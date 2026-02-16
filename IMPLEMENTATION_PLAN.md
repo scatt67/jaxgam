@@ -475,6 +475,8 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 
 **Acceptance:** Converges for all four families. Step-halving works. JIT-compiles. Monotonicity invariant holds.
 
+**Important — Link/Family backend dispatch:** Link functions (Task 1.1) and family methods (Task 1.2) are implemented in NumPy for Phase 1. PIRLS calls them inside `jax.lax.while_loop`, which requires JAX-traceable operations. Before implementing PIRLS, make link and family classes backend-agnostic: detect array type at call time and dispatch to `numpy` or `jax.numpy` accordingly. The import guard only prohibits JAX imports at *module load* time, not at runtime. This also enables `jax.grad` to differentiate through link/family calls in Task 2.4 (REML).
+
 **Prerequisites:** Task 1.2 (families), Task 1.1 (links), Task 2.1 (linalg).
 
 ---
