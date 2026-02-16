@@ -11,12 +11,20 @@ Design doc reference: docs/design.md Section 5.1
 from __future__ import annotations
 
 from pymgcv.smooths.base import Smooth
+from pymgcv.smooths.cubic import (
+    CubicRegressionSmooth,
+    CubicShrinkageSmooth,
+    CyclicCubicSmooth,
+)
 from pymgcv.smooths.tprs import TPRSShrinkageSmooth, TPRSSmooth
 
 # Canonical basis type -> smooth class mapping
 _SMOOTH_REGISTRY: dict[str, type[Smooth]] = {
     "tp": TPRSSmooth,
     "ts": TPRSShrinkageSmooth,
+    "cr": CubicRegressionSmooth,
+    "cs": CubicShrinkageSmooth,
+    "cc": CyclicCubicSmooth,
 }
 
 
