@@ -8,6 +8,51 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 
 ---
 
+## Progress Checklist
+
+### Phase 0: Project Scaffolding
+- [x] **Task 0.1** — Repository Structure and Build System
+- [x] **Task 0.2** — Tolerance Classes and Test Infrastructure
+- [x] **Task 0.3** — R Bridge and Reference Data Generator
+
+### Phase 1: Foundation Components (Setup — CPU, NumPy Only)
+- [x] **Task 1.1** — Link Functions (8 links, registry, 42 tests)
+- [x] **Task 1.2** — Family Base Class and Standard Families (4 families, 50 tests)
+- [x] **Task 1.3** — Penalty Matrix Base Class (Penalty, CompositePenalty, 55 tests)
+- [ ] **Task 1.4** — TPRS Basis and Penalty Construction *(HIGH RISK)*
+- [ ] **Task 1.5** — Cubic Regression Spline Basis and Penalty
+- [ ] **Task 1.6** — Tensor Product Smooths (te, ti) — *blocked by 1.4, 1.5*
+- [x] **Task 1.7** — Formula Parser (AST-based, 46 tests)
+- [ ] **Task 1.8** — Factor-By Smooth Expansion — *blocked by 1.4 or 1.5*
+- [ ] **Task 1.9** — Identifiability Constraints and CoefficientMap — *blocked by 1.4 or 1.5*
+- [ ] **Task 1.10** — Design Matrix Assembly — *blocked by 1.4–1.9*
+
+### Phase 2: Fitting Engine (JAX, JIT-compiled)
+- [ ] **Task 2.1** — JAX Linear Algebra Primitives
+- [ ] **Task 2.2** — JAX AD Wrappers
+- [ ] **Task 2.3** — PIRLS Inner Loop *(HIGH RISK)* — *blocked by 1.2, 1.1, 2.1*
+- [ ] **Task 2.4** — REML and ML Criteria *(HIGH RISK)* — *blocked by 2.3*
+- [ ] **Task 2.5** — Newton Outer Optimizer — *blocked by 2.4*
+- [ ] **Task 2.6** — Full GAM Fitting Orchestration — *blocked by 1.10, 2.5*
+
+### Phase 3: Post-Estimation (CPU, NumPy)
+- [ ] **Task 3.1** — Prediction — *blocked by 2.6*
+- [ ] **Task 3.2** — Summary and EDF — *blocked by 2.6*
+- [ ] **Task 3.3** — Plotting — *blocked by 3.1*
+
+### Phase 4: Integration Testing and Hardening
+- [ ] **Task 4.1** — 32-Cell Validation Matrix — *blocked by 3.1, 3.2*
+- [ ] **Task 4.2** — NumPy Reference Backend — *blocked by 2.6*
+- [ ] **Task 4.3** — Edge Cases and Robustness — *blocked by 2.6*
+- [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
+
+### Current Stats
+- **Tests:** 233 passing
+- **Coverage:** 91%
+- **Next up:** Tasks 1.4 (TPRS) and 1.5 (Cubic) can run in parallel
+
+---
+
 ## Phase 0: Project Scaffolding
 
 ### Task 0.1 — Repository Structure and Build System
