@@ -1,0 +1,1 @@
+"""Link function implementations."""

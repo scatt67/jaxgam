@@ -1,0 +1,1 @@
+"""Pivoted QR decomposition."""

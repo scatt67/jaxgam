@@ -1,0 +1,1 @@
+"""Convergence criteria and diagnostics."""
