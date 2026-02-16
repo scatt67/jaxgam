@@ -448,3 +448,201 @@ for (i in seq_len(n_smooths)) {{
                 "basis_matrices": basis_matrices,
                 "penalty_matrices": penalty_matrices,
             }
+
+    def smooth_construct(
+        self,
+        smooth_expr: str,
+        data: pd.DataFrame,
+        absorb_cons: bool = False,
+    ) -> dict[str, Any]:
+        """Call R's smoothCon() and return smooth construction details.
+
+        Parameters
+        ----------
+        smooth_expr : str
+            Smooth expression, e.g. ``"s(x, bs='tp', k=10)"``.
+        data : pd.DataFrame
+            Data frame containing the variables.
+        absorb_cons : bool
+            Whether to absorb identifiability constraints.
+
+        Returns
+        -------
+        dict
+            Keys: X, S (list of penalty matrices), rank, null_space_dim,
+            Xu (knots), UZ (mapping matrix), shift (centring values).
+        """
+        if self.mode == "rpy2":
+            return self._smooth_construct_rpy2(smooth_expr, data, absorb_cons)
+        return self._smooth_construct_subprocess(smooth_expr, data, absorb_cons)
+
+    def _smooth_construct_rpy2(
+        self,
+        smooth_expr: str,
+        data: pd.DataFrame,
+        absorb_cons: bool,
+    ) -> dict[str, Any]:
+        import rpy2.robjects as ro
+        from rpy2.robjects import numpy2ri, pandas2ri
+
+        with ro.conversion.localconverter(
+            ro.default_converter + pandas2ri.converter + numpy2ri.converter
+        ):
+            r_df = ro.conversion.py2rpy(data)
+
+        absorb_str = "TRUE" if absorb_cons else "FALSE"
+        r_code = f"""
+        library(mgcv)
+        dat <- as.data.frame(dat_input)
+        sm <- smoothCon({smooth_expr}, data=dat, absorb.cons={absorb_str})[[1]]
+        list(
+            X = sm$X,
+            S = sm$S,
+            rank = sm$rank,
+            null_space_dim = sm$null.space.dim,
+            Xu = if (!is.null(sm$Xu)) sm$Xu else matrix(0, 0, 0),
+            UZ = if (!is.null(sm$UZ)) sm$UZ else matrix(0, 0, 0),
+            shift = if (!is.null(sm$shift)) sm$shift else numeric(0)
+        )
+        """
+        ro.globalenv["dat_input"] = r_df
+        result = ro.r(r_code)
+
+        X = np.array(result.rx2("X"), dtype=np.float64)
+        rank_arr = np.array(result.rx2("rank"), dtype=np.float64).ravel()
+        rank = int(rank_arr[0])
+        nsd_arr = np.array(result.rx2("null_space_dim"), dtype=np.float64).ravel()
+        null_space_dim = int(nsd_arr[0])
+
+        S_list = result.rx2("S")
+        S_matrices = []
+        for i in range(len(S_list)):
+            S_matrices.append(np.array(S_list[i], dtype=np.float64))
+
+        Xu = np.array(result.rx2("Xu"), dtype=np.float64)
+        UZ = np.array(result.rx2("UZ"), dtype=np.float64)
+        shift = np.array(result.rx2("shift"), dtype=np.float64)
+
+        return {
+            "X": X,
+            "S": S_matrices,
+            "rank": rank,
+            "null_space_dim": null_space_dim,
+            "Xu": Xu,
+            "UZ": UZ,
+            "shift": shift,
+        }
+
+    def _smooth_construct_subprocess(
+        self,
+        smooth_expr: str,
+        data: pd.DataFrame,
+        absorb_cons: bool,
+    ) -> dict[str, Any]:
+        absorb_str = "TRUE" if absorb_cons else "FALSE"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            script_path = os.path.join(tmpdir, "smooth.R")
+            out = tmpdir
+
+            data.to_csv(data_path, index=False)
+
+            script = f"""\
+library(mgcv)
+
+dat <- read.csv("{data_path}")
+sm <- smoothCon({smooth_expr}, data=dat, absorb.cons={absorb_str})[[1]]
+
+write.csv(as.data.frame(sm$X), "{out}/X.csv", row.names=FALSE)
+writeLines(as.character(sm$rank), "{out}/rank.txt")
+writeLines(as.character(sm$null.space.dim), "{out}/null_space_dim.txt")
+
+n_S <- length(sm$S)
+writeLines(as.character(n_S), "{out}/n_S.txt")
+for (i in seq_len(n_S)) {{
+    write.csv(as.data.frame(sm$S[[i]]), sprintf("{out}/S_%d.csv", i), row.names=FALSE)
+}}
+
+if (!is.null(sm$Xu)) {{
+    if (is.matrix(sm$Xu)) {{
+        write.csv(as.data.frame(sm$Xu), "{out}/Xu.csv", row.names=FALSE)
+    }} else {{
+        write.csv(data.frame(v=as.numeric(sm$Xu)), "{out}/Xu.csv", row.names=FALSE)
+    }}
+}} else {{
+    writeLines("NULL", "{out}/Xu.csv")
+}}
+
+if (!is.null(sm$UZ)) {{
+    write.csv(as.data.frame(sm$UZ), "{out}/UZ.csv", row.names=FALSE)
+}} else {{
+    writeLines("NULL", "{out}/UZ.csv")
+}}
+
+if (!is.null(sm$shift)) {{
+    write.csv(data.frame(v=as.numeric(sm$shift)), "{out}/shift.csv", row.names=FALSE)
+}} else {{
+    writeLines("NULL", "{out}/shift.csv")
+}}
+"""
+            with open(script_path, "w") as f:
+                f.write(script)
+
+            proc = subprocess.run(
+                ["Rscript", script_path],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if proc.returncode != 0:
+                raise RBridgeError(
+                    f"Rscript failed (exit {proc.returncode}):\n{proc.stderr}"
+                )
+
+            def _read_matrix(name: str) -> np.ndarray:
+                path = os.path.join(out, name)
+                with open(path) as f:
+                    first_line = f.readline().strip()
+                if first_line == "NULL":
+                    return np.array([])
+                return pd.read_csv(path).values.astype(np.float64)
+
+            def _read_scalar(name: str) -> float:
+                with open(os.path.join(out, name)) as f:
+                    return float(f.read().strip())
+
+            X = _read_matrix("X.csv")
+            rank = int(_read_scalar("rank.txt"))
+            null_space_dim = int(_read_scalar("null_space_dim.txt"))
+
+            n_S = int(_read_scalar("n_S.txt"))
+            S_matrices = []
+            for i in range(1, n_S + 1):
+                S_matrices.append(_read_matrix(f"S_{i}.csv"))
+
+            Xu_raw = _read_matrix("Xu.csv")
+            shift_raw = _read_matrix("shift.csv")
+
+            # Handle 1D knots stored as single column
+            if Xu_raw.ndim == 2 and Xu_raw.shape[1] == 1:
+                Xu = Xu_raw.ravel()
+            else:
+                Xu = Xu_raw
+
+            if shift_raw.ndim == 2 and shift_raw.shape[1] == 1:
+                shift = shift_raw.ravel()
+            else:
+                shift = shift_raw
+
+            UZ = _read_matrix("UZ.csv")
+
+            return {
+                "X": X,
+                "S": S_matrices,
+                "rank": rank,
+                "null_space_dim": null_space_dim,
+                "Xu": Xu,
+                "UZ": UZ,
+                "shift": shift,
+            }
