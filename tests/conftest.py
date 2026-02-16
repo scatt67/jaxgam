@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from pymgcv.compat.r_bridge import RBridge
+
 SEED = 42
 N = 200
 
@@ -73,3 +75,14 @@ def simple_gamma_data() -> pd.DataFrame:
     shape = 5.0
     y = rng.gamma(shape, scale=mu / shape, size=N)
     return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
+
+
+@pytest.fixture
+def r_bridge():
+    """Fixture providing R bridge for reference comparison.
+
+    Skips the test if R/mgcv is not available.
+    """
+    if not RBridge.available():
+        pytest.skip("R with mgcv not available")
+    return RBridge()

@@ -38,6 +38,10 @@ test: ## run tests
 test-cov: ## run tests with coverage (80% minimum)
 	$(UV) run pytest --cov --cov-report=term-missing --cov-fail-under=80
 
+.PHONY: generate-ref
+generate-ref: ## regenerate R reference data (requires R + mgcv)
+	$(UV) run python scripts/generate_reference_data.py
+
 .PHONY: pre-commit
 pre-commit: ## run pre-commit on all files
 	$(UV) run pre-commit run --all-files

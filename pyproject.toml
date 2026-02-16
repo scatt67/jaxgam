@@ -34,6 +34,10 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 
+[tool.ruff.lint.per-file-ignores]
+# R bridge contains embedded R scripts in f-strings with long lines
+"pymgcv/compat/r_bridge.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
