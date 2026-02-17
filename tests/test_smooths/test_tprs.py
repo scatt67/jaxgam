@@ -26,6 +26,8 @@ from pymgcv.penalties.penalty import Penalty
 from pymgcv.smooths.tprs import (
     TPRSShrinkageSmooth,
     TPRSSmooth,
+    _monomial_indices,
+    _nearest_knot_indices,
     compute_polynomial_basis,
     default_penalty_order,
     eta_const,
@@ -64,20 +66,6 @@ def _make_2d_data(n: int = 200, seed: int = 42) -> dict[str, np.ndarray]:
     """Generate simple 2D test data."""
     rng = np.random.default_rng(seed)
     return {"x1": rng.uniform(0, 1, n), "x2": rng.uniform(0, 1, n)}
-
-
-def align_sign(A: np.ndarray, B: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Align column signs of A to match B using dot product sign.
-
-    Eigenvectors have arbitrary sign. This flips columns of A so that
-    each column has a positive dot product with the corresponding
-    column of B.
-    """
-    A_aligned = A.copy()
-    for j in range(min(A.shape[1], B.shape[1])):
-        if np.dot(A[:, j], B[:, j]) < 0:
-            A_aligned[:, j] = -A_aligned[:, j]
-    return A_aligned, B
 
 
 # ===========================================================================
@@ -374,13 +362,9 @@ def _r_available() -> bool:
 class TestRComparison:
     """Compare TPRS construction against R's smoothCon().
 
-    Python and R use different eigenvector solvers (numpy eigh vs
-    mgcv Rlanczos), producing different-but-valid basis representations
-    of the same TPRS smooth.  Column normalisation makes the final
-    X, S dependent on the specific eigenvector choice, so element-wise
-    comparison is not meaningful.  Instead we test basis-*invariant*
-    properties: column space, wiggly-subspace span, pre-normalisation
-    penalty eigenvalues, rank, shift, and knot locations.
+    Python reimplements R's Rlanczos eigensolver (mgcv/src/mat.c) to
+    produce identical eigenvectors, so all downstream quantities (X, S)
+    match R after column and smoothCon normalisation.
     """
 
     def _setup_1d(
@@ -423,21 +407,27 @@ class TestRComparison:
         )
 
     def test_tp_1d_wiggly_subspace_vs_r(self) -> None:
-        """Wiggly subspace (UZ columns) spans same space as R."""
+        """Wiggly subspace (UZ columns) spans same space as R.
+
+        Compares principal angles between wiggly column spaces.
+        Both sides are normalized to unit-length columns before
+        computing the cross-Gram SVD.
+        """
         smooth, r_result, _x = self._setup_1d()
         nk = smooth._Xu.shape[0]
         k_w = smooth._k - smooth._M
 
-        # Extract wiggly blocks, undo normalisation to get pre-norm
-        rms_py = smooth._col_norms[:k_w]
-        UZ_w_py = smooth._UZ[:nk, :k_w] * rms_py[np.newaxis, :]
+        # Python: undo smoothCon normalization → U_k @ Z (orthonormal cols)
+        UZ_w_py = smooth._UZ[:nk, :k_w] * smooth._col_norms[:k_w]
 
-        rms_r = 1.0 / np.sqrt(np.sum(r_result["UZ"][:nk, :k_w] ** 2, axis=0))
-        UZ_w_r = r_result["UZ"][:nk, :k_w] * rms_r[np.newaxis, :]
+        # R: normalize columns to unit L2 norm
+        UZ_w_r_raw = r_result["UZ"][:nk, :k_w]
+        col_norms_r = np.sqrt(np.sum(UZ_w_r_raw**2, axis=0))
+        UZ_w_r = UZ_w_r_raw / col_norms_r
 
         # Principal angles via SVD of cross product
-        M_cross = UZ_w_py.T @ UZ_w_r
-        sv = np.linalg.svd(M_cross, compute_uv=False)
+        # All singular values = 1 iff subspaces are identical
+        sv = np.linalg.svd(UZ_w_py.T @ UZ_w_r, compute_uv=False)
 
         np.testing.assert_allclose(
             sv,
@@ -446,49 +436,71 @@ class TestRComparison:
             err_msg="Wiggly subspaces differ between Python and R",
         )
 
-    def test_tp_1d_pre_norm_penalty_eigenvalues_vs_r(self) -> None:
-        """Pre-normalisation penalty eigenvalues match R (basis-invariant)."""
-        from pymgcv.smooths.tprs import (
-            _compute_distance_matrix,
-            _get_unique_rows,
-            compute_polynomial_basis,
-            tps_semi_kernel,
-        )
+    def test_tp_1d_X_gram_vs_r(self) -> None:
+        """X Gram matrix (X @ X.T) matches mgcv.
 
+        Validates _slanczos eigenvalues and eigenvector magnitudes:
+        X @ X.T is sign-invariant (column sign flips cancel) but
+        depends on the actual eigenvalues and basis vectors. Wrong
+        Lanczos output would produce a different Gram matrix.
+        """
         smooth, r_result, x = self._setup_1d()
-        d, m, M, k = smooth._d, smooth._m, smooth._M, smooth._k
+        X_py = smooth.build_design_matrix({"x": x})
+        X_r = r_result["X"]
 
-        # Re-derive pre-normalisation S eigenvalues for Python
-        X_centered = (x - x.mean()).reshape(-1, 1)
-        Xu, _ = _get_unique_rows(X_centered)
-        E = tps_semi_kernel(_compute_distance_matrix(Xu, Xu), m, d)
-        T = compute_polynomial_basis(Xu, m)
-
-        eigvals_E, eigvecs_E = np.linalg.eigh(E)
-        order = np.argsort(-np.abs(eigvals_E))[:k]
-        D_k = eigvals_E[order]
-        U_k = eigvecs_E[:, order]
-
-        TU = T.T @ U_k
-        Q_qr, _ = np.linalg.qr(TU.T, mode="complete")
-        Z = Q_qr[:, M:]
-        S_wiggly = Z.T @ np.diag(D_k) @ Z
-        eigvals_pre_py = np.sort(np.linalg.eigvalsh(S_wiggly))
-
-        # Do the same using R's eigenvalues (which we know match)
-        # to compute the invariant eigenvalues
-        # Since both Z bases span the same null space, eigenvalues are
-        # identical regardless of which Z we use.  Just verify they
-        # match what we get from R's E eigenvalues.
         np.testing.assert_allclose(
-            eigvals_pre_py,
-            eigvals_pre_py,  # self-consistent check
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
+            X_py @ X_py.T,
+            X_r @ X_r.T,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="X Gram matrix differs from mgcv",
         )
-        # Verify all non-zero eigenvalues are positive
-        assert np.all(eigvals_pre_py >= -STRICT.atol)
-        assert eigvals_pre_py[-1] > 0, "Should have positive eigenvalues"
+
+    def test_tp_1d_UZ_gram_vs_r(self) -> None:
+        """UZ Gram matrix (UZ @ UZ.T) matches mgcv.
+
+        UZ encodes the Lanczos eigenvectors (U_k) projected through
+        the null space basis (Z), but NOT the eigenvalues D_k. The
+        Gram matrix is sign-invariant and validates that _slanczos
+        eigenvectors and _null_space_basis_r produce the same
+        column geometry as R's smoothCon. D_k is validated
+        separately via the X Gram and S eigenvalue tests.
+        """
+        smooth, r_result, _x = self._setup_1d()
+        UZ_py = smooth._UZ
+        UZ_r = r_result["UZ"]
+
+        np.testing.assert_allclose(
+            UZ_py @ UZ_py.T,
+            UZ_r @ UZ_r.T,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="UZ Gram matrix differs from mgcv",
+        )
+
+    def test_tp_1d_S_eigenvalues_vs_r(self) -> None:
+        """Penalty matrix S eigenvalues match mgcv.
+
+        S eigenvalues are sign-invariant (immune to LAPACK eigenvector
+        sign ambiguity) and directly encode the Lanczos eigenvalues D_k
+        through S_wiggly = Z' @ diag(D_k) @ Z. This is the strongest
+        validation that _slanczos eigenvalues are correct, complementing
+        the X Gram test (which tests D_k² through X_wiggly).
+        """
+        smooth, r_result, _x = self._setup_1d()
+        S_py = smooth._S
+        S_r = r_result["S"][0]
+
+        eigvals_py = np.linalg.eigvalsh(S_py)
+        eigvals_r = np.linalg.eigvalsh(S_r)
+
+        np.testing.assert_allclose(
+            eigvals_py,
+            eigvals_r,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="S eigenvalues differ from mgcv",
+        )
 
     def test_tp_1d_rank_and_null_space_vs_r(self) -> None:
         """Rank and null_space_dim match R exactly."""
@@ -518,8 +530,10 @@ class TestRComparison:
             err_msg="Knot locations do not match R",
         )
 
-    def test_tp_2d_column_space_vs_r(self) -> None:
-        """2D tp column space of X matches R."""
+    def _setup_2d(
+        self,
+    ) -> tuple:
+        """Shared 2D setup for R comparison."""
         import pandas as pd
 
         from pymgcv.compat.r_bridge import RBridge
@@ -535,6 +549,11 @@ class TestRComparison:
         spec = _make_spec(["x1", "x2"], k=10)
         smooth = TPRSSmooth(spec)
         smooth.setup({"x1": x1, "x2": x2})
+        return smooth, r_result, x1, x2
+
+    def test_tp_2d_column_space_vs_r(self) -> None:
+        """2D tp column space of X matches R (projection matrix)."""
+        smooth, r_result, x1, x2 = self._setup_2d()
         X_py = smooth.build_design_matrix({"x1": x1, "x2": x2})
         X_r = r_result["X"]
 
@@ -547,6 +566,63 @@ class TestRComparison:
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
             err_msg="2D tp column spaces differ from R",
+        )
+
+    def test_tp_2d_X_gram_vs_r(self) -> None:
+        """2D X Gram matrix (X @ X.T) matches mgcv.
+
+        Validates _slanczos eigenvalues and eigenvector magnitudes
+        for the 2D case (M=3 null space, different eigenvalue
+        structure than 1D).
+        """
+        smooth, r_result, x1, x2 = self._setup_2d()
+        X_py = smooth.build_design_matrix({"x1": x1, "x2": x2})
+        X_r = r_result["X"]
+
+        np.testing.assert_allclose(
+            X_py @ X_py.T,
+            X_r @ X_r.T,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="2D X Gram matrix differs from mgcv",
+        )
+
+    def test_tp_2d_UZ_gram_vs_r(self) -> None:
+        """2D UZ Gram matrix (UZ @ UZ.T) matches mgcv.
+
+        Validates eigenvector/null-space geometry for the 2D case.
+        """
+        smooth, r_result, _x1, _x2 = self._setup_2d()
+        UZ_py = smooth._UZ
+        UZ_r = r_result["UZ"]
+
+        np.testing.assert_allclose(
+            UZ_py @ UZ_py.T,
+            UZ_r @ UZ_r.T,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="2D UZ Gram matrix differs from mgcv",
+        )
+
+    def test_tp_2d_S_eigenvalues_vs_r(self) -> None:
+        """2D penalty matrix S eigenvalues match mgcv.
+
+        Validates _slanczos eigenvalues for the 2D case where
+        M=3 (larger null space than 1D).
+        """
+        smooth, r_result, _x1, _x2 = self._setup_2d()
+        S_py = smooth._S
+        S_r = r_result["S"][0]
+
+        eigvals_py = np.linalg.eigvalsh(S_py)
+        eigvals_r = np.linalg.eigvalsh(S_r)
+
+        np.testing.assert_allclose(
+            eigvals_py,
+            eigvals_r,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="2D S eigenvalues differ from mgcv",
         )
 
     def test_ts_1d_column_space_vs_r(self) -> None:
@@ -906,3 +982,92 @@ class TestNoJaxImport:
                 if key.startswith("pymgcv."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)
+
+
+class TestCoveragePaths:
+    """Tests for code paths not covered by main tests."""
+
+    def test_monomial_indices_d1(self) -> None:
+        """_monomial_indices handles d=1 path."""
+        result = _monomial_indices(1, 3)
+        assert result == [(0,), (1,), (2,)]
+
+    def test_knot_subsampling(self) -> None:
+        """Knot subsampling activates when n_unique > max_knots."""
+        rng = np.random.RandomState(42)
+        n = 100
+        x = rng.randn(n)
+        spec = _make_spec(["x"], k=5, max_knots=20)
+        smooth = TPRSSmooth(spec)
+        smooth.setup({"x": x})
+        assert smooth._is_setup
+        assert smooth._Xu.shape[0] == 20
+
+    def test_nearest_knot_indices(self) -> None:
+        """_nearest_knot_indices returns correct indices."""
+        X = np.array([[0.0], [1.0], [2.0]])
+        Xu = np.array([[0.5], [1.5]])
+        idx = _nearest_knot_indices(X, Xu)
+        np.testing.assert_array_equal(idx, [0, 0, 1])
+
+    def test_build_design_matrix_different_n(self) -> None:
+        """build_design_matrix falls back to predict_matrix for different n."""
+        rng = np.random.RandomState(42)
+        x_train = rng.randn(50)
+        spec = _make_spec(["x"], k=5)
+        smooth = TPRSSmooth(spec)
+        smooth.setup({"x": x_train})
+        x_new = rng.randn(30)
+        X_new = smooth.build_design_matrix({"x": x_new})
+        assert X_new.shape == (30, 5)
+
+    def test_s_scale_fallback_when_maxx_zero(self) -> None:
+        """_s_scale = 1.0 when X_design is all zeros (maXX == 0)."""
+        spec = _make_spec(["x"], k=5)
+        smooth = TPRSSmooth(spec)
+        data = _make_1d_data(n=50)
+        # Patch np.linalg.norm to return 0.0 for the X inf-norm call
+        # during smoothCon normalization (step 14)
+        orig_norm = np.linalg.norm
+        call_count = [0]
+
+        def patched_norm(x, ord=None, **kwargs):
+            result = orig_norm(x, ord=ord, **kwargs)
+            # The smoothCon step computes norm(X, inf) then norm(S, 1)
+            # norm(X, inf) is the first call with ord=inf
+            if ord == np.inf:
+                call_count[0] += 1
+                return 0.0
+            return result
+
+        import unittest.mock
+
+        with unittest.mock.patch("numpy.linalg.norm", side_effect=patched_norm):
+            smooth.setup(data)
+        assert smooth._s_scale == 1.0
+
+    def test_ts_smallest_nonzero_fallback(self) -> None:
+        """smallest_nonzero = 1.0 when all S eigenvalues are zero."""
+        import unittest.mock
+
+        spec = _make_spec(["x"], bs="ts", k=5)
+        smooth = TPRSShrinkageSmooth(spec)
+        data = _make_1d_data(n=50)
+
+        # Patch TPRSSmooth.setup to zero out S before shrinkage logic runs
+        orig_setup = TPRSSmooth.setup
+
+        def patched_setup(self_inner, data_inner):
+            orig_setup(self_inner, data_inner)
+            self_inner._S = np.zeros_like(self_inner._S)
+
+        with unittest.mock.patch.object(TPRSSmooth, "setup", patched_setup):
+            smooth.setup(data)
+
+        # After shrinkage with all-zero input eigenvalues, S should be
+        # replacement * I where replacement = 1.0 * shrink_factor
+        assert smooth.rank == 5
+        assert smooth.null_space_dim == 0
+        eigvals = np.linalg.eigvalsh(smooth._S)
+        # All eigenvalues should be equal (= 1.0 * shrink_factor)
+        np.testing.assert_allclose(eigvals, eigvals[0], rtol=STRICT.rtol)

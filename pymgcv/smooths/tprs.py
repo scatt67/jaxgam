@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from math import ceil, comb, factorial, pi
 
+import numba
 import numpy as np
 import numpy.typing as npt
 from scipy.special import gamma as gamma_func
@@ -276,6 +277,258 @@ def _get_unique_rows(
     return Xu, inverse
 
 
+@numba.njit(
+    numba.types.Tuple((numba.float64[:], numba.float64[:, :]))(
+        numba.float64[:, ::1], numba.int64, numba.float64
+    ),
+    cache=True,
+)
+def _slanczos_jit(A, k, tol):  # pragma: no cover  # noqa: C901
+    n = A.shape[0]
+
+    # --- Deterministic starting vector (R's LCG) ---
+    q0 = np.empty(n)
+    jran = 1
+    for i in range(n):
+        jran = (jran * 106 + 1283) % 6075
+        q0[i] = jran / 6075.0 - 0.5
+    q0 /= np.linalg.norm(q0)
+
+    # --- Lanczos iteration ---
+    Q = np.empty((n, n))
+    Q[:, 0] = q0
+    alpha = np.empty(n)
+    beta = np.empty(n)
+
+    # Convergence check frequency (matching R)
+    f_check = k // 2
+    if f_check < 10:
+        f_check = 10
+    kk = n // 10
+    if kk < 1:
+        kk = 1
+    if kk < f_check:
+        f_check = kk
+
+    j_final = n
+    n_pos = 0
+    n_neg = 0
+    converged = False
+    d = np.zeros(1)
+    v_tri = np.zeros((1, 1))
+
+    for j in range(n):
+        qj = np.ascontiguousarray(Q[:, j])
+        z = A @ qj
+        alpha[j] = qj @ z
+
+        if j == 0:
+            z -= alpha[0] * qj
+        else:
+            z -= alpha[j] * qj + beta[j - 1] * np.ascontiguousarray(Q[:, j - 1])
+            # Double reorthogonalization (CGS via BLAS gemv)
+            Qj = np.ascontiguousarray(Q[:, : j + 1])
+            for _pass in range(2):
+                z -= Qj @ (Qj.T @ z)
+
+        beta[j] = np.linalg.norm(z)
+
+        if j < n - 1:
+            Q[:, j + 1] = z / beta[j]
+
+        # --- Convergence check ---
+        if not ((j >= k and j % f_check == 0) or j == n - 1):
+            continue
+
+        # Build tridiagonal matrix and eigendecompose
+        size = j + 1
+        T_mat = np.zeros((size, size))
+        for idx in range(size):
+            T_mat[idx, idx] = alpha[idx]
+        for idx in range(j):
+            T_mat[idx, idx + 1] = beta[idx]
+            T_mat[idx + 1, idx] = beta[idx]
+        d, v_tri = np.linalg.eigh(T_mat)
+        # Reverse to descending order
+        d = d[::-1].copy()
+        v_tri = v_tri[:, ::-1].copy()
+
+        # Error bounds: |beta_j * last component of kth Ritz vector|
+        norm_Tj = max(abs(d[0]), abs(d[-1]))
+        max_err = norm_Tj * tol
+        err = np.abs(beta[j] * v_tri[-1, :])
+
+        # Biggest mode: greedily walk from both ends by magnitude
+        pi = 0
+        ni = 0
+        ok = True
+        while pi + ni < k:
+            if abs(d[pi]) >= abs(d[j - ni]):
+                if err[pi] > max_err:
+                    ok = False
+                    break
+                pi += 1
+            else:
+                if err[ni] > max_err:
+                    ok = False
+                    break
+                ni += 1
+
+        if ok:
+            j_final = j + 1
+            n_pos = pi
+            n_neg = ni
+            converged = True
+            break
+
+    if not converged:
+        j_final = n
+        pi = 0
+        ni = 0
+        while pi + ni < k:
+            if abs(d[pi]) >= abs(d[n - 1 - ni]):
+                pi += 1
+            else:
+                ni += 1
+        n_pos = pi
+        n_neg = ni
+
+    # --- Build output eigenvalues and Ritz vectors ---
+    pos_idx = np.arange(n_pos)
+    neg_idx = np.arange(j_final - n_neg, j_final)
+    sel = np.concatenate((pos_idx, neg_idx))
+
+    D = d[sel]
+    Q_cont = np.ascontiguousarray(Q[:, :j_final])
+    U = Q_cont @ np.ascontiguousarray(v_tri[:, sel])
+
+    return D, U
+
+
+def _slanczos(
+    A: npt.NDArray[np.floating],
+    k: int,
+    tol: float | None = None,
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """Lanczos eigendecomposition matching R's mgcv Rlanczos (biggest mode).
+
+    Reimplements the Rlanczos function from mgcv/src/mat.c with minus=-1
+    (largest magnitude eigenvalues). Uses the same deterministic LCG
+    starting vector, double reorthogonalization, and convergence
+    criteria as R.
+
+    JIT-compiled via Numba for native performance.
+
+    Parameters
+    ----------
+    A : np.ndarray
+        Symmetric matrix, shape ``(n, n)``.
+    k : int
+        Number of eigenvalues/vectors to compute (largest magnitude).
+    tol : float, optional
+        Convergence tolerance. Default: ``np.finfo(float).eps ** 0.7``.
+
+    Returns
+    -------
+    D : np.ndarray
+        Eigenvalues, shape ``(k,)``. Positive eigenvalues first
+        (descending), then negative eigenvalues.
+    U : np.ndarray
+        Eigenvectors, shape ``(n, k)``.
+    """
+    if tol is None:
+        tol = np.finfo(float).eps ** 0.7
+    return _slanczos_jit(A, k, tol)
+
+
+@numba.njit(numba.float64[:, :](numba.float64[:, :]), cache=True)
+def _null_space_basis_r_jit(TU):  # pragma: no cover
+    M = TU.shape[0]
+    k = TU.shape[1]
+    A = TU.copy()
+
+    # --- Phase 1: Householder reflectors (R's QT, fullQ=0) ---
+    reflectors = np.zeros((M, k))
+    for i in range(M):
+        n_elem = k - i
+        v = A[i, :n_elem]
+
+        # Scale for numerical stability
+        m_scale = 0.0
+        for j in range(n_elem):
+            av = abs(v[j])
+            if av > m_scale:
+                m_scale = av
+        if m_scale > 0.0:
+            for j in range(n_elem):
+                v[j] /= m_scale
+
+        lsq = np.linalg.norm(v)
+        if v[n_elem - 1] < 0.0:
+            lsq = -lsq
+
+        v[n_elem - 1] += lsq
+        if lsq != 0.0:
+            g = 1.0 / (lsq * v[n_elem - 1])
+        else:
+            g = 0.0
+        lsq *= m_scale
+
+        # Apply reflector to remaining rows of A
+        if g != 0.0:
+            for j in range(i + 1, M):
+                dot_val = 0.0
+                for jj in range(n_elem):
+                    dot_val += v[jj] * A[j, jj]
+                for jj in range(n_elem):
+                    A[j, jj] -= g * dot_val * v[jj]
+
+        # Store reflector scaled by sqrt(g)
+        sqrt_g = np.sqrt(g) if g > 0.0 else 0.0
+        for j in range(n_elem):
+            reflectors[i, j] = v[j] * sqrt_g
+
+        # Overwrite row i with R factor
+        for j in range(n_elem - 1):
+            A[i, j] = 0.0
+        A[i, n_elem - 1] = -lsq
+
+    # --- Phase 2: Build Q = H_0 @ H_1 @ ... @ H_{M-1} (R's HQmult) ---
+    Q = np.eye(k)
+    for i in range(M):
+        u = reflectors[i]
+        Cu = Q @ u
+        Q -= np.outer(Cu, u)
+
+    return Q[:, : k - M]
+
+
+def _null_space_basis_r(
+    TU: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """Null space basis of TU via right-Householder QR matching R's mgcv.
+
+    Reimplements R's ``QT`` and ``HQmult`` functions from
+    ``mgcv/src/matrix.c`` to produce an identical null space basis.
+    R applies Householder reflectors from the right on TU (M x k),
+    yielding Q such that TU @ Q = [0 | T]. The first k-M columns
+    of Q span the right null space of TU.
+
+    JIT-compiled via Numba for native performance.
+
+    Parameters
+    ----------
+    TU : np.ndarray
+        Constraint projection matrix, shape ``(M, k)`` with ``M < k``.
+
+    Returns
+    -------
+    Z : np.ndarray
+        Null space basis, shape ``(k, k - M)``.
+    """
+    return _null_space_basis_r_jit(TU)
+
+
 # ---------------------------------------------------------------------------
 # TPRSSmooth
 # ---------------------------------------------------------------------------
@@ -331,9 +584,6 @@ class TPRSSmooth(Smooth):
         raw = np.column_stack(cols)
         n = raw.shape[0]
 
-        if raw.ndim == 1:
-            raw = raw.reshape(-1, 1)
-
         self._shift = raw.mean(axis=0)
         X_centered = raw - self._shift
 
@@ -388,30 +638,12 @@ class TPRSSmooth(Smooth):
         # Step 7: Build T (polynomial null space at knots)
         T = compute_polynomial_basis(Xu, self._m)
 
-        # Step 8: Eigendecompose E
-        # Take k eigenvalues with largest MAGNITUDE (not value).
-        # R's Rlanczos uses minus=-1, which selects by absolute value.
-        # For TPS kernels, E has large negative eigenvalues that must
-        # be included in the basis for correct penalty construction.
-        eigvals, eigvecs = np.linalg.eigh(E)
-        # eigh returns ascending order; select k largest by magnitude
-        order = np.argsort(-np.abs(eigvals))
-        eigvals = eigvals[order[:k]]
-        eigvecs = eigvecs[:, order[:k]]
-        U_k = eigvecs  # (nk, k)
-        D_k = eigvals  # (k,)
+        # Step 8: Eigendecompose E via Lanczos (matching R's Rlanczos)
+        D_k, U_k = _slanczos(E, k)
 
-        # Step 9: QR of T'U_k
-        # The null space of T'U_k defines the wiggly subspace Z.
-        # QR of TU^T (k × M): first M columns of Q span column space
-        # of TU^T, remaining k-M columns Z span the null space.
-        # The choice of Z basis is unique up to rotation within the
-        # null space. Column normalisation (step 13) makes the final
-        # X, S representation basis-dependent, but the mathematical
-        # smooth (column space, penalty eigenvalues) is invariant.
+        # Step 9: Null space via right-Householder QR (matching R's QT)
         TU = T.T @ U_k  # (M, k)
-        Q, _R = np.linalg.qr(TU.T, mode="complete")  # Q is (k, k)
-        Z = Q[:, self._M :]  # (k, k-M) — wiggly subspace
+        Z = _null_space_basis_r(TU)  # (k, k-M)
 
         # Step 10: Build UZ matrix
         # UZ is (nk + M, k) where:
@@ -457,7 +689,18 @@ class TPRSSmooth(Smooth):
         # Force symmetry of S
         S = 0.5 * (S + S.T)
 
-        # Step 14: Store results
+        # Step 14: smoothCon penalty normalization
+        # Replicates R's smoothCon(): S.scale = norm(S,"O") / norm(X,"I")^2
+        norm_X_inf = np.linalg.norm(X_design, ord=np.inf)
+        norm_S_1 = np.linalg.norm(S, ord=1)
+        maXX = norm_X_inf**2
+        if maXX > 0:
+            self._s_scale = norm_S_1 / maXX
+            S = S / self._s_scale
+        else:
+            self._s_scale = 1.0
+
+        # Step 15: Store results
         self._X = X_design
         self._S = S
         self._UZ = UZ
@@ -481,8 +724,6 @@ class TPRSSmooth(Smooth):
         # For new data, use predict_matrix
         cols = [np.asarray(data[v], dtype=float) for v in self.spec.variables]
         raw = np.column_stack(cols)
-        if raw.ndim == 1:
-            raw = raw.reshape(-1, 1)
 
         if self._X is not None and raw.shape[0] == self._X.shape[0]:
             X_centered = raw - self._shift
@@ -536,9 +777,6 @@ class TPRSSmooth(Smooth):
         raw = np.column_stack(
             [np.asarray(new_data[v], dtype=float) for v in self.spec.variables]
         )
-        if raw.ndim == 1:
-            raw = raw.reshape(-1, 1)
-
         # Centre by stored shift
         X_centered = raw - self._shift
 
