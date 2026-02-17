@@ -12,8 +12,6 @@ We use uv for dependency and package management; init using uv and use `uv sync`
 ## Code Quality
 We use pre-commit for code quality checks, and ruff for python specific linting, and formatting. 
 
-## Test Coverage
-We must have 80% test coverage for all unit tests.
 
 ## Repo Developer Tasks Orchestration
 We use `make` and `Makefile` to orchestrate common tasks such as running linters, and static analysis. Whenever we add new repo, CICD capabilities please update the `Makefile` and use make to run common tools. 
@@ -139,7 +137,9 @@ pymgcv/
 - Use the tolerance classes from `tests/tolerances.py`: `STRICT`, `MODERATE`, `LOOSE`.
 - R comparison tests use `compat/r_bridge.py` to run the same model in R and compare results.
 - Reference data (pre-computed R results) lives in `tests/reference_data/` as JSON files. Generate these using `scripts/generate_reference_data.R`.
+- pymgcv results (smooths, bases, coefficients, etc...) **must** be identical to the canonical R mgcv results.
 - Hard-gate invariants (§18.1) are tested in every CI run and block the build on failure. These include: objective monotonicity, H symmetry/PSD, penalty PSD, rank conditions, EDF bounds, deviance non-negativity, no NaN in converged model.
+- All new modules must have > 80% test coverage.
 
 ### Commit and PR Conventions
 

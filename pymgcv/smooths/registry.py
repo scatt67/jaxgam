@@ -16,6 +16,7 @@ from pymgcv.smooths.cubic import (
     CubicShrinkageSmooth,
     CyclicCubicSmooth,
 )
+from pymgcv.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 from pymgcv.smooths.tprs import TPRSShrinkageSmooth, TPRSSmooth
 
 # Canonical basis type -> smooth class mapping
@@ -25,6 +26,8 @@ _SMOOTH_REGISTRY: dict[str, type[Smooth]] = {
     "cr": CubicRegressionSmooth,
     "cs": CubicShrinkageSmooth,
     "cc": CyclicCubicSmooth,
+    "te": TensorProductSmooth,
+    "ti": TensorInteractionSmooth,
 }
 
 

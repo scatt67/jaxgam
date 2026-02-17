@@ -46,6 +46,7 @@ class CubicRegressionSmooth(Smooth):
         self._knots: npt.NDArray[np.floating] | None = None
         self._k: int = 0
         self._cyclic: bool = False
+        self._noterp: bool = True
 
     # ------------------------------------------------------------------
     # Static helpers (pure computation, no instance state)
