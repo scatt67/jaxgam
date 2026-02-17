@@ -19,8 +19,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 1.1** — Link Functions (8 links, registry, 42 tests)
 - [x] **Task 1.2** — Family Base Class and Standard Families (4 families, 50 tests)
 - [x] **Task 1.3** — Penalty Matrix Base Class (Penalty, CompositePenalty, 55 tests)
-- [ ] **Task 1.4** — TPRS Basis and Penalty Construction *(HIGH RISK)*
-- [ ] **Task 1.5** — Cubic Regression Spline Basis and Penalty
+- [x] **Task 1.4** — TPRS Basis and Penalty Construction *(HIGH RISK)*
+- [x] **Task 1.5** — Cubic Regression Spline Basis and Penalty
 - [ ] **Task 1.6** — Tensor Product Smooths (te, ti) — *blocked by 1.4, 1.5*
 - [x] **Task 1.7** — Formula Parser (AST-based, 46 tests)
 - [ ] **Task 1.8** — Factor-By Smooth Expansion — *blocked by 1.4 or 1.5*

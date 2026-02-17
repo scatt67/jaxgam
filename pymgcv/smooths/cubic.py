@@ -24,320 +24,6 @@ from pymgcv.formula.terms import SmoothSpec
 from pymgcv.penalties.penalty import Penalty
 from pymgcv.smooths.base import Smooth
 
-# ---------------------------------------------------------------------------
-# Knot placement
-# ---------------------------------------------------------------------------
-
-
-def _place_knots(x: npt.NDArray[np.floating], k: int) -> npt.NDArray[np.floating]:
-    """Place k knots at equally-spaced rank positions through unique values.
-
-    Ports R's ``place.knots()`` exactly: linearly interpolate k
-    equally-spaced fractional indices through the sorted unique values.
-
-    Parameters
-    ----------
-    x : np.ndarray
-        1D covariate values.
-    k : int
-        Number of knots to place.
-
-    Returns
-    -------
-    np.ndarray
-        Sorted knot locations, shape ``(k,)``.
-    """
-    x_unique = np.sort(np.unique(x))
-    n = len(x_unique)
-    indices = np.linspace(0, n - 1, k)
-    return np.interp(indices, np.arange(n), x_unique)
-
-
-# ---------------------------------------------------------------------------
-# Basis matrix construction (Wood 2006, pp 145-147)
-# ---------------------------------------------------------------------------
-
-
-def _find_knot_intervals(
-    x: npt.NDArray[np.floating], knots: npt.NDArray[np.floating]
-) -> npt.NDArray[np.intp]:
-    """Find the knot interval index for each x value.
-
-    Returns array ``j`` such that ``knots[j[i]] <= x[i] < knots[j[i]+1]``,
-    clamped to ``[0, len(knots) - 2]``.
-    """
-    j = np.searchsorted(knots, x) - 1
-    return np.clip(j, 0, len(knots) - 2)
-
-
-def _compute_base_functions(
-    x: npt.NDArray[np.floating], knots: npt.NDArray[np.floating]
-) -> tuple[
-    npt.NDArray[np.floating],
-    npt.NDArray[np.floating],
-    npt.NDArray[np.floating],
-    npt.NDArray[np.floating],
-    npt.NDArray[np.intp],
-]:
-    """Compute the 4 base functions for cubic spline evaluation.
-
-    Following Wood (2006) p. 146 and mgcv's ``crspl()`` for
-    linear extrapolation beyond the knot range.
-
-    Returns ``(ajm, ajp, cjm, cjp, j)`` where ajm/ajp are linear
-    interpolation weights and cjm/cjp are cubic correction weights.
-    """
-    j = _find_knot_intervals(x, knots)
-
-    h = np.diff(knots)
-    hj = h[j]
-    xj1_x = knots[j + 1] - x
-    x_xj = x - knots[j]
-
-    # Linear interpolation weights
-    ajm = xj1_x / hj
-    ajp = x_xj / hj
-
-    # Cubic correction weights (linear extrapolation beyond boundaries)
-    cjm_3 = xj1_x**3 / (6.0 * hj)
-    cjm_3[x > knots[-1]] = 0.0
-    cjm_1 = hj * xj1_x / 6.0
-    cjm = cjm_3 - cjm_1
-
-    cjp_3 = x_xj**3 / (6.0 * hj)
-    cjp_3[x < knots[0]] = 0.0
-    cjp_1 = hj * x_xj / 6.0
-    cjp = cjp_3 - cjp_1
-
-    return ajm, ajp, cjm, cjp, j
-
-
-def _natural_f(knots: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-    """Mapping from spline values to 2nd derivatives (natural BC).
-
-    Returns F of shape ``(k, k)`` where ``f''(knots) = F @ f(knots)``.
-    First and last rows are zero (natural boundary conditions:
-    ``f''`` = 0 at endpoints).
-
-    Wood (2006) pp 145-146.
-    """
-    h = np.diff(knots)
-    k = len(knots)
-
-    # B matrix (k-2, k-2) tridiagonal — banded storage
-    diag = (h[:-1] + h[1:]) / 3.0
-    off_diag = h[1:-1] / 6.0
-    banded_B = np.array(
-        [
-            np.r_[0.0, off_diag],
-            diag,
-            np.r_[off_diag, 0.0],
-        ]
-    )
-
-    # D matrix (k-2, k)
-    D = np.zeros((k - 2, k))
-    for i in range(k - 2):
-        D[i, i] = 1.0 / h[i]
-        D[i, i + 1] = -(1.0 / h[i] + 1.0 / h[i + 1])
-        D[i, i + 2] = 1.0 / h[i + 1]
-
-    # F_inner = B^{-1} @ D, shape (k-2, k)
-    F_inner = linalg.solve_banded((1, 1), banded_B, D)
-
-    # Pad with zero rows for natural boundary conditions
-    return np.vstack([np.zeros(k), F_inner, np.zeros(k)])
-
-
-def _cyclic_f(knots: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-    """Mapping from spline values to 2nd derivatives (cyclic BC).
-
-    Returns F of shape ``(k-1, k-1)`` where
-    ``f''(knots[:-1]) = F @ f(knots[:-1])``.
-    The last knot wraps to the first.
-
-    Wood (2006) pp 146-147.
-    """
-    h = np.diff(knots)
-    n = len(knots) - 1
-
-    # B and D matrices (n, n) — circulant tridiagonal with wrap-around
-    B = np.zeros((n, n))
-    D = np.zeros((n, n))
-
-    # Wrap-around corner entries
-    B[0, 0] = (h[n - 1] + h[0]) / 3.0
-    B[0, n - 1] = h[n - 1] / 6.0
-    B[n - 1, 0] = h[n - 1] / 6.0
-
-    D[0, 0] = -1.0 / h[0] - 1.0 / h[n - 1]
-    D[0, n - 1] = 1.0 / h[n - 1]
-    D[n - 1, 0] = 1.0 / h[n - 1]
-
-    for i in range(1, n):
-        B[i, i] = (h[i - 1] + h[i]) / 3.0
-        B[i, i - 1] = h[i - 1] / 6.0
-        B[i - 1, i] = h[i - 1] / 6.0
-
-        D[i, i] = -1.0 / h[i - 1] - 1.0 / h[i]
-        D[i, i - 1] = 1.0 / h[i - 1]
-        D[i - 1, i] = 1.0 / h[i - 1]
-
-    return np.linalg.solve(B, D)
-
-
-def _map_cyclic(
-    x: npt.NDArray[np.floating], lbound: float, ubound: float
-) -> npt.NDArray[np.floating]:
-    """Map values into ``[lbound, ubound]`` cyclically."""
-    x = np.copy(x)
-    period = ubound - lbound
-    mask_above = x > ubound
-    mask_below = x < lbound
-    x[mask_above] = lbound + (x[mask_above] - ubound) % period
-    x[mask_below] = ubound - (lbound - x[mask_below]) % period
-    return x
-
-
-def _build_basis_matrix(
-    x: npt.NDArray[np.floating],
-    knots: npt.NDArray[np.floating],
-    cyclic: bool = False,
-) -> npt.NDArray[np.floating]:
-    """Build cubic regression spline basis matrix.
-
-    Natural (``cyclic=False``): returns ``(n, k)`` matrix.
-    Cyclic (``cyclic=True``): returns ``(n, k-1)`` matrix.
-
-    Wood (2006) p. 145, eq. 4.2.
-
-    Parameters
-    ----------
-    x : np.ndarray
-        Data values, shape ``(n,)``.
-    knots : np.ndarray
-        Sorted knot locations, shape ``(k,)``.
-    cyclic : bool
-        If True, build cyclic (periodic) basis.
-
-    Returns
-    -------
-    np.ndarray
-        Basis matrix.
-    """
-    k = len(knots)
-    n_basis = k - 1 if cyclic else k
-
-    if cyclic:
-        x = _map_cyclic(x, knots[0], knots[-1])
-
-    ajm, ajp, cjm, cjp, j = _compute_base_functions(x, knots)
-
-    j1 = j + 1
-    if cyclic:
-        j1[j1 == k - 1] = 0
-
-    # F matrix: maps spline values to 2nd derivatives
-    F = _cyclic_f(knots) if cyclic else _natural_f(knots)
-
-    # Build basis: X[i,:] = ajm*e_j + ajp*e_j1 + cjm*F[j,:] + cjp*F[j1,:]
-    eye = np.eye(n_basis)
-    X = (
-        ajm[:, np.newaxis] * eye[j, :]
-        + ajp[:, np.newaxis] * eye[j1, :]
-        + cjm[:, np.newaxis] * F[j, :]
-        + cjp[:, np.newaxis] * F[j1, :]
-    )
-    return X
-
-
-# ---------------------------------------------------------------------------
-# Penalty matrix construction
-# ---------------------------------------------------------------------------
-
-
-def _build_natural_penalty(
-    knots: npt.NDArray[np.floating],
-) -> npt.NDArray[np.floating]:
-    """Build penalty for natural cubic regression spline.
-
-    Computes ``S = D.T @ B^{-1} @ D`` where D is the ``(k-2, k)``
-    second-difference matrix and B is the ``(k-2, k-2)`` tridiagonal
-    mass matrix. S has shape ``(k, k)``, rank ``k-2``, and a 2D null
-    space spanned by constant and linear functions.
-    """
-    k = len(knots)
-    h = np.diff(knots)
-
-    # D matrix (k-2, k)
-    D = np.zeros((k - 2, k))
-    for i in range(k - 2):
-        D[i, i] = 1.0 / h[i]
-        D[i, i + 1] = -(1.0 / h[i] + 1.0 / h[i + 1])
-        D[i, i + 2] = 1.0 / h[i + 1]
-
-    # B matrix (k-2, k-2) — banded storage for tridiagonal solve
-    diag = (h[:-1] + h[1:]) / 3.0
-    off_diag = h[1:-1] / 6.0
-    banded_B = np.array(
-        [
-            np.r_[0.0, off_diag],
-            diag,
-            np.r_[off_diag, 0.0],
-        ]
-    )
-
-    # S = D.T @ (B^{-1} @ D)
-    F_inner = linalg.solve_banded((1, 1), banded_B, D)
-    S = D.T @ F_inner
-    S = 0.5 * (S + S.T)
-    return S
-
-
-def _build_cyclic_penalty(
-    knots: npt.NDArray[np.floating],
-) -> npt.NDArray[np.floating]:
-    """Build penalty for cyclic cubic regression spline.
-
-    Computes ``S = D.T @ B^{-1} @ D`` where D and B are ``(k-1, k-1)``
-    circulant tridiagonal matrices with wrap-around corners. S has
-    shape ``(k-1, k-1)``, rank ``k-2``, and a 1D null space (constants).
-    """
-    h = np.diff(knots)
-    n = len(knots) - 1
-
-    B = np.zeros((n, n))
-    D = np.zeros((n, n))
-
-    # Wrap-around corner entries
-    B[0, 0] = (h[n - 1] + h[0]) / 3.0
-    B[0, n - 1] = h[n - 1] / 6.0
-    B[n - 1, 0] = h[n - 1] / 6.0
-
-    D[0, 0] = -1.0 / h[0] - 1.0 / h[n - 1]
-    D[0, n - 1] = 1.0 / h[n - 1]
-    D[n - 1, 0] = 1.0 / h[n - 1]
-
-    for i in range(1, n):
-        B[i, i] = (h[i - 1] + h[i]) / 3.0
-        B[i, i - 1] = h[i - 1] / 6.0
-        B[i - 1, i] = h[i - 1] / 6.0
-
-        D[i, i] = -1.0 / h[i - 1] - 1.0 / h[i]
-        D[i, i - 1] = 1.0 / h[i - 1]
-        D[i - 1, i] = 1.0 / h[i - 1]
-
-    # S = D.T @ (B^{-1} @ D)
-    F = np.linalg.solve(B, D)
-    S = D.T @ F
-    S = 0.5 * (S + S.T)
-    return S
-
-
-# ---------------------------------------------------------------------------
-# Smooth classes
-# ---------------------------------------------------------------------------
-
 
 class CubicRegressionSmooth(Smooth):
     """Natural cubic regression spline smooth (bs="cr").
@@ -356,10 +42,278 @@ class CubicRegressionSmooth(Smooth):
         super().__init__(spec)
         self._X: npt.NDArray[np.floating] | None = None
         self._S: npt.NDArray[np.floating] | None = None
+        self._F: npt.NDArray[np.floating] | None = None
         self._knots: npt.NDArray[np.floating] | None = None
         self._k: int = 0
-        self._is_setup: bool = False
         self._cyclic: bool = False
+
+    # ------------------------------------------------------------------
+    # Static helpers (pure computation, no instance state)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _place_knots(x: npt.NDArray[np.floating], k: int) -> npt.NDArray[np.floating]:
+        """Place k knots at equally-spaced rank positions through unique values.
+
+        Ports R's ``place.knots()`` exactly: linearly interpolate k
+        equally-spaced fractional indices through the sorted unique values.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            1D covariate values.
+        k : int
+            Number of knots to place.
+
+        Returns
+        -------
+        np.ndarray
+            Sorted knot locations, shape ``(k,)``.
+        """
+        x_unique = np.sort(np.unique(x))
+        n = len(x_unique)
+        indices = np.linspace(0, n - 1, k)
+        return np.interp(indices, np.arange(n), x_unique)
+
+    @staticmethod
+    def _find_knot_intervals(
+        x: npt.NDArray[np.floating], knots: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.intp]:
+        """Find the knot interval index for each x value.
+
+        Returns array ``j`` such that ``knots[j[i]] <= x[i] < knots[j[i]+1]``,
+        clamped to ``[0, len(knots) - 2]``.
+        """
+        j = np.searchsorted(knots, x) - 1
+        return np.clip(j, 0, len(knots) - 2)
+
+    @staticmethod
+    def _compute_base_functions(
+        x: npt.NDArray[np.floating], knots: npt.NDArray[np.floating]
+    ) -> tuple[
+        npt.NDArray[np.floating],
+        npt.NDArray[np.floating],
+        npt.NDArray[np.floating],
+        npt.NDArray[np.floating],
+        npt.NDArray[np.intp],
+    ]:
+        """Compute the 4 base functions for cubic spline evaluation.
+
+        Following Wood (2006) p. 146 and mgcv's ``crspl()`` for
+        linear extrapolation beyond the knot range.
+
+        Returns ``(ajm, ajp, cjm, cjp, j)`` where ajm/ajp are linear
+        interpolation weights and cjm/cjp are cubic correction weights.
+        """
+        j = CubicRegressionSmooth._find_knot_intervals(x, knots)
+
+        h = np.diff(knots)
+        hj = h[j]
+        xj1_x = knots[j + 1] - x
+        x_xj = x - knots[j]
+
+        # Linear interpolation weights
+        ajm = xj1_x / hj
+        ajp = x_xj / hj
+
+        # Cubic correction weights (linear extrapolation beyond boundaries)
+        cjm_3 = xj1_x**3 / (6.0 * hj)
+        cjm_3[x > knots[-1]] = 0.0
+        cjm_1 = hj * xj1_x / 6.0
+        cjm = cjm_3 - cjm_1
+
+        cjp_3 = x_xj**3 / (6.0 * hj)
+        cjp_3[x < knots[0]] = 0.0
+        cjp_1 = hj * x_xj / 6.0
+        cjp = cjp_3 - cjp_1
+
+        return ajm, ajp, cjm, cjp, j
+
+    @staticmethod
+    def _map_cyclic(
+        x: npt.NDArray[np.floating], lbound: float, ubound: float
+    ) -> npt.NDArray[np.floating]:
+        """Map values into ``[lbound, ubound]`` cyclically."""
+        x = np.copy(x)
+        period = ubound - lbound
+        mask_above = x > ubound
+        mask_below = x < lbound
+        x[mask_above] = lbound + (x[mask_above] - ubound) % period
+        x[mask_below] = ubound - (lbound - x[mask_below]) % period
+        return x
+
+    @staticmethod
+    def _compute_natural_f_and_penalty(
+        knots: npt.NDArray[np.floating],
+    ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+        """Compute F matrix and penalty S for natural cubic spline.
+
+        Constructs B, D once, solves ``F_inner = B^{-1} D`` once, and
+        derives both F (for basis construction) and S (penalty) from the
+        same intermediates.
+
+        Returns
+        -------
+        F : np.ndarray
+            Second-derivative mapping, shape ``(k, k)``.
+        S : np.ndarray
+            Penalty matrix ``D.T @ F_inner``, shape ``(k, k)``.
+        """
+        h = np.diff(knots)
+        k = len(knots)
+
+        # B matrix (k-2, k-2) tridiagonal — banded storage
+        diag = (h[:-1] + h[1:]) / 3.0
+        off_diag = h[1:-1] / 6.0
+        banded_B = np.array(
+            [
+                np.r_[0.0, off_diag],
+                diag,
+                np.r_[off_diag, 0.0],
+            ]
+        )
+
+        # D matrix (k-2, k)
+        D = np.zeros((k - 2, k))
+        for i in range(k - 2):
+            D[i, i] = 1.0 / h[i]
+            D[i, i + 1] = -(1.0 / h[i] + 1.0 / h[i + 1])
+            D[i, i + 2] = 1.0 / h[i + 1]
+
+        # Single solve: F_inner = B^{-1} @ D, shape (k-2, k)
+        F_inner = linalg.solve_banded((1, 1), banded_B, D)
+
+        # F for basis: pad with zero rows for natural boundary conditions
+        F = np.vstack([np.zeros(k), F_inner, np.zeros(k)])
+
+        # S for penalty
+        S = D.T @ F_inner
+        S = 0.5 * (S + S.T)
+
+        return F, S
+
+    @staticmethod
+    def _compute_cyclic_f_and_penalty(
+        knots: npt.NDArray[np.floating],
+    ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+        """Compute F matrix and penalty S for cyclic cubic spline.
+
+        Constructs B, D once, solves ``F = B^{-1} D`` once, and
+        derives both F (for basis construction) and S (penalty) from the
+        same intermediates.
+
+        Returns
+        -------
+        F : np.ndarray
+            Second-derivative mapping, shape ``(k-1, k-1)``.
+        S : np.ndarray
+            Penalty matrix ``D.T @ F``, shape ``(k-1, k-1)``.
+        """
+        h = np.diff(knots)
+        n = len(knots) - 1
+
+        # B and D matrices (n, n) — circulant tridiagonal with wrap-around
+        B = np.zeros((n, n))
+        D = np.zeros((n, n))
+
+        # Wrap-around corner entries
+        B[0, 0] = (h[n - 1] + h[0]) / 3.0
+        B[0, n - 1] = h[n - 1] / 6.0
+        B[n - 1, 0] = h[n - 1] / 6.0
+
+        D[0, 0] = -1.0 / h[0] - 1.0 / h[n - 1]
+        D[0, n - 1] = 1.0 / h[n - 1]
+        D[n - 1, 0] = 1.0 / h[n - 1]
+
+        for i in range(1, n):
+            B[i, i] = (h[i - 1] + h[i]) / 3.0
+            B[i, i - 1] = h[i - 1] / 6.0
+            B[i - 1, i] = h[i - 1] / 6.0
+
+            D[i, i] = -1.0 / h[i - 1] - 1.0 / h[i]
+            D[i, i - 1] = 1.0 / h[i - 1]
+            D[i - 1, i] = 1.0 / h[i - 1]
+
+        # Single solve
+        F = np.linalg.solve(B, D)
+
+        S = D.T @ F
+        S = 0.5 * (S + S.T)
+
+        return F, S
+
+    # ------------------------------------------------------------------
+    # Template methods (overridden by subclasses)
+    # ------------------------------------------------------------------
+
+    def _compute_f_and_penalty(
+        self, knots: npt.NDArray[np.floating]
+    ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+        """Compute F and S matrices for this spline type.
+
+        Overridden by CyclicCubicSmooth to use cyclic boundary conditions.
+
+        Returns
+        -------
+        F : np.ndarray
+            Second-derivative mapping matrix.
+        S : np.ndarray
+            Penalty matrix.
+        """
+        return self._compute_natural_f_and_penalty(knots)
+
+    def _build_basis_matrix(
+        self,
+        x: npt.NDArray[np.floating],
+        knots: npt.NDArray[np.floating],
+        F: npt.NDArray[np.floating],
+    ) -> npt.NDArray[np.floating]:
+        """Build cubic regression spline basis matrix.
+
+        Natural: returns ``(n, k)`` matrix.
+        Cyclic: returns ``(n, k-1)`` matrix.
+
+        Wood (2006) p. 145, eq. 4.2.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Data values, shape ``(n,)``.
+        knots : np.ndarray
+            Sorted knot locations, shape ``(k,)``.
+        F : np.ndarray
+            Pre-computed second-derivative mapping matrix.
+
+        Returns
+        -------
+        np.ndarray
+            Basis matrix.
+        """
+        k = len(knots)
+        n_basis = k - 1 if self._cyclic else k
+
+        if self._cyclic:
+            x = self._map_cyclic(x, knots[0], knots[-1])
+
+        ajm, ajp, cjm, cjp, j = self._compute_base_functions(x, knots)
+
+        j1 = j + 1
+        if self._cyclic:
+            j1[j1 == k - 1] = 0
+
+        # Build basis: X[i,:] = ajm*e_j + ajp*e_j1 + cjm*F[j,:] + cjp*F[j1,:]
+        eye = np.eye(n_basis)
+        X = (
+            ajm[:, np.newaxis] * eye[j, :]
+            + ajp[:, np.newaxis] * eye[j1, :]
+            + cjm[:, np.newaxis] * F[j, :]
+            + cjp[:, np.newaxis] * F[j1, :]
+        )
+        return X
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
         """Construct cubic regression spline basis from data.
@@ -394,28 +348,22 @@ class CubicRegressionSmooth(Smooth):
                 f"({n_unique}). Reduce k or add more distinct data."
             )
 
-        # Place knots and build basis + penalty
-        knots = _place_knots(x, k)
+        # Place knots and build F + S together (single solve)
+        knots = self._place_knots(x, k)
         self._knots = knots
-        self._X = _build_basis_matrix(x, knots, cyclic=self._cyclic)
-        self._S = self._build_penalty(knots)
+
+        F, S = self._compute_f_and_penalty(knots)
+
+        self._F = F
+        self._X = self._build_basis_matrix(x, knots, F)
+        self._S = S
 
         # Apply shrinkage before normalization (matching R's order:
         # smooth.construct modifies S, then smoothCon normalizes)
         self._S = self._apply_shrinkage(self._S)
 
-        # Normalize penalty: S = S / S.scale
-        # Replicates R's smoothCon() normalization:
-        #   maXX = norm(X, type="I")^2
-        #   S.scale = norm(S, type="O") / maXX
-        norm_X_inf = np.linalg.norm(self._X, ord=np.inf)
-        norm_S_1 = np.linalg.norm(self._S, ord=1)
-        maXX = norm_X_inf**2
-        if maXX > 0:
-            self._s_scale = norm_S_1 / maXX
-            self._S = self._S / self._s_scale
-        else:
-            self._s_scale = 1.0
+        # Normalize penalty (R's smoothCon normalization)
+        [self._S], self._s_scale = self._smoothcon_normalize(self._X, [self._S])
 
         # Set dimensions
         if self._cyclic:
@@ -429,28 +377,16 @@ class CubicRegressionSmooth(Smooth):
 
         self._is_setup = True
 
-    def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-        """Hook for shrinkage penalty modification. No-op in base class."""
-        return S
-
-    def _build_penalty(
-        self, knots: npt.NDArray[np.floating]
-    ) -> npt.NDArray[np.floating]:
-        """Build the penalty matrix. Overridden in CyclicCubicSmooth."""
-        return _build_natural_penalty(knots)
-
     def build_design_matrix(
         self, data: dict[str, npt.NDArray[np.floating]]
     ) -> npt.NDArray[np.floating]:
         """Return the design matrix for the given data."""
-        if not self._is_setup:
-            raise RuntimeError("Call setup() before build_design_matrix().")
+        self._require_setup()
         return self.predict_matrix(data)
 
     def build_penalty_matrices(self) -> list[Penalty]:
         """Return the cubic spline penalty matrix."""
-        if not self._is_setup:
-            raise RuntimeError("Call setup() before build_penalty_matrices().")
+        self._require_setup()
         return [
             Penalty(
                 self._S,
@@ -463,10 +399,9 @@ class CubicRegressionSmooth(Smooth):
         self, new_data: dict[str, npt.NDArray[np.floating]]
     ) -> npt.NDArray[np.floating]:
         """Build prediction matrix for new data."""
-        if not self._is_setup:
-            raise RuntimeError("Call setup() before predict_matrix().")
+        self._require_setup()
         x = np.asarray(new_data[self.spec.variables[0]], dtype=float)
-        return _build_basis_matrix(x, self._knots, cyclic=self._cyclic)
+        return self._build_basis_matrix(x, self._knots, self._F)
 
 
 class CubicShrinkageSmooth(CubicRegressionSmooth):
@@ -493,35 +428,10 @@ class CubicShrinkageSmooth(CubicRegressionSmooth):
         self.rank = self._k
 
     def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-        """Apply chained geometric shrinkage matching R's cs.
-
-        R source (smooth.r, smooth.construct.cs.smooth.spec):
-          es$values[nk-1] <- es$values[nk-2]*shrink
-          es$values[nk]   <- es$values[nk-1]*shrink
-        Each successive null eigenvalue is shrink times the previous.
-
-        Uses additive update (S + delta) rather than full reconstruction
-        to preserve range-space eigenvalues exactly.
-        """
-        # Use driver='evr' (dsyevr) to match R's eigen(symmetric=TRUE)
-        eigvals, eigvecs = linalg.eigh(S, driver="evr")
-
-        tol = np.max(np.abs(eigvals)) * self._k * np.finfo(float).eps
-        nonzero_mask = np.abs(eigvals) > tol
-        null_rank = int(np.sum(~nonzero_mask))
-
-        if null_rank > 0:
-            if np.any(nonzero_mask):
-                smallest_nonzero = np.min(np.abs(eigvals[nonzero_mask]))
-            else:
-                smallest_nonzero = 1.0
-            # Chained geometric: ascending order gets
-            # [smallest * shrink^null_rank, ..., smallest * shrink]
-            factors = self._shrink ** np.arange(null_rank, 0, -1)
-            eigvals[:null_rank] = smallest_nonzero * factors
-
-        S_new = eigvecs @ np.diag(eigvals) @ eigvecs.T
-        return 0.5 * (S_new + S_new.T)
+        """Apply chained geometric shrinkage matching R's cs."""
+        return self._decompose_and_replace(
+            S, self._k, self._shrink, self._chained_geometric_replacement
+        )
 
 
 class CyclicCubicSmooth(CubicRegressionSmooth):
@@ -541,8 +451,8 @@ class CyclicCubicSmooth(CubicRegressionSmooth):
         super().__init__(spec)
         self._cyclic = True
 
-    def _build_penalty(
+    def _compute_f_and_penalty(
         self, knots: npt.NDArray[np.floating]
-    ) -> npt.NDArray[np.floating]:
-        """Build the cyclic penalty matrix."""
-        return _build_cyclic_penalty(knots)
+    ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+        """Compute F and S matrices with cyclic boundary conditions."""
+        return self._compute_cyclic_f_and_penalty(knots)

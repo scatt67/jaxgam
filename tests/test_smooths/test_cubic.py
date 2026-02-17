@@ -30,9 +30,10 @@ from pymgcv.smooths.cubic import (
     CubicRegressionSmooth,
     CubicShrinkageSmooth,
     CyclicCubicSmooth,
-    _place_knots,
 )
 from tests.tolerances import MODERATE, STRICT
+
+_place_knots = CubicRegressionSmooth._place_knots
 
 # ---------------------------------------------------------------------------
 # Helpers

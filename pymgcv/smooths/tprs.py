@@ -17,7 +17,6 @@ from math import ceil, comb, factorial, pi
 import numba
 import numpy as np
 import numpy.typing as npt
-from scipy import linalg as scipy_linalg
 from scipy.special import gamma as gamma_func
 
 from pymgcv.formula.terms import SmoothSpec
@@ -559,7 +558,6 @@ class TPRSSmooth(Smooth):
         self._M: int = 0
         self._k: int = 0
         self._d: int = 0
-        self._is_setup: bool = False
 
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
         """Construct TPRS basis from data.
@@ -695,15 +693,7 @@ class TPRSSmooth(Smooth):
         S = self._apply_shrinkage(S)
 
         # Step 14: smoothCon penalty normalization
-        # Replicates R's smoothCon(): S.scale = norm(S,"O") / norm(X,"I")^2
-        norm_X_inf = np.linalg.norm(X_design, ord=np.inf)
-        norm_S_1 = np.linalg.norm(S, ord=1)
-        maXX = norm_X_inf**2
-        if maXX > 0:
-            self._s_scale = norm_S_1 / maXX
-            S = S / self._s_scale
-        else:
-            self._s_scale = 1.0
+        [S], self._s_scale = self._smoothcon_normalize(X_design, [S])
 
         # Step 15: Store results
         self._X = X_design
@@ -715,10 +705,6 @@ class TPRSSmooth(Smooth):
         self.null_space_dim = self._M
         self._is_setup = True
 
-    def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-        """Hook for shrinkage penalty modification. No-op in base class."""
-        return S
-
     def build_design_matrix(
         self, data: dict[str, npt.NDArray[np.floating]]
     ) -> npt.NDArray[np.floating]:
@@ -727,8 +713,7 @@ class TPRSSmooth(Smooth):
         If ``data`` matches the setup data, returns the stored matrix.
         Otherwise builds a new prediction matrix.
         """
-        if not self._is_setup:
-            raise RuntimeError("Call setup() before build_design_matrix().")
+        self._require_setup()
         # For the training data, return stored X
         # For new data, use predict_matrix
         cols = [np.asarray(data[v], dtype=float) for v in self.spec.variables]
@@ -755,8 +740,7 @@ class TPRSSmooth(Smooth):
         list[Penalty]
             Single penalty matrix for the TPRS smooth.
         """
-        if not self._is_setup:
-            raise RuntimeError("Call setup() before build_penalty_matrices().")
+        self._require_setup()
         return [
             Penalty(
                 self._S,
@@ -780,8 +764,7 @@ class TPRSSmooth(Smooth):
         np.ndarray
             Prediction matrix, shape ``(n_new, k)``.
         """
-        if not self._is_setup:
-            raise RuntimeError("Call setup() before predict_matrix().")
+        self._require_setup()
 
         raw = np.column_stack(
             [np.asarray(new_data[v], dtype=float) for v in self.spec.variables]
@@ -838,29 +821,7 @@ class TPRSShrinkageSmooth(TPRSSmooth):
         self.rank = self._k
 
     def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
-        """Apply uniform shrinkage matching R's ts.
-
-        R source (smooth.r, smooth.construct.ts.smooth.spec):
-          es$values[(k-M+1):k] <- es$values[k-M]*shrink
-        All null-space eigenvalues get the same value.
-
-        Uses additive update (S + delta) rather than full reconstruction
-        to preserve range-space eigenvalues exactly.
-        """
-        # Use driver='evr' (dsyevr) to match R's eigen(symmetric=TRUE)
-        eigvals, eigvecs = scipy_linalg.eigh(S, driver="evr")
-
-        tol = np.max(np.abs(eigvals)) * self._k * np.finfo(float).eps
-        nonzero_mask = np.abs(eigvals) > tol
-        null_rank = int(np.sum(~nonzero_mask))
-
-        if null_rank > 0:
-            if np.any(nonzero_mask):
-                smallest_nonzero = np.min(np.abs(eigvals[nonzero_mask]))
-            else:
-                smallest_nonzero = 1.0
-            # Uniform: all null eigenvalues get same value
-            eigvals[:null_rank] = smallest_nonzero * self._shrink
-
-        S_new = eigvecs @ np.diag(eigvals) @ eigvecs.T
-        return 0.5 * (S_new + S_new.T)
+        """Apply uniform shrinkage matching R's ts."""
+        return self._decompose_and_replace(
+            S, self._k, self._shrink, self._uniform_replacement
+        )
