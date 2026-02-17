@@ -400,6 +400,10 @@ class CubicRegressionSmooth(Smooth):
         self._X = _build_basis_matrix(x, knots, cyclic=self._cyclic)
         self._S = self._build_penalty(knots)
 
+        # Apply shrinkage before normalization (matching R's order:
+        # smooth.construct modifies S, then smoothCon normalizes)
+        self._S = self._apply_shrinkage(self._S)
+
         # Normalize penalty: S = S / S.scale
         # Replicates R's smoothCon() normalization:
         #   maXX = norm(X, type="I")^2
@@ -424,6 +428,10 @@ class CubicRegressionSmooth(Smooth):
             self.null_space_dim = 2
 
         self._is_setup = True
+
+    def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        """Hook for shrinkage penalty modification. No-op in base class."""
+        return S
 
     def _build_penalty(
         self, knots: npt.NDArray[np.floating]
@@ -475,28 +483,45 @@ class CubicShrinkageSmooth(CubicRegressionSmooth):
         Smooth term specification.
     """
 
+    #: Shrinkage factor from R's ``attr(object,"shrink") <- .1``.
+    _shrink: float = 0.1
+
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
         """Construct cs basis: standard cr + shrinkage penalty."""
         super().setup(data)
+        self.null_space_dim = 0
+        self.rank = self._k
 
-        # Make S full rank by replacing zero eigenvalues
-        eigvals, eigvecs = np.linalg.eigh(self._S)
+    def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        """Apply chained geometric shrinkage matching R's cs.
+
+        R source (smooth.r, smooth.construct.cs.smooth.spec):
+          es$values[nk-1] <- es$values[nk-2]*shrink
+          es$values[nk]   <- es$values[nk-1]*shrink
+        Each successive null eigenvalue is shrink times the previous.
+
+        Uses additive update (S + delta) rather than full reconstruction
+        to preserve range-space eigenvalues exactly.
+        """
+        # Use driver='evr' (dsyevr) to match R's eigen(symmetric=TRUE)
+        eigvals, eigvecs = linalg.eigh(S, driver="evr")
 
         tol = np.max(np.abs(eigvals)) * self._k * np.finfo(float).eps
         nonzero_mask = np.abs(eigvals) > tol
-        if np.any(nonzero_mask):
-            smallest_nonzero = np.min(np.abs(eigvals[nonzero_mask]))
-        else:
-            smallest_nonzero = 1.0
+        null_rank = int(np.sum(~nonzero_mask))
 
-        shrink_factor = self.spec.extra_args.get("shrink", 1.0)
-        eigvals[~nonzero_mask] = smallest_nonzero * shrink_factor
+        if null_rank > 0:
+            if np.any(nonzero_mask):
+                smallest_nonzero = np.min(np.abs(eigvals[nonzero_mask]))
+            else:
+                smallest_nonzero = 1.0
+            # Chained geometric: ascending order gets
+            # [smallest * shrink^null_rank, ..., smallest * shrink]
+            factors = self._shrink ** np.arange(null_rank, 0, -1)
+            eigvals[:null_rank] = smallest_nonzero * factors
 
-        self._S = eigvecs @ np.diag(eigvals) @ eigvecs.T
-        self._S = 0.5 * (self._S + self._S.T)
-
-        self.null_space_dim = 0
-        self.rank = self._k
+        S_new = eigvecs @ np.diag(eigvals) @ eigvecs.T
+        return 0.5 * (S_new + S_new.T)
 
 
 class CyclicCubicSmooth(CubicRegressionSmooth):

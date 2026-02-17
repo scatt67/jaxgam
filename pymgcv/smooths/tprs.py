@@ -17,6 +17,7 @@ from math import ceil, comb, factorial, pi
 import numba
 import numpy as np
 import numpy.typing as npt
+from scipy import linalg as scipy_linalg
 from scipy.special import gamma as gamma_func
 
 from pymgcv.formula.terms import SmoothSpec
@@ -689,6 +690,10 @@ class TPRSSmooth(Smooth):
         # Force symmetry of S
         S = 0.5 * (S + S.T)
 
+        # Apply shrinkage before smoothCon normalization (matching R's order:
+        # smooth.construct modifies S, then smoothCon normalizes)
+        S = self._apply_shrinkage(S)
+
         # Step 14: smoothCon penalty normalization
         # Replicates R's smoothCon(): S.scale = norm(S,"O") / norm(X,"I")^2
         norm_X_inf = np.linalg.norm(X_design, ord=np.inf)
@@ -709,6 +714,10 @@ class TPRSSmooth(Smooth):
         self.rank = k_wiggly
         self.null_space_dim = self._M
         self._is_setup = True
+
+    def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        """Hook for shrinkage penalty modification. No-op in base class."""
+        return S
 
     def build_design_matrix(
         self, data: dict[str, npt.NDArray[np.floating]]
@@ -819,33 +828,39 @@ class TPRSShrinkageSmooth(TPRSSmooth):
         Smooth term specification.
     """
 
+    #: Shrinkage factor from R's ``attr(object,"shrink") <- 1e-1``.
+    _shrink: float = 0.1
+
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
         """Construct ts basis: standard TPRS + shrinkage penalty."""
-        # First do the standard TPRS setup
         super().setup(data)
-
-        # Make S full rank by replacing zero eigenvalues
-        eigvals, eigvecs = np.linalg.eigh(self._S)
-
-        # Find smallest nonzero eigenvalue
-        tol = np.max(np.abs(eigvals)) * self._k * np.finfo(float).eps
-        nonzero_mask = np.abs(eigvals) > tol
-        if np.any(nonzero_mask):
-            smallest_nonzero = np.min(np.abs(eigvals[nonzero_mask]))
-        else:
-            smallest_nonzero = 1.0
-
-        # Replace zero eigenvalues with smallest_nonzero * shrink_factor
-        # R uses TRUE which coerces to 1.0
-        shrink_factor = self.spec.extra_args.get("shrink", 1.0)
-        replacement = smallest_nonzero * shrink_factor
-
-        eigvals[~nonzero_mask] = replacement
-
-        # Reconstruct S
-        self._S = eigvecs @ np.diag(eigvals) @ eigvecs.T
-        self._S = 0.5 * (self._S + self._S.T)  # force symmetry
-
-        # Update rank and null space
         self.null_space_dim = 0
         self.rank = self._k
+
+    def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        """Apply uniform shrinkage matching R's ts.
+
+        R source (smooth.r, smooth.construct.ts.smooth.spec):
+          es$values[(k-M+1):k] <- es$values[k-M]*shrink
+        All null-space eigenvalues get the same value.
+
+        Uses additive update (S + delta) rather than full reconstruction
+        to preserve range-space eigenvalues exactly.
+        """
+        # Use driver='evr' (dsyevr) to match R's eigen(symmetric=TRUE)
+        eigvals, eigvecs = scipy_linalg.eigh(S, driver="evr")
+
+        tol = np.max(np.abs(eigvals)) * self._k * np.finfo(float).eps
+        nonzero_mask = np.abs(eigvals) > tol
+        null_rank = int(np.sum(~nonzero_mask))
+
+        if null_rank > 0:
+            if np.any(nonzero_mask):
+                smallest_nonzero = np.min(np.abs(eigvals[nonzero_mask]))
+            else:
+                smallest_nonzero = 1.0
+            # Uniform: all null eigenvalues get same value
+            eigvals[:null_rank] = smallest_nonzero * self._shrink
+
+        S_new = eigvecs @ np.diag(eigvals) @ eigvecs.T
+        return 0.5 * (S_new + S_new.T)

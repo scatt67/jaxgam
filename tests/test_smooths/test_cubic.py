@@ -205,9 +205,9 @@ class TestPenaltyConstruction:
 
         S = smooth.build_penalty_matrices()[0].S
         # S @ ones ≈ 0 (constant in null space)
-        np.testing.assert_allclose(S @ np.ones(k), np.zeros(k), atol=1e-10)
+        np.testing.assert_allclose(S @ np.ones(k), np.zeros(k), atol=STRICT.atol)
         # S @ knots ≈ 0 (linear in null space)
-        np.testing.assert_allclose(S @ smooth._knots, np.zeros(k), atol=1e-10)
+        np.testing.assert_allclose(S @ smooth._knots, np.zeros(k), atol=STRICT.atol)
 
     def test_cc_null_space_contains_constant(self) -> None:
         """cc null space contains constant function."""
@@ -217,7 +217,9 @@ class TestPenaltyConstruction:
         smooth.setup(_make_1d_data())
 
         S = smooth.build_penalty_matrices()[0].S
-        np.testing.assert_allclose(S @ np.ones(k - 1), np.zeros(k - 1), atol=1e-10)
+        np.testing.assert_allclose(
+            S @ np.ones(k - 1), np.zeros(k - 1), atol=STRICT.atol
+        )
 
 
 # ===========================================================================
@@ -337,7 +339,13 @@ def _r_available() -> bool:
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRComparison:
-    """Compare cubic spline construction against R's smoothCon()."""
+    """Compare cubic spline construction against R's smoothCon().
+
+    Unlike TPRS, cubic splines involve no eigendecomposition and thus
+    have no LAPACK sign ambiguity. Basis matrices X and penalty matrices
+    S are fully deterministic and match R element-wise at machine
+    precision (~1e-15). All primary tests use STRICT tolerance.
+    """
 
     def _setup_cr(self) -> tuple:
         """Shared cr setup for R comparison."""
@@ -357,21 +365,74 @@ class TestRComparison:
         smooth.setup({"x": x})
         return smooth, r_result, x
 
-    def test_cr_column_space_vs_r(self) -> None:
-        """cr column space matches R."""
+    def _setup_cc(self) -> tuple:
+        """Shared cc setup for R comparison."""
+        import pandas as pd
+
+        from pymgcv.compat.r_bridge import RBridge
+
+        rng = np.random.default_rng(42)
+        x = rng.uniform(0, 1, 100)
+        data = pd.DataFrame({"x": x})
+
+        bridge = RBridge()
+        r_result = bridge.smooth_construct("s(x, bs='cc', k=10)", data)
+
+        spec = _make_spec(["x"], bs="cc", k=10)
+        smooth = CyclicCubicSmooth(spec)
+        smooth.setup({"x": x})
+        return smooth, r_result, x
+
+    def _setup_cs(self) -> tuple:
+        """Shared cs setup for R comparison."""
+        import pandas as pd
+
+        from pymgcv.compat.r_bridge import RBridge
+
+        rng = np.random.default_rng(42)
+        x = rng.uniform(0, 1, 100)
+        data = pd.DataFrame({"x": x})
+
+        bridge = RBridge()
+        r_result = bridge.smooth_construct("s(x, bs='cs', k=10)", data)
+
+        spec = _make_spec(["x"], bs="cs", k=10)
+        smooth = CubicShrinkageSmooth(spec)
+        smooth.setup({"x": x})
+        return smooth, r_result, x
+
+    # --- cr element-wise tests (STRICT) ---
+
+    def test_cr_X_values_vs_r(self) -> None:
+        """cr basis matrix X matches R element-wise (STRICT).
+
+        Cubic splines are fully deterministic — no eigendecomposition,
+        no sign ambiguity. X should match at machine precision.
+        """
         smooth, r_result, x = self._setup_cr()
         X_py = smooth.build_design_matrix({"x": x})
         X_r = r_result["X"]
 
-        P_py = X_py @ np.linalg.pinv(X_py)
-        P_r = X_r @ np.linalg.pinv(X_r)
+        np.testing.assert_allclose(
+            X_py,
+            X_r,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="cr X values differ from R",
+        )
+
+    def test_cr_S_values_vs_r(self) -> None:
+        """cr penalty matrix S matches R element-wise (STRICT)."""
+        smooth, r_result, _x = self._setup_cr()
+        S_py = smooth.build_penalty_matrices()[0].S
+        S_r = r_result["S"][0]
 
         np.testing.assert_allclose(
-            P_py,
-            P_r,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="cr column spaces differ from R",
+            S_py,
+            S_r,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="cr S values differ from R",
         )
 
     def test_cr_rank_vs_r(self) -> None:
@@ -388,7 +449,7 @@ class TestRComparison:
 
         smooth, _r_result, x = self._setup_cr()
 
-        # Extract knots via rpy2 (the bridge doesn't export xp for cr)
+        # Extract knots via rpy2 (smoothCon doesn't export xp for cr)
         with ro.conversion.localconverter(
             ro.default_converter + pandas2ri.converter + numpy2ri.converter
         ):
@@ -414,74 +475,122 @@ class TestRComparison:
             err_msg="cr knot locations do not match R",
         )
 
-    def test_cc_column_space_vs_r(self) -> None:
-        """cc column space matches R."""
-        import pandas as pd
+    # --- cc element-wise tests (STRICT) ---
 
-        from pymgcv.compat.r_bridge import RBridge
-
-        rng = np.random.default_rng(42)
-        x = rng.uniform(0, 1, 100)
-        data = pd.DataFrame({"x": x})
-
-        bridge = RBridge()
-        r_result = bridge.smooth_construct("s(x, bs='cc', k=10)", data)
-
-        spec = _make_spec(["x"], bs="cc", k=10)
-        smooth = CyclicCubicSmooth(spec)
-        smooth.setup({"x": x})
+    def test_cc_X_values_vs_r(self) -> None:
+        """cc basis matrix X matches R element-wise (STRICT)."""
+        smooth, r_result, x = self._setup_cc()
         X_py = smooth.build_design_matrix({"x": x})
         X_r = r_result["X"]
 
-        P_py = X_py @ np.linalg.pinv(X_py)
-        P_r = X_r @ np.linalg.pinv(X_r)
-
         np.testing.assert_allclose(
-            P_py,
-            P_r,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="cc column spaces differ from R",
+            X_py,
+            X_r,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="cc X values differ from R",
         )
 
-    def test_cs_rank_vs_r(self) -> None:
-        """cs has full rank penalty matching R."""
-        import pandas as pd
-
-        from pymgcv.compat.r_bridge import RBridge
-
-        rng = np.random.default_rng(42)
-        x = rng.uniform(0, 1, 100)
-        data = pd.DataFrame({"x": x})
-
-        bridge = RBridge()
-        r_result = bridge.smooth_construct("s(x, bs='cs', k=10)", data)
-
-        spec = _make_spec(["x"], bs="cs", k=10)
-        smooth = CubicShrinkageSmooth(spec)
-        smooth.setup({"x": x})
-
-        assert smooth.rank == r_result["rank"]
-        assert smooth.null_space_dim == 0
-
-    def test_cr_penalty_eigenvalues_vs_r(self) -> None:
-        """cr penalty eigenvalues match R after smoothCon normalization."""
-        smooth, r_result, _x = self._setup_cr()
-
+    def test_cc_S_values_vs_r(self) -> None:
+        """cc penalty matrix S matches R element-wise (STRICT)."""
+        smooth, r_result, _x = self._setup_cc()
         S_py = smooth.build_penalty_matrices()[0].S
-        S_r = np.array(r_result["S"][0])
+        S_r = r_result["S"][0]
 
-        eigvals_py = np.sort(np.linalg.eigvalsh(S_py))
-        eigvals_r = np.sort(np.linalg.eigvalsh(S_r))
+        np.testing.assert_allclose(
+            S_py,
+            S_r,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="cc S values differ from R",
+        )
 
-        # Both are now smoothCon-normalized, compare directly
+    def test_cc_rank_vs_r(self) -> None:
+        """cc rank and null_space_dim match R."""
+        smooth, r_result, _x = self._setup_cc()
+        assert smooth.rank == r_result["rank"]
+        assert smooth.null_space_dim == r_result["null_space_dim"]
+
+    def test_cc_knots_vs_r(self) -> None:
+        """cc knot locations match R (STRICT)."""
+        import pandas as pd
+        import rpy2.robjects as ro
+        from rpy2.robjects import numpy2ri, pandas2ri
+
+        smooth, _r_result, x = self._setup_cc()
+
+        with ro.conversion.localconverter(
+            ro.default_converter + pandas2ri.converter + numpy2ri.converter
+        ):
+            r_df = ro.conversion.py2rpy(pd.DataFrame({"x": x}))
+        ro.globalenv["dat_input"] = r_df
+        r_knots = np.array(
+            ro.r(
+                """
+            library(mgcv)
+            dat <- as.data.frame(dat_input)
+            spec <- s(x, bs="cc", k=10)
+            spec <- eval(spec)
+            sm <- smooth.construct(spec, dat, knots=NULL)
+            sm$xp
+            """
+            )
+        )
+        np.testing.assert_allclose(
+            smooth._knots,
+            r_knots,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="cc knot locations do not match R",
+        )
+
+    # --- cs element-wise tests (STRICT) ---
+
+    def test_cs_X_values_vs_r(self) -> None:
+        """cs basis matrix X matches R element-wise (STRICT).
+
+        cs and cr share the same basis matrix X (shrinkage only
+        modifies S), so this also cross-validates the cr X test.
+        """
+        smooth, r_result, x = self._setup_cs()
+        X_py = smooth.build_design_matrix({"x": x})
+        X_r = r_result["X"]
+
+        np.testing.assert_allclose(
+            X_py,
+            X_r,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="cs X values differ from R",
+        )
+
+    def test_cs_S_eigenvalues_vs_r(self) -> None:
+        """cs penalty S eigenvalues match R.
+
+        cs S is reconstructed from eigenvectors after replacing zero
+        eigenvalues, so element-wise comparison may differ due to
+        LAPACK eigenvector ordering. Eigenvalue comparison is robust.
+        """
+        smooth, r_result, _x = self._setup_cs()
+        S_py = smooth.build_penalty_matrices()[0].S
+        S_r = r_result["S"][0]
+
+        eigvals_py = np.linalg.eigvalsh(S_py)
+        eigvals_r = np.linalg.eigvalsh(S_r)
+
         np.testing.assert_allclose(
             eigvals_py,
             eigvals_r,
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="cr penalty eigenvalues differ from R",
+            err_msg="cs S eigenvalues differ from R",
         )
+
+    def test_cs_rank_vs_r(self) -> None:
+        """cs has full rank penalty matching R."""
+        smooth, r_result, _x = self._setup_cs()
+        assert smooth.rank == r_result["rank"]
+        assert smooth.null_space_dim == 0
 
 
 # ===========================================================================

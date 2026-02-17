@@ -625,8 +625,8 @@ class TestRComparison:
             err_msg="2D S eigenvalues differ from mgcv",
         )
 
-    def test_ts_1d_column_space_vs_r(self) -> None:
-        """ts column space matches R (same basis as tp)."""
+    def _setup_ts(self) -> tuple:
+        """Shared ts setup for R comparison."""
         import pandas as pd
 
         from pymgcv.compat.r_bridge import RBridge
@@ -641,6 +641,11 @@ class TestRComparison:
         spec = _make_spec(["x"], bs="ts", k=10)
         smooth = TPRSShrinkageSmooth(spec)
         smooth.setup({"x": x})
+        return smooth, r_result, x
+
+    def test_ts_1d_column_space_vs_r(self) -> None:
+        """ts column space matches R (same basis as tp)."""
+        smooth, r_result, x = self._setup_ts()
         X_py = smooth.build_design_matrix({"x": x})
         X_r = r_result["X"]
 
@@ -655,23 +660,32 @@ class TestRComparison:
             err_msg="ts column spaces differ from R",
         )
 
+    def test_ts_1d_S_eigenvalues_vs_r(self) -> None:
+        """ts penalty S eigenvalues match R.
+
+        ts applies shrinkage (geometric factor replacement) then
+        smoothCon normalization. Eigenvalue comparison is used because
+        the null-space eigenvectors may differ between LAPACK
+        implementations, making element-wise S comparison unreliable.
+        """
+        smooth, r_result, _x = self._setup_ts()
+        S_py = smooth._S
+        S_r = r_result["S"][0]
+
+        eigvals_py = np.linalg.eigvalsh(S_py)
+        eigvals_r = np.linalg.eigvalsh(S_r)
+
+        np.testing.assert_allclose(
+            eigvals_py,
+            eigvals_r,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="ts S eigenvalues differ from R",
+        )
+
     def test_ts_1d_rank_vs_r(self) -> None:
         """ts has full rank penalty."""
-        import pandas as pd
-
-        from pymgcv.compat.r_bridge import RBridge
-
-        rng = np.random.default_rng(42)
-        x = rng.uniform(0, 1, 100)
-        data = pd.DataFrame({"x": x})
-
-        bridge = RBridge()
-        r_result = bridge.smooth_construct("s(x, bs='ts', k=10)", data)
-
-        spec = _make_spec(["x"], bs="ts", k=10)
-        smooth = TPRSShrinkageSmooth(spec)
-        smooth.setup({"x": x})
-
+        smooth, r_result, _x = self._setup_ts()
         assert smooth.rank == r_result["rank"]
         assert smooth.null_space_dim == 0
 
@@ -1054,20 +1068,23 @@ class TestCoveragePaths:
         smooth = TPRSShrinkageSmooth(spec)
         data = _make_1d_data(n=50)
 
-        # Patch TPRSSmooth.setup to zero out S before shrinkage logic runs
-        orig_setup = TPRSSmooth.setup
+        # Patch _apply_shrinkage's input: zero out S before shrinkage runs
+        orig_apply = TPRSShrinkageSmooth._apply_shrinkage
 
-        def patched_setup(self_inner, data_inner):
-            orig_setup(self_inner, data_inner)
-            self_inner._S = np.zeros_like(self_inner._S)
+        def patched_apply(self_inner, S):
+            return orig_apply(self_inner, np.zeros_like(S))
 
-        with unittest.mock.patch.object(TPRSSmooth, "setup", patched_setup):
+        with unittest.mock.patch.object(
+            TPRSShrinkageSmooth, "_apply_shrinkage", patched_apply
+        ):
             smooth.setup(data)
 
-        # After shrinkage with all-zero input eigenvalues, S should be
-        # replacement * I where replacement = 1.0 * shrink_factor
+        # After uniform shrinkage with all-zero input eigenvalues:
+        # smallest_nonzero = 1.0, all eigenvalues = 1.0 * 0.1 = 0.1
+        # After smoothCon renorm, all eigenvalues are equal
         assert smooth.rank == 5
         assert smooth.null_space_dim == 0
-        eigvals = np.linalg.eigvalsh(smooth._S)
-        # All eigenvalues should be equal (= 1.0 * shrink_factor)
-        np.testing.assert_allclose(eigvals, eigvals[0], rtol=STRICT.rtol)
+        eigvals = np.sort(np.linalg.eigvalsh(smooth._S))
+        assert np.all(eigvals > 0), "ts penalty should be strictly positive definite"
+        # All eigenvalues should be equal (uniform replacement)
+        np.testing.assert_allclose(eigvals, eigvals[0] * np.ones(5), rtol=STRICT.rtol)
