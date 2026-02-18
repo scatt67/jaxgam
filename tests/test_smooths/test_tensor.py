@@ -30,7 +30,12 @@ from pymgcv.smooths.tensor import (
     TensorProductSmooth,
     _row_tensor,
 )
-from tests.tolerances import MODERATE, STRICT
+from tests.tolerances import (
+    MODERATE,
+    STRICT,
+    normalize_column_signs,
+    normalize_symmetric_signs,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -619,16 +624,15 @@ class TestRComparison:
         """te(x1, x2, k=5, bs='tp'): basis matches R element-wise (MODERATE).
 
         TPRS marginals undergo SVD reparameterization in both R and Python.
-        MODERATE tolerance due to SVD numerical differences across LAPACK
-        implementations (typical abs diff ~1e-10).
+        Sign normalization handles LAPACK eigenvector sign ambiguity.
         """
         smooth, r_result, data = self._setup_te_tp()
         X_py = smooth.build_design_matrix(data)
         X_r = r_result["X"]
 
         np.testing.assert_allclose(
-            X_py,
-            X_r,
+            normalize_column_signs(X_py),
+            normalize_column_signs(X_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
             err_msg="te(tp) basis differs from R",
@@ -652,17 +656,19 @@ class TestRComparison:
     def test_te_tp_penalty_vs_r(self) -> None:
         """te(tp) penalty matrices match R element-wise (MODERATE).
 
-        MODERATE tolerance due to smoothCon normalization scale differences
-        from SVD reparameterization.
+        Sign normalization handles LAPACK eigenvector sign ambiguity
+        that propagates through SVD reparameterization.
         """
-        smooth, r_result, _data = self._setup_te_tp()
+        smooth, r_result, data = self._setup_te_tp()
+        X_py = smooth.build_design_matrix(data)
+        X_r = r_result["X"]
 
         for j, (py_pen, r_S) in enumerate(
             zip(smooth.build_penalty_matrices(), r_result["S"])
         ):
             np.testing.assert_allclose(
-                py_pen.S,
-                r_S,
+                normalize_symmetric_signs(py_pen.S, X_py),
+                normalize_symmetric_signs(r_S, X_r),
                 rtol=MODERATE.rtol,
                 atol=MODERATE.atol,
                 err_msg=f"te(tp) penalty {j} differs from R",
@@ -685,16 +691,16 @@ class TestRComparison:
     def test_ti_tp_basis_vs_r(self) -> None:
         """ti(x1, x2, k=5, bs='tp'): basis matches R element-wise (MODERATE).
 
-        MODERATE tolerance due to SVD numerical differences across LAPACK
-        implementations, compounded by constraint absorption.
+        Sign normalization handles LAPACK eigenvector sign ambiguity
+        compounded by constraint absorption.
         """
         smooth, r_result, data = self._setup_ti_tp()
         X_py = smooth.build_design_matrix(data)
         X_r = r_result["X"]
 
         np.testing.assert_allclose(
-            X_py,
-            X_r,
+            normalize_column_signs(X_py),
+            normalize_column_signs(X_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
             err_msg="ti(tp) basis differs from R",
@@ -717,14 +723,16 @@ class TestRComparison:
 
     def test_ti_tp_penalty_vs_r(self) -> None:
         """ti(tp) penalty matrices match R element-wise (MODERATE)."""
-        smooth, r_result, _data = self._setup_ti_tp()
+        smooth, r_result, data = self._setup_ti_tp()
+        X_py = smooth.build_design_matrix(data)
+        X_r = r_result["X"]
 
         for j, (py_pen, r_S) in enumerate(
             zip(smooth.build_penalty_matrices(), r_result["S"])
         ):
             np.testing.assert_allclose(
-                py_pen.S,
-                r_S,
+                normalize_symmetric_signs(py_pen.S, X_py),
+                normalize_symmetric_signs(r_S, X_r),
                 rtol=MODERATE.rtol,
                 atol=MODERATE.atol,
                 err_msg=f"ti(tp) penalty {j} differs from R",

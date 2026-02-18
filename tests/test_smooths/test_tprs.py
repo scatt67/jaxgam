@@ -34,7 +34,12 @@ from pymgcv.smooths.tprs import (
     null_space_dimension,
     tps_semi_kernel,
 )
-from tests.tolerances import MODERATE, STRICT
+from tests.tolerances import (
+    MODERATE,
+    STRICT,
+    normalize_column_signs,
+    normalize_symmetric_signs,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -387,119 +392,63 @@ class TestRComparison:
         smooth.setup({"x": x})
         return smooth, r_result, x
 
-    def test_tp_1d_column_space_vs_r(self) -> None:
-        """1D tp column space of X matches R (projection matrix)."""
-        smooth, r_result, x = self._setup_1d()
-        X_py = smooth.build_design_matrix({"x": x})
-        X_r = r_result["X"]
+    def test_tp_1d_X_vs_r(self) -> None:
+        """1D tp design matrix X matches R element-wise after sign normalization.
 
-        # Projection matrices: P = X @ pinv(X)
-        # Using MODERATE tolerance because pinv introduces O(eps*cond) noise.
-        P_py = X_py @ np.linalg.pinv(X_py)
-        P_r = X_r @ np.linalg.pinv(X_r)
-
-        np.testing.assert_allclose(
-            P_py,
-            P_r,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="1D tp column spaces differ from R",
-        )
-
-    def test_tp_1d_wiggly_subspace_vs_r(self) -> None:
-        """Wiggly subspace (UZ columns) spans same space as R.
-
-        Compares principal angles between wiggly column spaces.
-        Both sides are normalized to unit-length columns before
-        computing the cross-Gram SVD.
-        """
-        smooth, r_result, _x = self._setup_1d()
-        nk = smooth._Xu.shape[0]
-        k_w = smooth._k - smooth._M
-
-        # Python: undo smoothCon normalization → U_k @ Z (orthonormal cols)
-        UZ_w_py = smooth._UZ[:nk, :k_w] * smooth._col_norms[:k_w]
-
-        # R: normalize columns to unit L2 norm
-        UZ_w_r_raw = r_result["UZ"][:nk, :k_w]
-        col_norms_r = np.sqrt(np.sum(UZ_w_r_raw**2, axis=0))
-        UZ_w_r = UZ_w_r_raw / col_norms_r
-
-        # Principal angles via SVD of cross product
-        # All singular values = 1 iff subspaces are identical
-        sv = np.linalg.svd(UZ_w_py.T @ UZ_w_r, compute_uv=False)
-
-        np.testing.assert_allclose(
-            sv,
-            np.ones(k_w),
-            atol=MODERATE.atol,
-            err_msg="Wiggly subspaces differ between Python and R",
-        )
-
-    def test_tp_1d_X_gram_vs_r(self) -> None:
-        """X Gram matrix (X @ X.T) matches mgcv.
-
-        Validates _slanczos eigenvalues and eigenvector magnitudes:
-        X @ X.T is sign-invariant (column sign flips cancel) but
-        depends on the actual eigenvalues and basis vectors. Wrong
-        Lanczos output would produce a different Gram matrix.
+        LAPACK eigenvector sign ambiguity (R's reference LAPACK vs system
+        Accelerate/MKL) can flip columns of X. normalize_column_signs
+        applies a deterministic convention (largest-magnitude entry positive)
+        to both sides before comparing.
         """
         smooth, r_result, x = self._setup_1d()
         X_py = smooth.build_design_matrix({"x": x})
         X_r = r_result["X"]
 
         np.testing.assert_allclose(
-            X_py @ X_py.T,
-            X_r @ X_r.T,
+            normalize_column_signs(X_py),
+            normalize_column_signs(X_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="X Gram matrix differs from mgcv",
+            err_msg="1D tp design matrix differs from R",
         )
 
-    def test_tp_1d_UZ_gram_vs_r(self) -> None:
-        """UZ Gram matrix (UZ @ UZ.T) matches mgcv.
+    def test_tp_1d_UZ_vs_r(self) -> None:
+        """1D tp UZ matrix matches R element-wise after sign normalization.
 
         UZ encodes the Lanczos eigenvectors (U_k) projected through
-        the null space basis (Z), but NOT the eigenvalues D_k. The
-        Gram matrix is sign-invariant and validates that _slanczos
-        eigenvectors and _null_space_basis_r produce the same
-        column geometry as R's smoothCon. D_k is validated
-        separately via the X Gram and S eigenvalue tests.
+        the null space basis (Z). Sign normalization removes LAPACK
+        eigenvector sign ambiguity.
         """
         smooth, r_result, _x = self._setup_1d()
         UZ_py = smooth._UZ
         UZ_r = r_result["UZ"]
 
         np.testing.assert_allclose(
-            UZ_py @ UZ_py.T,
-            UZ_r @ UZ_r.T,
+            normalize_column_signs(UZ_py),
+            normalize_column_signs(UZ_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="UZ Gram matrix differs from mgcv",
+            err_msg="1D tp UZ matrix differs from R",
         )
 
-    def test_tp_1d_S_eigenvalues_vs_r(self) -> None:
-        """Penalty matrix S eigenvalues match mgcv.
+    def test_tp_1d_S_vs_r(self) -> None:
+        """Penalty matrix S matches R element-wise after sign normalization.
 
-        S eigenvalues are sign-invariant (immune to LAPACK eigenvector
-        sign ambiguity) and directly encode the Lanczos eigenvalues D_k
-        through S_wiggly = Z' @ diag(D_k) @ Z. This is the strongest
-        validation that _slanczos eigenvalues are correct, complementing
-        the X Gram test (which tests D_k² through X_wiggly).
+        S transforms as D @ S @ D under eigenvector sign flips.
+        The sign vector D is derived from X.
         """
-        smooth, r_result, _x = self._setup_1d()
+        smooth, r_result, x = self._setup_1d()
+        X_py = smooth.build_design_matrix({"x": x})
+        X_r = r_result["X"]
         S_py = smooth._S
         S_r = r_result["S"][0]
 
-        eigvals_py = np.linalg.eigvalsh(S_py)
-        eigvals_r = np.linalg.eigvalsh(S_r)
-
         np.testing.assert_allclose(
-            eigvals_py,
-            eigvals_r,
+            normalize_symmetric_signs(S_py, X_py),
+            normalize_symmetric_signs(S_r, X_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="S eigenvalues differ from mgcv",
+            err_msg="1D tp penalty matrix differs from R",
         )
 
     def test_tp_1d_rank_and_null_space_vs_r(self) -> None:
@@ -551,25 +500,8 @@ class TestRComparison:
         smooth.setup({"x1": x1, "x2": x2})
         return smooth, r_result, x1, x2
 
-    def test_tp_2d_column_space_vs_r(self) -> None:
-        """2D tp column space of X matches R (projection matrix)."""
-        smooth, r_result, x1, x2 = self._setup_2d()
-        X_py = smooth.build_design_matrix({"x1": x1, "x2": x2})
-        X_r = r_result["X"]
-
-        P_py = X_py @ np.linalg.pinv(X_py)
-        P_r = X_r @ np.linalg.pinv(X_r)
-
-        np.testing.assert_allclose(
-            P_py,
-            P_r,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="2D tp column spaces differ from R",
-        )
-
-    def test_tp_2d_X_gram_vs_r(self) -> None:
-        """2D X Gram matrix (X @ X.T) matches mgcv.
+    def test_tp_2d_X_vs_r(self) -> None:
+        """2D tp design matrix X matches R element-wise after sign normalization.
 
         Validates _slanczos eigenvalues and eigenvector magnitudes
         for the 2D case (M=3 null space, different eigenvalue
@@ -580,15 +512,15 @@ class TestRComparison:
         X_r = r_result["X"]
 
         np.testing.assert_allclose(
-            X_py @ X_py.T,
-            X_r @ X_r.T,
+            normalize_column_signs(X_py),
+            normalize_column_signs(X_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="2D X Gram matrix differs from mgcv",
+            err_msg="2D tp design matrix differs from R",
         )
 
-    def test_tp_2d_UZ_gram_vs_r(self) -> None:
-        """2D UZ Gram matrix (UZ @ UZ.T) matches mgcv.
+    def test_tp_2d_UZ_vs_r(self) -> None:
+        """2D tp UZ matrix matches R element-wise after sign normalization.
 
         Validates eigenvector/null-space geometry for the 2D case.
         """
@@ -597,32 +529,31 @@ class TestRComparison:
         UZ_r = r_result["UZ"]
 
         np.testing.assert_allclose(
-            UZ_py @ UZ_py.T,
-            UZ_r @ UZ_r.T,
+            normalize_column_signs(UZ_py),
+            normalize_column_signs(UZ_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="2D UZ Gram matrix differs from mgcv",
+            err_msg="2D tp UZ matrix differs from R",
         )
 
-    def test_tp_2d_S_eigenvalues_vs_r(self) -> None:
-        """2D penalty matrix S eigenvalues match mgcv.
+    def test_tp_2d_S_vs_r(self) -> None:
+        """2D penalty matrix S matches R element-wise after sign normalization.
 
         Validates _slanczos eigenvalues for the 2D case where
         M=3 (larger null space than 1D).
         """
-        smooth, r_result, _x1, _x2 = self._setup_2d()
+        smooth, r_result, x1, x2 = self._setup_2d()
+        X_py = smooth.build_design_matrix({"x1": x1, "x2": x2})
+        X_r = r_result["X"]
         S_py = smooth._S
         S_r = r_result["S"][0]
 
-        eigvals_py = np.linalg.eigvalsh(S_py)
-        eigvals_r = np.linalg.eigvalsh(S_r)
-
         np.testing.assert_allclose(
-            eigvals_py,
-            eigvals_r,
+            normalize_symmetric_signs(S_py, X_py),
+            normalize_symmetric_signs(S_r, X_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="2D S eigenvalues differ from mgcv",
+            err_msg="2D tp penalty matrix differs from R",
         )
 
     def _setup_ts(self) -> tuple:
@@ -649,38 +580,32 @@ class TestRComparison:
         X_py = smooth.build_design_matrix({"x": x})
         X_r = r_result["X"]
 
-        P_py = X_py @ np.linalg.pinv(X_py)
-        P_r = X_r @ np.linalg.pinv(X_r)
-
         np.testing.assert_allclose(
-            P_py,
-            P_r,
+            normalize_column_signs(X_py),
+            normalize_column_signs(X_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="ts column spaces differ from R",
+            err_msg="ts design matrix differs from R",
         )
 
-    def test_ts_1d_S_eigenvalues_vs_r(self) -> None:
-        """ts penalty S eigenvalues match R.
+    def test_ts_1d_S_vs_r(self) -> None:
+        """ts penalty S matches R element-wise after sign normalization.
 
         ts applies shrinkage (geometric factor replacement) then
-        smoothCon normalization. Eigenvalue comparison is used because
-        the null-space eigenvectors may differ between LAPACK
-        implementations, making element-wise S comparison unreliable.
+        smoothCon normalization. Sign vector derived from X.
         """
-        smooth, r_result, _x = self._setup_ts()
+        smooth, r_result, x = self._setup_ts()
+        X_py = smooth.build_design_matrix({"x": x})
+        X_r = r_result["X"]
         S_py = smooth._S
         S_r = r_result["S"][0]
 
-        eigvals_py = np.linalg.eigvalsh(S_py)
-        eigvals_r = np.linalg.eigvalsh(S_r)
-
         np.testing.assert_allclose(
-            eigvals_py,
-            eigvals_r,
+            normalize_symmetric_signs(S_py, X_py),
+            normalize_symmetric_signs(S_r, X_r),
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
-            err_msg="ts S eigenvalues differ from R",
+            err_msg="ts penalty matrix differs from R",
         )
 
     def test_ts_1d_rank_vs_r(self) -> None:

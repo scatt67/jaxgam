@@ -23,7 +23,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 1.5** — Cubic Regression Spline Basis and Penalty
 - [x] **Task 1.6** — Tensor Product Smooths (te, ti)
 - [x] **Task 1.7** — Formula Parser (AST-based, 46 tests)
-- [ ] **Task 1.8** — Factor-By Smooth Expansion — *blocked by 1.4 or 1.5*
+- [x] **Task 1.8** — Factor-By Smooth Expansion (FactorBySmooth, NumericBySmooth, 54 tests)
 - [ ] **Task 1.9** — Identifiability Constraints and CoefficientMap — *blocked by 1.4 or 1.5*
 - [ ] **Task 1.10** — Design Matrix Assembly — *blocked by 1.4–1.9*
 
@@ -47,9 +47,9 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 428 passing
+- **Tests:** 484 passing
 - **Coverage:** 92%
-- **Next up:** Tasks 1.8, 1.9 can run in parallel (all unblocked by 1.4+1.5+1.6 completion)
+- **Next up:** Task 1.9 (Identifiability Constraints) is unblocked; then Task 1.10 (Design Matrix Assembly) completes Phase 1
 
 ---
 

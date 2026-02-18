@@ -646,3 +646,213 @@ if (!is.null(sm$shift)) {{
                 "UZ": UZ,
                 "shift": shift,
             }
+
+    def smooth_construct_list(
+        self,
+        smooth_expr: str,
+        data: pd.DataFrame,
+        absorb_cons: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Call R's smoothCon() and return ALL smooth objects.
+
+        Unlike ``smooth_construct`` which returns only ``[[1]]``, this
+        returns every element. Essential for factor-by smooths where
+        ``smoothCon()`` returns one smooth per factor level.
+
+        Parameters
+        ----------
+        smooth_expr : str
+            Smooth expression, e.g. ``"s(x, by=fac, bs='tp', k=10)"``.
+        data : pd.DataFrame
+            Data frame containing the variables.
+        absorb_cons : bool
+            Whether to absorb identifiability constraints.
+
+        Returns
+        -------
+        list[dict]
+            One dict per smooth returned by smoothCon(). Each dict has keys:
+            X, S, rank, null_space_dim, by_level (str or None), label.
+        """
+        if self.mode == "rpy2":
+            return self._smooth_construct_list_rpy2(smooth_expr, data, absorb_cons)
+        return self._smooth_construct_list_subprocess(smooth_expr, data, absorb_cons)
+
+    def _smooth_construct_list_rpy2(
+        self,
+        smooth_expr: str,
+        data: pd.DataFrame,
+        absorb_cons: bool,
+    ) -> list[dict[str, Any]]:
+        import rpy2.robjects as ro
+        from rpy2.robjects import numpy2ri, pandas2ri
+
+        with ro.conversion.localconverter(
+            ro.default_converter + pandas2ri.converter + numpy2ri.converter
+        ):
+            r_df = ro.conversion.py2rpy(data)
+
+        absorb_str = "TRUE" if absorb_cons else "FALSE"
+        r_code = f"""
+        library(mgcv)
+        dat <- as.data.frame(dat_input)
+        sml <- smoothCon({smooth_expr}, data=dat, absorb.cons={absorb_str})
+        n_sm <- length(sml)
+        result <- list(n_sm=n_sm, smooths=list())
+        for (i in seq_len(n_sm)) {{
+            sm <- sml[[i]]
+            by_lev <- if (!is.null(sm$by.level)) sm$by.level else "NONE"
+            lab <- if (!is.null(sm$label)) sm$label else ""
+            result$smooths[[i]] <- list(
+                X = sm$X,
+                S = sm$S,
+                rank = sm$rank,
+                null_space_dim = sm$null.space.dim,
+                by_level = by_lev,
+                label = lab
+            )
+        }}
+        result
+        """
+        ro.globalenv["dat_input"] = r_df
+        result = ro.r(r_code)
+
+        n_sm = int(np.array(result.rx2("n_sm"))[0])
+        smooths_r = result.rx2("smooths")
+
+        out = []
+        for i in range(n_sm):
+            sm = smooths_r[i]
+            X = np.array(sm.rx2("X"), dtype=np.float64)
+            rank_arr = np.array(sm.rx2("rank"), dtype=np.float64).ravel()
+            rank = int(rank_arr[0])
+            nsd_arr = np.array(sm.rx2("null_space_dim"), dtype=np.float64).ravel()
+            null_space_dim = int(nsd_arr[0])
+
+            S_list_r = sm.rx2("S")
+            S_matrices = []
+            for j in range(len(S_list_r)):
+                S_matrices.append(np.array(S_list_r[j], dtype=np.float64))
+
+            by_level_arr = np.array(sm.rx2("by_level"))
+            by_level_str = str(by_level_arr[0]) if by_level_arr.size > 0 else None
+            if by_level_str == "NONE":
+                by_level_str = None
+
+            label_arr = np.array(sm.rx2("label"))
+            label = str(label_arr[0]) if label_arr.size > 0 else ""
+
+            out.append(
+                {
+                    "X": X,
+                    "S": S_matrices,
+                    "rank": rank,
+                    "null_space_dim": null_space_dim,
+                    "by_level": by_level_str,
+                    "label": label,
+                }
+            )
+
+        return out
+
+    def _smooth_construct_list_subprocess(
+        self,
+        smooth_expr: str,
+        data: pd.DataFrame,
+        absorb_cons: bool,
+    ) -> list[dict[str, Any]]:
+        absorb_str = "TRUE" if absorb_cons else "FALSE"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            script_path = os.path.join(tmpdir, "smooth.R")
+            out = tmpdir
+
+            data.to_csv(data_path, index=False)
+
+            script = f"""\
+library(mgcv)
+
+dat <- read.csv("{data_path}")
+## Ensure factor columns are treated as factors in R
+for (cn in names(dat)) {{
+    if (is.character(dat[[cn]])) dat[[cn]] <- factor(dat[[cn]])
+}}
+sml <- smoothCon({smooth_expr}, data=dat, absorb.cons={absorb_str})
+n_sm <- length(sml)
+writeLines(as.character(n_sm), "{out}/n_sm.txt")
+
+for (i in seq_len(n_sm)) {{
+    sm <- sml[[i]]
+    write.csv(as.data.frame(sm$X), sprintf("{out}/X_%d.csv", i), row.names=FALSE)
+    writeLines(as.character(sm$rank), sprintf("{out}/rank_%d.txt", i))
+    writeLines(as.character(sm$null.space.dim), sprintf("{out}/nsd_%d.txt", i))
+
+    n_S <- length(sm$S)
+    writeLines(as.character(n_S), sprintf("{out}/nS_%d.txt", i))
+    for (j in seq_len(n_S)) {{
+        write.csv(as.data.frame(sm$S[[j]]), sprintf("{out}/S_%d_%d.csv", i, j), row.names=FALSE)
+    }}
+
+    by_lev <- if (!is.null(sm$by.level)) sm$by.level else "NONE"
+    writeLines(by_lev, sprintf("{out}/bylevel_%d.txt", i))
+
+    lab <- if (!is.null(sm$label)) sm$label else ""
+    writeLines(lab, sprintf("{out}/label_%d.txt", i))
+}}
+"""
+            with open(script_path, "w") as f:
+                f.write(script)
+
+            proc = subprocess.run(
+                ["Rscript", script_path],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if proc.returncode != 0:
+                raise RBridgeError(
+                    f"Rscript failed (exit {proc.returncode}):\n{proc.stderr}"
+                )
+
+            def _read_matrix(name: str) -> np.ndarray:
+                return pd.read_csv(os.path.join(out, name)).values.astype(np.float64)
+
+            def _read_scalar(name: str) -> float:
+                with open(os.path.join(out, name)) as f:
+                    return float(f.read().strip())
+
+            def _read_text(name: str) -> str:
+                with open(os.path.join(out, name)) as f:
+                    return f.read().strip()
+
+            n_sm = int(_read_scalar("n_sm.txt"))
+            results = []
+            for i in range(1, n_sm + 1):
+                X = _read_matrix(f"X_{i}.csv")
+                rank = int(_read_scalar(f"rank_{i}.txt"))
+                null_space_dim = int(_read_scalar(f"nsd_{i}.txt"))
+
+                n_S = int(_read_scalar(f"nS_{i}.txt"))
+                S_matrices = []
+                for j in range(1, n_S + 1):
+                    S_matrices.append(_read_matrix(f"S_{i}_{j}.csv"))
+
+                by_level_str = _read_text(f"bylevel_{i}.txt")
+                if by_level_str == "NONE":
+                    by_level_str = None
+
+                label = _read_text(f"label_{i}.txt")
+
+                results.append(
+                    {
+                        "X": X,
+                        "S": S_matrices,
+                        "rank": rank,
+                        "null_space_dim": null_space_dim,
+                        "by_level": by_level_str,
+                        "label": label,
+                    }
+                )
+
+            return results
