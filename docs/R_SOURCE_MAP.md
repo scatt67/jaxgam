@@ -1,21 +1,31 @@
 # R Source Reference Map
 
-This document maps each PyMGCV implementation task to the specific R mgcv source files and functions that implement the equivalent logic. The mgcv source is available on the CRAN GitHub mirror:
+This document maps each PyMGCV implementation task to the specific R mgcv source files and functions that implement the equivalent logic.
 
-**https://github.com/cran/mgcv**
+## Setup: Local mgcv Clone
+
+Clone the CRAN GitHub mirror and set the `MGCV_SOURCE` environment variable:
+
+```bash
+git clone https://github.com/cran/mgcv.git <your-path>/mgcv
+export MGCV_SOURCE=<your-path>/mgcv
+```
+
+Add the export to your shell profile (`.zshrc`, `.bashrc`, etc.) so it persists. Agents can run `echo $MGCV_SOURCE` to discover the clone location.
 
 ## How to Use This File
 
-**When implementing a task**, find it in the table below. Read the listed R functions *before* writing Python. Use `web_fetch` on the raw GitHub URLs to read the source. The R code is the ground truth for numerical behavior — edge cases, special handling, and algorithmic choices that aren't captured in the design doc.
+**When implementing a task**, find it in the table below. Read the listed R functions *before* writing Python using the local clone. The R code is the ground truth for numerical behavior — edge cases, special handling, and algorithmic choices that aren't captured in the design doc.
 
-**Base URL for raw file access:**
+**Source layout:**
 ```
-https://raw.githubusercontent.com/cran/mgcv/master/
+$MGCV_SOURCE/R/       # R source files
+$MGCV_SOURCE/src/     # C source files
 ```
 
 For example, to read the smooth constructors:
 ```
-https://raw.githubusercontent.com/cran/mgcv/master/R/smooth.r
+$MGCV_SOURCE/R/smooth.r
 ```
 
 **When debugging a mismatch with R**, the R function listed here is where to look. Run the R code in an R session with `debug(function_name)` to step through and compare intermediate values.
@@ -32,7 +42,7 @@ https://raw.githubusercontent.com/cran/mgcv/master/R/smooth.r
 ## Source File Inventory
 
 ```
-https://github.com/cran/mgcv/tree/master/
+$MGCV_SOURCE/
 ├── R/                    # R source files
 │   ├── gam.fit.r         # PIRLS, working weights, convergence
 │   ├── smooth.r          # All smooth constructors (basis + penalty)
@@ -257,25 +267,24 @@ https://github.com/cran/mgcv/tree/master/
 
 ## Accessing the Source
 
-The mgcv source is on the CRAN GitHub mirror. Agents can read files directly:
+The mgcv source is cloned locally (see Setup above). Agents should read files directly from `$MGCV_SOURCE`:
 
 ```bash
+# Discover the clone location
+echo $MGCV_SOURCE
+
 # Read a specific R file
-curl https://raw.githubusercontent.com/cran/mgcv/master/R/smooth.r
+$MGCV_SOURCE/R/smooth.r
 
 # Read a C source file
-curl https://raw.githubusercontent.com/cran/mgcv/master/src/tprs.c
-
-# Browse the repo
-# https://github.com/cran/mgcv/tree/master/R
-# https://github.com/cran/mgcv/tree/master/src
+$MGCV_SOURCE/src/tprs.c
 ```
 
-Claude Code agents: use `web_fetch` on the raw URLs above. For large files like `smooth.r` (~8000 lines), search for the specific function name rather than reading the entire file.
+For large files like `smooth.r` (~8000 lines), search for the specific function name rather than reading the entire file.
 
-**Pinning a version:** The `master` branch tracks the latest CRAN release. To pin to a specific version for reproducibility, use a tagged release or commit hash:
-```
-https://raw.githubusercontent.com/cran/mgcv/1.9-1/R/smooth.r
+**Pinning a version:** The `master` branch tracks the latest CRAN release. To pin to a specific version for reproducibility, checkout a tagged release:
+```bash
+cd $MGCV_SOURCE && git checkout 1.9-1
 ```
 
 The CRAN mirror is GPL-2 (Simon Wood). Attribution is required if redistributing; reading for reference is fine.

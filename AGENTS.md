@@ -32,27 +32,23 @@ Phase 1 (NumPy)  ──jax.device_put──▶  Phase 2 (JAX JIT)  ──np.asar
 
 ## R Source Reference
 
-The mgcv R source is on the CRAN GitHub mirror at **https://github.com/cran/mgcv**. **Always read the corresponding R implementation before writing Python.** The R code is ground truth for numerical edge cases, special handling, and algorithmic choices that the design doc doesn't capture.
+The mgcv R source is cloned locally from the CRAN GitHub mirror. **Always read the corresponding R implementation before writing Python.** The R code is ground truth for numerical edge cases, special handling, and algorithmic choices that the design doc doesn't capture.
 
-Use `web_fetch` on raw URLs to read source files:
-```
-https://raw.githubusercontent.com/cran/mgcv/master/R/smooth.r
-https://raw.githubusercontent.com/cran/mgcv/master/src/tprs.c
-```
+The clone location is in the `MGCV_SOURCE` environment variable. Run `echo $MGCV_SOURCE` to find it. See `docs/R_SOURCE_MAP.md` for setup instructions if the variable is not set.
 
 `docs/R_SOURCE_MAP.md` maps every implementation task to the specific R files and functions to read. It also has a quick-lookup table for debugging ("my coefficients don't match R → look here").
 
 Key R files you'll reference most often:
 
-| R file | URL path | Contains |
-|---|---|---|
-| `R/smooth.r` | `R/smooth.r` | All smooth constructors (basis + penalty). ~8000 lines. Search for `smooth.construct.XX.smooth.spec` where XX is the basis type. |
-| `R/gam.fit.r` | `R/gam.fit.r` | PIRLS inner loop (`gam.fit3`), working weights, step-halving, convergence. |
-| `R/fast-REML.r` | `R/fast-REML.r` | REML/ML criterion computation, Newton optimizer for λ. |
-| `R/gam.r` | `R/gam.r` | Top-level `gam()`, `predict.gam()`, `summary.gam()`, `gam.setup()`, `gam.side()` (identifiability). |
-| `R/families.r` | `R/families.r` | Family definitions: `variance`, `dev.resids`, `initialize`, `validmu`. |
-| `src/tprs.c` | `src/tprs.c` | C implementation of TPRS eigendecomposition and knot selection. The R wrapper just calls this. |
-| `src/gdi.c` | `src/gdi.c` | C implementation of REML derivatives. Reading this helps validate our `jax.grad` output. |
+| R file | Contains |
+|---|---|
+| `$MGCV_SOURCE/R/smooth.r` | All smooth constructors (basis + penalty). ~8000 lines. Search for `smooth.construct.XX.smooth.spec` where XX is the basis type. |
+| `$MGCV_SOURCE/R/gam.fit3.r` | PIRLS inner loop (`gam.fit3`), working weights, step-halving, convergence. |
+| `$MGCV_SOURCE/R/fast-REML.r` | REML/ML criterion computation, Newton optimizer for λ. |
+| `$MGCV_SOURCE/R/gam.r` | Top-level `gam()`, `predict.gam()`, `summary.gam()`, `gam.setup()`, `gam.side()` (identifiability). |
+| `$MGCV_SOURCE/R/families.r` | Family definitions: `variance`, `dev.resids`, `initialize`, `validmu`. |
+| `$MGCV_SOURCE/src/tprs.c` | C implementation of TPRS eigendecomposition and knot selection. The R wrapper just calls this. |
+| `$MGCV_SOURCE/src/gdi.c` | C implementation of REML derivatives. Reading this helps validate our `jax.grad` output. |
 
 **R reading tips:**
 - `<-` is assignment. `.C()` / `.Call()` invoke C code in `src/`.
