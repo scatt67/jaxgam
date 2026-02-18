@@ -1,7 +1,8 @@
 """Smooth basis and penalty construction (Phase 1 — NumPy only, no JAX).
 
 Provides the Smooth abstract base class, TPRS, cubic spline, tensor
-product, and by-variable implementations, and the smooth class registry.
+product, and by-variable implementations, the smooth class registry,
+and identifiability constraints via CoefficientMap.
 """
 
 from pymgcv.smooths.base import Smooth
@@ -11,6 +12,7 @@ from pymgcv.smooths.by_variable import (
     is_factor,
     resolve_by_variable,
 )
+from pymgcv.smooths.constraints import CoefficientMap, TermBlock
 from pymgcv.smooths.cubic import (
     CubicRegressionSmooth,
     CubicShrinkageSmooth,
@@ -34,4 +36,6 @@ __all__ = [
     "is_factor",
     "resolve_by_variable",
     "get_smooth_class",
+    "CoefficientMap",
+    "TermBlock",
 ]

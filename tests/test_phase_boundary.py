@@ -22,6 +22,7 @@ PHASE1_MODULES = [
     "pymgcv.smooths.registry",
     "pymgcv.penalties",
     "pymgcv.penalties.penalty",
+    "pymgcv.smooths.constraints",
 ]
 
 

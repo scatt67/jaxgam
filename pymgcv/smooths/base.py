@@ -39,6 +39,7 @@ class Smooth(ABC):
         self._is_setup: bool = False
         self._s_scale: float = 1.0
         self._noterp: bool = False
+        self.side_constrain: bool = True
 
     def _require_setup(self) -> None:
         """Raise RuntimeError if setup() hasn't been called."""
