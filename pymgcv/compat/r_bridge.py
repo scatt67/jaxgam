@@ -334,6 +334,7 @@ writeLines(format(model$gcv.ubre, digits=15), "{out}/reml_score.txt")
         fit_result = self._fit_rpy2(formula, data, family, method)
         fit_result["basis_matrices"] = basis_matrices
         fit_result["penalty_matrices"] = penalty_matrices
+        fit_result["model_matrix"] = X_full
 
         return fit_result
 

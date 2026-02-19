@@ -24,7 +24,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 1.6** — Tensor Product Smooths (te, ti)
 - [x] **Task 1.7** — Formula Parser (AST-based, 46 tests)
 - [x] **Task 1.8** — Factor-By Smooth Expansion (FactorBySmooth, NumericBySmooth, 54 tests)
-- [ ] **Task 1.9** — Identifiability Constraints and CoefficientMap — *blocked by 1.4 or 1.5*
+- [x] **Task 1.9** — Identifiability Constraints and CoefficientMap
 - [ ] **Task 1.10** — Design Matrix Assembly — *blocked by 1.4–1.9*
 
 ### Phase 2: Fitting Engine (JAX, JIT-compiled)
@@ -47,9 +47,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 484 passing
-- **Coverage:** 92%
-- **Next up:** Task 1.9 (Identifiability Constraints) is unblocked; then Task 1.10 (Design Matrix Assembly) completes Phase 1
+- **Tests:** 529 passing
+- **Next up:** Task 1.10 (Design Matrix Assembly) is unblocked — completes Phase 1
 
 ---
 
@@ -394,7 +393,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **R source:** `docs/R_SOURCE_MAP.md` → Task 1.9. Read `R/gam.r::gam.side()` carefully — constraint detection order matters for matching R output.
 
 **Create:**
-- `pymgcv/fitting/constraints.py` — `apply_sum_to_zero(X_s, S_s)` absorbs sum-to-zero constraint into basis via QR decomposition (reduces p by 1 per constrained smooth). `gam_side_constraints(smooth_list)` determines which smooths need constraints (overlapping covariate spaces). `CoefficientMap` class: stores the constraint transformations and provides `constrained_to_full(beta_c)` → `beta` and `full_to_constrained(beta)` → `beta_c`. Also provides `transform_X(X)` → `X_c` (constrained model matrix) and `transform_S(S_j)` → `S_c_j` (constrained penalty).
+- `pymgcv/smooths/constraints.py` — `CoefficientMap` frozen dataclass with all constraint pipeline methods as static/class methods: `apply_sum_to_zero()`, `apply_sum_to_zero_factor_by()`, `fix_dependence()`, `gam_side()` (static methods), and `build()` (classmethod factory). Instance methods: `constrained_to_full(beta_c)` → `beta`, `full_to_constrained(beta)` → `beta_c`, `transform_X(X)` → `X_c`, `transform_S(S_j)` → `S_c_j`. `TermBlock` frozen dataclass records per-term constraint info.
 - Handle §5.7.3: when `s(x, by=fac)` coexists with `s(x)`, absorb null space per level.
 
 **Tests** (`tests/test_constraints.py`):
