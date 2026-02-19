@@ -25,7 +25,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 1.7** — Formula Parser (AST-based, 46 tests)
 - [x] **Task 1.8** — Factor-By Smooth Expansion (FactorBySmooth, NumericBySmooth, 54 tests)
 - [x] **Task 1.9** — Identifiability Constraints and CoefficientMap
-- [ ] **Task 1.10** — Design Matrix Assembly — *blocked by 1.4–1.9*
+- [x] **Task 1.10** — Design Matrix Assembly (ModelSetup, SmoothInfo, 45 tests)
 
 ### Phase 2: Fitting Engine (JAX, JIT-compiled)
 - [ ] **Task 2.1** — JAX Linear Algebra Primitives
@@ -47,8 +47,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 529 passing
-- **Next up:** Task 1.10 (Design Matrix Assembly) is unblocked — completes Phase 1
+- **Tests:** 574 passing
+- **Phase 1 complete.** Next up: Phase 2 (JAX fitting engine)
 
 ---
 
