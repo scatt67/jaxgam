@@ -35,6 +35,17 @@
 
 ## Changelog
 
+### v1.19 (February 2026) — Remove AD Wrapper Module
+
+Implementation review during Phase 2 (Task 2.2) found that the `autodiff/interface.py` wrappers (`grad`, `hessian`, `hvp`) are trivial one-line delegations to `jax.grad`, `jax.hessian`, `jax.jvp`. The multi-backend abstraction they originally served was already removed in v1.18. Callers should use JAX directly. `per_obs_ll_derivatives` is deferred to v1.1+ with extended families.
+
+| Issue | Fix |
+|---|---|
+| **`autodiff/interface.py` wrappers are trivial pass-throughs to JAX** | Section 9.2: removed wrapper module. Callers use `jax.grad`, `jax.hessian`, `jax.jvp` directly. HVP pattern inlined at point of use in REML. |
+| **`per_obs_ll_derivatives` not needed in v1.0** | Deferred to v1.1+ when extended families are implemented. |
+
+---
+
 ### v1.18 (February 2026) — Post-Seventeenth Review: Scope Freeze + Architecture Diagram + AD Strategy Reframing
 
 External review identified execution risk as the primary concern: the gap between design and working library is enormous, and the original timeline didn't reflect that. This version freezes the v1.0 implementation scope, adds the missing architecture overview, and reframes the extended family AD strategy.
@@ -3779,51 +3790,19 @@ In mgcv, Simon Wood hand-codes derivatives for:
 
 **v1.18: The key insight is that "numerically tricky forward computation" ≠ "numerically tricky derivative."** For most extended families, if the forward log-likelihood is written in a stable way, the derivative is automatically stable because JAX differentiates the *stable computation*, not the mathematical expression. The doc previously conflated these two problems, leading to an overly conservative `custom_jvp` strategy that would have required hand-deriving and maintaining gradients for 6+ families — exactly the error-prone manual work that autodiff is designed to eliminate.
 
-### 9.2 JAX AD Interface (No Multi-Backend)
+### 9.2 JAX AD — No Wrapper Module
 
-v1.0 proposed an `ADBackend` Protocol with JAX, PyTensor, and PyTorch implementations. **This is removed.** AD is JAX-only. The NumPy fallback backend uses analytical derivatives exclusively and does not support extended families that lack them.
+v1.0 proposed an `ADBackend` Protocol with JAX, PyTensor, and PyTorch implementations. v1.18 removed multi-backend and kept thin JAX-only wrappers in `autodiff/interface.py`. **v1.19 removes those wrappers entirely.** Callers use `jax.grad`, `jax.hessian`, `jax.jvp` directly — wrapping trivial one-line delegations adds indirection with no value.
+
+The `autodiff/` module is no longer needed for v1.0. The only non-trivial AD pattern (Hessian-vector product via forward-over-reverse) is a two-line composition that belongs inline where REML uses it:
 
 ```python
-# autodiff/interface.py
-
-"""
-Thin JAX-only AD interface. No multi-backend abstraction.
-"""
-import jax
-import jax.numpy as jnp
-from functools import partial
-
-def grad(fn, argnums=0):
-    """Gradient of scalar-valued function."""
-    return jax.grad(fn, argnums=argnums)
-
-def hessian(fn, argnums=0):
-    """Full Hessian of scalar-valued function."""
-    return jax.hessian(fn, argnums=argnums)
-
-def hvp(fn, primals, tangents):
-    """Hessian-vector product via forward-over-reverse."""
-    grad_fn = jax.grad(fn)
-    _, hvp_result = jax.jvp(grad_fn, (primals,), (tangents,))
-    return hvp_result
-
-@jax.jit
-def per_obs_ll_derivatives(ll_single, y, mu, theta):
-    """
-    Compute per-observation dl/dμ and d²l/dμ² for extended families.
-
-    Uses vmap over a scalar log-likelihood function:
-        ll_single(y_i, mu_i, theta) → scalar
-
-    This is O(n) forward passes but each is trivially cheap.
-    The vmap compiles to a single vectorized XLA kernel.
-    """
-    grad_fn = jax.grad(ll_single, argnums=1)
-    hess_fn = jax.grad(grad_fn, argnums=1)
-    dll = jax.vmap(lambda yi, mi: grad_fn(yi, mi, theta))(y, mu)
-    d2ll = jax.vmap(lambda yi, mi: hess_fn(yi, mi, theta))(y, mu)
-    return dll, d2ll
+# Inline at point of use in REML, not in a wrapper module
+grad_fn = jax.grad(fn)
+_, hvp_result = jax.jvp(grad_fn, (primals,), (tangents,))
 ```
+
+`per_obs_ll_derivatives` (vmap over scalar log-likelihood) is only needed for extended families, which are out of v1.0 scope. It will be introduced when extended families are implemented (v1.1+).
 
 ### 9.3 Extended Family AD Strategy: Stable Forward Pass + Autodiff
 

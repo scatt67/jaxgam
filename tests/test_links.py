@@ -14,6 +14,8 @@ import os
 import subprocess
 import tempfile
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -29,6 +31,8 @@ from pymgcv.links import (
     SqrtLink,
 )
 from tests.tolerances import MODERATE, STRICT
+
+jax.config.update("jax_enable_x64", True)
 
 # ---------------------------------------------------------------------------
 # Fixtures: mu test points for each link family
@@ -317,30 +321,125 @@ class TestLinkRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Test 5: No JAX imports
+# Test 5: JAX compatibility — links accept JAX arrays and JIT-compile
 # ---------------------------------------------------------------------------
 
+# JAX-compatible mu test points (same values as NumPy helpers above)
+_JAX_MU_UNIT = jnp.array([1e-8, 1e-4, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1 - 1e-4])
+_JAX_MU_POS = jnp.array([1e-6, 0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 100.0])
+_JAX_MU_REAL = jnp.array([-10.0, -1.0, 0.0, 0.5, 1.0, 5.0, 100.0])
 
-class TestNoJax:
-    def test_links_does_not_import_jax(self) -> None:
-        """Verify that importing pymgcv.links does not pull in jax."""
-        import importlib
-        import sys
+JAX_LINK_MU_MAP: list[tuple[Link, jax.Array, np.ndarray]] = [
+    (IdentityLink(), _JAX_MU_REAL, _mu_real()),
+    (LogLink(), _JAX_MU_POS, _mu_positive()),
+    (LogitLink(), _JAX_MU_UNIT, _mu_unit_interval()),
+    (InverseLink(), _JAX_MU_POS, _mu_positive()),
+    (ProbitLink(), _JAX_MU_UNIT, _mu_unit_interval()),
+    (CloglogLink(), _JAX_MU_UNIT, _mu_unit_interval()),
+    (SqrtLink(), _JAX_MU_POS, _mu_positive()),
+    (InverseSquaredLink(), _JAX_MU_POS, _mu_positive()),
+]
 
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
-        try:
-            importlib.import_module("pymgcv.links")
-            assert "jax" not in sys.modules, (
-                "Importing pymgcv.links triggered a jax import."
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("pymgcv."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)
+class TestLinkJAXCompat:
+    """JAX compatibility: link methods accept JAX arrays and JIT-compile."""
+
+    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    def test_link_jax_matches_numpy(
+        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
+    ) -> None:
+        """link(jax_mu) matches link(np_mu)."""
+        jax_eta = link_obj.link(jax_mu)
+        np_eta = link_obj.link(np_mu)
+        np.testing.assert_allclose(
+            np.asarray(jax_eta),
+            np_eta,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"link() JAX vs NumPy for {type(link_obj).__name__}",
+        )
+
+    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    def test_inverse_jax_matches_numpy(
+        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
+    ) -> None:
+        """inverse(link(jax_mu)) matches inverse(link(np_mu))."""
+        jax_eta = link_obj.link(jax_mu)
+        np_eta = link_obj.link(np_mu)
+        jax_mu_back = link_obj.inverse(jax_eta)
+        np_mu_back = link_obj.inverse(np_eta)
+        np.testing.assert_allclose(
+            np.asarray(jax_mu_back),
+            np_mu_back,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"inverse() JAX vs NumPy for {type(link_obj).__name__}",
+        )
+
+    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    def test_derivative_jax_matches_numpy(
+        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
+    ) -> None:
+        """derivative(jax_mu) matches derivative(np_mu)."""
+        jax_deriv = link_obj.derivative(jax_mu)
+        np_deriv = link_obj.derivative(np_mu)
+        np.testing.assert_allclose(
+            np.asarray(jax_deriv),
+            np_deriv,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"derivative() JAX vs NumPy for {type(link_obj).__name__}",
+        )
+
+    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    def test_mu_eta_jax_matches_numpy(
+        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
+    ) -> None:
+        """mu_eta(link(jax_mu)) matches mu_eta(link(np_mu))."""
+        jax_eta = link_obj.link(jax_mu)
+        np_eta = link_obj.link(np_mu)
+        jax_me = link_obj.mu_eta(jax_eta)
+        np_me = link_obj.mu_eta(np_eta)
+        np.testing.assert_allclose(
+            np.asarray(jax_me),
+            np_me,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"mu_eta() JAX vs NumPy for {type(link_obj).__name__}",
+        )
+
+    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    def test_link_jit_compiles(
+        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
+    ) -> None:
+        """All 4 methods JIT-compile without error."""
+        jit_link = jax.jit(link_obj.link)
+        jit_inverse = jax.jit(link_obj.inverse)
+        jit_deriv = jax.jit(link_obj.derivative)
+        jit_mu_eta = jax.jit(link_obj.mu_eta)
+
+        eta = jit_link(jax_mu)
+        mu_back = jit_inverse(eta)
+        deriv = jit_deriv(jax_mu)
+        me = jit_mu_eta(eta)
+
+        # Sanity: results are finite
+        assert jnp.all(jnp.isfinite(eta)), "JIT link() produced non-finite"
+        assert jnp.all(jnp.isfinite(mu_back)), "JIT inverse() produced non-finite"
+        assert jnp.all(jnp.isfinite(deriv)), "JIT derivative() produced non-finite"
+        assert jnp.all(jnp.isfinite(me)), "JIT mu_eta() produced non-finite"
+
+    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    def test_roundtrip_jax(
+        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
+    ) -> None:
+        """linkinv(link(jax_mu)) ≈ jax_mu."""
+        eta = link_obj.link(jax_mu)
+        mu_recovered = link_obj.linkinv(eta)
+        np.testing.assert_allclose(
+            np.asarray(mu_recovered),
+            np.asarray(jax_mu),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"JAX roundtrip failed for {type(link_obj).__name__}",
+        )

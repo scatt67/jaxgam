@@ -17,6 +17,8 @@ import os
 import subprocess
 import tempfile
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -29,6 +31,8 @@ from pymgcv.families import (
     get_family,
 )
 from tests.tolerances import STRICT
+
+jax.config.update("jax_enable_x64", True)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -687,40 +691,7 @@ class TestRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Test 7: No JAX imports
-# ---------------------------------------------------------------------------
-
-
-class TestNoJaxImports:
-    """Importing pymgcv.families must not trigger a jax import."""
-
-    def test_families_does_not_import_jax(self) -> None:
-        import importlib
-        import sys
-
-        # Remove all pymgcv and jax modules
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("pymgcv.families")
-            assert "jax" not in sys.modules, (
-                "Importing pymgcv.families triggered a jax import."
-            )
-        finally:
-            # Restore original modules
-            for key in list(sys.modules):
-                if key.startswith("pymgcv."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)
-
-
-# ---------------------------------------------------------------------------
-# Test 8: Family properties and link integration
+# Test 7: Family properties and link integration
 # ---------------------------------------------------------------------------
 
 
@@ -829,3 +800,154 @@ class TestWorkingResponse:
                 atol=STRICT.atol,
                 err_msg=f"Working response mismatch for {fam.family_name}",
             )
+
+
+# ---------------------------------------------------------------------------
+# Test 10: JAX compatibility — family PIRLS methods accept JAX arrays
+# ---------------------------------------------------------------------------
+
+
+def _jax_family_test_data(
+    fam: ExponentialFamily,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Return (y, mu, wt, eta) as JAX arrays for a given family."""
+    if isinstance(fam, Gaussian):
+        y = jnp.array([0.5, 1.2, 2.0, 3.5, 4.1])
+        mu = jnp.array([0.6, 1.0, 2.2, 3.3, 4.0])
+    elif isinstance(fam, Binomial):
+        y = jnp.array([0.0, 0.3, 0.5, 0.7, 1.0])
+        mu = jnp.array([0.15, 0.35, 0.5, 0.65, 0.85])
+    elif isinstance(fam, Poisson):
+        y = jnp.array([0.0, 1.0, 2.0, 5.0, 10.0])
+        mu = jnp.array([0.5, 1.2, 2.5, 4.0, 9.0])
+    elif isinstance(fam, Gamma):
+        y = jnp.array([0.5, 1.0, 2.0, 5.0, 10.0])
+        mu = jnp.array([0.8, 1.2, 1.5, 4.0, 8.0])
+    else:
+        raise ValueError(f"Unknown family: {fam}")
+    wt = jnp.ones_like(y)
+    eta = fam.link.link(mu)
+    return y, mu, wt, eta
+
+
+FAMILIES = [Gaussian(), Binomial(), Poisson(), Gamma()]
+FAMILY_IDS = ["gaussian", "binomial", "poisson", "gamma"]
+
+
+class TestFamilyJAXCompat:
+    """JAX compatibility: PIRLS-path methods accept JAX arrays."""
+
+    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
+    def test_variance_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
+        _, jax_mu, _, _ = _jax_family_test_data(fam)
+        np_mu = np.asarray(jax_mu)
+
+        jax_v = fam.variance(jax_mu)
+        np_v = fam.variance(np_mu)
+        np.testing.assert_allclose(
+            np.asarray(jax_v),
+            np_v,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"variance() JAX vs NumPy for {fam.family_name}",
+        )
+
+    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
+    def test_deviance_resids_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
+        jax_y, jax_mu, jax_wt, _ = _jax_family_test_data(fam)
+        np_y, np_mu, np_wt = (
+            np.asarray(jax_y),
+            np.asarray(jax_mu),
+            np.asarray(jax_wt),
+        )
+
+        jax_dr = fam.deviance_resids(jax_y, jax_mu, jax_wt)
+        np_dr = fam.deviance_resids(np_y, np_mu, np_wt)
+        np.testing.assert_allclose(
+            np.asarray(jax_dr),
+            np_dr,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"deviance_resids() JAX vs NumPy for {fam.family_name}",
+        )
+
+    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
+    def test_dev_resids_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
+        """Total deviance (scalar) matches between backends."""
+        jax_y, jax_mu, jax_wt, _ = _jax_family_test_data(fam)
+        np_y, np_mu, np_wt = (
+            np.asarray(jax_y),
+            np.asarray(jax_mu),
+            np.asarray(jax_wt),
+        )
+
+        jax_total = fam.dev_resids(jax_y, jax_mu, jax_wt)
+        np_total = fam.dev_resids(np_y, np_mu, np_wt)
+        np.testing.assert_allclose(
+            float(jax_total),
+            float(np_total),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"dev_resids() JAX vs NumPy for {fam.family_name}",
+        )
+
+    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
+    def test_working_weights_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
+        _, jax_mu, jax_wt, _ = _jax_family_test_data(fam)
+        np_mu, np_wt = np.asarray(jax_mu), np.asarray(jax_wt)
+
+        jax_w = fam.working_weights(jax_mu, jax_wt)
+        np_w = fam.working_weights(np_mu, np_wt)
+        np.testing.assert_allclose(
+            np.asarray(jax_w),
+            np_w,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"working_weights() JAX vs NumPy for {fam.family_name}",
+        )
+
+    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
+    def test_working_response_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
+        jax_y, jax_mu, _, jax_eta = _jax_family_test_data(fam)
+        np_y = np.asarray(jax_y)
+        np_mu = np.asarray(jax_mu)
+        np_eta = np.asarray(jax_eta)
+
+        jax_z = fam.working_response(jax_y, jax_mu, jax_eta)
+        np_z = fam.working_response(np_y, np_mu, np_eta)
+        np.testing.assert_allclose(
+            np.asarray(jax_z),
+            np_z,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=(f"working_response() JAX vs NumPy for {fam.family_name}"),
+        )
+
+    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
+    def test_pirls_methods_jit_compile(self, fam: ExponentialFamily) -> None:
+        """variance, deviance_resids, working_weights, working_response
+        all JIT-compile without error."""
+        jax_y, jax_mu, jax_wt, jax_eta = _jax_family_test_data(fam)
+
+        jit_var = jax.jit(fam.variance)
+        jit_dr = jax.jit(fam.deviance_resids)
+        jit_ww = jax.jit(fam.working_weights)
+        jit_wr = jax.jit(fam.working_response)
+
+        v = jit_var(jax_mu)
+        dr = jit_dr(jax_y, jax_mu, jax_wt)
+        ww = jit_ww(jax_mu, jax_wt)
+        wr = jit_wr(jax_y, jax_mu, jax_eta)
+
+        assert jnp.all(jnp.isfinite(v)), (
+            f"JIT variance() non-finite for {fam.family_name}"
+        )
+        assert jnp.all(jnp.isfinite(dr)), (
+            f"JIT deviance_resids() non-finite for {fam.family_name}"
+        )
+        assert jnp.all(jnp.isfinite(ww)), (
+            f"JIT working_weights() non-finite for {fam.family_name}"
+        )
+        assert jnp.all(jnp.isfinite(wr)), (
+            f"JIT working_response() non-finite for {fam.family_name}"
+        )

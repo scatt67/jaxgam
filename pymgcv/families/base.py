@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from pymgcv.jax_utils import array_module
 from pymgcv.links.links import Link
 
 
@@ -133,7 +134,8 @@ class ExponentialFamily(ABC):
             Scalar total deviance.
         """
         dr = self.deviance_resids(y, mu, wt)
-        return float(np.sum(dr**2))
+        xp = array_module(dr)
+        return xp.sum(dr**2)
 
     @abstractmethod
     def aic(

@@ -29,7 +29,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 
 ### Phase 2: Fitting Engine (JAX, JIT-compiled)
 - [ ] **Task 2.1** — JAX Linear Algebra Primitives
-- [ ] **Task 2.2** — JAX AD Wrappers
+- [x] **Task 2.2** — ~~JAX AD Wrappers~~ *Removed (design.md v1.19). Use `jax.grad`/`jax.hessian`/`jax.jvp` directly.*
 - [ ] **Task 2.3** — PIRLS Inner Loop *(HIGH RISK)* — *blocked by 1.2, 1.1, 2.1*
 - [ ] **Task 2.4** — REML and ML Criteria *(HIGH RISK)* — *blocked by 2.3*
 - [ ] **Task 2.5** — Newton Outer Optimizer — *blocked by 2.4*
@@ -465,23 +465,13 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 
 ---
 
-### Task 2.2 — JAX AD Wrappers
+### Task 2.2 — ~~JAX AD Wrappers~~ Removed
 
-**What:** Implement the thin JAX autodiff interface used by REML.
+**Status:** Removed in design.md v1.19.
 
-**Read first:** docs/design.md §9.2
+**Rationale:** The original `autodiff/interface.py` module (`grad`, `hessian`, `hvp`, `value_and_grad`) consisted entirely of trivial one-line delegations to `jax.grad`, `jax.hessian`, `jax.jvp`. The multi-backend abstraction they originally served was removed in v1.18. Callers use JAX directly. The HVP pattern (forward-over-reverse) is a two-line composition inlined at point of use in REML. `per_obs_ll_derivatives` is deferred to v1.1+ with extended families.
 
-**Create:**
-- `pymgcv/autodiff/jax_ad.py` — `grad(fn, argnums)`, `hessian(fn, argnums)`, `hvp(fn, primals, tangents)`. These are thin wrappers around `jax.grad`, `jax.hessian`, `jax.jvp`. Also: `value_and_grad(fn, argnums)` for REML (need both criterion value and gradient).
-
-**Tests** (`tests/test_autodiff.py`):
-- `grad` of known function (e.g., quadratic) matches analytical gradient at STRICT.
-- `hessian` matches analytical Hessian at STRICT.
-- All wrappers JIT-compile.
-
-**Acceptance:** Wrappers work under JIT. Thin and correct.
-
-**Prerequisites:** Task 0.2.
+**No implementation, tests, or module needed.**
 
 ---
 
@@ -822,8 +812,7 @@ Phase 1:           ▼
                           │
 Phase 2:                  ▼
               ┌── 2.1 ──▶ 2.3 ──▶ 2.4 ──▶ 2.5 ──▶ 2.6
-              │                                       │
-              └── 2.2 ─────────────┘                  │
+              │           (2.2 removed)               │
                                                       │
 Phase 3:                                              ▼
                                                 ┌── 3.1 ──▶ 3.3
@@ -844,7 +833,7 @@ These task groups can run concurrently if multiple agents are available:
 - **Group A** (links + families): Tasks 1.1, 1.2 — no dependency on smooths.
 - **Group B** (smooths): Tasks 1.3, 1.4, 1.5, 1.6 — depends on penalty base only.
 - **Group C** (formula): Tasks 1.7, 1.8 — depends on term dataclasses only.
-- **Group D** (linalg + AD): Tasks 2.1, 2.2 — no dependency on Phase 1 outputs.
+- **Group D** (linalg): Task 2.1 — no dependency on Phase 1 outputs. (Task 2.2 removed.)
 
 Groups A, B, C, D can all proceed in parallel. They converge at Task 1.10 (design matrix assembly) and Task 2.3 (PIRLS, which needs families + linalg).
 
@@ -866,7 +855,7 @@ Groups A, B, C, D can all proceed in parallel. They converge at Task 1.10 (desig
 | 1.9 Constraints | **High** | **5–7 days** | **High** (CoefficientMap is subtle) |
 | 1.10 Assembly | Medium | 4–5 days | Medium (integration point) |
 | 2.1 Linalg | Medium | 3 days | Low |
-| 2.2 AD wrappers | Low | 1 day | Low |
+| 2.2 AD wrappers | ~~Low~~ | ~~1 day~~ | *Removed* |
 | 2.3 PIRLS | **High** | **8–12 days** | **High** (step-halving, convergence) |
 | 2.4 REML | **High** | **6–10 days** | **High** (implicit differentiation) |
 | 2.5 Newton | Medium | 3–5 days | Medium |

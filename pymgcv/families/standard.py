@@ -4,6 +4,9 @@ Each family provides the variance function V(mu), deviance residuals,
 AIC contribution, initialization, and validity checks needed by the
 PIRLS fitting algorithm.
 
+PIRLS-path methods (variance, deviance_resids) are backend-agnostic:
+they accept both NumPy and JAX arrays via ``array_module()`` dispatch.
+
 Design doc reference: Section 6.2
 R source reference: R/family.R (stats package family definitions)
 """
@@ -13,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 from pymgcv.families.base import ExponentialFamily
+from pymgcv.jax_utils import array_module
 from pymgcv.links.links import IdentityLink, InverseLink, Link, LogitLink, LogLink
 
 
@@ -34,7 +38,8 @@ class Gaussian(ExponentialFamily):
 
     def variance(self, mu: np.ndarray) -> np.ndarray:
         """V(mu) = 1 for all mu."""
-        return np.ones_like(mu, dtype=float)
+        xp = array_module(mu)
+        return xp.ones_like(mu, dtype=float)
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -43,8 +48,9 @@ class Gaussian(ExponentialFamily):
 
         The unit deviance for Gaussian is (y - mu)^2.
         """
+        xp = array_module(y)
         d = wt * (y - mu) ** 2
-        return np.sign(y - mu) * np.sqrt(d)
+        return xp.sign(y - mu) * xp.sqrt(d)
 
     def aic(
         self,
@@ -105,20 +111,17 @@ class Binomial(ExponentialFamily):
 
         Matches R's binomial()$dev.resids.
         """
-        mu_safe = np.clip(mu, 1e-10, 1.0 - 1e-10)
+        xp = array_module(y)
+        mu_safe = xp.clip(mu, 1e-10, 1.0 - 1e-10)
 
-        # Guard against log(0): replace y=0 with 1 in the ratio
-        # so log evaluates to 0 for those entries, then zero out
-        # via multiplication by y (which is 0 at those points).
-        y_pos = np.where(y > 0, y, 1.0)
-        y1_pos = np.where(y < 1, 1.0 - y, 1.0)
-        term1 = y * np.log(y_pos / mu_safe)
-        term2 = (1.0 - y) * np.log(y1_pos / (1.0 - mu_safe))
+        y_pos = xp.where(y > 0, y, 1.0)
+        y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
+        term1 = y * xp.log(y_pos / mu_safe)
+        term2 = (1.0 - y) * xp.log(y1_pos / (1.0 - mu_safe))
 
         d = 2.0 * wt * (term1 + term2)
-        # Ensure non-negative (numerical guard)
-        d = np.maximum(d, 0.0)
-        return np.sign(y - mu_safe) * np.sqrt(d)
+        d = xp.maximum(d, 0.0)
+        return xp.sign(y - mu_safe) * xp.sqrt(d)
 
     def aic(
         self,
@@ -171,7 +174,8 @@ class Poisson(ExponentialFamily):
 
     def variance(self, mu: np.ndarray) -> np.ndarray:
         """V(mu) = mu."""
-        return np.asarray(mu, dtype=float)
+        xp = array_module(mu)
+        return xp.asarray(mu, dtype=float)
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -183,16 +187,14 @@ class Poisson(ExponentialFamily):
 
         Matches R's poisson()$dev.resids.
         """
-        mu_safe = np.maximum(mu, 1e-10)
+        xp = array_module(y)
+        mu_safe = xp.maximum(mu, 1e-10)
 
-        # Guard against log(0): replace y=0 with 1 in the ratio
-        # so log evaluates to 0, then zero out via multiplication by y.
-        y_pos = np.where(y > 0, y, 1.0)
-        term1 = y * np.log(y_pos / mu_safe)
+        y_pos = xp.where(y > 0, y, 1.0)
+        term1 = y * xp.log(y_pos / mu_safe)
         d = 2.0 * wt * (term1 - (y - mu_safe))
-        # Ensure non-negative (numerical guard)
-        d = np.maximum(d, 0.0)
-        return np.sign(y - mu_safe) * np.sqrt(d)
+        d = xp.maximum(d, 0.0)
+        return xp.sign(y - mu_safe) * xp.sqrt(d)
 
     def aic(
         self,
@@ -260,13 +262,13 @@ class Gamma(ExponentialFamily):
 
         Matches R's Gamma()$dev.resids.
         """
-        mu_safe = np.maximum(mu, 1e-10)
-        y_safe = np.maximum(y, 1e-10)
+        xp = array_module(y)
+        mu_safe = xp.maximum(mu, 1e-10)
+        y_safe = xp.maximum(y, 1e-10)
 
-        d = 2.0 * wt * (-np.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
-        # Ensure non-negative (numerical guard)
-        d = np.maximum(d, 0.0)
-        return np.sign(y - mu_safe) * np.sqrt(d)
+        d = 2.0 * wt * (-xp.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
+        d = xp.maximum(d, 0.0)
+        return xp.sign(y - mu_safe) * xp.sqrt(d)
 
     def aic(
         self,
@@ -283,15 +285,11 @@ class Gamma(ExponentialFamily):
         """
         from scipy.special import gammaln
 
-        # shape = 1/scale, rate = 1/(mu*scale)
-        disp = scale  # dispersion parameter
+        disp = scale
         shape = 1.0 / disp
         y_safe = np.maximum(y, 1e-10)
         mu_safe = np.maximum(mu, 1e-10)
 
-        # log density of Gamma(shape, scale=mu*disp):
-        #   (shape-1)*log(y) - y/(mu*disp)
-        #   - shape*log(mu*disp) - gammaln(shape)
         ll = wt * (
             (shape - 1.0) * np.log(y_safe)
             - y_safe / (mu_safe * disp)
