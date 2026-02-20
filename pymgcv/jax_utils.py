@@ -1,8 +1,10 @@
-"""JAX utilities: array dispatch and linear algebra primitives.
+"""JAX utilities: array dispatch, device transfer, and linear algebra.
 
 Provides:
 - ``array_module`` / ``is_jax_array``: runtime NumPy/JAX dispatch for
   backend-agnostic code (links, families).
+- ``to_jax`` / ``to_numpy``: Phase 1→2 and Phase 2→3 device transfer
+  boundaries (design.md §1.3).
 - ``cho_factor``: Cholesky with scale-relative jitter (design.md §4.8).
 - ``penalized_cholesky`` / ``penalized_solve``: penalized Hessian solves
   for PIRLS.
@@ -21,6 +23,68 @@ import jax.scipy.linalg as jsla
 import numpy as np
 
 jax.config.update("jax_enable_x64", True)
+
+
+# ---------------------------------------------------------------------------
+# Device transfer (Phase 1→2 and Phase 2→3 boundaries, design.md §1.3)
+# ---------------------------------------------------------------------------
+
+
+def to_jax(
+    *arrays: np.ndarray,
+    device: jax.Device | None = None,
+) -> tuple[jax.Array, ...] | jax.Array:
+    """Transfer NumPy arrays to a JAX device.
+
+    This is the Phase 1→2 boundary: after basis/penalty construction
+    (NumPy, CPU) and before PIRLS/REML (JAX, JIT-compiled).
+
+    Parameters
+    ----------
+    *arrays : np.ndarray
+        One or more NumPy arrays to transfer.
+    device : jax.Device, optional
+        Target device. If ``None``, uses JAX's default device
+        (GPU/Metal if available, otherwise CPU).
+
+    Returns
+    -------
+    jax.Array or tuple[jax.Array, ...]
+        Single array if one input, tuple if multiple.
+
+    Examples
+    --------
+    >>> X_jax, y_jax, S_jax = to_jax(X, y, S_lambda)
+    >>> result = pirls_loop(X_jax, y_jax, beta_init, S_jax, family)
+    """
+    converted = tuple(
+        jax.device_put(jnp.asarray(a, dtype=jnp.float64), device) for a in arrays
+    )
+    if len(converted) == 1:
+        return converted[0]
+    return converted
+
+
+def to_numpy(*arrays: jax.Array) -> tuple[np.ndarray, ...] | np.ndarray:
+    """Transfer JAX arrays back to NumPy on CPU.
+
+    This is the Phase 2→3 boundary: after PIRLS/REML (JAX) and
+    before post-estimation (NumPy, CPU).
+
+    Parameters
+    ----------
+    *arrays : jax.Array
+        One or more JAX arrays to transfer.
+
+    Returns
+    -------
+    np.ndarray or tuple[np.ndarray, ...]
+        Single array if one input, tuple if multiple.
+    """
+    converted = tuple(np.asarray(a) for a in arrays)
+    if len(converted) == 1:
+        return converted[0]
+    return converted
 
 
 # ---------------------------------------------------------------------------

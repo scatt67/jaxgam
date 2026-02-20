@@ -28,10 +28,11 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 1.10** — Design Matrix Assembly (ModelSetup, SmoothInfo, 45 tests)
 
 ### Phase 2: Fitting Engine (JAX, JIT-compiled)
-- [ ] **Task 2.1** — JAX Linear Algebra Primitives
+- [x] **Task 2.1** — JAX Linear Algebra Primitives
 - [x] **Task 2.2** — ~~JAX AD Wrappers~~ *Removed (design.md v1.19). Use `jax.grad`/`jax.hessian`/`jax.jvp` directly.*
-- [ ] **Task 2.3** — PIRLS Inner Loop *(HIGH RISK)* — *blocked by 1.2, 1.1, 2.1*
-- [ ] **Task 2.4** — REML and ML Criteria *(HIGH RISK)* — *blocked by 2.3*
+- [x] **Task 2.3** — PIRLS Inner Loop *(HIGH RISK)* — *blocked by 1.2, 1.1, 2.1*
+- [x] **Task 2.3b** — FittingData Phase 1→2 Boundary Contract — *blocked by 1.10, 2.3*
+- [ ] **Task 2.4** — REML and ML Criteria *(HIGH RISK)* — *blocked by 2.3b*
 - [ ] **Task 2.5** — Newton Outer Optimizer — *blocked by 2.4*
 - [ ] **Task 2.6** — Full GAM Fitting Orchestration — *blocked by 1.10, 2.5*
 
@@ -47,8 +48,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 574 passing
-- **Phase 1 complete.** Next up: Phase 2 (JAX fitting engine)
+- **Tests:** 705 passing
+- **Phase 1 complete.** Phase 2 in progress: 2.1, 2.3, 2.3b done. Next up: Task 2.4 (REML)
 
 ---
 
@@ -515,6 +516,36 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 
 ---
 
+### Task 2.3b — FittingData Phase 1→2 Boundary Contract
+
+**What:** Implement the `FittingData` container that formalizes the Phase 1→2 boundary between `ModelSetup` (NumPy) and PIRLS/REML (JAX).
+
+**Read first:** docs/design.md §1.3 (phase boundaries), §4.4 (what REML needs)
+
+**Create:**
+- `pymgcv/fitting/data.py` — `FittingData` frozen dataclass with:
+  - `from_setup(setup, family, device)` factory: transfers X, y, weights, offset, per-penalty S matrices to JAX device; extracts penalty metadata (ranks, null space dims).
+  - `S_lambda(log_lambda)` method: computes `Σ exp(log_λ_j) * S_j`, pure JAX, differentiable via `jax.grad` for REML.
+  - `n_penalties` property.
+  - Handles purely parametric models (empty S_list, zero-dim log_lambda_init).
+
+**Tests** (`tests/test_fitting/test_fitting_data.py`, 21 tests):
+- Array transfer: shapes, values (STRICT), JAX type checks.
+- Offset handling (present and None).
+- Purely parametric models (no penalties → empty tuples).
+- Penalty metadata cross-checked against Penalty objects.
+- Tensor product multi-penalty support.
+- `S_lambda` correctness (single/multi penalty, manual computation match at STRICT).
+- `jax.grad` traceability with gradient verification.
+- End-to-end: ModelSetup → FittingData → pirls_loop convergence (Gaussian, Poisson).
+- Device placement verification.
+
+**Acceptance:** All 21 tests pass. `make lint` clean. No regressions in existing tests.
+
+**Prerequisites:** Task 1.10 (ModelSetup), Task 2.3 (PIRLS).
+
+---
+
 ### Task 2.4 — REML and ML Criteria
 
 **What:** Implement the REML and ML smoothness selection criteria as differentiable JAX functions.
@@ -811,7 +842,7 @@ Phase 1:           ▼
                         1.10
                           │
 Phase 2:                  ▼
-              ┌── 2.1 ──▶ 2.3 ──▶ 2.4 ──▶ 2.5 ──▶ 2.6
+              ┌── 2.1 ──▶ 2.3 ──▶ 2.3b ──▶ 2.4 ──▶ 2.5 ──▶ 2.6
               │           (2.2 removed)               │
                                                       │
 Phase 3:                                              ▼
