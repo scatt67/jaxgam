@@ -53,27 +53,33 @@ def _make_polynomial_data(
 
 
 def _make_glm_data(
-    family_name: str, n: int = 200, seed: int = SEED
+    family_name: str, n: int = 200, p: int = 2, seed: int = SEED
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Create (X, y) for a GLM with known linear predictor."""
+    """Create (X, y) for a GLM with known linear predictor.
+
+    X is a polynomial basis [1, x, x^2, ...] with *p* columns.
+    The response y is generated from a simple linear predictor
+    (intercept + slope), so higher-order columns act as noise
+    that the penalty should regularise toward zero.
+    """
     rng = np.random.default_rng(seed)
     x = np.linspace(0.05, 0.95, n)
-    X = np.column_stack([np.ones(n), x])
+    X = np.column_stack([x**j for j in range(p)])
 
     if family_name == "gaussian":
         eta = 1.0 + 2.0 * x
         y = eta + rng.normal(0, 0.5, n)
     elif family_name == "binomial":
         eta = -3.0 + 6.0 * x
-        p = 1.0 / (1.0 + np.exp(-eta))
-        y = rng.binomial(1, p, n).astype(float)
+        prob = 1.0 / (1.0 + np.exp(-eta))
+        y = rng.binomial(1, prob, n).astype(float)
     elif family_name == "poisson":
         eta = 0.5 + 1.5 * x
         mu = np.exp(eta)
         y = rng.poisson(mu).astype(float)
     elif family_name == "gamma":
-        eta = 0.5 + 1.0 * x
-        mu = np.exp(eta)
+        eta = 0.5 + 1.0 * x  # positive, suitable for inverse link
+        mu = 1.0 / eta
         shape = 5.0
         y = rng.gamma(shape, scale=mu / shape, size=n)
     else:
@@ -134,10 +140,10 @@ class TestGaussianConverges:
 class TestBinomialConverges:
     @classmethod
     def setup_class(cls):
-        cls.X, cls.y = _make_glm_data("binomial")
+        cls.X, cls.y = _make_glm_data("binomial", p=6)
         cls.family = Binomial()
         wt = np.ones(len(cls.y))
-        S_lambda_np = np.zeros((2, 2))
+        S_lambda_np = np.eye(6)
         X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(
             cls.X, cls.y, wt, cls.family, S_lambda_np
         )
@@ -155,10 +161,10 @@ class TestBinomialConverges:
 class TestPoissonConverges:
     @classmethod
     def setup_class(cls):
-        cls.X, cls.y = _make_glm_data("poisson")
+        cls.X, cls.y = _make_glm_data("poisson", p=6)
         cls.family = Poisson()
         wt = np.ones(len(cls.y))
-        S_lambda_np = np.zeros((2, 2))
+        S_lambda_np = np.eye(6)
         X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(
             cls.X, cls.y, wt, cls.family, S_lambda_np
         )
@@ -175,10 +181,10 @@ class TestPoissonConverges:
 class TestGammaConverges:
     @classmethod
     def setup_class(cls):
-        cls.X, cls.y = _make_glm_data("gamma")
-        cls.family = Gamma(link="log")
+        cls.X, cls.y = _make_glm_data("gamma", p=6)
+        cls.family = Gamma()
         wt = np.ones(len(cls.y))
-        S_lambda_np = np.zeros((2, 2))
+        S_lambda_np = np.eye(6)
         X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(
             cls.X, cls.y, wt, cls.family, S_lambda_np
         )
@@ -217,15 +223,15 @@ class TestMonotonicity:
             ("gaussian", Gaussian()),
             ("binomial", Binomial()),
             ("poisson", Poisson()),
-            ("gamma", Gamma(link="log")),
+            ("gamma", Gamma()),
         ],
     )
     def test_final_pen_dev_leq_initial(self, family_name, family):
-        X, y = _make_glm_data(family_name)
+        X, y = _make_glm_data(family_name, p=6)
         n = len(y)
         p = X.shape[1]
         wt = np.ones(n)
-        S_lambda_np = np.zeros((p, p))
+        S_lambda_np = np.eye(p)
 
         X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(X, y, wt, family, S_lambda_np)
 
@@ -240,13 +246,27 @@ class TestMonotonicity:
 
 
 class TestJITCompilation:
-    """PIRLS should work under jax.jit."""
+    """PIRLS should work under jax.jit for all families."""
 
     def test_jit_gaussian(self):
         X, y, _ = _make_polynomial_data(n=50, p=2)
         family = Gaussian()
         wt = np.ones(len(y))
         S_lambda_np = np.zeros((2, 2))
+
+        X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(X, y, wt, family, S_lambda_np)
+
+        jit_pirls = jax.jit(pirls_loop, static_argnames=("family", "max_iter", "tol"))
+        result = jit_pirls(X_d, y_d, beta_d, S_d, family, wt=wt_d)
+
+        assert result.converged
+
+    def test_jit_poisson_penalized(self):
+        X, y = _make_glm_data("poisson", n=50, p=4)
+        family = Poisson()
+        wt = np.ones(len(y))
+        p = X.shape[1]
+        S_lambda_np = np.eye(p)
 
         X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(X, y, wt, family, S_lambda_np)
 
@@ -311,28 +331,39 @@ class TestOffset:
 
 
 class TestPenalized:
-    """Ridge penalty should shrink coefficients."""
+    """Ridge penalty should shrink coefficients for all families."""
 
-    def test_ridge_shrinkage(self):
-        X, y, _ = _make_polynomial_data(n=200, p=5)
-        family = Gaussian()
+    @pytest.mark.parametrize(
+        "family_name,family",
+        [
+            ("gaussian", Gaussian()),
+            ("binomial", Binomial()),
+            ("poisson", Poisson()),
+            ("gamma", Gamma()),
+        ],
+    )
+    def test_ridge_shrinkage(self, family_name, family):
+        X, y = _make_glm_data(family_name, n=200, p=5)
         wt = np.ones(len(y))
+        p = X.shape[1]
 
         beta_init = initialize_beta(X, y, wt, family)
         X_d, y_d, beta_d = to_jax(X, y, np.asarray(beta_init))
 
         # Unpenalized
-        S_zero = to_jax(np.zeros((5, 5)))
+        S_zero = to_jax(np.zeros((p, p)))
         result_unpen = pirls_loop(X_d, y_d, beta_d, S_zero, family)
 
         # Heavily penalized (ridge)
-        S_ridge = to_jax(100.0 * np.eye(5))
+        S_ridge = to_jax(100.0 * np.eye(p))
         result_pen = pirls_loop(X_d, y_d, beta_d, S_ridge, family)
 
         # Penalized coefficients should be smaller in norm
         norm_unpen = float(jnp.linalg.norm(result_unpen.coefficients))
         norm_pen = float(jnp.linalg.norm(result_pen.coefficients))
-        assert norm_pen < norm_unpen, "Ridge penalty should shrink coefficient norm"
+        assert norm_pen < norm_unpen, (
+            f"Ridge penalty should shrink {family_name} coefficient norm"
+        )
 
 
 class TestPIRLSStep:
@@ -421,11 +452,12 @@ class TestVsR:
         return pd.DataFrame({"x": x, "y": y})
 
     def _setup(self, family_name: str, family_r: str, family: ExponentialFamily):
-        """Build Python pipeline and get R reference coefficients.
+        """Build Python pipeline and get R reference values.
 
-        Returns (fd, beta_jax, log_lambda, r_coefficients) where fd is
-        a FittingData from our full Python pipeline and log_lambda uses
-        R's REML-estimated smoothing parameters.
+        Returns (fd, beta_jax, log_lambda, r_ref) where fd is a FittingData
+        from our full Python pipeline, log_lambda uses R's REML-estimated
+        smoothing parameters, and r_ref is a dict with R's coefficients,
+        deviance, and fitted_values.
         """
         from pymgcv.compat.r_bridge import RBridge
         from pymgcv.fitting.data import FittingData
@@ -444,12 +476,17 @@ class TestVsR:
         )
         beta_jax = to_jax(np.asarray(beta_init))
 
-        # R reference: fit gam and extract sp + coefficients
+        # R reference: fit gam and extract sp + coefficients + deviance + fitted
         bridge = RBridge()
         r_result = bridge.fit_gam(self.FORMULA, data, family=family_r)
         log_lambda = jnp.log(jnp.array(r_result["smoothing_params"]))
 
-        return fd, beta_jax, log_lambda, r_result["coefficients"]
+        r_ref = {
+            "coefficients": r_result["coefficients"],
+            "deviance": r_result["deviance"],
+            "fitted_values": r_result["fitted_values"],
+        }
+        return fd, beta_jax, log_lambda, r_ref
 
     @staticmethod
     def _run_pirls(fd, beta_jax, log_lambda):
@@ -457,54 +494,51 @@ class TestVsR:
         S_lambda = fd.S_lambda(log_lambda)
         return pirls_loop(fd.X, fd.y, beta_jax, S_lambda, fd.family, fd.wt, fd.offset)
 
+    def _check_vs_r(self, result, r_ref, label):
+        """Compare PIRLS result against R reference for coefficients,
+        deviance, and fitted values."""
+        np.testing.assert_allclose(
+            to_numpy(result.coefficients),
+            r_ref["coefficients"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg=f"{label} PIRLS coefficients differ from R",
+        )
+        np.testing.assert_allclose(
+            float(result.deviance),
+            r_ref["deviance"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg=f"{label} PIRLS deviance differs from R",
+        )
+        np.testing.assert_allclose(
+            to_numpy(result.mu),
+            r_ref["fitted_values"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg=f"{label} PIRLS fitted values differ from R",
+        )
+
     def test_vs_r_gaussian(self):
-        fd, beta_jax, log_lambda, r_coefs = self._setup(
+        fd, beta_jax, log_lambda, r_ref = self._setup(
             "gaussian", "gaussian", Gaussian()
         )
         result = self._run_pirls(fd, beta_jax, log_lambda)
-
-        np.testing.assert_allclose(
-            to_numpy(result.coefficients),
-            r_coefs,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Gaussian PIRLS coefficients differ from R",
-        )
+        self._check_vs_r(result, r_ref, "Gaussian")
 
     def test_vs_r_binomial(self):
-        fd, beta_jax, log_lambda, r_coefs = self._setup(
+        fd, beta_jax, log_lambda, r_ref = self._setup(
             "binomial", "binomial", Binomial()
         )
         result = self._run_pirls(fd, beta_jax, log_lambda)
-
-        np.testing.assert_allclose(
-            to_numpy(result.coefficients),
-            r_coefs,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Binomial PIRLS coefficients differ from R",
-        )
+        self._check_vs_r(result, r_ref, "Binomial")
 
     def test_vs_r_poisson(self):
-        fd, beta_jax, log_lambda, r_coefs = self._setup("poisson", "poisson", Poisson())
+        fd, beta_jax, log_lambda, r_ref = self._setup("poisson", "poisson", Poisson())
         result = self._run_pirls(fd, beta_jax, log_lambda)
-
-        np.testing.assert_allclose(
-            to_numpy(result.coefficients),
-            r_coefs,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Poisson PIRLS coefficients differ from R",
-        )
+        self._check_vs_r(result, r_ref, "Poisson")
 
     def test_vs_r_gamma(self):
-        fd, beta_jax, log_lambda, r_coefs = self._setup("gamma", "gamma", Gamma())
+        fd, beta_jax, log_lambda, r_ref = self._setup("gamma", "gamma", Gamma())
         result = self._run_pirls(fd, beta_jax, log_lambda)
-
-        np.testing.assert_allclose(
-            to_numpy(result.coefficients),
-            r_coefs,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Gamma PIRLS coefficients differ from R",
-        )
+        self._check_vs_r(result, r_ref, "Gamma")
