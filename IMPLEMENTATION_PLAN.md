@@ -34,7 +34,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 2.3b** — FittingData Phase 1→2 Boundary Contract — *blocked by 1.10, 2.3*
 - [x] **Task 2.4** — REML and ML Criteria *(HIGH RISK)* — *blocked by 2.3b*
 - [x] **Task 2.5** — Newton Outer Optimizer — *blocked by 2.4*
-- [ ] **Task 2.6** — Full GAM Fitting Orchestration — *blocked by 1.10, 2.5*
+- [x] **Task 2.6** — Full GAM Fitting Orchestration (sklearn-style GAM class, 82 tests)
 
 ### Phase 3: Post-Estimation (CPU, NumPy)
 - [ ] **Task 3.1** — Prediction — *blocked by 2.6*
@@ -48,8 +48,9 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 818 passing
-- **Phase 1 complete.** Phase 2 in progress: 2.1, 2.3, 2.3b, 2.4, 2.5 done. Next up: Task 2.6 (GAM orchestration)
+- **Tests:** 898 passing, 2 xfailed
+- **Phase 1 complete. Phase 2 complete.** Next up: Phase 3 (Prediction, Summary, Plotting)
+- **Known xfails:** (1) Gamma sp exceeds LOOSE rtol by ~0.2% (Pitfall #4), (2) Newton premature convergence for 3-penalty factor-by models
 
 ---
 
