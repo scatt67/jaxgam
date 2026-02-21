@@ -33,7 +33,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 2.3** — PIRLS Inner Loop *(HIGH RISK)* — *blocked by 1.2, 1.1, 2.1*
 - [x] **Task 2.3b** — FittingData Phase 1→2 Boundary Contract — *blocked by 1.10, 2.3*
 - [x] **Task 2.4** — REML and ML Criteria *(HIGH RISK)* — *blocked by 2.3b*
-- [ ] **Task 2.5** — Newton Outer Optimizer — *blocked by 2.4*
+- [x] **Task 2.5** — Newton Outer Optimizer — *blocked by 2.4*
 - [ ] **Task 2.6** — Full GAM Fitting Orchestration — *blocked by 1.10, 2.5*
 
 ### Phase 3: Post-Estimation (CPU, NumPy)
@@ -48,8 +48,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 748 passing
-- **Phase 1 complete.** Phase 2 in progress: 2.1, 2.3, 2.3b, 2.4 done. Next up: Task 2.5 (Newton optimizer)
+- **Tests:** 818 passing
+- **Phase 1 complete.** Phase 2 in progress: 2.1, 2.3, 2.3b, 2.4, 2.5 done. Next up: Task 2.6 (GAM orchestration)
 
 ---
 
@@ -572,30 +572,38 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 
 ---
 
-### Task 2.5 — Newton Outer Optimizer
+### Task 2.5 — Newton Outer Optimizer ✅
 
 **What:** Implement the Newton iteration for smoothing parameter estimation.
 
-**Read first:** docs/design.md §4.3 (outer iteration), §4.5 (convergence)
+**Read first:** docs/design.md §4.3 (outer iteration), §4.5 (convergence). R source: `fast.REML.fit()` in `R/fast-REML.r` lines 1740–1875.
 
-**Create:**
-- `pymgcv/fitting/newton.py` — `newton_optimize(criterion_fn, log_lambda_init, max_iter=50, tol=1e-6)`:
-  1. Compute gradient `g = jax.grad(criterion_fn)(log_lambda)`.
-  2. Compute Hessian `H_v = jax.hessian(criterion_fn)(log_lambda)`.
-  3. Newton step: `delta = -solve(H_v, g)`.
-  4. Step-halving on the outer criterion (same pattern as PIRLS inner).
-  5. Convergence: `|g| < tol` or `|delta| < tol`.
-  Returns `OptimResult` with `log_lambda`, `converged`, `n_iter`, `criterion_value`, `gradient`.
+**Created:**
+- `pymgcv/fitting/newton.py` — `NewtonOptimizer` class and `newton_optimize()` convenience function:
+  - `NewtonResult` frozen dataclass: log_lambda, smoothing_params, converged, n_iter, score, gradient, edf, scale, pirls_result, convergence_info.
+  - `_safe_newton_step()` (JIT-compiled): eigenvalue-safe Newton direction with negative eigenvalue flip, small eigenvalue floor (`max(|D|) * sqrt(eps)`), and step norm capping to `max_step=5.0`.
+  - `NewtonOptimizer` class with methods: `_initial_beta()`, `_make_criterion()`, `_fit_and_score()`, `_step_halve()` (up to 25 halvings with stuck detection), `_check_convergence()`, `_build_result()`, `run()`.
+  - Purely parametric shortcut: if `n_penalties == 0`, PIRLS once, return immediately.
+  - Python-level loop (not `jax.lax.while_loop`) since each iteration involves PIRLS re-convergence.
+  - Convergence: `max(|grad|) < reml_scale * tol` and `|score_new - score_old| < reml_scale * tol`, where `reml_scale = |score| + deviance/n_obs`.
+  - Three outcome states: "full convergence", "step failed", "iteration limit".
 
-- `pymgcv/fitting/convergence.py` — `ConvergenceInfo` dataclass. `check_convergence(...)` returns convergence status and diagnostics.
+**Tests** (`tests/test_fitting/test_newton.py`, 70 tests):
+- **TestSafeNewtonStep** (5): quadratic 1-step, negative eigenvalue flip, norm capping, near-singular Hessian, eigenvalue floor dominance.
+- **TestInvariants** (4×4=16): hard-gate invariants across all 4 families — deviance ≥ 0, all-finite, EDF bounds, H symmetric PSD.
+- **TestFamilyVsR** (4×8=32): parametrized R comparison across Gaussian/Poisson/Binomial/Gamma — convergence, deviance, coefficients, fitted values, scale, REML score, smoothing params, EDF. Gaussian at MODERATE, GLM families at LOOSE.
+- **TestMultiSmooth** (2): two-smooth Gaussian with full R comparison (deviance, coefficients, fitted values, smoothing params); TPRS basis end-to-end.
+- **TestMLOptimization** (4): ML convergence, ML deviance vs R (LOOSE), ML GLM convergence (Poisson, Binomial), ML differs from REML.
+- **TestDiagnostics** (8): result fields/types, purely parametric, offset support, REML monotonicity (Gaussian/Binomial/Gamma), convergence info strings, invalid method, iteration limit.
+- **TestStepHalving** (1): adversarial start forces step-halving, still converges.
 
-**Tests** (`tests/test_fitting/test_newton.py`):
-- On a known quadratic: converges in 1 step.
-- On Gaussian GAM: `log_lambda` matches R's `log(gam(...)$sp)` at LOOSE (REML is flat near optimum).
-- On Binomial GAM: converges and produces reasonable λ.
-- Outer convergence diagnostics populated correctly.
+**Tolerance notes:**
+- MODERATE (rtol=1e-4, atol=1e-6) for Gaussian REML — single PIRLS iteration, no compounding.
+- LOOSE (rtol=1e-2, atol=1e-4) for GLM families — iterative PIRLS + Newton differences compound.
+- ML criterion differs from R by a normalization constant, so only deviance compared (at LOOSE).
+- Smoothing params and EDF use wider atol (0.02) due to flat lambda landscape near optimum.
 
-**Acceptance:** λ matches R at LOOSE. Convergence reliable across all four families.
+**Acceptance:** 70 tests pass. 818 total suite. All four families converge. REML matches R. Hard-gate invariants hold.
 
 **Prerequisites:** Task 2.4 (REML criterion).
 
