@@ -48,9 +48,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 898 passing, 2 xfailed
+- **Tests:** 900 passing, 0 xfailed
 - **Phase 1 complete. Phase 2 complete.** Next up: Phase 3 (Prediction, Summary, Plotting)
-- **Known xfails:** (1) Gamma sp exceeds LOOSE rtol by ~0.2% (Pitfall #4), (2) Newton premature convergence for 3-penalty factor-by models
 
 ---
 

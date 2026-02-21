@@ -26,7 +26,14 @@ import numpy as np
 from pymgcv.fitting.data import FittingData
 from pymgcv.fitting.initialization import initialize_beta
 from pymgcv.fitting.pirls import PIRLSResult, pirls_loop
-from pymgcv.fitting.reml import MLCriterion, REMLCriterion, _CriterionBase
+from pymgcv.fitting.reml import (
+    JointMLCriterion,
+    JointREMLCriterion,
+    MLCriterion,
+    REMLCriterion,
+    _CriterionBase,
+    _JointCriterionBase,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -183,6 +190,9 @@ class NewtonOptimizer:
         self._max_iter = max_iter
         self._tol = tol if tol is not None else float(jnp.finfo(jnp.float64).eps ** 0.5)
         self._max_step = max_step
+        # Joint optimization: append log_phi to params when scale is unknown
+        # (matches R's mgcv.r line 2033: lsp <- c(lsp, log.scale))
+        self._joint_scale = not fd.family.scale_known and fd.n_penalties > 0
 
         if method not in ("REML", "ML"):
             raise ValueError(f"Unknown method: {method!r}. Use 'REML' or 'ML'.")
@@ -199,23 +209,38 @@ class NewtonOptimizer:
             offset_np,
         )
 
-    def _make_criterion(self, pirls_result: PIRLSResult) -> _CriterionBase:
+    def _make_criterion(
+        self, pirls_result: PIRLSResult
+    ) -> _CriterionBase | _JointCriterionBase:
         """Create the appropriate criterion object from converged PIRLS."""
+        if self._joint_scale:
+            if self._method == "REML":
+                return JointREMLCriterion(self._fd, pirls_result)
+            return JointMLCriterion(self._fd, pirls_result)
         if self._method == "REML":
             return REMLCriterion(self._fd, pirls_result)
         return MLCriterion(self._fd, pirls_result)
 
     def _fit_and_score(
         self,
-        log_lambda: jax.Array,
+        params: jax.Array,
         beta_init: jax.Array,
-    ) -> tuple[PIRLSResult, _CriterionBase, jax.Array]:
-        """Run PIRLS at log_lambda, build criterion, return score."""
+    ) -> tuple[PIRLSResult, _CriterionBase | _JointCriterionBase, jax.Array]:
+        """Run PIRLS at current params, build criterion, return score.
+
+        For joint optimization, ``params = [log_lambda..., log_phi]``.
+        PIRLS only uses the ``log_lambda`` portion (via ``S_lambda``);
+        ``log_phi`` enters only through the criterion scoring.
+        """
         fd = self._fd
+        if self._joint_scale:
+            log_lambda = params[: fd.n_penalties]
+        else:
+            log_lambda = params
         S = fd.S_lambda(log_lambda)
         pirls_result = pirls_loop(fd.X, fd.y, beta_init, S, fd.family, fd.wt, fd.offset)
         criterion = self._make_criterion(pirls_result)
-        score = criterion.score(log_lambda)
+        score = criterion.score(params)
         return pirls_result, criterion, score
 
     def _step_halve(
@@ -270,8 +295,8 @@ class NewtonOptimizer:
 
     def _check_convergence(
         self,
-        criterion: _CriterionBase,
-        log_lambda: jax.Array,
+        criterion: _CriterionBase | _JointCriterionBase,
+        params: jax.Array,
         score: float,
         score_old: float,
         deviance: jax.Array,
@@ -282,8 +307,8 @@ class NewtonOptimizer:
         """
         fd = self._fd
         tol = self._tol
-        grad = criterion.gradient(log_lambda)
-        hess = criterion.hessian(log_lambda)
+        grad = criterion.gradient(params)
+        hess = criterion.hessian(params)
         reml_scale = abs(score) + float(deviance) / fd.n_obs
 
         grad_converged = float(jnp.max(jnp.abs(grad))) < reml_scale * tol
@@ -293,10 +318,10 @@ class NewtonOptimizer:
 
     def _build_result(
         self,
-        log_lambda: jax.Array,
+        params: jax.Array,
         score: jax.Array,
         gradient: jax.Array,
-        criterion: _CriterionBase,
+        criterion: _CriterionBase | _JointCriterionBase,
         pirls_result: PIRLSResult,
         converged: bool,
         step_failed: bool,
@@ -310,13 +335,23 @@ class NewtonOptimizer:
         else:
             info = "iteration limit"
 
+        if self._joint_scale:
+            # Extract log_lambda from joint params; keep Fletcher scale
+            # for post-estimation (Vp) matching R's model$scale.
+            # The REML-optimized phi is internal to the criterion only.
+            log_lambda = params[: self._fd.n_penalties]
+            grad_lambda = gradient[: self._fd.n_penalties]
+        else:
+            log_lambda = params
+            grad_lambda = gradient
+
         return NewtonResult(
             log_lambda=log_lambda,
             smoothing_params=jnp.exp(log_lambda),
             converged=converged,
             n_iter=n_iter,
             score=score,
-            gradient=gradient,
+            gradient=grad_lambda,
             edf=criterion.edf,
             scale=criterion.scale,
             pirls_result=pirls_result,
@@ -351,14 +386,30 @@ class NewtonOptimizer:
                 n_iter=0,
             )
 
-        # -- Initial PIRLS fit at starting log_lambda --
+        # -- Build initial params vector --
         log_lambda = fd.log_lambda_init.copy()
+        if self._joint_scale:
+            # Run initial PIRLS to get Fletcher scale for log_phi init
+            S_init = fd.S_lambda(log_lambda)
+            pirls_init = pirls_loop(
+                fd.X, fd.y, self._initial_beta(), S_init, fd.family, fd.wt, fd.offset
+            )
+            from pymgcv.fitting.reml import estimate_edf, fletcher_scale
+
+            edf_init = estimate_edf(pirls_init.XtWX, pirls_init.L)
+            phi_init = fletcher_scale(fd.y, pirls_init.mu, fd.wt, fd.family, edf_init)
+            log_phi_init = jnp.log(phi_init)
+            params = jnp.concatenate([log_lambda, log_phi_init[None]])
+        else:
+            params = log_lambda
+
+        # -- Initial fit and score --
         pirls_result, criterion, score = self._fit_and_score(
-            log_lambda, self._initial_beta()
+            params, self._initial_beta()
         )
         grad, hess, reml_scale, _ = self._check_convergence(
             criterion,
-            log_lambda,
+            params,
             float(score),
             float(score),
             pirls_result.deviance,
@@ -372,8 +423,8 @@ class NewtonOptimizer:
         for outer_iter in range(self._max_iter):
             step = _safe_newton_step(grad, hess, self._max_step)
 
-            log_lambda_new, pirls_new, crit_new, score_new, outcome = self._step_halve(
-                log_lambda,
+            params_new, pirls_new, crit_new, score_new, outcome = self._step_halve(
+                params,
                 step,
                 float(score),
                 pirls_result.coefficients,
@@ -395,14 +446,14 @@ class NewtonOptimizer:
 
             consecutive_stuck = 0
             score_old = score
-            log_lambda = log_lambda_new
+            params = params_new
             pirls_result = pirls_new
             criterion = crit_new
             score = score_new
 
             grad, hess, reml_scale, converged = self._check_convergence(
                 criterion,
-                log_lambda,
+                params,
                 float(score),
                 float(score_old),
                 pirls_result.deviance,
@@ -411,7 +462,7 @@ class NewtonOptimizer:
                 break
 
         return self._build_result(
-            log_lambda,
+            params,
             score,
             grad,
             criterion,

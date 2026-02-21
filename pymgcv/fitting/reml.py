@@ -29,6 +29,12 @@ Where:
     - |S+| = pseudo-determinant of S_lambda (product of non-zero eigenvalues)
     - Mp = total penalty null space dimension
 
+For unknown-scale families (Gaussian, Gamma), R jointly optimizes
+``log(phi)`` alongside ``log(lambda)`` in the Newton loop (mgcv.r line
+2033: ``lsp <- c(lsp, log.scale)``). The ``Joint*Criterion`` classes
+implement this by extending the parameter vector with ``log_phi`` and
+computing ``ls_sat(phi)`` inside the differentiable trace.
+
 Scale estimation uses Fletcher (2012) correction by default:
     phi_pearson = sum(w_i (y_i - mu_i)^2 / V(mu_i)) / (n - trA)
     s_bar = max(-0.9, mean(V'(mu) * (y - mu) / V(mu)))
@@ -378,6 +384,98 @@ def ml_criterion(
 
 
 # ---------------------------------------------------------------------------
+# Joint criteria (log_lambda + log_phi co-optimized)
+# ---------------------------------------------------------------------------
+
+
+def reml_criterion_joint(
+    params: jax.Array,
+    XtWX: jax.Array,
+    beta: jax.Array,
+    deviance: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    S_list: tuple[jax.Array, ...],
+    Mp: int,
+    n_lambda: int,
+    family: ExponentialFamily,
+) -> jax.Array:
+    """REML criterion with joint ``(log_lambda, log_phi)`` optimization.
+
+    Matches R's approach: ``log(phi)`` is appended to the smoothing
+    parameter vector and jointly optimized via Newton (mgcv.r line 2033,
+    gam.fit3.r lines 628-637).
+
+    ``ls_sat`` is computed inside the differentiable trace so that
+    ``jax.grad`` correctly accounts for its dependence on ``phi``.
+
+    Parameters
+    ----------
+    params : jax.Array, shape (n_lambda + 1,)
+        ``[log_lambda_1, ..., log_lambda_m, log_phi]``.
+    XtWX : jax.Array, shape (p, p)
+        Weighted cross-product from PIRLS.
+    beta : jax.Array, shape (p,)
+        Converged coefficients.
+    deviance : jax.Array, scalar
+        Unpenalized deviance from PIRLS.
+    y : jax.Array, shape (n,)
+        Response vector (for ``ls_sat`` computation).
+    wt : jax.Array, shape (n,)
+        Prior weights (for ``ls_sat`` computation).
+    S_list : tuple[jax.Array, ...]
+        Per-penalty (p, p) matrices.
+    Mp : int (static)
+        Penalty null space dimension.
+    n_lambda : int (static)
+        Number of smoothing parameters (to split params).
+    family : ExponentialFamily (static)
+        Family with ``saturated_loglik`` method.
+
+    Returns
+    -------
+    jax.Array, scalar
+        REML score (lower is better).
+    """
+    log_lambda = params[:n_lambda]
+    phi = jnp.exp(params[n_lambda])
+    ls_sat = family.saturated_loglik(y, wt, phi)
+    core = _criterion_core(log_lambda, XtWX, beta, deviance, ls_sat, S_list, phi)
+    return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
+
+
+def ml_criterion_joint(
+    params: jax.Array,
+    XtWX: jax.Array,
+    beta: jax.Array,
+    deviance: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    S_list: tuple[jax.Array, ...],
+    n_lambda: int,
+    family: ExponentialFamily,
+) -> jax.Array:
+    """ML criterion with joint ``(log_lambda, log_phi)`` optimization.
+
+    Parameters
+    ----------
+    params : jax.Array, shape (n_lambda + 1,)
+        ``[log_lambda_1, ..., log_lambda_m, log_phi]``.
+    XtWX, beta, deviance, y, wt, S_list, n_lambda, family
+        See ``reml_criterion_joint``.
+
+    Returns
+    -------
+    jax.Array, scalar
+        ML score (lower is better).
+    """
+    log_lambda = params[:n_lambda]
+    phi = jnp.exp(params[n_lambda])
+    ls_sat = family.saturated_loglik(y, wt, phi)
+    return _criterion_core(log_lambda, XtWX, beta, deviance, ls_sat, S_list, phi)
+
+
+# ---------------------------------------------------------------------------
 # Pre-compiled JIT'd transforms for the Newton hot loop
 # ---------------------------------------------------------------------------
 
@@ -388,6 +486,27 @@ _jit_reml_hess = jax.jit(jax.hessian(reml_criterion), static_argnames=("Mp",))
 _jit_ml_score = jax.jit(ml_criterion)
 _jit_ml_grad = jax.jit(jax.grad(ml_criterion))
 _jit_ml_hess = jax.jit(jax.hessian(ml_criterion))
+
+_JOINT_STATIC = ("Mp", "n_lambda", "family")
+_jit_reml_joint_score = jax.jit(reml_criterion_joint, static_argnames=_JOINT_STATIC)
+_jit_reml_joint_grad = jax.jit(
+    jax.grad(reml_criterion_joint), static_argnames=_JOINT_STATIC
+)
+_jit_reml_joint_hess = jax.jit(
+    jax.hessian(reml_criterion_joint),
+    static_argnames=_JOINT_STATIC,
+)
+
+_ML_JOINT_STATIC = ("n_lambda", "family")
+_jit_ml_joint_score = jax.jit(ml_criterion_joint, static_argnames=_ML_JOINT_STATIC)
+_jit_ml_joint_grad = jax.jit(
+    jax.grad(ml_criterion_joint),
+    static_argnames=_ML_JOINT_STATIC,
+)
+_jit_ml_joint_hess = jax.jit(
+    jax.hessian(ml_criterion_joint),
+    static_argnames=_ML_JOINT_STATIC,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -518,3 +637,124 @@ class MLCriterion(_CriterionBase):
     def hessian(self, log_lambda: jax.Array) -> jax.Array:
         """ML Hessian via pre-compiled ``jax.hessian``."""
         return _jit_ml_hess(log_lambda, **self._kwargs())
+
+
+# ---------------------------------------------------------------------------
+# Joint criterion classes (log_lambda + log_phi co-optimized)
+# ---------------------------------------------------------------------------
+
+
+class _JointCriterionBase(ABC):
+    """Base class for joint ``(log_lambda, log_phi)`` criterion.
+
+    Used when ``family.scale_known`` is False (Gaussian, Gamma).
+    The parameter vector is ``params = [log_lambda..., log_phi]``,
+    and ``ls_sat`` is recomputed inside the differentiable trace
+    so ``jax.grad`` accounts for its dependence on ``phi``.
+
+    EDF is computed once at construction (it depends on S_lambda
+    and XtWX, not on phi). The Fletcher scale is still computed
+    for use as the initial ``log_phi`` estimate.
+    """
+
+    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
+        self.edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
+        # Fletcher scale used only as initial log_phi estimate
+        self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
+        self._deviance = pirls_result.deviance
+        self._XtWX = pirls_result.XtWX
+        self._beta = pirls_result.coefficients
+        self._S_list = fd.S_list
+        self._y = fd.y
+        self._wt = fd.wt
+        self._family = fd.family
+        self._n_lambda = fd.n_penalties
+
+    @abstractmethod
+    def score(self, params: jax.Array) -> jax.Array: ...
+
+    @abstractmethod
+    def gradient(self, params: jax.Array) -> jax.Array: ...
+
+    @abstractmethod
+    def hessian(self, params: jax.Array) -> jax.Array: ...
+
+
+class JointREMLCriterion(_JointCriterionBase):
+    """REML criterion with joint ``(log_lambda, log_phi)`` optimization.
+
+    Matches R's approach where ``log(phi)`` is appended to the smoothing
+    parameter vector and jointly optimized via Newton.
+
+    Parameters
+    ----------
+    fd : FittingData
+        Phase 1->2 boundary container with model data and penalties.
+    pirls_result : PIRLSResult
+        Converged PIRLS output.
+    """
+
+    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
+        super().__init__(fd, pirls_result)
+        self._Mp = fd.total_penalty_null_dim
+
+    def _kwargs(self) -> dict:
+        return dict(
+            XtWX=self._XtWX,
+            beta=self._beta,
+            deviance=self._deviance,
+            y=self._y,
+            wt=self._wt,
+            S_list=self._S_list,
+            Mp=self._Mp,
+            n_lambda=self._n_lambda,
+            family=self._family,
+        )
+
+    def score(self, params: jax.Array) -> jax.Array:
+        """REML score at given params = [log_lambda, log_phi]."""
+        return _jit_reml_joint_score(params, **self._kwargs())
+
+    def gradient(self, params: jax.Array) -> jax.Array:
+        """REML gradient w.r.t. params via ``jax.grad``."""
+        return _jit_reml_joint_grad(params, **self._kwargs())
+
+    def hessian(self, params: jax.Array) -> jax.Array:
+        """REML Hessian w.r.t. params via ``jax.hessian``."""
+        return _jit_reml_joint_hess(params, **self._kwargs())
+
+
+class JointMLCriterion(_JointCriterionBase):
+    """ML criterion with joint ``(log_lambda, log_phi)`` optimization.
+
+    Parameters
+    ----------
+    fd : FittingData
+        Phase 1->2 boundary container with model data and penalties.
+    pirls_result : PIRLSResult
+        Converged PIRLS output.
+    """
+
+    def _kwargs(self) -> dict:
+        return dict(
+            XtWX=self._XtWX,
+            beta=self._beta,
+            deviance=self._deviance,
+            y=self._y,
+            wt=self._wt,
+            S_list=self._S_list,
+            n_lambda=self._n_lambda,
+            family=self._family,
+        )
+
+    def score(self, params: jax.Array) -> jax.Array:
+        """ML score at given params = [log_lambda, log_phi]."""
+        return _jit_ml_joint_score(params, **self._kwargs())
+
+    def gradient(self, params: jax.Array) -> jax.Array:
+        """ML gradient w.r.t. params via ``jax.grad``."""
+        return _jit_ml_joint_grad(params, **self._kwargs())
+
+    def hessian(self, params: jax.Array) -> jax.Array:
+        """ML Hessian w.r.t. params via ``jax.hessian``."""
+        return _jit_ml_joint_hess(params, **self._kwargs())

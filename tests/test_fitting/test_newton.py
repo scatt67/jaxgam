@@ -367,14 +367,6 @@ class TestFamilyVsR:
         link amplifies small lambda differences.
         """
         family_name, _, result, r_result = family_fit
-        if family_name == "gamma":
-            # TODO: Gamma sp exceeds LOOSE (1.2% vs 1% rtol). Investigate
-            # whether tighter Newton convergence or Fletcher scale refinement
-            # can close the gap. See AGENTS.md Pitfall #4.
-            pytest.xfail(
-                "Gamma sp exceeds LOOSE (1.2% vs 1% rtol) — "
-                "REML flat near optimum, AGENTS.md Pitfall #4"
-            )
         np.testing.assert_allclose(
             np.asarray(result.smoothing_params),
             r_result["smoothing_params"],

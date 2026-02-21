@@ -141,18 +141,28 @@ def build_S_lambda(
 def log_pseudo_det(S: jax.Array) -> jax.Array:
     """Log pseudo-determinant of S (product of non-zero eigenvalues).
 
-    Uses ``jnp.maximum`` to prevent NaN gradients in reverse-mode AD.
+    Adds a tiny asymmetric diagonal perturbation before eigendecomposition
+    to break eigenvalue degeneracy.  Without this, ``jax.hessian`` through
+    ``eigvalsh`` produces NaN when eigenvalues are degenerate — which
+    occurs for factor-by models whose block-diagonal penalties share
+    identical eigenvalue structure.  The perturbation (scale ~1e-14) is
+    negligible relative to the eigenvalues.
 
     Parameters
     ----------
     S : jax.Array, shape (p, p)
-        Symmetric matrix.
+        Symmetric positive semi-definite matrix.
 
     Returns
     -------
     jax.Array, scalar
         Log of the product of non-zero eigenvalues.
     """
+    p = S.shape[0]
+    # Asymmetric diagonal jitter breaks eigenvalue degeneracy so that
+    # second derivatives through eigvalsh remain finite.
+    jitter_scale = 1e-14 * jnp.max(jnp.abs(S))
+    S = S + jnp.diag(jnp.arange(1, p + 1, dtype=S.dtype) * jitter_scale)
     eigs = jnp.linalg.eigvalsh(S)
     threshold = 1e-10 * jnp.max(jnp.abs(eigs))
     safe_eigs = jnp.maximum(eigs, 1e-30)
