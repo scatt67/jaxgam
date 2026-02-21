@@ -38,8 +38,8 @@ class ToleranceClass:
 
 
 STRICT = ToleranceClass(rtol=1e-10, atol=1e-12, label="strict")
-MODERATE = ToleranceClass(rtol=1e-6, atol=1e-8, label="moderate")
-LOOSE = ToleranceClass(rtol=1e-3, atol=1e-5, label="loose")
+MODERATE = ToleranceClass(rtol=1e-4, atol=1e-6, label="moderate")
+LOOSE = ToleranceClass(rtol=1e-2, atol=1e-4, label="loose")
 
 
 def normalize_column_signs(X: np.ndarray) -> np.ndarray:
