@@ -32,7 +32,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 2.2** — ~~JAX AD Wrappers~~ *Removed (design.md v1.19). Use `jax.grad`/`jax.hessian`/`jax.jvp` directly.*
 - [x] **Task 2.3** — PIRLS Inner Loop *(HIGH RISK)* — *blocked by 1.2, 1.1, 2.1*
 - [x] **Task 2.3b** — FittingData Phase 1→2 Boundary Contract — *blocked by 1.10, 2.3*
-- [ ] **Task 2.4** — REML and ML Criteria *(HIGH RISK)* — *blocked by 2.3b*
+- [x] **Task 2.4** — REML and ML Criteria *(HIGH RISK)* — *blocked by 2.3b*
 - [ ] **Task 2.5** — Newton Outer Optimizer — *blocked by 2.4*
 - [ ] **Task 2.6** — Full GAM Fitting Orchestration — *blocked by 1.10, 2.5*
 
@@ -48,8 +48,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 705 passing
-- **Phase 1 complete.** Phase 2 in progress: 2.1, 2.3, 2.3b done. Next up: Task 2.4 (REML)
+- **Tests:** 748 passing
+- **Phase 1 complete.** Phase 2 in progress: 2.1, 2.3, 2.3b, 2.4 done. Next up: Task 2.5 (Newton optimizer)
 
 ---
 
