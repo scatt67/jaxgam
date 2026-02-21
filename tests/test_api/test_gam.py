@@ -474,6 +474,10 @@ class TestMultiSmooth:
 class TestFactorBy:
     """Factor-by smooth comparisons with R."""
 
+    # TODO: Fix Newton optimizer premature convergence for multi-penalty
+    # factor-by models. PIRLS is correct (reproduces R's deviance when
+    # given R's sp), but Newton converges too early with sp at initial
+    # values. Likely needs better initial sp or convergence criteria.
     @pytest.mark.xfail(
         reason="Newton optimizer premature convergence for 3-penalty "
         "factor-by models — smoothing params stay at initial values. "
