@@ -165,12 +165,15 @@ class RBridge:
         r_summary = self._base.summary(r_model)
         edf = np.array(r_summary.rx2("edf"), dtype=np.float64)
 
+        null_deviance = float(np.array(r_model.rx2("null.deviance"))[0])
+
         return {
             "coefficients": coefficients,
             "fitted_values": fitted_values,
             "smoothing_params": smoothing_params,
             "edf": edf,
             "deviance": deviance,
+            "null_deviance": null_deviance,
             "scale": scale,
             "reml_scale": reml_scale,
             "Vp": vp,
@@ -233,6 +236,7 @@ writeLines(format(deviance(model), digits=15), "{out}/deviance.txt")
 writeLines(format(model$scale, digits=15), "{out}/scale.txt")
 write.csv(as.data.frame(model$Vp), "{out}/Vp.csv", row.names=FALSE)
 writeLines(format(model$gcv.ubre, digits=15), "{out}/reml_score.txt")
+writeLines(format(model$null.deviance, digits=15), "{out}/null_deviance.txt")
 """
             with open(script_path, "w") as f:
                 f.write(script)
@@ -265,6 +269,7 @@ writeLines(format(model$gcv.ubre, digits=15), "{out}/reml_score.txt")
                 "smoothing_params": _read_vec("smoothing_params.csv"),
                 "edf": _read_vec("edf.csv"),
                 "deviance": _read_scalar("deviance.txt"),
+                "null_deviance": _read_scalar("null_deviance.txt"),
                 "scale": _read_scalar("scale.txt"),
                 "Vp": vp,
                 "reml_score": _read_scalar("reml_score.txt"),

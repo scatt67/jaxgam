@@ -1,5 +1,5 @@
 """PyMGCV: Python port of R's mgcv for Generalized Additive Models."""
 
-from pymgcv.api import gam, plot, predict, summary
+from pymgcv.api import GAM
 
-__all__ = ["gam", "predict", "summary", "plot"]
+__all__ = ["GAM"]
