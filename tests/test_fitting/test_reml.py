@@ -757,7 +757,7 @@ class TestSaturatedLoglik:
 
         ls_sat = float(family.saturated_loglik(y, wt, jnp.array(1.0)))
         # At boundaries, y*log(y) + (1-y)*log(1-y) = 0
-        np.testing.assert_allclose(ls_sat, 0.0, atol=1e-8)
+        np.testing.assert_allclose(ls_sat, 0.0, atol=STRICT.atol)
 
     def test_gamma_finite(self):
         """Gamma ls_sat is finite for reasonable inputs."""

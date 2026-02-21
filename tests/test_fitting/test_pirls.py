@@ -242,7 +242,7 @@ class TestMonotonicity:
 
         result = pirls_loop(X_d, y_d, beta_d, S_d, family)
 
-        assert float(result.penalized_deviance) <= float(pen_dev_init) + 1e-7
+        assert float(result.penalized_deviance) <= float(pen_dev_init) + MODERATE.atol
 
 
 class TestJITCompilation:

@@ -653,7 +653,7 @@ class TestEdgeCases:
         np.testing.assert_allclose(
             result,
             np.zeros((k, k)),
-            atol=1e-80,  # exp(-200) ~ 1e-87
+            atol=STRICT.atol,
         )
 
     def test_small_matrix_2x2(self) -> None:

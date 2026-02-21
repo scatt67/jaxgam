@@ -574,7 +574,7 @@ class TestEdgeCases:
         np.testing.assert_allclose(
             dr**2,
             np.zeros(3),
-            atol=1e-10,
+            atol=STRICT.atol,
         )
 
     def test_poisson_y_zero(self) -> None:
@@ -604,7 +604,7 @@ class TestEdgeCases:
         np.testing.assert_allclose(
             dr**2,
             np.zeros(3),
-            atol=1e-10,
+            atol=STRICT.atol,
         )
 
     def test_gamma_small_mu(self) -> None:
@@ -629,7 +629,7 @@ class TestEdgeCases:
         np.testing.assert_allclose(
             dr**2,
             np.zeros(3),
-            atol=1e-10,
+            atol=STRICT.atol,
         )
 
     def test_binomial_extreme_mu(self) -> None:

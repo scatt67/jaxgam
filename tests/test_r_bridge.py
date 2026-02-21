@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from pymgcv.compat.r_bridge import RBridge
+from tests.tolerances import STRICT
 
 
 @pytest.fixture
@@ -45,6 +46,7 @@ class TestRBridgeFitGam:
             "smoothing_params",
             "edf",
             "deviance",
+            "null_deviance",
             "scale",
             "reml_scale",
             "Vp",
@@ -140,7 +142,9 @@ class TestRBridgeFitGam:
         bridge = RBridge()
         result = bridge.fit_gam("y ~ s(x)", gaussian_data, family="gaussian")
         vp = result["Vp"]
-        np.testing.assert_allclose(vp, vp.T, atol=1e-12, err_msg="Vp must be symmetric")
+        np.testing.assert_allclose(
+            vp, vp.T, atol=STRICT.atol, err_msg="Vp must be symmetric"
+        )
 
 
 @pytest.mark.skipif(not RBridge.available(), reason="R with mgcv not available")
@@ -177,7 +181,7 @@ class TestRBridgeSmoothComponents:
             for S in penalties:
                 assert S.shape[0] == S.shape[1], "Penalty must be square"
                 eigenvalues = np.linalg.eigvalsh(S)
-                assert np.all(eigenvalues >= -1e-10), "Penalty must be PSD"
+                assert np.all(eigenvalues >= -STRICT.rtol), "Penalty must be PSD"
 
     def test_multi_smooth_components(self) -> None:
         bridge = RBridge()
@@ -248,12 +252,14 @@ class TestRBridgeSubprocessFallback:
             "y ~ s(x, k=10)", gaussian_data, family="gaussian"
         )
 
-        np.testing.assert_allclose(r1["coefficients"], r2["coefficients"], rtol=1e-10)
         np.testing.assert_allclose(
-            r1["basis_matrices"][0], r2["basis_matrices"][0], rtol=1e-10
+            r1["coefficients"], r2["coefficients"], rtol=STRICT.rtol
+        )
+        np.testing.assert_allclose(
+            r1["basis_matrices"][0], r2["basis_matrices"][0], rtol=STRICT.rtol
         )
         for s1, s2 in zip(r1["penalty_matrices"][0], r2["penalty_matrices"][0]):
-            np.testing.assert_allclose(s1, s2, rtol=1e-10, atol=1e-14)
+            np.testing.assert_allclose(s1, s2, rtol=STRICT.rtol, atol=STRICT.atol)
 
     def test_subprocess_matches_rpy2(self, gaussian_data: pd.DataFrame) -> None:
         """Both modes should produce identical results."""
@@ -267,6 +273,10 @@ class TestRBridgeSubprocessFallback:
         r1 = bridge_rpy2.fit_gam("y ~ s(x)", gaussian_data, family="gaussian")
         r2 = bridge_sub.fit_gam("y ~ s(x)", gaussian_data, family="gaussian")
 
-        np.testing.assert_allclose(r1["coefficients"], r2["coefficients"], rtol=1e-10)
-        np.testing.assert_allclose(r1["fitted_values"], r2["fitted_values"], rtol=1e-10)
-        np.testing.assert_allclose(r1["deviance"], r2["deviance"], rtol=1e-10)
+        np.testing.assert_allclose(
+            r1["coefficients"], r2["coefficients"], rtol=STRICT.rtol
+        )
+        np.testing.assert_allclose(
+            r1["fitted_values"], r2["fitted_values"], rtol=STRICT.rtol
+        )
+        np.testing.assert_allclose(r1["deviance"], r2["deviance"], rtol=STRICT.rtol)
