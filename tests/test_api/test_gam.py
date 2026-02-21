@@ -158,8 +158,6 @@ class TestGAMClass:
     def test_method_stubs_raise(self):
         data = _make_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
-        with pytest.raises(NotImplementedError, match="Task 3.1"):
-            model.predict()
         with pytest.raises(NotImplementedError, match="Task 3.2"):
             model.summary()
         with pytest.raises(NotImplementedError, match="Task 3.3"):

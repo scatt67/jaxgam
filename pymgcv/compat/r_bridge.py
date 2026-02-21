@@ -870,3 +870,71 @@ for (i in seq_len(n_sm)) {{
                 )
 
             return results
+
+    def predict_gam(
+        self,
+        formula: str,
+        train_data: pd.DataFrame,
+        newdata: pd.DataFrame,
+        family: str = "gaussian",
+        method: str = "REML",
+        type: str = "response",
+        se_fit: bool = False,
+    ) -> dict[str, Any]:
+        """Fit a GAM in R and predict on new data.
+
+        Parameters
+        ----------
+        formula : str
+            R-style model formula.
+        train_data : pd.DataFrame
+            Training data.
+        newdata : pd.DataFrame
+            New data for prediction.
+        family : str
+            Distribution family name.
+        method : str
+            Smoothing parameter estimation method.
+        type : str
+            Prediction type: ``'response'`` or ``'link'``.
+        se_fit : bool
+            Whether to return standard errors.
+
+        Returns
+        -------
+        dict
+            Keys: ``'predictions'``, optionally ``'se'``.
+        """
+        import rpy2.robjects as ro
+        from rpy2.robjects import numpy2ri, pandas2ri
+
+        r_family = self._get_r_family_rpy2(family)
+
+        with ro.conversion.localconverter(
+            ro.default_converter + pandas2ri.converter + numpy2ri.converter
+        ):
+            r_train = ro.conversion.py2rpy(train_data)
+            r_new = ro.conversion.py2rpy(newdata)
+
+        r_model = self._mgcv.gam(
+            ro.Formula(formula),
+            data=r_train,
+            family=r_family,
+            method=method,
+        )
+
+        pred = self._stats.predict(
+            r_model,
+            newdata=r_new,
+            type=type,
+            **{"se.fit": se_fit},
+        )
+
+        result: dict[str, Any] = {}
+        if se_fit:
+            result["predictions"] = np.array(pred.rx2("fit"), dtype=np.float64)
+            result["se"] = np.array(pred.rx2("se.fit"), dtype=np.float64)
+        else:
+            result["predictions"] = np.array(pred, dtype=np.float64)
+
+        return result

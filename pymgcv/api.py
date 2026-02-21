@@ -23,7 +23,9 @@ from pymgcv.fitting.pirls import pirls_loop
 from pymgcv.fitting.reml import estimate_edf, estimate_scale
 from pymgcv.formula.design import ModelSetup, SmoothInfo
 from pymgcv.formula.parser import parse_formula
+from pymgcv.formula.terms import FormulaSpec, ParametricTerm
 from pymgcv.jax_utils import to_numpy
+from pymgcv.smooths.by_variable import _get_factor_levels, is_factor
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -115,7 +117,7 @@ class GAM:
             lambda_strategy = f"newton_{self.method.lower()}"
 
         # Phase 2→3: post-estimation
-        self._store_results(result, setup, family_obj, fd, lambda_strategy)
+        self._store_results(result, setup, spec, data, family_obj, fd, lambda_strategy)
         self._fitted = True
         return self
 
@@ -124,17 +126,20 @@ class GAM:
         newdata: pd.DataFrame | dict | None = None,
         type: str = "response",
         se_fit: bool = False,
+        offset: np.ndarray | None = None,
     ):
         """Predict from a fitted GAM.
 
         Parameters
         ----------
-        newdata : pandas.DataFrame, optional
+        newdata : pandas.DataFrame or dict, optional
             New data for prediction. If None, uses the training data.
         type : str
             Type of prediction: ``'response'`` or ``'link'``.
         se_fit : bool
             Whether to return standard errors.
+        offset : array-like, optional
+            Offset for new data predictions.
 
         Returns
         -------
@@ -142,9 +147,96 @@ class GAM:
             Predictions, or ``(predictions, standard_errors)`` if ``se_fit=True``.
         """
         self._check_fitted()
-        raise NotImplementedError(
-            "predict() is planned for Task 3.1. See IMPLEMENTATION_PLAN.md."
+
+        if type not in ("response", "link"):
+            raise ValueError(f"type must be 'response' or 'link', got {type!r}")
+
+        if newdata is None:
+            # Self-prediction: use stored linear predictor
+            eta = self.linear_predictor_.copy()
+            X_p = self.X_ if se_fit else None
+        else:
+            X_p = self._build_predict_matrix(newdata)
+            eta = X_p @ self.coefficients_
+            if offset is not None:
+                eta = eta + np.asarray(offset, dtype=np.float64).ravel()
+
+        if type == "response":
+            pred = self.family_.link.linkinv(eta)
+        else:
+            pred = eta
+
+        if se_fit:
+            if X_p is None:
+                X_p = self.X_
+            # se = sqrt(rowSums((X_p @ Vp) * X_p))
+            XVp = X_p @ self.Vp_
+            se = np.sqrt(np.sum(XVp * X_p, axis=1))
+            return pred, se
+
+        return pred
+
+    def predict_matrix(self, newdata: pd.DataFrame | dict) -> np.ndarray:
+        """Build constrained prediction matrix for new data.
+
+        Equivalent to R's ``predict.gam(type="lpmatrix")``.
+
+        Parameters
+        ----------
+        newdata : DataFrame or dict
+            New data for prediction.
+
+        Returns
+        -------
+        np.ndarray, shape ``(n_new, total_coefs)``
+            Constrained prediction matrix.
+        """
+        self._check_fitted()
+        return self._build_predict_matrix(newdata)
+
+    def _build_predict_matrix(self, newdata: pd.DataFrame | dict) -> np.ndarray:
+        """Build the full constrained prediction matrix for new data.
+
+        Parameters
+        ----------
+        newdata : DataFrame or dict
+            New data containing all required variables.
+
+        Returns
+        -------
+        np.ndarray, shape ``(n_new, total_coefs)``
+        """
+        data_dict = ModelSetup._to_dict(newdata)
+
+        # Determine n_obs from first available variable
+        first_key = next(iter(data_dict))
+        n_new = len(data_dict[first_key])
+
+        # Build parametric columns
+        X_parametric = _build_parametric_predict(
+            self.formula_spec_.parametric_terms,
+            newdata,
+            self.formula_spec_.has_intercept,
+            n_new,
+            self._factor_info_,
         )
+
+        # Build smooth columns
+        blocks: list[np.ndarray] = [X_parametric]
+        coef_map = self.coef_map_
+
+        for term in coef_map.terms:
+            if term.term_type == "parametric":
+                continue
+            # Get raw prediction matrix from the smooth
+            X_raw = term.smooth.predict_matrix(data_dict)
+            # Apply constraint transform (centering + gam_side)
+            X_c = coef_map.transform_X(X_raw, term.label)
+            blocks.append(X_c)
+
+        X_p = np.column_stack(blocks) if len(blocks) > 1 else blocks[0]
+        assert X_p.shape[1] == coef_map.total_coefs
+        return X_p
 
     def summary(self):
         """Print summary of a fitted GAM."""
@@ -180,6 +272,8 @@ class GAM:
         self,
         result: NewtonResult,
         setup: ModelSetup,
+        spec: FormulaSpec,
+        data: pd.DataFrame | dict,
         family_obj: ExponentialFamily,
         fd: FittingData,
         lambda_strategy: str,
@@ -241,6 +335,8 @@ class GAM:
         self.term_names_ = setup.term_names
         self.execution_path_ = "jax"
         self.lambda_strategy_ = lambda_strategy
+        self.formula_spec_ = spec
+        self._factor_info_ = _extract_factor_info(spec.parametric_terms, data)
 
 
 # ---------------------------------------------------------------------------
@@ -450,3 +546,90 @@ def _compute_null_deviance(
     mu_null = np.sum(wt * y) / np.sum(wt)
     mu_null_arr = np.full_like(y, mu_null)
     return float(family.dev_resids(y, mu_null_arr, wt))
+
+
+def _extract_factor_info(
+    parametric_terms: list[ParametricTerm],
+    data: pd.DataFrame | dict,
+) -> dict[str, list]:
+    """Extract factor level info from parametric terms at training time.
+
+    Parameters
+    ----------
+    parametric_terms : list[ParametricTerm]
+        Parametric terms from the formula.
+    data : DataFrame or dict
+        Training data.
+
+    Returns
+    -------
+    dict[str, list]
+        Mapping from factor variable name to its ordered levels.
+    """
+    import pandas as pd
+
+    factor_info: dict[str, list] = {}
+    for term in parametric_terms:
+        if isinstance(data, pd.DataFrame):
+            col = data[term.name]
+        else:
+            col = data[term.name]
+        if is_factor(col):
+            factor_info[term.name] = _get_factor_levels(col)
+    return factor_info
+
+
+def _build_parametric_predict(
+    parametric_terms: list[ParametricTerm],
+    data: pd.DataFrame | dict,
+    has_intercept: bool,
+    n_obs: int,
+    factor_info: dict[str, list],
+) -> np.ndarray:
+    """Build the parametric portion of the prediction matrix.
+
+    Uses stored factor levels from training time for consistent encoding.
+
+    Parameters
+    ----------
+    parametric_terms : list[ParametricTerm]
+        Parametric terms from formula.
+    data : DataFrame or dict
+        New data for prediction.
+    has_intercept : bool
+        Whether model includes an intercept.
+    n_obs : int
+        Number of new observations.
+    factor_info : dict[str, list]
+        Training-time factor levels.
+
+    Returns
+    -------
+    np.ndarray, shape ``(n_obs, n_parametric_cols)``
+    """
+    import pandas as pd
+
+    blocks: list[np.ndarray] = []
+
+    if has_intercept:
+        blocks.append(np.ones((n_obs, 1), dtype=np.float64))
+
+    for term in parametric_terms:
+        if isinstance(data, pd.DataFrame):
+            col = data[term.name]
+        else:
+            col = data[term.name]
+
+        if term.name in factor_info:
+            # Use training-time levels for consistent dummy encoding
+            levels = factor_info[term.name]
+            drop_ref = has_intercept
+            dummy, _ = ModelSetup._encode_factor(col, levels, drop_reference=drop_ref)
+            blocks.append(dummy)
+        else:
+            col_arr = np.asarray(col, dtype=np.float64).ravel()
+            blocks.append(col_arr[:, np.newaxis])
+
+    if blocks:
+        return np.column_stack(blocks)
+    return np.empty((n_obs, 0), dtype=np.float64)
