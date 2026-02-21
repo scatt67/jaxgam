@@ -13,6 +13,8 @@ R source reference: R/family.R (stats package family definitions)
 
 from __future__ import annotations
 
+import jax.numpy as jnp
+import jax.scipy.special as jsp
 import numpy as np
 
 from pymgcv.families.base import ExponentialFamily
@@ -40,6 +42,19 @@ class Gaussian(ExponentialFamily):
         """V(mu) = 1 for all mu."""
         xp = array_module(mu)
         return xp.ones_like(mu, dtype=float)
+
+    def dvar(self, mu: np.ndarray) -> np.ndarray:
+        """V'(mu) = 0 for Gaussian."""
+        return jnp.zeros_like(mu, dtype=float)
+
+    def saturated_loglik(self, y, wt, scale):
+        """Saturated log-likelihood for Gaussian.
+
+        R: -nobs*log(2*pi*scale)/2 + sum(log(w[w>0]))/2
+        """
+        nobs = jnp.sum(wt > 0)
+        log_wt = jnp.where(wt > 0, jnp.log(jnp.maximum(wt, 1e-30)), 0.0)
+        return -nobs * jnp.log(2.0 * jnp.pi * scale) / 2.0 + jnp.sum(log_wt) / 2.0
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -100,6 +115,25 @@ class Binomial(ExponentialFamily):
     def variance(self, mu: np.ndarray) -> np.ndarray:
         """V(mu) = mu * (1 - mu)."""
         return mu * (1.0 - mu)
+
+    def dvar(self, mu: np.ndarray) -> np.ndarray:
+        """V'(mu) = 1 - 2*mu for Binomial."""
+        return 1.0 - 2.0 * mu
+
+    def saturated_loglik(self, y, wt, scale):
+        """Saturated log-likelihood for Binomial.
+
+        R: -binomial()$aic(y, n, y, w, 0) / 2
+        = sum(wt * [y*log(y) + (1-y)*log(1-y)]) with boundary handling.
+        """
+        y_safe = jnp.clip(y, 1e-10, 1.0 - 1e-10)
+        interior = (y > 0) & (y < 1)
+        ll = jnp.where(
+            interior,
+            y * jnp.log(y_safe) + (1.0 - y) * jnp.log(1.0 - y_safe),
+            0.0,
+        )
+        return jnp.sum(wt * ll)
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -177,6 +211,24 @@ class Poisson(ExponentialFamily):
         xp = array_module(mu)
         return xp.asarray(mu, dtype=float)
 
+    def dvar(self, mu: np.ndarray) -> np.ndarray:
+        """V'(mu) = 1 for Poisson."""
+        return jnp.ones_like(mu, dtype=float)
+
+    def saturated_loglik(self, y, wt, scale):
+        """Saturated log-likelihood for Poisson.
+
+        R: sum(dpois(y, y, log=TRUE) * w)
+        = sum(w * [y*log(y) - y - lgamma(y+1)]) for y > 0, else 0.
+        """
+        y_safe = jnp.where(y > 0, y, 1.0)
+        term = jnp.where(
+            y > 0,
+            y * jnp.log(y_safe) - y - jsp.gammaln(y + 1.0),
+            0.0,
+        )
+        return jnp.sum(wt * term)
+
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
     ) -> np.ndarray:
@@ -251,6 +303,27 @@ class Gamma(ExponentialFamily):
     def variance(self, mu: np.ndarray) -> np.ndarray:
         """V(mu) = mu^2."""
         return mu**2
+
+    def dvar(self, mu: np.ndarray) -> np.ndarray:
+        """V'(mu) = 2*mu for Gamma."""
+        return 2.0 * mu
+
+    def saturated_loglik(self, y, wt, scale):
+        """Saturated log-likelihood for Gamma.
+
+        R's fix.family.ls (gam.fit3.r line 2519):
+            scale_i = scale / w_i  (per-observation scale)
+            k_i = -lgamma(1/scale_i) - log(scale_i)/scale_i - 1/scale_i
+            ls = sum(k_i - log(y_i))
+        """
+        # Per-observation scale: phi_i = scale / wt_i
+        wt_safe = jnp.maximum(wt, 1e-30)
+        inv_phi = wt_safe / scale  # 1 / phi_i = wt_i / scale
+        phi = scale / wt_safe
+
+        k = -jsp.gammaln(inv_phi) - jnp.log(phi) * inv_phi - inv_phi
+        y_safe = jnp.maximum(y, 1e-30)
+        return jnp.sum(jnp.where(wt > 0, k - jnp.log(y_safe), 0.0))
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray

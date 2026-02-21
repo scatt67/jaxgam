@@ -85,6 +85,49 @@ class ExponentialFamily(ABC):
         ...
 
     @abstractmethod
+    def dvar(self, mu: np.ndarray) -> np.ndarray:
+        """Derivative of the variance function V'(mu).
+
+        Used by the Fletcher (2012) scale estimator.
+
+        Parameters
+        ----------
+        mu : np.ndarray
+            Mean parameter values.
+
+        Returns
+        -------
+        np.ndarray
+            V'(mu) at each mu value.
+        """
+        ...
+
+    @abstractmethod
+    def saturated_loglik(self, y: np.ndarray, wt: np.ndarray, scale: float) -> float:
+        """Saturated log-likelihood: log L(y; y, scale, wt).
+
+        The log-likelihood of the saturated model (mu = y). Used in the
+        REML/ML criterion (R's ``family$ls``).
+
+        Backend-agnostic: accepts both NumPy and JAX arrays.
+
+        Parameters
+        ----------
+        y : np.ndarray
+            Response values.
+        wt : np.ndarray
+            Prior weights.
+        scale : float
+            Dispersion parameter.
+
+        Returns
+        -------
+        float
+            Scalar saturated log-likelihood.
+        """
+        ...
+
+    @abstractmethod
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
     ) -> np.ndarray:

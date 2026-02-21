@@ -154,6 +154,13 @@ class RBridge:
         vp = np.array(vp_r, dtype=np.float64).reshape((p, p))
         reml_score = float(np.array(r_model.rx2("gcv.ubre"))[0])
 
+        # reml.scale is the scale used in the REML criterion (jointly
+        # optimized), which differs from model$scale (Fletcher estimate).
+        reml_scale_r = r_model.rx2("reml.scale")
+        reml_scale = (
+            float(np.array(reml_scale_r)[0]) if reml_scale_r is not None else scale
+        )
+
         # EDF from summary
         r_summary = self._base.summary(r_model)
         edf = np.array(r_summary.rx2("edf"), dtype=np.float64)
@@ -165,6 +172,7 @@ class RBridge:
             "edf": edf,
             "deviance": deviance,
             "scale": scale,
+            "reml_scale": reml_scale,
             "Vp": vp,
             "reml_score": reml_score,
         }

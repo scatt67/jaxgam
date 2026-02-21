@@ -109,6 +109,56 @@ def array_module(x: object):
 # ---------------------------------------------------------------------------
 
 
+def build_S_lambda(
+    log_lambda: jax.Array,
+    S_list: tuple[jax.Array, ...],
+    p: int,
+) -> jax.Array:
+    """Build S_lambda = sum_j exp(log_lambda[j]) * S_j.
+
+    Pure JAX, differentiable w.r.t. log_lambda.
+
+    Parameters
+    ----------
+    log_lambda : jax.Array, shape (m,)
+        Log smoothing parameters.
+    S_list : tuple[jax.Array, ...]
+        Per-penalty (p, p) matrices.
+    p : int
+        Number of coefficients.
+
+    Returns
+    -------
+    jax.Array, shape (p, p)
+        Combined weighted penalty matrix.
+    """
+    S_lambda = jnp.zeros((p, p))
+    for j, S_j in enumerate(S_list):
+        S_lambda = S_lambda + jnp.exp(log_lambda[j]) * S_j
+    return S_lambda
+
+
+def log_pseudo_det(S: jax.Array) -> jax.Array:
+    """Log pseudo-determinant of S (product of non-zero eigenvalues).
+
+    Uses ``jnp.maximum`` to prevent NaN gradients in reverse-mode AD.
+
+    Parameters
+    ----------
+    S : jax.Array, shape (p, p)
+        Symmetric matrix.
+
+    Returns
+    -------
+    jax.Array, scalar
+        Log of the product of non-zero eigenvalues.
+    """
+    eigs = jnp.linalg.eigvalsh(S)
+    threshold = 1e-10 * jnp.max(jnp.abs(eigs))
+    safe_eigs = jnp.maximum(eigs, 1e-30)
+    return jnp.sum(jnp.where(eigs > threshold, jnp.log(safe_eigs), 0.0))
+
+
 @jax.jit
 def cho_factor(
     H: jax.Array,

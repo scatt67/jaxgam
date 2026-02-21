@@ -26,7 +26,7 @@ import jax
 import jax.numpy as jnp
 
 from pymgcv.families.base import ExponentialFamily
-from pymgcv.jax_utils import to_jax
+from pymgcv.jax_utils import build_S_lambda, to_jax
 
 if TYPE_CHECKING:
     from pymgcv.formula.design import ModelSetup
@@ -89,6 +89,34 @@ class FittingData:
     def n_penalties(self) -> int:
         """Number of penalty matrices."""
         return len(self.S_list)
+
+    @property
+    def total_penalty_null_dim(self) -> int:
+        """Null space dimension of the total penalty matrix.
+
+        This is R's ``Mp`` — the dimension of the kernel of
+        ``S_total = Σ S_j / ||S_j||`` (R's ``totalPenaltySpace``,
+        gam.fit3.r line 2661). It differs from ``sum(penalty_null_dims)``
+        when there are multiple penalties with overlapping null spaces.
+
+        Used in the REML criterion's ``-Mp/2·log(2πφ)`` term.
+        """
+        if self.n_penalties == 0:
+            return self.n_coef
+
+        import numpy as np
+
+        # Follow R's totalPenaltySpace: normalize each penalty, sum, eigendecompose
+        St = np.zeros((self.n_coef, self.n_coef))
+        for S_j in self.S_list:
+            S_np = np.asarray(S_j)
+            norm_j = np.sqrt(np.sum(S_np * S_np))
+            if norm_j > 0:
+                St += S_np / norm_j
+
+        eigs = np.linalg.eigvalsh(St)
+        threshold = np.max(eigs) * np.finfo(float).eps ** (2.0 / 3.0)
+        return int(np.sum(eigs <= threshold))
 
     @classmethod
     def from_setup(
@@ -170,7 +198,4 @@ class FittingData:
         if self.n_penalties == 0:
             return jnp.zeros((self.n_coef, self.n_coef))
 
-        result = jnp.zeros((self.n_coef, self.n_coef))
-        for j, S_j in enumerate(self.S_list):
-            result = result + jnp.exp(log_lambda[j]) * S_j
-        return result
+        return build_S_lambda(log_lambda, self.S_list, self.n_coef)

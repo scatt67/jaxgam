@@ -46,6 +46,7 @@ class TestRBridgeFitGam:
             "edf",
             "deviance",
             "scale",
+            "reml_scale",
             "Vp",
             "reml_score",
         }
