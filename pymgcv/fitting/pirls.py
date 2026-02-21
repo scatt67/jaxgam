@@ -25,6 +25,51 @@ from pymgcv.jax_utils import penalized_solve
 
 
 @dataclass(frozen=True)
+class _PIRLSState:
+    """Internal while_loop state for PIRLS. Registered as JAX pytree."""
+
+    i: jax.Array
+    beta: jax.Array
+    beta_old: jax.Array
+    mu: jax.Array
+    pen_dev: jax.Array
+    pen_dev_prev: jax.Array
+    converged: jax.Array
+    XtWX: jax.Array
+    L: jax.Array
+    W: jax.Array
+
+
+_PIRLS_STATE_FIELDS = [f.name for f in fields(_PIRLSState)]
+
+jax.tree_util.register_pytree_node(
+    _PIRLSState,
+    lambda s: ([getattr(s, f) for f in _PIRLS_STATE_FIELDS], None),
+    lambda _, children: _PIRLSState(**dict(zip(_PIRLS_STATE_FIELDS, children))),
+)
+
+
+@dataclass(frozen=True)
+class _StepHalvingState:
+    """Internal while_loop state for step-halving. Registered as JAX pytree."""
+
+    k: jax.Array
+    beta_try: jax.Array
+    pen_dev_try: jax.Array
+    mu_try: jax.Array
+    accepted: jax.Array
+
+
+_SH_STATE_FIELDS = [f.name for f in fields(_StepHalvingState)]
+
+jax.tree_util.register_pytree_node(
+    _StepHalvingState,
+    lambda s: ([getattr(s, f) for f in _SH_STATE_FIELDS], None),
+    lambda _, children: _StepHalvingState(**dict(zip(_SH_STATE_FIELDS, children))),
+)
+
+
+@dataclass(frozen=True)
 class PIRLSResult:
     """Result of the PIRLS inner loop.
 
@@ -201,36 +246,31 @@ def pirls_loop(
     mu_init = family.link.inverse(eta_init)
 
     # Initialize loop state
-    # (i, beta, beta_old, mu, pen_dev, pen_dev_prev,
-    #  converged, XtWX, L, W)
-    init_state = (
-        jnp.int32(0),  # i
-        beta_init,  # beta
-        jnp.zeros_like(beta_init),  # beta_old
-        mu_init,  # mu
-        jnp.array(jnp.inf),  # pen_dev
-        jnp.array(jnp.inf),  # pen_dev_prev
-        jnp.bool_(False),  # converged
-        jnp.zeros((p, p)),  # XtWX
-        jnp.eye(p),  # L
-        jnp.ones(n),  # W
+    init_state = _PIRLSState(
+        i=jnp.int32(0),
+        beta=beta_init,
+        beta_old=jnp.zeros_like(beta_init),
+        mu=mu_init,
+        pen_dev=jnp.array(jnp.inf),
+        pen_dev_prev=jnp.array(jnp.inf),
+        converged=jnp.bool_(False),
+        XtWX=jnp.zeros((p, p)),
+        L=jnp.eye(p),
+        W=jnp.ones(n),
     )
 
-    def _cond(state):
-        i, _, _, _, _, _, converged, _, _, _ = state
-        return (i < max_iter) & (~converged)
+    def _cond(state: _PIRLSState):
+        return (state.i < max_iter) & (~state.converged)
 
-    def _body(state):
-        i, beta, _beta_old, mu, pen_dev, pen_dev_prev, _converged, _XtWX, _L, _W = state
-
+    def _body(state: _PIRLSState):
         # One PIRLS step
-        beta_new, XtWX, L, W = _pirls_step(X, y, wt, beta, mu, offset, S_lambda, family)
+        beta_new, XtWX, L, W = _pirls_step(
+            X, y, wt, state.beta, state.mu, offset, S_lambda, family
+        )
 
         # Step-halving on penalized deviance
-        # Use nested while_loop for JIT compatibility
-        is_first_iter = i == 0
+        is_first_iter = state.i == 0
 
-        # Initial step-halving state: (k, step, beta_try, pen_dev_try, mu_try, accepted)
         eta_new = X @ beta_new + offset
         mu_new = family.link.inverse(eta_new)
         pen_dev_new = _penalized_deviance(beta_new, mu_new, y, wt, S_lambda, family)
@@ -240,80 +280,71 @@ def pirls_loop(
         subsequent_ok = (
             (~is_first_iter)
             & jnp.isfinite(pen_dev_new)
-            & (pen_dev_new <= pen_dev + 1e-7 * jnp.abs(pen_dev))
+            & (pen_dev_new <= state.pen_dev + 1e-7 * jnp.abs(state.pen_dev))
         )
         accepted = first_ok | subsequent_ok
 
-        sh_init = (
-            jnp.int32(0),  # k (halving counter)
-            beta_new,  # beta_try
-            pen_dev_new,  # pen_dev_try
-            mu_new,  # mu_try
-            accepted,  # accepted
+        sh_init = _StepHalvingState(
+            k=jnp.int32(0),
+            beta_try=beta_new,
+            pen_dev_try=pen_dev_new,
+            mu_try=mu_new,
+            accepted=accepted,
         )
 
-        def _sh_cond(sh_state):
-            k, _, _, _, acc = sh_state
-            return (k < 25) & (~acc)
+        def _sh_cond(sh: _StepHalvingState):
+            return (sh.k < 25) & (~sh.accepted)
 
-        def _sh_body(sh_state):
-            k, _beta_try, _pen_dev_try, _mu_try, _acc = sh_state
-            step = 0.5 ** (k + 2)  # 0.25, 0.125, ...
-            bt = beta + step * (beta_new - beta)
+        def _sh_body(sh: _StepHalvingState):
+            step = 0.5 ** (sh.k + 2)  # 0.25, 0.125, ...
+            bt = state.beta + step * (beta_new - state.beta)
             eta_t = X @ bt + offset
             mu_t = family.link.inverse(eta_t)
             pd_t = _penalized_deviance(bt, mu_t, y, wt, S_lambda, family)
 
-            ok = jnp.isfinite(pd_t) & (pd_t <= pen_dev + 1e-7 * jnp.abs(pen_dev))
+            ok = jnp.isfinite(pd_t) & (
+                pd_t <= state.pen_dev + 1e-7 * jnp.abs(state.pen_dev)
+            )
             # On first iteration, accept any finite value
             ok = ok | (is_first_iter & jnp.isfinite(pd_t))
 
-            return (k + 1, bt, pd_t, mu_t, ok)
+            return _StepHalvingState(
+                k=sh.k + 1, beta_try=bt, pen_dev_try=pd_t, mu_try=mu_t, accepted=ok
+            )
 
         sh_final = jax.lax.while_loop(_sh_cond, _sh_body, sh_init)
-        _k, beta_acc, pen_dev_acc, mu_acc, was_accepted = sh_final
 
         # If nothing was accepted (all 25 halvings failed), keep beta unchanged
-        beta_next = jnp.where(was_accepted, beta_acc, beta)
-        pen_dev_next = jnp.where(was_accepted, pen_dev_acc, pen_dev)
-        mu_next = jnp.where(was_accepted, mu_acc, mu)
+        beta_next = jnp.where(sh_final.accepted, sh_final.beta_try, state.beta)
+        pen_dev_next = jnp.where(sh_final.accepted, sh_final.pen_dev_try, state.pen_dev)
+        mu_next = jnp.where(sh_final.accepted, sh_final.mu_try, state.mu)
 
         # Convergence check (skip first 3 iterations)
-        dev_change = jnp.abs(pen_dev_next - pen_dev) / (0.1 + jnp.abs(pen_dev_next))
-        coef_change = jnp.max(jnp.abs(beta_next - beta)) / (
+        dev_change = jnp.abs(pen_dev_next - state.pen_dev) / (
+            0.1 + jnp.abs(pen_dev_next)
+        )
+        coef_change = jnp.max(jnp.abs(beta_next - state.beta)) / (
             0.1 + jnp.max(jnp.abs(beta_next))
         )
-        converged = (i >= 3) & (dev_change < tol) & (coef_change < tol)
+        converged = (state.i >= 3) & (dev_change < tol) & (coef_change < tol)
 
-        return (
-            i + 1,
-            beta_next,
-            beta,  # beta_old = previous beta
-            mu_next,
-            pen_dev_next,
-            pen_dev,  # pen_dev_prev
-            converged,
-            XtWX,
-            L,
-            W,
+        return _PIRLSState(
+            i=state.i + 1,
+            beta=beta_next,
+            beta_old=state.beta,
+            mu=mu_next,
+            pen_dev=pen_dev_next,
+            pen_dev_prev=state.pen_dev,
+            converged=converged,
+            XtWX=XtWX,
+            L=L,
+            W=W,
         )
 
-    final_state = jax.lax.while_loop(_cond, _body, init_state)
-    (
-        n_iter,
-        beta_final,
-        _beta_old,
-        mu_final,
-        pen_dev_final,
-        _pen_dev_prev,
-        converged,
-        XtWX_final,
-        L_final,
-        W_final,
-    ) = final_state
+    final = jax.lax.while_loop(_cond, _body, init_state)
 
-    eta_final = X @ beta_final + offset
-    dev_final = family.dev_resids(y, mu_final, wt)
+    eta_final = X @ final.beta + offset
+    dev_final = family.dev_resids(y, final.mu, wt)
     scale = jnp.where(
         family.scale_known,
         1.0,
@@ -321,15 +352,15 @@ def pirls_loop(
     )
 
     return PIRLSResult(
-        coefficients=beta_final,
-        mu=mu_final,
+        coefficients=final.beta,
+        mu=final.mu,
         eta=eta_final,
         deviance=dev_final,
-        penalized_deviance=pen_dev_final,
-        n_iter=n_iter,
-        converged=converged,
+        penalized_deviance=final.pen_dev,
+        n_iter=final.i,
+        converged=final.converged,
         scale=scale,
-        XtWX=XtWX_final,
-        L=L_final,
-        working_weights=W_final,
+        XtWX=final.XtWX,
+        L=final.L,
+        working_weights=final.W,
     )
