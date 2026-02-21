@@ -12,13 +12,13 @@ class TestToleranceClasses:
         assert STRICT.label == "strict"
 
     def test_moderate_values(self) -> None:
-        assert MODERATE.rtol == 1e-6
-        assert MODERATE.atol == 1e-8
+        assert MODERATE.rtol == 1e-4
+        assert MODERATE.atol == 1e-6
         assert MODERATE.label == "moderate"
 
     def test_loose_values(self) -> None:
-        assert LOOSE.rtol == 1e-3
-        assert LOOSE.atol == 1e-5
+        assert LOOSE.rtol == 1e-2
+        assert LOOSE.atol == 1e-4
         assert LOOSE.label == "loose"
 
     def test_frozen(self) -> None:

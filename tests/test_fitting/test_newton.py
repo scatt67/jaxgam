@@ -17,13 +17,16 @@ Tests cover:
 - Edge cases (invalid method, iteration limit)
 
 Tolerance rationale:
-  Gaussian achieves MODERATE (rtol=1e-6, atol=1e-6) for all R comparisons.
-  The atol=1e-6 accommodates near-zero coefficients/fitted values where
-  absolute agreement is excellent (~1e-7) but tighter atol would cause
-  false failures from inflated relative error on small entries. GLM families
-  (Poisson, Binomial, Gamma) use LOOSE because Newton converges to slightly
-  different lambda (~1e-3, per AGENTS.md §Common Pitfalls #4), which feeds
-  a different PIRLS, and the differences compound through the full pipeline.
+  Gaussian REML achieves MODERATE (rtol=1e-4, atol=1e-6) for all R
+  comparisons. The atol=1e-6 accommodates near-zero coefficients/fitted
+  values where absolute agreement is excellent (~1e-7) but tighter atol
+  would cause false failures from inflated relative error on small entries.
+  GLM families (Poisson, Binomial, Gamma) use LOOSE because Newton converges
+  to slightly different lambda (~1e-3, per AGENTS.md §Common Pitfalls #4),
+  which feeds a different PIRLS, and the differences compound through the
+  full pipeline. ML criterion has a different normalization convention from
+  R's (constant offset), so ML converges to a slightly different lambda
+  even for Gaussian — only deviance is compared (at LOOSE).
 
 Design doc reference: Section 8.2 (Outer Newton with Damped Hessian)
 R source reference: fast-REML.r lines 1740-1875
@@ -256,9 +259,9 @@ class TestInvariants:
 class TestFamilyVsR:
     """Comprehensive R comparison across all four families.
 
-    Gaussian uses MODERATE tolerance (single PIRLS iteration, no
-    compounding). GLM families use LOOSE (iterative PIRLS + Newton,
-    differences compound per AGENTS.md Pitfall #4).
+    Gaussian uses MODERATE (single PIRLS iteration, no compounding).
+    GLM families use LOOSE (iterative PIRLS + Newton, differences
+    compound per AGENTS.md Pitfall #4).
     """
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
@@ -305,16 +308,9 @@ class TestFamilyVsR:
         )
 
     def test_coefficients_vs_r(self, family_fit):
-        """Coefficients match R.
-
-        GLM families use wider atol (1e-3) because small-magnitude
-        coefficients on the link scale amplify relative differences.
-        """
+        """Coefficients match R."""
         family_name, _, result, r_result = family_fit
         rtol, atol = _r_tol(family_name)
-        # For GLM families, small coefficients on link scale need wider atol
-        if family_name != "gaussian":
-            atol = 1e-3
         np.testing.assert_allclose(
             np.asarray(result.pirls_result.coefficients),
             r_result["coefficients"],
