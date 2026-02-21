@@ -182,6 +182,7 @@ def _penalized_deviance(
     return dev + penalty
 
 
+@jax.jit(static_argnames=("family", "max_iter", "tol"))
 def pirls_loop(
     X: jax.Array,
     y: jax.Array,

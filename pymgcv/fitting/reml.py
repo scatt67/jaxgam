@@ -149,6 +149,7 @@ def _criterion_core(
 # ---------------------------------------------------------------------------
 
 
+@jax.jit(static_argnames=("family",))
 def pearson_rss(
     y: jax.Array,
     mu: jax.Array,
@@ -177,6 +178,7 @@ def pearson_rss(
     return jnp.sum(wt * (y - mu) ** 2 / V)
 
 
+@jax.jit(static_argnames=("family",))
 def fletcher_scale(
     y: jax.Array,
     mu: jax.Array,
@@ -223,6 +225,7 @@ def fletcher_scale(
     return phi_pearson / (1.0 + s_bar)
 
 
+@jax.jit
 def estimate_edf(
     XtWX: jax.Array,
     L: jax.Array,
@@ -375,6 +378,19 @@ def ml_criterion(
 
 
 # ---------------------------------------------------------------------------
+# Pre-compiled JIT'd transforms for the Newton hot loop
+# ---------------------------------------------------------------------------
+
+_jit_reml_score = jax.jit(reml_criterion, static_argnames=("Mp",))
+_jit_reml_grad = jax.jit(jax.grad(reml_criterion), static_argnames=("Mp",))
+_jit_reml_hess = jax.jit(jax.hessian(reml_criterion), static_argnames=("Mp",))
+
+_jit_ml_score = jax.jit(ml_criterion)
+_jit_ml_grad = jax.jit(jax.grad(ml_criterion))
+_jit_ml_hess = jax.jit(jax.hessian(ml_criterion))
+
+
+# ---------------------------------------------------------------------------
 # Criterion classes
 # ---------------------------------------------------------------------------
 
@@ -383,7 +399,8 @@ class _CriterionBase(ABC):
     """Base class for REML/ML criterion evaluation.
 
     Precomputes and caches constants from converged PIRLS.
-    Subclasses implement ``score()`` with the specific criterion function.
+    Subclasses implement ``score()``, ``gradient()``, ``hessian()``
+    using the pre-compiled module-level JIT'd transforms.
     """
 
     def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
@@ -398,13 +415,11 @@ class _CriterionBase(ABC):
     @abstractmethod
     def score(self, log_lambda: jax.Array) -> jax.Array: ...
 
-    def gradient(self, log_lambda: jax.Array) -> jax.Array:
-        """Gradient via ``jax.grad``."""
-        return jax.grad(self.score)(log_lambda)
+    @abstractmethod
+    def gradient(self, log_lambda: jax.Array) -> jax.Array: ...
 
-    def hessian(self, log_lambda: jax.Array) -> jax.Array:
-        """Hessian via ``jax.hessian``."""
-        return jax.hessian(self.score)(log_lambda)
+    @abstractmethod
+    def hessian(self, log_lambda: jax.Array) -> jax.Array: ...
 
     def evaluate(self, log_lambda: jax.Array) -> REMLResult:
         """Full evaluation returning ``REMLResult``."""
@@ -418,7 +433,11 @@ class REMLCriterion(_CriterionBase):
     Provides ``score()``, ``gradient()``, ``hessian()`` for the Newton
     optimizer, and ``evaluate()`` for full diagnostic output.
 
-    Usage by the Newton optimizer (Task 2.5)::
+    Uses pre-compiled module-level ``_jit_reml_*`` transforms so that
+    the JIT cache is reused across Newton iterations (arrays flow as
+    dynamic inputs, not baked-in closure constants).
+
+    Usage by the Newton optimizer::
 
         obj = REMLCriterion(fd, pirls_result)
         score = obj.score(log_lambda)
@@ -438,18 +457,28 @@ class REMLCriterion(_CriterionBase):
         super().__init__(fd, pirls_result)
         self._Mp = fd.total_penalty_null_dim
 
-    def score(self, log_lambda: jax.Array) -> jax.Array:
-        """REML score at given log_lambda. Differentiable via ``jax.grad``."""
-        return reml_criterion(
-            log_lambda,
-            self._XtWX,
-            self._beta,
-            self._deviance,
-            self._ls_sat,
-            self._S_list,
-            self.scale,
-            self._Mp,
+    def _kwargs(self) -> dict:
+        return dict(
+            XtWX=self._XtWX,
+            beta=self._beta,
+            deviance=self._deviance,
+            ls_sat=self._ls_sat,
+            S_list=self._S_list,
+            phi=self.scale,
+            Mp=self._Mp,
         )
+
+    def score(self, log_lambda: jax.Array) -> jax.Array:
+        """REML score at given log_lambda."""
+        return _jit_reml_score(log_lambda, **self._kwargs())
+
+    def gradient(self, log_lambda: jax.Array) -> jax.Array:
+        """REML gradient via pre-compiled ``jax.grad``."""
+        return _jit_reml_grad(log_lambda, **self._kwargs())
+
+    def hessian(self, log_lambda: jax.Array) -> jax.Array:
+        """REML Hessian via pre-compiled ``jax.hessian``."""
+        return _jit_reml_hess(log_lambda, **self._kwargs())
 
 
 class MLCriterion(_CriterionBase):
@@ -457,6 +486,8 @@ class MLCriterion(_CriterionBase):
 
     Same interface as ``REMLCriterion`` but uses the ML formula
     (no ``-Mp/2*log(2*pi*phi)`` correction).
+
+    Uses pre-compiled module-level ``_jit_ml_*`` transforms.
 
     Parameters
     ----------
@@ -466,14 +497,24 @@ class MLCriterion(_CriterionBase):
         Converged PIRLS output.
     """
 
-    def score(self, log_lambda: jax.Array) -> jax.Array:
-        """ML score at given log_lambda. Differentiable via ``jax.grad``."""
-        return ml_criterion(
-            log_lambda,
-            self._XtWX,
-            self._beta,
-            self._deviance,
-            self._ls_sat,
-            self._S_list,
-            self.scale,
+    def _kwargs(self) -> dict:
+        return dict(
+            XtWX=self._XtWX,
+            beta=self._beta,
+            deviance=self._deviance,
+            ls_sat=self._ls_sat,
+            S_list=self._S_list,
+            phi=self.scale,
         )
+
+    def score(self, log_lambda: jax.Array) -> jax.Array:
+        """ML score at given log_lambda."""
+        return _jit_ml_score(log_lambda, **self._kwargs())
+
+    def gradient(self, log_lambda: jax.Array) -> jax.Array:
+        """ML gradient via pre-compiled ``jax.grad``."""
+        return _jit_ml_grad(log_lambda, **self._kwargs())
+
+    def hessian(self, log_lambda: jax.Array) -> jax.Array:
+        """ML Hessian via pre-compiled ``jax.hessian``."""
+        return _jit_ml_hess(log_lambda, **self._kwargs())
