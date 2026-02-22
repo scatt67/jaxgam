@@ -43,12 +43,11 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 
 ### Phase 4: Integration Testing and Hardening
 - [ ] **Task 4.1** — 32-Cell Validation Matrix — *blocked by 3.1, 3.2*
-- [ ] **Task 4.2** — NumPy Reference Backend — *blocked by 2.6*
 - [ ] **Task 4.3** — Edge Cases and Robustness — *blocked by 2.6*
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 943 passing, 2 xfailed
+- **Tests:** 959 passing, 0 xfailed
 - **Phase 1 complete. Phase 2 complete. Task 3.1 complete.** Next up: Task 3.2 (Summary), Task 3.3 (Plotting)
 
 ---
@@ -766,27 +765,6 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 
 ---
 
-### Task 4.2 — NumPy Reference Backend
-
-**What:** Implement the pure NumPy/SciPy execution path (no JAX) for testing and fallback.
-
-**Read first:** docs/design.md §10 (execution paths — Dense-CPU variant)
-
-**Create:**
-- `pymgcv/linalg/backend.py` — Add NumPy backend: `cho_factor_numpy(H)` wraps `scipy.linalg.cho_factor`. `cho_solve_numpy(factor, b)` wraps `scipy.linalg.cho_solve`.
-- `pymgcv/fitting/pirls.py` — Add `pirls_loop_numpy(...)` that uses Python while loop + NumPy operations (no JIT, no `lax.while_loop`).
-- `pymgcv/api.py` — `gam(..., backend="numpy")` routes to NumPy path.
-
-**Tests** (`tests/test_numpy_backend.py`):
-- NumPy backend produces results matching JAX backend at MODERATE tolerance.
-- Works without JAX installed (test in a clean environment if possible).
-
-**Acceptance:** Cross-backend agreement at MODERATE. NumPy path is functional (not optimized).
-
-**Prerequisites:** Task 2.6 (JAX path complete — NumPy path mirrors it).
-
----
-
 ### Task 4.3 — Edge Cases and Robustness
 
 **What:** Test failure modes, edge cases, and error messages.
@@ -863,7 +841,6 @@ Phase 3:                                              ▼
                                                       │
 Phase 4:                                              ▼
                                                 ┌── 4.1
-                                                ├── 4.2
                                                 ├── 4.3
                                                 └── 4.4
 ```
@@ -906,7 +883,6 @@ Groups A, B, C, D can all proceed in parallel. They converge at Task 1.10 (desig
 | 3.2 Summary | Medium | 4–5 days | Medium (EDF computation) |
 | 3.3 Plot | Low | 2–3 days | Low |
 | 4.1 Validation | Medium | 5–7 days | Medium |
-| 4.2 NumPy backend | Medium | 3–5 days | Low |
 | 4.3 Edge cases | Medium | 3–5 days | Low |
 | 4.4 Documentation | Low | 3–4 days | Low |
 | **Total** | | **~95–140 days** | |
