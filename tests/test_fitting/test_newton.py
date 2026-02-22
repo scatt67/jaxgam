@@ -525,20 +525,34 @@ class TestMultiSmooth:
             atol=LOOSE.atol,
             err_msg="Tensor product fitted values differ from R",
         )
-        # Only compare well-determined sp. Tensor products have gently
-        # sloping REML surfaces where any sp in a wide range gives an
-        # equivalent fit. Different optimizers land at different points
-        # on these flat surfaces — compare only sp that agree on log scale.
-        log_sp_ours = np.log(np.asarray(result.smoothing_params))
+        # All sp must be finite and positive
+        sp_ours = np.asarray(result.smoothing_params)
+        assert np.all(np.isfinite(sp_ours)), f"All sp must be finite, got {sp_ours}"
+        assert np.all(sp_ours > 0), f"All sp must be positive, got {sp_ours}"
+
+        # Compare well-determined sp. Tensor products have gently sloping
+        # REML surfaces where any sp in a wide range gives an equivalent
+        # fit. Different optimizers land at different points on these flat
+        # surfaces.
+        log_sp_ours = np.log(sp_ours)
         log_sp_r = np.log(r_result["smoothing_params"])
         well_determined = np.abs(log_sp_ours - log_sp_r) < 2.0
         if np.any(well_determined):
             np.testing.assert_allclose(
-                np.asarray(result.smoothing_params)[well_determined],
+                sp_ours[well_determined],
                 r_result["smoothing_params"][well_determined],
                 rtol=MODERATE.rtol,
                 atol=MODERATE.atol,
                 err_msg="Tensor product well-determined sp differ from R",
+            )
+        # Poorly-determined sp must still be in a sensible range
+        poorly_determined = ~well_determined
+        if np.any(poorly_determined):
+            assert np.all(sp_ours[poorly_determined] >= 1e-5), (
+                f"Poorly-determined sp too small: {sp_ours[poorly_determined]}"
+            )
+            assert np.all(sp_ours[poorly_determined] <= 1e20), (
+                f"Poorly-determined sp too large: {sp_ours[poorly_determined]}"
             )
 
     def test_factor_by_vs_r(self):
@@ -606,17 +620,31 @@ class TestMultiSmooth:
             atol=LOOSE.atol,
             err_msg="Factor-by fitted values differ from R",
         )
-        # Only compare well-determined sp (flat-surface sp are ambiguous)
-        log_sp_ours = np.log(np.asarray(result.smoothing_params))
+        # All sp must be finite and positive
+        sp_ours = np.asarray(result.smoothing_params)
+        assert np.all(np.isfinite(sp_ours)), f"All sp must be finite, got {sp_ours}"
+        assert np.all(sp_ours > 0), f"All sp must be positive, got {sp_ours}"
+
+        # Compare well-determined sp (flat-surface sp are ambiguous)
+        log_sp_ours = np.log(sp_ours)
         log_sp_r = np.log(r_result["smoothing_params"])
         well_determined = np.abs(log_sp_ours - log_sp_r) < 2.0
         if np.any(well_determined):
             np.testing.assert_allclose(
-                np.asarray(result.smoothing_params)[well_determined],
+                sp_ours[well_determined],
                 r_result["smoothing_params"][well_determined],
                 rtol=LOOSE.rtol,
                 atol=LOOSE.atol,
                 err_msg="Factor-by well-determined sp differ from R",
+            )
+        # Poorly-determined sp must still be in a sensible range
+        poorly_determined = ~well_determined
+        if np.any(poorly_determined):
+            assert np.all(sp_ours[poorly_determined] >= 1e-5), (
+                f"Poorly-determined sp too small: {sp_ours[poorly_determined]}"
+            )
+            assert np.all(sp_ours[poorly_determined] <= 1e20), (
+                f"Poorly-determined sp too large: {sp_ours[poorly_determined]}"
             )
 
     def test_tprs_basis_vs_r(self):
