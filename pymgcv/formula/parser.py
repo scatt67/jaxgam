@@ -29,8 +29,8 @@ _SMOOTH_FUNCTIONS = frozenset({"s", "te", "ti"})
 
 _DEFAULT_BASIS: dict[str, str] = {
     "s": "tp",
-    "te": "tp",
-    "ti": "tp",
+    "te": "cr",  # R's te() defaults to cr, not tp
+    "ti": "cr",  # R's ti() defaults to cr, not tp
 }
 
 

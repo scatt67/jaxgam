@@ -172,7 +172,7 @@ class NewtonOptimizer:
     max_iter : int
         Maximum Newton iterations.
     tol : float, optional
-        Convergence tolerance. Defaults to ``sqrt(machine epsilon) ~ 1.49e-8``.
+        Convergence tolerance. Defaults to ``sqrt(eps)``.
     max_step : float
         Maximum step norm in log-lambda space.
     """
@@ -184,18 +184,41 @@ class NewtonOptimizer:
         max_iter: int = 200,
         tol: float | None = None,
         max_step: float = 5.0,
+        lsp_max: float = 15.0,
     ) -> None:
         self._fd = fd
         self._method = method
         self._max_iter = max_iter
         self._tol = tol if tol is not None else float(jnp.finfo(jnp.float64).eps ** 0.5)
         self._max_step = max_step
+        # Cap log smoothing parameters to prevent divergence on flat REML
+        # landscapes (e.g. tensor products with one dominant penalty).
+        self._lsp_max = lsp_max
         # Joint optimization: append log_phi to params when scale is unknown
         # (matches R's mgcv.r line 2033: lsp <- c(lsp, log.scale))
         self._joint_scale = not fd.family.scale_known and fd.n_penalties > 0
 
         if method not in ("REML", "ML"):
             raise ValueError(f"Unknown method: {method!r}. Use 'REML' or 'ML'.")
+
+    def _clamp_params(self, params: jax.Array) -> jax.Array:
+        """Clamp log smoothing parameters to [-lsp_max, lsp_max].
+
+        Matches R's ``pmin(lsp, lsp.max)`` / ``pmax(lsp, lsp0 - 20)``
+        (gam.fit3.r line ~2060). Prevents the optimizer from running
+        to infinity on flat REML landscapes.
+
+        For joint optimization, only the log_lambda portion is clamped;
+        log_phi is left unclamped.
+        """
+        lsp_max = self._lsp_max
+        if self._joint_scale:
+            n_lambda = self._fd.n_penalties
+            log_lambda = params[:n_lambda]
+            log_phi = params[n_lambda:]
+            log_lambda = jnp.clip(log_lambda, -lsp_max, lsp_max)
+            return jnp.concatenate([log_lambda, log_phi])
+        return jnp.clip(params, -lsp_max, lsp_max)
 
     def _initial_beta(self) -> jax.Array:
         """Compute initial beta via Phase 1 initialization (NumPy -> JAX)."""
@@ -250,39 +273,94 @@ class NewtonOptimizer:
         score: float,
         beta_warm: jax.Array,
         reml_scale: float,
+        grad: jax.Array,
+        hess: jax.Array,
+        outer_iter: int,
     ) -> tuple[jax.Array, PIRLSResult, _CriterionBase, jax.Array, _StepOutcome]:
-        """Trial PIRLS fit at ``log_lambda + step``, halving until score decreases.
+        """Trial step with quadratic-error check and steepest-descent fallback.
 
-        At each halving, PIRLS re-converges at the new smoothing parameters.
+        Follows R's ``mgcv:::newton`` (fast-REML.r):
+
+        1. Try Newton step, check if quadratic model is accurate (qerror < 0.8)
+        2. If rejected: halve the step, retry
+        3. After 3 halvings (in early iterations): switch to steepest-descent
+           step with length min(newton_norm, maxSstep=2)
+
+        The quadratic error check prevents accepting tiny Newton steps on
+        nearly-linear surfaces where the quadratic model is wrong. The
+        steepest-descent fallback covers more ground on such surfaces.
 
         Returns
         -------
         log_lambda_new, pirls_new, crit_new, score_new, outcome
         """
         tol = self._tol
-        log_lambda_new = log_lambda + step
+        max_s_step = 2.0  # R's maxSstep default
+
+        # Compute predicted change from quadratic model
+        pred_change = float(jnp.sum(grad * step) + 0.5 * step @ hess @ step)
+
+        log_lambda_new = self._clamp_params(log_lambda + step)
         pirls_new, crit_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
 
+        score_change = float(score_new) - score
+        qerror = abs(pred_change - score_change) / (
+            max(abs(pred_change), abs(score_change)) + reml_scale * tol
+        )
+
+        # Accept if score decreased AND quadratic model is accurate
+        if jnp.isfinite(score_new) and score_change < 0 and qerror < 0.8:
+            return log_lambda_new, pirls_new, crit_new, score_new, _StepOutcome.ACCEPTED
+
+        # Step-halving with steepest-descent fallback
+        sd_step = -grad / float(jnp.max(jnp.abs(grad)))  # unit steepest-descent
+        sd_used = False
         k = 0
         not_moved = 0
-        while float(score_new) > score:
+        while k < 30:
             if float(score_new) - score < tol * reml_scale:
                 not_moved += 1
             else:
                 not_moved = 0
 
-            if k == 25 or not_moved > 3:
+            if not_moved > 3:
                 break
+
+            # After 3 halvings in early iterations, try steepest descent
+            if k == 3 and outer_iter < 10 and not sd_used:
+                s_length = min(float(jnp.sqrt(jnp.sum(step**2))), max_s_step)
+                sd_norm = float(jnp.sqrt(jnp.sum(sd_step**2)))
+                if sd_norm > 0:
+                    step = sd_step * (s_length / sd_norm)
+                    sd_used = True
+            else:
+                step = step / 2
 
             if bool(jnp.allclose(log_lambda, log_lambda + step)):
                 break
 
-            step = step / 2
             k += 1
-            log_lambda_new = log_lambda + step
+            log_lambda_new = self._clamp_params(log_lambda + step)
             pirls_new, crit_new, score_new = self._fit_and_score(
                 log_lambda_new, beta_warm
             )
+
+            score_change = float(score_new) - score
+            # Relax qerror check after enough halvings
+            qerror_thresh = 0.4 if k > 4 else 0.8
+            pred_change = float(jnp.sum(grad * step) + 0.5 * step @ hess @ step)
+            qerror = abs(pred_change - score_change) / (
+                max(abs(pred_change), abs(score_change)) + reml_scale * tol
+            )
+
+            if jnp.isfinite(score_new) and score_change < 0 and qerror < qerror_thresh:
+                return (
+                    log_lambda_new,
+                    pirls_new,
+                    crit_new,
+                    score_new,
+                    _StepOutcome.ACCEPTED,
+                )
 
         if float(score_new) <= score:
             outcome = _StepOutcome.ACCEPTED
@@ -292,6 +370,45 @@ class NewtonOptimizer:
             outcome = _StepOutcome.STUCK
 
         return log_lambda_new, pirls_new, crit_new, score_new, outcome
+
+    def _projected_gradient(self, grad: jax.Array, params: jax.Array) -> jax.Array:
+        """Projected gradient for bounded log smoothing parameters.
+
+        At a bound, if the gradient points outward (into the constraint),
+        the KKT conditions are satisfied and that component is zeroed.
+        This prevents the optimizer from cycling at ``lsp_max`` when a
+        smoothing parameter is on a flat REML surface.
+
+        Parameters
+        ----------
+        grad : jax.Array
+            Raw gradient of the criterion.
+        params : jax.Array
+            Current parameter vector.
+
+        Returns
+        -------
+        jax.Array
+            Projected gradient (zero at satisfied bound constraints).
+        """
+        lsp_max = self._lsp_max
+        if self._joint_scale:
+            n_lambda = self._fd.n_penalties
+            log_lambda = params[:n_lambda]
+            # Zero gradient at upper bound when gradient < 0 (wants to increase)
+            at_upper = jnp.abs(log_lambda - lsp_max) < 1e-10
+            # Zero gradient at lower bound when gradient > 0 (wants to decrease)
+            at_lower = jnp.abs(log_lambda + lsp_max) < 1e-10
+            proj_lambda = jnp.where(
+                at_upper & (grad[:n_lambda] < 0), 0.0, grad[:n_lambda]
+            )
+            proj_lambda = jnp.where(at_lower & (proj_lambda > 0), 0.0, proj_lambda)
+            return jnp.concatenate([proj_lambda, grad[n_lambda:]])
+        else:
+            at_upper = jnp.abs(params - lsp_max) < 1e-10
+            at_lower = jnp.abs(params + lsp_max) < 1e-10
+            proj = jnp.where(at_upper & (grad < 0), 0.0, grad)
+            return jnp.where(at_lower & (proj > 0), 0.0, proj)
 
     def _check_convergence(
         self,
@@ -303,15 +420,25 @@ class NewtonOptimizer:
     ) -> tuple[jax.Array, jax.Array, float, bool]:
         """Compute gradient/Hessian and check convergence at accepted point.
 
+        Uses the projected gradient for bounded parameters: at a bound
+        where the gradient points into the constraint (KKT satisfied),
+        that component is zeroed.
+
         Returns (grad, hess, reml_scale, converged).
         """
         fd = self._fd
         tol = self._tol
         grad = criterion.gradient(params)
         hess = criterion.hessian(params)
+        # Symmetrize: jax.hessian can produce asymmetric results when
+        # differentiating through slogdet/eigendecompositions in the
+        # REML criterion. The true Hessian of a scalar function is
+        # always symmetric.
+        hess = (hess + hess.T) / 2
         reml_scale = abs(score) + float(deviance) / fd.n_obs
 
-        grad_converged = float(jnp.max(jnp.abs(grad))) < reml_scale * tol
+        proj_grad = self._projected_gradient(grad, params)
+        grad_converged = float(jnp.max(jnp.abs(proj_grad))) < reml_scale * tol
         reml_converged = abs(score - score_old) < reml_scale * tol
 
         return grad, hess, reml_scale, grad_converged and reml_converged
@@ -429,6 +556,9 @@ class NewtonOptimizer:
                 float(score),
                 pirls_result.coefficients,
                 reml_scale,
+                grad,
+                hess,
+                outer_iter,
             )
 
             n_iter = outer_iter + 1
@@ -485,6 +615,7 @@ def newton_optimize(
     max_iter: int = 200,
     tol: float | None = None,
     max_step: float = 5.0,
+    lsp_max: float = 40.0,
 ) -> NewtonResult:
     """Minimize REML/ML criterion over log smoothing parameters.
 
@@ -508,9 +639,12 @@ def newton_optimize(
     max_iter : int
         Maximum Newton iterations.
     tol : float, optional
-        Convergence tolerance. Defaults to ``sqrt(machine epsilon) ~ 1.49e-8``.
+        Convergence tolerance. Defaults to ``sqrt(eps)``.
     max_step : float
         Maximum step norm in log-lambda space.
+    lsp_max : float
+        Maximum absolute value for log smoothing parameters. Prevents
+        divergence on flat REML landscapes.
 
     Returns
     -------
@@ -531,8 +665,21 @@ def newton_optimize(
             n_coef=fd.n_coef,
             penalty_ranks=fd.penalty_ranks,
             penalty_null_dims=fd.penalty_null_dims,
+            penalty_range_basis=fd.penalty_range_basis,
+            singleton_sp_indices=fd.singleton_sp_indices,
+            singleton_ranks=fd.singleton_ranks,
+            singleton_eig_constants=fd.singleton_eig_constants,
+            multi_block_sp_indices=fd.multi_block_sp_indices,
+            multi_block_ranks=fd.multi_block_ranks,
+            multi_block_proj_S=fd.multi_block_proj_S,
+            repara_D=fd.repara_D,
         )
     optimizer = NewtonOptimizer(
-        fd, method=method, max_iter=max_iter, tol=tol, max_step=max_step
+        fd,
+        method=method,
+        max_iter=max_iter,
+        tol=tol,
+        max_step=max_step,
+        lsp_max=lsp_max,
     )
     return optimizer.run()

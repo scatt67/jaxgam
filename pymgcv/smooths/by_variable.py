@@ -183,6 +183,11 @@ class FactorBySmooth:
         # Get base design matrix for ALL observations
         X_base = self.base_smooth.build_design_matrix(data)
 
+        # Store constraint from full-data base basis (matches R's smoothCon).
+        # R computes C = colSums(X_base) BEFORE multiplying by the factor
+        # indicator, so all levels share the same constraint direction.
+        self._base_constraint = X_base.sum(axis=0)
+
         # Build block-structured matrix
         X = np.zeros((n, self.n_coefs))
         for level_idx, level in enumerate(self.levels):

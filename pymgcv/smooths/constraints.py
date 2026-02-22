@@ -373,6 +373,7 @@ class CoefficientMap:
                         S_blocks[i],
                         sm.n_levels,
                         sm.k_per_level,
+                        base_constraint=getattr(sm, "_base_constraint", None),
                     )
                 else:
                     X_c, S_c, Z = cls.apply_sum_to_zero(X_blocks[i], S_blocks[i])
@@ -501,16 +502,18 @@ class CoefficientMap:
         S_list: list[npt.NDArray[np.floating]],
         n_levels: int,
         k_per_level: int,
+        base_constraint: npt.NDArray[np.floating] | None = None,
     ) -> tuple[
         npt.NDArray[np.floating],
         list[npt.NDArray[np.floating]],
         npt.NDArray[np.floating],
     ]:
-        """Apply centering constraint to each level's block independently.
+        """Apply centering constraint to each level's block.
 
-        For ``FactorBySmooth``, the design matrix is block-structured.
-        The centering constraint is applied to each level's block
-        independently, producing a block-diagonal Z matrix.
+        For ``FactorBySmooth``, R computes the constraint from the base
+        smooth's full-data design matrix (before indicator multiplication),
+        so all levels share the **same** Z matrix.  When ``base_constraint``
+        is provided, we replicate that behaviour.
 
         Parameters
         ----------
@@ -523,6 +526,10 @@ class CoefficientMap:
             Number of factor levels.
         k_per_level : int
             Basis dimension per level.
+        base_constraint : np.ndarray or None
+            ``colSums(X_base)`` from the base smooth evaluated on ALL data
+            (before indicator multiplication).  When provided, all levels
+            share the same constraint direction, matching R's ``smoothCon``.
 
         Returns
         -------
@@ -533,17 +540,17 @@ class CoefficientMap:
         Z : np.ndarray
             Block-diagonal constraint absorption matrix.
         """
-        Z_blocks: list[npt.NDArray[np.floating]] = []
-        for lev in range(n_levels):
-            col_start = lev * k_per_level
-            col_end = col_start + k_per_level
-            X_block = X[:, col_start:col_end]
+        # Compute the shared constraint direction from the base smooth
+        if base_constraint is not None:
+            C = base_constraint
+        else:
+            # Fallback: use first level's block (backwards compat)
+            C = X[:, :k_per_level].sum(axis=0)
 
-            C = X_block.sum(axis=0)  # matches R's colSums
-            Q, _ = np.linalg.qr(C[:, np.newaxis], mode="complete")
-            Z_blocks.append(Q[:, 1:])
+        Q, _ = np.linalg.qr(C[:, np.newaxis], mode="complete")
+        Z_one = Q[:, 1:]  # same Z for all levels
 
-        Z = linalg.block_diag(*Z_blocks)
+        Z = linalg.block_diag(*([Z_one] * n_levels))
 
         X_c = X @ Z
         S_c_list = []

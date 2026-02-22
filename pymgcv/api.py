@@ -301,13 +301,20 @@ class GAM:
         Z = sla.solve_triangular(L, np.eye(p), lower=True)
         H_inv = Z.T @ Z
 
+        # Per-smooth EDF via hat matrix F = H^{-1} @ XtWX
+        # (invariant under repara — cyclic trace with block-diagonal D)
+        F = H_inv @ XtWX
+        per_smooth_edf = _compute_per_smooth_edf(F, setup.smooth_info)
+
+        # Back-transform from Sl.setup reparameterized space
+        if fd.repara_D is not None:
+            D = to_numpy(fd.repara_D)
+            coefficients = D @ coefficients
+            H_inv = D @ H_inv @ D.T
+
         # Bayesian covariance
         phi = 1.0 if family_obj.scale_known else scale
         Vp = phi * H_inv
-
-        # Per-smooth EDF via hat matrix F = H^{-1} @ XtWX
-        F = H_inv @ XtWX
-        per_smooth_edf = _compute_per_smooth_edf(F, setup.smooth_info)
 
         # Null deviance
         null_deviance = _compute_null_deviance(y_np, wt_np, family_obj)

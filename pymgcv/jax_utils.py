@@ -138,7 +138,7 @@ def build_S_lambda(
     return S_lambda
 
 
-def log_pseudo_det(S: jax.Array) -> jax.Array:
+def log_pseudo_det(S: jax.Array, n_zero: int = 0) -> jax.Array:
     """Log pseudo-determinant of S (product of non-zero eigenvalues).
 
     Adds a tiny asymmetric diagonal perturbation before eigendecomposition
@@ -152,6 +152,15 @@ def log_pseudo_det(S: jax.Array) -> jax.Array:
     ----------
     S : jax.Array, shape (p, p)
         Symmetric positive semi-definite matrix.
+    n_zero : int
+        Number of eigenvalues known to be zero (the penalty null space
+        dimension ``Mp``).  When provided, the bottom ``n_zero``
+        eigenvalues are excluded by index rather than by a relative
+        threshold.  This is critical for multi-penalty models where
+        eigenvalues span many orders of magnitude — a relative
+        threshold ``1e-10 * max(eig)`` can incorrectly exclude
+        eigenvalues from weaker penalties when one smoothing parameter
+        dominates.
 
     Returns
     -------
@@ -161,12 +170,121 @@ def log_pseudo_det(S: jax.Array) -> jax.Array:
     p = S.shape[0]
     # Asymmetric diagonal jitter breaks eigenvalue degeneracy so that
     # second derivatives through eigvalsh remain finite.
-    jitter_scale = 1e-14 * jnp.max(jnp.abs(S))
-    S = S + jnp.diag(jnp.arange(1, p + 1, dtype=S.dtype) * jitter_scale)
-    eigs = jnp.linalg.eigvalsh(S)
-    threshold = 1e-10 * jnp.max(jnp.abs(eigs))
+    #
+    # The jitter scales proportionally to each diagonal entry of S,
+    # ensuring the relative perturbation is ~1e-14 regardless of the
+    # eigenvalue magnitude.  This is critical for multi-penalty models
+    # (tensor products) where eigenvalues span many orders of magnitude:
+    # a global scale ``1e-14 * max|S|`` would corrupt the small eigenvalues
+    # from the weaker penalty when one smoothing parameter dominates.
+    diag_S = jnp.abs(jnp.diag(S))
+    # Floor prevents zero jitter in the null space (where diag ≈ 0).
+    # The floor is negligible relative to any non-null eigenvalue.
+    per_entry_scale = jnp.maximum(diag_S, 1e-30)
+    jitter = 1e-14 * per_entry_scale * jnp.arange(1, p + 1, dtype=S.dtype)
+    S = S + jnp.diag(jitter)
+    eigs = jnp.linalg.eigvalsh(S)  # ascending order
     safe_eigs = jnp.maximum(eigs, 1e-30)
-    return jnp.sum(jnp.where(eigs > threshold, jnp.log(safe_eigs), 0.0))
+    # Select top p - n_zero eigenvalues (the non-null ones).
+    # eigvalsh returns ascending order, so null eigenvalues are first.
+    mask = jnp.arange(p) >= n_zero
+    return jnp.sum(jnp.where(mask, jnp.log(safe_eigs), 0.0))
+
+
+def block_log_det_S(
+    log_lambda: jax.Array,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+) -> jax.Array:
+    """Block-structured log pseudo-determinant of S_lambda.
+
+    For models where penalties from different smooths occupy non-overlapping
+    columns, S_lambda is block-diagonal and log|S+| decomposes as a sum
+    over blocks.
+
+    Singleton blocks (one penalty per smooth) use the exact formula
+    ``log|S+| = rank * rho + const``, whose derivative w.r.t. rho is
+    exactly ``rank`` — no matrix operations, zero numerical error.
+
+    Multi-penalty blocks (tensor products) factor out ``exp(rho_max)``
+    for numerical stability, then use slogdet on a well-conditioned matrix.
+
+    Parameters
+    ----------
+    log_lambda : jax.Array, shape (m,)
+        Log smoothing parameters.
+    singleton_sp_indices : tuple[int, ...]
+        Index into ``log_lambda`` for each singleton block.
+    singleton_ranks : tuple[int, ...]
+        Rank of each singleton's penalty.
+    singleton_eig_constants : jax.Array, shape (n_singletons,)
+        Precomputed ``sum(log(nonzero_eigenvalues))`` for each singleton.
+    multi_block_sp_indices : tuple[tuple[int, ...], ...]
+        ``log_lambda`` indices for each multi-penalty block.
+    multi_block_ranks : tuple[int, ...]
+        Combined penalty rank for each multi-penalty block.
+    multi_block_proj_S : tuple[tuple[jax.Array, ...], ...]
+        Range-space-projected penalty matrices for each multi-penalty block.
+
+    Returns
+    -------
+    jax.Array, scalar
+        Log pseudo-determinant of S_lambda.
+    """
+    log_det = jnp.array(0.0)
+
+    # Singleton blocks: exact formula (derivative = rank, no numerical error)
+    for i, sp_idx in enumerate(singleton_sp_indices):
+        log_det = (
+            log_det
+            + singleton_ranks[i] * log_lambda[sp_idx]
+            + singleton_eig_constants[i]
+        )
+
+    # Multi-penalty blocks: scaled slogdet for well-conditioned derivatives
+    for i, sp_indices in enumerate(multi_block_sp_indices):
+        rho_block = jnp.stack([log_lambda[j] for j in sp_indices])
+        rho_max = jnp.max(rho_block)
+        S_adj = jnp.zeros_like(multi_block_proj_S[i][0])
+        for j, S_j_proj in enumerate(multi_block_proj_S[i]):
+            S_adj = S_adj + jnp.exp(rho_block[j] - rho_max) * S_j_proj
+        sign, logdet = jnp.linalg.slogdet(S_adj)
+        log_det = (
+            log_det
+            + multi_block_ranks[i] * rho_max
+            + jnp.where(sign > 0, logdet, -1e10)
+        )
+
+    return log_det
+
+
+def stable_log_pseudo_det(S: jax.Array, U_range: jax.Array) -> jax.Array:
+    """Log pseudo-determinant via projection into range space + slogdet.
+
+    Projects S into its range space using a precomputed orthogonal
+    basis, then computes slogdet on the resulting full-rank PD matrix.
+    This avoids eigendecomposition of rank-deficient matrices, which
+    has unstable derivatives under JAX autodiff.
+
+    Parameters
+    ----------
+    S : jax.Array, shape (p, p)
+        Symmetric positive semi-definite matrix.
+    U_range : jax.Array, shape (p, r)
+        Orthogonal basis for the range space of the total penalty.
+
+    Returns
+    -------
+    jax.Array, scalar
+        Log of the product of non-zero eigenvalues.
+    """
+    S_proj = U_range.T @ S @ U_range  # (r, r), full rank PD
+    sign, logdet = jnp.linalg.slogdet(S_proj)
+    return jnp.where(sign > 0, logdet, -1e10)
 
 
 @jax.jit

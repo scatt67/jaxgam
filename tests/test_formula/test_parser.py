@@ -167,7 +167,7 @@ class TestTensorProducts:
         smooth = result.smooth_terms[0]
         assert smooth.variables == ["x1", "x2"]
         assert smooth.smooth_type == "te"
-        assert smooth.bs == "tp"
+        assert smooth.bs == "cr"
 
     def test_ti_basic(self) -> None:
         """ti(x1, x2) produces SmoothSpec with smooth_type='ti'."""
@@ -192,6 +192,13 @@ class TestTensorProducts:
 
         smooth = result.smooth_terms[0]
         assert smooth.variables == ["x1", "x2", "x3"]
+
+    def test_default_bs_tensor(self) -> None:
+        """Default bs is 'cr' for te() and ti(), matching R."""
+        result_te = parse_formula("y ~ te(x1, x2)")
+        assert result_te.smooth_terms[0].bs == "cr"
+        result_ti = parse_formula("y ~ ti(x1, x2)")
+        assert result_ti.smooth_terms[0].bs == "cr"
 
     def test_smooth_plus_interaction(self) -> None:
         """y ~ s(x1) + s(x2) + ti(x1, x2) parses all three terms."""

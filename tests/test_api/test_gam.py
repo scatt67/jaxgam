@@ -442,8 +442,9 @@ class TestMultiSmooth:
     def test_tensor_product(self):
         """te(x1, x2, k=5): Python parser uses scalar k (not R's c(5,5)).
 
-        LOOSE tolerance: tensor products have multiple penalties and
-        differences compound through the joint lambda optimization.
+        With the default basis fix (te defaults to cr, matching R),
+        we achieve MODERATE agreement on deviance, coefficients, and
+        fitted values.
         """
         from pymgcv.compat.r_bridge import RBridge
 
@@ -457,9 +458,25 @@ class TestMultiSmooth:
         np.testing.assert_allclose(
             model.deviance_,
             r_result["deviance"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="Tensor product deviance differs from R",
+        )
+        # LOOSE: one penalty's sp converges on a flat REML landscape,
+        # so small sp differences cascade to coefficients (~1e-3 rel).
+        np.testing.assert_allclose(
+            model.coefficients_,
+            r_result["coefficients"],
             rtol=LOOSE.rtol,
             atol=LOOSE.atol,
-            err_msg="Tensor product deviance differs from R",
+            err_msg="Tensor product coefficients differ from R",
+        )
+        np.testing.assert_allclose(
+            model.fitted_values_,
+            r_result["fitted_values"],
+            rtol=LOOSE.rtol,
+            atol=LOOSE.atol,
+            err_msg="Tensor product fitted values differ from R",
         )
 
 
@@ -484,9 +501,25 @@ class TestFactorBy:
         np.testing.assert_allclose(
             model.deviance_,
             r_result["deviance"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="Factor-by deviance differs from R",
+        )
+        # LOOSE: one sp is at the lsp_max cap (exp(15) vs R's exp(18)),
+        # causing minor coefficient/fitted value differences (~1e-3 rel).
+        np.testing.assert_allclose(
+            model.coefficients_,
+            r_result["coefficients"],
             rtol=LOOSE.rtol,
             atol=LOOSE.atol,
-            err_msg="Factor-by deviance differs from R",
+            err_msg="Factor-by coefficients differ from R",
+        )
+        np.testing.assert_allclose(
+            model.fitted_values_,
+            r_result["fitted_values"],
+            rtol=LOOSE.rtol,
+            atol=LOOSE.atol,
+            err_msg="Factor-by fitted values differ from R",
         )
 
     def test_factor_by_edf_count(self):

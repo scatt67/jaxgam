@@ -136,17 +136,33 @@ class TestFromSetupBasic:
             assert isinstance(S_j, jax.Array)
 
     def test_values_preserved(self, gaussian_setup):
-        """Values must match original NumPy arrays at STRICT tolerance."""
+        """Values must match original NumPy arrays at STRICT tolerance.
+
+        X may be reparameterized (X_repara = X_orig @ D) for better
+        Hessian conditioning. Check the original-space relationship.
+        """
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
 
-        np.testing.assert_allclose(
-            to_numpy(fd.X),
-            gaussian_setup.X,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="X values must match after transfer",
-        )
+        if fd.repara_D is not None:
+            # X_repara = X_orig @ D, so X_orig = X_repara @ D^{-1}
+            D = to_numpy(fd.repara_D)
+            X_recovered = to_numpy(fd.X) @ np.linalg.inv(D)
+            np.testing.assert_allclose(
+                X_recovered,
+                gaussian_setup.X,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg="X values must be recoverable via D inverse",
+            )
+        else:
+            np.testing.assert_allclose(
+                to_numpy(fd.X),
+                gaussian_setup.X,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg="X values must match after transfer",
+            )
         np.testing.assert_allclose(
             to_numpy(fd.y),
             gaussian_setup.y,

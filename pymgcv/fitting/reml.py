@@ -51,7 +51,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jsla
 
-from pymgcv.jax_utils import build_S_lambda, log_pseudo_det
+from pymgcv.jax_utils import block_log_det_S, build_S_lambda
 
 if TYPE_CHECKING:
     from pymgcv.families.base import ExponentialFamily
@@ -108,10 +108,21 @@ def _criterion_core(
     ls_sat: jax.Array,
     S_list: tuple[jax.Array, ...],
     phi: jax.Array,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
 ) -> jax.Array:
     """Shared REML/ML computation. Pure JAX, differentiable.
 
     Computes: Dp/(2*phi) - ls_sat + log|H|/2 - log|S+|/2
+
+    Uses block-structured log|S+| for accurate gradients:
+    singletons use the exact ``rank * rho + const`` formula,
+    multi-penalty blocks use scaled slogdet.
 
     Parameters
     ----------
@@ -129,6 +140,18 @@ def _criterion_core(
         Per-penalty (p, p) matrices.
     phi : jax.Array, scalar
         Dispersion parameter.
+    Mp : int (static)
+        Total penalty null space dimension.
+    singleton_sp_indices, singleton_ranks : tuple[int, ...]
+        Static block metadata for singleton penalties.
+    singleton_eig_constants : jax.Array
+        Precomputed eigenvalue constants for singletons.
+    multi_block_sp_indices : tuple[tuple[int, ...], ...]
+        Static log_lambda indices for multi-penalty blocks.
+    multi_block_ranks : tuple[int, ...]
+        Static ranks for multi-penalty blocks.
+    multi_block_proj_S : tuple[tuple[jax.Array, ...], ...]
+        Range-space-projected penalties for multi-penalty blocks.
 
     Returns
     -------
@@ -145,7 +168,15 @@ def _criterion_core(
     sign, log_det_H = jnp.linalg.slogdet(H)
     log_det_H = jnp.where(sign > 0, log_det_H, 1e10)
 
-    log_det_S = log_pseudo_det(S_lambda)
+    log_det_S = block_log_det_S(
+        log_lambda,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
 
     return Dp / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
 
@@ -305,6 +336,12 @@ def reml_criterion(
     S_list: tuple[jax.Array, ...],
     phi: jax.Array,
     Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
 ) -> jax.Array:
     """REML criterion matching R's Laplace REML (gam.fit3.r line 616).
 
@@ -319,27 +356,33 @@ def reml_criterion(
     ----------
     log_lambda : jax.Array, shape (m,)
         Log smoothing parameters.
-    XtWX : jax.Array, shape (p, p)
-        Weighted cross-product from PIRLS (PIRLSResult.XtWX).
-    beta : jax.Array, shape (p,)
-        Converged coefficients (PIRLSResult.coefficients).
-    deviance : jax.Array, scalar
-        Unpenalized deviance from PIRLS (PIRLSResult.deviance).
-    ls_sat : jax.Array, scalar
-        Saturated log-likelihood (family.saturated_loglik).
-    S_list : tuple[jax.Array, ...]
-        Per-penalty (p, p) matrices (FittingData.S_list).
-    phi : jax.Array, scalar
-        Dispersion parameter.
-    Mp : int (static)
-        Penalty null space dimension = sum(penalty_null_dims).
+    XtWX, beta, deviance, ls_sat, S_list, phi, Mp
+        See ``_criterion_core``.
+    singleton_sp_indices, singleton_ranks, singleton_eig_constants,
+    multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
+        Block-structured log|S+| metadata. See ``block_log_det_S``.
 
     Returns
     -------
     jax.Array, scalar
         REML score (lower is better).
     """
-    core = _criterion_core(log_lambda, XtWX, beta, deviance, ls_sat, S_list, phi)
+    core = _criterion_core(
+        log_lambda,
+        XtWX,
+        beta,
+        deviance,
+        ls_sat,
+        S_list,
+        phi,
+        Mp,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
 
@@ -351,6 +394,13 @@ def ml_criterion(
     ls_sat: jax.Array,
     S_list: tuple[jax.Array, ...],
     phi: jax.Array,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
 ) -> jax.Array:
     """ML criterion. Same as REML but without the -Mp/2*log(2*pi*phi) correction.
 
@@ -362,25 +412,33 @@ def ml_criterion(
     ----------
     log_lambda : jax.Array, shape (m,)
         Log smoothing parameters.
-    XtWX : jax.Array, shape (p, p)
-        Weighted cross-product from PIRLS.
-    beta : jax.Array, shape (p,)
-        Converged coefficients.
-    deviance : jax.Array, scalar
-        Unpenalized deviance from PIRLS.
-    ls_sat : jax.Array, scalar
-        Saturated log-likelihood.
-    S_list : tuple[jax.Array, ...]
-        Per-penalty (p, p) matrices.
-    phi : jax.Array, scalar
-        Dispersion parameter.
+    XtWX, beta, deviance, ls_sat, S_list, phi, Mp
+        See ``_criterion_core``.
+    singleton_sp_indices, singleton_ranks, singleton_eig_constants,
+    multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
+        Block-structured log|S+| metadata. See ``block_log_det_S``.
 
     Returns
     -------
     jax.Array, scalar
         ML score (lower is better).
     """
-    return _criterion_core(log_lambda, XtWX, beta, deviance, ls_sat, S_list, phi)
+    return _criterion_core(
+        log_lambda,
+        XtWX,
+        beta,
+        deviance,
+        ls_sat,
+        S_list,
+        phi,
+        Mp,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +457,12 @@ def reml_criterion_joint(
     Mp: int,
     n_lambda: int,
     family: ExponentialFamily,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
 ) -> jax.Array:
     """REML criterion with joint ``(log_lambda, log_phi)`` optimization.
 
@@ -413,24 +477,11 @@ def reml_criterion_joint(
     ----------
     params : jax.Array, shape (n_lambda + 1,)
         ``[log_lambda_1, ..., log_lambda_m, log_phi]``.
-    XtWX : jax.Array, shape (p, p)
-        Weighted cross-product from PIRLS.
-    beta : jax.Array, shape (p,)
-        Converged coefficients.
-    deviance : jax.Array, scalar
-        Unpenalized deviance from PIRLS.
-    y : jax.Array, shape (n,)
-        Response vector (for ``ls_sat`` computation).
-    wt : jax.Array, shape (n,)
-        Prior weights (for ``ls_sat`` computation).
-    S_list : tuple[jax.Array, ...]
-        Per-penalty (p, p) matrices.
-    Mp : int (static)
-        Penalty null space dimension.
-    n_lambda : int (static)
-        Number of smoothing parameters (to split params).
-    family : ExponentialFamily (static)
-        Family with ``saturated_loglik`` method.
+    XtWX, beta, deviance, y, wt, S_list, Mp, n_lambda, family
+        See ``_criterion_core`` / ``reml_criterion``.
+    singleton_sp_indices, singleton_ranks, singleton_eig_constants,
+    multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
+        Block-structured log|S+| metadata. See ``block_log_det_S``.
 
     Returns
     -------
@@ -440,7 +491,22 @@ def reml_criterion_joint(
     log_lambda = params[:n_lambda]
     phi = jnp.exp(params[n_lambda])
     ls_sat = family.saturated_loglik(y, wt, phi)
-    core = _criterion_core(log_lambda, XtWX, beta, deviance, ls_sat, S_list, phi)
+    core = _criterion_core(
+        log_lambda,
+        XtWX,
+        beta,
+        deviance,
+        ls_sat,
+        S_list,
+        phi,
+        Mp,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
 
@@ -452,8 +518,15 @@ def ml_criterion_joint(
     y: jax.Array,
     wt: jax.Array,
     S_list: tuple[jax.Array, ...],
+    Mp: int,
     n_lambda: int,
     family: ExponentialFamily,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
 ) -> jax.Array:
     """ML criterion with joint ``(log_lambda, log_phi)`` optimization.
 
@@ -461,8 +534,11 @@ def ml_criterion_joint(
     ----------
     params : jax.Array, shape (n_lambda + 1,)
         ``[log_lambda_1, ..., log_lambda_m, log_phi]``.
-    XtWX, beta, deviance, y, wt, S_list, n_lambda, family
+    XtWX, beta, deviance, y, wt, S_list, Mp, n_lambda, family
         See ``reml_criterion_joint``.
+    singleton_sp_indices, singleton_ranks, singleton_eig_constants,
+    multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
+        Block-structured log|S+| metadata. See ``block_log_det_S``.
 
     Returns
     -------
@@ -472,22 +548,45 @@ def ml_criterion_joint(
     log_lambda = params[:n_lambda]
     phi = jnp.exp(params[n_lambda])
     ls_sat = family.saturated_loglik(y, wt, phi)
-    return _criterion_core(log_lambda, XtWX, beta, deviance, ls_sat, S_list, phi)
+    return _criterion_core(
+        log_lambda,
+        XtWX,
+        beta,
+        deviance,
+        ls_sat,
+        S_list,
+        phi,
+        Mp,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Pre-compiled JIT'd transforms for the Newton hot loop
 # ---------------------------------------------------------------------------
 
-_jit_reml_score = jax.jit(reml_criterion, static_argnames=("Mp",))
-_jit_reml_grad = jax.jit(jax.grad(reml_criterion), static_argnames=("Mp",))
-_jit_reml_hess = jax.jit(jax.hessian(reml_criterion), static_argnames=("Mp",))
+_BLOCK_STATIC = (
+    "Mp",
+    "singleton_sp_indices",
+    "singleton_ranks",
+    "multi_block_sp_indices",
+    "multi_block_ranks",
+)
 
-_jit_ml_score = jax.jit(ml_criterion)
-_jit_ml_grad = jax.jit(jax.grad(ml_criterion))
-_jit_ml_hess = jax.jit(jax.hessian(ml_criterion))
+_jit_reml_score = jax.jit(reml_criterion, static_argnames=_BLOCK_STATIC)
+_jit_reml_grad = jax.jit(jax.grad(reml_criterion), static_argnames=_BLOCK_STATIC)
+_jit_reml_hess = jax.jit(jax.hessian(reml_criterion), static_argnames=_BLOCK_STATIC)
 
-_JOINT_STATIC = ("Mp", "n_lambda", "family")
+_jit_ml_score = jax.jit(ml_criterion, static_argnames=_BLOCK_STATIC)
+_jit_ml_grad = jax.jit(jax.grad(ml_criterion), static_argnames=_BLOCK_STATIC)
+_jit_ml_hess = jax.jit(jax.hessian(ml_criterion), static_argnames=_BLOCK_STATIC)
+
+_JOINT_STATIC = _BLOCK_STATIC + ("n_lambda", "family")
 _jit_reml_joint_score = jax.jit(reml_criterion_joint, static_argnames=_JOINT_STATIC)
 _jit_reml_joint_grad = jax.jit(
     jax.grad(reml_criterion_joint), static_argnames=_JOINT_STATIC
@@ -497,15 +596,14 @@ _jit_reml_joint_hess = jax.jit(
     static_argnames=_JOINT_STATIC,
 )
 
-_ML_JOINT_STATIC = ("n_lambda", "family")
-_jit_ml_joint_score = jax.jit(ml_criterion_joint, static_argnames=_ML_JOINT_STATIC)
+_jit_ml_joint_score = jax.jit(ml_criterion_joint, static_argnames=_JOINT_STATIC)
 _jit_ml_joint_grad = jax.jit(
     jax.grad(ml_criterion_joint),
-    static_argnames=_ML_JOINT_STATIC,
+    static_argnames=_JOINT_STATIC,
 )
 _jit_ml_joint_hess = jax.jit(
     jax.hessian(ml_criterion_joint),
-    static_argnames=_ML_JOINT_STATIC,
+    static_argnames=_JOINT_STATIC,
 )
 
 
@@ -530,6 +628,13 @@ class _CriterionBase(ABC):
         self._XtWX = pirls_result.XtWX
         self._beta = pirls_result.coefficients
         self._S_list = fd.S_list
+        # Block-structured log|S+| metadata
+        self._singleton_sp_indices = fd.singleton_sp_indices
+        self._singleton_ranks = fd.singleton_ranks
+        self._singleton_eig_constants = fd.singleton_eig_constants
+        self._multi_block_sp_indices = fd.multi_block_sp_indices
+        self._multi_block_ranks = fd.multi_block_ranks
+        self._multi_block_proj_S = fd.multi_block_proj_S
 
     @abstractmethod
     def score(self, log_lambda: jax.Array) -> jax.Array: ...
@@ -585,6 +690,12 @@ class REMLCriterion(_CriterionBase):
             S_list=self._S_list,
             phi=self.scale,
             Mp=self._Mp,
+            singleton_sp_indices=self._singleton_sp_indices,
+            singleton_ranks=self._singleton_ranks,
+            singleton_eig_constants=self._singleton_eig_constants,
+            multi_block_sp_indices=self._multi_block_sp_indices,
+            multi_block_ranks=self._multi_block_ranks,
+            multi_block_proj_S=self._multi_block_proj_S,
         )
 
     def score(self, log_lambda: jax.Array) -> jax.Array:
@@ -616,6 +727,10 @@ class MLCriterion(_CriterionBase):
         Converged PIRLS output.
     """
 
+    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
+        super().__init__(fd, pirls_result)
+        self._Mp = fd.total_penalty_null_dim
+
     def _kwargs(self) -> dict:
         return dict(
             XtWX=self._XtWX,
@@ -624,6 +739,13 @@ class MLCriterion(_CriterionBase):
             ls_sat=self._ls_sat,
             S_list=self._S_list,
             phi=self.scale,
+            Mp=self._Mp,
+            singleton_sp_indices=self._singleton_sp_indices,
+            singleton_ranks=self._singleton_ranks,
+            singleton_eig_constants=self._singleton_eig_constants,
+            multi_block_sp_indices=self._multi_block_sp_indices,
+            multi_block_ranks=self._multi_block_ranks,
+            multi_block_proj_S=self._multi_block_proj_S,
         )
 
     def score(self, log_lambda: jax.Array) -> jax.Array:
@@ -669,6 +791,13 @@ class _JointCriterionBase(ABC):
         self._wt = fd.wt
         self._family = fd.family
         self._n_lambda = fd.n_penalties
+        # Block-structured log|S+| metadata
+        self._singleton_sp_indices = fd.singleton_sp_indices
+        self._singleton_ranks = fd.singleton_ranks
+        self._singleton_eig_constants = fd.singleton_eig_constants
+        self._multi_block_sp_indices = fd.multi_block_sp_indices
+        self._multi_block_ranks = fd.multi_block_ranks
+        self._multi_block_proj_S = fd.multi_block_proj_S
 
     @abstractmethod
     def score(self, params: jax.Array) -> jax.Array: ...
@@ -709,6 +838,12 @@ class JointREMLCriterion(_JointCriterionBase):
             Mp=self._Mp,
             n_lambda=self._n_lambda,
             family=self._family,
+            singleton_sp_indices=self._singleton_sp_indices,
+            singleton_ranks=self._singleton_ranks,
+            singleton_eig_constants=self._singleton_eig_constants,
+            multi_block_sp_indices=self._multi_block_sp_indices,
+            multi_block_ranks=self._multi_block_ranks,
+            multi_block_proj_S=self._multi_block_proj_S,
         )
 
     def score(self, params: jax.Array) -> jax.Array:
@@ -735,6 +870,10 @@ class JointMLCriterion(_JointCriterionBase):
         Converged PIRLS output.
     """
 
+    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
+        super().__init__(fd, pirls_result)
+        self._Mp = fd.total_penalty_null_dim
+
     def _kwargs(self) -> dict:
         return dict(
             XtWX=self._XtWX,
@@ -743,8 +882,15 @@ class JointMLCriterion(_JointCriterionBase):
             y=self._y,
             wt=self._wt,
             S_list=self._S_list,
+            Mp=self._Mp,
             n_lambda=self._n_lambda,
             family=self._family,
+            singleton_sp_indices=self._singleton_sp_indices,
+            singleton_ranks=self._singleton_ranks,
+            singleton_eig_constants=self._singleton_eig_constants,
+            multi_block_sp_indices=self._multi_block_sp_indices,
+            multi_block_ranks=self._multi_block_ranks,
+            multi_block_proj_S=self._multi_block_proj_S,
         )
 
     def score(self, params: jax.Array) -> jax.Array:

@@ -471,8 +471,10 @@ class TestVsR:
         setup = ModelSetup.build(spec, data)
         fd = FittingData.from_setup(setup, family)
 
+        # Initialize beta from the (possibly reparameterized) model matrix
+        # stored in fd.X, matching the coordinate system PIRLS will use.
         beta_init = initialize_beta(
-            setup.X, setup.y, setup.weights, family, setup.offset
+            np.asarray(fd.X), setup.y, setup.weights, family, setup.offset
         )
         beta_jax = to_jax(np.asarray(beta_init))
 
@@ -494,11 +496,14 @@ class TestVsR:
         S_lambda = fd.S_lambda(log_lambda)
         return pirls_loop(fd.X, fd.y, beta_jax, S_lambda, fd.family, fd.wt, fd.offset)
 
-    def _check_vs_r(self, result, r_ref, label):
+    def _check_vs_r(self, result, r_ref, label, fd=None):
         """Compare PIRLS result against R reference for coefficients,
         deviance, and fitted values."""
+        coefs = to_numpy(result.coefficients)
+        if fd is not None and fd.repara_D is not None:
+            coefs = to_numpy(fd.repara_D) @ coefs
         np.testing.assert_allclose(
-            to_numpy(result.coefficients),
+            coefs,
             r_ref["coefficients"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
@@ -524,21 +529,21 @@ class TestVsR:
             "gaussian", "gaussian", Gaussian()
         )
         result = self._run_pirls(fd, beta_jax, log_lambda)
-        self._check_vs_r(result, r_ref, "Gaussian")
+        self._check_vs_r(result, r_ref, "Gaussian", fd)
 
     def test_vs_r_binomial(self):
         fd, beta_jax, log_lambda, r_ref = self._setup(
             "binomial", "binomial", Binomial()
         )
         result = self._run_pirls(fd, beta_jax, log_lambda)
-        self._check_vs_r(result, r_ref, "Binomial")
+        self._check_vs_r(result, r_ref, "Binomial", fd)
 
     def test_vs_r_poisson(self):
         fd, beta_jax, log_lambda, r_ref = self._setup("poisson", "poisson", Poisson())
         result = self._run_pirls(fd, beta_jax, log_lambda)
-        self._check_vs_r(result, r_ref, "Poisson")
+        self._check_vs_r(result, r_ref, "Poisson", fd)
 
     def test_vs_r_gamma(self):
         fd, beta_jax, log_lambda, r_ref = self._setup("gamma", "gamma", Gamma())
         result = self._run_pirls(fd, beta_jax, log_lambda)
-        self._check_vs_r(result, r_ref, "Gamma")
+        self._check_vs_r(result, r_ref, "Gamma", fd)

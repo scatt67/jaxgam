@@ -101,7 +101,11 @@ def _setup_pipeline(
     setup = ModelSetup.build(spec, data)
     fd = FittingData.from_setup(setup, family)
 
-    beta_init = initialize_beta(setup.X, setup.y, setup.weights, family, setup.offset)
+    # Initialize beta from the (possibly reparameterized) model matrix
+    # stored in fd.X, matching the coordinate system PIRLS will use.
+    beta_init = initialize_beta(
+        np.asarray(fd.X), setup.y, setup.weights, family, setup.offset
+    )
     beta_jax = to_jax(np.asarray(beta_init))
 
     bridge = RBridge()
@@ -135,6 +139,12 @@ def _reml_args(fd, pirls_result, log_lambda):
         S_list=fd.S_list,
         phi=phi,
         Mp=Mp,
+        singleton_sp_indices=fd.singleton_sp_indices,
+        singleton_ranks=fd.singleton_ranks,
+        singleton_eig_constants=fd.singleton_eig_constants,
+        multi_block_sp_indices=fd.multi_block_sp_indices,
+        multi_block_ranks=fd.multi_block_ranks,
+        multi_block_proj_S=fd.multi_block_proj_S,
     )
 
 
@@ -305,15 +315,13 @@ class TestMLCriterion:
         args = _reml_args(self.fd, self.pirls_result, self.log_lambda)
         reml_val = float(reml_criterion(**args))
 
-        ml_args = {k: v for k, v in args.items() if k != "Mp"}
-        ml_val = float(ml_criterion(**ml_args))
+        ml_val = float(ml_criterion(**args))
         assert reml_val != ml_val
 
     def test_ml_gradient_finite(self):
         def ml_fn(ll):
             args = _reml_args(self.fd, self.pirls_result, ll)
-            ml_args = {k: v for k, v in args.items() if k != "Mp"}
-            return ml_criterion(**ml_args)
+            return ml_criterion(**args)
 
         grad = jax.grad(ml_fn)(self.log_lambda)
         assert jnp.all(jnp.isfinite(grad))
@@ -457,6 +465,12 @@ class TestPurelyParametric:
             (),
             result.scale,
             Mp,
+            singleton_sp_indices=(),
+            singleton_ranks=(),
+            singleton_eig_constants=jnp.array([]),
+            multi_block_sp_indices=(),
+            multi_block_ranks=(),
+            multi_block_proj_S=(),
         )
 
         # Expected: Dp/(2*phi) - ls_sat + log|XtWX|/2 - Mp/2*log(2*pi*phi)

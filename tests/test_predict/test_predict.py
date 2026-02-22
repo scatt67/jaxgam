@@ -388,12 +388,6 @@ class TestMultiSmoothVsR:
             err_msg="Two-smooth new-data prediction differs from R",
         )
 
-    @pytest.mark.xfail(
-        reason="Tensor product fit-level smoothing params diverge from R "
-        "(test_gam.py only checks deviance). Prediction compounds this. "
-        "TODO: fix tensor product fitting agreement.",
-        strict=False,
-    )
     def test_tensor_product_newdata_vs_r(self):
         from pymgcv.compat.r_bridge import RBridge
 
@@ -422,12 +416,6 @@ class TestMultiSmoothVsR:
             err_msg="Tensor product new-data prediction differs from R",
         )
 
-    @pytest.mark.xfail(
-        reason="Factor-by fit-level coefficients diverge from R "
-        "(test_gam.py only checks deviance). Prediction compounds this. "
-        "TODO: fix factor-by fitting agreement.",
-        strict=False,
-    )
     def test_factor_by_newdata_vs_r(self):
         from pymgcv.compat.r_bridge import RBridge
 
