@@ -583,7 +583,7 @@ class TestDaviesAlgorithm:
         """Single weight = 1 should match chi-squared(1) CDF."""
         from scipy import stats
 
-        from pymgcv.summary.davies import davies
+        from pymgcv.summary._davies import _davies as davies
 
         for q in [0.5, 1.0, 2.0, 5.0, 10.0]:
             result = davies(
@@ -606,7 +606,7 @@ class TestDaviesAlgorithm:
         """Single weight = 1, df = 3 should match chi-squared(3) CDF."""
         from scipy import stats
 
-        from pymgcv.summary.davies import davies
+        from pymgcv.summary._davies import _davies as davies
 
         for q in [1.0, 3.0, 7.0]:
             result = davies(
@@ -629,7 +629,7 @@ class TestDaviesAlgorithm:
         """Weight = 2 with df = 1: should match CDF of 2 * chi2(1)."""
         from scipy import stats
 
-        from pymgcv.summary.davies import davies
+        from pymgcv.summary._davies import _davies as davies
 
         for q in [1.0, 3.0, 5.0]:
             result = davies(
@@ -651,7 +651,7 @@ class TestDaviesAlgorithm:
 
     def test_ifault_zero_on_valid_input(self):
         """Valid inputs should produce ifault = 0."""
-        from pymgcv.summary.davies import davies
+        from pymgcv.summary._davies import _davies as davies
 
         result = davies(
             lb=np.array([1.0, 0.5]),
@@ -664,7 +664,7 @@ class TestDaviesAlgorithm:
 
     def test_ifault_3_on_negative_df(self):
         """Negative df should produce ifault = 3."""
-        from pymgcv.summary.davies import davies
+        from pymgcv.summary._davies import _davies as davies
 
         result = davies(
             lb=np.array([1.0]),
@@ -677,7 +677,7 @@ class TestDaviesAlgorithm:
 
     def test_probability_bounds(self):
         """Result probability should be in [0, 1]."""
-        from pymgcv.summary.davies import davies
+        from pymgcv.summary._davies import _davies as davies
 
         for q in [0.1, 1.0, 5.0, 20.0]:
             result = davies(
@@ -694,7 +694,7 @@ class TestDaviesAlgorithm:
 
     def test_extreme_tails(self):
         """Very large q should give prob near 1, very small near 0."""
-        from pymgcv.summary.davies import davies
+        from pymgcv.summary._davies import _davies as davies
 
         result_large = davies(
             lb=np.array([1.0]),
@@ -722,7 +722,7 @@ class TestPsumChisqDavies:
         """Upper tail for single chi2(1) should match scipy."""
         from scipy import stats
 
-        from pymgcv.summary.davies import psum_chisq_davies
+        from pymgcv.summary.summary import psum_chisq_davies
 
         for q in [1.0, 3.84, 6.63]:
             result = psum_chisq_davies(q, np.array([1.0]))
@@ -737,7 +737,7 @@ class TestPsumChisqDavies:
 
     def test_negative_weights(self):
         """Should handle negative weights (used in F-like tests)."""
-        from pymgcv.summary.davies import psum_chisq_davies
+        from pymgcv.summary.summary import psum_chisq_davies
 
         # Pr(X1 - 0.5*X2 > 0) where X1, X2 ~ chi2(1)
         result = psum_chisq_davies(0.0, np.array([1.0, -0.5]), df=np.array([1, 1]))
@@ -745,7 +745,7 @@ class TestPsumChisqDavies:
 
     def test_mixed_df(self):
         """Should handle mixed degrees of freedom."""
-        from pymgcv.summary.davies import psum_chisq_davies
+        from pymgcv.summary.summary import psum_chisq_davies
 
         result = psum_chisq_davies(5.0, np.array([1.0, 0.5]), df=np.array([1, 3]))
         assert 0.0 <= result <= 1.0
@@ -769,7 +769,7 @@ class TestDaviesVsR:
             """
             r_result = float(ro.r(r_code)[0])
 
-            from pymgcv.summary.davies import psum_chisq_davies
+            from pymgcv.summary.summary import psum_chisq_davies
 
             py_result = psum_chisq_davies(q, lb)
 
@@ -794,7 +794,7 @@ class TestDaviesVsR:
         """
         r_result = float(ro.r(r_code)[0])
 
-        from pymgcv.summary.davies import psum_chisq_davies
+        from pymgcv.summary.summary import psum_chisq_davies
 
         py_result = psum_chisq_davies(0.0, lb, df=df)
 

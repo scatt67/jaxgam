@@ -397,7 +397,7 @@ def _test_stat(
 
         if res_df <= 0:
             # Known scale: mixture of chi-squared (Davies exact)
-            pval = (_psum_chisq_davies(d, val) + _psum_chisq_davies(d1, val)) / 2.0
+            pval = (psum_chisq_davies(d, val) + psum_chisq_davies(d1, val)) / 2.0
         else:
             # Unknown scale: F-like mixture via Davies
             # R's testStat line 3839: difference of two weighted chi-sq sums
@@ -406,8 +406,8 @@ def _test_stat(
             lb_d1 = np.concatenate([val, [-d1 / k0]])
             df_arr = np.concatenate([np.ones(len(val), dtype=int), np.array([k0])])
             pval = (
-                _psum_chisq_davies(0.0, lb_d, df=df_arr)
-                + _psum_chisq_davies(0.0, lb_d1, df=df_arr)
+                psum_chisq_davies(0.0, lb_d, df=df_arr)
+                + psum_chisq_davies(0.0, lb_d1, df=df_arr)
             ) / 2.0
     else:
         pval = 2.0  # sentinel: needs integer case
@@ -520,33 +520,72 @@ def _psum_chisq(q: float, lb: np.ndarray) -> float:
     return _liu2(q, lb)
 
 
-def _psum_chisq_davies(
+def psum_chisq_davies(
     q: float,
     lb: np.ndarray,
     df: np.ndarray | None = None,
+    nc: np.ndarray | None = None,
+    sigz: float = 0.0,
+    tol: float = 2e-5,
+    nlim: int = 100_000,
 ) -> float:
-    """Upper tail probability via Davies' exact method with Liu fallback.
+    """Upper tail probability for weighted sum of chi-squared variables.
 
-    Thin wrapper around ``davies.psum_chisq_davies`` for use in
-    ``_test_stat()``.
+    Computes ``Pr(sum_j lb[j] * X_j + sigz * Z > q)`` where
+    ``X_j ~ chi^2(df[j], nc[j])`` and ``Z ~ N(0, 1)``.
+
+    Uses Davies' exact method with Liu et al. (2009) fallback.
+
+    Port of R's ``psum.chisq()`` (mgcv.r lines 3466-3498).
 
     Parameters
     ----------
     q : float
         Quantile.
     lb : np.ndarray
-        Weights.
+        Weights (can be either sign).
     df : np.ndarray or None
-        Degrees of freedom (defaults to all ones).
+        Degrees of freedom (positive integers). Defaults to all ones.
+    nc : np.ndarray or None
+        Non-centrality parameters. Defaults to all zeros.
+    sigz : float
+        Standard deviation of the normal component.
+    tol : float
+        Accuracy tolerance.
+    nlim : int
+        Maximum number of integration terms.
 
     Returns
     -------
     float
         Upper tail probability.
     """
-    from pymgcv.summary.davies import psum_chisq_davies
+    from pymgcv.summary._davies import _davies
 
-    return psum_chisq_davies(q, lb, df=df)
+    lb = np.asarray(lb, dtype=np.float64)
+    r = len(lb)
+
+    if df is None:
+        df = np.ones(r, dtype=np.int64)
+    else:
+        df = np.round(np.asarray(df, dtype=np.float64)).astype(np.int64)
+
+    if nc is None:
+        nc = np.zeros(r, dtype=np.float64)
+    else:
+        nc = np.asarray(nc, dtype=np.float64)
+
+    if sigz < 0:
+        sigz = 0.0
+
+    result = _davies(lb, nc, df, sigz, q, lim=nlim, acc=tol)
+
+    if result.ifault in (0, 2):
+        return float(1.0 - result.prob)
+    # Fallback to Liu approximation
+    if np.all(nc == 0):
+        return float(_liu2(q, lb, h=df))
+    return float(np.nan)
 
 
 def _psum_chisq_general(
