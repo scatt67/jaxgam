@@ -89,7 +89,7 @@ class TestRBridgeFitGam:
         assert np.all(np.isfinite(result["fitted_values"]))
         assert np.isfinite(result["deviance"])
 
-    def test_fit_all_families(self, gaussian_data: pd.DataFrame) -> None:
+    def test_fit_all_families(self) -> None:
         """All four v1.0 families should work."""
         bridge = RBridge()
         rng = np.random.default_rng(456)

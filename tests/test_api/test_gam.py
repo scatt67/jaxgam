@@ -155,13 +155,21 @@ class TestGAMClass:
         assert isinstance(model.X_, np.ndarray)
         assert isinstance(model.smoothing_params_, np.ndarray)
 
-    def test_method_stubs_raise(self):
+    def test_summary_and_plot_work(self):
+        import matplotlib
+
+        matplotlib.use("Agg")
         data = _make_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
-        with pytest.raises(NotImplementedError, match="Task 3.2"):
-            model.summary()
-        with pytest.raises(NotImplementedError, match="Task 3.3"):
-            model.plot()
+        # summary() is now implemented (Task 3.2)
+        s = model.summary()
+        assert s is not None
+        # plot() is now implemented (Task 3.3)
+        fig, axes = model.plot()
+        assert fig is not None
+        import matplotlib.pyplot as plt
+
+        plt.close("all")
 
     def test_ve_is_none(self):
         data = _make_data("gaussian")

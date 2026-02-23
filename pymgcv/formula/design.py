@@ -162,7 +162,7 @@ class ModelSetup:
         n_obs = len(y)
 
         # Validate all variables exist
-        cls._validate_variables(formula_spec, data_dict, original_data)
+        cls._validate_variables(formula_spec, data_dict)
 
         # Default weights and offset
         if weights is None:
@@ -339,7 +339,6 @@ class ModelSetup:
     def _validate_variables(
         formula_spec: FormulaSpec,
         data_dict: dict[str, npt.NDArray],
-        original_data: dict | pd.DataFrame,
     ) -> None:
         """Validate all formula variables exist in data."""
         available = set(data_dict.keys())

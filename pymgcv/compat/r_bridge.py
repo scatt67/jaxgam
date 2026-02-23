@@ -938,3 +938,224 @@ for (i in seq_len(n_sm)) {{
             result["predictions"] = np.array(pred, dtype=np.float64)
 
         return result
+
+    def summary_gam(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str = "gaussian",
+        method: str = "REML",
+    ) -> dict[str, Any]:
+        """Fit a GAM in R and return summary statistics.
+
+        Parameters
+        ----------
+        formula : str
+            R-style model formula.
+        data : pd.DataFrame
+            Data frame with variables referenced in formula.
+        family : str
+            Distribution family name.
+        method : str
+            Smoothing parameter estimation method.
+
+        Returns
+        -------
+        dict
+            Keys: p_table, s_table, r_sq, dev_explained, scale,
+            residual_df, n, edf (per smooth), sp_criterion.
+        """
+        if self.mode == "rpy2":
+            return self._summary_gam_rpy2(formula, data, family, method)
+        return self._summary_gam_subprocess(formula, data, family, method)
+
+    def _summary_gam_rpy2(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        method: str,
+    ) -> dict[str, Any]:
+        import rpy2.robjects as ro
+        from rpy2.robjects import numpy2ri, pandas2ri
+
+        r_family = self._get_r_family_rpy2(family)
+
+        with ro.conversion.localconverter(
+            ro.default_converter + pandas2ri.converter + numpy2ri.converter
+        ):
+            r_df = ro.conversion.py2rpy(data)
+
+        r_model = self._mgcv.gam(
+            ro.Formula(formula),
+            data=r_df,
+            family=r_family,
+            method=method,
+        )
+
+        r_summary = self._base.summary(r_model)
+
+        result: dict[str, Any] = {}
+
+        # Parametric coefficients table
+        p_table_r = r_summary.rx2("p.table")
+        if p_table_r is not None and len(p_table_r) > 0:
+            p_arr = np.array(p_table_r, dtype=np.float64)
+            n_rows = len(r_summary.rx2("p.coeff"))
+            if p_arr.ndim == 1:
+                result["p_table"] = p_arr.reshape(n_rows, -1)
+            else:
+                result["p_table"] = p_arr
+        else:
+            result["p_table"] = None
+
+        # Smooth terms table
+        s_table_r = r_summary.rx2("s.table")
+        if s_table_r is not None and len(s_table_r) > 0:
+            s_arr = np.array(s_table_r, dtype=np.float64)
+            n_smooths = int(np.array(r_summary.rx2("m"))[0])
+            if n_smooths > 0:
+                result["s_table"] = s_arr.reshape(n_smooths, -1)
+            else:
+                result["s_table"] = None
+        else:
+            result["s_table"] = None
+
+        # R-squared
+        r_sq = r_summary.rx2("r.sq")
+        result["r_sq"] = float(np.array(r_sq)[0]) if r_sq is not None else None
+
+        # Deviance explained
+        result["dev_explained"] = float(np.array(r_summary.rx2("dev.expl"))[0])
+
+        # Scale
+        result["scale"] = float(np.array(r_summary.rx2("scale"))[0])
+
+        # Residual df
+        result["residual_df"] = float(np.array(r_summary.rx2("residual.df"))[0])
+
+        # N
+        result["n"] = int(np.array(r_summary.rx2("n"))[0])
+
+        # Per-smooth EDF
+        edf_r = r_summary.rx2("edf")
+        if edf_r is not None:
+            result["edf"] = np.array(edf_r, dtype=np.float64)
+        else:
+            result["edf"] = np.array([])
+
+        # SP criterion (REML/ML score)
+        sp_crit = r_summary.rx2("sp.criterion")
+        if sp_crit is not None:
+            result["sp_criterion"] = float(np.array(sp_crit)[0])
+        else:
+            result["sp_criterion"] = None
+
+        return result
+
+    def _summary_gam_subprocess(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        method: str,
+    ) -> dict[str, Any]:
+        family_map = {
+            "gaussian": "gaussian()",
+            "binomial": "binomial()",
+            "poisson": "poisson()",
+            "gamma": "Gamma()",
+        }
+        r_family = family_map.get(family)
+        if r_family is None:
+            raise ValueError(
+                f"Unknown family: {family!r}. Supported: {list(family_map.keys())}"
+            )
+
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            script_path = os.path.join(tmpdir, "summary.R")
+            out = tmpdir
+
+            data.to_csv(data_path, index=False)
+
+            script = f"""\
+library(mgcv)
+
+data <- read.csv("{data_path}")
+model <- gam({formula}, data=data, family={r_family}, method="{method}")
+s <- summary(model)
+
+# Parametric table
+if (!is.null(s$p.table)) {{
+    write.csv(as.data.frame(s$p.table), "{out}/p_table.csv", row.names=TRUE)
+}} else {{
+    writeLines("NULL", "{out}/p_table.csv")
+}}
+
+# Smooth table
+if (!is.null(s$s.table) && s$m > 0) {{
+    write.csv(as.data.frame(s$s.table), "{out}/s_table.csv", row.names=TRUE)
+}} else {{
+    writeLines("NULL", "{out}/s_table.csv")
+}}
+
+# Scalars
+writeLines(format(s$r.sq, digits=15), "{out}/r_sq.txt")
+writeLines(format(s$dev.expl, digits=15), "{out}/dev_expl.txt")
+writeLines(format(s$scale, digits=15), "{out}/scale.txt")
+writeLines(format(s$residual.df, digits=15), "{out}/residual_df.txt")
+writeLines(as.character(s$n), "{out}/n.txt")
+write.csv(data.frame(v=as.numeric(s$edf)), "{out}/edf.csv", row.names=FALSE)
+if (!is.null(s$sp.criterion)) {{
+    writeLines(format(s$sp.criterion, digits=15), "{out}/sp_criterion.txt")
+}}
+"""
+            with open(script_path, "w") as f:
+                f.write(script)
+
+            proc = subprocess.run(
+                ["Rscript", script_path],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if proc.returncode != 0:
+                raise RBridgeError(
+                    f"Rscript failed (exit {proc.returncode}):\n{proc.stderr}"
+                )
+
+            def _read_scalar(name: str) -> float:
+                with open(os.path.join(out, name)) as f:
+                    return float(f.read().strip())
+
+            def _read_matrix(name: str) -> np.ndarray | None:
+                path = os.path.join(out, name)
+                with open(path) as f:
+                    first = f.readline().strip()
+                if first == "NULL":
+                    return None
+                return pd.read_csv(path, index_col=0).values.astype(np.float64)
+
+            result: dict[str, Any] = {}
+            result["p_table"] = _read_matrix("p_table.csv")
+            result["s_table"] = _read_matrix("s_table.csv")
+            result["r_sq"] = _read_scalar("r_sq.txt")
+            result["dev_explained"] = _read_scalar("dev_expl.txt")
+            result["scale"] = _read_scalar("scale.txt")
+            result["residual_df"] = _read_scalar("residual_df.txt")
+            result["n"] = int(_read_scalar("n.txt"))
+            result["edf"] = pd.read_csv(os.path.join(out, "edf.csv"))[
+                "v"
+            ].values.astype(np.float64)
+
+            sp_path = os.path.join(out, "sp_criterion.txt")
+            if os.path.exists(sp_path):
+                result["sp_criterion"] = _read_scalar("sp_criterion.txt")
+            else:
+                result["sp_criterion"] = None
+
+            return result

@@ -108,7 +108,6 @@ def _criterion_core(
     ls_sat: jax.Array,
     S_list: tuple[jax.Array, ...],
     phi: jax.Array,
-    Mp: int,
     singleton_sp_indices: tuple[int, ...],
     singleton_ranks: tuple[int, ...],
     singleton_eig_constants: jax.Array,
@@ -140,8 +139,6 @@ def _criterion_core(
         Per-penalty (p, p) matrices.
     phi : jax.Array, scalar
         Dispersion parameter.
-    Mp : int (static)
-        Total penalty null space dimension.
     singleton_sp_indices, singleton_ranks : tuple[int, ...]
         Static block metadata for singleton penalties.
     singleton_eig_constants : jax.Array
@@ -375,7 +372,6 @@ def reml_criterion(
         ls_sat,
         S_list,
         phi,
-        Mp,
         singleton_sp_indices,
         singleton_ranks,
         singleton_eig_constants,
@@ -394,7 +390,7 @@ def ml_criterion(
     ls_sat: jax.Array,
     S_list: tuple[jax.Array, ...],
     phi: jax.Array,
-    Mp: int,
+    Mp: int,  # noqa: ARG001
     singleton_sp_indices: tuple[int, ...],
     singleton_ranks: tuple[int, ...],
     singleton_eig_constants: jax.Array,
@@ -431,7 +427,6 @@ def ml_criterion(
         ls_sat,
         S_list,
         phi,
-        Mp,
         singleton_sp_indices,
         singleton_ranks,
         singleton_eig_constants,
@@ -499,7 +494,6 @@ def reml_criterion_joint(
         ls_sat,
         S_list,
         phi,
-        Mp,
         singleton_sp_indices,
         singleton_ranks,
         singleton_eig_constants,
@@ -518,7 +512,7 @@ def ml_criterion_joint(
     y: jax.Array,
     wt: jax.Array,
     S_list: tuple[jax.Array, ...],
-    Mp: int,
+    Mp: int,  # noqa: ARG001
     n_lambda: int,
     family: ExponentialFamily,
     singleton_sp_indices: tuple[int, ...],
@@ -556,7 +550,6 @@ def ml_criterion_joint(
         ls_sat,
         S_list,
         phi,
-        Mp,
         singleton_sp_indices,
         singleton_ranks,
         singleton_eig_constants,

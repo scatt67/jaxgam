@@ -33,7 +33,7 @@ target-version = "py311"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "F401", "F841", "ARG"]
 
 [tool.ruff.lint.per-file-ignores]
 # R bridge contains embedded R scripts in f-strings with long lines

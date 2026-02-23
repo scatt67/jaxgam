@@ -386,9 +386,7 @@ class TestPIRLSStep:
         eta = X_d @ beta_d + offset_d
         mu = family.link.inverse(eta)
 
-        beta_new, XtWX, L, W = _pirls_step(
-            X_d, y_d, wt_d, beta_d, mu, offset_d, S_d, family
-        )
+        beta_new, XtWX, L, W = _pirls_step(X_d, y_d, wt_d, beta_d, mu, S_d, family)
 
         # XtWX should be symmetric positive definite for Gaussian
         XtWX_np = to_numpy(XtWX)

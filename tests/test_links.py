@@ -408,9 +408,9 @@ class TestLinkJAXCompat:
             err_msg=f"mu_eta() JAX vs NumPy for {type(link_obj).__name__}",
         )
 
-    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize("link_obj,jax_mu,_np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
     def test_link_jit_compiles(
-        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
+        self, link_obj: Link, jax_mu: jax.Array, _np_mu: np.ndarray
     ) -> None:
         """All 4 methods JIT-compile without error."""
         jit_link = jax.jit(link_obj.link)
@@ -429,9 +429,9 @@ class TestLinkJAXCompat:
         assert jnp.all(jnp.isfinite(deriv)), "JIT derivative() produced non-finite"
         assert jnp.all(jnp.isfinite(me)), "JIT mu_eta() produced non-finite"
 
-    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize("link_obj,jax_mu,_np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
     def test_roundtrip_jax(
-        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
+        self, link_obj: Link, jax_mu: jax.Array, _np_mu: np.ndarray
     ) -> None:
         """linkinv(link(jax_mu)) ≈ jax_mu."""
         eta = link_obj.link(jax_mu)

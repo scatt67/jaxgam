@@ -47,7 +47,7 @@ class Gaussian(ExponentialFamily):
         """V'(mu) = 0 for Gaussian."""
         return jnp.zeros_like(mu, dtype=float)
 
-    def saturated_loglik(self, y, wt, scale):
+    def saturated_loglik(self, y, wt, scale):  # noqa: ARG002
         """Saturated log-likelihood for Gaussian.
 
         R: -nobs*log(2*pi*scale)/2 + sum(log(w[w>0]))/2
@@ -69,8 +69,8 @@ class Gaussian(ExponentialFamily):
 
     def aic(
         self,
-        y: np.ndarray,
-        mu: np.ndarray,
+        y: np.ndarray,  # noqa: ARG002
+        mu: np.ndarray,  # noqa: ARG002
         wt: np.ndarray,
         scale: float,
     ) -> float:
@@ -83,7 +83,7 @@ class Gaussian(ExponentialFamily):
         n = np.sum(wt)
         return float(n * (np.log(2 * np.pi * scale) + 1) + 2)
 
-    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:
+    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu = y for Gaussian."""
         return np.asarray(y, dtype=float).copy()
 
@@ -120,7 +120,7 @@ class Binomial(ExponentialFamily):
         """V'(mu) = 1 - 2*mu for Binomial."""
         return 1.0 - 2.0 * mu
 
-    def saturated_loglik(self, y, wt, scale):
+    def saturated_loglik(self, y, wt, scale):  # noqa: ARG002
         """Saturated log-likelihood for Binomial.
 
         R: -binomial()$aic(y, n, y, w, 0) / 2
@@ -162,7 +162,7 @@ class Binomial(ExponentialFamily):
         y: np.ndarray,
         mu: np.ndarray,
         wt: np.ndarray,
-        scale: float,
+        scale: float,  # noqa: ARG002
     ) -> float:
         """AIC contribution for Binomial family.
 
@@ -173,7 +173,7 @@ class Binomial(ExponentialFamily):
         ll = wt * (y * np.log(mu_safe) + (1.0 - y) * np.log(1.0 - mu_safe))
         return float(-2.0 * np.sum(ll))
 
-    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:
+    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu = (y + 0.5) / 2 for Binomial.
 
         This R convention maps y in {0, 1} to mu in (0.25, 0.75),
@@ -215,7 +215,7 @@ class Poisson(ExponentialFamily):
         """V'(mu) = 1 for Poisson."""
         return jnp.ones_like(mu, dtype=float)
 
-    def saturated_loglik(self, y, wt, scale):
+    def saturated_loglik(self, y, wt, scale):  # noqa: ARG002
         """Saturated log-likelihood for Poisson.
 
         R: sum(dpois(y, y, log=TRUE) * w)
@@ -253,7 +253,7 @@ class Poisson(ExponentialFamily):
         y: np.ndarray,
         mu: np.ndarray,
         wt: np.ndarray,
-        scale: float,
+        scale: float,  # noqa: ARG002
     ) -> float:
         """AIC contribution for Poisson family.
 
@@ -266,7 +266,7 @@ class Poisson(ExponentialFamily):
         ll = wt * (y * np.log(mu_safe) - mu_safe - gammaln(y + 1.0))
         return float(-2.0 * np.sum(ll))
 
-    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:
+    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu for Poisson: mu = y + 0.1 where y == 0.
 
         Following R's convention, this avoids log(0) in the first
@@ -371,7 +371,7 @@ class Gamma(ExponentialFamily):
         )
         return float(-2.0 * np.sum(ll) + 2.0)
 
-    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:
+    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu for Gamma: mu = y, clipped to positive values.
 
         Follows R's Gamma()$initialize which ensures mu > 0.

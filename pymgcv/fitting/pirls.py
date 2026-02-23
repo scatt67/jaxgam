@@ -128,7 +128,6 @@ def _pirls_step(
     wt: jax.Array,
     beta: jax.Array,
     mu: jax.Array,
-    offset: jax.Array,
     S_lambda: jax.Array,
     family: ExponentialFamily,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
@@ -141,7 +140,6 @@ def _pirls_step(
     wt : jax.Array, shape (n,)
     beta : jax.Array, shape (p,)
     mu : jax.Array, shape (n,)
-    offset : jax.Array, shape (n,)
     S_lambda : jax.Array, shape (p, p)
     family : ExponentialFamily
 
@@ -266,7 +264,7 @@ def pirls_loop(
     def _body(state: _PIRLSState):
         # One PIRLS step
         beta_new, XtWX, L, W = _pirls_step(
-            X, y, wt, state.beta, state.mu, offset, S_lambda, family
+            X, y, wt, state.beta, state.mu, S_lambda, family
         )
 
         # Step-halving on penalized deviance

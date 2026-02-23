@@ -41,7 +41,7 @@ SMOOTH_TYPES = ["tp", "cr", "cc"]
 TENSOR_TYPES = ["te", "ti"]
 
 
-def generate_data(bridge: RBridge) -> dict[str, pd.DataFrame]:
+def generate_data() -> dict[str, pd.DataFrame]:
     """Generate synthetic data matching the R script (set.seed(42)).
 
     We use R to generate the data so the random seed matches exactly.
@@ -208,7 +208,7 @@ def main() -> None:
         bridge = RBridge()
         print(f"Using RBridge mode: {bridge.mode}")
         print("Generating synthetic data via R (set.seed(42))...")
-        datasets = generate_data(bridge)
+        datasets = generate_data()
         for fam, df in datasets.items():
             arrays = {col: df[col].values for col in df.columns}
             np.savez_compressed(OUTPUT_DIR / f"data_{fam}.npz", **arrays)

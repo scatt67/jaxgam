@@ -30,6 +30,8 @@ from pymgcv.smooths.by_variable import _get_factor_levels, is_factor
 if TYPE_CHECKING:
     import pandas as pd
 
+    from pymgcv.summary.summary import GAMSummary
+
 
 # ---------------------------------------------------------------------------
 # GAM class
@@ -238,12 +240,25 @@ class GAM:
         assert X_p.shape[1] == coef_map.total_coefs
         return X_p
 
-    def summary(self):
-        """Print summary of a fitted GAM."""
+    def summary(self) -> "GAMSummary":
+        """Print and return summary of a fitted GAM.
+
+        Computes parametric coefficient significance (z/t tests),
+        smooth term significance (Wood 2013 testStat), and model-level
+        statistics (R-squared, deviance explained, scale estimate).
+
+        Returns
+        -------
+        GAMSummary
+            Summary object with parametric and smooth term tables.
+            The summary is also printed to stdout.
+        """
+        from pymgcv.summary.summary import summary as _summary
+
         self._check_fitted()
-        raise NotImplementedError(
-            "summary() is planned for Task 3.2. See IMPLEMENTATION_PLAN.md."
-        )
+        s = _summary(self)
+        print(s)
+        return s
 
     def plot(
         self,
@@ -252,11 +267,50 @@ class GAM:
         rug: bool = True,
         se: bool = True,
         shade: bool = True,
+        **kwargs,
     ):
-        """Plot smooth components of a fitted GAM."""
+        """Plot smooth components of a fitted GAM.
+
+        Equivalent to R's ``plot.gam()``. Produces one panel per smooth
+        term (or per factor level for factor-by smooths) showing the
+        partial effect on the link scale, with optional SE bands and
+        rug marks.
+
+        Parameters
+        ----------
+        select : int, list, or None
+            Select specific smooth term(s) to plot (0-indexed). If None,
+            plots all smooth terms.
+        pages : int
+            Number of pages. 0 means automatic layout.
+        rug : bool
+            Show rug marks at data covariate values.
+        se : bool
+            Show standard error bands.
+        shade : bool
+            If True, use shaded SE bands; if False, use dashed lines.
+        **kwargs
+            Additional arguments passed to ``plot_gam()``. See
+            ``pymgcv.plot.plot_gam.plot_gam`` for full parameter list.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+            The figure.
+        axes : numpy.ndarray
+            Array of Axes objects.
+        """
         self._check_fitted()
-        raise NotImplementedError(
-            "plot() is planned for Task 3.3. See IMPLEMENTATION_PLAN.md."
+        from pymgcv.plot import plot_gam
+
+        return plot_gam(
+            self,
+            select=select,
+            pages=pages,
+            rug=rug,
+            se=se,
+            shade=shade,
+            **kwargs,
         )
 
     # ------------------------------------------------------------------
@@ -305,6 +359,9 @@ class GAM:
         # (invariant under repara — cyclic trace with block-diagonal D)
         F = H_inv @ XtWX
         per_smooth_edf = _compute_per_smooth_edf(F, setup.smooth_info)
+        # edf1 = 2*edf - trace(F^2): alternative EDF for significance testing
+        # (R's gam.fit3.post.proc, mgcv.r line 966)
+        per_smooth_edf1 = _compute_per_smooth_edf1(F, setup.smooth_info)
 
         # Back-transform from Sl.setup reparameterized space
         if fd.repara_D is not None:
@@ -328,6 +385,7 @@ class GAM:
         self.Ve_ = None
         self.scale_ = scale
         self.edf_ = per_smooth_edf
+        self.edf1_ = per_smooth_edf1
         self.edf_total_ = edf_total
         self.smoothing_params_ = smoothing_params
         self.deviance_ = deviance
@@ -344,6 +402,10 @@ class GAM:
         self.lambda_strategy_ = lambda_strategy
         self.formula_spec_ = spec
         self._factor_info_ = _extract_factor_info(spec.parametric_terms, data)
+        self.y_ = y_np
+        self.weights_ = wt_np
+        self.score_ = float(to_numpy(result.score))
+        self._training_data = _extract_training_data(spec, data)
 
 
 # ---------------------------------------------------------------------------
@@ -473,34 +535,6 @@ def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
     )
 
 
-def _compute_vp(
-    L: np.ndarray,
-    scale: float,
-    family: ExponentialFamily,
-) -> np.ndarray:
-    """Bayesian covariance matrix: ``phi * H^{-1}``.
-
-    Parameters
-    ----------
-    L : np.ndarray, shape (p, p)
-        Lower Cholesky factor of H = XtWX + S_lambda.
-    scale : float
-        Estimated dispersion parameter.
-    family : ExponentialFamily
-        Family (for scale_known check).
-
-    Returns
-    -------
-    np.ndarray, shape (p, p)
-        Bayesian covariance matrix Vp.
-    """
-    p = L.shape[0]
-    Z = sla.solve_triangular(L, np.eye(p), lower=True)
-    H_inv = Z.T @ Z
-    phi = 1.0 if family.scale_known else scale
-    return phi * H_inv
-
-
 def _compute_per_smooth_edf(
     F: np.ndarray,
     smooth_info: tuple[SmoothInfo, ...],
@@ -525,6 +559,46 @@ def _compute_per_smooth_edf(
         cols = slice(si.first_coef, si.last_coef)
         edf[j] = np.trace(F[cols, cols])
     return edf
+
+
+def _compute_per_smooth_edf1(
+    F: np.ndarray,
+    smooth_info: tuple[SmoothInfo, ...],
+) -> np.ndarray:
+    """Alternative per-smooth EDF for significance testing.
+
+    Computes ``edf1 = 2*edf - edf2`` where ``edf2 = trace(F^2)`` per
+    smooth block. This is R's ``edf1`` (mgcv gam.fit3.post.proc line 966):
+    ``edf1 <- 2*edf - rowSums(t(F)*F)``.
+
+    The per-smooth version sums per-coefficient ``edf1`` values over
+    each smooth's column range, matching R's
+    ``sum(object$edf1[start:stop])``.
+
+    Parameters
+    ----------
+    F : np.ndarray, shape (p, p)
+        Hat-like matrix: ``H^{-1} @ XtWX``.
+    smooth_info : tuple[SmoothInfo, ...]
+        Per-smooth metadata with column ranges.
+
+    Returns
+    -------
+    np.ndarray, shape (n_smooths,)
+        Alternative EDF (``edf1``) per smooth, for use as ``Ref.df``
+        in Wood (2013) significance tests.
+    """
+    # Per-coefficient: edf_i = F[i,i], edf2_i = sum(F[i,:] * F[:,i])
+    edf_per_coef = np.diag(F)
+    edf2_per_coef = np.sum(F.T * F, axis=0)  # rowSums(t(F)*F)
+    edf1_per_coef = 2.0 * edf_per_coef - edf2_per_coef
+
+    n_smooths = len(smooth_info)
+    edf1 = np.empty(n_smooths, dtype=np.float64)
+    for j, si in enumerate(smooth_info):
+        cols = slice(si.first_coef, si.last_coef)
+        edf1[j] = np.sum(edf1_per_coef[cols])
+    return edf1
 
 
 def _compute_null_deviance(
@@ -584,6 +658,54 @@ def _extract_factor_info(
         if is_factor(col):
             factor_info[term.name] = _get_factor_levels(col)
     return factor_info
+
+
+def _extract_training_data(
+    spec: FormulaSpec,
+    data: pd.DataFrame | dict,
+) -> dict[str, np.ndarray]:
+    """Extract raw training covariate data for plotting.
+
+    Stores all variables referenced in smooth terms (covariates and
+    by-variables) so that ``plot()`` can construct evaluation grids
+    and rug plots without re-accessing the original data.
+
+    Parameters
+    ----------
+    spec : FormulaSpec
+        Parsed formula specification.
+    data : DataFrame or dict
+        Training data.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Mapping from variable name to raw training data array.
+    """
+    import pandas as pd
+
+    training: dict[str, np.ndarray] = {}
+
+    # Collect all variable names from smooth terms
+    var_names: set[str] = set()
+    for st in spec.smooth_terms:
+        for v in st.variables:
+            var_names.add(v)
+        if st.by is not None:
+            var_names.add(st.by)
+
+    for name in var_names:
+        if isinstance(data, pd.DataFrame):
+            col = data[name]
+        else:
+            col = data[name]
+        # Preserve dtype: factors stay as-is, numerics become float64
+        if is_factor(col):
+            training[name] = np.asarray(col)
+        else:
+            training[name] = np.asarray(col, dtype=np.float64).ravel()
+
+    return training
 
 
 def _build_parametric_predict(

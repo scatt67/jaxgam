@@ -38,8 +38,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 
 ### Phase 3: Post-Estimation (CPU, NumPy)
 - [x] **Task 3.1** — Prediction — *blocked by 2.6*
-- [ ] **Task 3.2** — Summary and EDF — *blocked by 2.6*
-- [ ] **Task 3.3** — Plotting — *blocked by 3.1*
+- [x] **Task 3.2** — Summary and EDF — *blocked by 2.6*
+- [x] **Task 3.3** — Plotting — *blocked by 3.1*
 
 ### Phase 4: Integration Testing and Hardening
 - [ ] **Task 4.1** — 32-Cell Validation Matrix — *blocked by 3.1, 3.2*
@@ -47,8 +47,8 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Current Stats
-- **Tests:** 959 passing, 0 xfailed
-- **Phase 1 complete. Phase 2 complete. Task 3.1 complete.** Next up: Task 3.2 (Summary), Task 3.3 (Plotting)
+- **Tests:** 1060 passing, 0 xfailed
+- **Phases 0-3 complete.** Next up: Phase 4 — Task 4.1 (Validation Matrix), Task 4.3 (Edge Cases), Task 4.4 (Documentation)
 
 ---
 
@@ -684,7 +684,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 
 ---
 
-### Task 3.2 — Summary and EDF
+### Task 3.2 — Summary and EDF ✅
 
 **What:** Implement `summary()` with effective degrees of freedom, p-values, and smooth significance tests.
 
@@ -713,7 +713,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 
 ---
 
-### Task 3.3 — Plotting
+### Task 3.3 — Plotting ✅
 
 **What:** Implement basic smooth effect plots.
 
