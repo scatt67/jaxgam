@@ -363,9 +363,10 @@ class CoefficientMap:
         # Apply sum-to-zero centering constraints
         if apply_centering:
             for i, sm in enumerate(smooths):
-                if isinstance(sm, NumericBySmooth):
-                    if not getattr(sm, "has_centering_constraint", True):
-                        continue
+                if isinstance(sm, NumericBySmooth) and not getattr(
+                    sm, "has_centering_constraint", True
+                ):
+                    continue
 
                 if isinstance(sm, FactorBySmooth):
                     X_c, S_c, Z = cls.apply_sum_to_zero_factor_by(
@@ -748,10 +749,7 @@ class CoefficientMap:
                     else:
                         X1 = np.zeros((n_obs + total_np, 0))
                 else:
-                    if intercept:
-                        X1 = np.ones((n_obs, 1))
-                    else:
-                        X1 = np.zeros((n_obs, 0))
+                    X1 = np.ones((n_obs, 1)) if intercept else np.zeros((n_obs, 0))
 
                 x1_components: set[int] = set()
 
@@ -777,16 +775,10 @@ class CoefficientMap:
                                     n_obs,
                                 )
                             Xa = Xa_cache[l_idx]
-                            if X1.shape[1] > 0:
-                                X1 = np.column_stack([X1, Xa])
-                            else:
-                                X1 = Xa
+                            X1 = np.column_stack([X1, Xa]) if X1.shape[1] > 0 else Xa
                         else:
                             Xb = X_blocks[l_idx]
-                            if X1.shape[1] > 0:
-                                X1 = np.column_stack([X1, Xb])
-                            else:
-                                X1 = Xb
+                            X1 = np.column_stack([X1, Xb]) if X1.shape[1] > 0 else Xb
 
                 # Check for dependence
                 n_intercept_cols = 1 if intercept else 0
@@ -954,9 +946,7 @@ class CoefficientMap:
         list[str]
             Variable names, with by-variable suffix if applicable.
         """
-        if isinstance(sm, FactorBySmooth):
-            return [v + sm.by_variable for v in sm.spec.variables]
-        elif isinstance(sm, NumericBySmooth):
+        if isinstance(sm, (FactorBySmooth, NumericBySmooth)):
             return [v + sm.by_variable for v in sm.spec.variables]
         return list(sm.spec.variables)
 

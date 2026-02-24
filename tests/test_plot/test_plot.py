@@ -18,10 +18,10 @@ import pytest
 
 matplotlib.use("Agg")  # Non-interactive backend for testing
 
-import matplotlib.figure  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.figure
+import matplotlib.pyplot as plt
 
-from pymgcv.api import GAM  # noqa: E402
+from pymgcv.api import GAM
 
 SEED = 42
 
@@ -131,21 +131,21 @@ class TestSmokeTests:
         """Two-smooth model plots without error."""
         data = _make_two_smooth_data()
         model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
-        fig, axes = model.plot()
+        fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
     def test_tensor_product_plot(self):
         """Tensor product model plots without error."""
         data = _make_tensor_data()
         model = GAM("y ~ te(x1, x2, k=5)").fit(data)
-        fig, axes = model.plot()
+        fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
     def test_factor_by_plot(self):
         """Factor-by model plots without error."""
         data = _make_factor_by_data()
         model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
-        fig, axes = model.plot()
+        fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
 
@@ -160,28 +160,28 @@ class TestPanelCounts:
     def test_single_smooth_has_one_panel(self):
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot()
+        _fig, axes = model.plot()
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 1
 
     def test_two_smooth_has_two_panels(self):
         data = _make_two_smooth_data()
         model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
-        fig, axes = model.plot()
+        _fig, axes = model.plot()
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 2
 
     def test_tensor_product_has_one_panel(self):
         data = _make_tensor_data()
         model = GAM("y ~ te(x1, x2, k=5)").fit(data)
-        fig, axes = model.plot()
+        _fig, axes = model.plot()
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 1
 
     def test_factor_by_has_one_panel_per_level(self):
         data = _make_factor_by_data()
         model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
-        fig, axes = model.plot()
+        _fig, axes = model.plot()
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         # 3 levels = 3 panels
         assert len(visible_axes) == 3
@@ -202,25 +202,25 @@ class TestParameters:
 
     def test_select_single(self, two_smooth_model):
         """select=0 shows only first smooth."""
-        fig, axes = two_smooth_model.plot(select=0)
+        _fig, axes = two_smooth_model.plot(select=0)
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 1
 
     def test_select_list(self, two_smooth_model):
         """select=[1] shows only second smooth."""
-        fig, axes = two_smooth_model.plot(select=[1])
+        _fig, axes = two_smooth_model.plot(select=[1])
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 1
 
     def test_select_both(self, two_smooth_model):
         """select=[0, 1] shows both smooths."""
-        fig, axes = two_smooth_model.plot(select=[0, 1])
+        _fig, axes = two_smooth_model.plot(select=[0, 1])
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 2
 
     def test_pages_one(self, two_smooth_model):
         """pages=1 arranges all smooths on one page."""
-        fig, axes = two_smooth_model.plot(pages=1)
+        _fig, axes = two_smooth_model.plot(pages=1)
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 2
 
@@ -228,7 +228,7 @@ class TestParameters:
         """se=False produces no SE bands."""
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot(se=False)
+        _fig, axes = model.plot(se=False)
         ax = axes.ravel()[0]
         # With se=False, should have no fill_between collections
         poly_collections = [
@@ -243,7 +243,7 @@ class TestParameters:
         """se=True with shade produces fill_between."""
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot(se=True, shade=True)
+        _fig, axes = model.plot(se=True, shade=True)
         ax = axes.ravel()[0]
         # Should have a fill_between collection
         # (FillBetweenPolyCollection in modern matplotlib)
@@ -256,7 +256,7 @@ class TestParameters:
         """shade=False produces dashed SE lines instead of shading."""
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot(se=True, shade=False)
+        _fig, axes = model.plot(se=True, shade=False)
         ax = axes.ravel()[0]
         lines = ax.get_lines()
         # Should have 3 lines: smooth effect + 2 SE boundary lines
@@ -268,7 +268,7 @@ class TestParameters:
         """rug=True adds rug marks."""
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot(rug=True, se=False)
+        _fig, axes = model.plot(rug=True, se=False)
         ax = axes.ravel()[0]
         lines = ax.get_lines()
         # Should have more than 1 line (smooth + rug)
@@ -278,7 +278,7 @@ class TestParameters:
         """rug=False produces no rug marks."""
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot(rug=False, se=False)
+        _fig, axes = model.plot(rug=False, se=False)
         ax = axes.ravel()[0]
         lines = ax.get_lines()
         # Should have only 1 line (the smooth effect, no rug)
@@ -303,19 +303,19 @@ class TestReturnValues:
     def test_fig_is_figure(self):
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot()
+        fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
     def test_axes_is_ndarray(self):
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot()
+        _fig, axes = model.plot()
         assert isinstance(axes, np.ndarray)
 
     def test_multi_smooth_axes_shape(self):
         data = _make_two_smooth_data()
         model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
-        fig, axes = model.plot()
+        _fig, axes = model.plot()
         # axes should be 2D array
         assert axes.ndim == 2
 
@@ -356,7 +356,7 @@ class TestEdgeCases:
         """Y-axis labels include EDF value."""
         data = _make_single_smooth_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, axes = model.plot()
+        _fig, axes = model.plot()
         ax = axes.ravel()[0]
         ylabel = ax.get_ylabel()
         # Should be something like "s(x,3.45)"
@@ -367,7 +367,7 @@ class TestEdgeCases:
         """2D contour plot includes a colorbar."""
         data = _make_tensor_data()
         model = GAM("y ~ te(x1, x2, k=5)").fit(data)
-        fig, axes = model.plot()
+        fig, _axes = model.plot()
         # The colorbar adds an extra axes to the figure
         assert len(fig.axes) > 1
 
@@ -375,7 +375,7 @@ class TestEdgeCases:
         """Factor-by panels have the level name in the title."""
         data = _make_factor_by_data()
         model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
-        fig, axes = model.plot()
+        _fig, axes = model.plot()
         titles = [ax.get_title() for ax in axes.ravel() if ax.get_visible()]
         # Should have 3 titles: "a", "b", "c"
         assert len(titles) == 3

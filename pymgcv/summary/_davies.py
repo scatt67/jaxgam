@@ -147,22 +147,13 @@ def _truncation_jit(u, tausq, sigsq, n, lb, nc):  # pragma: no cover
     x = math.exp(-sum1 - 0.25 * prod2) / pi
     y = math.exp(-sum1 - 0.25 * prod3) / pi
 
-    if s == 0:
-        err1 = 1.0
-    else:
-        err1 = 2.0 * x / s
-    if prod3 > 1.0:
-        err2 = 2.5 * y
-    else:
-        err2 = 1.0
+    err1 = 1.0 if s == 0 else 2.0 * x / s
+    err2 = 2.5 * y if prod3 > 1.0 else 1.0
     if err2 < err1:
         err1 = err2
 
     x = 0.5 * sum2
-    if x <= y:
-        err2 = 1.0
-    else:
-        err2 = y / x
+    err2 = 1.0 if x <= y else y / x
 
     if err1 < err2:
         return err1
@@ -307,7 +298,7 @@ def _cfe_jit(x, th, n, lb, nc):  # pragma: no cover
     ),
     cache=True,
 )
-def _davies_jit(lb, nc, n, sigma, c, lim, acc):  # pragma: no cover  # noqa: C901
+def _davies_jit(lb, nc, n, sigma, c, lim, acc):  # pragma: no cover
     """Core Davies algorithm. Returns (prob, ifault, trace)."""
     pi = math.pi
     r = len(lb)
@@ -361,11 +352,10 @@ def _davies_jit(lb, nc, n, sigma, c, lim, acc):  # pragma: no cover  # noqa: C90
     if c != 0.0 and almx > 0.07 * sd:
         coef, fail = _cfe_jit(c, th, n, lb, nc)
         tausq = 0.25 * acc1 / coef
-        if not fail:
-            if _truncation_jit(utx, tausq, sigsq, n, lb, nc) < 0.2 * acc1:
-                sigsq += tausq
-                utx = _findu_jit(utx, 0.25 * acc1, sigsq, n, lb, nc)
-                trace[5] = math.sqrt(tausq)
+        if not fail and _truncation_jit(utx, tausq, sigsq, n, lb, nc) < 0.2 * acc1:
+            sigsq += tausq
+            utx = _findu_jit(utx, 0.25 * acc1, sigsq, n, lb, nc)
+            trace[5] = math.sqrt(tausq)
 
     trace[4] = utx
     acc1 *= 0.5
@@ -385,20 +375,17 @@ def _davies_jit(lb, nc, n, sigma, c, lim, acc):  # pragma: no cover  # noqa: C90
             return 0.0, numba.int64(0), trace
 
         # Integration interval
-        if d1 > d2:
-            intv = 2.0 * pi / d1
-        else:
-            intv = 2.0 * pi / d2
+        intv = 2.0 * pi / d1 if d1 > d2 else 2.0 * pi / d2
 
         # Number of terms for main and auxiliary integrations
         # C-style rounding: floor(x); if frac > 0.5 then increment
         x_nt = utx / intv
-        nt = int(math.floor(x_nt))
+        nt = math.floor(x_nt)
         if x_nt - nt > 0.5:
             nt += 1
 
         x_ntm = 3.0 / math.sqrt(acc1)
-        ntm = int(math.floor(x_ntm))
+        ntm = math.floor(x_ntm)
         if x_ntm - ntm > 0.5:
             ntm += 1
 
@@ -485,7 +472,7 @@ class DaviesResult:
         7-element diagnostic vector.
     """
 
-    __slots__ = ("prob", "ifault", "trace")
+    __slots__ = ("ifault", "prob", "trace")
 
     def __init__(self, prob: float, ifault: int, trace: np.ndarray) -> None:
         self.prob = prob

@@ -163,10 +163,7 @@ class GAM:
             if offset is not None:
                 eta = eta + np.asarray(offset, dtype=np.float64).ravel()
 
-        if type == "response":
-            pred = self.family_.link.linkinv(eta)
-        else:
-            pred = eta
+        pred = self.family_.link.linkinv(eta) if type == "response" else eta
 
         if se_fit:
             if X_p is None:
@@ -240,7 +237,7 @@ class GAM:
         assert X_p.shape[1] == coef_map.total_coefs
         return X_p
 
-    def summary(self) -> "GAMSummary":
+    def summary(self) -> GAMSummary:
         """Print and return summary of a fitted GAM.
 
         Computes parametric coefficient significance (z/t tests),
@@ -257,7 +254,7 @@ class GAM:
 
         self._check_fitted()
         s = _summary(self)
-        print(s)
+        print(s)  # noqa: T201
         return s
 
     def plot(
@@ -647,14 +644,10 @@ def _extract_factor_info(
     dict[str, list]
         Mapping from factor variable name to its ordered levels.
     """
-    import pandas as pd
 
     factor_info: dict[str, list] = {}
     for term in parametric_terms:
-        if isinstance(data, pd.DataFrame):
-            col = data[term.name]
-        else:
-            col = data[term.name]
+        col = data[term.name]
         if is_factor(col):
             factor_info[term.name] = _get_factor_levels(col)
     return factor_info
@@ -682,7 +675,6 @@ def _extract_training_data(
     dict[str, np.ndarray]
         Mapping from variable name to raw training data array.
     """
-    import pandas as pd
 
     training: dict[str, np.ndarray] = {}
 
@@ -695,10 +687,7 @@ def _extract_training_data(
             var_names.add(st.by)
 
     for name in var_names:
-        if isinstance(data, pd.DataFrame):
-            col = data[name]
-        else:
-            col = data[name]
+        col = data[name]
         # Preserve dtype: factors stay as-is, numerics become float64
         if is_factor(col):
             training[name] = np.asarray(col)
@@ -736,7 +725,6 @@ def _build_parametric_predict(
     -------
     np.ndarray, shape ``(n_obs, n_parametric_cols)``
     """
-    import pandas as pd
 
     blocks: list[np.ndarray] = []
 
@@ -744,10 +732,7 @@ def _build_parametric_predict(
         blocks.append(np.ones((n_obs, 1), dtype=np.float64))
 
     for term in parametric_terms:
-        if isinstance(data, pd.DataFrame):
-            col = data[term.name]
-        else:
-            col = data[term.name]
+        col = data[term.name]
 
         if term.name in factor_info:
             # Use training-time levels for consistent dummy encoding

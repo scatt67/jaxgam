@@ -2,6 +2,7 @@
 # programs
 UV ?= uv
 RUFF ?= ruff
+VULTURE ?= vulture
 
 .DEFAULT_GOAL := help
 
@@ -26,9 +27,10 @@ format: ## format python
 	$(UV) run $(RUFF) format
 
 .PHONY: lint
-lint: ## run all linters (ruff check + format check)
+lint: ## run all linters (ruff check + format check + vulture)
 	$(UV) run $(RUFF) check
 	$(UV) run $(RUFF) format --check
+	$(UV) run $(VULTURE) pymgcv --min-confidence 80
 
 .PHONY: test
 test: ## run tests

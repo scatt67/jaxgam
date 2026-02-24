@@ -552,7 +552,7 @@ class TestRComparison:
         setup = ModelSetup.build(spec, data)
 
         si = setup.smooth_info[0]
-        pen_idx = list(setup.smooth_penalty_indices(si.label))[0]
+        pen_idx = next(iter(setup.smooth_penalty_indices(si.label)))
         S_global = setup.penalties.penalties[pen_idx].S
         S_block = S_global[si.first_coef : si.last_coef, si.first_coef : si.last_coef]
 
@@ -593,7 +593,7 @@ class TestPhaseBoundary:
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
+            if key == "jax" or key.startswith(("jax.", "pymgcv."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 

@@ -199,7 +199,7 @@ class ModelSetup:
 
         # 2e. Assemble full X
         if X_constrained:
-            X = np.column_stack([X_parametric] + X_constrained)
+            X = np.column_stack([X_parametric, *X_constrained])
         else:
             X = X_parametric
         assert X.shape[1] == coef_map.total_coefs
@@ -440,10 +440,7 @@ class ModelSetup:
             names.append("(Intercept)")
 
         for term in parametric_terms:
-            if isinstance(data, pd.DataFrame):
-                col = data[term.name]
-            else:
-                col = data[term.name]
+            col = data[term.name]
 
             if is_factor(col):
                 levels = _get_factor_levels(col)
@@ -457,8 +454,7 @@ class ModelSetup:
                     col, levels, drop_reference=drop_ref
                 )
                 blocks.append(dummy)
-                for lev in level_names:
-                    names.append(f"{term.name}{lev}")
+                names.extend(f"{term.name}{lev}" for lev in level_names)
             else:
                 col_arr = np.asarray(col, dtype=np.float64).ravel()
                 blocks.append(col_arr[:, np.newaxis])
@@ -507,10 +503,7 @@ class ModelSetup:
 
         for spec in smooth_terms:
             # Registry key: smooth_type for te/ti, else bs
-            if spec.smooth_type in ("te", "ti"):
-                key = spec.smooth_type
-            else:
-                key = spec.bs
+            key = spec.smooth_type if spec.smooth_type in ("te", "ti") else spec.bs
 
             smooth_cls = get_smooth_class(key)
             smooth = smooth_cls(spec)
@@ -614,7 +607,6 @@ class ModelSetup:
         for sm in smooths:
             label = CoefficientMap._smooth_label(sm)
             term = coef_map.get_term(label)
-            for j in range(term.n_coefs):
-                names.append(f"{label}.{j + 1}")
+            names.extend(f"{label}.{j + 1}" for j in range(term.n_coefs))
 
         return tuple(names)

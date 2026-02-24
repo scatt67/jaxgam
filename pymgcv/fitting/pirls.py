@@ -45,7 +45,9 @@ _PIRLS_STATE_FIELDS = [f.name for f in fields(_PIRLSState)]
 jax.tree_util.register_pytree_node(
     _PIRLSState,
     lambda s: ([getattr(s, f) for f in _PIRLS_STATE_FIELDS], None),
-    lambda _, children: _PIRLSState(**dict(zip(_PIRLS_STATE_FIELDS, children))),
+    lambda _, children: _PIRLSState(
+        **dict(zip(_PIRLS_STATE_FIELDS, children, strict=True))
+    ),
 )
 
 
@@ -65,7 +67,9 @@ _SH_STATE_FIELDS = [f.name for f in fields(_StepHalvingState)]
 jax.tree_util.register_pytree_node(
     _StepHalvingState,
     lambda s: ([getattr(s, f) for f in _SH_STATE_FIELDS], None),
-    lambda _, children: _StepHalvingState(**dict(zip(_SH_STATE_FIELDS, children))),
+    lambda _, children: _StepHalvingState(
+        **dict(zip(_SH_STATE_FIELDS, children, strict=True))
+    ),
 )
 
 
@@ -118,7 +122,7 @@ _PIRLS_FIELDS = [f.name for f in fields(PIRLSResult)]
 jax.tree_util.register_pytree_node(
     PIRLSResult,
     lambda r: ([getattr(r, f) for f in _PIRLS_FIELDS], None),
-    lambda _, children: PIRLSResult(**dict(zip(_PIRLS_FIELDS, children))),
+    lambda _, children: PIRLSResult(**dict(zip(_PIRLS_FIELDS, children, strict=True))),
 )
 
 

@@ -330,7 +330,7 @@ class TestStructuralInvariants:
         smooth.setup(data)
 
         S = smooth.build_penalty_matrices()[0].S
-        eigvals, eigvecs = np.linalg.eigh(S)
+        eigvals, _eigvecs = np.linalg.eigh(S)
 
         # Last M=2 eigenvalues should be ~0
         M = smooth.null_space_dim
@@ -866,7 +866,7 @@ class TestNoJaxImport:
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
+            if key == "jax" or key.startswith(("jax.", "pymgcv."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
@@ -887,7 +887,7 @@ class TestNoJaxImport:
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
+            if key == "jax" or key.startswith(("jax.", "pymgcv."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
@@ -907,7 +907,7 @@ class TestNoJaxImport:
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
+            if key == "jax" or key.startswith(("jax.", "pymgcv."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 

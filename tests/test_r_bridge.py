@@ -258,7 +258,9 @@ class TestRBridgeSubprocessFallback:
         np.testing.assert_allclose(
             r1["basis_matrices"][0], r2["basis_matrices"][0], rtol=STRICT.rtol
         )
-        for s1, s2 in zip(r1["penalty_matrices"][0], r2["penalty_matrices"][0]):
+        for s1, s2 in zip(
+            r1["penalty_matrices"][0], r2["penalty_matrices"][0], strict=True
+        ):
             np.testing.assert_allclose(s1, s2, rtol=STRICT.rtol, atol=STRICT.atol)
 
     def test_subprocess_matches_rpy2(self, gaussian_data: pd.DataFrame) -> None:

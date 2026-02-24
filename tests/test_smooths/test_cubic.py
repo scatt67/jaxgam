@@ -783,7 +783,7 @@ class TestNoJaxImport:
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
+            if key == "jax" or key.startswith(("jax.", "pymgcv."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 

@@ -91,7 +91,7 @@ _REML_FIELDS = [f.name for f in fields(REMLResult)]
 jax.tree_util.register_pytree_node(
     REMLResult,
     lambda r: ([getattr(r, f) for f in _REML_FIELDS], None),
-    lambda _, children: REMLResult(**dict(zip(_REML_FIELDS, children))),
+    lambda _, children: REMLResult(**dict(zip(_REML_FIELDS, children, strict=True))),
 )
 
 
@@ -579,7 +579,7 @@ _jit_ml_score = jax.jit(ml_criterion, static_argnames=_BLOCK_STATIC)
 _jit_ml_grad = jax.jit(jax.grad(ml_criterion), static_argnames=_BLOCK_STATIC)
 _jit_ml_hess = jax.jit(jax.hessian(ml_criterion), static_argnames=_BLOCK_STATIC)
 
-_JOINT_STATIC = _BLOCK_STATIC + ("n_lambda", "family")
+_JOINT_STATIC = (*_BLOCK_STATIC, "n_lambda", "family")
 _jit_reml_joint_score = jax.jit(reml_criterion_joint, static_argnames=_JOINT_STATIC)
 _jit_reml_joint_grad = jax.jit(
     jax.grad(reml_criterion_joint), static_argnames=_JOINT_STATIC
@@ -675,21 +675,21 @@ class REMLCriterion(_CriterionBase):
         self._Mp = fd.total_penalty_null_dim
 
     def _kwargs(self) -> dict:
-        return dict(
-            XtWX=self._XtWX,
-            beta=self._beta,
-            deviance=self._deviance,
-            ls_sat=self._ls_sat,
-            S_list=self._S_list,
-            phi=self.scale,
-            Mp=self._Mp,
-            singleton_sp_indices=self._singleton_sp_indices,
-            singleton_ranks=self._singleton_ranks,
-            singleton_eig_constants=self._singleton_eig_constants,
-            multi_block_sp_indices=self._multi_block_sp_indices,
-            multi_block_ranks=self._multi_block_ranks,
-            multi_block_proj_S=self._multi_block_proj_S,
-        )
+        return {
+            "XtWX": self._XtWX,
+            "beta": self._beta,
+            "deviance": self._deviance,
+            "ls_sat": self._ls_sat,
+            "S_list": self._S_list,
+            "phi": self.scale,
+            "Mp": self._Mp,
+            "singleton_sp_indices": self._singleton_sp_indices,
+            "singleton_ranks": self._singleton_ranks,
+            "singleton_eig_constants": self._singleton_eig_constants,
+            "multi_block_sp_indices": self._multi_block_sp_indices,
+            "multi_block_ranks": self._multi_block_ranks,
+            "multi_block_proj_S": self._multi_block_proj_S,
+        }
 
     def score(self, log_lambda: jax.Array) -> jax.Array:
         """REML score at given log_lambda."""
@@ -725,21 +725,21 @@ class MLCriterion(_CriterionBase):
         self._Mp = fd.total_penalty_null_dim
 
     def _kwargs(self) -> dict:
-        return dict(
-            XtWX=self._XtWX,
-            beta=self._beta,
-            deviance=self._deviance,
-            ls_sat=self._ls_sat,
-            S_list=self._S_list,
-            phi=self.scale,
-            Mp=self._Mp,
-            singleton_sp_indices=self._singleton_sp_indices,
-            singleton_ranks=self._singleton_ranks,
-            singleton_eig_constants=self._singleton_eig_constants,
-            multi_block_sp_indices=self._multi_block_sp_indices,
-            multi_block_ranks=self._multi_block_ranks,
-            multi_block_proj_S=self._multi_block_proj_S,
-        )
+        return {
+            "XtWX": self._XtWX,
+            "beta": self._beta,
+            "deviance": self._deviance,
+            "ls_sat": self._ls_sat,
+            "S_list": self._S_list,
+            "phi": self.scale,
+            "Mp": self._Mp,
+            "singleton_sp_indices": self._singleton_sp_indices,
+            "singleton_ranks": self._singleton_ranks,
+            "singleton_eig_constants": self._singleton_eig_constants,
+            "multi_block_sp_indices": self._multi_block_sp_indices,
+            "multi_block_ranks": self._multi_block_ranks,
+            "multi_block_proj_S": self._multi_block_proj_S,
+        }
 
     def score(self, log_lambda: jax.Array) -> jax.Array:
         """ML score at given log_lambda."""
@@ -821,23 +821,23 @@ class JointREMLCriterion(_JointCriterionBase):
         self._Mp = fd.total_penalty_null_dim
 
     def _kwargs(self) -> dict:
-        return dict(
-            XtWX=self._XtWX,
-            beta=self._beta,
-            deviance=self._deviance,
-            y=self._y,
-            wt=self._wt,
-            S_list=self._S_list,
-            Mp=self._Mp,
-            n_lambda=self._n_lambda,
-            family=self._family,
-            singleton_sp_indices=self._singleton_sp_indices,
-            singleton_ranks=self._singleton_ranks,
-            singleton_eig_constants=self._singleton_eig_constants,
-            multi_block_sp_indices=self._multi_block_sp_indices,
-            multi_block_ranks=self._multi_block_ranks,
-            multi_block_proj_S=self._multi_block_proj_S,
-        )
+        return {
+            "XtWX": self._XtWX,
+            "beta": self._beta,
+            "deviance": self._deviance,
+            "y": self._y,
+            "wt": self._wt,
+            "S_list": self._S_list,
+            "Mp": self._Mp,
+            "n_lambda": self._n_lambda,
+            "family": self._family,
+            "singleton_sp_indices": self._singleton_sp_indices,
+            "singleton_ranks": self._singleton_ranks,
+            "singleton_eig_constants": self._singleton_eig_constants,
+            "multi_block_sp_indices": self._multi_block_sp_indices,
+            "multi_block_ranks": self._multi_block_ranks,
+            "multi_block_proj_S": self._multi_block_proj_S,
+        }
 
     def score(self, params: jax.Array) -> jax.Array:
         """REML score at given params = [log_lambda, log_phi]."""
@@ -868,23 +868,23 @@ class JointMLCriterion(_JointCriterionBase):
         self._Mp = fd.total_penalty_null_dim
 
     def _kwargs(self) -> dict:
-        return dict(
-            XtWX=self._XtWX,
-            beta=self._beta,
-            deviance=self._deviance,
-            y=self._y,
-            wt=self._wt,
-            S_list=self._S_list,
-            Mp=self._Mp,
-            n_lambda=self._n_lambda,
-            family=self._family,
-            singleton_sp_indices=self._singleton_sp_indices,
-            singleton_ranks=self._singleton_ranks,
-            singleton_eig_constants=self._singleton_eig_constants,
-            multi_block_sp_indices=self._multi_block_sp_indices,
-            multi_block_ranks=self._multi_block_ranks,
-            multi_block_proj_S=self._multi_block_proj_S,
-        )
+        return {
+            "XtWX": self._XtWX,
+            "beta": self._beta,
+            "deviance": self._deviance,
+            "y": self._y,
+            "wt": self._wt,
+            "S_list": self._S_list,
+            "Mp": self._Mp,
+            "n_lambda": self._n_lambda,
+            "family": self._family,
+            "singleton_sp_indices": self._singleton_sp_indices,
+            "singleton_ranks": self._singleton_ranks,
+            "singleton_eig_constants": self._singleton_eig_constants,
+            "multi_block_sp_indices": self._multi_block_sp_indices,
+            "multi_block_ranks": self._multi_block_ranks,
+            "multi_block_proj_S": self._multi_block_proj_S,
+        }
 
     def score(self, params: jax.Array) -> jax.Array:
         """ML score at given params = [log_lambda, log_phi]."""

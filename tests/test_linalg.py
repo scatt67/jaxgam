@@ -184,7 +184,7 @@ class TestPenalizedCholesky:
     def test_penalized_solve_roundtrip(self, realistic_penalized_system: dict) -> None:
         """penalized_solve produces beta such that (XtWX + S_lambda) @ beta ≈ rhs."""
         sys = realistic_penalized_system
-        beta, L, jitter = penalized_solve(sys["XtWX"], sys["S_lambda"], sys["rhs"])
+        beta, _L, jitter = penalized_solve(sys["XtWX"], sys["S_lambda"], sys["rhs"])
         H = sys["XtWX"] + sys["S_lambda"] + jitter * jnp.eye(sys["rhs"].shape[0])
         np.testing.assert_allclose(
             np.array(H @ beta),
@@ -363,17 +363,17 @@ class TestJITCompilation:
     """Verify every function compiles and runs under jax.jit."""
 
     def test_cho_factor_jit(self, pd_matrix: jnp.ndarray) -> None:
-        L, jitter = jax.jit(cho_factor)(pd_matrix)
+        L, _jitter = jax.jit(cho_factor)(pd_matrix)
         assert jnp.all(jnp.isfinite(L))
 
     def test_penalized_cholesky_jit(self, realistic_penalized_system: dict) -> None:
         sys = realistic_penalized_system
-        L, jitter = jax.jit(penalized_cholesky)(sys["XtWX"], sys["S_lambda"])
+        L, _jitter = jax.jit(penalized_cholesky)(sys["XtWX"], sys["S_lambda"])
         assert jnp.all(jnp.isfinite(L))
 
     def test_penalized_solve_jit(self, realistic_penalized_system: dict) -> None:
         sys = realistic_penalized_system
-        beta, L, jitter = jax.jit(penalized_solve)(
+        beta, _L, _jitter = jax.jit(penalized_solve)(
             sys["XtWX"], sys["S_lambda"], sys["rhs"]
         )
         assert jnp.all(jnp.isfinite(beta))
@@ -384,7 +384,7 @@ class TestJITCompilation:
         assert int(rank) == 2
 
     def test_slogdet_jit(self, pd_matrix: jnp.ndarray) -> None:
-        sign, logdet = jax.jit(jnp.linalg.slogdet)(pd_matrix)
+        _sign, logdet = jax.jit(jnp.linalg.slogdet)(pd_matrix)
         assert jnp.isfinite(logdet)
 
     def test_solve_triangular_jit(self, pd_matrix: jnp.ndarray) -> None:

@@ -179,7 +179,7 @@ class TestFactorBySmoothStructure:
     def test_n_coefs_equals_n_levels_times_k(
         self, factor_by: FactorBySmooth, base_smooth: TPRSSmooth
     ) -> None:
-        """Total columns = n_levels × k_per_level."""
+        """Total columns = n_levels x k_per_level."""
         assert factor_by.n_coefs == 3 * base_smooth.n_coefs
 
     def test_k_per_level_matches_base(
@@ -263,7 +263,7 @@ class TestFactorBySmoothStructure:
         assert len(penalties) == 3
 
     def test_penalty_shape(self, factor_by: FactorBySmooth) -> None:
-        """Each penalty is (n_coefs × n_coefs) — embedded in global space."""
+        """Each penalty is (n_coefs x n_coefs) - embedded in global space."""
         penalties = factor_by.build_penalty_matrices()
         for pen in penalties:
             assert pen.shape == (factor_by.n_coefs, factor_by.n_coefs)
@@ -324,7 +324,7 @@ class TestFactorBySmoothStructure:
 
     def test_labels(self, factor_by: FactorBySmooth) -> None:
         """Labels include by-variable and level names."""
-        for label, level in zip(factor_by.labels, factor_by.levels):
+        for label, level in zip(factor_by.labels, factor_by.levels, strict=True):
             assert "fac" in label
             assert str(level) in label
             assert "s(x)" in label
@@ -411,7 +411,7 @@ class TestNumericBySmoothStructure:
         by_penalties = numeric_by.build_penalty_matrices()
         base_penalties = base_smooth.build_penalty_matrices()
         assert len(by_penalties) == len(base_penalties)
-        for by_pen, base_pen in zip(by_penalties, base_penalties):
+        for by_pen, base_pen in zip(by_penalties, base_penalties, strict=True):
             np.testing.assert_allclose(
                 by_pen.S,
                 base_pen.S,
@@ -794,9 +794,9 @@ class TestRComparison:
     def test_factor_by_design_matrix_elementwise_vs_r(self, r_bridge) -> None:
         """Each level's design matrix matches R element-wise at MODERATE.
 
-        R's smoothCon(s(x, by=fac)) returns per-level (n × k) matrices
+        R's smoothCon(s(x, by=fac)) returns per-level (n x k) matrices
         where rows not belonging to the level are zeroed. Our
-        FactorBySmooth assembles these into a single (n × 3k) block.
+        FactorBySmooth assembles these into a single (n x 3k) block.
         Sign normalization removes LAPACK eigenvector sign ambiguity
         (R bundles reference LAPACK; Python may use Accelerate/MKL).
         """

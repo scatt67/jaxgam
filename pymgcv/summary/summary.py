@@ -292,7 +292,7 @@ def _test_stat(
         ``rank`` (reference degrees of freedom).
     """
     # QR of X to get R factor
-    Q_x, R_x = np.linalg.qr(X, mode="reduced")
+    _Q_x, R_x = np.linalg.qr(X, mode="reduced")
     # Transform V into R-space: R @ V @ R^T
     V_r = R_x @ V @ R_x.T
     V_r = (V_r + V_r.T) / 2.0
@@ -498,28 +498,6 @@ def _liu2(x: float, lam: np.ndarray, h: np.ndarray | None = None) -> float:
     return float(stats.ncx2.sf(z, df=ell, nc=delta))
 
 
-def _psum_chisq(q: float, lb: np.ndarray) -> float:
-    """Upper tail probability for weighted sum of chi-squared(1) variables.
-
-    Uses Liu/Pearson approximation.
-
-    Computes Pr(sum_j lb[j] * X_j > q) where X_j ~ chi^2(1).
-
-    Parameters
-    ----------
-    q : float
-        Quantile.
-    lb : np.ndarray
-        Weights (positive).
-
-    Returns
-    -------
-    float
-        Upper tail probability.
-    """
-    return _liu2(q, lb)
-
-
 def psum_chisq_davies(
     q: float,
     lb: np.ndarray,
@@ -586,33 +564,6 @@ def psum_chisq_davies(
     if np.all(nc == 0):
         return float(_liu2(q, lb, h=df))
     return float(np.nan)
-
-
-def _psum_chisq_general(
-    q: float,
-    lb: np.ndarray,
-    df: np.ndarray,
-) -> float:
-    """Upper tail probability for weighted sum of chi-squared variables
-    with general degrees of freedom.
-
-    Computes Pr(sum_j lb[j] * X_j > q) where X_j ~ chi^2(df[j]).
-
-    Parameters
-    ----------
-    q : float
-        Quantile.
-    lb : np.ndarray
-        Weights (can be negative).
-    df : np.ndarray
-        Degrees of freedom for each component.
-
-    Returns
-    -------
-    float
-        Upper tail probability.
-    """
-    return _liu2(q, lb, h=df)
 
 
 # ---------------------------------------------------------------------------

@@ -53,15 +53,12 @@ def is_factor(col: pd.Series | npt.NDArray) -> bool:
         if col.dtype == object or col.dtype.kind in ("U", "S", "T"):
             return True
         # pandas StringDtype (pd.StringDtype())
-        if pd.api.types.is_string_dtype(col):
-            return True
-        return False
+        return bool(pd.api.types.is_string_dtype(col))
 
     # numpy array
-    if hasattr(col, "dtype"):
-        if col.dtype == object or col.dtype.kind in ("U", "S"):
-            return True
-    return False
+    return hasattr(col, "dtype") and (
+        col.dtype == object or col.dtype.kind in ("U", "S")
+    )
 
 
 def _get_factor_levels(col: pd.Series | npt.NDArray) -> list:

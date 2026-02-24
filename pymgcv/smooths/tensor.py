@@ -248,18 +248,12 @@ class TensorProductSmooth(Smooth):
             # Normalize by largest eigenvalue (matching R)
             eigvals_j = linalg.eigvalsh(S_list[j])
             max_eigval = np.max(np.abs(eigvals_j))
-            if max_eigval > 0:
-                S_norm = S_list[j] / max_eigval
-            else:
-                S_norm = S_list[j].copy()
+            S_norm = S_list[j] / max_eigval if max_eigval > 0 else S_list[j].copy()
 
             # Build Kronecker product: I ⊗ ... ⊗ S_norm ⊗ ... ⊗ I
             P = np.array([[1.0]])
             for i in range(n_marginals):
-                if i == j:
-                    P = np.kron(P, S_norm)
-                else:
-                    P = np.kron(P, np.eye(dims[i]))
+                P = np.kron(P, S_norm) if i == j else np.kron(P, np.eye(dims[i]))
 
             # Symmetrize
             P = 0.5 * (P + P.T)
@@ -423,7 +417,7 @@ class TensorInteractionSmooth(TensorProductSmooth):
         X_list = []
         S_list = []
         self._Z_list = []
-        for X_j, S_j in zip(X_list_raw, S_list_raw):
+        for X_j, S_j in zip(X_list_raw, S_list_raw, strict=True):
             X_c, S_c, Z = self._absorb_constraint(X_j, S_j)
             X_list.append(X_c)
             S_list.append(S_c)
@@ -457,7 +451,7 @@ class TensorInteractionSmooth(TensorProductSmooth):
         # Build tensor penalties from constrained marginals
         constrained_ranks = [
             d - max(m.null_space_dim - 1, 0)
-            for d, m in zip(constrained_dims, self._marginals)
+            for d, m in zip(constrained_dims, self._marginals, strict=True)
         ]
 
         class _RankInfo:
@@ -505,7 +499,7 @@ class TensorInteractionSmooth(TensorProductSmooth):
         self._require_setup()
         X_list_raw = [m.predict_matrix(new_data) for m in self._marginals]
         matrices = []
-        for j, (X, Z) in enumerate(zip(X_list_raw, self._Z_list)):
+        for j, (X, Z) in enumerate(zip(X_list_raw, self._Z_list, strict=True)):
             X_j = X @ Z
             XP = self._XP_list[j]
             if XP is not None:

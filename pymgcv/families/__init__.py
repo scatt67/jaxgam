@@ -9,10 +9,10 @@ from pymgcv.families.registry import get_family
 from pymgcv.families.standard import Binomial, Gamma, Gaussian, Poisson
 
 __all__ = [
-    "ExponentialFamily",
-    "Gaussian",
     "Binomial",
-    "Poisson",
+    "ExponentialFamily",
     "Gamma",
+    "Gaussian",
+    "Poisson",
     "get_family",
 ]

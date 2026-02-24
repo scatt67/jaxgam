@@ -8,4 +8,4 @@ This is Phase 1 code (NumPy only, no JAX imports).
 
 from pymgcv.penalties.penalty import CompositePenalty, Penalty
 
-__all__ = ["Penalty", "CompositePenalty"]
+__all__ = ["CompositePenalty", "Penalty"]

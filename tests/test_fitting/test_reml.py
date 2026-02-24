@@ -13,7 +13,7 @@ Tests cover:
 - Fletcher scale estimation
 
 Design doc reference: Section 4.3, 4.4
-R source reference: gam.fit3.r lines 612–640 (general Laplace REML)
+R source reference: gam.fit3.r lines 612-640 (general Laplace REML)
 """
 
 from __future__ import annotations
@@ -130,22 +130,22 @@ def _reml_args(fd, pirls_result, log_lambda):
     deviance = pirls_result.deviance
     ls_sat = fd.family.saturated_loglik(fd.y, fd.wt, phi)
     Mp = fd.total_penalty_null_dim
-    return dict(
-        log_lambda=log_lambda,
-        XtWX=pirls_result.XtWX,
-        beta=pirls_result.coefficients,
-        deviance=deviance,
-        ls_sat=ls_sat,
-        S_list=fd.S_list,
-        phi=phi,
-        Mp=Mp,
-        singleton_sp_indices=fd.singleton_sp_indices,
-        singleton_ranks=fd.singleton_ranks,
-        singleton_eig_constants=fd.singleton_eig_constants,
-        multi_block_sp_indices=fd.multi_block_sp_indices,
-        multi_block_ranks=fd.multi_block_ranks,
-        multi_block_proj_S=fd.multi_block_proj_S,
-    )
+    return {
+        "log_lambda": log_lambda,
+        "XtWX": pirls_result.XtWX,
+        "beta": pirls_result.coefficients,
+        "deviance": deviance,
+        "ls_sat": ls_sat,
+        "S_list": fd.S_list,
+        "phi": phi,
+        "Mp": Mp,
+        "singleton_sp_indices": fd.singleton_sp_indices,
+        "singleton_ranks": fd.singleton_ranks,
+        "singleton_eig_constants": fd.singleton_eig_constants,
+        "multi_block_sp_indices": fd.multi_block_sp_indices,
+        "multi_block_ranks": fd.multi_block_ranks,
+        "multi_block_proj_S": fd.multi_block_proj_S,
+    }
 
 
 # ---- REML score vs R ----
@@ -611,7 +611,7 @@ class TestFletcherScale:
     def test_gaussian_no_correction(self):
         """For Gaussian, V'(mu)=0 so Fletcher = Pearson."""
         data = _make_data("gaussian")
-        fd, pirls_result, log_lambda, _ = _setup_pipeline(
+        fd, pirls_result, _log_lambda, _ = _setup_pipeline(
             self.FORMULA, data, Gaussian(), "gaussian"
         )
         n = fd.n_obs
@@ -630,7 +630,7 @@ class TestFletcherScale:
     def test_poisson_differs_from_pearson(self):
         """For Poisson, V'(mu)=1 so Fletcher != Pearson."""
         data = _make_data("poisson")
-        fd, pirls_result, log_lambda, _ = _setup_pipeline(
+        fd, pirls_result, _log_lambda, _ = _setup_pipeline(
             self.FORMULA, data, Poisson(), "poisson"
         )
         n = fd.n_obs
@@ -652,7 +652,7 @@ class TestFletcherScale:
             ("gamma", "gamma", Gamma()),
         ]:
             data = _make_data(family_name)
-            fd, pirls_result, log_lambda, _ = _setup_pipeline(
+            fd, pirls_result, _log_lambda, _ = _setup_pipeline(
                 self.FORMULA, data, family, family_r
             )
             edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
@@ -666,7 +666,7 @@ class TestFletcherScale:
             ("gamma", "gamma", Gamma()),
         ]:
             data = _make_data(family_name)
-            fd, pirls_result, log_lambda, r_result = _setup_pipeline(
+            fd, pirls_result, _log_lambda, r_result = _setup_pipeline(
                 self.FORMULA, data, family, family_r
             )
             edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
@@ -696,7 +696,7 @@ class TestEstimateEdf:
         is the total hat matrix trace including the unpenalized intercept.
         """
         data = _make_data("gaussian")
-        fd, pirls_result, log_lambda, r_result = _setup_pipeline(
+        _fd, pirls_result, _log_lambda, r_result = _setup_pipeline(
             self.FORMULA, data, Gaussian(), "gaussian"
         )
         py_edf = float(estimate_edf(pirls_result.XtWX, pirls_result.L))
@@ -713,7 +713,7 @@ class TestEstimateEdf:
     def test_edf_bounded(self):
         """EDF should be between 0 and p (number of coefficients)."""
         data = _make_data("gaussian")
-        fd, pirls_result, log_lambda, _ = _setup_pipeline(
+        fd, pirls_result, _log_lambda, _ = _setup_pipeline(
             self.FORMULA, data, Gaussian(), "gaussian"
         )
         py_edf = float(estimate_edf(pirls_result.XtWX, pirls_result.L))

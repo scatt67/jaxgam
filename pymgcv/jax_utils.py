@@ -293,7 +293,7 @@ def cho_factor(
 ) -> tuple[jax.Array, jax.Array]:
     """Cholesky factorization with two-level scale-relative jitter.
 
-    Follows the stabilization strategy from design.md §4.8 (lines 3190–3212):
+    Follows the stabilization strategy from design.md §4.8 (lines 3190-3212):
     always applies a small jitter ``eps_small * trace(H)/p``, and falls back
     to a larger jitter ``eps_large * trace(H)/p`` if the first attempt
     produces NaN (indicating non-positive-definiteness under JIT).

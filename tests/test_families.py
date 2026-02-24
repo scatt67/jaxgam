@@ -650,7 +650,7 @@ class TestRegistry:
     """get_family() returns correct family instances."""
 
     @pytest.mark.parametrize(
-        "name,expected_cls",
+        ("name", "expected_cls"),
         [
             ("gaussian", Gaussian),
             ("binomial", Binomial),

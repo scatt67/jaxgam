@@ -115,7 +115,7 @@ class TestGaussianConverges:
         cls.family = Gaussian()
         wt = np.ones(len(cls.y))
         S_lambda_np = np.zeros((3, 3))
-        X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(
+        X_d, y_d, beta_d, S_d, _wt_d = _init_and_transfer(
             cls.X, cls.y, wt, cls.family, S_lambda_np
         )
         cls.result = pirls_loop(X_d, y_d, beta_d, S_d, cls.family)
@@ -144,7 +144,7 @@ class TestBinomialConverges:
         cls.family = Binomial()
         wt = np.ones(len(cls.y))
         S_lambda_np = np.eye(6)
-        X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(
+        X_d, y_d, beta_d, S_d, _wt_d = _init_and_transfer(
             cls.X, cls.y, wt, cls.family, S_lambda_np
         )
         cls.result = pirls_loop(X_d, y_d, beta_d, S_d, cls.family)
@@ -155,7 +155,8 @@ class TestBinomialConverges:
 
     def test_mu_in_bounds(self):
         mu = to_numpy(self.result.mu)
-        assert np.all(mu > 0) and np.all(mu < 1)
+        assert np.all(mu > 0)
+        assert np.all(mu < 1)
 
 
 class TestPoissonConverges:
@@ -165,7 +166,7 @@ class TestPoissonConverges:
         cls.family = Poisson()
         wt = np.ones(len(cls.y))
         S_lambda_np = np.eye(6)
-        X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(
+        X_d, y_d, beta_d, S_d, _wt_d = _init_and_transfer(
             cls.X, cls.y, wt, cls.family, S_lambda_np
         )
         cls.result = pirls_loop(X_d, y_d, beta_d, S_d, cls.family)
@@ -185,7 +186,7 @@ class TestGammaConverges:
         cls.family = Gamma()
         wt = np.ones(len(cls.y))
         S_lambda_np = np.eye(6)
-        X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(
+        X_d, y_d, beta_d, S_d, _wt_d = _init_and_transfer(
             cls.X, cls.y, wt, cls.family, S_lambda_np
         )
         cls.result = pirls_loop(X_d, y_d, beta_d, S_d, cls.family)
@@ -218,7 +219,7 @@ class TestMonotonicity:
     """Penalized deviance should not increase (within tolerance)."""
 
     @pytest.mark.parametrize(
-        "family_name,family",
+        ("family_name", "family"),
         [
             ("gaussian", Gaussian()),
             ("binomial", Binomial()),
@@ -300,11 +301,13 @@ class TestOffset:
         offset = np.full(n, offset_val)
 
         # Fit WITHOUT offset
-        X_d, y_d, beta_no, S_d, wt_d = _init_and_transfer(X, y, wt, family, S_lambda_np)
+        X_d, y_d, beta_no, S_d, _wt_d = _init_and_transfer(
+            X, y, wt, family, S_lambda_np
+        )
         result_no = pirls_loop(X_d, y_d, beta_no, S_d, family)
 
         # Fit WITH offset
-        *_, beta_off, S_d2, wt_d2, offset_d = _init_and_transfer(
+        *_, beta_off, _S_d2, _wt_d2, offset_d = _init_and_transfer(
             X, y, wt, family, S_lambda_np, offset=offset
         )
         result_off = pirls_loop(X_d, y_d, beta_off, S_d, family, offset=offset_d)
@@ -334,7 +337,7 @@ class TestPenalized:
     """Ridge penalty should shrink coefficients for all families."""
 
     @pytest.mark.parametrize(
-        "family_name,family",
+        ("family_name", "family"),
         [
             ("gaussian", Gaussian()),
             ("binomial", Binomial()),
@@ -386,7 +389,7 @@ class TestPIRLSStep:
         eta = X_d @ beta_d + offset_d
         mu = family.link.inverse(eta)
 
-        beta_new, XtWX, L, W = _pirls_step(X_d, y_d, wt_d, beta_d, mu, S_d, family)
+        _beta_new, XtWX, _L, W = _pirls_step(X_d, y_d, wt_d, beta_d, mu, S_d, family)
 
         # XtWX should be symmetric positive definite for Gaussian
         XtWX_np = to_numpy(XtWX)

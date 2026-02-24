@@ -445,9 +445,9 @@ for (i in seq_len(n_smooths)) {{
             for i in range(1, n_smooths + 1):
                 basis_matrices.append(_read_matrix(f"basis_{i}.csv"))
                 n_pen = int(_read_scalar(f"n_pen_{i}.txt"))
-                penalties = []
-                for j in range(1, n_pen + 1):
-                    penalties.append(_read_matrix(f"pen_{i}_{j}.csv"))
+                penalties = [
+                    _read_matrix(f"pen_{i}_{j}.csv") for j in range(1, n_pen + 1)
+                ]
                 penalty_matrices.append(penalties)
 
             return {
@@ -529,9 +529,7 @@ for (i in seq_len(n_smooths)) {{
         null_space_dim = int(nsd_arr[0])
 
         S_list = result.rx2("S")
-        S_matrices = []
-        for i in range(len(S_list)):
-            S_matrices.append(np.array(S_list[i], dtype=np.float64))
+        S_matrices = [np.array(S_list[i], dtype=np.float64) for i in range(len(S_list))]
 
         Xu = np.array(result.rx2("Xu"), dtype=np.float64)
         UZ = np.array(result.rx2("UZ"), dtype=np.float64)
@@ -631,18 +629,13 @@ if (!is.null(sm$shift)) {{
             null_space_dim = int(_read_scalar("null_space_dim.txt"))
 
             n_S = int(_read_scalar("n_S.txt"))
-            S_matrices = []
-            for i in range(1, n_S + 1):
-                S_matrices.append(_read_matrix(f"S_{i}.csv"))
+            S_matrices = [_read_matrix(f"S_{i}.csv") for i in range(1, n_S + 1)]
 
             Xu_raw = _read_matrix("Xu.csv")
             shift_raw = _read_matrix("shift.csv")
 
             # Handle 1D knots stored as single column
-            if Xu_raw.ndim == 2 and Xu_raw.shape[1] == 1:
-                Xu = Xu_raw.ravel()
-            else:
-                Xu = Xu_raw
+            Xu = Xu_raw.ravel() if Xu_raw.ndim == 2 and Xu_raw.shape[1] == 1 else Xu_raw
 
             if shift_raw.ndim == 2 and shift_raw.shape[1] == 1:
                 shift = shift_raw.ravel()
@@ -744,9 +737,9 @@ if (!is.null(sm$shift)) {{
             null_space_dim = int(nsd_arr[0])
 
             S_list_r = sm.rx2("S")
-            S_matrices = []
-            for j in range(len(S_list_r)):
-                S_matrices.append(np.array(S_list_r[j], dtype=np.float64))
+            S_matrices = [
+                np.array(S_list_r[j], dtype=np.float64) for j in range(len(S_list_r))
+            ]
 
             by_level_arr = np.array(sm.rx2("by_level"))
             by_level_str = str(by_level_arr[0]) if by_level_arr.size > 0 else None
@@ -848,9 +841,7 @@ for (i in seq_len(n_sm)) {{
                 null_space_dim = int(_read_scalar(f"nsd_{i}.txt"))
 
                 n_S = int(_read_scalar(f"nS_{i}.txt"))
-                S_matrices = []
-                for j in range(1, n_S + 1):
-                    S_matrices.append(_read_matrix(f"S_{i}_{j}.csv"))
+                S_matrices = [_read_matrix(f"S_{i}_{j}.csv") for j in range(1, n_S + 1)]
 
                 by_level_str = _read_text(f"bylevel_{i}.txt")
                 if by_level_str == "NONE":

@@ -180,17 +180,14 @@ def _fill_polynomial_basis(
     total degree then lexicographic order.
     """
     n = X.shape[0]
-    col = 0
-
     # Generate all multi-indices with total degree < m
     indices = _monomial_indices(d, m)
-    for idx in indices:
+    for col, idx in enumerate(indices):
         val = np.ones(n)
         for j, power in enumerate(idx):
             if power > 0:
                 val = val * X[:, j] ** power
         T[:, col] = val
-        col += 1
 
 
 def _monomial_indices(d: int, max_degree: int) -> list[tuple[int, ...]]:
@@ -217,8 +214,7 @@ def _partitions(d: int, total: int) -> list[tuple[int, ...]]:
         return [(total,)]
     result: list[tuple[int, ...]] = []
     for first in range(total, -1, -1):
-        for rest in _partitions(d - 1, total - first):
-            result.append((first, *rest))
+        result.extend((first, *rest) for rest in _partitions(d - 1, total - first))
     return result
 
 
@@ -283,7 +279,7 @@ def _get_unique_rows(
     ),
     cache=True,
 )
-def _slanczos_jit(A, k, tol):  # pragma: no cover  # noqa: C901
+def _slanczos_jit(A, k, tol):  # pragma: no cover
     n = A.shape[0]
 
     # --- Deterministic starting vector (R's LCG) ---
@@ -468,10 +464,7 @@ def _null_space_basis_r_jit(TU):  # pragma: no cover
             lsq = -lsq
 
         v[n_elem - 1] += lsq
-        if lsq != 0.0:
-            g = 1.0 / (lsq * v[n_elem - 1])
-        else:
-            g = 0.0
+        g = 1.0 / (lsq * v[n_elem - 1]) if lsq != 0.0 else 0.0
         lsq *= m_scale
 
         # Apply reflector to remaining rows of A
@@ -672,7 +665,7 @@ class TPRSSmooth(Smooth):
             X_design = ET @ UZ  # (n, k)
 
         # Step 12: Build S (penalty matrix)
-        # S = Z' @ diag(D_k) @ Z, padded to k×k with zeros for null space
+        # S = Z' @ diag(D_k) @ Z, padded to kxk with zeros for null space
         S_wiggly = Z.T @ np.diag(D_k) @ Z  # (k-M, k-M)
         S = np.zeros((k, k))
         S[:k_wiggly, :k_wiggly] = S_wiggly

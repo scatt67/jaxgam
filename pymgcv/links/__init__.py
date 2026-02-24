@@ -13,13 +13,13 @@ from pymgcv.links.links import (
 )
 
 __all__ = [
-    "Link",
+    "CloglogLink",
     "IdentityLink",
+    "InverseLink",
+    "InverseSquaredLink",
+    "Link",
     "LogLink",
     "LogitLink",
-    "InverseLink",
     "ProbitLink",
-    "CloglogLink",
     "SqrtLink",
-    "InverseSquaredLink",
 ]

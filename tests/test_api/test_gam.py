@@ -165,7 +165,7 @@ class TestGAMClass:
         s = model.summary()
         assert s is not None
         # plot() is now implemented (Task 3.3)
-        fig, axes = model.plot()
+        fig, _axes = model.plot()
         assert fig is not None
         import matplotlib.pyplot as plt
 
@@ -627,7 +627,7 @@ class TestScopeGuards:
             GAM("y ~ s(x)", select=True)
 
     def test_gamma_nondefault_raises(self):
-        with pytest.raises(NotImplementedError, match="gamma=1.4"):
+        with pytest.raises(NotImplementedError, match=r"gamma=1\.4"):
             GAM("y ~ s(x)", gamma=1.4)
 
     def test_knots_raises(self):

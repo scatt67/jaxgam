@@ -234,7 +234,7 @@ class _PlotPanel:
     one panel per term.
     """
 
-    __slots__ = ("term", "factor_level", "level_idx")
+    __slots__ = ("factor_level", "level_idx", "term")
 
     def __init__(
         self,

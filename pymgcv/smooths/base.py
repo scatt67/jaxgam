@@ -9,7 +9,7 @@ Design doc reference: docs/design.md Section 5.1
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import numpy.typing as npt

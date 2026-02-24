@@ -723,7 +723,7 @@ class TestMLOptimization:
         )
 
     @pytest.mark.parametrize(
-        "family_name,family_obj",
+        ("family_name", "family_obj"),
         [("poisson", Poisson()), ("binomial", Binomial())],
         ids=["poisson", "binomial"],
     )
@@ -864,7 +864,7 @@ class TestDiagnostics:
         assert coef_diff > 0.01, "Offset should change coefficients"
 
     @pytest.mark.parametrize(
-        "family_name,family_obj",
+        ("family_name", "family_obj"),
         [
             ("gaussian", Gaussian()),
             ("binomial", Binomial()),

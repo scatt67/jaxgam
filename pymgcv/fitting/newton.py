@@ -256,10 +256,7 @@ class NewtonOptimizer:
         ``log_phi`` enters only through the criterion scoring.
         """
         fd = self._fd
-        if self._joint_scale:
-            log_lambda = params[: fd.n_penalties]
-        else:
-            log_lambda = params
+        log_lambda = params[: fd.n_penalties] if self._joint_scale else params
         S = fd.S_lambda(log_lambda)
         pirls_result = pirls_loop(fd.X, fd.y, beta_init, S, fd.family, fd.wt, fd.offset)
         criterion = self._make_criterion(pirls_result)

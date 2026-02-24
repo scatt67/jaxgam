@@ -235,7 +235,7 @@ class TestApplySumToZero:
         sm = _setup_te(["x1", "x2"], data_dict, k=5)
         X, S_list = _get_X_S(sm, data_dict)
 
-        X_c, S_c_list, Z = CoefficientMap.apply_sum_to_zero(X, S_list)
+        X_c, S_c_list, _Z = CoefficientMap.apply_sum_to_zero(X, S_list)
 
         assert X_c.shape[1] == X.shape[1] - 1
         assert len(S_c_list) == len(S_list)
@@ -278,7 +278,7 @@ class TestApplySumToZeroFactorBy:
         X = fbs.build_design_matrix(df)
         S_list = [p.S for p in fbs.build_penalty_matrices()]
 
-        X_c, S_c_list, Z = CoefficientMap.apply_sum_to_zero_factor_by(
+        X_c, _S_c_list, Z = CoefficientMap.apply_sum_to_zero_factor_by(
             X, S_list, n_levels=3, k_per_level=10
         )
 
@@ -763,7 +763,7 @@ class TestBuildCoefficientMap:
 
         X_param = np.ones((N, 1))
 
-        coef_map, X_blocks, S_blocks = CoefficientMap.build(
+        coef_map, _X_blocks, _S_blocks = CoefficientMap.build(
             smooths=[sm1, sm2],
             X_smooth_blocks=[X1, X2],
             S_smooth_blocks=[S1, S2],
@@ -793,7 +793,7 @@ class TestBuildCoefficientMap:
 
         X_param = np.ones((N, 1))
 
-        coef_map, X_blocks, S_blocks = CoefficientMap.build(
+        coef_map, _X_blocks, _S_blocks = CoefficientMap.build(
             smooths=[sm1, sm2, sm_te],
             X_smooth_blocks=[X1, X2, X_te],
             S_smooth_blocks=[S1, S2, S_te],
@@ -818,7 +818,7 @@ class TestBuildCoefficientMap:
         X_nbs = nbs.build_design_matrix(df)
         S_list = [p.S for p in nbs.build_penalty_matrices()]
 
-        coef_map, X_blocks, S_blocks = CoefficientMap.build(
+        coef_map, _X_blocks, _S_blocks = CoefficientMap.build(
             smooths=[nbs],
             X_smooth_blocks=[X_nbs],
             S_smooth_blocks=[S_list],
@@ -1056,7 +1056,7 @@ class TestPhaseBoundary:
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
+            if key == "jax" or key.startswith(("jax.", "pymgcv."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 

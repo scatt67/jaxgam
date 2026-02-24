@@ -55,7 +55,7 @@ def _mu_positive_moderate() -> np.ndarray:
 
 
 def _mu_real() -> np.ndarray:
-    """mu values spanning ℝ for identity link."""
+    """mu values spanning R for identity link."""
     return np.array([-10.0, -1.0, 0.0, 0.5, 1.0, 5.0, 100.0])
 
 
@@ -105,7 +105,7 @@ FD_LINK_MU_MAP: list[tuple[Link, np.ndarray]] = [
 
 
 class TestLinkRoundtrip:
-    @pytest.mark.parametrize("link_obj,mu", LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(("link_obj", "mu"), LINK_MU_MAP, ids=LINK_IDS)
     def test_roundtrip(self, link_obj: Link, mu: np.ndarray) -> None:
         eta = link_obj.link(mu)
         mu_recovered = link_obj.linkinv(eta)
@@ -117,7 +117,7 @@ class TestLinkRoundtrip:
             err_msg=f"Roundtrip failed for {type(link_obj).__name__}",
         )
 
-    @pytest.mark.parametrize("link_obj,mu", LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(("link_obj", "mu"), LINK_MU_MAP, ids=LINK_IDS)
     def test_inverse_alias(self, link_obj: Link, mu: np.ndarray) -> None:
         """linkinv and inverse return the same thing."""
         eta = link_obj.link(mu)
@@ -141,7 +141,7 @@ class TestMuEta:
     R comparison tests (TestLinkVsR).
     """
 
-    @pytest.mark.parametrize("link_obj,mu", FD_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(("link_obj", "mu"), FD_LINK_MU_MAP, ids=LINK_IDS)
     def test_mu_eta_vs_finite_diff(self, link_obj: Link, mu: np.ndarray) -> None:
         eta = link_obj.link(mu)
         # Optimal step for central differences: h = eps^(1/3) * scale
@@ -243,7 +243,7 @@ R_LINK_MAP: list[tuple[str, Link, np.ndarray]] = [
 @pytest.mark.skipif(not _r_available(), reason="R not available")
 class TestLinkVsR:
     @pytest.mark.parametrize(
-        "r_name,link_obj,mu",
+        ("r_name", "link_obj", "mu"),
         R_LINK_MAP,
         ids=[
             "identity",
@@ -299,7 +299,7 @@ class TestLinkVsR:
 
 class TestLinkRegistry:
     @pytest.mark.parametrize(
-        "name,expected_cls",
+        ("name", "expected_cls"),
         [
             ("identity", IdentityLink),
             ("log", LogLink),
@@ -344,7 +344,9 @@ JAX_LINK_MU_MAP: list[tuple[Link, jax.Array, np.ndarray]] = [
 class TestLinkJAXCompat:
     """JAX compatibility: link methods accept JAX arrays and JIT-compile."""
 
-    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(
+        ("link_obj", "jax_mu", "np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
+    )
     def test_link_jax_matches_numpy(
         self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
     ) -> None:
@@ -359,7 +361,9 @@ class TestLinkJAXCompat:
             err_msg=f"link() JAX vs NumPy for {type(link_obj).__name__}",
         )
 
-    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(
+        ("link_obj", "jax_mu", "np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
+    )
     def test_inverse_jax_matches_numpy(
         self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
     ) -> None:
@@ -376,7 +380,9 @@ class TestLinkJAXCompat:
             err_msg=f"inverse() JAX vs NumPy for {type(link_obj).__name__}",
         )
 
-    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(
+        ("link_obj", "jax_mu", "np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
+    )
     def test_derivative_jax_matches_numpy(
         self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
     ) -> None:
@@ -391,7 +397,9 @@ class TestLinkJAXCompat:
             err_msg=f"derivative() JAX vs NumPy for {type(link_obj).__name__}",
         )
 
-    @pytest.mark.parametrize("link_obj,jax_mu,np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(
+        ("link_obj", "jax_mu", "np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
+    )
     def test_mu_eta_jax_matches_numpy(
         self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
     ) -> None:
@@ -408,7 +416,9 @@ class TestLinkJAXCompat:
             err_msg=f"mu_eta() JAX vs NumPy for {type(link_obj).__name__}",
         )
 
-    @pytest.mark.parametrize("link_obj,jax_mu,_np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(
+        ("link_obj", "jax_mu", "_np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
+    )
     def test_link_jit_compiles(
         self, link_obj: Link, jax_mu: jax.Array, _np_mu: np.ndarray
     ) -> None:
@@ -429,7 +439,9 @@ class TestLinkJAXCompat:
         assert jnp.all(jnp.isfinite(deriv)), "JIT derivative() produced non-finite"
         assert jnp.all(jnp.isfinite(me)), "JIT mu_eta() produced non-finite"
 
-    @pytest.mark.parametrize("link_obj,jax_mu,_np_mu", JAX_LINK_MU_MAP, ids=LINK_IDS)
+    @pytest.mark.parametrize(
+        ("link_obj", "jax_mu", "_np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
+    )
     def test_roundtrip_jax(
         self, link_obj: Link, jax_mu: jax.Array, _np_mu: np.ndarray
     ) -> None:

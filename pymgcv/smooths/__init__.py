@@ -23,19 +23,19 @@ from pymgcv.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 from pymgcv.smooths.tprs import TPRSShrinkageSmooth, TPRSSmooth
 
 __all__ = [
-    "Smooth",
-    "TPRSSmooth",
-    "TPRSShrinkageSmooth",
+    "CoefficientMap",
     "CubicRegressionSmooth",
     "CubicShrinkageSmooth",
     "CyclicCubicSmooth",
-    "TensorProductSmooth",
-    "TensorInteractionSmooth",
     "FactorBySmooth",
     "NumericBySmooth",
+    "Smooth",
+    "TPRSShrinkageSmooth",
+    "TPRSSmooth",
+    "TensorInteractionSmooth",
+    "TensorProductSmooth",
+    "TermBlock",
+    "get_smooth_class",
     "is_factor",
     "resolve_by_variable",
-    "get_smooth_class",
-    "CoefficientMap",
-    "TermBlock",
 ]

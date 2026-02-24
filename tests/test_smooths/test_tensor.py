@@ -643,7 +643,7 @@ class TestRComparison:
         smooth, r_result, _data = self._setup_te_cr()
 
         for j, (py_pen, r_S) in enumerate(
-            zip(smooth.build_penalty_matrices(), r_result["S"])
+            zip(smooth.build_penalty_matrices(), r_result["S"], strict=True)
         ):
             np.testing.assert_allclose(
                 py_pen.S,
@@ -664,7 +664,7 @@ class TestRComparison:
         X_r = r_result["X"]
 
         for j, (py_pen, r_S) in enumerate(
-            zip(smooth.build_penalty_matrices(), r_result["S"])
+            zip(smooth.build_penalty_matrices(), r_result["S"], strict=True)
         ):
             np.testing.assert_allclose(
                 normalize_symmetric_signs(py_pen.S, X_py),
@@ -711,7 +711,7 @@ class TestRComparison:
         smooth, r_result, _data = self._setup_ti_cr()
 
         for j, (py_pen, r_S) in enumerate(
-            zip(smooth.build_penalty_matrices(), r_result["S"])
+            zip(smooth.build_penalty_matrices(), r_result["S"], strict=True)
         ):
             np.testing.assert_allclose(
                 py_pen.S,
@@ -728,7 +728,7 @@ class TestRComparison:
         X_r = r_result["X"]
 
         for j, (py_pen, r_S) in enumerate(
-            zip(smooth.build_penalty_matrices(), r_result["S"])
+            zip(smooth.build_penalty_matrices(), r_result["S"], strict=True)
         ):
             np.testing.assert_allclose(
                 normalize_symmetric_signs(py_pen.S, X_py),
@@ -862,7 +862,7 @@ class TestNoJaxImport:
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith("jax.") or key.startswith("pymgcv.")
+            if key == "jax" or key.startswith(("jax.", "pymgcv."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
