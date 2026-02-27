@@ -22,9 +22,6 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jsla
 import numpy as np
 
-jax.config.update("jax_enable_x64", True)
-
-
 # ---------------------------------------------------------------------------
 # Device transfer (Phase 1→2 and Phase 2→3 boundaries, design.md §1.3)
 # ---------------------------------------------------------------------------

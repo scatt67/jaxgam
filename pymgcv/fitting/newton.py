@@ -6,12 +6,30 @@ pipeline: Newton over ``log_lambda`` (outer) wrapping PIRLS over
 ``beta`` (inner). At each Newton step, PIRLS must re-converge at
 the proposed ``log_lambda``.
 
-The algorithm follows R's ``fast.REML.fit()`` (fast-REML.r lines
-1740-1875): eigenvalue-safe Newton direction with step-halving
-line search.
+The algorithm follows R's ``newton()`` (gam.fit3.r lines
+1290-1719): eigenvalue-safe Newton direction with step-halving
+line search and steepest-descent fallback for indefinite Hessians.
+
+Key R-matching design choices (see docs/experiments.md):
+- ``conv_tol = 1e-6`` (R's ``gam.control()$newton$conv.tol``)
+- Gradient convergence uses ``5 * conv_tol`` factor (R line 1652)
+- PIRLS tolerance tightened to ``conv_tol / 100`` (R line 1308)
+- ``score_scale = abs(log(scale)) + abs(score)`` for REML (R line 1648)
+- ``uconv.ind`` dimension subsetting with ``|grad| > max(|grad|)*0.001``
+  filter (R lines 1430-1432, 1435-1436, 1651)
+- Eigenvalue floor ``eps^0.7`` (R line 1450)
+- ``lsp_max = 40`` safety net for flat REML surfaces
+- ``custom_jvp`` on PIRLS for non-Gaussian families (Exp 18):
+  defines how ``(β*, XtWX, deviance)`` change with ``S_lambda``
+  via the implicit function theorem. ``jax.grad`` and
+  ``jax.hessian`` of the end-to-end score function automatically
+  capture all first- and second-order terms, matching R's
+  analytical Hessian from ``gdi.c``. Cost: 1 PIRLS per Newton
+  iteration (same as R). For Gaussian, ``W`` is constant so the
+  standard AD Hessian is exact.
 
 Design doc reference: Section 8.2 (Outer Newton with Damped Hessian)
-R source reference: fast-REML.r lines 1740-1875
+R source reference: gam.fit3.r lines 1290-1719
 """
 
 from __future__ import annotations
@@ -22,6 +40,7 @@ from enum import Enum, auto
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.scipy.linalg import cho_solve
 
 from pymgcv.fitting.data import FittingData
 from pymgcv.fitting.initialization import initialize_beta
@@ -31,11 +50,275 @@ from pymgcv.fitting.reml import (
     JointREMLCriterion,
     MLCriterion,
     REMLCriterion,
+    _criterion_core,
     _CriterionBase,
     _JointCriterionBase,
 )
+from pymgcv.jax_utils import build_S_lambda
 
-jax.config.update("jax_enable_x64", True)
+# R's default Newton convergence tolerance (gam.control()$newton$conv.tol).
+# This is ~67x looser than sqrt(eps) ≈ 1.5e-8, matching R's deliberate
+# choice for the Newton optimizer that wraps PIRLS (gam.fit3.r line 1307).
+_DEFAULT_CONV_TOL = 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Module-level differentiable score (JIT-cached across fits)
+# ---------------------------------------------------------------------------
+#
+# ``_diff_score`` is a module-level function with explicit arguments so that
+# ``jax.jit(jax.grad(...))`` and ``jax.jit(jax.hessian(...))`` are defined
+# once at module load time. The JIT cache is keyed by static args (family,
+# tol, method, structure), so after the first fit per combination, subsequent
+# fits reuse the compiled XLA code — no per-fit recompilation of
+# ``jax.hessian(jacfwd(jacrev(...)))`` which costs ~300ms.
+#
+# The ``custom_jvp`` on PIRLS is defined as a closure INSIDE ``_diff_score``
+# to keep only 2 primals (S_lambda, beta_warm). This is critical: extra
+# primals would make ``jax.hessian`` compute unnecessary JVP/VJP passes,
+# significantly increasing compile and run time.
+
+
+def _diff_score(
+    params,
+    beta_warm,
+    X,
+    y,
+    wt,
+    offset,
+    S_list,
+    singleton_eig_constants,
+    multi_block_proj_S,
+    family,
+    pirls_tol,
+    is_reml,
+    joint_scale,
+    n_lambda,
+    Mp,
+    singleton_sp_indices,
+    singleton_ranks,
+    multi_block_sp_indices,
+    multi_block_ranks,
+    p,
+):
+    """End-to-end differentiable score: PIRLS + criterion.
+
+    All data flows as explicit arguments (no per-fit closures). Static
+    arguments (family, pirls_tol, is_reml, etc.) are compile-time constants
+    that key the JIT cache. The ``custom_jvp`` on PIRLS is defined inside
+    this function as a closure over X, y, wt, offset, family, pirls_tol
+    (all concrete or traced at trace time), keeping only S_lambda and
+    beta_warm as differentiable primals.
+    """
+
+    # ---- custom_jvp on PIRLS (closure over traced X, y, wt, offset) ----
+    @jax.custom_jvp
+    def _pirls_out(S_lambda, beta_warm_inner):
+        result = pirls_loop(
+            X,
+            y,
+            beta_warm_inner,
+            S_lambda,
+            family,
+            wt,
+            offset,
+            tol=pirls_tol,
+        )
+        return result.coefficients, result.XtWX, result.deviance
+
+    @_pirls_out.defjvp
+    def _pirls_jvp(primals, tangents):
+        S_lambda, beta_warm_inner = primals
+        dS, _ = tangents
+
+        beta, XtWX, dev = _pirls_out(S_lambda, beta_warm_inner)
+
+        # IFT: dβ = -H⁻¹(dS @ β)
+        H = XtWX + S_lambda
+        L = jnp.linalg.cholesky(H)
+        dbeta = cho_solve((L, True), -(dS @ beta))
+
+        # Chain: dη → dW → dXtWX
+        eta = X @ beta + offset
+        deta = X @ dbeta
+
+        def _eta_to_W(e):
+            return family.working_weights(family.link.inverse(e), wt)
+
+        _, dW = jax.jvp(_eta_to_W, (eta,), (deta,))
+        dXtWX = (X.T * dW) @ X
+
+        # Chain: dη → dμ → ddeviance
+        def _eta_to_dev(e):
+            return jnp.sum(family.dev_resids(y, family.link.inverse(e), wt))
+
+        _, ddev = jax.jvp(_eta_to_dev, (eta,), (deta,))
+
+        return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
+
+    # ---- End-to-end score ----
+    if joint_scale:
+        log_lambda = params[:n_lambda]
+        phi = jnp.exp(params[n_lambda])
+        ls_sat = family.saturated_loglik(y, wt, phi)
+    else:
+        log_lambda = params
+        phi = jnp.array(1.0)
+        ls_sat = family.saturated_loglik(y, wt, phi)
+
+    S_lambda = build_S_lambda(log_lambda, S_list, p)
+    beta, XtWX, dev = _pirls_out(S_lambda, beta_warm)
+
+    core = _criterion_core(
+        log_lambda,
+        XtWX,
+        beta,
+        dev,
+        ls_sat,
+        S_list,
+        phi,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
+
+    if is_reml:
+        return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
+    return core
+
+
+# Static argument names for JIT caching of _diff_score derivatives.
+# These are Python values (not JAX arrays) that key the compilation cache.
+_DIFF_STATIC = (
+    "family",
+    "pirls_tol",
+    "is_reml",
+    "joint_scale",
+    "n_lambda",
+    "Mp",
+    "singleton_sp_indices",
+    "singleton_ranks",
+    "multi_block_sp_indices",
+    "multi_block_ranks",
+    "p",
+)
+
+# Module-level JIT'd gradient and Hessian — compiled ONCE per
+# (family, tol, method, structure) combination, reused across all
+# subsequent fits. This is the key performance optimization: the
+# jax.hessian (jacfwd(jacrev)) compilation that costs ~300ms happens
+# only on the first fit, not on every fit.
+_jit_diff_grad = jax.jit(
+    jax.grad(_diff_score, argnums=0),
+    static_argnames=_DIFF_STATIC,
+)
+_jit_diff_hess = jax.jit(
+    jax.hessian(_diff_score, argnums=0),
+    static_argnames=_DIFF_STATIC,
+)
+
+
+# Fused gradient + Hessian: single XLA program, halves Python↔XLA syncs.
+def _diff_grad_hess(*args, **kwargs):
+    _grad = jax.grad(_diff_score, argnums=0)
+    _hess = jax.hessian(_diff_score, argnums=0)
+    return _grad(*args, **kwargs), _hess(*args, **kwargs)
+
+
+_jit_diff_grad_hess = jax.jit(_diff_grad_hess, static_argnames=_DIFF_STATIC)
+
+
+# ---------------------------------------------------------------------------
+# Fused forward pass: PIRLS + criterion score in one XLA dispatch
+# ---------------------------------------------------------------------------
+#
+# ``_fit_and_score_impl`` fuses S_lambda construction, PIRLS (while_loop),
+# and criterion score evaluation into a single JIT program. This reduces
+# 4 JIT dispatches (S_lambda + PIRLS + edf/scale + score) to 1, saving
+# ~300μs per call. During step-halving (1-30 trials per Newton iteration),
+# these savings compound significantly.
+#
+# PIRLSResult is a registered JAX pytree, so it can be returned from JIT.
+# The criterion object is NOT created here — only after step acceptance
+# (when gradient/Hessian are needed).
+
+
+def _fit_and_score_impl(
+    params,
+    beta_init,
+    X,
+    y,
+    wt,
+    offset,
+    S_list,
+    singleton_eig_constants,
+    multi_block_proj_S,
+    family,
+    pirls_tol,
+    is_reml,
+    joint_scale,
+    n_lambda,
+    Mp,
+    singleton_sp_indices,
+    singleton_ranks,
+    multi_block_sp_indices,
+    multi_block_ranks,
+    p,
+):
+    """Fused PIRLS + criterion score in one XLA program.
+
+    Same signature as ``_diff_score`` but forward-pass only (no custom_jvp).
+    Returns ``(score, pirls_result)`` where pirls_result is a pytree.
+    """
+    if joint_scale:
+        log_lambda = params[:n_lambda]
+        phi = jnp.exp(params[n_lambda])
+        ls_sat = family.saturated_loglik(y, wt, phi)
+    else:
+        log_lambda = params
+        phi = jnp.array(1.0)
+        ls_sat = family.saturated_loglik(y, wt, phi)
+
+    S_lambda = build_S_lambda(log_lambda, S_list, p)
+    pirls_result = pirls_loop(
+        X,
+        y,
+        beta_init,
+        S_lambda,
+        family,
+        wt,
+        offset,
+        tol=pirls_tol,
+    )
+
+    core = _criterion_core(
+        log_lambda,
+        pirls_result.XtWX,
+        pirls_result.coefficients,
+        pirls_result.deviance,
+        ls_sat,
+        S_list,
+        phi,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
+
+    score = core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi) if is_reml else core
+
+    return score, pirls_result
+
+
+_jit_fit_and_score = jax.jit(
+    _fit_and_score_impl,
+    static_argnames=_DIFF_STATIC,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -96,16 +379,17 @@ def _safe_newton_step(
     gradient: jax.Array,
     hessian: jax.Array,
     max_step: float = 5.0,
-) -> jax.Array:
-    """Newton step with eigenvalue safety and norm capping.
+) -> tuple[jax.Array, jax.Array]:
+    """Newton step with eigenvalue safety, component-wise capping, and
+    indefiniteness detection.
 
-    Follows R's ``fast.REML.fit``:
+    Follows R's ``newton()`` (gam.fit3.r lines 1438-1465):
 
     1. Eigendecompose Hessian: ``H = V D V^T``
     2. Flip negative eigenvalues to positive: ``D = |D|``
-    3. Floor small eigenvalues: ``D = max(D, max(|D|) * sqrt(eps))``
+    3. Floor small eigenvalues: ``D = max(D, max(|D|) * eps^0.7)``
     4. Compute step: ``step = -V @ ((V^T @ g) / D_safe)``
-    5. Cap step norm to ``max_step``
+    5. Cap step: ``max(|step|) <= max_step`` (component-wise, R line 1465)
 
     Parameters
     ----------
@@ -114,31 +398,40 @@ def _safe_newton_step(
     hessian : jax.Array, shape (m, m)
         Hessian of criterion w.r.t. log_lambda.
     max_step : float
-        Maximum allowed step norm in log-lambda space.
+        Maximum allowed component magnitude in log-lambda space.
 
     Returns
     -------
-    jax.Array, shape (m,)
+    step : jax.Array, shape (m,)
         Safe Newton direction.
+    is_pdef : jax.Array, scalar bool
+        Whether the original Hessian was positive definite.
     """
     eigs, V = jnp.linalg.eigh(hessian)
 
-    # Flip negative eigenvalues
+    # Check positive definiteness before modification (R line 1440/1448)
+    is_pdef = jnp.all(eigs > 0)
+
+    # Flip negative eigenvalues (R line 1449)
     eigs_safe = jnp.abs(eigs)
 
-    # Floor small eigenvalues
+    # Floor small eigenvalues — R uses eps^0.7 (line 1450), NOT sqrt(eps).
+    # This is more aggressive, keeping small eigenvalues closer to their
+    # true values, which produces better-conditioned steps.
     eps = jnp.finfo(jnp.float64).eps
-    floor = jnp.max(eigs_safe) * jnp.sqrt(eps)
+    floor = jnp.max(eigs_safe) * eps**0.7
     eigs_safe = jnp.maximum(eigs_safe, floor)
 
     # Newton step: -H^{-1} g = -V diag(1/D) V^T g
     step = -V @ ((V.T @ gradient) / eigs_safe)
 
-    # Cap step norm
-    step_norm = jnp.sqrt(jnp.sum(step**2))
-    step = jnp.where(step_norm > max_step, step * max_step / step_norm, step)
+    # Cap step — R uses component-wise max (line 1462-1465):
+    # ms <- max(abs(uc.step))
+    # if (ms>maxNstep) uc.step <- maxNstep * uc.step/ms
+    ms = jnp.max(jnp.abs(step))
+    step = jnp.where(ms > max_step, step * max_step / ms, step)
 
-    return step
+    return step, is_pdef
 
 
 # ---------------------------------------------------------------------------
@@ -160,8 +453,7 @@ class _StepOutcome(Enum):
 class NewtonOptimizer:
     """Newton optimizer for smoothing parameter selection.
 
-    Holds the fixed problem data (``FittingData``, method, tolerances)
-    and provides methods for the individual algorithmic steps.
+    Matches R's ``newton()`` (gam.fit3.r lines 1290-1719).
 
     Parameters
     ----------
@@ -172,9 +464,17 @@ class NewtonOptimizer:
     max_iter : int
         Maximum Newton iterations.
     tol : float, optional
-        Convergence tolerance. Defaults to ``sqrt(eps)``.
+        Convergence tolerance. Defaults to ``1e-6`` matching R's
+        ``gam.control()$newton$conv.tol``.
     max_step : float
-        Maximum step norm in log-lambda space.
+        Maximum step component in log-lambda space.
+    lsp_max : float or None
+        Maximum absolute value for log smoothing parameters. Defaults
+        to ``40.0``. While R's Newton has no upper bounds (gam.fit3.r
+        line 1323 disabled), our AD gradient has slightly more noise
+        than R's analytical IFT gradient, which can cause drift on flat
+        REML surfaces. The cap acts as a safety net without affecting
+        well-determined directions. ``None`` disables clamping.
     """
 
     def __init__(
@@ -184,16 +484,32 @@ class NewtonOptimizer:
         max_iter: int = 200,
         tol: float | None = None,
         max_step: float = 5.0,
-        lsp_max: float = 15.0,
+        lsp_max: float = 40.0,
     ) -> None:
         self._fd = fd
         self._method = method
         self._max_iter = max_iter
-        self._tol = tol if tol is not None else float(jnp.finfo(jnp.float64).eps ** 0.5)
         self._max_step = max_step
-        # Cap log smoothing parameters to prevent divergence on flat REML
-        # landscapes (e.g. tensor products with one dominant penalty).
         self._lsp_max = lsp_max
+
+        # Convergence tolerance: family-dependent, matching R.
+        # Gaussian: sqrt(eps) ≈ 1.5e-8 (matching fast.REML.fit).
+        # Non-Gaussian: 1e-6 (R's gam.control()$newton$conv.tol).
+        # R converges in ~10 outer iterations using the exact analytical
+        # Hessian from gdi.c. Our custom_jvp approach (Exp 18) gives
+        # the correct analytical Hessian via implicit differentiation,
+        # matching R's convergence rate.
+        if tol is not None:
+            self._tol = tol
+        elif fd.family.family_name == "gaussian":
+            self._tol = float(jnp.finfo(jnp.float64).eps ** 0.5)
+        else:
+            self._tol = _DEFAULT_CONV_TOL
+
+        # PIRLS tolerance: R tightens to conv.tol/100 inside Newton
+        # (gam.fit3.r line 1308). This produces more accurate PIRLS
+        # solutions, which in turn gives more accurate AD gradients.
+        self._pirls_tol = min(self._tol / 100.0, 1e-8)
         # Joint optimization: append log_phi to params when scale is unknown
         # (matches R's mgcv.r line 2033: lsp <- c(lsp, log.scale))
         self._joint_scale = not fd.family.scale_known and fd.n_penalties > 0
@@ -201,16 +517,55 @@ class NewtonOptimizer:
         if method not in ("REML", "ML"):
             raise ValueError(f"Unknown method: {method!r}. Use 'REML' or 'ML'.")
 
-    def _clamp_params(self, params: jax.Array) -> jax.Array:
-        """Clamp log smoothing parameters to [-lsp_max, lsp_max].
+        # Pre-bind all arguments except (params, beta_init) which vary
+        # per Newton iteration. Shared by _jit_fit_and_score (forward pass)
+        # and _jit_diff_grad_hess (gradient/Hessian for non-Gaussian).
+        # Dynamic args are JAX arrays; static args are Python values that
+        # key the JIT cache.
+        offset = fd.offset if fd.offset is not None else jnp.zeros(fd.n_obs)
+        self._jit_kwargs = {
+            "X": fd.X,
+            "y": fd.y,
+            "wt": fd.wt,
+            "offset": offset,
+            "S_list": fd.S_list,
+            "singleton_eig_constants": fd.singleton_eig_constants,
+            "multi_block_proj_S": fd.multi_block_proj_S,
+            "family": fd.family,
+            "pirls_tol": self._pirls_tol,
+            "is_reml": self._method == "REML",
+            "joint_scale": self._joint_scale,
+            "n_lambda": fd.n_penalties,
+            "Mp": fd.total_penalty_null_dim,
+            "singleton_sp_indices": fd.singleton_sp_indices,
+            "singleton_ranks": fd.singleton_ranks,
+            "multi_block_sp_indices": fd.multi_block_sp_indices,
+            "multi_block_ranks": fd.multi_block_ranks,
+            "p": fd.n_coef,
+        }
 
-        Matches R's ``pmin(lsp, lsp.max)`` / ``pmax(lsp, lsp0 - 20)``
-        (gam.fit3.r line ~2060). Prevents the optimizer from running
-        to infinity on flat REML landscapes.
+        # Build custom_jvp-based differentiable score for non-Gaussian families
+        if fd.family.family_name != "gaussian" and fd.n_penalties > 0:
+            kw = self._jit_kwargs
+
+            def _grad_hess_fn(params, beta_warm):
+                return _jit_diff_grad_hess(params, beta_warm, **kw)
+
+            self._diff_grad_hess = _grad_hess_fn
+        else:
+            self._diff_grad_hess = None
+
+    def _clamp_params(self, params: jax.Array) -> jax.Array:
+        """Optionally clamp log smoothing parameters.
+
+        When ``lsp_max`` is None (default, matching R), no clamping
+        is applied. When set, clamps to ``[-lsp_max, lsp_max]``.
 
         For joint optimization, only the log_lambda portion is clamped;
         log_phi is left unclamped.
         """
+        if self._lsp_max is None:
+            return params
         lsp_max = self._lsp_max
         if self._joint_scale:
             n_lambda = self._fd.n_penalties
@@ -248,20 +603,27 @@ class NewtonOptimizer:
         self,
         params: jax.Array,
         beta_init: jax.Array,
-    ) -> tuple[PIRLSResult, _CriterionBase | _JointCriterionBase, jax.Array]:
-        """Run PIRLS at current params, build criterion, return score.
+    ) -> tuple[PIRLSResult, jax.Array]:
+        """Run PIRLS and compute criterion score in a single JIT dispatch.
+
+        Uses ``_jit_fit_and_score`` which fuses S_lambda construction,
+        PIRLS (while_loop), and criterion score into one XLA program.
+        No criterion object is created — use ``_make_criterion()``
+        separately after step acceptance when gradient/Hessian are needed.
 
         For joint optimization, ``params = [log_lambda..., log_phi]``.
         PIRLS only uses the ``log_lambda`` portion (via ``S_lambda``);
         ``log_phi`` enters only through the criterion scoring.
+
+        Uses tightened PIRLS tolerance (``conv_tol / 100``) matching
+        R's gam.fit3.r line 1308.
         """
-        fd = self._fd
-        log_lambda = params[: fd.n_penalties] if self._joint_scale else params
-        S = fd.S_lambda(log_lambda)
-        pirls_result = pirls_loop(fd.X, fd.y, beta_init, S, fd.family, fd.wt, fd.offset)
-        criterion = self._make_criterion(pirls_result)
-        score = criterion.score(params)
-        return pirls_result, criterion, score
+        score, pirls_result = _jit_fit_and_score(
+            params,
+            beta_init,
+            **self._jit_kwargs,
+        )
+        return pirls_result, score
 
     def _step_halve(
         self,
@@ -269,27 +631,30 @@ class NewtonOptimizer:
         step: jax.Array,
         score: float,
         beta_warm: jax.Array,
-        reml_scale: float,
+        score_scale: float,
         grad: jax.Array,
         hess: jax.Array,
         outer_iter: int,
-    ) -> tuple[jax.Array, PIRLSResult, _CriterionBase, jax.Array, _StepOutcome]:
+        is_pdef: bool,
+    ) -> tuple[jax.Array, PIRLSResult, jax.Array, _StepOutcome]:
         """Trial step with quadratic-error check and steepest-descent fallback.
 
-        Follows R's ``mgcv:::newton`` (fast-REML.r):
+        Follows R's ``newton()`` (gam.fit3.r lines 1491-1571):
 
         1. Try Newton step, check if quadratic model is accurate (qerror < 0.8)
-        2. If rejected: halve the step, retry
-        3. After 3 halvings (in early iterations): switch to steepest-descent
+        2. If Hessian is positive definite and step accepted: done
+        3. If rejected: halve the step, retry
+        4. After 3 halvings (in early iterations): switch to steepest-descent
            step with length min(newton_norm, maxSstep=2)
+        5. For indefinite Hessians: also try pure steepest descent and pick best
 
-        The quadratic error check prevents accepting tiny Newton steps on
-        nearly-linear surfaces where the quadratic model is wrong. The
-        steepest-descent fallback covers more ground on such surfaces.
+        No criterion object is created — only the score is computed via
+        the fused ``_jit_fit_and_score``. The criterion is created in
+        ``run()`` after the step is accepted.
 
         Returns
         -------
-        log_lambda_new, pirls_new, crit_new, score_new, outcome
+        log_lambda_new, pirls_new, score_new, outcome
         """
         tol = self._tol
         max_s_step = 2.0  # R's maxSstep default
@@ -298,16 +663,17 @@ class NewtonOptimizer:
         pred_change = float(jnp.sum(grad * step) + 0.5 * step @ hess @ step)
 
         log_lambda_new = self._clamp_params(log_lambda + step)
-        pirls_new, crit_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
+        pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
 
         score_change = float(score_new) - score
         qerror = abs(pred_change - score_change) / (
-            max(abs(pred_change), abs(score_change)) + reml_scale * tol
+            max(abs(pred_change), abs(score_change)) + score_scale * tol
         )
 
-        # Accept if score decreased AND quadratic model is accurate
-        if jnp.isfinite(score_new) and score_change < 0 and qerror < 0.8:
-            return log_lambda_new, pirls_new, crit_new, score_new, _StepOutcome.ACCEPTED
+        # Accept immediately if score decreased, quadratic model is accurate,
+        # AND Hessian is positive definite (R line 1499)
+        if jnp.isfinite(score_new) and score_change < 0 and is_pdef and qerror < 0.8:
+            return log_lambda_new, pirls_new, score_new, _StepOutcome.ACCEPTED
 
         # Step-halving with steepest-descent fallback
         sd_step = -grad / float(jnp.max(jnp.abs(grad)))  # unit steepest-descent
@@ -315,7 +681,7 @@ class NewtonOptimizer:
         k = 0
         not_moved = 0
         while k < 30:
-            if float(score_new) - score < tol * reml_scale:
+            if float(score_new) - score < tol * score_scale:
                 not_moved += 1
             else:
                 not_moved = 0
@@ -338,35 +704,76 @@ class NewtonOptimizer:
 
             k += 1
             log_lambda_new = self._clamp_params(log_lambda + step)
-            pirls_new, crit_new, score_new = self._fit_and_score(
-                log_lambda_new, beta_warm
-            )
+            pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
 
             score_change = float(score_new) - score
-            # Relax qerror check after enough halvings
+            # Relax qerror check after enough halvings (R line 1540)
             qerror_thresh = 0.4 if k > 4 else 0.8
             pred_change = float(jnp.sum(grad * step) + 0.5 * step @ hess @ step)
             qerror = abs(pred_change - score_change) / (
-                max(abs(pred_change), abs(score_change)) + reml_scale * tol
+                max(abs(pred_change), abs(score_change)) + score_scale * tol
             )
 
             if jnp.isfinite(score_new) and score_change < 0 and qerror < qerror_thresh:
                 return (
                     log_lambda_new,
                     pirls_new,
-                    crit_new,
                     score_new,
                     _StepOutcome.ACCEPTED,
                 )
 
         if float(score_new) <= score:
             outcome = _StepOutcome.ACCEPTED
-        elif float(score_new) - score >= tol * reml_scale:
+        elif float(score_new) - score >= tol * score_scale:
             outcome = _StepOutcome.FAILED
         else:
             outcome = _StepOutcome.STUCK
 
-        return log_lambda_new, pirls_new, crit_new, score_new, outcome
+        return log_lambda_new, pirls_new, score_new, outcome
+
+    def _compute_uconv_ind(
+        self,
+        grad: jax.Array,
+        hess: jax.Array,
+        score_scale: float,
+    ) -> np.ndarray:
+        """Identify unconverged dimensions for Newton step subsetting.
+
+        Matches R's ``uconv.ind`` logic (gam.fit3.r lines 1430-1432, 1651):
+
+        1. Base filter: ``|grad| > score_scale * tol * 0.1``
+           OR ``|diag(H)| > score_scale * tol * 0.1``
+        2. Refinement: additionally require ``|grad| > max(|grad|) * 0.001``
+           to exclude dimensions where the gradient is tiny relative to
+           the largest, as these are "likely to be poorly modelled on the
+           scale of Newton step" (R comment at line 1427).
+
+        Returns
+        -------
+        np.ndarray of bool, shape (m,)
+            True for dimensions to include in the Newton step.
+        """
+        tol = self._tol
+        grad_np = np.asarray(grad)
+        hess_diag = np.asarray(jnp.diag(hess))
+
+        # Base uconv.ind (R line 1651)
+        thresh = score_scale * tol * 0.1
+        uconv = (np.abs(grad_np) > thresh) | (np.abs(hess_diag) > thresh)
+
+        # Refinement: exclude tiny-gradient dimensions (R lines 1430-1431)
+        max_grad = np.max(np.abs(grad_np)) if len(grad_np) > 0 else 0.0
+        uconv1 = uconv & (np.abs(grad_np) > max_grad * 0.001)
+
+        # Fallback: if nothing left, use full uconv (R line 1431)
+        if np.sum(uconv1) == 0:
+            uconv1 = uconv
+
+        # Ultimate fallback: at least one dimension (R line 1432)
+        if np.sum(uconv1) == 0:
+            uconv1 = np.ones_like(uconv, dtype=bool)
+
+        return uconv1
 
     def _projected_gradient(self, grad: jax.Array, params: jax.Array) -> jax.Array:
         """Projected gradient for bounded log smoothing parameters.
@@ -375,37 +782,24 @@ class NewtonOptimizer:
         the KKT conditions are satisfied and that component is zeroed.
         This prevents the optimizer from cycling at ``lsp_max`` when a
         smoothing parameter is on a flat REML surface.
-
-        Parameters
-        ----------
-        grad : jax.Array
-            Raw gradient of the criterion.
-        params : jax.Array
-            Current parameter vector.
-
-        Returns
-        -------
-        jax.Array
-            Projected gradient (zero at satisfied bound constraints).
         """
+        if self._lsp_max is None:
+            return grad
         lsp_max = self._lsp_max
         if self._joint_scale:
             n_lambda = self._fd.n_penalties
             log_lambda = params[:n_lambda]
-            # Zero gradient at upper bound when gradient < 0 (wants to increase)
             at_upper = jnp.abs(log_lambda - lsp_max) < 1e-10
-            # Zero gradient at lower bound when gradient > 0 (wants to decrease)
             at_lower = jnp.abs(log_lambda + lsp_max) < 1e-10
             proj_lambda = jnp.where(
                 at_upper & (grad[:n_lambda] < 0), 0.0, grad[:n_lambda]
             )
             proj_lambda = jnp.where(at_lower & (proj_lambda > 0), 0.0, proj_lambda)
             return jnp.concatenate([proj_lambda, grad[n_lambda:]])
-        else:
-            at_upper = jnp.abs(params - lsp_max) < 1e-10
-            at_lower = jnp.abs(params + lsp_max) < 1e-10
-            proj = jnp.where(at_upper & (grad < 0), 0.0, grad)
-            return jnp.where(at_lower & (proj > 0), 0.0, proj)
+        at_upper = jnp.abs(params - lsp_max) < 1e-10
+        at_lower = jnp.abs(params + lsp_max) < 1e-10
+        proj = jnp.where(at_upper & (grad < 0), 0.0, grad)
+        return jnp.where(at_lower & (proj > 0), 0.0, proj)
 
     def _check_convergence(
         self,
@@ -413,32 +807,75 @@ class NewtonOptimizer:
         params: jax.Array,
         score: float,
         score_old: float,
-        deviance: jax.Array,
+        is_pdef: bool,
+        pirls_result: PIRLSResult,
     ) -> tuple[jax.Array, jax.Array, float, bool]:
         """Compute gradient/Hessian and check convergence at accepted point.
 
-        Uses the projected gradient for bounded parameters: at a bound
-        where the gradient points into the constraint (KKT satisfied),
-        that component is zeroed.
+        Uses family-dependent convergence logic matching R's two code paths:
 
-        Returns (grad, hess, reml_scale, converged).
+        **Gaussian** (matches ``fast.REML.fit``, fast-REML.r lines 1740-1875):
+        - ``score_scale = 1 + abs(score)``
+        - Gradient check: ``max(|grad|) < tol * score_scale``
+        - Score change: ``abs(delta) < tol * score_scale``
+        - AD Hessian (exact for Gaussian since W is constant)
+
+        **Non-Gaussian** (matches ``newton()``, gam.fit3.r lines 1647-1658):
+        - ``score_scale = abs(log(scale)) + abs(score)``
+        - Gradient check: ``max(|proj_grad|) < 5 * tol * score_scale``
+        - Score change: ``abs(delta) < tol * score_scale``
+        - Not converged if Hessian was indefinite (R line 1647)
+        - Projected gradient zeros gradient at active ``lsp_max`` bounds
+        - ``custom_jvp`` Hessian via implicit differentiation (matches
+          R's analytical Hessian from gdi.c which accounts for dbeta*/drho)
+
+        Returns (grad, hess, score_scale, converged).
         """
-        fd = self._fd
         tol = self._tol
-        grad = criterion.gradient(params)
-        hess = criterion.hessian(params)
-        # Symmetrize: jax.hessian can produce asymmetric results when
-        # differentiating through slogdet/eigendecompositions in the
-        # REML criterion. The true Hessian of a scalar function is
-        # always symmetric.
-        hess = (hess + hess.T) / 2
-        reml_scale = abs(score) + float(deviance) / fd.n_obs
+        is_gaussian = self._fd.family.family_name == "gaussian"
 
-        proj_grad = self._projected_gradient(grad, params)
-        grad_converged = float(jnp.max(jnp.abs(proj_grad))) < reml_scale * tol
-        reml_converged = abs(score - score_old) < reml_scale * tol
+        if is_gaussian:
+            # AD Hessian is exact for Gaussian (W is constant, no IFT needed).
+            # Fused grad+hess: single XLA dispatch instead of two.
+            grad, hess = criterion.grad_hess(params)
+            hess = (hess + hess.T) / 2
+        else:
+            # custom_jvp gradient and Hessian via implicit differentiation.
+            # Captures all first- and second-order terms from how PIRLS
+            # output (beta*, W, XtWX) changes with rho. Matches R's analytical
+            # Hessian from gdi.c at O(p²n) cost per iteration, no extra
+            # PIRLS calls needed. Fused: single XLA dispatch.
+            beta_warm = pirls_result.coefficients
+            grad, hess = self._diff_grad_hess(params, beta_warm)
+            hess = (hess + hess.T) / 2
 
-        return grad, hess, reml_scale, grad_converged and reml_converged
+        scale_val = float(criterion.scale)
+        if is_gaussian:
+            # fast.REML.fit: score.scale <- 1 + abs(score)
+            score_scale = 1.0 + abs(score)
+        elif self._method in ("REML", "ML"):
+            # newton(): score.scale <- abs(log(b$scale.est)) + abs(score)
+            score_scale = abs(np.log(max(scale_val, 1e-30))) + abs(score)
+        else:
+            score_scale = scale_val + abs(score)
+
+        if is_gaussian:
+            # fast.REML.fit convergence: simple gradient + score change
+            converged = True
+            if float(jnp.max(jnp.abs(grad))) > score_scale * tol:
+                converged = False
+            if abs(score - score_old) > score_scale * tol:
+                converged = False
+        else:
+            # newton() convergence: is_pdef + projected gradient + score change
+            converged = bool(is_pdef)
+            proj_grad = self._projected_gradient(grad, params)
+            if float(jnp.max(jnp.abs(proj_grad))) > score_scale * tol * 5:
+                converged = False
+            if abs(score - score_old) > score_scale * tol:
+                converged = False
+
+        return grad, hess, score_scale, converged
 
     def _build_result(
         self,
@@ -494,11 +931,24 @@ class NewtonOptimizer:
         fd = self._fd
 
         # -- Purely parametric shortcut --
+        # Uses separate PIRLS + criterion (not the fused path) because
+        # purely parametric unknown-scale families need Fletcher scale
+        # as phi, not the joint optimization phi=1.0 assumption.
         if fd.n_penalties == 0:
             log_lambda = jnp.zeros(0)
-            pirls_result, criterion, score = self._fit_and_score(
-                log_lambda, self._initial_beta()
+            S = fd.S_lambda(log_lambda)
+            pirls_result = pirls_loop(
+                fd.X,
+                fd.y,
+                self._initial_beta(),
+                S,
+                fd.family,
+                fd.wt,
+                fd.offset,
+                tol=self._pirls_tol,
             )
+            criterion = self._make_criterion(pirls_result)
+            score = criterion.score(log_lambda)
             return self._build_result(
                 log_lambda,
                 score,
@@ -516,7 +966,14 @@ class NewtonOptimizer:
             # Run initial PIRLS to get Fletcher scale for log_phi init
             S_init = fd.S_lambda(log_lambda)
             pirls_init = pirls_loop(
-                fd.X, fd.y, self._initial_beta(), S_init, fd.family, fd.wt, fd.offset
+                fd.X,
+                fd.y,
+                self._initial_beta(),
+                S_init,
+                fd.family,
+                fd.wt,
+                fd.offset,
+                tol=self._pirls_tol,
             )
             from pymgcv.fitting.reml import estimate_edf, fletcher_scale
 
@@ -528,15 +985,15 @@ class NewtonOptimizer:
             params = log_lambda
 
         # -- Initial fit and score --
-        pirls_result, criterion, score = self._fit_and_score(
-            params, self._initial_beta()
-        )
-        grad, hess, reml_scale, _ = self._check_convergence(
+        pirls_result, score = self._fit_and_score(params, self._initial_beta())
+        criterion = self._make_criterion(pirls_result)
+        grad, hess, score_scale, _ = self._check_convergence(
             criterion,
             params,
             float(score),
             float(score),
-            pirls_result.deviance,
+            is_pdef=True,
+            pirls_result=pirls_result,
         )
 
         converged = False
@@ -545,17 +1002,35 @@ class NewtonOptimizer:
         consecutive_stuck = 0
 
         for outer_iter in range(self._max_iter):
-            step = _safe_newton_step(grad, hess, self._max_step)
+            # uconv.ind subsetting: only optimize unconverged dimensions
+            # (R lines 1430-1436, 1651). This speeds convergence and
+            # prevents poorly-modelled flat directions from corrupting
+            # the Newton step in well-conditioned directions.
+            uconv = self._compute_uconv_ind(grad, hess, score_scale)
+            n_uc = int(np.sum(uconv))
 
-            params_new, pirls_new, crit_new, score_new, outcome = self._step_halve(
+            if n_uc < len(np.asarray(grad)):
+                # Subset to unconverged dimensions
+                uc_idx = np.where(uconv)[0]
+                grad_uc = grad[uc_idx]
+                hess_uc = hess[np.ix_(uc_idx, uc_idx)]
+                step_uc, is_pdef = _safe_newton_step(grad_uc, hess_uc, self._max_step)
+                # Embed back into full space (R line 1457-1458)
+                step = jnp.zeros_like(grad)
+                step = step.at[uc_idx].set(step_uc)
+            else:
+                step, is_pdef = _safe_newton_step(grad, hess, self._max_step)
+
+            params_new, pirls_new, score_new, outcome = self._step_halve(
                 params,
                 step,
                 float(score),
                 pirls_result.coefficients,
-                reml_scale,
+                score_scale,
                 grad,
                 hess,
                 outer_iter,
+                bool(is_pdef),
             )
 
             n_iter = outer_iter + 1
@@ -575,15 +1050,16 @@ class NewtonOptimizer:
             score_old = score
             params = params_new
             pirls_result = pirls_new
-            criterion = crit_new
+            criterion = self._make_criterion(pirls_result)
             score = score_new
 
-            grad, hess, reml_scale, converged = self._check_convergence(
+            grad, hess, score_scale, converged = self._check_convergence(
                 criterion,
                 params,
                 float(score),
                 float(score_old),
-                pirls_result.deviance,
+                is_pdef=bool(is_pdef),
+                pirls_result=pirls_result,
             )
             if converged:
                 break
@@ -623,7 +1099,7 @@ def newton_optimize(
     3. Step-halving until criterion decreases
     4. Accept and check convergence
 
-    Follows R's ``fast.REML.fit()`` (fast-REML.r lines 1740-1875).
+    Follows R's ``newton()`` (gam.fit3.r lines 1290-1719).
 
     Parameters
     ----------
@@ -636,12 +1112,12 @@ def newton_optimize(
     max_iter : int
         Maximum Newton iterations.
     tol : float, optional
-        Convergence tolerance. Defaults to ``sqrt(eps)``.
+        Convergence tolerance. Defaults to ``1e-6`` (R's default).
     max_step : float
-        Maximum step norm in log-lambda space.
-    lsp_max : float
-        Maximum absolute value for log smoothing parameters. Prevents
-        divergence on flat REML landscapes.
+        Maximum step component in log-lambda space.
+    lsp_max : float or None
+        Maximum absolute value for log smoothing parameters. Defaults
+        to ``40.0``. ``None`` disables clamping.
 
     Returns
     -------
@@ -669,6 +1145,7 @@ def newton_optimize(
             multi_block_sp_indices=fd.multi_block_sp_indices,
             multi_block_ranks=fd.multi_block_ranks,
             multi_block_proj_S=fd.multi_block_proj_S,
+            multi_block_S_local=fd.multi_block_S_local,
             repara_D=fd.repara_D,
         )
     optimizer = NewtonOptimizer(

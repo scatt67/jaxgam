@@ -32,8 +32,6 @@ from pymgcv.jax_utils import build_S_lambda, to_jax
 if TYPE_CHECKING:
     from pymgcv.formula.design import ModelSetup
 
-jax.config.update("jax_enable_x64", True)
-
 
 @dataclass(frozen=True)
 class FittingData:
@@ -96,6 +94,9 @@ class FittingData:
     multi_block_proj_S: tuple[
         tuple[jax.Array, ...], ...
     ]  # projected penalties per block
+    multi_block_S_local: tuple[
+        tuple[jax.Array, ...], ...
+    ]  # block-local (unprojected) penalties for adaptive reparam
 
     # Sl.setup reparameterization (R's fast-REML.r lines 68-429)
     repara_D: jax.Array | None  # (p, p) back-transform matrix, or None
@@ -285,7 +286,7 @@ class FittingData:
                         rank = int(np.sum(eig_vals > thresh))
                         U_local = vecs[:, -rank:]  # (block_size, rank)
                         S_projs = [U_local.T @ S @ U_local for S in S_locals]
-                        multi_blocks.append((sp_indices, rank, S_projs))
+                        multi_blocks.append((sp_indices, rank, S_projs, S_locals))
 
         # Pack block metadata
         singleton_sp_indices = tuple(s[0] for s in singletons)
@@ -299,6 +300,9 @@ class FittingData:
         multi_block_ranks_tup = tuple(mb[1] for mb in multi_blocks)
         multi_block_proj_S = tuple(
             tuple(to_jax(S, device=device) for S in mb[2]) for mb in multi_blocks
+        )
+        multi_block_S_local = tuple(
+            tuple(to_jax(S, device=device) for S in mb[3]) for mb in multi_blocks
         )
 
         return cls(
@@ -320,6 +324,7 @@ class FittingData:
             multi_block_sp_indices=multi_block_sp_indices,
             multi_block_ranks=multi_block_ranks_tup,
             multi_block_proj_S=multi_block_proj_S,
+            multi_block_S_local=multi_block_S_local,
             repara_D=repara_D_jax,
         )
 

@@ -29,6 +29,7 @@ import numpy.typing as npt
 from scipy import linalg
 
 from pymgcv.smooths.by_variable import FactorBySmooth, NumericBySmooth
+from pymgcv.smooths.tensor import TensorInteractionSmooth
 
 if TYPE_CHECKING:
     from pymgcv.smooths.base import Smooth
@@ -366,6 +367,12 @@ class CoefficientMap:
                 if isinstance(sm, NumericBySmooth) and not getattr(
                     sm, "has_centering_constraint", True
                 ):
+                    continue
+
+                # ti() already absorbs marginal constraints during construction;
+                # applying centering again would incorrectly remove a column.
+                base_smooth = getattr(sm, "base_smooth", sm)
+                if isinstance(base_smooth, TensorInteractionSmooth):
                     continue
 
                 if isinstance(sm, FactorBySmooth):

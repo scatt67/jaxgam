@@ -58,8 +58,6 @@ if TYPE_CHECKING:
     from pymgcv.fitting.data import FittingData
     from pymgcv.fitting.pirls import PIRLSResult
 
-jax.config.update("jax_enable_x64", True)
-
 
 # ---------------------------------------------------------------------------
 # REMLResult dataclass
@@ -162,8 +160,15 @@ def _criterion_core(
     Dp = deviance + penalty
 
     H = XtWX + S_lambda
-    sign, log_det_H = jnp.linalg.slogdet(H)
-    log_det_H = jnp.where(sign > 0, log_det_H, 1e10)
+    # Diagonal preconditioning: scale H to unit diagonal before logdet.
+    # This dramatically improves conditioning for binomial (where W
+    # varies from ~0 to 0.25) and prevents AD noise when jax.hessian
+    # differentiates through the factorization.
+    d = jnp.sqrt(jnp.maximum(jnp.diag(H), jnp.finfo(H.dtype).tiny))
+    d_inv = 1.0 / d
+    H_scaled = H * (d_inv[:, None] * d_inv[None, :])
+    L = jnp.linalg.cholesky(H_scaled)
+    log_det_H = 2.0 * jnp.sum(jnp.log(jnp.diag(L))) + 2.0 * jnp.sum(jnp.log(d))
 
     log_det_S = block_log_det_S(
         log_lambda,
@@ -600,6 +605,37 @@ _jit_ml_joint_hess = jax.jit(
 )
 
 
+# Fused gradient + Hessian: compute both in a single XLA program,
+# halving the Python↔XLA round trips in _check_convergence().
+def _make_grad_hess(criterion_fn):
+    """Create a function returning (gradient, hessian) for a criterion."""
+    _grad = jax.grad(criterion_fn)
+    _hess = jax.hessian(criterion_fn)
+
+    def _grad_hess(*args, **kwargs):
+        return _grad(*args, **kwargs), _hess(*args, **kwargs)
+
+    return _grad_hess
+
+
+_jit_reml_grad_hess = jax.jit(
+    _make_grad_hess(reml_criterion),
+    static_argnames=_BLOCK_STATIC,
+)
+_jit_ml_grad_hess = jax.jit(
+    _make_grad_hess(ml_criterion),
+    static_argnames=_BLOCK_STATIC,
+)
+_jit_reml_joint_grad_hess = jax.jit(
+    _make_grad_hess(reml_criterion_joint),
+    static_argnames=_JOINT_STATIC,
+)
+_jit_ml_joint_grad_hess = jax.jit(
+    _make_grad_hess(ml_criterion_joint),
+    static_argnames=_JOINT_STATIC,
+)
+
+
 # ---------------------------------------------------------------------------
 # Criterion classes
 # ---------------------------------------------------------------------------
@@ -609,8 +645,9 @@ class _CriterionBase(ABC):
     """Base class for REML/ML criterion evaluation.
 
     Precomputes and caches constants from converged PIRLS.
-    Subclasses implement ``score()``, ``gradient()``, ``hessian()``
-    using the pre-compiled module-level JIT'd transforms.
+    Subclasses implement ``score()``, ``gradient()``, ``hessian()``,
+    and ``grad_hess()`` using the pre-compiled module-level JIT'd
+    transforms.
     """
 
     def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
@@ -638,6 +675,9 @@ class _CriterionBase(ABC):
     @abstractmethod
     def hessian(self, log_lambda: jax.Array) -> jax.Array: ...
 
+    @abstractmethod
+    def grad_hess(self, log_lambda: jax.Array) -> tuple[jax.Array, jax.Array]: ...
+
     def evaluate(self, log_lambda: jax.Array) -> REMLResult:
         """Full evaluation returning ``REMLResult``."""
         return REMLResult(score=self.score(log_lambda), edf=self.edf, scale=self.scale)
@@ -647,8 +687,9 @@ class REMLCriterion(_CriterionBase):
     """REML criterion for smoothing parameter optimization.
 
     Precomputes and caches constants from converged PIRLS at construction.
-    Provides ``score()``, ``gradient()``, ``hessian()`` for the Newton
-    optimizer, and ``evaluate()`` for full diagnostic output.
+    Provides ``score()``, ``gradient()``, ``hessian()``, and
+    ``grad_hess()`` for the Newton optimizer, and ``evaluate()`` for
+    full diagnostic output.
 
     Uses pre-compiled module-level ``_jit_reml_*`` transforms so that
     the JIT cache is reused across Newton iterations (arrays flow as
@@ -658,8 +699,7 @@ class REMLCriterion(_CriterionBase):
 
         obj = REMLCriterion(fd, pirls_result)
         score = obj.score(log_lambda)
-        grad = obj.gradient(log_lambda)
-        hess = obj.hessian(log_lambda)
+        grad, hess = obj.grad_hess(log_lambda)  # fused, 1 XLA dispatch
         result = obj.evaluate(log_lambda)  # -> REMLResult
 
     Parameters
@@ -702,6 +742,10 @@ class REMLCriterion(_CriterionBase):
     def hessian(self, log_lambda: jax.Array) -> jax.Array:
         """REML Hessian via pre-compiled ``jax.hessian``."""
         return _jit_reml_hess(log_lambda, **self._kwargs())
+
+    def grad_hess(self, log_lambda: jax.Array) -> tuple[jax.Array, jax.Array]:
+        """Fused gradient + Hessian in a single XLA dispatch."""
+        return _jit_reml_grad_hess(log_lambda, **self._kwargs())
 
 
 class MLCriterion(_CriterionBase):
@@ -753,6 +797,10 @@ class MLCriterion(_CriterionBase):
         """ML Hessian via pre-compiled ``jax.hessian``."""
         return _jit_ml_hess(log_lambda, **self._kwargs())
 
+    def grad_hess(self, log_lambda: jax.Array) -> tuple[jax.Array, jax.Array]:
+        """Fused gradient + Hessian in a single XLA dispatch."""
+        return _jit_ml_grad_hess(log_lambda, **self._kwargs())
+
 
 # ---------------------------------------------------------------------------
 # Joint criterion classes (log_lambda + log_phi co-optimized)
@@ -800,6 +848,9 @@ class _JointCriterionBase(ABC):
 
     @abstractmethod
     def hessian(self, params: jax.Array) -> jax.Array: ...
+
+    @abstractmethod
+    def grad_hess(self, params: jax.Array) -> tuple[jax.Array, jax.Array]: ...
 
 
 class JointREMLCriterion(_JointCriterionBase):
@@ -851,6 +902,10 @@ class JointREMLCriterion(_JointCriterionBase):
         """REML Hessian w.r.t. params via ``jax.hessian``."""
         return _jit_reml_joint_hess(params, **self._kwargs())
 
+    def grad_hess(self, params: jax.Array) -> tuple[jax.Array, jax.Array]:
+        """Fused gradient + Hessian in a single XLA dispatch."""
+        return _jit_reml_joint_grad_hess(params, **self._kwargs())
+
 
 class JointMLCriterion(_JointCriterionBase):
     """ML criterion with joint ``(log_lambda, log_phi)`` optimization.
@@ -897,3 +952,7 @@ class JointMLCriterion(_JointCriterionBase):
     def hessian(self, params: jax.Array) -> jax.Array:
         """ML Hessian w.r.t. params via ``jax.hessian``."""
         return _jit_ml_joint_hess(params, **self._kwargs())
+
+    def grad_hess(self, params: jax.Array) -> tuple[jax.Array, jax.Array]:
+        """Fused gradient + Hessian in a single XLA dispatch."""
+        return _jit_ml_joint_grad_hess(params, **self._kwargs())

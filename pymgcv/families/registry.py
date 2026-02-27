@@ -19,6 +19,11 @@ _FAMILY_REGISTRY: dict[str, type[ExponentialFamily]] = {
     "gamma": Gamma,
 }
 
+# Cached instances for default-link families. Reusing the same object
+# ensures JAX's JIT cache (keyed by object identity) hits across fits
+# with the same family, avoiding costly recompilation of jax.hessian.
+_FAMILY_CACHE: dict[str, ExponentialFamily] = {}
+
 
 def get_family(name_or_instance: str | ExponentialFamily) -> ExponentialFamily:
     """Look up and return a family instance.
@@ -63,7 +68,9 @@ def get_family(name_or_instance: str | ExponentialFamily) -> ExponentialFamily:
             raise KeyError(
                 f"Unknown family: {name_or_instance!r}. Available families: {available}"
             )
-        return _FAMILY_REGISTRY[key]()
+        if key not in _FAMILY_CACHE:
+            _FAMILY_CACHE[key] = _FAMILY_REGISTRY[key]()
+        return _FAMILY_CACHE[key]
 
     raise TypeError(
         f"Expected a string or ExponentialFamily instance, "

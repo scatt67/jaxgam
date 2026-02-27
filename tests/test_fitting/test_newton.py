@@ -44,6 +44,7 @@ from pymgcv.families.standard import Binomial, Gamma, Gaussian, Poisson
 from pymgcv.fitting.data import FittingData
 from pymgcv.fitting.initialization import initialize_beta
 from pymgcv.fitting.newton import (
+    NewtonOptimizer,
     NewtonResult,
     _safe_newton_step,
     newton_optimize,
@@ -137,58 +138,58 @@ class TestSafeNewtonStep:
         # At x=0: f'=-4, f''=2, step = -f'/f'' = 2
         grad = jnp.array([-4.0])
         hess = jnp.array([[2.0]])
-        step = _safe_newton_step(grad, hess)
+        step, is_pdef = _safe_newton_step(grad, hess)
         np.testing.assert_allclose(float(step[0]), 2.0, rtol=STRICT.rtol)
+        assert bool(is_pdef)
 
     def test_negative_eigenvalues_flipped(self):
         """Negative Hessian eigenvalues are flipped to positive."""
         grad = jnp.array([1.0, -1.0])
         hess = jnp.array([[-2.0, 0.0], [0.0, -3.0]])
-        step = _safe_newton_step(grad, hess)
+        step, is_pdef = _safe_newton_step(grad, hess)
         # After flipping: eigs become [2, 3], step = -H_safe^{-1} g
         expected = -jnp.array([1.0 / 2.0, -1.0 / 3.0])
         np.testing.assert_allclose(
             np.asarray(step), np.asarray(expected), rtol=STRICT.rtol
         )
+        assert not bool(is_pdef)
 
     def test_step_norm_capped(self):
-        """Step norm is capped to max_step."""
+        """Step component magnitude is capped to max_step."""
         grad = jnp.array([100.0])
         hess = jnp.array([[1.0]])
-        step = _safe_newton_step(grad, hess, max_step=5.0)
-        assert float(jnp.sqrt(jnp.sum(step**2))) <= 5.0 + STRICT.rtol
+        step, _ = _safe_newton_step(grad, hess, max_step=5.0)
+        assert float(jnp.max(jnp.abs(step))) <= 5.0 + STRICT.rtol
 
     def test_near_singular_hessian(self):
         """Near-singular Hessian: floor prevents division by zero."""
         grad = jnp.array([1.0, 1.0])
         hess = jnp.array([[1.0, 0.0], [0.0, 1e-20]])
-        step = _safe_newton_step(grad, hess)
+        step, _ = _safe_newton_step(grad, hess)
         assert jnp.all(jnp.isfinite(step))
 
     def test_eigenvalue_floor_value(self):
-        """Floor computation uses max(|D|) * sqrt(eps) as threshold.
+        """Floor computation uses max(|D|) * eps^0.7 as threshold.
 
         With one large and one zero eigenvalue, the zero eigenvalue
-        should be floored to max(|D|) * sqrt(eps). The step in the
-        floored direction should be much larger than in the well-
-        conditioned direction (before norm capping).
+        should be floored to max(|D|) * eps^0.7 (R line 1450). The
+        step in the floored direction should be much larger than in
+        the well-conditioned direction (before component-wise capping).
         """
-        # Hessian with eigs [4, 0]. After floor: [4, 4*sqrt(eps)]
-        # Gradient along both directions equally.
-        # The floored eigenvalue direction gets step component -1/floor ≈ -1.7e7
-        # The well-conditioned direction gets step component -1/4 = -0.25
-        # After norm capping to 5.0, the step is dominated by the floored direction
         grad = jnp.array([1.0, 1.0])
         hess = jnp.array([[4.0, 0.0], [0.0, 0.0]])
-        step = _safe_newton_step(grad, hess)
+        step, is_pdef = _safe_newton_step(grad, hess)
 
-        # Step should be finite and norm-capped
+        # Step should be finite and component-wise capped
         assert jnp.all(jnp.isfinite(step))
-        assert float(jnp.sqrt(jnp.sum(step**2))) <= 5.0 + STRICT.rtol
+        assert float(jnp.max(jnp.abs(step))) <= 5.0 + STRICT.rtol
 
         # The floored direction (index 1) should dominate the step
         # because its eigenvalue is tiny
         assert abs(float(step[1])) > abs(float(step[0]))
+
+        # Hessian with a zero eigenvalue is not positive definite
+        assert not bool(is_pdef)
 
 
 # ---- B. Hard-gate invariants ----
@@ -804,6 +805,7 @@ class TestDiagnostics:
             multi_block_sp_indices=(),
             multi_block_ranks=(),
             multi_block_proj_S=(),
+            multi_block_S_local=(),
             repara_D=None,
         )
         result = newton_optimize(fd)
@@ -847,6 +849,7 @@ class TestDiagnostics:
             multi_block_sp_indices=fd_no_offset.multi_block_sp_indices,
             multi_block_ranks=fd_no_offset.multi_block_ranks,
             multi_block_proj_S=fd_no_offset.multi_block_proj_S,
+            multi_block_S_local=fd_no_offset.multi_block_S_local,
             repara_D=fd_no_offset.repara_D,
         )
         result_offset = newton_optimize(fd_offset)
@@ -957,3 +960,184 @@ class TestStepHalving:
         assert jnp.isfinite(result_far.score)
         # Adversarial start should need more iterations
         assert result_far.n_iter > result_default.n_iter
+
+
+# ---- H. custom_jvp differentiable score ----
+
+
+@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+class TestCustomJVP:
+    """Tests for the custom_jvp-based differentiable score function.
+
+    The custom_jvp on PIRLS defines how (β*, XtWX, deviance) change
+    with S_lambda via the IFT. jax.grad and jax.hessian of the
+    end-to-end score automatically capture all missing terms.
+    """
+
+    FORMULA = "y ~ s(x, k=10, bs='cr')"
+
+    @pytest.mark.parametrize(
+        ("family_name", "family_obj"),
+        [("poisson", Poisson()), ("binomial", Binomial()), ("gamma", Gamma())],
+        ids=["poisson", "binomial", "gamma"],
+    )
+    def test_custom_jvp_gradient_matches_fd(self, family_name, family_obj):
+        """custom_jvp gradient matches central FD of the score.
+
+        Central FD re-runs PIRLS at each perturbation, computing the
+        true gradient. The custom_jvp gradient should match this to
+        O(h²) accuracy.
+        """
+        data = _make_data(family_name)
+        fd = _setup_fd(self.FORMULA, data, family_obj)
+        optimizer = NewtonOptimizer(fd)
+
+        params = fd.log_lambda_init.copy()
+        if optimizer._joint_scale:
+            # Add log_phi for joint scale families
+            S = fd.S_lambda(params)
+            beta_init = initialize_beta(
+                np.asarray(fd.X),
+                np.asarray(fd.y),
+                np.asarray(fd.wt),
+                fd.family,
+            )
+            pirls_result = pirls_loop(
+                fd.X,
+                fd.y,
+                to_jax(np.asarray(beta_init)),
+                S,
+                fd.family,
+                fd.wt,
+                fd.offset,
+            )
+            from pymgcv.fitting.reml import estimate_edf, fletcher_scale
+
+            edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
+            phi = fletcher_scale(fd.y, pirls_result.mu, fd.wt, fd.family, edf)
+            params = jnp.concatenate([params, jnp.log(phi)[None]])
+
+        # Get PIRLS result for beta_warm
+        S = fd.S_lambda(params[: fd.n_penalties] if optimizer._joint_scale else params)
+        beta_init = initialize_beta(
+            np.asarray(fd.X),
+            np.asarray(fd.y),
+            np.asarray(fd.wt),
+            fd.family,
+        )
+        pirls_result = pirls_loop(
+            fd.X,
+            fd.y,
+            to_jax(np.asarray(beta_init)),
+            S,
+            fd.family,
+            fd.wt,
+            fd.offset,
+        )
+        beta_warm = pirls_result.coefficients
+
+        # custom_jvp gradient (fused call returns both grad and hess)
+        grad_jvp, _ = optimizer._diff_grad_hess(params, beta_warm)
+
+        # Central FD gradient (re-running PIRLS at each perturbation)
+        eps = 1e-5
+        fd_grad = jnp.zeros_like(params)
+        for j in range(len(params)):
+            e_j = jnp.zeros_like(params).at[j].set(eps)
+            _, score_plus = optimizer._fit_and_score(params + e_j, beta_warm)
+            _, score_minus = optimizer._fit_and_score(params - e_j, beta_warm)
+            fd_grad = fd_grad.at[j].set((score_plus - score_minus) / (2 * eps))
+
+        np.testing.assert_allclose(
+            np.asarray(grad_jvp),
+            np.asarray(fd_grad),
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg=f"{family_name}: custom_jvp gradient differs from FD",
+        )
+
+    @pytest.mark.parametrize(
+        ("family_name", "family_obj"),
+        [("poisson", Poisson()), ("binomial", Binomial())],
+        ids=["poisson", "binomial"],
+    )
+    def test_custom_jvp_hessian_matches_fd(self, family_name, family_obj):
+        """custom_jvp Hessian matches FD Hessian with PIRLS reconvergence.
+
+        Central FD of the custom_jvp gradient (which itself re-runs
+        PIRLS via _fit_and_score). The custom_jvp Hessian should match.
+        """
+        data = _make_data(family_name)
+        fd = _setup_fd(self.FORMULA, data, family_obj)
+        optimizer = NewtonOptimizer(fd)
+
+        params = fd.log_lambda_init.copy()
+        S = fd.S_lambda(params)
+        beta_init = initialize_beta(
+            np.asarray(fd.X),
+            np.asarray(fd.y),
+            np.asarray(fd.wt),
+            fd.family,
+        )
+        pirls_result = pirls_loop(
+            fd.X,
+            fd.y,
+            to_jax(np.asarray(beta_init)),
+            S,
+            fd.family,
+            fd.wt,
+            fd.offset,
+        )
+        beta_warm = pirls_result.coefficients
+
+        # custom_jvp Hessian (fused call returns both grad and hess)
+        _, hess_jvp = optimizer._diff_grad_hess(params, beta_warm)
+        hess_jvp = (hess_jvp + hess_jvp.T) / 2
+
+        # FD Hessian: central FD of the custom_jvp gradient with PIRLS
+        # reconvergence at each perturbation
+        h = float(jnp.finfo(jnp.float64).eps ** (1.0 / 3.0))
+        m = len(params)
+        cols = []
+        for j in range(m):
+            e_j = jnp.zeros(m).at[j].set(h)
+            # Re-converge PIRLS at perturbed params, get custom_jvp gradient
+            g_p, _ = optimizer._diff_grad_hess(params + e_j, beta_warm)
+            g_m, _ = optimizer._diff_grad_hess(params - e_j, beta_warm)
+            cols.append((g_p - g_m) / (2 * h))
+        hess_fd = jnp.column_stack(cols)
+        hess_fd = (hess_fd + hess_fd.T) / 2
+
+        np.testing.assert_allclose(
+            np.asarray(hess_jvp),
+            np.asarray(hess_fd),
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg=f"{family_name}: custom_jvp Hessian differs from FD Hessian",
+        )
+
+    def test_gaussian_uses_ad_not_custom_jvp(self):
+        """Gaussian families use AD Hessian, not custom_jvp."""
+        data = _make_data("gaussian")
+        fd = _setup_fd(self.FORMULA, data, Gaussian())
+        optimizer = NewtonOptimizer(fd)
+
+        assert optimizer._diff_grad_hess is None
+
+    @pytest.mark.parametrize(
+        ("family_name", "family_obj"),
+        [("poisson", Poisson()), ("binomial", Binomial())],
+        ids=["poisson", "binomial"],
+    )
+    def test_convergence_speed(self, family_name, family_obj):
+        """Non-Gaussian single-smooth models converge in <30 iterations."""
+        data = _make_data(family_name)
+        fd = _setup_fd(self.FORMULA, data, family_obj)
+        result = newton_optimize(fd)
+
+        assert result.converged, (
+            f"{family_name} did not converge in {result.n_iter} iterations"
+        )
+        assert result.n_iter < 30, (
+            f"{family_name} took {result.n_iter} iterations (expected <30)"
+        )
