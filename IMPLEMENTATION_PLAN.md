@@ -42,13 +42,23 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 3.3** — Plotting — *blocked by 3.1*
 
 ### Phase 4: Integration Testing and Hardening
-- [ ] **Task 4.1** — 32-Cell Validation Matrix — *blocked by 3.1, 3.2*
-- [ ] **Task 4.3** — Edge Cases and Robustness — *blocked by 2.6*
+- [x] **Task 4.1** — 32-Cell Validation Matrix — *blocked by 3.1, 3.2*
+- [x] **Task 4.3** — Edge Cases and Robustness — *blocked by 2.6*
 - [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
+### Phase 5: Performance Optimization
+- [x] **Task 5.0** — Profiling script (`scripts/profile_fit.py`)
+- [x] **Task 5.1** — Eliminate per-fit JIT recompilation (module-level `_diff_score` with explicit args)
+- [x] **Task 5.2** — Fuse gradient + Hessian into single JIT dispatch (`grad_hess()`)
+- [x] **Task 5.3** — Fuse `_fit_and_score` into single JIT region (`_jit_fit_and_score`)
+- [x] **Task 5.4** — Persistent compilation cache (`~/.cache/pymgcv/jax/`), centralized JAX config
+- [x] **Task 5.5** — Benchmark script with cold/warm reporting (`scripts/benchmark_vs_r.py`)
+
 ### Current Stats
-- **Tests:** 1060 passing, 0 xfailed
-- **Phases 0-3 complete.** Next up: Phase 4 — Task 4.1 (Validation Matrix), Task 4.3 (Edge Cases), Task 4.4 (Documentation)
+- **Tests:** 1448 passing, 0 xfailed
+- **Phases 0-3 complete.** Phase 4.1 (Validation Matrix) complete. Phase 5 (Performance) complete.
+- **Performance:** 1.1-15.8x faster than R (JIT warm); ~275ms cold start with disk cache.
+- **Next up:** Task 4.4 (Documentation)
 
 ---
 

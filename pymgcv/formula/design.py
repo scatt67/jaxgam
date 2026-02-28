@@ -161,6 +161,27 @@ class ModelSetup:
         y = np.asarray(data_dict[formula_spec.response], dtype=np.float64).ravel()
         n_obs = len(y)
 
+        # Validate data quality
+        if not np.all(np.isfinite(y)):
+            n_nan = np.sum(np.isnan(y))
+            n_inf = np.sum(np.isinf(y))
+            parts = []
+            if n_nan:
+                parts.append(f"{n_nan} NaN")
+            if n_inf:
+                parts.append(f"{n_inf} Inf")
+            raise ValueError(
+                f"Response variable '{formula_spec.response}' contains "
+                f"non-finite values ({', '.join(parts)}). "
+                f"Remove or impute missing values before fitting."
+            )
+
+        if n_obs < 2:
+            raise ValueError(
+                f"Data has {n_obs} observation(s). "
+                f"At least 2 observations are required to fit a GAM."
+            )
+
         # Validate all variables exist
         cls._validate_variables(formula_spec, data_dict)
 

@@ -185,6 +185,16 @@ class FactorBySmooth:
         # indicator, so all levels share the same constraint direction.
         self._base_constraint = X_base.sum(axis=0)
 
+        # Validate all levels have observations
+        for level in self.levels:
+            mask = np.asarray(by_col == level)
+            if not np.any(mask):
+                raise ValueError(
+                    f"Factor level '{level}' of by-variable "
+                    f"'{self.by_variable}' has zero observations. "
+                    f"Remove empty levels or subset data before fitting."
+                )
+
         # Build block-structured matrix
         X = np.zeros((n, self.n_coefs))
         for level_idx, level in enumerate(self.levels):
