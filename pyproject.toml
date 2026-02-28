@@ -25,6 +25,11 @@ dev = [
     "rpy2>=3.5",
 ]
 
+docs = [
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.24",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

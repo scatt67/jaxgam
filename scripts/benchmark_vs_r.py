@@ -16,6 +16,9 @@ R timing is measured with system.time() inside R to avoid rpy2 overhead.
 from __future__ import annotations
 
 import csv
+import os
+import pathlib
+import shutil
 import time
 from statistics import median
 
@@ -28,7 +31,7 @@ from pymgcv.api import GAM
 # Configuration
 # ---------------------------------------------------------------------------
 
-DATA_SIZES = [500, 2000, 10000]
+DATA_SIZES = [500, 2000, 10000, 100000, 500000]
 FAMILIES = ["gaussian", "poisson", "binomial", "gamma"]
 N_WARM_REPEATS = 5
 
@@ -171,6 +174,7 @@ def time_r_fit(
     r_formula: str,
     data: pd.DataFrame,
     family: str,
+    nthreads: int = 1,
 ) -> tuple[float, int]:
     """Time R's gam() using system.time() and return (ms, n_iter)."""
     from rpy2.robjects import numpy2ri, pandas2ri
@@ -188,9 +192,10 @@ def time_r_fit(
         ro.globalenv["bench_data"] = ro.conversion.py2rpy(data)
 
     r_family = family_map[family]
+    ctrl = f", control=list(nthreads={nthreads})" if nthreads > 1 else ""
     r_code = f"""
     tm <- system.time({{
-        mod <- gam({r_formula}, data=bench_data, family={r_family}, method="REML")
+        mod <- gam({r_formula}, data=bench_data, family={r_family}, method="REML"{ctrl})
     }})
     elapsed_ms <- tm["elapsed"] * 1000
 
@@ -257,6 +262,38 @@ def main() -> None:
                 datasets[(smooth_key, family, n)] = maker(n, family)
     print(f"  {len(datasets)} datasets ready.\n")
 
+    # ---------------------------------------------------------------------------
+    # True cold pass: first-ever fit at largest n, BEFORE any JIT warmup.
+    # This measures the worst case: full trace compilation + XLA compilation
+    # + actual fitting, all in one shot.
+    # ---------------------------------------------------------------------------
+    # Clear persistent compilation cache so XLA must recompile from scratch.
+    cache_dir = os.environ.get(
+        "JAX_COMPILATION_CACHE_DIR",
+        str(pathlib.Path.home() / ".cache" / "pymgcv" / "jax"),
+    )
+    if os.path.isdir(cache_dir):
+        shutil.rmtree(cache_dir)
+        print(f"Cleared JAX compilation cache: {cache_dir}")
+
+    true_cold_n = DATA_SIZES[-1]
+    print(f"True cold benchmark (no prior JIT, n={true_cold_n})...")
+    true_cold_results: dict[tuple[str, str], tuple[float, int]] = {}
+    total_tc = len(SMOOTH_CONFIGS) * len(FAMILIES)
+    done_tc = 0
+    for smooth_key, cfg in SMOOTH_CONFIGS.items():
+        for family in FAMILIES:
+            done_tc += 1
+            data = datasets[(smooth_key, family, true_cold_n)]
+            try:
+                ms, it = time_py_fit(cfg["py_formula"], data, family)
+                true_cold_results[(smooth_key, family)] = (ms, it)
+                print(f"  [{done_tc}/{total_tc}] {smooth_key}/{family}: {ms:.0f}ms")
+            except Exception as e:
+                true_cold_results[(smooth_key, family)] = (float("nan"), -1)
+                print(f"  [{done_tc}/{total_tc}] {smooth_key}/{family}: FAILED ({e})")
+    print()
+
     # Minimal JIT warmup: one tiny fit per (smooth, family) to compile
     # the function traces. Shape-specific recompilation for each n is
     # measured as part of the "cold" benchmark.
@@ -306,10 +343,11 @@ def main() -> None:
             for n in DATA_SIZES:
                 done += 1
                 data = datasets[(smooth_key, family, n)]
+                n_reps = 1 if n >= 100000 else N_WARM_REPEATS
                 times = []
                 iters = []
                 try:
-                    for _ in range(N_WARM_REPEATS):
+                    for _ in range(n_reps):
                         ms, it = time_py_fit(cfg["py_formula"], data, family)
                         times.append(ms)
                         iters.append(it)
@@ -330,7 +368,7 @@ def main() -> None:
     # ---------------------------------------------------------------------------
     r_results: dict[tuple[str, str, int], tuple[float, int]] = {}
     if has_r:
-        print("R benchmark (median of 3)...")
+        print("R benchmark (median of 3, single-threaded)...")
         done = 0
         for smooth_key, cfg in SMOOTH_CONFIGS.items():
             for family in FAMILIES:
@@ -342,7 +380,12 @@ def main() -> None:
                         r_times = []
                         r_iters = []
                         for _ in range(n_reps):
-                            ms, it = time_r_fit(ro, cfg["r_formula"], data, family)
+                            ms, it = time_r_fit(
+                                ro,
+                                cfg["r_formula"],
+                                data,
+                                family,
+                            )
                             r_times.append(ms)
                             r_iters.append(it)
                         r_results[(smooth_key, family, n)] = (
@@ -370,18 +413,68 @@ def main() -> None:
         ratio = r_ms / py_ms
         return f"{ratio:.1f}x" if ratio >= 1.0 else f"{ratio:.2f}x"
 
-    print("=" * 100)
-    print("RESULTS")
-    print("=" * 100)
+    # ---------------------------------------------------------------------------
+    # True cold summary (n=100k only)
+    # ---------------------------------------------------------------------------
+    print("=" * 110)
+    print(f"TRUE COLD vs R (n={true_cold_n}, no prior JIT)")
+    print("=" * 110)
+    print()
+    tc_header = (
+        f"| {'smooth':<6} | {'family':<8} "
+        f"| {'true_cold':>10} | {'warm':>8} | {'r_ms':>7} "
+        f"| {'tcold/R':>8} | {'warm/R':>7} "
+        f"| {'jit_cost':>8} |"
+    )
+    tc_sep = (
+        f"|{'-' * 8}|{'-' * 10}"
+        f"|{'-' * 12}|{'-' * 10}|{'-' * 9}"
+        f"|{'-' * 10}|{'-' * 9}"
+        f"|{'-' * 10}|"
+    )
+    print(tc_header)
+    print(tc_sep)
+    for smooth_key in SMOOTH_CONFIGS:
+        for family in FAMILIES:
+            tc_key = (smooth_key, family)
+            tc_ms, _ = true_cold_results.get(tc_key, (float("nan"), -1))
+            w_key = (smooth_key, family, true_cold_n)
+            w_ms, _ = warm_results.get(w_key, (float("nan"), -1))
+            r_key = (smooth_key, family, true_cold_n)
+            r_ms_val, _ = r_results.get(r_key, (float("nan"), -1))
+            both_valid = not (np.isnan(tc_ms) or np.isnan(w_ms))
+            jit_cost = tc_ms - w_ms if both_valid else float("nan")
+            tc_ratio = _ratio_str(tc_ms, r_ms_val)
+            w_ratio = _ratio_str(w_ms, r_ms_val)
+
+            def _fmt(v: float) -> str:
+                if np.isnan(v):
+                    return "N/A"
+                return f"{v:.0f}"
+
+            print(
+                f"| {smooth_key:<6} | {family:<8} "
+                f"| {_fmt(tc_ms):>10} | {_fmt(w_ms):>8} | {_fmt(r_ms_val):>7} "
+                f"| {tc_ratio:>8} | {w_ratio:>7} "
+                f"| {_fmt(jit_cost):>8} |"
+            )
+    print()
+
+    # ---------------------------------------------------------------------------
+    # Full results table (all sizes)
+    # ---------------------------------------------------------------------------
+    print("=" * 110)
+    print("FULL RESULTS (all sizes)")
+    print("=" * 110)
     print()
     header = (
-        f"| {'smooth':<6} | {'family':<8} | {'n':>5} "
+        f"| {'smooth':<6} | {'family':<8} | {'n':>6} "
         f"| {'py_cold':>8} | {'py_warm':>8} | {'r_ms':>7} "
         f"| {'cold/R':>7} | {'warm/R':>7} "
         f"| {'py_iter':>7} | {'r_iter':>6} |"
     )
     sep = (
-        f"|{'-' * 8}|{'-' * 10}|{'-' * 7}"
+        f"|{'-' * 8}|{'-' * 10}|{'-' * 8}"
         f"|{'-' * 10}|{'-' * 10}|{'-' * 9}"
         f"|{'-' * 9}|{'-' * 9}"
         f"|{'-' * 9}|{'-' * 8}|"
@@ -409,7 +502,7 @@ def main() -> None:
                     return f"{v:.1f}"
 
                 print(
-                    f"| {smooth_key:<6} | {family:<8} | {n:>5} "
+                    f"| {smooth_key:<6} | {family:<8} | {n:>6} "
                     f"| {_fmt(cold_ms):>8} | {_fmt(warm_ms):>8} | {_fmt(r_ms):>7} "
                     f"| {cold_ratio:>7} | {warm_ratio:>7} "
                     f"| {py_iter:>7} | {r_it:>6} |"
@@ -432,6 +525,13 @@ def main() -> None:
 
     # Save CSV
     csv_path = "scripts/benchmark_results.csv"
+    # Add true cold column for rows at true_cold_n
+    for row in rows:
+        tc_key = (row["smooth"], row["family"])
+        if row["n"] == true_cold_n and tc_key in true_cold_results:
+            row["py_true_cold_ms"] = round(true_cold_results[tc_key][0], 1)
+        else:
+            row["py_true_cold_ms"] = ""
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(
             f,
@@ -439,6 +539,7 @@ def main() -> None:
                 "smooth",
                 "family",
                 "n",
+                "py_true_cold_ms",
                 "py_cold_ms",
                 "py_warm_ms",
                 "r_ms",

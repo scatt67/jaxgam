@@ -3,3 +3,4 @@
 *.nbi
 .claude/worktrees/*
 *.csv
+site/

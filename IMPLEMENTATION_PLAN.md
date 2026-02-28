@@ -44,7 +44,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 ### Phase 4: Integration Testing and Hardening
 - [x] **Task 4.1** — 32-Cell Validation Matrix — *blocked by 3.1, 3.2*
 - [x] **Task 4.3** — Edge Cases and Robustness — *blocked by 2.6*
-- [ ] **Task 4.4** — Documentation and README — *blocked by 3.3*
+- [x] **Task 4.4** — Documentation and README — *blocked by 3.3*
 
 ### Phase 5: Performance Optimization
 - [x] **Task 5.0** — Profiling script (`scripts/profile_fit.py`)
@@ -58,7 +58,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - **Tests:** 1448 passing, 0 xfailed
 - **Phases 0-3 complete.** Phase 4.1 (Validation Matrix) complete. Phase 5 (Performance) complete.
 - **Performance:** 1.1-15.8x faster than R (JIT warm); ~275ms cold start with disk cache.
-- **Next up:** Task 4.4 (Documentation)
+- **Phase 4 complete.** All integration testing and hardening tasks done.
 
 ---
 

@@ -52,10 +52,12 @@ class GAM:
         Smoothing parameter estimation method: ``'REML'`` or ``'ML'``.
     sp : np.ndarray or list, optional
         Fixed smoothing parameters. If provided, skips Newton optimization.
+    device : str, optional
+        Target device: ``'cpu'``, ``'gpu'``, or ``None`` (auto-detect).
+        GPU requires ``jax[cuda12]`` (NVIDIA) or ``jax-metal`` (Apple).
     **kwargs
-        Additional arguments. Supported v1.0 scope guards:
-        ``backend``, ``device``, ``optimizer``, ``select``, ``gamma``,
-        ``knots``.
+        Additional arguments. Supported scope guards:
+        ``backend``, ``optimizer``, ``select``, ``gamma``, ``knots``.
 
     Examples
     --------
@@ -77,6 +79,7 @@ class GAM:
         self.family = family
         self.method = method.upper()
         self.sp = sp
+        self.device = kwargs.get("device")
         self._fitted = False
 
     def fit(
@@ -108,7 +111,8 @@ class GAM:
         setup = ModelSetup.build(spec, data, weights, offset)
 
         # Phase 1→2: transfer to JAX device
-        fd = FittingData.from_setup(setup, family_obj)
+        jax_device = _resolve_device(self.device)
+        fd = FittingData.from_setup(setup, family_obj, device=jax_device)
 
         # Phase 2: fit
         if self.sp is not None:
@@ -410,6 +414,28 @@ class GAM:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_device(device: str | None) -> object:
+    """Resolve a device string to a JAX device object."""
+    if device is None:
+        return None
+    import jax
+
+    if device == "cpu":
+        return jax.devices("cpu")[0]
+    if device == "gpu":
+        try:
+            gpu_devices = jax.devices("gpu")
+        except RuntimeError:
+            gpu_devices = []
+        if not gpu_devices:
+            raise RuntimeError(
+                "device='gpu' requested but no GPU backend found. "
+                "Install jax[cuda12] (NVIDIA) or jax-metal (Apple Silicon)."
+            )
+        return gpu_devices[0]
+    return None
+
+
 def _check_scope_guards(method: str, kwargs: dict) -> None:
     """Validate v1.0 scope guards."""
     method_upper = method.upper()
@@ -427,9 +453,9 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
         )
 
     device = kwargs.get("device")
-    if device is not None and device == "gpu":
-        raise NotImplementedError(
-            "GPU execution is planned for v1.1. See docs/design.md Section 10.2."
+    if device is not None and device not in ("cpu", "gpu"):
+        raise ValueError(
+            f"device={device!r} is not recognized. Use 'cpu', 'gpu', or None."
         )
 
     optimizer = kwargs.get("optimizer")
