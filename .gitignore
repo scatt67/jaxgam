@@ -6,3 +6,4 @@
 site/
 .coverage
 docker/renv/library/
+*.npz
