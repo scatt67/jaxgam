@@ -5,3 +5,4 @@
 *.csv
 site/
 .coverage
+docker/renv/library/

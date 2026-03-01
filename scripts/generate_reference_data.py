@@ -32,7 +32,7 @@ import pandas as pd
 # Ensure pymgcv is importable when run from repo root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pymgcv.compat.r_bridge import RBridge
+from tests.r_bridge import RBridge
 
 OUTPUT_DIR = Path("tests/reference_data")
 

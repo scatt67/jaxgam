@@ -31,9 +31,12 @@ SEED = 42
 
 
 def _r_available() -> bool:
-    from pymgcv.compat.r_bridge import RBridge
+    from tests.r_bridge import RBridge
 
-    return RBridge.available()
+    if not RBridge.available():
+        return False
+    ok, _ = RBridge.check_versions()
+    return ok
 
 
 def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
@@ -207,7 +210,7 @@ class TestNewDataVsR:
         ids=["gaussian", "poisson", "binomial", "gamma"],
     )
     def prediction_pair(self, request):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         family_name, family_r = request.param
         train = _make_data(family_name)
@@ -271,7 +274,7 @@ class TestSEVsR:
         ids=["gaussian", "poisson", "binomial", "gamma"],
     )
     def se_pair(self, request):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         family_name, family_r = request.param
         train = _make_data(family_name)
@@ -362,7 +365,7 @@ class TestMultiSmoothVsR:
     """Multi-smooth new-data prediction vs R."""
 
     def test_two_smooth_newdata_vs_r(self):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
         train = _make_two_smooth_data()
@@ -389,7 +392,7 @@ class TestMultiSmoothVsR:
         )
 
     def test_tensor_product_newdata_vs_r(self):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         py_formula = "y ~ te(x1, x2, k=5)"
         r_formula = "y ~ te(x1, x2, k=c(5,5))"
@@ -417,7 +420,7 @@ class TestMultiSmoothVsR:
         )
 
     def test_factor_by_newdata_vs_r(self):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
         train = _make_factor_by_data()

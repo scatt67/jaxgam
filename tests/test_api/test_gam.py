@@ -40,9 +40,12 @@ SEED = 42
 
 
 def _r_available() -> bool:
-    from pymgcv.compat.r_bridge import RBridge
+    from tests.r_bridge import RBridge
 
-    return RBridge.available()
+    if not RBridge.available():
+        return False
+    ok, _ = RBridge.check_versions()
+    return ok
 
 
 def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
@@ -319,7 +322,7 @@ class TestFamilyVsR:
         ids=["gaussian", "poisson", "binomial", "gamma"],
     )
     def family_fit(self, request):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         family_name, family_r = request.param
         data = _make_data(family_name)
@@ -416,7 +419,7 @@ class TestMultiSmooth:
     """Multi-smooth models compared to R."""
 
     def test_two_smooths(self):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
         data = _make_two_smooth_data()
@@ -454,7 +457,7 @@ class TestMultiSmooth:
         we achieve MODERATE agreement on deviance, coefficients, and
         fitted values.
         """
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         py_formula = "y ~ te(x1, x2, k=5)"
         r_formula = "y ~ te(x1, x2, k=c(5,5))"
@@ -498,7 +501,7 @@ class TestFactorBy:
     """Factor-by smooth comparisons with R."""
 
     def test_factor_by_gaussian(self):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
         data = _make_factor_by_data()

@@ -22,6 +22,8 @@ dev = [
     "pre-commit",
     "ruff",
     "vulture",
+]
+r = [
     "rpy2>=3.5",
 ]
 
@@ -43,7 +45,7 @@ select = ["E", "F", "W", "I", "ARG", "B", "UP", "SIM", "C4", "RUF", "T20", "PERF
 
 [tool.ruff.lint.per-file-ignores]
 # R bridge contains embedded R scripts in f-strings with long lines
-"pymgcv/compat/r_bridge.py" = ["E501"]
+"tests/r_bridge.py" = ["E501"]
 # Scripts are not library code — print, unused vars, etc. are fine
 "scripts/**" = ["T201", "RUF059"]
 

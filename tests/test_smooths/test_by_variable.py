@@ -749,7 +749,7 @@ class TestRComparison:
 
     @pytest.fixture
     def r_bridge(self):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         if not RBridge.available():
             pytest.skip("R with mgcv not available")

@@ -32,11 +32,14 @@ N = 200
 
 
 def _r_available() -> bool:
-    """Check if R bridge is available."""
+    """Check if R bridge is available with correct versions."""
     try:
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
-        return RBridge.available()
+        if not RBridge.available():
+            return False
+        ok, _ = RBridge.check_versions()
+        return ok
     except Exception:
         return False
 

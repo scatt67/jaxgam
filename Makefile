@@ -3,6 +3,10 @@
 UV ?= uv
 RUFF ?= ruff
 VULTURE ?= vulture
+DOCKER_IMAGE ?= pymgcv-test
+DOCKER_TAG ?= latest
+COLIMA_CPU ?= 4
+COLIMA_MEMORY ?= 8
 
 .DEFAULT_GOAL := help
 
@@ -33,16 +37,31 @@ lint: ## run all linters (ruff check + format check + vulture)
 	$(UV) run $(VULTURE) pymgcv --min-confidence 80
 
 .PHONY: test
-test: ## run tests
+test: docker-build ## run full test suite in Docker (includes R tests)
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG)
+
+.PHONY: test-local
+test-local: ## run tests locally (R tests auto-skip if R unavailable)
 	$(UV) run pytest
 
 .PHONY: test-cov
-test-cov: ## run tests with coverage (80% minimum)
-	$(UV) run pytest --cov --cov-report=term-missing --cov-fail-under=80
+test-cov: docker-build ## run tests with coverage in Docker
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest --cov --cov-report=term-missing --cov-fail-under=80
+
+.PHONY: colima-start
+colima-start: ## start colima VM (no-op if already running)
+	@colima status 2>/dev/null || colima start --cpu $(COLIMA_CPU) --memory $(COLIMA_MEMORY)
+
+.PHONY: docker-build
+docker-build: colima-start ## build the test Docker image
+	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 .PHONY: generate-ref
-generate-ref: ## regenerate R reference data (requires R + mgcv)
-	$(UV) run python scripts/generate_reference_data.py
+generate-ref: docker-build ## regenerate R reference data via Docker
+	docker run --rm -v $$(pwd)/tests/reference_data:/app/tests/reference_data \
+		$(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run python scripts/generate_reference_data.py --force
 
 .PHONY: pre-commit
 pre-commit: ## run pre-commit on all files

@@ -846,7 +846,7 @@ class TestRComparison:
 
     def _get_bridge(self):
         """Get RBridge, skip test if R/mgcv not available."""
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         if not RBridge.available():
             pytest.skip("R with mgcv not available")

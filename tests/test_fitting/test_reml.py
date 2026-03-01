@@ -52,10 +52,13 @@ SEED = 42
 
 
 def _r_available() -> bool:
-    """Check if R and mgcv are available."""
-    from pymgcv.compat.r_bridge import RBridge
+    """Check if R and mgcv are available with correct versions."""
+    from tests.r_bridge import RBridge
 
-    return RBridge.available()
+    if not RBridge.available():
+        return False
+    ok, _ = RBridge.check_versions()
+    return ok
 
 
 def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
@@ -93,9 +96,9 @@ def _setup_pipeline(
 
     Returns (fd, pirls_result, log_lambda, r_result).
     """
-    from pymgcv.compat.r_bridge import RBridge
     from pymgcv.formula.design import ModelSetup
     from pymgcv.formula.parser import parse_formula
+    from tests.r_bridge import RBridge
 
     spec = parse_formula(formula)
     setup = ModelSetup.build(spec, data)

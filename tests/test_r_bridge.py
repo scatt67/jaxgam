@@ -1,4 +1,4 @@
-"""Tests for the R bridge (pymgcv.compat.r_bridge).
+"""Tests for the R bridge (tests.r_bridge).
 
 These tests require R with mgcv installed.
 They are automatically skipped if R is not available.
@@ -8,8 +8,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.compat.r_bridge import RBridge
+from tests.r_bridge import RBridge
 from tests.tolerances import STRICT
+
+
+def _r_available() -> bool:
+    if not RBridge.available():
+        return False
+    ok, _ = RBridge.check_versions()
+    return ok
 
 
 @pytest.fixture
@@ -32,7 +39,7 @@ class TestRBridgeAvailability:
             RBridge(mode="invalid")
 
 
-@pytest.mark.skipif(not RBridge.available(), reason="R with mgcv not available")
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeFitGam:
     def test_fit_gaussian_returns_expected_keys(
         self, gaussian_data: pd.DataFrame
@@ -147,7 +154,7 @@ class TestRBridgeFitGam:
         )
 
 
-@pytest.mark.skipif(not RBridge.available(), reason="R with mgcv not available")
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeSmoothComponents:
     def test_get_smooth_components_keys(self, gaussian_data: pd.DataFrame) -> None:
         bridge = RBridge()
@@ -200,7 +207,7 @@ class TestRBridgeSmoothComponents:
         assert len(result["penalty_matrices"]) == 2
 
 
-@pytest.mark.skipif(not RBridge.available(), reason="R with mgcv not available")
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeSubprocessFallback:
     def test_subprocess_mode_works(self, gaussian_data: pd.DataFrame) -> None:
         """Subprocess mode should produce same structure as rpy2."""

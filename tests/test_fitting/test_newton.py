@@ -62,10 +62,13 @@ SEED = 42
 
 
 def _r_available() -> bool:
-    """Check if R and mgcv are available."""
-    from pymgcv.compat.r_bridge import RBridge
+    """Check if R and mgcv are available with correct versions."""
+    from tests.r_bridge import RBridge
 
-    return RBridge.available()
+    if not RBridge.available():
+        return False
+    ok, _ = RBridge.check_versions()
+    return ok
 
 
 def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
@@ -288,7 +291,7 @@ class TestFamilyVsR:
     )
     def family_fit(self, request):
         """Fit both pymgcv and R for a given family, return both results."""
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         family_name, family_obj = request.param
         data = _make_data(family_name)
@@ -422,7 +425,7 @@ class TestMultiSmooth:
         values require MODERATE's atol=1e-6 to avoid false failures from
         inflated relative error on small entries.
         """
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(SEED)
         n = 200
@@ -486,7 +489,7 @@ class TestMultiSmooth:
         sloping direction where any value in a wide range gives an
         equivalent fit).
         """
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(SEED)
         n = 200
@@ -566,7 +569,7 @@ class TestMultiSmooth:
         Deviance, coefficients, and fitted values match R at MODERATE.
         Smoothing parameters match at LOOSE.
         """
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(SEED)
         n = 300
@@ -654,7 +657,7 @@ class TestMultiSmooth:
         TPRS is mgcv's default basis and exercises the eigendecomposition
         path end-to-end through Newton.
         """
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         formula = "y ~ s(x, k=10, bs='tp')"
         data = _make_data("gaussian")
@@ -706,7 +709,7 @@ class TestMLOptimization:
         gradient landscape, so ML converges to a slightly different lambda
         than R even for Gaussian — unlike REML which matches R to 1e-15.
         """
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         data = _make_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())

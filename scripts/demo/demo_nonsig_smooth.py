@@ -44,7 +44,7 @@ for i, name in enumerate(s.s_names):
 
 # Also compare to R
 try:
-    from pymgcv.compat.r_bridge import RBridge
+    from tests.r_bridge import RBridge
 
     rb = RBridge()
     r_summary = rb.summary_gam(

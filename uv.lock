@@ -1454,13 +1454,15 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
-    { name = "rpy2" },
     { name = "ruff" },
     { name = "vulture" },
 ]
 docs = [
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
+]
+r = [
+    { name = "rpy2" },
 ]
 
 [package.metadata]
@@ -1478,12 +1480,12 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "rpy2", marker = "extra == 'dev'", specifier = ">=3.5" },
+    { name = "rpy2", marker = "extra == 'r'", specifier = ">=3.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy", specifier = ">=1.11" },
     { name = "vulture", marker = "extra == 'dev'" },
 ]
-provides-extras = ["dev", "docs"]
+provides-extras = ["dev", "r", "docs"]
 
 [[package]]
 name = "pyparsing"

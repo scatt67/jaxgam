@@ -164,16 +164,15 @@ class TestMuEta:
 
 
 def _r_available() -> bool:
-    """Check if Rscript is available."""
+    """Check if R is available with correct versions."""
     try:
-        result = subprocess.run(
-            ["Rscript", "-e", "cat('ok')"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        return result.returncode == 0 and "ok" in result.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        from tests.r_bridge import RBridge
+
+        if not RBridge.available():
+            return False
+        ok, _ = RBridge.check_versions()
+        return ok
+    except Exception:
         return False
 
 

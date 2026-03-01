@@ -35,9 +35,12 @@ SEED = 42
 
 
 def _r_available() -> bool:
-    from pymgcv.compat.r_bridge import RBridge
+    from tests.r_bridge import RBridge
 
-    return RBridge.available()
+    if not RBridge.available():
+        return False
+    ok, _ = RBridge.check_versions()
+    return ok
 
 
 def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
@@ -229,7 +232,7 @@ class TestSummaryVsR:
         ids=["gaussian", "poisson", "binomial", "gamma"],
     )
     def summary_pair(self, request):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         family_name, family_r = request.param
         data = _make_data(family_name)
@@ -371,7 +374,7 @@ class TestMultiSmoothSummaryVsR:
     """Summary for multi-smooth models vs R."""
 
     def test_two_smooth_edf_vs_r(self):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
         data = _make_two_smooth_data()
@@ -394,7 +397,7 @@ class TestMultiSmoothSummaryVsR:
         )
 
     def test_two_smooth_deviance_explained_vs_r(self):
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
         data = _make_two_smooth_data()

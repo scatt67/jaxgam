@@ -329,11 +329,14 @@ class TestBasisMatrixStructure:
 
 
 def _r_available() -> bool:
-    """Check if R bridge is available."""
+    """Check if R bridge is available with correct versions."""
     try:
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
-        return RBridge.available()
+        if not RBridge.available():
+            return False
+        ok, _ = RBridge.check_versions()
+        return ok
     except Exception:
         return False
 
@@ -352,7 +355,7 @@ class TestRComparison:
         """Shared cr setup for R comparison."""
         import pandas as pd
 
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(42)
         x = rng.uniform(0, 1, 100)
@@ -370,7 +373,7 @@ class TestRComparison:
         """Shared cc setup for R comparison."""
         import pandas as pd
 
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(42)
         x = rng.uniform(0, 1, 100)
@@ -388,7 +391,7 @@ class TestRComparison:
         """Shared cs setup for R comparison."""
         import pandas as pd
 
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(42)
         x = rng.uniform(0, 1, 100)

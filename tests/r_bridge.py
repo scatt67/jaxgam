@@ -6,7 +6,7 @@ Two modes:
 
 Usage::
 
-    from pymgcv.compat.r_bridge import RBridge
+    from tests.r_bridge import RBridge
     import pandas as pd
 
     bridge = RBridge()
@@ -23,6 +23,9 @@ from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
+
+_REQUIRED_R_VERSION = "4.5.2"
+_REQUIRED_MGCV_VERSION = "1.9.3"
 
 
 class RBridgeError(Exception):
@@ -99,6 +102,32 @@ class RBridge:
             return result.returncode == 0 and "ok" in result.stdout
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return False
+
+    @staticmethod
+    def check_versions() -> tuple[bool, str]:
+        """Verify R and mgcv match the pinned versions.
+
+        Returns (True, "") if versions match, or (False, reason) if not.
+        """
+        try:
+            r_ver = subprocess.check_output(
+                ["Rscript", "-e", "cat(R.version$major, R.version$minor, sep='.')"],
+                text=True,
+                timeout=10,
+            ).strip()
+            mgcv_ver = subprocess.check_output(
+                ["Rscript", "-e", "cat(as.character(packageVersion('mgcv')))"],
+                text=True,
+                timeout=10,
+            ).strip()
+        except Exception as e:
+            return False, f"Cannot query R versions: {e}"
+
+        if r_ver != _REQUIRED_R_VERSION:
+            return False, f"R {r_ver} != required {_REQUIRED_R_VERSION}"
+        if mgcv_ver != _REQUIRED_MGCV_VERSION:
+            return False, f"mgcv {mgcv_ver} != required {_REQUIRED_MGCV_VERSION}"
+        return True, ""
 
     # ------------------------------------------------------------------ #
     #  rpy2 helpers                                                       #

@@ -354,11 +354,14 @@ class TestStructuralInvariants:
 
 
 def _r_available() -> bool:
-    """Check if R bridge is available."""
+    """Check if R bridge is available with correct versions."""
     try:
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
-        return RBridge.available()
+        if not RBridge.available():
+            return False
+        ok, _ = RBridge.check_versions()
+        return ok
     except Exception:
         return False
 
@@ -378,7 +381,7 @@ class TestRComparison:
         """Shared 1D setup for R comparison."""
         import pandas as pd
 
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(42)
         x = rng.uniform(0, 1, 100)
@@ -485,7 +488,7 @@ class TestRComparison:
         """Shared 2D setup for R comparison."""
         import pandas as pd
 
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(42)
         x1 = rng.uniform(0, 1, 100)
@@ -560,7 +563,7 @@ class TestRComparison:
         """Shared ts setup for R comparison."""
         import pandas as pd
 
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(42)
         x = rng.uniform(0, 1, 100)

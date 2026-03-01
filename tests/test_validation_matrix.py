@@ -221,9 +221,12 @@ FAMILIES = ["gaussian", "binomial", "poisson", "gamma"]
 
 
 def _r_available() -> bool:
-    from pymgcv.compat.r_bridge import RBridge
+    from tests.r_bridge import RBridge
 
-    return RBridge.available()
+    if not RBridge.available():
+        return False
+    ok, _ = RBridge.check_versions()
+    return ok
 
 
 def _get_data(config: SmoothConfig, family: str) -> pd.DataFrame:
@@ -300,7 +303,7 @@ class TestValidationMatrix:
     @pytest.fixture(params=CELL_IDS, ids=[_cell_id(c) for c in CELL_IDS])
     def cell(self, request):
         """Fit Python GAM and R GAM, return both for comparison."""
-        from pymgcv.compat.r_bridge import RBridge
+        from tests.r_bridge import RBridge
 
         smooth_key, family_name = request.param
         config = SMOOTH_CONFIGS[smooth_key]
