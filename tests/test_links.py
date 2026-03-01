@@ -316,7 +316,7 @@ class TestLinkRegistry:
         assert isinstance(link_obj, expected_cls)
 
     def test_unknown_name_raises(self) -> None:
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError, match="Unknown link function"):
             Link.from_name("nonexistent_link")
 
 
