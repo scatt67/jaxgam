@@ -195,114 +195,9 @@ class FittingData:
             to_jax(S, device=device) for S in penalty_arrays
         )
 
-        # Compute range space basis for stable log|S+| computation.
-        # Eigendecompose the normalized total penalty (R's totalPenaltySpace)
-        # and keep the eigenvectors for non-zero eigenvalues.
-        penalty_range_basis: jax.Array | None = None
-        if penalty_arrays:
-            St = np.zeros((n_coef, n_coef))
-            for S_np in penalty_arrays:
-                norm_j = np.sqrt(np.sum(S_np * S_np))
-                if norm_j > 0:
-                    St += S_np / norm_j
-            eigs, vecs = np.linalg.eigh(St)
-            threshold = np.max(eigs) * np.finfo(float).eps ** (2.0 / 3.0)
-            Mp = int(np.sum(eigs <= threshold))
-            U_range = vecs[:, Mp:]  # (p, r) orthogonal basis for range space
-            penalty_range_basis = to_jax(U_range, device=device)
+        penalty_range_basis = cls._penalty_range_basis(penalty_arrays, n_coef, device)
 
-        # Block-structured log|S+| metadata.
-        # Classify penalties into singleton blocks (exact derivative) and
-        # multi-penalty blocks (scaled slogdet). Since penalties from
-        # different smooths occupy non-overlapping columns, S_lambda is
-        # block-diagonal and log|S+| = sum(log|S+_block|).
-        eps_thresh = np.finfo(float).eps ** (2.0 / 3.0)
-        singletons: list[tuple[int, int, float]] = []  # (sp_idx, rank, eig_const)
-        multi_blocks: list[
-            tuple[tuple[int, ...], int, list[np.ndarray]]
-        ] = []  # (sp_indices, rank, [S_proj, ...])
-
-        if penalty_arrays and setup.smooth_info:
-            for si in setup.smooth_info:
-                if si.n_penalties == 0:
-                    continue
-                col_start = si.first_coef
-                col_stop = si.last_coef
-                sp_indices = tuple(
-                    range(si.first_penalty, si.first_penalty + si.n_penalties)
-                )
-
-                if si.n_penalties == 1:
-                    # Singleton: exact formula log|S+| = rank * rho + const
-                    sp_idx = sp_indices[0]
-                    S_local = penalty_arrays[sp_idx][
-                        col_start:col_stop, col_start:col_stop
-                    ]
-                    eig_vals = np.linalg.eigvalsh(S_local)
-                    thresh = np.max(np.abs(eig_vals)) * eps_thresh
-                    nonzero = eig_vals > thresh
-                    rank = int(np.sum(nonzero))
-                    eig_const = float(
-                        np.sum(np.log(np.maximum(eig_vals[nonzero], 1e-30)))
-                    )
-                    singletons.append((sp_idx, rank, eig_const))
-                else:
-                    # Multi-penalty: check non-overlapping (factor-by) vs
-                    # overlapping (tensor product)
-                    S_locals = [
-                        penalty_arrays[j][col_start:col_stop, col_start:col_stop]
-                        for j in sp_indices
-                    ]
-                    non_overlapping = True
-                    for j in range(len(S_locals)):
-                        for k in range(j + 1, len(S_locals)):
-                            if np.any(np.abs(S_locals[j]) * np.abs(S_locals[k]) > 0):
-                                non_overlapping = False
-                                break
-                        if not non_overlapping:
-                            break
-
-                    if non_overlapping:
-                        # Factor-by: split into singleton sub-blocks
-                        for idx, sp_idx in enumerate(sp_indices):
-                            eig_vals = np.linalg.eigvalsh(S_locals[idx])
-                            thresh = np.max(np.abs(eig_vals)) * eps_thresh
-                            nonzero = eig_vals > thresh
-                            rank = int(np.sum(nonzero))
-                            eig_const = float(
-                                np.sum(np.log(np.maximum(eig_vals[nonzero], 1e-30)))
-                            )
-                            singletons.append((sp_idx, rank, eig_const))
-                    else:
-                        # Tensor product: scaled slogdet in range space
-                        St_local = np.zeros_like(S_locals[0])
-                        for S in S_locals:
-                            norm = np.linalg.norm(S, "fro")
-                            if norm > 0:
-                                St_local += S / norm
-                        eig_vals, vecs = np.linalg.eigh(St_local)
-                        thresh = np.max(eig_vals) * eps_thresh
-                        rank = int(np.sum(eig_vals > thresh))
-                        U_local = vecs[:, -rank:]  # (block_size, rank)
-                        S_projs = [U_local.T @ S @ U_local for S in S_locals]
-                        multi_blocks.append((sp_indices, rank, S_projs, S_locals))
-
-        # Pack block metadata
-        singleton_sp_indices = tuple(s[0] for s in singletons)
-        singleton_ranks_tup = tuple(s[1] for s in singletons)
-        eig_consts_np = (
-            np.array([s[2] for s in singletons]) if singletons else np.array([])
-        )
-        singleton_eig_constants = to_jax(eig_consts_np, device=device)
-
-        multi_block_sp_indices = tuple(mb[0] for mb in multi_blocks)
-        multi_block_ranks_tup = tuple(mb[1] for mb in multi_blocks)
-        multi_block_proj_S = tuple(
-            tuple(to_jax(S, device=device) for S in mb[2]) for mb in multi_blocks
-        )
-        multi_block_S_local = tuple(
-            tuple(to_jax(S, device=device) for S in mb[3]) for mb in multi_blocks
-        )
+        block_meta = _build_block_metadata(penalty_arrays, setup.smooth_info, device)
 
         return cls(
             X=X_jax,
@@ -317,13 +212,13 @@ class FittingData:
             penalty_ranks=tuple(ranks),
             penalty_null_dims=tuple(null_dims),
             penalty_range_basis=penalty_range_basis,
-            singleton_sp_indices=singleton_sp_indices,
-            singleton_ranks=singleton_ranks_tup,
-            singleton_eig_constants=singleton_eig_constants,
-            multi_block_sp_indices=multi_block_sp_indices,
-            multi_block_ranks=multi_block_ranks_tup,
-            multi_block_proj_S=multi_block_proj_S,
-            multi_block_S_local=multi_block_S_local,
+            singleton_sp_indices=block_meta["singleton_sp_indices"],
+            singleton_ranks=block_meta["singleton_ranks"],
+            singleton_eig_constants=block_meta["singleton_eig_constants"],
+            multi_block_sp_indices=block_meta["multi_block_sp_indices"],
+            multi_block_ranks=block_meta["multi_block_ranks"],
+            multi_block_proj_S=block_meta["multi_block_proj_S"],
+            multi_block_S_local=block_meta["multi_block_S_local"],
             repara_D=repara_D_jax,
         )
 
@@ -391,6 +286,32 @@ class FittingData:
         def_sp = np.maximum(def_sp, np.finfo(float).tiny)
         return np.log(def_sp)
 
+    @staticmethod
+    def _penalty_range_basis(
+        penalty_arrays: list[np.ndarray],
+        n_coef: int,
+        device: jax.Device | None,
+    ) -> jax.Array | None:
+        """Orthogonal basis for the range space of the total penalty.
+
+        Eigendecomposes the normalized total penalty (R's totalPenaltySpace)
+        and returns eigenvectors for non-zero eigenvalues. Used for
+        stable ``log|S+|`` computation via range-space projection.
+        """
+        if not penalty_arrays:
+            return None
+
+        St = np.zeros((n_coef, n_coef))
+        for S_np in penalty_arrays:
+            norm_j = np.sqrt(np.sum(S_np * S_np))
+            if norm_j > 0:
+                St += S_np / norm_j
+        eigs, vecs = np.linalg.eigh(St)
+        threshold = np.max(eigs) * np.finfo(float).eps ** (2.0 / 3.0)
+        Mp = int(np.sum(eigs <= threshold))
+        U_range = vecs[:, Mp:]
+        return to_jax(U_range, device=device)
+
     def S_lambda(self, log_lambda: jax.Array) -> jax.Array:
         """Compute S_lambda = sum_j exp(log_lambda[j]) * S_j.
 
@@ -410,6 +331,100 @@ class FittingData:
             return jnp.zeros((self.n_coef, self.n_coef))
 
         return build_S_lambda(log_lambda, self.S_list, self.n_coef)
+
+
+def _build_block_metadata(
+    penalty_arrays: list[np.ndarray],
+    smooth_info: tuple | None,
+    device: jax.Device | None,
+) -> dict:
+    """Classify penalties into singleton and multi-penalty blocks.
+
+    Penalties from different smooths occupy non-overlapping columns, so
+    ``S_lambda`` is block-diagonal and ``log|S+| = sum(log|S+_block|)``.
+
+    Singletons (one penalty per smooth) get an exact analytical
+    derivative: ``log|S+| = rank * rho + const``.  Multi-penalty blocks
+    (tensor products with overlapping penalties) use a scaled slogdet in
+    the range space.  Factor-by smooths (non-overlapping multi-penalty)
+    are split into independent singletons.
+    """
+    eps_thresh = np.finfo(float).eps ** (2.0 / 3.0)
+    singletons: list[tuple[int, int, float]] = []
+    multi_blocks: list[tuple[tuple[int, ...], int, list, list]] = []
+
+    if penalty_arrays and smooth_info:
+        for si in smooth_info:
+            if si.n_penalties == 0:
+                continue
+            col_start = si.first_coef
+            col_stop = si.last_coef
+            sp_indices = tuple(
+                range(si.first_penalty, si.first_penalty + si.n_penalties)
+            )
+
+            if si.n_penalties == 1:
+                sp_idx = sp_indices[0]
+                S_local = penalty_arrays[sp_idx][col_start:col_stop, col_start:col_stop]
+                eig_vals = np.linalg.eigvalsh(S_local)
+                thresh = np.max(np.abs(eig_vals)) * eps_thresh
+                nonzero = eig_vals > thresh
+                rank = int(np.sum(nonzero))
+                eig_const = float(np.sum(np.log(np.maximum(eig_vals[nonzero], 1e-30))))
+                singletons.append((sp_idx, rank, eig_const))
+            else:
+                S_locals = [
+                    penalty_arrays[j][col_start:col_stop, col_start:col_stop]
+                    for j in sp_indices
+                ]
+                non_overlapping = _penalties_non_overlapping(S_locals)
+
+                if non_overlapping:
+                    for idx, sp_idx in enumerate(sp_indices):
+                        eig_vals = np.linalg.eigvalsh(S_locals[idx])
+                        thresh = np.max(np.abs(eig_vals)) * eps_thresh
+                        nonzero = eig_vals > thresh
+                        rank = int(np.sum(nonzero))
+                        eig_const = float(
+                            np.sum(np.log(np.maximum(eig_vals[nonzero], 1e-30)))
+                        )
+                        singletons.append((sp_idx, rank, eig_const))
+                else:
+                    St_local = np.zeros_like(S_locals[0])
+                    for S in S_locals:
+                        norm = np.linalg.norm(S, "fro")
+                        if norm > 0:
+                            St_local += S / norm
+                    eig_vals, vecs = np.linalg.eigh(St_local)
+                    thresh = np.max(eig_vals) * eps_thresh
+                    rank = int(np.sum(eig_vals > thresh))
+                    U_local = vecs[:, -rank:]
+                    S_projs = [U_local.T @ S @ U_local for S in S_locals]
+                    multi_blocks.append((sp_indices, rank, S_projs, S_locals))
+
+    eig_consts_np = np.array([s[2] for s in singletons]) if singletons else np.array([])
+    return {
+        "singleton_sp_indices": tuple(s[0] for s in singletons),
+        "singleton_ranks": tuple(s[1] for s in singletons),
+        "singleton_eig_constants": to_jax(eig_consts_np, device=device),
+        "multi_block_sp_indices": tuple(mb[0] for mb in multi_blocks),
+        "multi_block_ranks": tuple(mb[1] for mb in multi_blocks),
+        "multi_block_proj_S": tuple(
+            tuple(to_jax(S, device=device) for S in mb[2]) for mb in multi_blocks
+        ),
+        "multi_block_S_local": tuple(
+            tuple(to_jax(S, device=device) for S in mb[3]) for mb in multi_blocks
+        ),
+    }
+
+
+def _penalties_non_overlapping(S_locals: list[np.ndarray]) -> bool:
+    """Check if multi-penalty matrices have non-overlapping supports."""
+    for j in range(len(S_locals)):
+        for k in range(j + 1, len(S_locals)):
+            if np.any(np.abs(S_locals[j]) * np.abs(S_locals[k]) > 0):
+                return False
+    return True
 
 
 def _compute_repara_D(
@@ -469,16 +484,8 @@ def _compute_repara_D(
                 penalty_arrays[j][col_start:col_stop, col_start:col_stop]
                 for j in sp_indices
             ]
-            non_overlapping = True
-            for j in range(len(S_locals)):
-                for k in range(j + 1, len(S_locals)):
-                    if np.any(np.abs(S_locals[j]) * np.abs(S_locals[k]) > 0):
-                        non_overlapping = False
-                        break
-                if not non_overlapping:
-                    break
 
-            if non_overlapping:
+            if _penalties_non_overlapping(S_locals):
                 # Factor-by: apply singleton treatment per sub-block
                 D_block = np.eye(block_size)
                 for S_local in S_locals:
