@@ -1,7 +1,13 @@
 # jaxgam
 
-Python port of R's [mgcv](https://cran.r-project.org/package=mgcv) package
-for Generalized Additive Models.
+A Python reimplementation of R's
+[mgcv](https://cran.r-project.org/package=mgcv) package by
+[Simon N. Wood](https://people.bath.ac.uk/sw283/), for fitting
+Generalized Additive Models. mgcv is the gold-standard GAM library and
+the algorithms in jaxgam — penalised iteratively re-weighted least
+squares (PIRLS), Laplace-approximate REML, and the full smooth
+construction pipeline — follow Wood's published methods and his
+[*Generalized Additive Models: An Introduction with R*](https://www.routledge.com/Generalized-Additive-Models-An-Introduction-with-R-Second-Edition/Wood/p/book/9781498728331) textbook.
 
 jaxgam uses [JAX](https://github.com/google/jax) for JIT-compiled fitting
 with automatic differentiation through the PIRLS inner loop and Newton
