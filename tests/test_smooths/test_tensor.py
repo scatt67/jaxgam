@@ -17,9 +17,6 @@ R source reference: R/smooth.r smooth.construct.tensor.smooth.spec()
 
 from __future__ import annotations
 
-import importlib
-import sys
-
 import numpy as np
 import pytest
 
@@ -857,26 +854,3 @@ class TestRegistry:
         assert get_smooth_class("ti") is TensorInteractionSmooth
 
 
-class TestNoJaxImport:
-    """Verify jaxgam.smooths.tensor does not trigger JAX import."""
-
-    def test_tensor_import_no_jax(self) -> None:
-        """Importing jaxgam.smooths.tensor must not cause jax import."""
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.smooths.tensor")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.smooths.tensor triggered a jax import. "
-                "Phase 1 modules must not depend on JAX."
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)

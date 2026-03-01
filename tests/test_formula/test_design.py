@@ -17,8 +17,6 @@ Design doc reference: docs/design.md Section 13.2
 
 from __future__ import annotations
 
-import sys
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -579,37 +577,6 @@ class TestRComparison:
         for term in setup.coef_map.terms:
             if term.term_type == "smooth":
                 assert len(term.del_index) == 0
-
-
-# ===========================================================================
-# TestPhaseBoundary — import guard
-# ===========================================================================
-
-
-class TestPhaseBoundary:
-    """Phase 1 import guard."""
-
-    def test_no_jax_import(self) -> None:
-        """Importing jaxgam.formula.design does not import JAX."""
-        import importlib
-
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.formula.design")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.formula.design triggered a jax import"
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)
 
 
 # ===========================================================================

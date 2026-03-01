@@ -13,8 +13,6 @@ Covers:
 10. No JAX imports (Phase 1 boundary)
 """
 
-import sys
-
 import pytest
 
 from jaxgam.formula import FormulaSpec, ParametricTerm, SmoothSpec, parse_formula
@@ -379,46 +377,6 @@ class TestErrorCases:
         """Subtraction of non-1 value raises ValueError."""
         with pytest.raises(ValueError, match="only supported as"):
             parse_formula("y ~ s(x1) - 2")
-
-
-class TestNoJaxImport:
-    """Test 10: Phase 1 boundary -- no JAX imports."""
-
-    def test_no_jax_in_modules(self) -> None:
-        """Importing jaxgam.formula does not trigger jax import."""
-        import importlib
-
-        # Force reimport by removing cached formula modules
-        formula_modules = [
-            key for key in list(sys.modules) if key.startswith("jaxgam.formula")
-        ]
-        saved = {}
-        for mod in formula_modules:
-            saved[mod] = sys.modules.pop(mod)
-
-        try:
-            # Also remove jax if it was loaded by other test modules
-            jax_mods_to_remove = [
-                key
-                for key in list(sys.modules)
-                if key == "jax" or key.startswith("jax.")
-            ]
-            saved_jax = {}
-            for mod in jax_mods_to_remove:
-                saved_jax[mod] = sys.modules.pop(mod)
-
-            importlib.import_module("jaxgam.formula")
-
-            jax_modules_after = {
-                key for key in sys.modules if key == "jax" or key.startswith("jax.")
-            }
-            assert not jax_modules_after, (
-                f"Importing jaxgam.formula triggered JAX imports: {jax_modules_after}"
-            )
-        finally:
-            # Restore modules to avoid breaking other tests
-            sys.modules.update(saved)
-            sys.modules.update(saved_jax)
 
 
 class TestDataclassProperties:

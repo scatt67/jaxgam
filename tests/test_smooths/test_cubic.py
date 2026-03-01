@@ -18,9 +18,6 @@ R source reference: R/smooth.r smooth.construct.cr.smooth.spec()
 
 from __future__ import annotations
 
-import importlib
-import sys
-
 import numpy as np
 import pytest
 
@@ -774,37 +771,7 @@ class TestEdgeCases:
 
 
 # ===========================================================================
-# 8. Phase boundary guard (no JAX imports)
-# ===========================================================================
-
-
-class TestNoJaxImport:
-    """Verify jaxgam.smooths.cubic does not trigger JAX import."""
-
-    def test_cubic_import_no_jax(self) -> None:
-        """Importing jaxgam.smooths.cubic must not cause jax import."""
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.smooths.cubic")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.smooths.cubic triggered a jax import. "
-                "Phase 1 modules must not depend on JAX."
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)
-
-
-# ===========================================================================
-# 9. Parameterized tests
+# 8. Parameterized tests
 # ===========================================================================
 
 

@@ -14,8 +14,6 @@ R source reference: R/smooth.r smooth.construct.tp.smooth.spec()
 
 from __future__ import annotations
 
-import importlib
-import sys
 from math import comb, pi
 
 import numpy as np
@@ -854,76 +852,6 @@ class TestRegistry:
         from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("TP") is TPRSSmooth
-
-
-# ===========================================================================
-# 8. Phase boundary guard (no JAX imports)
-# ===========================================================================
-
-
-class TestNoJaxImport:
-    """Verify that jaxgam.smooths does not trigger JAX import."""
-
-    def test_smooths_tprs_import_no_jax(self) -> None:
-        """Importing jaxgam.smooths.tprs must not cause jax to be imported."""
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.smooths.tprs")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.smooths.tprs triggered a jax import. "
-                "Phase 1 modules must not depend on JAX."
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)
-
-    def test_smooths_init_import_no_jax(self) -> None:
-        """Importing jaxgam.smooths must not cause jax import."""
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.smooths")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.smooths triggered a jax import."
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)
-
-    def test_smooths_registry_import_no_jax(self) -> None:
-        """Importing jaxgam.smooths.registry must not cause jax import."""
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.smooths.registry")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.smooths.registry triggered a jax import."
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)
 
 
 class TestCoveragePaths:

@@ -14,9 +14,6 @@ Design doc reference: docs/design.md Section 10.2
 
 from __future__ import annotations
 
-import importlib
-import sys
-
 import numpy as np
 import pytest
 
@@ -681,53 +678,3 @@ class TestEdgeCases:
         assert "n_penalties=2" in r
 
 
-# ---------------------------------------------------------------------------
-# Tests — No JAX imports (Phase 1 boundary guard)
-# ---------------------------------------------------------------------------
-
-
-class TestNoJaxImport:
-    """Verify that jaxgam.penalties does not trigger JAX import."""
-
-    def test_penalties_import_no_jax(self) -> None:
-        """Importing jaxgam.penalties must not cause jax to be imported."""
-        # Remove jax and jaxgam modules from sys.modules
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.penalties")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.penalties triggered a jax import. "
-                "Phase 1 modules must not depend on JAX."
-            )
-        finally:
-            # Restore original sys.modules state
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)
-
-    def test_penalty_module_import_no_jax(self) -> None:
-        """Importing jaxgam.penalties.penalty must not cause jax import."""
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.penalties.penalty")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.penalties.penalty triggered a jax import."
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)

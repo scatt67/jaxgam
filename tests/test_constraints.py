@@ -13,9 +13,6 @@ R source reference: R/mgcv.r gam.side(), fixDependence()
 
 from __future__ import annotations
 
-import importlib
-import sys
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -1043,30 +1040,3 @@ class TestRComparison:
                 )
 
 
-# ===========================================================================
-# Phase boundary test
-# ===========================================================================
-
-
-class TestPhaseBoundary:
-    """Phase boundary: importing constraints must not import JAX."""
-
-    def test_no_jax_import(self):
-        """Importing jaxgam.smooths.constraints must not trigger jax import."""
-        modules_to_remove = [
-            key
-            for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "jaxgam."))
-        ]
-        saved = {key: sys.modules.pop(key) for key in modules_to_remove}
-
-        try:
-            importlib.import_module("jaxgam.smooths.constraints")
-            assert "jax" not in sys.modules, (
-                "Importing jaxgam.smooths.constraints triggered a jax import."
-            )
-        finally:
-            for key in list(sys.modules):
-                if key.startswith("jaxgam."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(saved)

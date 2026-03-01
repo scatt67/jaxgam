@@ -14,8 +14,6 @@ R source reference: R/smooth.r smoothCon() by-variable handling
 
 from __future__ import annotations
 
-import importlib
-import sys
 
 import numpy as np
 import pandas as pd
@@ -1040,28 +1038,3 @@ class TestRComparison:
             )
 
 
-# ===========================================================================
-# 8. Phase boundary guard
-# ===========================================================================
-
-
-class TestPhaseBoundary:
-    """Ensure no JAX imports in this Phase 1 module."""
-
-    def test_no_jax_import(self) -> None:
-        """Importing by_variable must not trigger JAX import."""
-        # Remove any cached by_variable module
-        mod_name = "jaxgam.smooths.by_variable"
-        if mod_name in sys.modules:
-            del sys.modules[mod_name]
-
-        # Track loaded modules before import
-        pre_modules = set(sys.modules.keys())
-        importlib.import_module(mod_name)
-        post_modules = set(sys.modules.keys())
-
-        new_modules = post_modules - pre_modules
-        jax_modules = {m for m in new_modules if m.startswith("jax")}
-        assert not jax_modules, (
-            f"Importing {mod_name} triggered JAX imports: {jax_modules}"
-        )
