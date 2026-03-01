@@ -4,3 +4,4 @@
 .claude/worktrees/*
 *.csv
 site/
+.coverage

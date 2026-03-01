@@ -1,4 +1,4 @@
-"""plot.gam equivalent: smooth component visualization.
+"""Smooth component visualization equivalent to R's plot.gam().
 
 Provides ``plot_gam()`` for visualizing the smooth components of a fitted
 GAM model, equivalent to R's ``plot.gam()``.
@@ -17,6 +17,7 @@ R source reference: R/plots.r plot.gam(), plot.mgcv.smooth()
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -36,8 +37,8 @@ if TYPE_CHECKING:
 
 def plot_gam(
     model: GAM,
-    select: int | list | None = None,
-    pages: int = 0,  # noqa: ARG001 (reserved for multi-page layout)
+    select: int | list[int] | None = None,
+    pages: int = 0,  # noqa: ARG001
     rug: bool = True,
     se: bool = True,
     shade: bool = True,
@@ -59,12 +60,11 @@ def plot_gam(
     ----------
     model : GAM
         A fitted GAM instance.
-    select : int, list, or None
+    select : int, list[int], or None
         Select specific smooth term(s) to plot (0-indexed). If None,
         plots all smooth terms.
     pages : int
-        Number of pages for multi-panel layout. 0 means one page with
-        automatic layout. 1 arranges all smooths on one page.
+        Reserved for multi-page layout (currently unused).
     rug : bool
         Whether to add rug marks at data covariate values.
     se : bool
@@ -99,13 +99,22 @@ def plot_gam(
     RuntimeError
         If the model is not fitted.
     ValueError
-        If ``select`` references an invalid smooth index.
+        If ``select`` references an invalid smooth index, or if
+        ``n_grid``, ``n2``, or ``se_mult`` are invalid.
     """
     import matplotlib.pyplot as plt
 
     from pymgcv.smooths.by_variable import FactorBySmooth
 
     model._check_fitted()
+
+    # Validate grid/SE parameters
+    if n_grid < 2:
+        raise ValueError(f"n_grid must be >= 2, got {n_grid}")
+    if n2 < 2:
+        raise ValueError(f"n2 must be >= 2, got {n2}")
+    if se_mult < 0:
+        raise ValueError(f"se_mult must be non-negative, got {se_mult}")
 
     # Gather smooth terms (skip parametric)
     smooth_terms = [t for t in model.coef_map_.terms if t.term_type == "smooth"]
@@ -156,6 +165,11 @@ def plot_gam(
         axes_flat[j].set_visible(False)
 
     # Get stored training data for rug/grid range
+    if not hasattr(model, "_training_data") or model._training_data is None:
+        raise RuntimeError(
+            "Training data not stored on model. "
+            "Cannot generate rug/grid without covariate ranges."
+        )
     training_data = model._training_data
 
     # Plot each panel
@@ -208,7 +222,7 @@ def plot_gam(
                 rug=rug,
             )
         else:
-            # 3D+ smooths: not supported in v1.0
+            warnings.warn(f"{dim}D smooth plotting not yet supported", stacklevel=2)
             ax.text(
                 0.5,
                 0.5,
@@ -239,9 +253,20 @@ class _PlotPanel:
     def __init__(
         self,
         term: TermBlock,
-        factor_level: object | None,
+        factor_level: str | None,
         level_idx: int = 0,
     ) -> None:
+        """Initialize a plot panel.
+
+        Parameters
+        ----------
+        term : TermBlock
+            The smooth term block to plot.
+        factor_level : str or None
+            Factor level for factor-by smooths, or None.
+        level_idx : int
+            Index of this level within the factor-by smooth (default 0).
+        """
         self.term = term
         self.factor_level = factor_level
         self.level_idx = level_idx
@@ -262,7 +287,8 @@ def _make_factor_by_panels(term: TermBlock) -> list[_PlotPanel]:
     """
     from pymgcv.smooths.by_variable import FactorBySmooth
 
-    smooth: FactorBySmooth = term.smooth  # type: ignore[assignment]
+    assert isinstance(term.smooth, FactorBySmooth)
+    smooth = term.smooth
     panels = []
     for idx, level in enumerate(smooth.levels):
         panels.append(_PlotPanel(term=term, factor_level=level, level_idx=idx))
@@ -270,8 +296,111 @@ def _make_factor_by_panels(term: TermBlock) -> list[_PlotPanel]:
 
 
 # ---------------------------------------------------------------------------
-# 1D smooth plotting
+# 1D smooth plotting (shared core + thin wrappers)
 # ---------------------------------------------------------------------------
+
+
+def _plot_1d_core(
+    model: GAM,
+    term: TermBlock,
+    pred_data: dict[str, np.ndarray],
+    x_grid: np.ndarray,
+    x_rug: np.ndarray,
+    ax: matplotlib.axes.Axes,
+    rug: bool,
+    se: bool,
+    shade: bool,
+    shade_color: str,
+    se_mult: float,
+    line_color: str,
+    se_line_color: str,
+    title: str | None = None,
+) -> None:
+    """Shared core for 1D smooth and factor-by-level plotting.
+
+    Parameters
+    ----------
+    model : GAM
+        Fitted model.
+    term : TermBlock
+        The smooth term to plot.
+    pred_data : dict[str, np.ndarray]
+        Prediction data dict (already built by caller).
+    x_grid : np.ndarray
+        1D evaluation grid for the covariate.
+    x_rug : np.ndarray
+        Covariate values for rug marks (may be filtered by level).
+    ax : matplotlib.axes.Axes
+        Axes to plot on.
+    rug : bool
+        Show rug marks.
+    se : bool
+        Show SE bands.
+    shade : bool
+        Shade SE bands (vs dashed lines).
+    shade_color : str
+        Shade fill color.
+    se_mult : float
+        SE multiplier.
+    line_color : str
+        Line color for smooth effect.
+    se_line_color : str
+        Line color for SE lines (when shade=False).
+    title : str or None
+        Optional panel title (used for factor-by levels).
+    """
+    smooth = term.smooth
+    var_name = smooth.spec.variables[0]
+
+    # Get prediction matrix for this smooth
+    X_raw = smooth.predict_matrix(pred_data)
+    X_s = model.coef_map_.transform_X(X_raw, term.label)
+
+    # Get coefficients and Vp block for this term
+    col_start = term.col_start
+    col_end = col_start + term.n_coefs
+    beta_s = model.coefficients_[col_start:col_end]
+    Vp_block = model.Vp_[col_start:col_end, col_start:col_end]
+
+    # Compute partial effect
+    fit = X_s @ beta_s
+
+    # Compute SE
+    se_fit = None
+    if se:
+        se_fit = np.sqrt(np.maximum(0.0, np.sum((X_s @ Vp_block) * X_s, axis=1)))
+
+    # Get EDF for label
+    edf = _get_smooth_edf(model, term)
+
+    # Plot
+    ax.plot(x_grid, fit, color=line_color, linewidth=1.5)
+
+    if se and se_fit is not None:
+        upper = fit + se_mult * se_fit
+        lower = fit - se_mult * se_fit
+        if shade:
+            ax.fill_between(x_grid, lower, upper, alpha=0.5, color=shade_color)
+        else:
+            ax.plot(x_grid, upper, color=se_line_color, linestyle="--", linewidth=0.8)
+            ax.plot(x_grid, lower, color=se_line_color, linestyle="--", linewidth=0.8)
+
+    if rug:
+        ax.plot(
+            x_rug,
+            np.full_like(x_rug, ax.get_ylim()[0]),
+            "|",
+            color="black",
+            alpha=0.3,
+            markersize=3,
+        )
+
+    # Labels
+    ax.set_xlabel(var_name)
+    ylabel = _make_ylabel(term.label, edf)
+    ax.set_ylabel(ylabel)
+    if title is not None:
+        ax.set_title(title)
 
 
 def _plot_1d_smooth(
@@ -322,65 +451,28 @@ def _plot_1d_smooth(
     smooth = term.smooth
     var_name = smooth.spec.variables[0]
 
-    # Get the covariate range from training data
     x_raw = np.asarray(training_data[var_name], dtype=np.float64)
     x_grid = np.linspace(x_raw.min(), x_raw.max(), n_grid)
 
-    # Build prediction data dict for this smooth
     pred_data: dict[str, np.ndarray] = {var_name: x_grid}
-
-    # Handle by-variable
     if isinstance(smooth, NumericBySmooth):
-        # Numeric-by: set by-variable to 1.0 for the grid
         pred_data[smooth.by_variable] = np.ones(n_grid)
 
-    # Get prediction matrix for this smooth
-    X_raw = smooth.predict_matrix(pred_data)
-    X_s = model.coef_map_.transform_X(X_raw, term.label)
-
-    # Get coefficients and Vp block for this term
-    col_start = term.col_start
-    col_end = col_start + term.n_coefs
-    beta_s = model.coefficients_[col_start:col_end]
-    Vp_block = model.Vp_[col_start:col_end, col_start:col_end]
-
-    # Compute partial effect
-    fit = X_s @ beta_s
-
-    # Compute SE
-    se_fit = None
-    if se:
-        se_fit = np.sqrt(np.maximum(0.0, np.sum((X_s @ Vp_block) * X_s, axis=1)))
-
-    # Get EDF for label
-    edf = _get_smooth_edf(model, term)
-
-    # Plot
-    ax.plot(x_grid, fit, color=line_color, linewidth=1.5)
-
-    if se and se_fit is not None:
-        upper = fit + se_mult * se_fit
-        lower = fit - se_mult * se_fit
-        if shade:
-            ax.fill_between(x_grid, lower, upper, alpha=0.5, color=shade_color)
-        else:
-            ax.plot(x_grid, upper, color=se_line_color, linestyle="--", linewidth=0.8)
-            ax.plot(x_grid, lower, color=se_line_color, linestyle="--", linewidth=0.8)
-
-    if rug:
-        ax.plot(
-            x_raw,
-            np.full_like(x_raw, ax.get_ylim()[0]),
-            "|",
-            color="black",
-            alpha=0.3,
-            markersize=3,
-        )
-
-    # Labels
-    ax.set_xlabel(var_name)
-    ylabel = _make_ylabel(term.label, edf)
-    ax.set_ylabel(ylabel)
+    _plot_1d_core(
+        model=model,
+        term=term,
+        pred_data=pred_data,
+        x_grid=x_grid,
+        x_rug=x_raw,
+        ax=ax,
+        rug=rug,
+        se=se,
+        shade=shade,
+        shade_color=shade_color,
+        se_mult=se_mult,
+        line_color=line_color,
+        se_line_color=se_line_color,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +483,7 @@ def _plot_1d_smooth(
 def _plot_factor_by_level(
     model: GAM,
     term: TermBlock,
-    level: object,
+    level: str,
     ax: matplotlib.axes.Axes,
     training_data: dict[str, np.ndarray],
     n_grid: int,
@@ -415,7 +507,7 @@ def _plot_factor_by_level(
         Fitted model.
     term : TermBlock
         The factor-by smooth term block.
-    level : object
+    level : str
         The factor level value.
     ax : matplotlib.axes.Axes
         Axes to plot on.
@@ -440,73 +532,40 @@ def _plot_factor_by_level(
     """
     from pymgcv.smooths.by_variable import FactorBySmooth
 
-    smooth: FactorBySmooth = term.smooth  # type: ignore[assignment]
+    assert isinstance(term.smooth, FactorBySmooth)
+    smooth = term.smooth
     var_name = smooth.spec.variables[0]
 
-    # Get the covariate range from training data
     x_raw = np.asarray(training_data[var_name], dtype=np.float64)
     x_grid = np.linspace(x_raw.min(), x_raw.max(), n_grid)
 
-    # Build prediction data for the full factor-by smooth
-    # Set the by-variable to this level for all grid points
-    by_col = np.full(n_grid, level, dtype=object)
+    by_col = np.full(n_grid, level, dtype=str)
     pred_data: dict[str, np.ndarray] = {
         var_name: x_grid,
         smooth.by_variable: by_col,
     }
 
-    # Get prediction matrix for the full factor-by smooth
-    X_raw = smooth.predict_matrix(pred_data)
-    X_s = model.coef_map_.transform_X(X_raw, term.label)
+    # Filter rug to this factor level
+    by_raw = training_data[smooth.by_variable]
+    mask = np.asarray(by_raw == level)
+    x_rug = x_raw[mask]
 
-    # Full term's coefficients and covariance
-    col_start = term.col_start
-    col_end = col_start + term.n_coefs
-    beta_s = model.coefficients_[col_start:col_end]
-    Vp_block = model.Vp_[col_start:col_end, col_start:col_end]
-
-    # Compute partial effect (X_s will be zero except for this level's block)
-    fit = X_s @ beta_s
-
-    # Compute SE
-    se_fit = None
-    if se:
-        se_fit = np.sqrt(np.maximum(0.0, np.sum((X_s @ Vp_block) * X_s, axis=1)))
-
-    # Get EDF for label
-    edf = _get_smooth_edf(model, term)
-
-    # Plot
-    ax.plot(x_grid, fit, color=line_color, linewidth=1.5)
-
-    if se and se_fit is not None:
-        upper = fit + se_mult * se_fit
-        lower = fit - se_mult * se_fit
-        if shade:
-            ax.fill_between(x_grid, lower, upper, alpha=0.5, color=shade_color)
-        else:
-            ax.plot(x_grid, upper, color=se_line_color, linestyle="--", linewidth=0.8)
-            ax.plot(x_grid, lower, color=se_line_color, linestyle="--", linewidth=0.8)
-
-    if rug:
-        # Show rug only for observations in this factor level
-        by_raw = training_data[smooth.by_variable]
-        mask = np.asarray(by_raw == level)
-        x_level = x_raw[mask]
-        ax.plot(
-            x_level,
-            np.full_like(x_level, ax.get_ylim()[0]),
-            "|",
-            color="black",
-            alpha=0.3,
-            markersize=3,
-        )
-
-    # Labels — include level in title
-    ax.set_xlabel(var_name)
-    ylabel = _make_ylabel(term.label, edf)
-    ax.set_ylabel(ylabel)
-    ax.set_title(f"{level}")
+    _plot_1d_core(
+        model=model,
+        term=term,
+        pred_data=pred_data,
+        x_grid=x_grid,
+        x_rug=x_rug,
+        ax=ax,
+        rug=rug,
+        se=se,
+        shade=shade,
+        shade_color=shade_color,
+        se_mult=se_mult,
+        line_color=line_color,
+        se_line_color=se_line_color,
+        title=f"{level}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -551,11 +610,8 @@ def _plot_2d_smooth(
     x1_grid = np.linspace(x1_raw.min(), x1_raw.max(), n2)
     x2_grid = np.linspace(x2_raw.min(), x2_raw.max(), n2)
 
-    # Create grid matching R's convention:
-    # R: xx = rep(xm, n2), yy = rep(ym, rep(n2, n2))
-    # This produces xm repeated n2 times vs ym repeated element-wise
-    xx = np.tile(x1_grid, n2)  # each of x1_grid repeated n2 times
-    yy = np.repeat(x2_grid, n2)  # each element of x2_grid repeated n2 times
+    X1, X2 = np.meshgrid(x1_grid, x2_grid)
+    xx, yy = X1.ravel(), X2.ravel()
 
     # Build prediction data
     pred_data: dict[str, np.ndarray] = {var1: xx, var2: yy}
@@ -574,9 +630,8 @@ def _plot_2d_smooth(
     beta_s = model.coefficients_[col_start:col_end]
     fit = X_s @ beta_s
 
-    # Reshape to grid: yy (x2) varies slow = rows, xx (x1) varies fast = cols
-    # contourf(x, y, Z) expects Z.shape == (len(y), len(x))
-    Z = fit.reshape(n2, n2)  # shape (n2_x2, n2_x1)
+    # Reshape to grid: contourf(x, y, Z) expects Z.shape == (len(y), len(x))
+    Z = fit.reshape(n2, n2)
 
     # Get EDF for label
     edf = _get_smooth_edf(model, term)
@@ -618,11 +673,19 @@ def _get_smooth_edf(model: GAM, term: TermBlock) -> float:
     -------
     float
         Sum of per-coefficient EDF for this term.
+
+    Raises
+    ------
+    ValueError
+        If the term label is not found in the model's smooth info.
     """
     for j, si in enumerate(model.smooth_info_):
         if si.label == term.label:
             return float(model.edf_[j])
-    return 0.0
+    raise ValueError(
+        f"Smooth term {term.label!r} not found in model smooth info. "
+        f"Available: {[si.label for si in model.smooth_info_]}"
+    )
 
 
 def _make_ylabel(label: str, edf: float) -> str:
