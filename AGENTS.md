@@ -26,7 +26,7 @@ R comparison tests require pinned R 4.5.2 + mgcv 1.9-3 (enforced by `RBridge.che
 
 Every `gam()` call flows through three phases. This boundary is load-bearing — do not mix phases.
 
-**Phase 1 — Setup (CPU, NumPy only).** Parse formula → construct basis matrices → build penalty matrices → assemble full model matrix X → apply identifiability constraints via `CoefficientMap`. No JAX imports permitted in Phase 1 code. There is a CI guard for this: `tests/test_phase_boundary.py` asserts that importing any `pymgcv.smooths.*` or `pymgcv.formula.*` module does not trigger a `jax` import.
+**Phase 1 — Setup (CPU, NumPy only).** Parse formula → construct basis matrices → build penalty matrices → assemble full model matrix X → apply identifiability constraints via `CoefficientMap`. No JAX imports permitted in Phase 1 code.
 
 **Phase 2 — Fit (JAX, JIT-compiled).** Dense X and S_λ are transferred to device via `jax.device_put`. PIRLS inner loop (penalized iteratively reweighted least squares) nested inside a REML outer Newton loop. All code in `fitting/` must be JIT-compatible — no Python-level control flow that depends on array values (use `jax.lax.while_loop`, `jax.lax.cond`).
 
@@ -130,7 +130,6 @@ pymgcv/
 ### NumPy Rules (Phase 1 and 3 code)
 
 - No JAX imports in Phase 1 modules (`formula/`, `smooths/`, `penalties/`). Use `numpy` and `scipy` only.
-- This is CI-enforced. If you add a JAX import to a Phase 1 module, `test_phase_boundary.py` will fail.
 
 ### Testing Rules
 
