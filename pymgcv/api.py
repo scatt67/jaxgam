@@ -25,7 +25,7 @@ from pymgcv.formula.design import ModelSetup, SmoothInfo
 from pymgcv.formula.parser import parse_formula
 from pymgcv.formula.terms import FormulaSpec, ParametricTerm
 from pymgcv.jax_utils import to_numpy
-from pymgcv.smooths.by_variable import _get_factor_levels, is_factor
+from pymgcv.smooths.by_variable import get_factor_levels, is_factor
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -675,7 +675,7 @@ def _extract_factor_info(
     for term in parametric_terms:
         col = data[term.name]
         if is_factor(col):
-            factor_info[term.name] = _get_factor_levels(col)
+            factor_info[term.name] = get_factor_levels(col)
     return factor_info
 
 

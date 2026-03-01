@@ -19,12 +19,12 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from pymgcv.formula.terms import FormulaSpec, ParametricTerm
+from pymgcv.formula.terms import FormulaSpec, ParametricTerm, SmoothSpec
 from pymgcv.penalties.penalty import CompositePenalty, Penalty
 from pymgcv.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
-    _get_factor_levels,
+    get_factor_levels,
     is_factor,
     resolve_by_variable,
 )
@@ -148,6 +148,9 @@ class ModelSetup:
         ValueError
             If required variables are missing from data.
         """
+        # Steps are numbered 2a-2h matching the design doc (Section 13.2).
+        # Step 1 (formula parsing) happens in parse_formula().
+
         # Keep original data for factor detection (by-variable needs dtype info)
         original_data = data
         data_dict = cls._to_dict(data)
@@ -223,14 +226,18 @@ class ModelSetup:
             X = np.column_stack([X_parametric, *X_constrained])
         else:
             X = X_parametric
-        assert X.shape[1] == coef_map.total_coefs
+        if X.shape[1] != coef_map.total_coefs:
+            raise RuntimeError(
+                f"Model matrix column count ({X.shape[1]}) does not match "
+                f"coefficient map total ({coef_map.total_coefs})"
+            )
 
         # 2f. Embed penalties
         total_p = coef_map.total_coefs
         embedded_penalties: list[Penalty] = []
 
         for i, sm in enumerate(smooths):
-            term_label = CoefficientMap._smooth_label(sm)
+            term_label = CoefficientMap.smooth_label(sm)
             term_block = coef_map.get_term(term_label)
             col_start = term_block.col_start
 
@@ -464,7 +471,7 @@ class ModelSetup:
             col = data[term.name]
 
             if is_factor(col):
-                levels = _get_factor_levels(col)
+                levels = get_factor_levels(col)
                 if len(levels) < 2:
                     raise ValueError(
                         f"Factor variable '{term.name}' has fewer than 2 levels "
@@ -490,9 +497,9 @@ class ModelSetup:
 
     @staticmethod
     def _build_smooth_components(
-        smooth_terms: list,
+        smooth_terms: list[SmoothSpec],
         data_dict: dict[str, npt.NDArray[np.floating]],
-        original_data: dict | pd.DataFrame,
+        original_data: dict[str, npt.NDArray] | pd.DataFrame,
     ) -> tuple[
         list[Smooth | FactorBySmooth | NumericBySmooth],
         list[npt.NDArray[np.floating]],
@@ -564,30 +571,15 @@ class ModelSetup:
         """
         infos: list[SmoothInfo] = []
         for sm in smooths:
-            label = CoefficientMap._smooth_label(sm)
+            label = CoefficientMap.smooth_label(sm)
             term = coef_map.get_term(label)
-
-            if isinstance(sm, FactorBySmooth):
-                by_var: str | None = sm.by_variable
-                term_type = sm.spec.smooth_type
-                variables = tuple(sm.spec.variables)
-                null_space_dim = sm.null_space_dim
-            elif isinstance(sm, NumericBySmooth):
-                by_var = sm.by_variable
-                term_type = sm.spec.smooth_type
-                variables = tuple(sm.spec.variables)
-                null_space_dim = sm.null_space_dim
-            else:
-                by_var = None
-                term_type = sm.spec.smooth_type
-                variables = tuple(sm.spec.variables)
-                null_space_dim = sm.null_space_dim
+            by_var: str | None = getattr(sm, "by_variable", None)
 
             infos.append(
                 SmoothInfo(
                     label=label,
-                    term_type=term_type,
-                    variables=variables,
+                    term_type=sm.spec.smooth_type,
+                    variables=tuple(sm.spec.variables),
                     by_variable=by_var,
                     first_coef=term.col_start,
                     last_coef=term.col_start + term.n_coefs,
@@ -595,7 +587,7 @@ class ModelSetup:
                     first_penalty=(
                         term.penalty_indices[0] if term.penalty_indices else 0
                     ),
-                    null_space_dim=null_space_dim,
+                    null_space_dim=sm.null_space_dim,
                 )
             )
 
@@ -626,7 +618,7 @@ class ModelSetup:
         names: list[str] = list(param_names)
 
         for sm in smooths:
-            label = CoefficientMap._smooth_label(sm)
+            label = CoefficientMap.smooth_label(sm)
             term = coef_map.get_term(label)
             names.extend(f"{label}.{j + 1}" for j in range(term.n_coefs))
 

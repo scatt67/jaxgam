@@ -22,6 +22,7 @@ Supported patterns
 from __future__ import annotations
 
 import ast
+from typing import Any
 
 from pymgcv.formula.terms import FormulaSpec, ParametricTerm, SmoothSpec
 
@@ -95,7 +96,12 @@ def parse_formula(formula_str: str) -> FormulaSpec:
 
 
 class _TermCollector:
-    """Walks an AST expression tree and collects formula terms."""
+    """Walks an AST expression tree and collects formula terms.
+
+    Note: this is a custom visitor, not an ``ast.NodeVisitor`` subclass,
+    because we only handle expression nodes (not statements) and want
+    explicit control over dispatch.
+    """
 
     def __init__(self) -> None:
         self.smooth_terms: list[SmoothSpec] = []
@@ -232,7 +238,7 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
     bs = _DEFAULT_BASIS[func_name]
     k = -1
     by: str | None = None
-    extra_args: dict = {}
+    extra_args: dict[str, Any] = {}
 
     for kw in node.keywords:
         key = kw.arg
@@ -273,7 +279,7 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
     )
 
 
-def _eval_kwarg_value(node: ast.expr, key: str, func_name: str) -> object:
+def _eval_kwarg_value(node: ast.expr, key: str, func_name: str) -> Any:
     """Safely evaluate a keyword argument value from the AST.
 
     Uses ``ast.literal_eval`` for constants. Raises ``ValueError`` for
@@ -291,7 +297,7 @@ def _eval_kwarg_value(node: ast.expr, key: str, func_name: str) -> object:
 
     Returns
     -------
-    object
+    Any
         The evaluated value.
     """
     try:

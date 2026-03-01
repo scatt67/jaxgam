@@ -61,7 +61,7 @@ def is_factor(col: pd.Series | npt.NDArray) -> bool:
     )
 
 
-def _get_factor_levels(col: pd.Series | npt.NDArray) -> list:
+def get_factor_levels(col: pd.Series | npt.NDArray) -> list:
     """Extract sorted factor levels from a column.
 
     For pandas Categorical, uses ``.cat.categories`` to respect the
@@ -423,7 +423,7 @@ def resolve_by_variable(
     by_col = _get_col(data, spec.by)
 
     if is_factor(by_col):
-        levels = _get_factor_levels(by_col)
+        levels = get_factor_levels(by_col)
 
         # Ordered factors: skip reference (first) level, matching R
         if _is_ordered_factor(by_col) and len(levels) > 1:

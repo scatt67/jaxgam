@@ -10,9 +10,10 @@ Design doc reference: Section 13.1
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
-@dataclass
+@dataclass(frozen=True)
 class SmoothSpec:
     """Specification for a smooth term (s, te, or ti).
 
@@ -23,6 +24,8 @@ class SmoothSpec:
         for ``te(x1, x2)`` this is ``["x1", "x2"]``.
     bs : str
         Basis type. Default is ``"tp"`` for thin plate regression splines.
+        Note: when constructed via ``parse_formula()``, ``te()`` and ``ti()``
+        default to ``"cr"`` (cubic regression splines), matching R's behavior.
     k : int
         Basis dimension (number of knots). Default ``-1`` means "auto"
         (let the smooth constructor choose).
@@ -30,7 +33,7 @@ class SmoothSpec:
         By-variable name for factor-by or numeric-by smooths.
     smooth_type : str
         One of ``"s"``, ``"te"``, ``"ti"``.
-    extra_args : dict
+    extra_args : dict[str, Any]
         Any additional keyword arguments not captured above.
     """
 
@@ -39,10 +42,10 @@ class SmoothSpec:
     k: int = -1
     by: str | None = None
     smooth_type: str = "s"
-    extra_args: dict = field(default_factory=dict)
+    extra_args: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParametricTerm:
     """Specification for a parametric (linear) term.
 
@@ -55,7 +58,7 @@ class ParametricTerm:
     name: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class FormulaSpec:
     """Parsed formula specification.
 

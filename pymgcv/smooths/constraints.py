@@ -423,7 +423,7 @@ class CoefficientMap:
             )
             penalty_offset += n_penalties_i
 
-            label = cls._smooth_label(sm)
+            label = cls.smooth_label(sm)
             n_coefs_constrained = X_blocks[i].shape[1]
 
             term_blocks.append(
@@ -996,7 +996,7 @@ class CoefficientMap:
         return getattr(sm, "side_constrain", True)
 
     @staticmethod
-    def _smooth_label(
+    def smooth_label(
         sm: Smooth | FactorBySmooth | NumericBySmooth,
     ) -> str:
         """Get a human-readable label for a smooth.
