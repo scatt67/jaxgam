@@ -6,7 +6,7 @@ VULTURE ?= vulture
 DOCKER_IMAGE ?= pymgcv-test
 DOCKER_TAG ?= latest
 COLIMA_CPU ?= 4
-COLIMA_MEMORY ?= 8
+COLIMA_MEMORY ?= 16
 
 .DEFAULT_GOAL := help
 
@@ -55,7 +55,7 @@ colima-start: ## start colima VM (no-op if already running)
 
 .PHONY: docker-build
 docker-build: colima-start ## build the test Docker image
-	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 .PHONY: generate-ref
 generate-ref: docker-build ## regenerate R reference data via Docker
