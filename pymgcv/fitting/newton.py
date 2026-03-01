@@ -19,14 +19,19 @@ Key R-matching design choices (see docs/experiments.md):
   filter (R lines 1430-1432, 1435-1436, 1651)
 - Eigenvalue floor ``eps^0.7`` (R line 1450)
 - ``lsp_max = 40`` safety net for flat REML surfaces
-- ``custom_jvp`` on PIRLS for non-Gaussian families (Exp 18):
+- ``custom_jvp`` on PIRLS for all families with penalties (Exp 18):
   defines how ``(β*, XtWX, deviance)`` change with ``S_lambda``
   via the implicit function theorem. ``jax.grad`` and
   ``jax.hessian`` of the end-to-end score function automatically
   capture all first- and second-order terms, matching R's
-  analytical Hessian from ``gdi.c``. Cost: 1 PIRLS per Newton
-  iteration (same as R). For Gaussian, ``W`` is constant so the
-  standard AD Hessian is exact.
+  analytical Hessian from ``gdi.c`` / ``Sl.ift``. Cost: 1 PIRLS
+  per Newton iteration (same as R).
+- Gaussian uses ``fast.REML.fit``-style step handling (fast-REML.r
+  lines 1822-1844): no qerror check, eigenvalue floor ``eps^0.5``,
+  no SD fallback, step failure breaks immediately.
+- Non-Gaussian uses ``newton()``-style step handling (gam.fit3.r
+  lines 1491-1571): qerror check, eigenvalue floor ``eps^0.7``,
+  SD fallback after 3 halvings.
 
 Design doc reference: Section 8.2 (Outer Newton with Damped Hessian)
 R source reference: gam.fit3.r lines 1290-1719
@@ -374,22 +379,27 @@ class NewtonResult:
 # ---------------------------------------------------------------------------
 
 
-@jax.jit(static_argnames=("max_step",))
+@jax.jit(static_argnames=("max_step", "eig_floor_power"))
 def _safe_newton_step(
     gradient: jax.Array,
     hessian: jax.Array,
     max_step: float = 5.0,
+    eig_floor_power: float = 0.7,
 ) -> tuple[jax.Array, jax.Array]:
     """Newton step with eigenvalue safety, component-wise capping, and
     indefiniteness detection.
 
-    Follows R's ``newton()`` (gam.fit3.r lines 1438-1465):
+    Follows R's eigenvalue-safe Newton step:
 
     1. Eigendecompose Hessian: ``H = V D V^T``
     2. Flip negative eigenvalues to positive: ``D = |D|``
-    3. Floor small eigenvalues: ``D = max(D, max(|D|) * eps^0.7)``
+    3. Floor small eigenvalues: ``D = max(D, max(|D|) * eps^power)``
     4. Compute step: ``step = -V @ ((V^T @ g) / D_safe)``
-    5. Cap step: ``max(|step|) <= max_step`` (component-wise, R line 1465)
+    5. Cap step: ``max(|step|) <= max_step`` (component-wise)
+
+    The eigenvalue floor power differs by code path:
+    - ``newton()`` (non-Gaussian): ``eps^0.7`` (gam.fit3.r line 1450)
+    - ``fast.REML.fit`` (Gaussian): ``eps^0.5`` (fast-REML.r line 1810)
 
     Parameters
     ----------
@@ -399,6 +409,9 @@ def _safe_newton_step(
         Hessian of criterion w.r.t. log_lambda.
     max_step : float
         Maximum allowed component magnitude in log-lambda space.
+    eig_floor_power : float
+        Power of machine epsilon for eigenvalue floor. ``0.7`` for
+        newton() (non-Gaussian), ``0.5`` for fast.REML.fit (Gaussian).
 
     Returns
     -------
@@ -409,25 +422,21 @@ def _safe_newton_step(
     """
     eigs, V = jnp.linalg.eigh(hessian)
 
-    # Check positive definiteness before modification (R line 1440/1448)
+    # Check positive definiteness before modification
     is_pdef = jnp.all(eigs > 0)
 
-    # Flip negative eigenvalues (R line 1449)
+    # Flip negative eigenvalues
     eigs_safe = jnp.abs(eigs)
 
-    # Floor small eigenvalues — R uses eps^0.7 (line 1450), NOT sqrt(eps).
-    # This is more aggressive, keeping small eigenvalues closer to their
-    # true values, which produces better-conditioned steps.
+    # Floor small eigenvalues
     eps = jnp.finfo(jnp.float64).eps
-    floor = jnp.max(eigs_safe) * eps**0.7
+    floor = jnp.max(eigs_safe) * eps**eig_floor_power
     eigs_safe = jnp.maximum(eigs_safe, floor)
 
     # Newton step: -H^{-1} g = -V diag(1/D) V^T g
     step = -V @ ((V.T @ gradient) / eigs_safe)
 
-    # Cap step — R uses component-wise max (line 1462-1465):
-    # ms <- max(abs(uc.step))
-    # if (ms>maxNstep) uc.step <- maxNstep * uc.step/ms
+    # Cap step — component-wise max
     ms = jnp.max(jnp.abs(step))
     step = jnp.where(ms > max_step, step * max_step / ms, step)
 
@@ -491,6 +500,12 @@ class NewtonOptimizer:
         self._max_iter = max_iter
         self._max_step = max_step
         self._lsp_max = lsp_max
+        self._is_gaussian = fd.family.family_name == "gaussian"
+
+        # Eigenvalue floor power: R's fast.REML.fit (Gaussian) uses
+        # eps^0.5 (fast-REML.r line 1810), more conservative than
+        # newton() which uses eps^0.7 (gam.fit3.r line 1450).
+        self._eig_floor_power = 0.5 if self._is_gaussian else 0.7
 
         # Convergence tolerance: family-dependent, matching R.
         # Gaussian: sqrt(eps) ≈ 1.5e-8 (matching fast.REML.fit).
@@ -544,8 +559,16 @@ class NewtonOptimizer:
             "p": fd.n_coef,
         }
 
-        # Build custom_jvp-based differentiable score for non-Gaussian families
-        if fd.family.family_name != "gaussian" and fd.n_penalties > 0:
+        # Build custom_jvp-based differentiable score for all families.
+        # For non-Gaussian: captures d(beta*)/d(rho), d(XtWX)/d(rho),
+        #   d(deviance)/d(rho) via IFT — matches R's gdi.c.
+        # For Gaussian: W is constant so dXtWX=0, but d(beta*)/d(rho)
+        #   is still needed for the Hessian cross-penalty terms
+        #   d²(beta'S beta)/d(rho_i)(rho_j). The AD Hessian misses these
+        #   because it treats beta* as constant. For single-smooth (m=1)
+        #   this has little effect, but for multi-smooth (m>1) the missing
+        #   terms cause 2-14x more iterations than R.
+        if fd.n_penalties > 0:
             kw = self._jit_kwargs
 
             def _grad_hess_fn(params, beta_warm):
@@ -625,6 +648,57 @@ class NewtonOptimizer:
         )
         return pirls_result, score
 
+    def _step_halve_gaussian(
+        self,
+        log_lambda: jax.Array,
+        step: jax.Array,
+        score: float,
+        beta_warm: jax.Array,
+        score_scale: float,
+    ) -> tuple[jax.Array, PIRLSResult, jax.Array, _StepOutcome]:
+        """Step-halving for Gaussian (R's ``fast.REML.fit``, fast-REML.r
+        lines 1822-1844).
+
+        Simpler than ``newton()``'s step acceptance: no quadratic-error
+        check, no steepest-descent fallback, and step failure immediately
+        ends the optimization. Just halves until score decreases.
+
+        Returns
+        -------
+        log_lambda_new, pirls_new, score_new, outcome
+        """
+        tol = self._tol
+
+        log_lambda_new = self._clamp_params(log_lambda + step)
+        pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
+
+        # Accept immediately if score decreased (R line 1827)
+        if jnp.isfinite(score_new) and float(score_new) < score:
+            return log_lambda_new, pirls_new, score_new, _StepOutcome.ACCEPTED
+
+        # Step-halving (R lines 1827-1839)
+        k = 0
+        not_moved = 0
+        while float(score_new) >= score:
+            # Count steps with no numerically significant change (R line 1831)
+            if float(score_new) - score < tol * score_scale:
+                not_moved += 1
+            else:
+                not_moved = 0
+
+            # Break conditions (R line 1832)
+            if k == 25 or not_moved > 3:
+                return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
+            if bool(jnp.allclose(log_lambda, log_lambda + step)):
+                return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
+
+            step = step / 2
+            k += 1
+            log_lambda_new = self._clamp_params(log_lambda + step)
+            pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
+
+        return log_lambda_new, pirls_new, score_new, _StepOutcome.ACCEPTED
+
     def _step_halve(
         self,
         log_lambda: jax.Array,
@@ -639,7 +713,8 @@ class NewtonOptimizer:
     ) -> tuple[jax.Array, PIRLSResult, jax.Array, _StepOutcome]:
         """Trial step with quadratic-error check and steepest-descent fallback.
 
-        Follows R's ``newton()`` (gam.fit3.r lines 1491-1571):
+        Follows R's ``newton()`` (gam.fit3.r lines 1491-1571) for
+        non-Gaussian families:
 
         1. Try Newton step, check if quadratic model is accurate (qerror < 0.8)
         2. If Hessian is positive definite and step accepted: done
@@ -818,7 +893,7 @@ class NewtonOptimizer:
         - ``score_scale = 1 + abs(score)``
         - Gradient check: ``max(|grad|) < tol * score_scale``
         - Score change: ``abs(delta) < tol * score_scale``
-        - AD Hessian (exact for Gaussian since W is constant)
+        - ``custom_jvp`` Hessian (matches R's ``Sl.ift`` analytical Hessian)
 
         **Non-Gaussian** (matches ``newton()``, gam.fit3.r lines 1647-1658):
         - ``score_scale = abs(log(scale)) + abs(score)``
@@ -834,19 +909,20 @@ class NewtonOptimizer:
         tol = self._tol
         is_gaussian = self._fd.family.family_name == "gaussian"
 
-        if is_gaussian:
-            # AD Hessian is exact for Gaussian (W is constant, no IFT needed).
-            # Fused grad+hess: single XLA dispatch instead of two.
-            grad, hess = criterion.grad_hess(params)
-            hess = (hess + hess.T) / 2
-        else:
+        if self._diff_grad_hess is not None:
             # custom_jvp gradient and Hessian via implicit differentiation.
             # Captures all first- and second-order terms from how PIRLS
-            # output (beta*, W, XtWX) changes with rho. Matches R's analytical
-            # Hessian from gdi.c at O(p²n) cost per iteration, no extra
-            # PIRLS calls needed. Fused: single XLA dispatch.
+            # output (beta*, W, XtWX) changes with rho. For Gaussian,
+            # dXtWX=0 (W constant) but d(beta*)/d(rho) contributes to
+            # the Hessian cross-penalty terms, critical for multi-smooth.
+            # For non-Gaussian, also captures d(XtWX)/d(rho).
+            # Matches R's analytical Hessian from gdi.c / fast.REML.fit.
             beta_warm = pirls_result.coefficients
             grad, hess = self._diff_grad_hess(params, beta_warm)
+            hess = (hess + hess.T) / 2
+        else:
+            # Purely parametric (no smoothing parameters): use criterion AD.
+            grad, hess = criterion.grad_hess(params)
             hess = (hess + hess.T) / 2
 
         scale_val = float(criterion.scale)
@@ -1002,10 +1078,11 @@ class NewtonOptimizer:
         consecutive_stuck = 0
 
         for outer_iter in range(self._max_iter):
-            # uconv.ind subsetting: only optimize unconverged dimensions
-            # (R lines 1430-1436, 1651). This speeds convergence and
-            # prevents poorly-modelled flat directions from corrupting
-            # the Newton step in well-conditioned directions.
+            # uconv.ind subsetting: only optimize unconverged dimensions.
+            # Both R's fast.REML.fit (line 1802) and newton() (lines
+            # 1430-1436) use this. Speeds convergence and prevents
+            # poorly-modelled flat directions from corrupting the
+            # Newton step in well-conditioned directions.
             uconv = self._compute_uconv_ind(grad, hess, score_scale)
             n_uc = int(np.sum(uconv))
 
@@ -1014,24 +1091,39 @@ class NewtonOptimizer:
                 uc_idx = np.where(uconv)[0]
                 grad_uc = grad[uc_idx]
                 hess_uc = hess[np.ix_(uc_idx, uc_idx)]
-                step_uc, is_pdef = _safe_newton_step(grad_uc, hess_uc, self._max_step)
-                # Embed back into full space (R line 1457-1458)
+                step_uc, is_pdef = _safe_newton_step(
+                    grad_uc, hess_uc, self._max_step, self._eig_floor_power
+                )
+                # Embed back into full space
                 step = jnp.zeros_like(grad)
                 step = step.at[uc_idx].set(step_uc)
             else:
-                step, is_pdef = _safe_newton_step(grad, hess, self._max_step)
+                step, is_pdef = _safe_newton_step(
+                    grad, hess, self._max_step, self._eig_floor_power
+                )
 
-            params_new, pirls_new, score_new, outcome = self._step_halve(
-                params,
-                step,
-                float(score),
-                pirls_result.coefficients,
-                score_scale,
-                grad,
-                hess,
-                outer_iter,
-                bool(is_pdef),
-            )
+            if self._is_gaussian:
+                # fast.REML.fit: simpler step acceptance, step.failed
+                # breaks immediately (R fast-REML.r lines 1822-1844)
+                params_new, pirls_new, score_new, outcome = self._step_halve_gaussian(
+                    params,
+                    step,
+                    float(score),
+                    pirls_result.coefficients,
+                    score_scale,
+                )
+            else:
+                params_new, pirls_new, score_new, outcome = self._step_halve(
+                    params,
+                    step,
+                    float(score),
+                    pirls_result.coefficients,
+                    score_scale,
+                    grad,
+                    hess,
+                    outer_iter,
+                    bool(is_pdef),
+                )
 
             n_iter = outer_iter + 1
 

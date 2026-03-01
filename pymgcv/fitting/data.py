@@ -164,9 +164,8 @@ class FittingData:
                 penalty_arrays.append(penalty.S)
                 ranks.append(penalty.rank)
                 null_dims.append(penalty.null_space_dim)
-            log_lambda_init = to_jax(
-                setup.penalties.log_smoothing_params, device=device
-            )
+            log_sp_init = cls._initial_sp(setup.X, penalty_arrays, setup.weights)
+            log_lambda_init = to_jax(log_sp_init, device=device)
         else:
             # Purely parametric model — no penalties
             log_lambda_init = jnp.zeros(0)
@@ -327,6 +326,70 @@ class FittingData:
             multi_block_S_local=multi_block_S_local,
             repara_D=repara_D_jax,
         )
+
+    @staticmethod
+    def _initial_sp(
+        X: np.ndarray,
+        S_list: list[np.ndarray],
+        weights: np.ndarray,
+    ) -> np.ndarray:
+        """Initial log smoothing parameters via R's ``initial.sp`` (mgcv.r:4626).
+
+        Balances diag(X'WX) against each penalty diagonal so that the
+        effective degrees of freedom are ~40% of the unpenalized model.
+        Must use the original (pre-reparameterization) X and S.
+        """
+        n_penalties = len(S_list)
+        if n_penalties == 0:
+            return np.zeros(0)
+
+        w = np.sqrt(np.maximum(weights, 0.0))
+        wX = w[:, None] * X
+
+        ldxx = np.sum(wX * wX, axis=0)
+        def_sp = np.zeros(n_penalties)
+        ldss = np.zeros_like(ldxx)
+        pen = np.zeros(len(ldxx), dtype=bool)
+        eps_08 = np.finfo(float).eps ** 0.8
+
+        for i, S in enumerate(S_list):
+            maS = np.max(np.abs(S))
+            if maS == 0:
+                continue
+            rsS = np.mean(np.abs(S), axis=1)
+            csS = np.mean(np.abs(S), axis=0)
+            dS = np.abs(np.diag(S))
+            thresh = eps_08 * maS
+            ind = (rsS > thresh) & (csS > thresh) & (dS > thresh)
+
+            ss = np.diag(S)[ind]
+            xx = ldxx[ind]
+            sizeXX = np.mean(xx) if len(xx) > 0 else 0.0
+            sizeS = np.mean(ss) if len(ss) > 0 else 0.0
+
+            if sizeS <= 0 or sizeXX <= 0:
+                continue
+
+            def_sp[i] = sizeXX / sizeS
+            pen |= ind
+            ldss += def_sp[i] * np.diag(S)
+
+        idx = (ldss > 0) & pen & (ldxx > 0)
+        if not np.any(idx):
+            return np.zeros(n_penalties)
+
+        ldxx_s = ldxx[idx].copy()
+        ldss_s = ldss[idx].copy()
+
+        while np.mean(ldxx_s / (ldxx_s + ldss_s)) > 0.4:
+            def_sp *= 10
+            ldss_s *= 10
+        while np.mean(ldxx_s / (ldxx_s + ldss_s)) < 0.4:
+            def_sp /= 10
+            ldss_s /= 10
+
+        def_sp = np.maximum(def_sp, np.finfo(float).tiny)
+        return np.log(def_sp)
 
     def S_lambda(self, log_lambda: jax.Array) -> jax.Array:
         """Compute S_lambda = sum_j exp(log_lambda[j]) * S_j.

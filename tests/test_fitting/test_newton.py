@@ -1116,13 +1116,13 @@ class TestCustomJVP:
             err_msg=f"{family_name}: custom_jvp Hessian differs from FD Hessian",
         )
 
-    def test_gaussian_uses_ad_not_custom_jvp(self):
-        """Gaussian families use AD Hessian, not custom_jvp."""
+    def test_gaussian_uses_custom_jvp(self):
+        """Gaussian families use custom_jvp for correct multi-smooth Hessian."""
         data = _make_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         optimizer = NewtonOptimizer(fd)
 
-        assert optimizer._diff_grad_hess is None
+        assert optimizer._diff_grad_hess is not None
 
     @pytest.mark.parametrize(
         ("family_name", "family_obj"),
