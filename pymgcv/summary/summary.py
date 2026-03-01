@@ -21,7 +21,7 @@ import numpy as np
 from scipy import stats
 
 if TYPE_CHECKING:
-    pass
+    from pymgcv.api import GAM
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ class GAMSummary:
 # ---------------------------------------------------------------------------
 
 
-def summary(gam) -> GAMSummary:
+def summary(gam: GAM) -> GAMSummary:
     """Compute summary statistics for a fitted GAM.
 
     Port of R's ``summary.gam()`` (mgcv.r lines 3858-4068).
@@ -128,7 +128,14 @@ def summary(gam) -> GAMSummary:
     -------
     GAMSummary
         Summary object with parametric and smooth term tables.
+
+    Raises
+    ------
+    RuntimeError
+        If the model is not fitted.
     """
+    gam._check_fitted()
+
     family = gam.family_
     est_disp = not family.scale_known
     dispersion = gam.scale_
@@ -194,6 +201,7 @@ def summary(gam) -> GAMSummary:
             edf_i = float(gam.edf_[i])
             # Use edf1 (= 2*edf - trace(F^2)) as reference df for the test,
             # matching R's summary.gam (mgcv.r line 4019/4027).
+            # edf1_ may be absent on models serialized before edf1 was added
             edf1_i = float(gam.edf1_[i]) if hasattr(gam, "edf1_") else edf_i
 
             X_i = X[:, start:stop]
@@ -264,7 +272,7 @@ def _test_stat(
     rank: float | None = None,
     type_: int = 0,
     res_df: float = -1.0,
-) -> dict:
+) -> dict[str, float]:
     """Wood (2013) test statistic for smooth significance.
 
     Port of R's ``testStat`` (mgcv.r lines 3759-3853).
@@ -384,6 +392,9 @@ def _test_stat(
 
     rank1 = rank  # rank for lower tail computation
 
+    use_integer_fallback = True
+    pval = 0.0
+
     if nu > 0:
         # Mixture of chi-squared reference distribution
         if k1 == 1:
@@ -401,19 +412,19 @@ def _test_stat(
         else:
             # Unknown scale: F-like mixture via Davies
             # R's testStat line 3839: difference of two weighted chi-sq sums
-            k0 = max(1, round(res_df))
-            lb_d = np.concatenate([val, [-d / k0]])
-            lb_d1 = np.concatenate([val, [-d1 / k0]])
-            df_arr = np.concatenate([np.ones(len(val), dtype=int), np.array([k0])])
+            res_df_int = max(1, round(res_df))
+            lb_d = np.concatenate([val, [-d / res_df_int]])
+            lb_d1 = np.concatenate([val, [-d1 / res_df_int]])
+            df_arr = np.concatenate(
+                [np.ones(len(val), dtype=int), np.array([res_df_int])]
+            )
             pval = (
                 psum_chisq_davies(0.0, lb_d, df=df_arr)
                 + psum_chisq_davies(0.0, lb_d1, df=df_arr)
             ) / 2.0
-    else:
-        pval = 2.0  # sentinel: needs integer case
+        use_integer_fallback = pval > 1.0
 
-    # Integer case fallback
-    if pval > 1.0:
+    if use_integer_fallback:
         if res_df <= 0:
             # Known scale: chi-squared
             pval = (stats.chi2.sf(d, df=rank1) + stats.chi2.sf(d1, df=rank1)) / 2.0
@@ -571,7 +582,7 @@ def psum_chisq_davies(
 # ---------------------------------------------------------------------------
 
 
-def _count_parametric(gam) -> int:
+def _count_parametric(gam: GAM) -> int:
     """Count the number of parametric coefficient columns.
 
     Parameters
@@ -591,7 +602,7 @@ def _count_parametric(gam) -> int:
     return 0
 
 
-def _compute_r_squared(gam, residual_df: float) -> float | None:
+def _compute_r_squared(gam: GAM, residual_df: float) -> float | None:
     """Compute adjusted R-squared.
 
     Matches R's formula in ``summary.gam`` (mgcv.r line 4056)::
@@ -638,7 +649,7 @@ def _compute_r_squared(gam, residual_df: float) -> float | None:
     return float(r_sq)
 
 
-def _compute_deviance_explained(gam) -> float:
+def _compute_deviance_explained(gam: GAM) -> float:
     """Compute proportion of deviance explained.
 
     Formula: ``(null_deviance - deviance) / null_deviance``
