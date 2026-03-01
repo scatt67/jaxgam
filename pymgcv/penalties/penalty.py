@@ -15,6 +15,10 @@ from __future__ import annotations
 import numpy as np
 import numpy.typing as npt
 
+# Tolerances for symmetry validation, matching the project's STRICT tier.
+_SYMMETRY_RTOL = 1e-10
+_SYMMETRY_ATOL = 1e-12
+
 
 class Penalty:
     """A single penalty matrix with rank and null space information.
@@ -27,8 +31,10 @@ class Penalty:
     Parameters
     ----------
     S : np.ndarray
-        Penalty matrix, shape (k, k). Must be symmetric and positive
-        semi-definite.
+        Penalty matrix, shape (k, k). Should be symmetric and positive
+        semi-definite. Symmetry is validated; PSD is assumed but not
+        checked (the eigendecomposition for rank would catch gross
+        violations).
     rank : int or None
         Rank of the penalty matrix. If None, computed from eigenvalues.
     null_space_dim : int or None
@@ -57,7 +63,7 @@ class Penalty:
             raise ValueError(f"Penalty matrix must be square, got shape {S.shape}.")
 
         # Validate symmetry
-        if not np.allclose(S, S.T, rtol=1e-10, atol=1e-12):
+        if not np.allclose(S, S.T, rtol=_SYMMETRY_RTOL, atol=_SYMMETRY_ATOL):
             raise ValueError(
                 "Penalty matrix must be symmetric. "
                 f"Max asymmetry: {np.max(np.abs(S - S.T)):.2e}."
@@ -72,6 +78,7 @@ class Penalty:
             eigvals = np.linalg.eigvalsh(self.S)
             max_eigval = np.max(np.abs(eigvals))
             if max_eigval > 0:
+                # Standard numerical rank threshold (cf. np.linalg.matrix_rank)
                 tol = max_eigval * max(k, 1) * np.finfo(float).eps
                 rank = int(np.sum(eigvals > tol))
             else:
@@ -126,6 +133,15 @@ class CompositePenalty:
     ) -> None:
         if not penalties:
             raise ValueError("CompositePenalty requires at least one Penalty.")
+
+        expected_shape = penalties[0].shape
+        for i, p in enumerate(penalties[1:], 1):
+            if p.shape != expected_shape:
+                raise ValueError(
+                    f"All penalties must have the same shape. "
+                    f"Penalty 0 has shape {expected_shape}, "
+                    f"but penalty {i} has shape {p.shape}."
+                )
 
         self.penalties: list[Penalty] = list(penalties)
 
@@ -236,7 +252,7 @@ class CompositePenalty:
                 f"total_p={total_p}."
             )
 
-        S_global = np.zeros((total_p, total_p))
+        S_global = np.zeros((total_p, total_p), dtype=float)
         S_global[col_start : col_start + k, col_start : col_start + k] = S_j
         return S_global
 
