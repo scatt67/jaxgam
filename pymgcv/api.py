@@ -18,6 +18,7 @@ import scipy.linalg as sla
 from pymgcv.families.base import ExponentialFamily
 from pymgcv.families.registry import get_family
 from pymgcv.fitting.data import FittingData
+from pymgcv.fitting.initialization import initialize_beta
 from pymgcv.fitting.newton import NewtonResult, newton_optimize
 from pymgcv.fitting.pirls import pirls_loop
 from pymgcv.fitting.reml import estimate_edf, estimate_scale
@@ -28,6 +29,8 @@ from pymgcv.jax_utils import to_numpy
 from pymgcv.smooths.by_variable import get_factor_levels, is_factor
 
 if TYPE_CHECKING:
+    import jax
+    import matplotlib.figure
     import pandas as pd
 
     from pymgcv.summary.summary import GAMSummary
@@ -58,6 +61,35 @@ class GAM:
     **kwargs
         Additional arguments. Supported scope guards:
         ``backend``, ``optimizer``, ``select``, ``gamma``, ``knots``.
+
+    Attributes (set after ``fit()``)
+    --------------------------------
+    coefficients_ : np.ndarray
+        Fitted coefficient vector.
+    fitted_values_ : np.ndarray
+        Fitted values (response scale).
+    linear_predictor_ : np.ndarray
+        Linear predictor (link scale).
+    family_ : ExponentialFamily
+        Fitted family object.
+    Vp_ : np.ndarray
+        Bayesian posterior covariance of coefficients.
+    scale_ : float
+        Estimated or fixed scale parameter (phi).
+    edf_ : np.ndarray
+        Per-smooth effective degrees of freedom.
+    edf_total_ : float
+        Total effective degrees of freedom.
+    smoothing_params_ : np.ndarray
+        Estimated smoothing parameters (original scale).
+    deviance_ : float
+        Model deviance.
+    null_deviance_ : float
+        Null model deviance.
+    converged_ : bool
+        Whether the outer Newton loop converged.
+    n_iter_ : int
+        Number of outer Newton iterations.
 
     Examples
     --------
@@ -130,17 +162,17 @@ class GAM:
     def predict(
         self,
         newdata: pd.DataFrame | dict | None = None,
-        type: str = "response",
+        pred_type: str = "response",
         se_fit: bool = False,
         offset: np.ndarray | None = None,
-    ):
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         """Predict from a fitted GAM.
 
         Parameters
         ----------
         newdata : pandas.DataFrame or dict, optional
             New data for prediction. If None, uses the training data.
-        type : str
+        pred_type : str
             Type of prediction: ``'response'`` or ``'link'``.
         se_fit : bool
             Whether to return standard errors.
@@ -149,13 +181,15 @@ class GAM:
 
         Returns
         -------
-        numpy.ndarray or tuple
+        numpy.ndarray or tuple[numpy.ndarray, numpy.ndarray]
             Predictions, or ``(predictions, standard_errors)`` if ``se_fit=True``.
         """
         self._check_fitted()
 
-        if type not in ("response", "link"):
-            raise ValueError(f"type must be 'response' or 'link', got {type!r}")
+        if pred_type not in ("response", "link"):
+            raise ValueError(
+                f"pred_type must be 'response' or 'link', got {pred_type!r}"
+            )
 
         if newdata is None:
             # Self-prediction: use stored linear predictor
@@ -167,7 +201,7 @@ class GAM:
             if offset is not None:
                 eta = eta + np.asarray(offset, dtype=np.float64).ravel()
 
-        pred = self.family_.link.linkinv(eta) if type == "response" else eta
+        pred = self.family_.link.linkinv(eta) if pred_type == "response" else eta
 
         if se_fit:
             if X_p is None:
@@ -211,6 +245,9 @@ class GAM:
         """
         data_dict = ModelSetup._to_dict(newdata)
 
+        if not data_dict:
+            raise ValueError("newdata is empty — no variables found.")
+
         # Determine n_obs from first available variable
         first_key = next(iter(data_dict))
         n_new = len(data_dict[first_key])
@@ -238,7 +275,11 @@ class GAM:
             blocks.append(X_c)
 
         X_p = np.column_stack(blocks) if len(blocks) > 1 else blocks[0]
-        assert X_p.shape[1] == coef_map.total_coefs
+        if X_p.shape[1] != coef_map.total_coefs:
+            raise RuntimeError(
+                f"Prediction matrix has {X_p.shape[1]} columns but model "
+                f"expects {coef_map.total_coefs}."
+            )
         return X_p
 
     def summary(self) -> GAMSummary:
@@ -269,7 +310,7 @@ class GAM:
         se: bool = True,
         shade: bool = True,
         **kwargs,
-    ):
+    ) -> tuple[matplotlib.figure.Figure, np.ndarray]:
         """Plot smooth components of a fitted GAM.
 
         Equivalent to R's ``plot.gam()``. Produces one panel per smooth
@@ -333,7 +374,12 @@ class GAM:
         fd: FittingData,
         lambda_strategy: str,
     ) -> None:
-        """Transfer Phase 2 output to fitted attributes."""
+        """Transfer Phase 2 output to fitted attributes.
+
+        Sets all ``*_`` attributes listed in the class docstring's
+        Attributes section (coefficients_, Vp_, edf_, etc.), plus
+        internal bookkeeping attributes used by predict/summary/plot.
+        """
         pr = result.pirls_result
 
         # Phase 2→3: transfer to NumPy
@@ -351,7 +397,8 @@ class GAM:
         y_np = setup.y
         wt_np = setup.weights
 
-        # Compute H^{-1} once, reuse for Vp and per-smooth EDF
+        # Compute H^{-1} via Cholesky solve (matches R's chol2inv).
+        # O(p^3) but p is typically small (< 200 for GAMs).
         p = L.shape[0]
         Z = sla.solve_triangular(L, np.eye(p), lower=True)
         H_inv = Z.T @ Z
@@ -383,6 +430,7 @@ class GAM:
         self.linear_predictor_ = eta
         self.family_ = family_obj
         self.Vp_ = Vp
+        # Placeholder for frequentist covariance (not yet implemented).
         self.Ve_ = None
         self.scale_ = scale
         self.edf_ = per_smooth_edf
@@ -399,6 +447,7 @@ class GAM:
         self.coef_map_ = setup.coef_map
         self.smooth_info_ = setup.smooth_info
         self.term_names_ = setup.term_names
+        # Currently always "jax"; reserved for future backend dispatch.
         self.execution_path_ = "jax"
         self.lambda_strategy_ = lambda_strategy
         self.formula_spec_ = spec
@@ -414,7 +463,7 @@ class GAM:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_device(device: str | None) -> object:
+def _resolve_device(device: str | None) -> jax.Device | None:
     """Resolve a device string to a JAX device object."""
     if device is None:
         return None
@@ -433,7 +482,9 @@ def _resolve_device(device: str | None) -> object:
                 "Install jax[cuda12] (NVIDIA) or jax-metal (Apple Silicon)."
             )
         return gpu_devices[0]
-    return None
+    # _check_scope_guards validates device before this is called, so this
+    # line is unreachable.  Raise explicitly for defensive clarity.
+    raise ValueError(f"Unrecognized device: {device!r}")
 
 
 def _check_scope_guards(method: str, kwargs: dict) -> None:
@@ -502,8 +553,6 @@ def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
         Result with ``n_iter=0``, ``convergence_info="fixed sp"``.
     """
     import jax.numpy as jnp
-
-    from pymgcv.fitting.initialization import initialize_beta
 
     sp_arr = np.asarray(sp, dtype=np.float64)
     if sp_arr.shape[0] != fd.n_penalties:

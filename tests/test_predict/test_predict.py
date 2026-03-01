@@ -147,13 +147,13 @@ class TestSelfPrediction:
 
     def test_predict_link_matches_linear_predictor(self, fitted_model):
         _, model, _ = fitted_model
-        pred = model.predict(type="link")
+        pred = model.predict(pred_type="link")
         np.testing.assert_allclose(
             pred,
             model.linear_predictor_,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
-            err_msg="predict(type='link') != linear_predictor_",
+            err_msg="predict(pred_type='link') != linear_predictor_",
         )
 
     def test_predict_matrix_times_coefs_matches_eta(self, fitted_model):
@@ -228,7 +228,7 @@ class TestNewDataVsR:
     def test_response_vs_r(self, prediction_pair):
         family_name, model, newdata, r_response, _ = prediction_pair
         tol = _r_tol(family_name)
-        pred = model.predict(newdata, type="response")
+        pred = model.predict(newdata, pred_type="response")
         np.testing.assert_allclose(
             pred,
             r_response["predictions"],
@@ -240,7 +240,7 @@ class TestNewDataVsR:
     def test_link_vs_r(self, prediction_pair):
         family_name, model, newdata, _, r_link = prediction_pair
         tol = _r_tol(family_name)
-        pred = model.predict(newdata, type="link")
+        pred = model.predict(newdata, pred_type="link")
         np.testing.assert_allclose(
             pred,
             r_link["predictions"],
@@ -288,7 +288,7 @@ class TestSEVsR:
     def test_se_vs_r(self, se_pair):
         family_name, model, newdata, r_result = se_pair
         tol = _r_tol(family_name)
-        _, se = model.predict(newdata, type="link", se_fit=True)
+        _, se = model.predict(newdata, pred_type="link", se_fit=True)
         np.testing.assert_allclose(
             se,
             r_result["se"],
@@ -379,7 +379,7 @@ class TestMultiSmoothVsR:
         bridge = RBridge()
         r_result = bridge.predict_gam(formula, train, newdata, pred_type="response")
 
-        pred = model.predict(newdata, type="response")
+        pred = model.predict(newdata, pred_type="response")
         np.testing.assert_allclose(
             pred,
             r_result["predictions"],
@@ -407,7 +407,7 @@ class TestMultiSmoothVsR:
         bridge = RBridge()
         r_result = bridge.predict_gam(r_formula, train, newdata, pred_type="response")
 
-        pred = model.predict(newdata, type="response")
+        pred = model.predict(newdata, pred_type="response")
         np.testing.assert_allclose(
             pred,
             r_result["predictions"],
@@ -438,7 +438,7 @@ class TestMultiSmoothVsR:
         bridge = RBridge()
         r_result = bridge.predict_gam(formula, train, newdata, pred_type="response")
 
-        pred = model.predict(newdata, type="response")
+        pred = model.predict(newdata, pred_type="response")
         np.testing.assert_allclose(
             pred,
             r_result["predictions"],
@@ -509,8 +509,8 @@ class TestEdgeCases:
 
         newdata = _make_newdata("gaussian")
         offset = np.ones(len(newdata)) * 0.5
-        pred_no_offset = model.predict(newdata, type="link")
-        pred_with_offset = model.predict(newdata, type="link", offset=offset)
+        pred_no_offset = model.predict(newdata, pred_type="link")
+        pred_with_offset = model.predict(newdata, pred_type="link", offset=offset)
 
         np.testing.assert_allclose(
             pred_with_offset,
@@ -534,8 +534,8 @@ class TestEdgeCases:
     def test_invalid_type_raises(self):
         data = _make_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        with pytest.raises(ValueError, match="type must be"):
-            model.predict(type="terms")
+        with pytest.raises(ValueError, match="pred_type must be"):
+            model.predict(pred_type="terms")
 
     def test_unfitted_predict_matrix_raises(self):
         model = GAM("y ~ s(x)")

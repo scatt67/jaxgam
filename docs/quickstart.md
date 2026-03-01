@@ -160,7 +160,7 @@ dtype) so pymgcv recognizes it as a factor.
 ```python
 # Predictions on the training data
 mu_hat = model.predict()                          # response scale
-eta_hat = model.predict(type="link")              # link scale
+eta_hat = model.predict(pred_type="link")          # link scale
 mu_hat, se = model.predict(se_fit=True)           # with standard errors
 ```
 

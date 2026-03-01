@@ -17,14 +17,41 @@ from ``jax.scipy.linalg`` / ``jax.numpy.linalg``.
 
 from __future__ import annotations
 
+import types
+from typing import overload
+
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jsla
 import numpy as np
 
+__all__ = [
+    "array_module",
+    "block_log_det_S",
+    "build_S_lambda",
+    "cho_factor",
+    "is_jax_array",
+    "numerical_rank",
+    "penalized_cholesky",
+    "penalized_solve",
+    "stable_log_pseudo_det",
+    "to_jax",
+    "to_numpy",
+]
+
 # ---------------------------------------------------------------------------
 # Device transfer (Phase 1→2 and Phase 2→3 boundaries, design.md §1.3)
 # ---------------------------------------------------------------------------
+
+
+@overload
+def to_jax(array: np.ndarray, /, *, device: jax.Device | None = ...) -> jax.Array: ...
+
+
+@overload
+def to_jax(
+    *arrays: np.ndarray, device: jax.Device | None = ...
+) -> tuple[jax.Array, ...]: ...
 
 
 def to_jax(
@@ -54,12 +81,22 @@ def to_jax(
     >>> X_jax, y_jax, S_jax = to_jax(X, y, S_lambda)
     >>> result = pirls_loop(X_jax, y_jax, beta_init, S_jax, family)
     """
+    if not arrays:
+        raise TypeError("to_jax() requires at least one array argument.")
     converted = tuple(
         jax.device_put(jnp.asarray(a, dtype=jnp.float64), device) for a in arrays
     )
     if len(converted) == 1:
         return converted[0]
     return converted
+
+
+@overload
+def to_numpy(array: jax.Array, /) -> np.ndarray: ...
+
+
+@overload
+def to_numpy(*arrays: jax.Array) -> tuple[np.ndarray, ...]: ...
 
 
 def to_numpy(*arrays: jax.Array) -> tuple[np.ndarray, ...] | np.ndarray:
@@ -78,6 +115,8 @@ def to_numpy(*arrays: jax.Array) -> tuple[np.ndarray, ...] | np.ndarray:
     np.ndarray or tuple[np.ndarray, ...]
         Single array if one input, tuple if multiple.
     """
+    if not arrays:
+        raise TypeError("to_numpy() requires at least one array argument.")
     converted = tuple(np.asarray(a) for a in arrays)
     if len(converted) == 1:
         return converted[0]
@@ -91,10 +130,10 @@ def to_numpy(*arrays: jax.Array) -> tuple[np.ndarray, ...] | np.ndarray:
 
 def is_jax_array(x: object) -> bool:
     """Check if x is a JAX array."""
-    return type(x).__module__.startswith(("jax", "jaxlib"))
+    return isinstance(x, jax.Array)
 
 
-def array_module(x: object):
+def array_module(x: object) -> types.ModuleType:
     """Return ``jax.numpy`` if *x* is a JAX array, else ``numpy``."""
     if is_jax_array(x):
         return jnp
@@ -133,59 +172,6 @@ def build_S_lambda(
     for j, S_j in enumerate(S_list):
         S_lambda = S_lambda + jnp.exp(log_lambda[j]) * S_j
     return S_lambda
-
-
-def log_pseudo_det(S: jax.Array, n_zero: int = 0) -> jax.Array:
-    """Log pseudo-determinant of S (product of non-zero eigenvalues).
-
-    Adds a tiny asymmetric diagonal perturbation before eigendecomposition
-    to break eigenvalue degeneracy.  Without this, ``jax.hessian`` through
-    ``eigvalsh`` produces NaN when eigenvalues are degenerate — which
-    occurs for factor-by models whose block-diagonal penalties share
-    identical eigenvalue structure.  The perturbation (scale ~1e-14) is
-    negligible relative to the eigenvalues.
-
-    Parameters
-    ----------
-    S : jax.Array, shape (p, p)
-        Symmetric positive semi-definite matrix.
-    n_zero : int
-        Number of eigenvalues known to be zero (the penalty null space
-        dimension ``Mp``).  When provided, the bottom ``n_zero``
-        eigenvalues are excluded by index rather than by a relative
-        threshold.  This is critical for multi-penalty models where
-        eigenvalues span many orders of magnitude — a relative
-        threshold ``1e-10 * max(eig)`` can incorrectly exclude
-        eigenvalues from weaker penalties when one smoothing parameter
-        dominates.
-
-    Returns
-    -------
-    jax.Array, scalar
-        Log of the product of non-zero eigenvalues.
-    """
-    p = S.shape[0]
-    # Asymmetric diagonal jitter breaks eigenvalue degeneracy so that
-    # second derivatives through eigvalsh remain finite.
-    #
-    # The jitter scales proportionally to each diagonal entry of S,
-    # ensuring the relative perturbation is ~1e-14 regardless of the
-    # eigenvalue magnitude.  This is critical for multi-penalty models
-    # (tensor products) where eigenvalues span many orders of magnitude:
-    # a global scale ``1e-14 * max|S|`` would corrupt the small eigenvalues
-    # from the weaker penalty when one smoothing parameter dominates.
-    diag_S = jnp.abs(jnp.diag(S))
-    # Floor prevents zero jitter in the null space (where diag ≈ 0).
-    # The floor is negligible relative to any non-null eigenvalue.
-    per_entry_scale = jnp.maximum(diag_S, 1e-30)
-    jitter = 1e-14 * per_entry_scale * jnp.arange(1, p + 1, dtype=S.dtype)
-    S = S + jnp.diag(jitter)
-    eigs = jnp.linalg.eigvalsh(S)  # ascending order
-    safe_eigs = jnp.maximum(eigs, 1e-30)
-    # Select top p - n_zero eigenvalues (the non-null ones).
-    # eigvalsh returns ascending order, so null eigenvalues are first.
-    mask = jnp.arange(p) >= n_zero
-    return jnp.sum(jnp.where(mask, jnp.log(safe_eigs), 0.0))
 
 
 def block_log_det_S(
@@ -281,6 +267,10 @@ def stable_log_pseudo_det(S: jax.Array, U_range: jax.Array) -> jax.Array:
     """
     S_proj = U_range.T @ S @ U_range  # (r, r), full rank PD
     sign, logdet = jnp.linalg.slogdet(S_proj)
+    # -1e10 sentinel: if the projected matrix is not PD (sign ≤ 0), return
+    # a large negative value.  This acts as a soft penalty in the REML
+    # criterion, steering the optimizer away from degenerate regions.
+    # Raising an exception is not possible inside JIT-compiled code.
     return jnp.where(sign > 0, logdet, -1e10)
 
 

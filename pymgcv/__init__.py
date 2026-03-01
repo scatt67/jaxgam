@@ -1,4 +1,14 @@
-"""PyMGCV: Python port of R's mgcv for Generalized Additive Models."""
+"""PyMGCV: Python port of R's mgcv for Generalized Additive Models.
+
+Importing this package has global side effects:
+
+* ``jax.config.update("jax_enable_x64", True)`` — enables float64 in JAX.
+* A persistent compilation cache directory is configured (unless
+  ``PYMGCV_NO_COMPILATION_CACHE=1`` or ``JAX_COMPILATION_CACHE_DIR`` is
+  already set).
+
+These calls are idempotent and follow standard JAX project conventions.
+"""
 
 import os
 import pathlib
@@ -24,6 +34,8 @@ jax.config.update("jax_enable_x64", True)
 if not os.environ.get("PYMGCV_NO_COMPILATION_CACHE"):
     _cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR")
     if not _cache_dir:
+        # JAX reads JAX_COMPILATION_CACHE_DIR automatically; only override
+        # when the env var is absent.
         _cache_dir = str(pathlib.Path.home() / ".cache" / "pymgcv" / "jax")
         jax.config.update("jax_compilation_cache_dir", _cache_dir)
     # Cache everything, including fast compiles — the small XLA programs
