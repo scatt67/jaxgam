@@ -21,7 +21,6 @@ R comparison tests require pinned R 4.5.2 + mgcv 1.9-3 (enforced by `RBridge.che
 
 - `make test` — full suite in Docker (includes R comparison tests)
 - `make test-local` — local tests only (R tests skip if R unavailable/wrong version)
-- `make generate-ref` — regenerate R reference data via Docker
 
 ## Architecture (Three Phases)
 
@@ -108,7 +107,6 @@ pymgcv/
 ├── plot/                # Phase 3: matplotlib plotting
 └── tests/
     ├── r_bridge.py      # R bridge for testing (pinned R 4.5.2 + mgcv 1.9-3)
-    ├── reference_data/  # Pre-computed R results (NPZ)
     ├── tolerances.py    # STRICT / MODERATE / LOOSE definitions
     └── conftest.py      # Shared fixtures, R bridge setup
 ```
@@ -140,7 +138,6 @@ pymgcv/
 - Use the tolerance classes from `tests/tolerances.py`: `STRICT`, `MODERATE`, `LOOSE`.
 - R comparison tests use `tests/r_bridge.py` to run the same model in R and compare results.
 - **important** R comparisons tests must be identical to R results with `STRICT`, or `MODERATE` tolerance.
-- Reference data (pre-computed R results) lives in `tests/reference_data/` as npz files. Generate these using `scripts/generate_reference_data.R`.
 - pymgcv results (smooths, bases, coefficients, etc...) **must** be identical to the canonical R mgcv results.
 - Hard-gate invariants (§18.1) are tested in every CI run and block the build on failure. These include: objective monotonicity, H symmetry/PSD, penalty PSD, rank conditions, EDF bounds, deviance non-negativity, no NaN in converged model.
 - All new modules must have > 80% test coverage.

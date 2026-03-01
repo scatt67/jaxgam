@@ -57,12 +57,6 @@ colima-start: ## start colima VM (no-op if already running)
 docker-build: colima-start ## build the test Docker image
 	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
-.PHONY: generate-ref
-generate-ref: docker-build ## regenerate R reference data via Docker
-	docker run --rm -v $$(pwd)/tests/reference_data:/app/tests/reference_data \
-		$(DOCKER_IMAGE):$(DOCKER_TAG) \
-		uv run python scripts/generate_reference_data.py --force
-
 .PHONY: pre-commit
 pre-commit: ## run pre-commit on all files
 	$(UV) run pre-commit run --all-files
