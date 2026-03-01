@@ -20,6 +20,9 @@ make test-local
 # Full test suite in Docker (includes R comparison tests, requires colima/Docker)
 make test
 
+# Run R tests for a single file in Docker
+make test-file FILE=tests/test_smooths/test_tprs.py
+
 # Tests with coverage
 make test-cov
 ```
