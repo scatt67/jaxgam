@@ -217,10 +217,10 @@ class TestNewDataVsR:
         bridge = RBridge()
 
         r_response = bridge.predict_gam(
-            self.FORMULA, train, newdata, family=family_r, type="response"
+            self.FORMULA, train, newdata, family=family_r, pred_type="response"
         )
         r_link = bridge.predict_gam(
-            self.FORMULA, train, newdata, family=family_r, type="link"
+            self.FORMULA, train, newdata, family=family_r, pred_type="link"
         )
 
         return family_name, model, newdata, r_response, r_link
@@ -280,7 +280,7 @@ class TestSEVsR:
         model = GAM(self.FORMULA, family=family_name).fit(train)
         bridge = RBridge()
         r_result = bridge.predict_gam(
-            self.FORMULA, train, newdata, family=family_r, type="link", se_fit=True
+            self.FORMULA, train, newdata, family=family_r, pred_type="link", se_fit=True
         )
 
         return family_name, model, newdata, r_result
@@ -377,7 +377,7 @@ class TestMultiSmoothVsR:
 
         model = GAM(formula).fit(train)
         bridge = RBridge()
-        r_result = bridge.predict_gam(formula, train, newdata, type="response")
+        r_result = bridge.predict_gam(formula, train, newdata, pred_type="response")
 
         pred = model.predict(newdata, type="response")
         np.testing.assert_allclose(
@@ -405,7 +405,7 @@ class TestMultiSmoothVsR:
 
         model = GAM(py_formula).fit(train)
         bridge = RBridge()
-        r_result = bridge.predict_gam(r_formula, train, newdata, type="response")
+        r_result = bridge.predict_gam(r_formula, train, newdata, pred_type="response")
 
         pred = model.predict(newdata, type="response")
         np.testing.assert_allclose(
@@ -436,7 +436,7 @@ class TestMultiSmoothVsR:
 
         model = GAM(formula).fit(train)
         bridge = RBridge()
-        r_result = bridge.predict_gam(formula, train, newdata, type="response")
+        r_result = bridge.predict_gam(formula, train, newdata, pred_type="response")
 
         pred = model.predict(newdata, type="response")
         np.testing.assert_allclose(

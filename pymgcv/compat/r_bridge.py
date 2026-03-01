@@ -19,14 +19,14 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
 
 
 class RBridgeError(Exception):
-    """Error communicating with R."""
+    """Error communicating with R via subprocess mode."""
 
 
 class RBridge:
@@ -39,6 +39,18 @@ class RBridge:
         falls back to subprocess.
     """
 
+    _SUBPROCESS_FAMILY_MAP: ClassVar[dict[str, str]] = {
+        "gaussian": "gaussian()",
+        "binomial": "binomial()",
+        "poisson": "poisson()",
+        "gamma": "Gamma()",
+    }
+
+    _ro: Any
+    _mgcv: Any
+    _base: Any
+    _stats: Any
+
     def __init__(self, mode: str = "auto") -> None:
         if mode == "auto":
             try:
@@ -46,8 +58,7 @@ class RBridge:
 
                 self.mode = "rpy2"
                 self._setup_rpy2()
-            except Exception:
-                # rpy2 may raise ImportError, ValueError, or OSError
+            except (ImportError, ValueError, OSError):
                 self.mode = "subprocess"
         elif mode == "rpy2":
             self.mode = "rpy2"
@@ -60,6 +71,7 @@ class RBridge:
             )
 
     def _setup_rpy2(self) -> None:
+        """Initialize rpy2 connection and import R packages."""
         import rpy2.robjects as ro
         from rpy2.robjects.packages import importr
 
@@ -75,9 +87,7 @@ class RBridge:
             import rpy2.robjects  # noqa: F401
 
             return True
-        except Exception:
-            # rpy2 may raise ImportError, ValueError (R_HOME not set),
-            # or OSError (shared library not found)
+        except (ImportError, ValueError, OSError):
             pass
         try:
             result = subprocess.run(
@@ -89,6 +99,66 @@ class RBridge:
             return result.returncode == 0 and "ok" in result.stdout
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return False
+
+    # ------------------------------------------------------------------ #
+    #  rpy2 helpers                                                       #
+    # ------------------------------------------------------------------ #
+
+    def _to_r_dataframe(self, data: pd.DataFrame) -> Any:
+        """Convert a pandas DataFrame to an R data.frame via rpy2."""
+        from rpy2.robjects import numpy2ri, pandas2ri
+
+        ro = self._ro
+        with ro.conversion.localconverter(
+            ro.default_converter + pandas2ri.converter + numpy2ri.converter
+        ):
+            return ro.conversion.py2rpy(data)
+
+    def _fit_r_model(
+        self,
+        formula: str,
+        r_df: Any,
+        family: str,
+        method: str,
+    ) -> Any:
+        """Fit a GAM in R and return the R model object."""
+        ro = self._ro
+        r_family = self._get_r_family_rpy2(family)
+        return self._mgcv.gam(
+            ro.Formula(formula),
+            data=r_df,
+            family=r_family,
+            method=method,
+        )
+
+    def _get_r_family_rpy2(self, family: str) -> Any:
+        """Map a Python family string to an R family function call."""
+        family_funcs = {
+            "gaussian": self._stats.gaussian,
+            "binomial": self._stats.binomial,
+            "poisson": self._stats.poisson,
+            "gamma": self._stats.Gamma,
+        }
+        func = family_funcs.get(family)
+        if func is None:
+            raise ValueError(
+                f"Unknown family: {family!r}. Supported: {list(family_funcs.keys())}"
+            )
+        return func()
+
+    def _get_subprocess_family(self, family: str) -> str:
+        """Map a Python family string to an R family expression for subprocess."""
+        r_family = self._SUBPROCESS_FAMILY_MAP.get(family)
+        if r_family is None:
+            raise ValueError(
+                f"Unknown family: {family!r}. "
+                f"Supported: {list(self._SUBPROCESS_FAMILY_MAP.keys())}"
+            )
+        return r_family
+
+    # ------------------------------------------------------------------ #
+    #  fit_gam                                                            #
+    # ------------------------------------------------------------------ #
 
     def fit_gam(
         self,
@@ -114,7 +184,7 @@ class RBridge:
         -------
         dict
             Keys: coefficients, fitted_values, smoothing_params, edf,
-            deviance, scale, Vp, reml_score.
+            deviance, null_deviance, scale, reml_scale, Vp, reml_score.
         """
         if self.mode == "rpy2":
             return self._fit_rpy2(formula, data, family, method)
@@ -127,31 +197,21 @@ class RBridge:
         family: str,
         method: str,
     ) -> dict[str, Any]:
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
+        """Fit a GAM via rpy2 and extract fit results."""
+        r_df = self._to_r_dataframe(data)
+        r_model = self._fit_r_model(formula, r_df, family, method)
+        return self._extract_fit_results_rpy2(r_model)
 
-        r_family = self._get_r_family_rpy2(family)
-
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(data)
-
-        r_model = self._mgcv.gam(
-            ro.Formula(formula),
-            data=r_df,
-            family=r_family,
-            method=method,
-        )
-
+    def _extract_fit_results_rpy2(self, r_model: Any) -> dict[str, Any]:
+        """Extract fit results from an R model object."""
         coefficients = np.array(r_model.rx2("coefficients"), dtype=np.float64)
         fitted_values = np.array(r_model.rx2("fitted.values"), dtype=np.float64)
         smoothing_params = np.array(r_model.rx2("sp"), dtype=np.float64)
         deviance = float(np.array(r_model.rx2("deviance"))[0])
         scale = float(np.array(r_model.rx2("scale"))[0])
         vp_r = r_model.rx2("Vp")
-        p = len(coefficients)
-        vp = np.array(vp_r, dtype=np.float64).reshape((p, p))
+        n_coef = len(coefficients)
+        vp = np.array(vp_r, dtype=np.float64).reshape((n_coef, n_coef))
         reml_score = float(np.array(r_model.rx2("gcv.ubre"))[0])
 
         # reml.scale is the scale used in the REML criterion (jointly
@@ -161,10 +221,8 @@ class RBridge:
             float(np.array(reml_scale_r)[0]) if reml_scale_r is not None else scale
         )
 
-        # EDF from summary
         r_summary = self._base.summary(r_model)
         edf = np.array(r_summary.rx2("edf"), dtype=np.float64)
-
         null_deviance = float(np.array(r_model.rx2("null.deviance"))[0])
 
         return {
@@ -180,20 +238,6 @@ class RBridge:
             "reml_score": reml_score,
         }
 
-    def _get_r_family_rpy2(self, family: str) -> Any:
-        family_funcs = {
-            "gaussian": self._stats.gaussian,
-            "binomial": self._stats.binomial,
-            "poisson": self._stats.poisson,
-            "gamma": self._stats.Gamma,
-        }
-        func = family_funcs.get(family)
-        if func is None:
-            raise ValueError(
-                f"Unknown family: {family!r}. Supported: {list(family_funcs.keys())}"
-            )
-        return func()
-
     def _fit_subprocess(
         self,
         formula: str,
@@ -201,22 +245,12 @@ class RBridge:
         family: str,
         method: str,
     ) -> dict[str, Any]:
-        family_map = {
-            "gaussian": "gaussian()",
-            "binomial": "binomial()",
-            "poisson": "poisson()",
-            "gamma": "Gamma()",
-        }
-        r_family = family_map.get(family)
-        if r_family is None:
-            raise ValueError(
-                f"Unknown family: {family!r}. Supported: {list(family_map.keys())}"
-            )
+        """Fit a GAM via Rscript subprocess and parse output files."""
+        r_family = self._get_subprocess_family(family)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
             script_path = os.path.join(tmpdir, "fit.R")
-            out = tmpdir  # output directory for CSVs
 
             data.to_csv(data_path, index=False)
 
@@ -228,15 +262,19 @@ data <- read.csv("{data_path}")
 model <- gam({formula}, data=data, family={r_family}, method="{method}")
 s <- summary(model)
 
-write.csv(data.frame(v=as.numeric(coef(model))), "{out}/coefficients.csv", row.names=FALSE)
-write.csv(data.frame(v=as.numeric(fitted(model))), "{out}/fitted_values.csv", row.names=FALSE)
-write.csv(data.frame(v=as.numeric(model$sp)), "{out}/smoothing_params.csv", row.names=FALSE)
-write.csv(data.frame(v=as.numeric(s$edf)), "{out}/edf.csv", row.names=FALSE)
-writeLines(format(deviance(model), digits=15), "{out}/deviance.txt")
-writeLines(format(model$scale, digits=15), "{out}/scale.txt")
-write.csv(as.data.frame(model$Vp), "{out}/Vp.csv", row.names=FALSE)
-writeLines(format(model$gcv.ubre, digits=15), "{out}/reml_score.txt")
-writeLines(format(model$null.deviance, digits=15), "{out}/null_deviance.txt")
+write.csv(data.frame(v=as.numeric(coef(model))), "{tmpdir}/coefficients.csv", row.names=FALSE)
+write.csv(data.frame(v=as.numeric(fitted(model))), "{tmpdir}/fitted_values.csv", row.names=FALSE)
+write.csv(data.frame(v=as.numeric(model$sp)), "{tmpdir}/smoothing_params.csv", row.names=FALSE)
+write.csv(data.frame(v=as.numeric(s$edf)), "{tmpdir}/edf.csv", row.names=FALSE)
+writeLines(format(deviance(model), digits=15), "{tmpdir}/deviance.txt")
+writeLines(format(model$scale, digits=15), "{tmpdir}/scale.txt")
+write.csv(as.data.frame(model$Vp), "{tmpdir}/Vp.csv", row.names=FALSE)
+writeLines(format(model$gcv.ubre, digits=15), "{tmpdir}/reml_score.txt")
+writeLines(format(model$null.deviance, digits=15), "{tmpdir}/null_deviance.txt")
+rs <- model$reml.scale
+if (!is.null(rs)) {{
+    writeLines(format(rs, digits=15), "{tmpdir}/reml_scale.txt")
+}}
 """
             with open(script_path, "w") as f:
                 f.write(script)
@@ -253,15 +291,23 @@ writeLines(format(model$null.deviance, digits=15), "{out}/null_deviance.txt")
                 )
 
             def _read_vec(name: str) -> np.ndarray:
-                return pd.read_csv(os.path.join(out, name))["v"].values.astype(
+                return pd.read_csv(os.path.join(tmpdir, name))["v"].values.astype(
                     np.float64
                 )
 
             def _read_scalar(name: str) -> float:
-                with open(os.path.join(out, name)) as f:
-                    return float(f.read().strip())
+                with open(os.path.join(tmpdir, name)) as fh:
+                    return float(fh.read().strip())
 
-            vp = pd.read_csv(os.path.join(out, "Vp.csv")).values.astype(np.float64)
+            vp = pd.read_csv(os.path.join(tmpdir, "Vp.csv")).values.astype(np.float64)
+            scale = _read_scalar("scale.txt")
+
+            reml_scale_path = os.path.join(tmpdir, "reml_scale.txt")
+            reml_scale = (
+                _read_scalar("reml_scale.txt")
+                if os.path.exists(reml_scale_path)
+                else scale
+            )
 
             return {
                 "coefficients": _read_vec("coefficients.csv"),
@@ -270,10 +316,15 @@ writeLines(format(model$null.deviance, digits=15), "{out}/null_deviance.txt")
                 "edf": _read_vec("edf.csv"),
                 "deviance": _read_scalar("deviance.txt"),
                 "null_deviance": _read_scalar("null_deviance.txt"),
-                "scale": _read_scalar("scale.txt"),
+                "scale": scale,
+                "reml_scale": reml_scale,
                 "Vp": vp,
                 "reml_score": _read_scalar("reml_score.txt"),
             }
+
+    # ------------------------------------------------------------------ #
+    #  get_smooth_components                                              #
+    # ------------------------------------------------------------------ #
 
     def get_smooth_components(
         self,
@@ -298,28 +349,15 @@ writeLines(format(model$null.deviance, digits=15), "{out}/null_deviance.txt")
         family: str,
         method: str,
     ) -> dict[str, Any]:
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
+        """Fit a GAM via rpy2, extract per-smooth basis/penalty and fit results."""
+        ro = self._ro
+        r_df = self._to_r_dataframe(data)
+        r_model = self._fit_r_model(formula, r_df, family, method)
 
-        r_family = self._get_r_family_rpy2(family)
-
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(data)
-
-        r_model = self._mgcv.gam(
-            ro.Formula(formula),
-            data=r_df,
-            family=r_family,
-            method=method,
-        )
-
-        # Extract per-smooth basis and penalty
+        # Extract per-smooth basis and penalty from the same model object
         smooth_list = r_model.rx2("smooth")
         n_smooths = len(smooth_list)
 
-        # Get full model matrix once
         X_full = np.array(ro.r["model.matrix"](r_model), dtype=np.float64)
 
         basis_matrices = []
@@ -344,7 +382,8 @@ writeLines(format(model$null.deviance, digits=15), "{out}/null_deviance.txt")
                     )
             penalty_matrices.append(penalties_for_smooth)
 
-        fit_result = self._fit_rpy2(formula, data, family, method)
+        # Extract fit results from the same model (no double-fitting)
+        fit_result = self._extract_fit_results_rpy2(r_model)
         fit_result["basis_matrices"] = basis_matrices
         fit_result["penalty_matrices"] = penalty_matrices
         fit_result["model_matrix"] = X_full
@@ -358,22 +397,12 @@ writeLines(format(model$null.deviance, digits=15), "{out}/null_deviance.txt")
         family: str,
         method: str,
     ) -> dict[str, Any]:
-        family_map = {
-            "gaussian": "gaussian()",
-            "binomial": "binomial()",
-            "poisson": "poisson()",
-            "gamma": "Gamma()",
-        }
-        r_family = family_map.get(family)
-        if r_family is None:
-            raise ValueError(
-                f"Unknown family: {family!r}. Supported: {list(family_map.keys())}"
-            )
+        """Fit a GAM via subprocess, extract per-smooth basis/penalty and fit results."""
+        r_family = self._get_subprocess_family(family)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
             script_path = os.path.join(tmpdir, "fit.R")
-            out = tmpdir
 
             data.to_csv(data_path, index=False)
 
@@ -385,31 +414,36 @@ model <- gam({formula}, data=data, family={r_family}, method="{method}")
 s <- summary(model)
 
 # Basic fit results
-write.csv(data.frame(v=as.numeric(coef(model))), "{out}/coefficients.csv", row.names=FALSE)
-write.csv(data.frame(v=as.numeric(fitted(model))), "{out}/fitted_values.csv", row.names=FALSE)
-write.csv(data.frame(v=as.numeric(model$sp)), "{out}/smoothing_params.csv", row.names=FALSE)
-write.csv(data.frame(v=as.numeric(s$edf)), "{out}/edf.csv", row.names=FALSE)
-writeLines(format(deviance(model), digits=15), "{out}/deviance.txt")
-writeLines(format(model$scale, digits=15), "{out}/scale.txt")
-write.csv(as.data.frame(model$Vp), "{out}/Vp.csv", row.names=FALSE)
-writeLines(format(model$gcv.ubre, digits=15), "{out}/reml_score.txt")
+write.csv(data.frame(v=as.numeric(coef(model))), "{tmpdir}/coefficients.csv", row.names=FALSE)
+write.csv(data.frame(v=as.numeric(fitted(model))), "{tmpdir}/fitted_values.csv", row.names=FALSE)
+write.csv(data.frame(v=as.numeric(model$sp)), "{tmpdir}/smoothing_params.csv", row.names=FALSE)
+write.csv(data.frame(v=as.numeric(s$edf)), "{tmpdir}/edf.csv", row.names=FALSE)
+writeLines(format(deviance(model), digits=15), "{tmpdir}/deviance.txt")
+writeLines(format(model$scale, digits=15), "{tmpdir}/scale.txt")
+write.csv(as.data.frame(model$Vp), "{tmpdir}/Vp.csv", row.names=FALSE)
+writeLines(format(model$gcv.ubre, digits=15), "{tmpdir}/reml_score.txt")
+writeLines(format(model$null.deviance, digits=15), "{tmpdir}/null_deviance.txt")
+rs <- model$reml.scale
+if (!is.null(rs)) {{
+    writeLines(format(rs, digits=15), "{tmpdir}/reml_scale.txt")
+}}
 
 # Per-smooth basis and penalty matrices
 X <- model.matrix(model)
 n_smooths <- length(model$smooth)
-writeLines(as.character(n_smooths), "{out}/n_smooths.txt")
+writeLines(as.character(n_smooths), "{tmpdir}/n_smooths.txt")
 
 for (i in seq_len(n_smooths)) {{
     sm <- model$smooth[[i]]
     first_col <- sm$first.para
     last_col <- sm$last.para
     Xblock <- X[, first_col:last_col, drop=FALSE]
-    write.csv(as.data.frame(Xblock), sprintf("{out}/basis_%d.csv", i), row.names=FALSE)
+    write.csv(as.data.frame(Xblock), sprintf("{tmpdir}/basis_%d.csv", i), row.names=FALSE)
 
     n_penalties <- length(sm$S)
-    writeLines(as.character(n_penalties), sprintf("{out}/n_pen_%d.txt", i))
+    writeLines(as.character(n_penalties), sprintf("{tmpdir}/n_pen_%d.txt", i))
     for (j in seq_len(n_penalties)) {{
-        write.csv(as.data.frame(sm$S[[j]]), sprintf("{out}/pen_%d_%d.csv", i, j), row.names=FALSE)
+        write.csv(as.data.frame(sm$S[[j]]), sprintf("{tmpdir}/pen_%d_%d.csv", i, j), row.names=FALSE)
     }}
 }}
 """
@@ -428,16 +462,16 @@ for (i in seq_len(n_smooths)) {{
                 )
 
             def _read_vec(name: str) -> np.ndarray:
-                return pd.read_csv(os.path.join(out, name))["v"].values.astype(
+                return pd.read_csv(os.path.join(tmpdir, name))["v"].values.astype(
                     np.float64
                 )
 
             def _read_scalar(name: str) -> float:
-                with open(os.path.join(out, name)) as f:
-                    return float(f.read().strip())
+                with open(os.path.join(tmpdir, name)) as fh:
+                    return float(fh.read().strip())
 
             def _read_matrix(name: str) -> np.ndarray:
-                return pd.read_csv(os.path.join(out, name)).values.astype(np.float64)
+                return pd.read_csv(os.path.join(tmpdir, name)).values.astype(np.float64)
 
             n_smooths = int(_read_scalar("n_smooths.txt"))
             basis_matrices = []
@@ -450,18 +484,32 @@ for (i in seq_len(n_smooths)) {{
                 ]
                 penalty_matrices.append(penalties)
 
+            scale = _read_scalar("scale.txt")
+            reml_scale_path = os.path.join(tmpdir, "reml_scale.txt")
+            reml_scale = (
+                _read_scalar("reml_scale.txt")
+                if os.path.exists(reml_scale_path)
+                else scale
+            )
+
             return {
                 "coefficients": _read_vec("coefficients.csv"),
                 "fitted_values": _read_vec("fitted_values.csv"),
                 "smoothing_params": _read_vec("smoothing_params.csv"),
                 "edf": _read_vec("edf.csv"),
                 "deviance": _read_scalar("deviance.txt"),
-                "scale": _read_scalar("scale.txt"),
+                "null_deviance": _read_scalar("null_deviance.txt"),
+                "scale": scale,
+                "reml_scale": reml_scale,
                 "Vp": _read_matrix("Vp.csv"),
                 "reml_score": _read_scalar("reml_score.txt"),
                 "basis_matrices": basis_matrices,
                 "penalty_matrices": penalty_matrices,
             }
+
+    # ------------------------------------------------------------------ #
+    #  smooth_construct                                                   #
+    # ------------------------------------------------------------------ #
 
     def smooth_construct(
         self,
@@ -496,14 +544,11 @@ for (i in seq_len(n_smooths)) {{
         data: pd.DataFrame,
         absorb_cons: bool,
     ) -> dict[str, Any]:
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
+        """Call smoothCon() via rpy2 and extract smooth construction details."""
+        ro = self._ro
+        r_df = self._to_r_dataframe(data)
 
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(data)
-
+        # Python booleans → R boolean strings for embedded R code
         absorb_str = "TRUE" if absorb_cons else "FALSE"
         r_code = f"""
         library(mgcv)
@@ -520,7 +565,10 @@ for (i in seq_len(n_smooths)) {{
         )
         """
         ro.globalenv["dat_input"] = r_df
-        result = ro.r(r_code)
+        try:
+            result = ro.r(r_code)
+        finally:
+            del ro.globalenv["dat_input"]
 
         X = np.array(result.rx2("X"), dtype=np.float64)
         rank_arr = np.array(result.rx2("rank"), dtype=np.float64).ravel()
@@ -551,12 +599,12 @@ for (i in seq_len(n_smooths)) {{
         data: pd.DataFrame,
         absorb_cons: bool,
     ) -> dict[str, Any]:
+        """Call smoothCon() via Rscript subprocess and parse output files."""
         absorb_str = "TRUE" if absorb_cons else "FALSE"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
             script_path = os.path.join(tmpdir, "smooth.R")
-            out = tmpdir
 
             data.to_csv(data_path, index=False)
 
@@ -566,36 +614,36 @@ library(mgcv)
 dat <- read.csv("{data_path}")
 sm <- smoothCon({smooth_expr}, data=dat, absorb.cons={absorb_str})[[1]]
 
-write.csv(as.data.frame(sm$X), "{out}/X.csv", row.names=FALSE)
-writeLines(as.character(sm$rank), "{out}/rank.txt")
-writeLines(as.character(sm$null.space.dim), "{out}/null_space_dim.txt")
+write.csv(as.data.frame(sm$X), "{tmpdir}/X.csv", row.names=FALSE)
+writeLines(as.character(sm$rank), "{tmpdir}/rank.txt")
+writeLines(as.character(sm$null.space.dim), "{tmpdir}/null_space_dim.txt")
 
 n_S <- length(sm$S)
-writeLines(as.character(n_S), "{out}/n_S.txt")
+writeLines(as.character(n_S), "{tmpdir}/n_S.txt")
 for (i in seq_len(n_S)) {{
-    write.csv(as.data.frame(sm$S[[i]]), sprintf("{out}/S_%d.csv", i), row.names=FALSE)
+    write.csv(as.data.frame(sm$S[[i]]), sprintf("{tmpdir}/S_%d.csv", i), row.names=FALSE)
 }}
 
 if (!is.null(sm$Xu)) {{
     if (is.matrix(sm$Xu)) {{
-        write.csv(as.data.frame(sm$Xu), "{out}/Xu.csv", row.names=FALSE)
+        write.csv(as.data.frame(sm$Xu), "{tmpdir}/Xu.csv", row.names=FALSE)
     }} else {{
-        write.csv(data.frame(v=as.numeric(sm$Xu)), "{out}/Xu.csv", row.names=FALSE)
+        write.csv(data.frame(v=as.numeric(sm$Xu)), "{tmpdir}/Xu.csv", row.names=FALSE)
     }}
 }} else {{
-    writeLines("NULL", "{out}/Xu.csv")
+    writeLines("NULL", "{tmpdir}/Xu.csv")
 }}
 
 if (!is.null(sm$UZ)) {{
-    write.csv(as.data.frame(sm$UZ), "{out}/UZ.csv", row.names=FALSE)
+    write.csv(as.data.frame(sm$UZ), "{tmpdir}/UZ.csv", row.names=FALSE)
 }} else {{
-    writeLines("NULL", "{out}/UZ.csv")
+    writeLines("NULL", "{tmpdir}/UZ.csv")
 }}
 
 if (!is.null(sm$shift)) {{
-    write.csv(data.frame(v=as.numeric(sm$shift)), "{out}/shift.csv", row.names=FALSE)
+    write.csv(data.frame(v=as.numeric(sm$shift)), "{tmpdir}/shift.csv", row.names=FALSE)
 }} else {{
-    writeLines("NULL", "{out}/shift.csv")
+    writeLines("NULL", "{tmpdir}/shift.csv")
 }}
 """
             with open(script_path, "w") as f:
@@ -613,16 +661,16 @@ if (!is.null(sm$shift)) {{
                 )
 
             def _read_matrix(name: str) -> np.ndarray:
-                path = os.path.join(out, name)
-                with open(path) as f:
-                    first_line = f.readline().strip()
+                path = os.path.join(tmpdir, name)
+                with open(path) as fh:
+                    first_line = fh.readline().strip()
                 if first_line == "NULL":
                     return np.array([])
                 return pd.read_csv(path).values.astype(np.float64)
 
             def _read_scalar(name: str) -> float:
-                with open(os.path.join(out, name)) as f:
-                    return float(f.read().strip())
+                with open(os.path.join(tmpdir, name)) as fh:
+                    return float(fh.read().strip())
 
             X = _read_matrix("X.csv")
             rank = int(_read_scalar("rank.txt"))
@@ -653,6 +701,10 @@ if (!is.null(sm$shift)) {{
                 "UZ": UZ,
                 "shift": shift,
             }
+
+    # ------------------------------------------------------------------ #
+    #  smooth_construct_list                                              #
+    # ------------------------------------------------------------------ #
 
     def smooth_construct_list(
         self,
@@ -691,13 +743,9 @@ if (!is.null(sm$shift)) {{
         data: pd.DataFrame,
         absorb_cons: bool,
     ) -> list[dict[str, Any]]:
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
-
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(data)
+        """Call smoothCon() via rpy2 and return all smooth objects."""
+        ro = self._ro
+        r_df = self._to_r_dataframe(data)
 
         absorb_str = "TRUE" if absorb_cons else "FALSE"
         r_code = f"""
@@ -722,12 +770,15 @@ if (!is.null(sm$shift)) {{
         result
         """
         ro.globalenv["dat_input"] = r_df
-        result = ro.r(r_code)
+        try:
+            result = ro.r(r_code)
+        finally:
+            del ro.globalenv["dat_input"]
 
         n_sm = int(np.array(result.rx2("n_sm"))[0])
         smooths_r = result.rx2("smooths")
 
-        out = []
+        results = []
         for i in range(n_sm):
             sm = smooths_r[i]
             X = np.array(sm.rx2("X"), dtype=np.float64)
@@ -749,7 +800,7 @@ if (!is.null(sm$shift)) {{
             label_arr = np.array(sm.rx2("label"))
             label = str(label_arr[0]) if label_arr.size > 0 else ""
 
-            out.append(
+            results.append(
                 {
                     "X": X,
                     "S": S_matrices,
@@ -760,7 +811,7 @@ if (!is.null(sm$shift)) {{
                 }
             )
 
-        return out
+        return results
 
     def _smooth_construct_list_subprocess(
         self,
@@ -768,12 +819,12 @@ if (!is.null(sm$shift)) {{
         data: pd.DataFrame,
         absorb_cons: bool,
     ) -> list[dict[str, Any]]:
+        """Call smoothCon() via Rscript subprocess and return all smooth objects."""
         absorb_str = "TRUE" if absorb_cons else "FALSE"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
             script_path = os.path.join(tmpdir, "smooth.R")
-            out = tmpdir
 
             data.to_csv(data_path, index=False)
 
@@ -787,25 +838,25 @@ for (cn in names(dat)) {{
 }}
 sml <- smoothCon({smooth_expr}, data=dat, absorb.cons={absorb_str})
 n_sm <- length(sml)
-writeLines(as.character(n_sm), "{out}/n_sm.txt")
+writeLines(as.character(n_sm), "{tmpdir}/n_sm.txt")
 
 for (i in seq_len(n_sm)) {{
     sm <- sml[[i]]
-    write.csv(as.data.frame(sm$X), sprintf("{out}/X_%d.csv", i), row.names=FALSE)
-    writeLines(as.character(sm$rank), sprintf("{out}/rank_%d.txt", i))
-    writeLines(as.character(sm$null.space.dim), sprintf("{out}/nsd_%d.txt", i))
+    write.csv(as.data.frame(sm$X), sprintf("{tmpdir}/X_%d.csv", i), row.names=FALSE)
+    writeLines(as.character(sm$rank), sprintf("{tmpdir}/rank_%d.txt", i))
+    writeLines(as.character(sm$null.space.dim), sprintf("{tmpdir}/nsd_%d.txt", i))
 
     n_S <- length(sm$S)
-    writeLines(as.character(n_S), sprintf("{out}/nS_%d.txt", i))
+    writeLines(as.character(n_S), sprintf("{tmpdir}/nS_%d.txt", i))
     for (j in seq_len(n_S)) {{
-        write.csv(as.data.frame(sm$S[[j]]), sprintf("{out}/S_%d_%d.csv", i, j), row.names=FALSE)
+        write.csv(as.data.frame(sm$S[[j]]), sprintf("{tmpdir}/S_%d_%d.csv", i, j), row.names=FALSE)
     }}
 
     by_lev <- if (!is.null(sm$by.level)) sm$by.level else "NONE"
-    writeLines(by_lev, sprintf("{out}/bylevel_%d.txt", i))
+    writeLines(by_lev, sprintf("{tmpdir}/bylevel_%d.txt", i))
 
     lab <- if (!is.null(sm$label)) sm$label else ""
-    writeLines(lab, sprintf("{out}/label_%d.txt", i))
+    writeLines(lab, sprintf("{tmpdir}/label_%d.txt", i))
 }}
 """
             with open(script_path, "w") as f:
@@ -823,15 +874,15 @@ for (i in seq_len(n_sm)) {{
                 )
 
             def _read_matrix(name: str) -> np.ndarray:
-                return pd.read_csv(os.path.join(out, name)).values.astype(np.float64)
+                return pd.read_csv(os.path.join(tmpdir, name)).values.astype(np.float64)
 
             def _read_scalar(name: str) -> float:
-                with open(os.path.join(out, name)) as f:
-                    return float(f.read().strip())
+                with open(os.path.join(tmpdir, name)) as fh:
+                    return float(fh.read().strip())
 
             def _read_text(name: str) -> str:
-                with open(os.path.join(out, name)) as f:
-                    return f.read().strip()
+                with open(os.path.join(tmpdir, name)) as fh:
+                    return fh.read().strip()
 
             n_sm = int(_read_scalar("n_sm.txt"))
             results = []
@@ -862,6 +913,10 @@ for (i in seq_len(n_sm)) {{
 
             return results
 
+    # ------------------------------------------------------------------ #
+    #  predict_gam                                                        #
+    # ------------------------------------------------------------------ #
+
     def predict_gam(
         self,
         formula: str,
@@ -869,7 +924,7 @@ for (i in seq_len(n_sm)) {{
         newdata: pd.DataFrame,
         family: str = "gaussian",
         method: str = "REML",
-        type: str = "response",
+        pred_type: str = "response",
         se_fit: bool = False,
     ) -> dict[str, Any]:
         """Fit a GAM in R and predict on new data.
@@ -886,7 +941,7 @@ for (i in seq_len(n_sm)) {{
             Distribution family name.
         method : str
             Smoothing parameter estimation method.
-        type : str
+        pred_type : str
             Prediction type: ``'response'`` or ``'link'``.
         se_fit : bool
             Whether to return standard errors.
@@ -896,28 +951,33 @@ for (i in seq_len(n_sm)) {{
         dict
             Keys: ``'predictions'``, optionally ``'se'``.
         """
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
-
-        r_family = self._get_r_family_rpy2(family)
-
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_train = ro.conversion.py2rpy(train_data)
-            r_new = ro.conversion.py2rpy(newdata)
-
-        r_model = self._mgcv.gam(
-            ro.Formula(formula),
-            data=r_train,
-            family=r_family,
-            method=method,
+        if self.mode == "rpy2":
+            return self._predict_gam_rpy2(
+                formula, train_data, newdata, family, method, pred_type, se_fit
+            )
+        return self._predict_gam_subprocess(
+            formula, train_data, newdata, family, method, pred_type, se_fit
         )
+
+    def _predict_gam_rpy2(
+        self,
+        formula: str,
+        train_data: pd.DataFrame,
+        newdata: pd.DataFrame,
+        family: str,
+        method: str,
+        pred_type: str,
+        se_fit: bool,
+    ) -> dict[str, Any]:
+        """Predict via rpy2."""
+        r_df = self._to_r_dataframe(train_data)
+        r_new = self._to_r_dataframe(newdata)
+        r_model = self._fit_r_model(formula, r_df, family, method)
 
         pred = self._stats.predict(
             r_model,
             newdata=r_new,
-            type=type,
+            type=pred_type,
             **{"se.fit": se_fit},
         )
 
@@ -929,6 +989,73 @@ for (i in seq_len(n_sm)) {{
             result["predictions"] = np.array(pred, dtype=np.float64)
 
         return result
+
+    def _predict_gam_subprocess(
+        self,
+        formula: str,
+        train_data: pd.DataFrame,
+        newdata: pd.DataFrame,
+        family: str,
+        method: str,
+        pred_type: str,
+        se_fit: bool,
+    ) -> dict[str, Any]:
+        """Predict via Rscript subprocess."""
+        r_family = self._get_subprocess_family(family)
+        se_str = "TRUE" if se_fit else "FALSE"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = os.path.join(tmpdir, "train.csv")
+            new_path = os.path.join(tmpdir, "newdata.csv")
+            script_path = os.path.join(tmpdir, "predict.R")
+
+            train_data.to_csv(train_path, index=False)
+            newdata.to_csv(new_path, index=False)
+
+            script = f"""\
+library(mgcv)
+
+train <- read.csv("{train_path}")
+newdata <- read.csv("{new_path}")
+model <- gam({formula}, data=train, family={r_family}, method="{method}")
+pred <- predict(model, newdata=newdata, type="{pred_type}", se.fit={se_str})
+
+if ({se_str}) {{
+    write.csv(data.frame(v=as.numeric(pred$fit)), "{tmpdir}/predictions.csv", row.names=FALSE)
+    write.csv(data.frame(v=as.numeric(pred$se.fit)), "{tmpdir}/se.csv", row.names=FALSE)
+}} else {{
+    write.csv(data.frame(v=as.numeric(pred)), "{tmpdir}/predictions.csv", row.names=FALSE)
+}}
+"""
+            with open(script_path, "w") as f:
+                f.write(script)
+
+            proc = subprocess.run(
+                ["Rscript", script_path],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if proc.returncode != 0:
+                raise RBridgeError(
+                    f"Rscript failed (exit {proc.returncode}):\n{proc.stderr}"
+                )
+
+            def _read_vec(name: str) -> np.ndarray:
+                return pd.read_csv(os.path.join(tmpdir, name))["v"].values.astype(
+                    np.float64
+                )
+
+            result: dict[str, Any] = {}
+            result["predictions"] = _read_vec("predictions.csv")
+            if se_fit:
+                result["se"] = _read_vec("se.csv")
+
+            return result
+
+    # ------------------------------------------------------------------ #
+    #  summary_gam                                                        #
+    # ------------------------------------------------------------------ #
 
     def summary_gam(
         self,
@@ -967,22 +1094,9 @@ for (i in seq_len(n_sm)) {{
         family: str,
         method: str,
     ) -> dict[str, Any]:
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
-
-        r_family = self._get_r_family_rpy2(family)
-
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(data)
-
-        r_model = self._mgcv.gam(
-            ro.Formula(formula),
-            data=r_df,
-            family=r_family,
-            method=method,
-        )
+        """Extract GAM summary statistics via rpy2."""
+        r_df = self._to_r_dataframe(data)
+        r_model = self._fit_r_model(formula, r_df, family, method)
 
         r_summary = self._base.summary(r_model)
 
@@ -1016,26 +1130,17 @@ for (i in seq_len(n_sm)) {{
         r_sq = r_summary.rx2("r.sq")
         result["r_sq"] = float(np.array(r_sq)[0]) if r_sq is not None else None
 
-        # Deviance explained
         result["dev_explained"] = float(np.array(r_summary.rx2("dev.expl"))[0])
-
-        # Scale
         result["scale"] = float(np.array(r_summary.rx2("scale"))[0])
-
-        # Residual df
         result["residual_df"] = float(np.array(r_summary.rx2("residual.df"))[0])
-
-        # N
         result["n"] = int(np.array(r_summary.rx2("n"))[0])
 
-        # Per-smooth EDF
         edf_r = r_summary.rx2("edf")
         if edf_r is not None:
             result["edf"] = np.array(edf_r, dtype=np.float64)
         else:
             result["edf"] = np.array([])
 
-        # SP criterion (REML/ML score)
         sp_crit = r_summary.rx2("sp.criterion")
         if sp_crit is not None:
             result["sp_criterion"] = float(np.array(sp_crit)[0])
@@ -1051,25 +1156,12 @@ for (i in seq_len(n_sm)) {{
         family: str,
         method: str,
     ) -> dict[str, Any]:
-        family_map = {
-            "gaussian": "gaussian()",
-            "binomial": "binomial()",
-            "poisson": "poisson()",
-            "gamma": "Gamma()",
-        }
-        r_family = family_map.get(family)
-        if r_family is None:
-            raise ValueError(
-                f"Unknown family: {family!r}. Supported: {list(family_map.keys())}"
-            )
-
-        import os
-        import tempfile
+        """Extract GAM summary statistics via Rscript subprocess."""
+        r_family = self._get_subprocess_family(family)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
             script_path = os.path.join(tmpdir, "summary.R")
-            out = tmpdir
 
             data.to_csv(data_path, index=False)
 
@@ -1082,27 +1174,27 @@ s <- summary(model)
 
 # Parametric table
 if (!is.null(s$p.table)) {{
-    write.csv(as.data.frame(s$p.table), "{out}/p_table.csv", row.names=TRUE)
+    write.csv(as.data.frame(s$p.table), "{tmpdir}/p_table.csv", row.names=TRUE)
 }} else {{
-    writeLines("NULL", "{out}/p_table.csv")
+    writeLines("NULL", "{tmpdir}/p_table.csv")
 }}
 
 # Smooth table
 if (!is.null(s$s.table) && s$m > 0) {{
-    write.csv(as.data.frame(s$s.table), "{out}/s_table.csv", row.names=TRUE)
+    write.csv(as.data.frame(s$s.table), "{tmpdir}/s_table.csv", row.names=TRUE)
 }} else {{
-    writeLines("NULL", "{out}/s_table.csv")
+    writeLines("NULL", "{tmpdir}/s_table.csv")
 }}
 
 # Scalars
-writeLines(format(s$r.sq, digits=15), "{out}/r_sq.txt")
-writeLines(format(s$dev.expl, digits=15), "{out}/dev_expl.txt")
-writeLines(format(s$scale, digits=15), "{out}/scale.txt")
-writeLines(format(s$residual.df, digits=15), "{out}/residual_df.txt")
-writeLines(as.character(s$n), "{out}/n.txt")
-write.csv(data.frame(v=as.numeric(s$edf)), "{out}/edf.csv", row.names=FALSE)
+writeLines(format(s$r.sq, digits=15), "{tmpdir}/r_sq.txt")
+writeLines(format(s$dev.expl, digits=15), "{tmpdir}/dev_expl.txt")
+writeLines(format(s$scale, digits=15), "{tmpdir}/scale.txt")
+writeLines(format(s$residual.df, digits=15), "{tmpdir}/residual_df.txt")
+writeLines(as.character(s$n), "{tmpdir}/n.txt")
+write.csv(data.frame(v=as.numeric(s$edf)), "{tmpdir}/edf.csv", row.names=FALSE)
 if (!is.null(s$sp.criterion)) {{
-    writeLines(format(s$sp.criterion, digits=15), "{out}/sp_criterion.txt")
+    writeLines(format(s$sp.criterion, digits=15), "{tmpdir}/sp_criterion.txt")
 }}
 """
             with open(script_path, "w") as f:
@@ -1120,13 +1212,13 @@ if (!is.null(s$sp.criterion)) {{
                 )
 
             def _read_scalar(name: str) -> float:
-                with open(os.path.join(out, name)) as f:
-                    return float(f.read().strip())
+                with open(os.path.join(tmpdir, name)) as fh:
+                    return float(fh.read().strip())
 
             def _read_matrix(name: str) -> np.ndarray | None:
-                path = os.path.join(out, name)
-                with open(path) as f:
-                    first = f.readline().strip()
+                path = os.path.join(tmpdir, name)
+                with open(path) as fh:
+                    first = fh.readline().strip()
                 if first == "NULL":
                     return None
                 return pd.read_csv(path, index_col=0).values.astype(np.float64)
@@ -1139,11 +1231,11 @@ if (!is.null(s$sp.criterion)) {{
             result["scale"] = _read_scalar("scale.txt")
             result["residual_df"] = _read_scalar("residual_df.txt")
             result["n"] = int(_read_scalar("n.txt"))
-            result["edf"] = pd.read_csv(os.path.join(out, "edf.csv"))[
+            result["edf"] = pd.read_csv(os.path.join(tmpdir, "edf.csv"))[
                 "v"
             ].values.astype(np.float64)
 
-            sp_path = os.path.join(out, "sp_criterion.txt")
+            sp_path = os.path.join(tmpdir, "sp_criterion.txt")
             if os.path.exists(sp_path):
                 result["sp_criterion"] = _read_scalar("sp_criterion.txt")
             else:
