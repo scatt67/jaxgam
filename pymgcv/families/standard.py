@@ -16,10 +16,15 @@ from __future__ import annotations
 import jax.numpy as jnp
 import jax.scipy.special as jsp
 import numpy as np
+from scipy.special import gammaln
 
 from pymgcv.families.base import ExponentialFamily
 from pymgcv.jax_utils import array_module
 from pymgcv.links.links import IdentityLink, InverseLink, Link, LogitLink, LogLink
+
+# Numerical stability constants for clamping near boundaries.
+_MU_EPS = 1e-10
+_LOG_EPS = 1e-30
 
 
 class Gaussian(ExponentialFamily):
@@ -44,16 +49,21 @@ class Gaussian(ExponentialFamily):
         return xp.ones_like(mu, dtype=float)
 
     def dvar(self, mu: np.ndarray) -> np.ndarray:
-        """V'(mu) = 0 for Gaussian."""
+        """V'(mu) = 0 for Gaussian.  Phase 2 only (JAX)."""
         return jnp.zeros_like(mu, dtype=float)
 
-    def saturated_loglik(self, y, wt, scale):  # noqa: ARG002
-        """Saturated log-likelihood for Gaussian.
+    def saturated_loglik(
+        self,
+        y: np.ndarray,  # noqa: ARG002
+        wt: np.ndarray,
+        scale: float,
+    ) -> float:
+        """Saturated log-likelihood for Gaussian.  Phase 2 only (JAX).
 
         R: -nobs*log(2*pi*scale)/2 + sum(log(w[w>0]))/2
         """
         nobs = jnp.sum(wt > 0)
-        log_wt = jnp.where(wt > 0, jnp.log(jnp.maximum(wt, 1e-30)), 0.0)
+        log_wt = jnp.where(wt > 0, jnp.log(jnp.maximum(wt, _LOG_EPS)), 0.0)
         return -nobs * jnp.log(2.0 * jnp.pi * scale) / 2.0 + jnp.sum(log_wt) / 2.0
 
     def deviance_resids(
@@ -74,7 +84,7 @@ class Gaussian(ExponentialFamily):
         wt: np.ndarray,
         scale: float,
     ) -> float:
-        """AIC contribution for Gaussian family.
+        """AIC contribution for Gaussian family.  Phase 3 only (NumPy).
 
         Matches R's gaussian()$aic which returns:
             sum(wt) * (log(2*pi*scale) + 1) + 2
@@ -92,7 +102,7 @@ class Gaussian(ExponentialFamily):
         return np.isfinite(mu)
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
-        """All finite eta are valid for Gaussian with identity link."""
+        """All finite eta are valid for Gaussian."""
         return np.isfinite(eta)
 
 
@@ -120,13 +130,18 @@ class Binomial(ExponentialFamily):
         """V'(mu) = 1 - 2*mu for Binomial."""
         return 1.0 - 2.0 * mu
 
-    def saturated_loglik(self, y, wt, scale):  # noqa: ARG002
-        """Saturated log-likelihood for Binomial.
+    def saturated_loglik(
+        self,
+        y: np.ndarray,
+        wt: np.ndarray,
+        scale: float,  # noqa: ARG002
+    ) -> float:
+        """Saturated log-likelihood for Binomial.  Phase 2 only (JAX).
 
         R: -binomial()$aic(y, n, y, w, 0) / 2
         = sum(wt * [y*log(y) + (1-y)*log(1-y)]) with boundary handling.
         """
-        y_safe = jnp.clip(y, 1e-10, 1.0 - 1e-10)
+        y_safe = jnp.clip(y, _MU_EPS, 1.0 - _MU_EPS)
         interior = (y > 0) & (y < 1)
         ll = jnp.where(
             interior,
@@ -146,7 +161,7 @@ class Binomial(ExponentialFamily):
         Matches R's binomial()$dev.resids.
         """
         xp = array_module(y)
-        mu_safe = xp.clip(mu, 1e-10, 1.0 - 1e-10)
+        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
 
         y_pos = xp.where(y > 0, y, 1.0)
         y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
@@ -164,12 +179,12 @@ class Binomial(ExponentialFamily):
         wt: np.ndarray,
         scale: float,  # noqa: ARG002
     ) -> float:
-        """AIC contribution for Binomial family.
+        """AIC contribution for Binomial family.  Phase 3 only (NumPy).
 
         Matches R: -2 * sum(wt * dbinom(y, 1, mu, log=TRUE))
         For Bernoulli trials: -2 * sum(wt * [y*log(mu) + (1-y)*log(1-mu)])
         """
-        mu_safe = np.clip(mu, 1e-10, 1.0 - 1e-10)
+        mu_safe = np.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
         ll = wt * (y * np.log(mu_safe) + (1.0 - y) * np.log(1.0 - mu_safe))
         return float(-2.0 * np.sum(ll))
 
@@ -212,11 +227,16 @@ class Poisson(ExponentialFamily):
         return xp.asarray(mu, dtype=float)
 
     def dvar(self, mu: np.ndarray) -> np.ndarray:
-        """V'(mu) = 1 for Poisson."""
+        """V'(mu) = 1 for Poisson.  Phase 2 only (JAX)."""
         return jnp.ones_like(mu, dtype=float)
 
-    def saturated_loglik(self, y, wt, scale):  # noqa: ARG002
-        """Saturated log-likelihood for Poisson.
+    def saturated_loglik(
+        self,
+        y: np.ndarray,
+        wt: np.ndarray,
+        scale: float,  # noqa: ARG002
+    ) -> float:
+        """Saturated log-likelihood for Poisson.  Phase 2 only (JAX).
 
         R: sum(dpois(y, y, log=TRUE) * w)
         = sum(w * [y*log(y) - y - lgamma(y+1)]) for y > 0, else 0.
@@ -240,7 +260,7 @@ class Poisson(ExponentialFamily):
         Matches R's poisson()$dev.resids.
         """
         xp = array_module(y)
-        mu_safe = xp.maximum(mu, 1e-10)
+        mu_safe = xp.maximum(mu, _MU_EPS)
 
         y_pos = xp.where(y > 0, y, 1.0)
         term1 = y * xp.log(y_pos / mu_safe)
@@ -255,14 +275,12 @@ class Poisson(ExponentialFamily):
         wt: np.ndarray,
         scale: float,  # noqa: ARG002
     ) -> float:
-        """AIC contribution for Poisson family.
+        """AIC contribution for Poisson family.  Phase 3 only (NumPy).
 
         Matches R: -2 * sum(wt * dpois(y, mu, log=TRUE))
         = -2 * sum(wt * (y*log(mu) - mu - lgamma(y+1)))
         """
-        from scipy.special import gammaln
-
-        mu_safe = np.maximum(mu, 1e-10)
+        mu_safe = np.maximum(mu, _MU_EPS)
         ll = wt * (y * np.log(mu_safe) - mu_safe - gammaln(y + 1.0))
         return float(-2.0 * np.sum(ll))
 
@@ -272,8 +290,8 @@ class Poisson(ExponentialFamily):
         Following R's convention, this avoids log(0) in the first
         evaluation of the working quantities.
         """
-        y = np.asarray(y, dtype=float)
-        return np.where(y == 0, y + 0.1, y)
+        y_arr = np.asarray(y, dtype=float)
+        return np.where(y_arr == 0, y_arr + 0.1, y_arr)
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Poisson: mu > 0."""
@@ -305,11 +323,11 @@ class Gamma(ExponentialFamily):
         return mu**2
 
     def dvar(self, mu: np.ndarray) -> np.ndarray:
-        """V'(mu) = 2*mu for Gamma."""
+        """V'(mu) = 2*mu for Gamma.  Phase 2 only (JAX)."""
         return 2.0 * mu
 
-    def saturated_loglik(self, y, wt, scale):
-        """Saturated log-likelihood for Gamma.
+    def saturated_loglik(self, y: np.ndarray, wt: np.ndarray, scale: float) -> float:
+        """Saturated log-likelihood for Gamma.  Phase 2 only (JAX).
 
         R's fix.family.ls (gam.fit3.r line 2519):
             scale_i = scale / w_i  (per-observation scale)
@@ -317,12 +335,12 @@ class Gamma(ExponentialFamily):
             ls = sum(k_i - log(y_i))
         """
         # Per-observation scale: phi_i = scale / wt_i
-        wt_safe = jnp.maximum(wt, 1e-30)
+        wt_safe = jnp.maximum(wt, _LOG_EPS)
         inv_phi = wt_safe / scale  # 1 / phi_i = wt_i / scale
         phi = scale / wt_safe
 
         k = -jsp.gammaln(inv_phi) - jnp.log(phi) * inv_phi - inv_phi
-        y_safe = jnp.maximum(y, 1e-30)
+        y_safe = jnp.maximum(y, _LOG_EPS)
         return jnp.sum(jnp.where(wt > 0, k - jnp.log(y_safe), 0.0))
 
     def deviance_resids(
@@ -336,8 +354,8 @@ class Gamma(ExponentialFamily):
         Matches R's Gamma()$dev.resids.
         """
         xp = array_module(y)
-        mu_safe = xp.maximum(mu, 1e-10)
-        y_safe = xp.maximum(y, 1e-10)
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_safe = xp.maximum(y, _MU_EPS)
 
         d = 2.0 * wt * (-xp.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
         d = xp.maximum(d, 0.0)
@@ -350,23 +368,20 @@ class Gamma(ExponentialFamily):
         wt: np.ndarray,
         scale: float,
     ) -> float:
-        """AIC contribution for Gamma family.
+        """AIC contribution for Gamma family.  Phase 3 only (NumPy).
 
         Matches R's Gamma()$aic:
             -2 * sum(wt * dgamma(y, shape=1/scale, scale=mu*scale, log=TRUE)) + 2
         The +2 accounts for the estimated scale parameter.
         """
-        from scipy.special import gammaln
-
-        disp = scale
-        shape = 1.0 / disp
-        y_safe = np.maximum(y, 1e-10)
-        mu_safe = np.maximum(mu, 1e-10)
+        shape = 1.0 / scale
+        y_safe = np.maximum(y, _MU_EPS)
+        mu_safe = np.maximum(mu, _MU_EPS)
 
         ll = wt * (
             (shape - 1.0) * np.log(y_safe)
-            - y_safe / (mu_safe * disp)
-            - shape * np.log(mu_safe * disp)
+            - y_safe / (mu_safe * scale)
+            - shape * np.log(mu_safe * scale)
             - gammaln(shape)
         )
         return float(-2.0 * np.sum(ll) + 2.0)
@@ -376,8 +391,8 @@ class Gamma(ExponentialFamily):
 
         Follows R's Gamma()$initialize which ensures mu > 0.
         """
-        y = np.asarray(y, dtype=float)
-        return np.maximum(y, np.finfo(float).eps)
+        y_arr = np.asarray(y, dtype=float)
+        return np.maximum(y_arr, np.finfo(float).eps)
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Gamma: mu > 0."""

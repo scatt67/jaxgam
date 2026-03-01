@@ -40,7 +40,8 @@ class ExponentialFamily(ABC):
         ``Link.from_name()``. If ``None``, uses the family's default link.
     """
 
-    # Subclasses should override these class attributes as needed
+    # Subclasses should override these class attributes as needed.
+    # n_theta: number of extra distribution parameters (for extended families).
     n_theta: int = 0
     scale_known: bool = False
 

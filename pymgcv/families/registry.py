@@ -32,7 +32,8 @@ def get_family(name_or_instance: str | ExponentialFamily) -> ExponentialFamily:
     ----------
     name_or_instance : str or ExponentialFamily
         If a string, looks up the family by name (case-insensitive)
-        and returns a new instance with the default link.
+        and returns a cached instance with the default link.  Cached
+        instances are shared across calls to ensure JAX JIT cache hits.
         If already an ``ExponentialFamily`` instance, returns it as-is.
 
     Returns
