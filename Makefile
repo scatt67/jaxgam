@@ -55,7 +55,7 @@ colima-start: ## start colima VM (no-op if already running)
 
 .PHONY: docker-build
 docker-build: colima-start ## build the test Docker image
-	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 .PHONY: generate-ref
 generate-ref: docker-build ## regenerate R reference data via Docker

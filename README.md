@@ -16,15 +16,6 @@ cd pymgcv
 uv sync
 ```
 
-### Dependencies
-
-- Python >= 3.11
-- JAX >= 0.4.20
-- NumPy >= 1.24
-- SciPy >= 1.11
-- pandas >= 2.0
-- matplotlib >= 3.7
-
 ## Quickstart
 
 ```python
