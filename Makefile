@@ -44,6 +44,11 @@ test: docker-build ## run full test suite in Docker (includes R tests)
 test-local: ## run tests locally (R tests auto-skip if R unavailable)
 	$(UV) run pytest
 
+.PHONY: test-file
+test-file: docker-build ## run Docker tests for one file: make test-file FILE=tests/test_smooths/test_tprs.py
+	@test -n "$(FILE)" || (echo "Usage: make test-file FILE=tests/test_smooths/test_tprs.py" && exit 1)
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest $(FILE) -x --tb=short -v
+
 .PHONY: test-cov
 test-cov: docker-build ## run tests with coverage in Docker
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
