@@ -18,6 +18,8 @@ R source reference: R/smooth.r smoothCon() by-variable handling
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -61,7 +63,7 @@ def is_factor(col: pd.Series | npt.NDArray) -> bool:
     )
 
 
-def get_factor_levels(col: pd.Series | npt.NDArray) -> list:
+def get_factor_levels(col: pd.Series | npt.NDArray) -> list[Any]:
     """Extract sorted factor levels from a column.
 
     For pandas Categorical, uses ``.cat.categories`` to respect the
@@ -74,8 +76,8 @@ def get_factor_levels(col: pd.Series | npt.NDArray) -> list:
 
     Returns
     -------
-    list
-        Ordered factor levels.
+    list[Any]
+        Ordered factor levels (strings, ints, or other hashable types).
     """
     if isinstance(col, pd.Series) and hasattr(col, "cat"):
         return list(col.cat.categories)

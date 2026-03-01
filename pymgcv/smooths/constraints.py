@@ -34,6 +34,11 @@ from pymgcv.smooths.tensor import TensorInteractionSmooth
 if TYPE_CHECKING:
     from pymgcv.smooths.base import Smooth
 
+    # Duck-typed union for smooth-like objects; FactorBySmooth and
+    # NumericBySmooth share the same interface as Smooth but do not
+    # inherit from it (see by_variable.py module docstring).
+    SmoothLike = Smooth | FactorBySmooth | NumericBySmooth
+
 
 # ---------------------------------------------------------------------------
 # TermBlock
@@ -74,7 +79,7 @@ class TermBlock:
     n_coefs: int
     n_coefs_raw: int
     term_type: str  # "parametric" | "smooth"
-    smooth: Smooth | FactorBySmooth | NumericBySmooth | None = None
+    smooth: SmoothLike | None = None
     penalty_indices: tuple[int, ...] = ()
     Z_centering: npt.NDArray[np.floating] | None = field(default=None, repr=False)
     del_index: tuple[int, ...] = ()
@@ -302,7 +307,7 @@ class CoefficientMap:
     @classmethod
     def build(
         cls,
-        smooths: list[Smooth | FactorBySmooth | NumericBySmooth],
+        smooths: list[SmoothLike],
         X_smooth_blocks: list[npt.NDArray[np.floating]],
         S_smooth_blocks: list[list[npt.NDArray[np.floating]]],
         has_intercept: bool = True,
@@ -602,6 +607,12 @@ class CoefficientMap:
             0-based column indices of X2 that are dependent on X1,
             or None if X2 is fully independent of X1.
         """
+        if X1.shape[0] != X2.shape[0]:
+            raise ValueError(
+                f"X1 and X2 must have the same number of rows, "
+                f"got {X1.shape[0]} and {X2.shape[0]}."
+            )
+
         r = X1.shape[1]
 
         # Pivoted QR of X1 (single full QR, matching R's qr() call)
@@ -639,7 +650,7 @@ class CoefficientMap:
 
     @staticmethod
     def gam_side(
-        smooths: list[Smooth | FactorBySmooth | NumericBySmooth],
+        smooths: list[SmoothLike],
         X_blocks: list[npt.NDArray[np.floating]],
         S_blocks: list[list[npt.NDArray[np.floating]]],
         X_parametric: npt.NDArray[np.floating] | None = None,
@@ -766,25 +777,25 @@ class CoefficientMap:
                         k_pos = b.index(i)
                     except ValueError:
                         continue
-                    for l_pos in range(k_pos):
-                        l_idx = b[l_pos]
-                        if l_idx in x1_components:
+                    for lower_pos in range(k_pos):
+                        lower_idx = b[lower_pos]
+                        if lower_idx in x1_components:
                             continue
-                        x1_components.add(l_idx)
+                        x1_components.add(lower_idx)
 
                         if with_pen:
-                            if l_idx not in Xa_cache:
-                                Xa_cache[l_idx] = CoefficientMap._augment_smooth_x(
-                                    X_blocks[l_idx],
-                                    S_blocks[l_idx],
-                                    p_inds[l_idx],
+                            if lower_idx not in Xa_cache:
+                                Xa_cache[lower_idx] = CoefficientMap._augment_smooth_x(
+                                    X_blocks[lower_idx],
+                                    S_blocks[lower_idx],
+                                    p_inds[lower_idx],
                                     total_np,
                                     n_obs,
                                 )
-                            Xa = Xa_cache[l_idx]
+                            Xa = Xa_cache[lower_idx]
                             X1 = np.column_stack([X1, Xa]) if X1.shape[1] > 0 else Xa
                         else:
-                            Xb = X_blocks[l_idx]
+                            Xb = X_blocks[lower_idx]
                             X1 = np.column_stack([X1, Xb]) if X1.shape[1] > 0 else Xb
 
                 # Check for dependence
@@ -811,10 +822,11 @@ class CoefficientMap:
                     # Apply deletions to X_blocks and S_blocks
                     keep = [j for j in range(X_blocks[i].shape[1]) if j not in ind]
                     X_blocks[i] = X_blocks[i][:, keep]
-                    for s_idx in range(len(S_blocks[i])):
-                        S_blocks[i][s_idx] = S_blocks[i][s_idx][np.ix_(keep, keep)]
+                    for s_idx, _S_mat in enumerate(S_blocks[i]):
+                        S_blocks[i][s_idx] = _S_mat[np.ix_(keep, keep)]
 
-                    # Recompute parameter indices after deletion
+                    # Recompute ALL parameter indices after deletion because
+                    # later augmented matrices depend on the global offset.
                     if with_pen:
                         k_start = 0
                         for j in range(m):
@@ -936,7 +948,7 @@ class CoefficientMap:
 
     @staticmethod
     def _smooth_variable_names(
-        sm: Smooth | FactorBySmooth | NumericBySmooth,
+        sm: SmoothLike,
     ) -> list[str]:
         """Get variable names for a smooth, including by-variable suffixes.
 
@@ -959,7 +971,7 @@ class CoefficientMap:
 
     @staticmethod
     def _smooth_dim(
-        sm: Smooth | FactorBySmooth | NumericBySmooth,
+        sm: SmoothLike,
     ) -> int:
         """Get the dimension (number of covariates) of a smooth.
 
@@ -977,7 +989,7 @@ class CoefficientMap:
 
     @staticmethod
     def _smooth_side_constrain(
-        sm: Smooth | FactorBySmooth | NumericBySmooth,
+        sm: SmoothLike,
     ) -> bool:
         """Get ``side_constrain`` flag for a smooth.
 
@@ -997,7 +1009,7 @@ class CoefficientMap:
 
     @staticmethod
     def smooth_label(
-        sm: Smooth | FactorBySmooth | NumericBySmooth,
+        sm: SmoothLike,
     ) -> str:
         """Get a human-readable label for a smooth.
 

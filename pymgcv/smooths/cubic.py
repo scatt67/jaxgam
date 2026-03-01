@@ -46,6 +46,8 @@ class CubicRegressionSmooth(Smooth):
         self._knots: npt.NDArray[np.floating] | None = None
         self._k: int = 0
         self._cyclic: bool = False
+        # Skip SVD reparameterization in tensor products — cubic bases
+        # are already well-conditioned (see base.py._noterp docstring).
         self._noterp: bool = True
 
     # ------------------------------------------------------------------

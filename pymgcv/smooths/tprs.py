@@ -223,6 +223,8 @@ def _default_k(d: int, M: int) -> int:
 
     R's defaults: M + {8, 27, 100}[d-1] for d in {1, 2, 3+}.
     """
+    # R defaults (mgcv smooth.r, smooth.construct.tp.smooth.spec):
+    # d=1 → k=10, d=2 → k=30, d≥3 → M+100
     defaults = {1: 10, 2: 30}
     return defaults.get(d, M + 100)
 
@@ -279,7 +281,10 @@ def _get_unique_rows(
     ),
     cache=True,
 )
-def _slanczos_jit(A, k, tol):  # pragma: no cover
+def _slanczos_jit(  # pragma: no cover
+    A: npt.NDArray[np.floating], k: int, tol: float
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """Numba-compiled Lanczos core; see _slanczos() for documentation."""
     n = A.shape[0]
 
     # --- Deterministic starting vector (R's LCG) ---
@@ -355,15 +360,15 @@ def _slanczos_jit(A, k, tol):  # pragma: no cover
         err = np.abs(beta[j] * v_tri[-1, :])
 
         # Biggest mode: greedily walk from both ends by magnitude
-        pi = 0
+        pos_idx = 0
         ni = 0
         ok = True
-        while pi + ni < k:
-            if abs(d[pi]) >= abs(d[j - ni]):
-                if err[pi] > max_err:
+        while pos_idx + ni < k:
+            if abs(d[pos_idx]) >= abs(d[j - ni]):
+                if err[pos_idx] > max_err:
                     ok = False
                     break
-                pi += 1
+                pos_idx += 1
             else:
                 if err[ni] > max_err:
                     ok = False
@@ -372,21 +377,21 @@ def _slanczos_jit(A, k, tol):  # pragma: no cover
 
         if ok:
             j_final = j + 1
-            n_pos = pi
+            n_pos = pos_idx
             n_neg = ni
             converged = True
             break
 
     if not converged:
         j_final = n
-        pi = 0
+        pos_idx = 0
         ni = 0
-        while pi + ni < k:
-            if abs(d[pi]) >= abs(d[n - 1 - ni]):
-                pi += 1
+        while pos_idx + ni < k:
+            if abs(d[pos_idx]) >= abs(d[n - 1 - ni]):
+                pos_idx += 1
             else:
                 ni += 1
-        n_pos = pi
+        n_pos = pos_idx
         n_neg = ni
 
     # --- Build output eigenvalues and Ritz vectors ---
@@ -438,7 +443,10 @@ def _slanczos(
 
 
 @numba.njit(numba.float64[:, :](numba.float64[:, :]), cache=True)
-def _null_space_basis_r_jit(TU):  # pragma: no cover
+def _null_space_basis_r_jit(  # pragma: no cover
+    TU: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """Numba-compiled null-space basis; see _null_space_basis_r() for docs."""
     M = TU.shape[0]
     k = TU.shape[1]
     A = TU.copy()
@@ -569,6 +577,13 @@ class TPRSSmooth(Smooth):
         data : dict[str, np.ndarray]
             Must contain keys matching ``self.spec.variables``.
         """
+        # Validate required variables are present
+        for v in self.spec.variables:
+            if v not in data:
+                raise KeyError(
+                    f"Variable '{v}' not found in data. Available: {list(data.keys())}"
+                )
+
         # Step 1: Extract and centre covariates
         d = len(self.spec.variables)
         self._d = d
@@ -612,7 +627,10 @@ class TPRSSmooth(Smooth):
         # Subsample knots if too many unique values
         max_knots = self.spec.extra_args.get("max_knots", 2000)
         if n_unique > max_knots:
-            rng = np.random.RandomState(1)  # seed=1 to match R
+            # np.random.RandomState is deprecated in favour of default_rng,
+            # but we use it intentionally to reproduce R's seed=1 knot
+            # subsampling exactly (mgcv tprs.c).
+            rng = np.random.RandomState(1)
             idx = rng.choice(n_unique, max_knots, replace=False)
             idx.sort()
             Xu = Xu[idx]
@@ -647,6 +665,9 @@ class TPRSSmooth(Smooth):
         UZ[nk:, k_wiggly:] = np.eye(self._M)
 
         # Step 11: Build X (design matrix)
+        # Exact float comparison is safe here: Xu and inverse come from
+        # np.unique on X_centered, so Xu[inverse] reconstructs the original
+        # array without any intervening transformation.
         knots_are_data = (nk == n) and np.array_equal(Xu[inverse], X_centered)
 
         if knots_are_data:

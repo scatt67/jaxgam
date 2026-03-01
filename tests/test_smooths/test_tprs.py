@@ -961,7 +961,7 @@ class TestCoveragePaths:
         assert X_new.shape == (30, 5)
 
     def test_s_scale_fallback_when_maxx_zero(self) -> None:
-        """_s_scale = 1.0 when X_design is all zeros (maXX == 0)."""
+        """_s_scale = 1.0 when X_design is all zeros (max_x_sq == 0)."""
         spec = _make_spec(["x"], k=5)
         smooth = TPRSSmooth(spec)
         data = _make_1d_data(n=50)

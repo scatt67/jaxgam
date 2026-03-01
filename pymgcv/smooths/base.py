@@ -38,6 +38,10 @@ class Smooth(ABC):
         self.rank: int = 0
         self._is_setup: bool = False
         self._s_scale: float = 1.0
+        # Controls whether SVD reparameterization is skipped in tensor
+        # product construction (tensor.py).  False → reparameterize (default
+        # for TPRS); True → skip (cubic splines, where the basis is already
+        # well-conditioned).  Name mirrors R's mgcv internal flag.
         self._noterp: bool = False
         self.side_constrain: bool = True
 
@@ -72,9 +76,10 @@ class Smooth(ABC):
         """
         norm_X_inf = np.linalg.norm(X, ord=np.inf)
         norm_S_1 = np.linalg.norm(S_list[0], ord=1)
-        maXX = norm_X_inf**2
-        if maXX > 0:
-            s_scale = norm_S_1 / maXX
+        # R variable: maXX (mgcv smoothCon)
+        max_x_sq = norm_X_inf**2
+        if max_x_sq > 0:
+            s_scale = norm_S_1 / max_x_sq
             return [S / s_scale for S in S_list], s_scale
         return list(S_list), 1.0
 

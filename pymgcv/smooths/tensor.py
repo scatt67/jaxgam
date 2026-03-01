@@ -126,10 +126,10 @@ class TensorProductSmooth(Smooth):
         """
         var = marginal.spec.variables[0]
         x = data[var]
-        np_ = X.shape[1]
+        n_cols = X.shape[1]
 
         # Evenly spaced evaluation points across covariate range
-        eval_x = np.linspace(np.min(x), np.max(x), np_)
+        eval_x = np.linspace(np.min(x), np.max(x), n_cols)
         eval_data = {var: eval_x}
 
         # Prediction matrix at eval points
@@ -176,6 +176,7 @@ class TensorProductSmooth(Smooth):
                 k=self.spec.k,
                 smooth_type="s",
             )
+            # Lazy import to break circular dependency: registry → tensor → registry
             from pymgcv.smooths.registry import get_smooth_class
 
             smooth_cls = get_smooth_class(self.spec.bs)
@@ -217,7 +218,7 @@ class TensorProductSmooth(Smooth):
         self,
         S_list: list[npt.NDArray[np.floating]],
         dims: list[int],
-        marginals: list[Smooth],
+        ranks: list[int],
     ) -> list[Penalty]:
         """Build tensor product penalty matrices.
 
@@ -232,8 +233,8 @@ class TensorProductSmooth(Smooth):
             Raw penalty matrices for each marginal.
         dims : list[int]
             Number of coefficients for each marginal.
-        marginals : list[Smooth]
-            Marginal smooth objects (for rank info).
+        ranks : list[int]
+            Penalty rank for each marginal.
 
         Returns
         -------
@@ -260,7 +261,7 @@ class TensorProductSmooth(Smooth):
 
             # Compute rank: rank(S_j) * product(d_i for i != j)
             other_dims = int(np.prod([dims[i] for i in range(n_marginals) if i != j]))
-            rank_j = marginals[j].rank * other_dims
+            rank_j = ranks[j] * other_dims
 
             penalties.append(Penalty(P, rank=rank_j, null_space_dim=total_dim - rank_j))
 
@@ -300,15 +301,17 @@ class TensorProductSmooth(Smooth):
         X_tensor = self._build_tensor_design(X_list)
 
         # Build tensor penalty matrices
-        self._penalties = self._build_tensor_penalties(S_list, dims, self._marginals)
+        self._penalties = self._build_tensor_penalties(
+            S_list, dims, [m.rank for m in self._marginals]
+        )
 
         # Apply smoothCon normalization — R normalizes each penalty
         # by its own 1-norm (not all by S[0]'s norm)
-        maXX = np.linalg.norm(X_tensor, ord=np.inf) ** 2
-        if maXX > 0:
+        max_x_sq = np.linalg.norm(X_tensor, ord=np.inf) ** 2
+        if max_x_sq > 0:
             normalized = []
             for p in self._penalties:
-                maS = np.linalg.norm(p.S, ord=1) / maXX
+                maS = np.linalg.norm(p.S, ord=1) / max_x_sq
                 normalized.append(
                     Penalty(p.S / maS, rank=p.rank, null_space_dim=p.null_space_dim)
                 )
@@ -454,24 +457,18 @@ class TensorInteractionSmooth(TensorProductSmooth):
             for d, m in zip(constrained_dims, self._marginals, strict=True)
         ]
 
-        class _RankInfo:
-            def __init__(self, rank: int) -> None:
-                self.rank = rank
-
-        rank_infos = [_RankInfo(r) for r in constrained_ranks]
-
         self._penalties = self._build_tensor_penalties(
             S_list,
             constrained_dims,
-            rank_infos,  # type: ignore[arg-type]
+            constrained_ranks,
         )
 
         # Apply smoothCon normalization — per-penalty (matching R)
-        maXX = np.linalg.norm(X_tensor, ord=np.inf) ** 2
-        if maXX > 0:
+        max_x_sq = np.linalg.norm(X_tensor, ord=np.inf) ** 2
+        if max_x_sq > 0:
             normalized = []
             for p in self._penalties:
-                maS = np.linalg.norm(p.S, ord=1) / maXX
+                maS = np.linalg.norm(p.S, ord=1) / max_x_sq
                 normalized.append(
                     Penalty(p.S / maS, rank=p.rank, null_space_dim=p.null_space_dim)
                 )
