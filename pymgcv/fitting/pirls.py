@@ -23,6 +23,19 @@ import jax.numpy as jnp
 from pymgcv.families.base import ExponentialFamily
 from pymgcv.jax_utils import penalized_solve
 
+# Working weight bounds to prevent numerical overflow/underflow.
+# R's gam.fit3 uses similar implicit bounds via sqrt(W) clamping.
+_W_MIN = 1e-10
+_W_MAX = 1e10
+
+# Step acceptance tolerance relative to current penalized deviance.
+# Distinct from the convergence tolerance parameter.
+_PEN_DEV_REL_TOL = 1e-7
+
+# Maximum step-halving iterations before giving up.
+# Matches R's gam.fit3.r step-halving limit.
+_MAX_HALVINGS = 25
+
 
 @dataclass(frozen=True)
 class _PIRLSState:
@@ -157,7 +170,7 @@ def _pirls_step(
     eta_no_offset = X @ beta
 
     W = family.working_weights(mu, wt)
-    W = jnp.clip(W, 1e-10, 1e10)
+    W = jnp.clip(W, _W_MIN, _W_MAX)
 
     z = family.working_response(y, mu, eta_no_offset)
 
@@ -178,7 +191,28 @@ def _penalized_deviance(
     S_lambda: jax.Array,
     family: ExponentialFamily,
 ) -> jax.Array:
-    """Compute penalized deviance: dev(y, mu, wt) + beta^T S_lambda beta."""
+    """Compute penalized deviance: dev(y, mu, wt) + beta^T S_lambda beta.
+
+    Parameters
+    ----------
+    beta : jax.Array, shape (p,)
+        Coefficient vector.
+    mu : jax.Array, shape (n,)
+        Fitted mean values.
+    y : jax.Array, shape (n,)
+        Response values.
+    wt : jax.Array, shape (n,)
+        Prior weights.
+    S_lambda : jax.Array, shape (p, p)
+        Combined weighted penalty matrix.
+    family : ExponentialFamily
+        Family with dev_resids method.
+
+    Returns
+    -------
+    jax.Array, scalar
+        Penalized deviance.
+    """
     dev = family.dev_resids(y, mu, wt)
     penalty = beta @ S_lambda @ beta
     return dev + penalty
@@ -283,7 +317,7 @@ def pirls_loop(
         subsequent_ok = (
             (~is_first_iter)
             & jnp.isfinite(pen_dev_new)
-            & (pen_dev_new <= state.pen_dev + 1e-7 * jnp.abs(state.pen_dev))
+            & (pen_dev_new <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev))
         )
         accepted = first_ok | subsequent_ok
 
@@ -296,7 +330,7 @@ def pirls_loop(
         )
 
         def _sh_cond(sh: _StepHalvingState):
-            return (sh.k < 25) & (~sh.accepted)
+            return (sh.k < _MAX_HALVINGS) & (~sh.accepted)
 
         def _sh_body(sh: _StepHalvingState):
             step = 0.5 ** (sh.k + 2)  # 0.25, 0.125, ...
@@ -306,7 +340,7 @@ def pirls_loop(
             pd_t = _penalized_deviance(bt, mu_t, y, wt, S_lambda, family)
 
             ok = jnp.isfinite(pd_t) & (
-                pd_t <= state.pen_dev + 1e-7 * jnp.abs(state.pen_dev)
+                pd_t <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev)
             )
             # On first iteration, accept any finite value
             ok = ok | (is_first_iter & jnp.isfinite(pd_t))
@@ -329,6 +363,7 @@ def pirls_loop(
         coef_change = jnp.max(jnp.abs(beta_next - state.beta)) / (
             0.1 + jnp.max(jnp.abs(beta_next))
         )
+        # Skip convergence check during first 3 warm-up iterations (R's gam.fit3.r)
         converged = (state.i >= 3) & (dev_change < tol) & (coef_change < tol)
 
         return _PIRLSState(

@@ -8,6 +8,7 @@ Design doc reference: Section 7.2 (initialization step)
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -20,7 +21,7 @@ def initialize_beta(
     wt: np.ndarray,
     family: ExponentialFamily,
     offset: np.ndarray | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Compute starting coefficients for PIRLS.
 
     Steps:
@@ -50,6 +51,6 @@ def initialize_beta(
         offset = np.zeros(len(y))
 
     mu_init = family.initialize(y, wt)
-    eta_init = np.asarray(family.link.link(mu_init), dtype=float)
+    eta_init = np.asarray(family.link.link(mu_init), dtype=np.float64)
     beta_init, _, _, _ = np.linalg.lstsq(X, eta_init - offset, rcond=None)
     return jnp.asarray(beta_init)

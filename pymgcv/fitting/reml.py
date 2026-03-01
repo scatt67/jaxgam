@@ -10,9 +10,11 @@ on the criterion w.r.t. log(lambda) gives the correct gradient when beta*, XtWX,
 are treated as constants (not differentiated through). This matches R's
 analytical IFT approach.
 
-We do NOT differentiate through PIRLS -- we run PIRLS, extract results, pass
-them as fixed inputs. Only ``log_lambda`` flows through the AD trace (through
-S_lambda construction and log-det computations).
+The criterion functions in this module do NOT differentiate through PIRLS --
+they receive converged PIRLS outputs as fixed inputs. Only ``log_lambda``
+flows through the AD trace (through S_lambda construction and log-det
+computations). The end-to-end differentiable score (which does differentiate
+through PIRLS via ``custom_jvp``) is in ``newton.py``.
 
 Design doc reference: Section 4.3, 4.4
 R source reference: gam.fit3.r lines 612-640 (general Laplace REML)
@@ -44,8 +46,9 @@ Scale estimation uses Fletcher (2012) correction by default:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
@@ -607,12 +610,33 @@ _jit_ml_joint_hess = jax.jit(
 
 # Fused gradient + Hessian: compute both in a single XLA program,
 # halving the Python↔XLA round trips in _check_convergence().
-def _make_grad_hess(criterion_fn):
-    """Create a function returning (gradient, hessian) for a criterion."""
+def _make_grad_hess(
+    criterion_fn: Callable[..., jax.Array],
+) -> Callable[..., tuple[jax.Array, jax.Array]]:
+    """Create a fused function returning (gradient, hessian) for a criterion.
+
+    Wraps ``jax.grad`` and ``jax.hessian`` of the given criterion into
+    a single callable, so that when JIT-compiled the gradient and Hessian
+    are computed in one XLA program. This halves the Python↔XLA round
+    trips compared to calling grad and hessian separately.
+
+    Parameters
+    ----------
+    criterion_fn : Callable[..., jax.Array]
+        A criterion function (e.g. ``reml_criterion``) that takes
+        ``log_lambda`` as its first argument and returns a scalar score.
+
+    Returns
+    -------
+    Callable[..., tuple[jax.Array, jax.Array]]
+        A function with the same signature as ``criterion_fn`` that
+        returns ``(gradient, hessian)`` where gradient has shape ``(m,)``
+        and hessian has shape ``(m, m)``.
+    """
     _grad = jax.grad(criterion_fn)
     _hess = jax.hessian(criterion_fn)
 
-    def _grad_hess(*args, **kwargs):
+    def _grad_hess(*args: Any, **kwargs: Any) -> tuple[jax.Array, jax.Array]:
         return _grad(*args, **kwargs), _hess(*args, **kwargs)
 
     return _grad_hess
@@ -644,10 +668,18 @@ _jit_ml_joint_grad_hess = jax.jit(
 class _CriterionBase(ABC):
     """Base class for REML/ML criterion evaluation.
 
-    Precomputes and caches constants from converged PIRLS.
+    Precomputes and caches constants from converged PIRLS at construction.
     Subclasses implement ``score()``, ``gradient()``, ``hessian()``,
     and ``grad_hess()`` using the pre-compiled module-level JIT'd
     transforms.
+
+    Parameters
+    ----------
+    fd : FittingData
+        Phase 1->2 boundary container with model data and penalties.
+    pirls_result : PIRLSResult
+        Converged PIRLS output providing coefficients, XtWX, deviance,
+        and working weights.
     """
 
     def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
@@ -658,6 +690,7 @@ class _CriterionBase(ABC):
         self._XtWX = pirls_result.XtWX
         self._beta = pirls_result.coefficients
         self._S_list = fd.S_list
+        self._Mp = fd.total_penalty_null_dim
         # Block-structured log|S+| metadata
         self._singleton_sp_indices = fd.singleton_sp_indices
         self._singleton_ranks = fd.singleton_ranks
@@ -665,6 +698,24 @@ class _CriterionBase(ABC):
         self._multi_block_sp_indices = fd.multi_block_sp_indices
         self._multi_block_ranks = fd.multi_block_ranks
         self._multi_block_proj_S = fd.multi_block_proj_S
+
+    def _kwargs(self) -> dict[str, Any]:
+        """Build keyword arguments for the JIT'd criterion function."""
+        return {
+            "XtWX": self._XtWX,
+            "beta": self._beta,
+            "deviance": self._deviance,
+            "ls_sat": self._ls_sat,
+            "S_list": self._S_list,
+            "phi": self.scale,
+            "Mp": self._Mp,
+            "singleton_sp_indices": self._singleton_sp_indices,
+            "singleton_ranks": self._singleton_ranks,
+            "singleton_eig_constants": self._singleton_eig_constants,
+            "multi_block_sp_indices": self._multi_block_sp_indices,
+            "multi_block_ranks": self._multi_block_ranks,
+            "multi_block_proj_S": self._multi_block_proj_S,
+        }
 
     @abstractmethod
     def score(self, log_lambda: jax.Array) -> jax.Array: ...
@@ -710,27 +761,6 @@ class REMLCriterion(_CriterionBase):
         Converged PIRLS output.
     """
 
-    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
-        super().__init__(fd, pirls_result)
-        self._Mp = fd.total_penalty_null_dim
-
-    def _kwargs(self) -> dict:
-        return {
-            "XtWX": self._XtWX,
-            "beta": self._beta,
-            "deviance": self._deviance,
-            "ls_sat": self._ls_sat,
-            "S_list": self._S_list,
-            "phi": self.scale,
-            "Mp": self._Mp,
-            "singleton_sp_indices": self._singleton_sp_indices,
-            "singleton_ranks": self._singleton_ranks,
-            "singleton_eig_constants": self._singleton_eig_constants,
-            "multi_block_sp_indices": self._multi_block_sp_indices,
-            "multi_block_ranks": self._multi_block_ranks,
-            "multi_block_proj_S": self._multi_block_proj_S,
-        }
-
     def score(self, log_lambda: jax.Array) -> jax.Array:
         """REML score at given log_lambda."""
         return _jit_reml_score(log_lambda, **self._kwargs())
@@ -763,27 +793,6 @@ class MLCriterion(_CriterionBase):
     pirls_result : PIRLSResult
         Converged PIRLS output.
     """
-
-    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
-        super().__init__(fd, pirls_result)
-        self._Mp = fd.total_penalty_null_dim
-
-    def _kwargs(self) -> dict:
-        return {
-            "XtWX": self._XtWX,
-            "beta": self._beta,
-            "deviance": self._deviance,
-            "ls_sat": self._ls_sat,
-            "S_list": self._S_list,
-            "phi": self.scale,
-            "Mp": self._Mp,
-            "singleton_sp_indices": self._singleton_sp_indices,
-            "singleton_ranks": self._singleton_ranks,
-            "singleton_eig_constants": self._singleton_eig_constants,
-            "multi_block_sp_indices": self._multi_block_sp_indices,
-            "multi_block_ranks": self._multi_block_ranks,
-            "multi_block_proj_S": self._multi_block_proj_S,
-        }
 
     def score(self, log_lambda: jax.Array) -> jax.Array:
         """ML score at given log_lambda."""
@@ -818,6 +827,13 @@ class _JointCriterionBase(ABC):
     EDF is computed once at construction (it depends on S_lambda
     and XtWX, not on phi). The Fletcher scale is still computed
     for use as the initial ``log_phi`` estimate.
+
+    Parameters
+    ----------
+    fd : FittingData
+        Phase 1->2 boundary container with model data and penalties.
+    pirls_result : PIRLSResult
+        Converged PIRLS output.
     """
 
     def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
@@ -830,8 +846,11 @@ class _JointCriterionBase(ABC):
         self._S_list = fd.S_list
         self._y = fd.y
         self._wt = fd.wt
+        # Retained as attribute because joint criteria need to call
+        # family.saturated_loglik(y, wt, phi) inside the JIT trace.
         self._family = fd.family
         self._n_lambda = fd.n_penalties
+        self._Mp = fd.total_penalty_null_dim
         # Block-structured log|S+| metadata
         self._singleton_sp_indices = fd.singleton_sp_indices
         self._singleton_ranks = fd.singleton_ranks
@@ -839,6 +858,26 @@ class _JointCriterionBase(ABC):
         self._multi_block_sp_indices = fd.multi_block_sp_indices
         self._multi_block_ranks = fd.multi_block_ranks
         self._multi_block_proj_S = fd.multi_block_proj_S
+
+    def _kwargs(self) -> dict[str, Any]:
+        """Build keyword arguments for the JIT'd joint criterion function."""
+        return {
+            "XtWX": self._XtWX,
+            "beta": self._beta,
+            "deviance": self._deviance,
+            "y": self._y,
+            "wt": self._wt,
+            "S_list": self._S_list,
+            "Mp": self._Mp,
+            "n_lambda": self._n_lambda,
+            "family": self._family,
+            "singleton_sp_indices": self._singleton_sp_indices,
+            "singleton_ranks": self._singleton_ranks,
+            "singleton_eig_constants": self._singleton_eig_constants,
+            "multi_block_sp_indices": self._multi_block_sp_indices,
+            "multi_block_ranks": self._multi_block_ranks,
+            "multi_block_proj_S": self._multi_block_proj_S,
+        }
 
     @abstractmethod
     def score(self, params: jax.Array) -> jax.Array: ...
@@ -867,29 +906,6 @@ class JointREMLCriterion(_JointCriterionBase):
         Converged PIRLS output.
     """
 
-    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
-        super().__init__(fd, pirls_result)
-        self._Mp = fd.total_penalty_null_dim
-
-    def _kwargs(self) -> dict:
-        return {
-            "XtWX": self._XtWX,
-            "beta": self._beta,
-            "deviance": self._deviance,
-            "y": self._y,
-            "wt": self._wt,
-            "S_list": self._S_list,
-            "Mp": self._Mp,
-            "n_lambda": self._n_lambda,
-            "family": self._family,
-            "singleton_sp_indices": self._singleton_sp_indices,
-            "singleton_ranks": self._singleton_ranks,
-            "singleton_eig_constants": self._singleton_eig_constants,
-            "multi_block_sp_indices": self._multi_block_sp_indices,
-            "multi_block_ranks": self._multi_block_ranks,
-            "multi_block_proj_S": self._multi_block_proj_S,
-        }
-
     def score(self, params: jax.Array) -> jax.Array:
         """REML score at given params = [log_lambda, log_phi]."""
         return _jit_reml_joint_score(params, **self._kwargs())
@@ -917,29 +933,6 @@ class JointMLCriterion(_JointCriterionBase):
     pirls_result : PIRLSResult
         Converged PIRLS output.
     """
-
-    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
-        super().__init__(fd, pirls_result)
-        self._Mp = fd.total_penalty_null_dim
-
-    def _kwargs(self) -> dict:
-        return {
-            "XtWX": self._XtWX,
-            "beta": self._beta,
-            "deviance": self._deviance,
-            "y": self._y,
-            "wt": self._wt,
-            "S_list": self._S_list,
-            "Mp": self._Mp,
-            "n_lambda": self._n_lambda,
-            "family": self._family,
-            "singleton_sp_indices": self._singleton_sp_indices,
-            "singleton_ranks": self._singleton_ranks,
-            "singleton_eig_constants": self._singleton_eig_constants,
-            "multi_block_sp_indices": self._multi_block_sp_indices,
-            "multi_block_ranks": self._multi_block_ranks,
-            "multi_block_proj_S": self._multi_block_proj_S,
-        }
 
     def score(self, params: jax.Array) -> jax.Array:
         """ML score at given params = [log_lambda, log_phi]."""

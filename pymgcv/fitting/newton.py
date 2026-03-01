@@ -10,7 +10,13 @@ The algorithm follows R's ``newton()`` (gam.fit3.r lines
 1290-1719): eigenvalue-safe Newton direction with step-halving
 line search and steepest-descent fallback for indefinite Hessians.
 
+Design doc reference: Section 8.2 (Outer Newton with Damped Hessian)
+R source reference: gam.fit3.r lines 1290-1719
+
+Notes
+-----
 Key R-matching design choices (see docs/experiments.md):
+
 - ``conv_tol = 1e-6`` (R's ``gam.control()$newton$conv.tol``)
 - Gradient convergence uses ``5 * conv_tol`` factor (R line 1652)
 - PIRLS tolerance tightened to ``conv_tol / 100`` (R line 1308)
@@ -32,13 +38,11 @@ Key R-matching design choices (see docs/experiments.md):
 - Non-Gaussian uses ``newton()``-style step handling (gam.fit3.r
   lines 1491-1571): qerror check, eigenvalue floor ``eps^0.7``,
   SD fallback after 3 halvings.
-
-Design doc reference: Section 8.2 (Outer Newton with Damped Hessian)
-R source reference: gam.fit3.r lines 1290-1719
 """
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -47,6 +51,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.scipy.linalg import cho_solve
 
+from pymgcv.families.base import ExponentialFamily
 from pymgcv.fitting.data import FittingData
 from pymgcv.fitting.initialization import initialize_beta
 from pymgcv.fitting.pirls import PIRLSResult, pirls_loop
@@ -58,6 +63,8 @@ from pymgcv.fitting.reml import (
     _criterion_core,
     _CriterionBase,
     _JointCriterionBase,
+    estimate_edf,
+    fletcher_scale,
 )
 from pymgcv.jax_utils import build_S_lambda
 
@@ -65,6 +72,22 @@ from pymgcv.jax_utils import build_S_lambda
 # This is ~67x looser than sqrt(eps) ≈ 1.5e-8, matching R's deliberate
 # choice for the Newton optimizer that wraps PIRLS (gam.fit3.r line 1307).
 _DEFAULT_CONV_TOL = 1e-6
+
+# R's maxSstep default for steepest-descent step length (gam.fit3.r).
+_MAX_SD_STEP = 2.0
+
+# Maximum step-halving iterations for Gaussian (fast-REML.r).
+_MAX_HALVINGS_GAUSSIAN = 25
+
+# Maximum step-halving iterations for non-Gaussian (gam.fit3.r).
+# Non-Gaussian uses more halvings because of qerror checking.
+_MAX_HALVINGS_NON_GAUSSIAN = 30
+
+# Tolerance for detecting active bounds on log smoothing parameters.
+_BOUND_TOL = 1e-10
+
+# Gradient filter threshold for uconv.ind (R lines 1430-1431).
+_GRAD_FILTER_THRESH = 0.001
 
 
 # ---------------------------------------------------------------------------
@@ -85,27 +108,29 @@ _DEFAULT_CONV_TOL = 1e-6
 
 
 def _diff_score(
-    params,
-    beta_warm,
-    X,
-    y,
-    wt,
-    offset,
-    S_list,
-    singleton_eig_constants,
-    multi_block_proj_S,
-    family,
-    pirls_tol,
-    is_reml,
-    joint_scale,
-    n_lambda,
-    Mp,
-    singleton_sp_indices,
-    singleton_ranks,
-    multi_block_sp_indices,
-    multi_block_ranks,
-    p,
-):
+    # Dynamic args (JAX arrays, differentiated through)
+    params: jax.Array,
+    beta_warm: jax.Array,
+    X: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    offset: jax.Array,
+    S_list: tuple[jax.Array, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    # Static args (JIT cache keys, not traced)
+    family: ExponentialFamily,
+    pirls_tol: float,
+    is_reml: bool,
+    joint_scale: bool,
+    n_lambda: int,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    p: int,
+) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
     All data flows as explicit arguments (no per-fit closures). Static
@@ -114,6 +139,41 @@ def _diff_score(
     this function as a closure over X, y, wt, offset, family, pirls_tol
     (all concrete or traced at trace time), keeping only S_lambda and
     beta_warm as differentiable primals.
+
+    Parameters
+    ----------
+    params : jax.Array, shape (m,) or (m+1,)
+        Log smoothing parameters, or ``[log_lambda, log_phi]`` for joint.
+    beta_warm : jax.Array, shape (p,)
+        Warm-start coefficients from previous PIRLS.
+    X, y, wt, offset : jax.Array
+        Model data on device.
+    S_list : tuple[jax.Array, ...]
+        Per-penalty matrices.
+    singleton_eig_constants, multi_block_proj_S
+        Block-structured log|S+| data (dynamic JAX arrays).
+    family : ExponentialFamily
+        Family (static, JIT cache key).
+    pirls_tol : float
+        PIRLS convergence tolerance (static).
+    is_reml : bool
+        Whether to use REML vs ML criterion (static).
+    joint_scale : bool
+        Whether params includes log_phi (static).
+    n_lambda : int
+        Number of smoothing parameters (static).
+    Mp : int
+        Total penalty null space dimension (static).
+    singleton_sp_indices, singleton_ranks, multi_block_sp_indices,
+    multi_block_ranks : tuple[int, ...]
+        Block metadata (static, JIT cache keys).
+    p : int
+        Number of coefficients (static).
+
+    Returns
+    -------
+    jax.Array, scalar
+        REML or ML criterion score.
     """
 
     # ---- custom_jvp on PIRLS (closure over traced X, y, wt, offset) ----
@@ -227,7 +287,10 @@ _jit_diff_hess = jax.jit(
 
 
 # Fused gradient + Hessian: single XLA program, halves Python↔XLA syncs.
-def _diff_grad_hess(*args, **kwargs):
+def _diff_grad_hess(
+    *args: jax.Array, **kwargs: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """Fused gradient + Hessian of ``_diff_score`` in a single XLA trace."""
     _grad = jax.grad(_diff_score, argnums=0)
     _hess = jax.hessian(_diff_score, argnums=0)
     return _grad(*args, **kwargs), _hess(*args, **kwargs)
@@ -252,31 +315,41 @@ _jit_diff_grad_hess = jax.jit(_diff_grad_hess, static_argnames=_DIFF_STATIC)
 
 
 def _fit_and_score_impl(
-    params,
-    beta_init,
-    X,
-    y,
-    wt,
-    offset,
-    S_list,
-    singleton_eig_constants,
-    multi_block_proj_S,
-    family,
-    pirls_tol,
-    is_reml,
-    joint_scale,
-    n_lambda,
-    Mp,
-    singleton_sp_indices,
-    singleton_ranks,
-    multi_block_sp_indices,
-    multi_block_ranks,
-    p,
-):
+    # Dynamic args (JAX arrays)
+    params: jax.Array,
+    beta_init: jax.Array,
+    X: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    offset: jax.Array,
+    S_list: tuple[jax.Array, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    # Static args (JIT cache keys)
+    family: ExponentialFamily,
+    pirls_tol: float,
+    is_reml: bool,
+    joint_scale: bool,
+    n_lambda: int,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    p: int,
+) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
-    Same signature as ``_diff_score`` but forward-pass only (no custom_jvp).
-    Returns ``(score, pirls_result)`` where pirls_result is a pytree.
+    Same signature as ``_diff_score`` but forward-pass only (no
+    ``custom_jvp``). Returns ``(score, pirls_result)`` where
+    ``pirls_result`` is a registered JAX pytree.
+
+    Returns
+    -------
+    score : jax.Array, scalar
+        REML or ML criterion score.
+    pirls_result : PIRLSResult
+        Converged PIRLS output.
     """
     if joint_scale:
         log_lambda = params[:n_lambda]
@@ -495,6 +568,9 @@ class NewtonOptimizer:
         max_step: float = 5.0,
         lsp_max: float = 40.0,
     ) -> None:
+        if method not in ("REML", "ML"):
+            raise ValueError(f"Unknown method: {method!r}. Use 'REML' or 'ML'.")
+
         self._fd = fd
         self._method = method
         self._max_iter = max_iter
@@ -528,9 +604,6 @@ class NewtonOptimizer:
         # Joint optimization: append log_phi to params when scale is unknown
         # (matches R's mgcv.r line 2033: lsp <- c(lsp, log.scale))
         self._joint_scale = not fd.family.scale_known and fd.n_penalties > 0
-
-        if method not in ("REML", "ML"):
-            raise ValueError(f"Unknown method: {method!r}. Use 'REML' or 'ML'.")
 
         # Pre-bind all arguments except (params, beta_init) which vary
         # per Newton iteration. Shared by _jit_fit_and_score (forward pass)
@@ -581,8 +654,8 @@ class NewtonOptimizer:
     def _clamp_params(self, params: jax.Array) -> jax.Array:
         """Optionally clamp log smoothing parameters.
 
-        When ``lsp_max`` is None (default, matching R), no clamping
-        is applied. When set, clamps to ``[-lsp_max, lsp_max]``.
+        When ``lsp_max`` is None, no clamping is applied. When set
+        (default ``40.0``), clamps to ``[-lsp_max, lsp_max]``.
 
         For joint optimization, only the log_lambda portion is clamped;
         log_phi is left unclamped.
@@ -687,7 +760,7 @@ class NewtonOptimizer:
                 not_moved = 0
 
             # Break conditions (R line 1832)
-            if k == 25 or not_moved > 3:
+            if k == _MAX_HALVINGS_GAUSSIAN or not_moved > 3:
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
             if bool(jnp.allclose(log_lambda, log_lambda + step)):
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
@@ -732,7 +805,6 @@ class NewtonOptimizer:
         log_lambda_new, pirls_new, score_new, outcome
         """
         tol = self._tol
-        max_s_step = 2.0  # R's maxSstep default
 
         # Compute predicted change from quadratic model
         pred_change = float(jnp.sum(grad * step) + 0.5 * step @ hess @ step)
@@ -755,7 +827,7 @@ class NewtonOptimizer:
         sd_used = False
         k = 0
         not_moved = 0
-        while k < 30:
+        while k < _MAX_HALVINGS_NON_GAUSSIAN:
             if float(score_new) - score < tol * score_scale:
                 not_moved += 1
             else:
@@ -766,7 +838,7 @@ class NewtonOptimizer:
 
             # After 3 halvings in early iterations, try steepest descent
             if k == 3 and outer_iter < 10 and not sd_used:
-                s_length = min(float(jnp.sqrt(jnp.sum(step**2))), max_s_step)
+                s_length = min(float(jnp.sqrt(jnp.sum(step**2))), _MAX_SD_STEP)
                 sd_norm = float(jnp.sqrt(jnp.sum(sd_step**2)))
                 if sd_norm > 0:
                     step = sd_step * (s_length / sd_norm)
@@ -782,7 +854,7 @@ class NewtonOptimizer:
             pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
 
             score_change = float(score_new) - score
-            # Relax qerror check after enough halvings (R line 1540)
+            # R relaxes qerror threshold after 4+ halvings (gam.fit3.r line 1540)
             qerror_thresh = 0.4 if k > 4 else 0.8
             pred_change = float(jnp.sum(grad * step) + 0.5 * step @ hess @ step)
             qerror = abs(pred_change - score_change) / (
@@ -838,7 +910,7 @@ class NewtonOptimizer:
 
         # Refinement: exclude tiny-gradient dimensions (R lines 1430-1431)
         max_grad = np.max(np.abs(grad_np)) if len(grad_np) > 0 else 0.0
-        uconv1 = uconv & (np.abs(grad_np) > max_grad * 0.001)
+        uconv1 = uconv & (np.abs(grad_np) > max_grad * _GRAD_FILTER_THRESH)
 
         # Fallback: if nothing left, use full uconv (R line 1431)
         if np.sum(uconv1) == 0:
@@ -864,15 +936,15 @@ class NewtonOptimizer:
         if self._joint_scale:
             n_lambda = self._fd.n_penalties
             log_lambda = params[:n_lambda]
-            at_upper = jnp.abs(log_lambda - lsp_max) < 1e-10
-            at_lower = jnp.abs(log_lambda + lsp_max) < 1e-10
+            at_upper = jnp.abs(log_lambda - lsp_max) < _BOUND_TOL
+            at_lower = jnp.abs(log_lambda + lsp_max) < _BOUND_TOL
             proj_lambda = jnp.where(
                 at_upper & (grad[:n_lambda] < 0), 0.0, grad[:n_lambda]
             )
             proj_lambda = jnp.where(at_lower & (proj_lambda > 0), 0.0, proj_lambda)
             return jnp.concatenate([proj_lambda, grad[n_lambda:]])
-        at_upper = jnp.abs(params - lsp_max) < 1e-10
-        at_lower = jnp.abs(params + lsp_max) < 1e-10
+        at_upper = jnp.abs(params - lsp_max) < _BOUND_TOL
+        at_lower = jnp.abs(params + lsp_max) < _BOUND_TOL
         proj = jnp.where(at_upper & (grad < 0), 0.0, grad)
         return jnp.where(at_lower & (proj > 0), 0.0, proj)
 
@@ -1051,8 +1123,6 @@ class NewtonOptimizer:
                 fd.offset,
                 tol=self._pirls_tol,
             )
-            from pymgcv.fitting.reml import estimate_edf, fletcher_scale
-
             edf_init = estimate_edf(pirls_init.XtWX, pirls_init.L)
             phi_init = fletcher_scale(fd.y, pirls_init.mu, fd.wt, fd.family, edf_init)
             log_phi_init = jnp.log(phi_init)
@@ -1218,27 +1288,9 @@ def newton_optimize(
         final PIRLS fit, and diagnostics.
     """
     if log_lambda_init is not None:
-        fd = FittingData(
-            X=fd.X,
-            y=fd.y,
-            wt=fd.wt,
-            offset=fd.offset,
-            S_list=fd.S_list,
+        fd = dataclasses.replace(
+            fd,
             log_lambda_init=jnp.asarray(log_lambda_init, dtype=jnp.float64),
-            family=fd.family,
-            n_obs=fd.n_obs,
-            n_coef=fd.n_coef,
-            penalty_ranks=fd.penalty_ranks,
-            penalty_null_dims=fd.penalty_null_dims,
-            penalty_range_basis=fd.penalty_range_basis,
-            singleton_sp_indices=fd.singleton_sp_indices,
-            singleton_ranks=fd.singleton_ranks,
-            singleton_eig_constants=fd.singleton_eig_constants,
-            multi_block_sp_indices=fd.multi_block_sp_indices,
-            multi_block_ranks=fd.multi_block_ranks,
-            multi_block_proj_S=fd.multi_block_proj_S,
-            multi_block_S_local=fd.multi_block_S_local,
-            repara_D=fd.repara_D,
         )
     optimizer = NewtonOptimizer(
         fd,

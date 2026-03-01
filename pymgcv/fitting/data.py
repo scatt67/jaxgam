@@ -19,8 +19,9 @@ Design doc reference: docs/design.md §1.3 (phase boundaries), §4.4
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
@@ -30,7 +31,20 @@ from pymgcv.families.base import ExponentialFamily
 from pymgcv.jax_utils import build_S_lambda, to_jax
 
 if TYPE_CHECKING:
-    from pymgcv.formula.design import ModelSetup
+    from pymgcv.formula.design import ModelSetup, SmoothInfo
+
+# Eigenvalue rank threshold: eigenvalues below max(eig) * _EPS_TWO_THIRDS
+# are treated as zero. Matches R's Sl.setup / totalPenaltySpace convention.
+_EPS_TWO_THIRDS = np.finfo(float).eps ** (2.0 / 3.0)
+
+# Floor for log of eigenvalues to prevent log(0).
+_LOG_FLOOR = 1e-30
+
+# R's initial.sp threshold for identifying active penalty entries.
+_ACTIVITY_THRESH = np.finfo(float).eps ** 0.8
+
+# Maximum iterations for the initial.sp scaling loop.
+_MAX_SP_ADJUST_ITERS = 200
 
 
 @dataclass(frozen=True)
@@ -65,6 +79,26 @@ class FittingData:
         Rank of each penalty matrix (for REML log|S^+|).
     penalty_null_dims : tuple[int, ...]
         Null space dimension of each penalty (for REML).
+    penalty_range_basis : jax.Array or None
+        Orthogonal basis for the range space of the total penalty,
+        shape (p, r) where r = p - Mp. Used for stable log|S+|.
+    singleton_sp_indices : tuple[int, ...]
+        Index into log_lambda for each singleton penalty block.
+    singleton_ranks : tuple[int, ...]
+        Rank of each singleton penalty's local block.
+    singleton_eig_constants : jax.Array, shape (n_singletons,)
+        Precomputed log-eigenvalue constants for singletons.
+    multi_block_sp_indices : tuple[tuple[int, ...], ...]
+        Log_lambda indices for each multi-penalty block.
+    multi_block_ranks : tuple[int, ...]
+        Combined penalty rank for each multi-penalty block.
+    multi_block_proj_S : tuple[tuple[jax.Array, ...], ...]
+        Range-space-projected penalties for each multi-penalty block.
+    multi_block_S_local : tuple[tuple[jax.Array, ...], ...]
+        Block-local (unprojected) penalties for adaptive reparam.
+    repara_D : jax.Array or None
+        Sl.setup reparameterization matrix (p, p), or None if no
+        reparameterization was applied.
     """
 
     # Arrays on device
@@ -83,23 +117,19 @@ class FittingData:
     n_coef: int
     penalty_ranks: tuple[int, ...]
     penalty_null_dims: tuple[int, ...]
-    penalty_range_basis: jax.Array | None  # shape (p, r), r = p - Mp
+    penalty_range_basis: jax.Array | None
 
     # Block-structured log|S+| metadata
-    singleton_sp_indices: tuple[int, ...]  # index into log_lambda per singleton
-    singleton_ranks: tuple[int, ...]  # rank of each singleton's penalty
-    singleton_eig_constants: jax.Array  # (n_singletons,) precomputed constants
-    multi_block_sp_indices: tuple[tuple[int, ...], ...]  # log_lambda indices per block
-    multi_block_ranks: tuple[int, ...]  # combined penalty rank per block
-    multi_block_proj_S: tuple[
-        tuple[jax.Array, ...], ...
-    ]  # projected penalties per block
-    multi_block_S_local: tuple[
-        tuple[jax.Array, ...], ...
-    ]  # block-local (unprojected) penalties for adaptive reparam
+    singleton_sp_indices: tuple[int, ...]
+    singleton_ranks: tuple[int, ...]
+    singleton_eig_constants: jax.Array
+    multi_block_sp_indices: tuple[tuple[int, ...], ...]
+    multi_block_ranks: tuple[int, ...]
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...]
+    multi_block_S_local: tuple[tuple[jax.Array, ...], ...]
 
     # Sl.setup reparameterization (R's fast-REML.r lines 68-429)
-    repara_D: jax.Array | None  # (p, p) back-transform matrix, or None
+    repara_D: jax.Array | None
 
     @property
     def n_penalties(self) -> int:
@@ -146,6 +176,9 @@ class FittingData:
         FittingData
             On-device data ready for PIRLS/REML.
         """
+        if setup.X.ndim != 2:
+            raise ValueError(f"Expected 2-D model matrix X, got ndim={setup.X.ndim}")
+
         y_jax = to_jax(setup.y, device=device)
         wt_jax = to_jax(setup.weights, device=device)
 
@@ -245,7 +278,6 @@ class FittingData:
         def_sp = np.zeros(n_penalties)
         ldss = np.zeros_like(ldxx)
         pen = np.zeros(len(ldxx), dtype=bool)
-        eps_08 = np.finfo(float).eps ** 0.8
 
         for i, S in enumerate(S_list):
             maS = np.max(np.abs(S))
@@ -254,7 +286,7 @@ class FittingData:
             rsS = np.mean(np.abs(S), axis=1)
             csS = np.mean(np.abs(S), axis=0)
             dS = np.abs(np.diag(S))
-            thresh = eps_08 * maS
+            thresh = _ACTIVITY_THRESH * maS
             ind = (rsS > thresh) & (csS > thresh) & (dS > thresh)
 
             ss = np.diag(S)[ind]
@@ -276,10 +308,14 @@ class FittingData:
         ldxx_s = ldxx[idx].copy()
         ldss_s = ldss[idx].copy()
 
-        while np.mean(ldxx_s / (ldxx_s + ldss_s)) > 0.4:
+        for _ in range(_MAX_SP_ADJUST_ITERS):
+            if np.mean(ldxx_s / (ldxx_s + ldss_s)) <= 0.4:
+                break
             def_sp *= 10
             ldss_s *= 10
-        while np.mean(ldxx_s / (ldxx_s + ldss_s)) < 0.4:
+        for _ in range(_MAX_SP_ADJUST_ITERS):
+            if np.mean(ldxx_s / (ldxx_s + ldss_s)) >= 0.4:
+                break
             def_sp /= 10
             ldss_s /= 10
 
@@ -307,7 +343,7 @@ class FittingData:
             if norm_j > 0:
                 St += S_np / norm_j
         eigs, vecs = np.linalg.eigh(St)
-        threshold = np.max(eigs) * np.finfo(float).eps ** (2.0 / 3.0)
+        threshold = np.max(eigs) * _EPS_TWO_THIRDS
         Mp = int(np.sum(eigs <= threshold))
         U_range = vecs[:, Mp:]
         return to_jax(U_range, device=device)
@@ -335,9 +371,9 @@ class FittingData:
 
 def _build_block_metadata(
     penalty_arrays: list[np.ndarray],
-    smooth_info: tuple | None,
+    smooth_info: tuple[SmoothInfo, ...] | None,
     device: jax.Device | None,
-) -> dict:
+) -> dict[str, Any]:
     """Classify penalties into singleton and multi-penalty blocks.
 
     Penalties from different smooths occupy non-overlapping columns, so
@@ -348,8 +384,29 @@ def _build_block_metadata(
     (tensor products with overlapping penalties) use a scaled slogdet in
     the range space.  Factor-by smooths (non-overlapping multi-penalty)
     are split into independent singletons.
+
+    Parameters
+    ----------
+    penalty_arrays : list[np.ndarray]
+        Per-penalty (p, p) matrices (NumPy, not yet on device).
+    smooth_info : tuple[SmoothInfo, ...] or None
+        Per-smooth metadata with column ranges and penalty counts.
+    device : jax.Device or None
+        Target JAX device for array transfer.
+
+    Returns
+    -------
+    dict[str, Any]
+        Block metadata with keys:
+
+        - ``singleton_sp_indices``: index into log_lambda per singleton
+        - ``singleton_ranks``: rank of each singleton's penalty
+        - ``singleton_eig_constants``: precomputed log-eigenvalue sums
+        - ``multi_block_sp_indices``: log_lambda indices per block
+        - ``multi_block_ranks``: combined penalty rank per block
+        - ``multi_block_proj_S``: range-space-projected penalties
+        - ``multi_block_S_local``: block-local unprojected penalties
     """
-    eps_thresh = np.finfo(float).eps ** (2.0 / 3.0)
     singletons: list[tuple[int, int, float]] = []
     multi_blocks: list[tuple[tuple[int, ...], int, list, list]] = []
 
@@ -367,10 +424,12 @@ def _build_block_metadata(
                 sp_idx = sp_indices[0]
                 S_local = penalty_arrays[sp_idx][col_start:col_stop, col_start:col_stop]
                 eig_vals = np.linalg.eigvalsh(S_local)
-                thresh = np.max(np.abs(eig_vals)) * eps_thresh
+                thresh = np.max(np.abs(eig_vals)) * _EPS_TWO_THIRDS
                 nonzero = eig_vals > thresh
                 rank = int(np.sum(nonzero))
-                eig_const = float(np.sum(np.log(np.maximum(eig_vals[nonzero], 1e-30))))
+                eig_const = float(
+                    np.sum(np.log(np.maximum(eig_vals[nonzero], _LOG_FLOOR)))
+                )
                 singletons.append((sp_idx, rank, eig_const))
             else:
                 S_locals = [
@@ -382,11 +441,11 @@ def _build_block_metadata(
                 if non_overlapping:
                     for idx, sp_idx in enumerate(sp_indices):
                         eig_vals = np.linalg.eigvalsh(S_locals[idx])
-                        thresh = np.max(np.abs(eig_vals)) * eps_thresh
+                        thresh = np.max(np.abs(eig_vals)) * _EPS_TWO_THIRDS
                         nonzero = eig_vals > thresh
                         rank = int(np.sum(nonzero))
                         eig_const = float(
-                            np.sum(np.log(np.maximum(eig_vals[nonzero], 1e-30)))
+                            np.sum(np.log(np.maximum(eig_vals[nonzero], _LOG_FLOOR)))
                         )
                         singletons.append((sp_idx, rank, eig_const))
                 else:
@@ -396,7 +455,7 @@ def _build_block_metadata(
                         if norm > 0:
                             St_local += S / norm
                     eig_vals, vecs = np.linalg.eigh(St_local)
-                    thresh = np.max(eig_vals) * eps_thresh
+                    thresh = np.max(eig_vals) * _EPS_TWO_THIRDS
                     rank = int(np.sum(eig_vals > thresh))
                     U_local = vecs[:, -rank:]
                     S_projs = [U_local.T @ S @ U_local for S in S_locals]
@@ -419,7 +478,13 @@ def _build_block_metadata(
 
 
 def _penalties_non_overlapping(S_locals: list[np.ndarray]) -> bool:
-    """Check if multi-penalty matrices have non-overlapping supports."""
+    """Check if multi-penalty matrices have non-overlapping supports.
+
+    Two penalties have non-overlapping supports if there is no position
+    where both have nonzero entries (i.e. their element-wise product
+    is zero everywhere). This is the case for factor-by smooths where
+    each level's penalty occupies a different sub-block.
+    """
     for j in range(len(S_locals)):
         for k in range(j + 1, len(S_locals)):
             if np.any(np.abs(S_locals[j]) * np.abs(S_locals[k]) > 0):
@@ -429,7 +494,7 @@ def _penalties_non_overlapping(S_locals: list[np.ndarray]) -> bool:
 
 def _compute_repara_D(
     penalty_arrays: list[np.ndarray],
-    smooth_info: tuple,
+    smooth_info: tuple[SmoothInfo, ...],
     n_coef: int,
 ) -> np.ndarray | None:
     """Compute Sl.setup reparameterization matrix.
@@ -443,7 +508,7 @@ def _compute_repara_D(
     ----------
     penalty_arrays : list[np.ndarray]
         Per-penalty (p, p) matrices (NumPy, not yet on device).
-    smooth_info : tuple of SmoothInfo
+    smooth_info : tuple[SmoothInfo, ...]
         Per-smooth metadata with column ranges and penalty counts.
     n_coef : int
         Total number of coefficients.
@@ -453,7 +518,6 @@ def _compute_repara_D(
     np.ndarray or None
         (p, p) reparameterization matrix, or None if no transform needed.
     """
-    eps_23 = np.finfo(float).eps ** (2.0 / 3.0)
     D_global = np.eye(n_coef)
     modified = False
 
@@ -471,7 +535,7 @@ def _compute_repara_D(
             sp_idx = sp_indices[0]
             S_local = penalty_arrays[sp_idx][col_start:col_stop, col_start:col_stop]
             eigs, U = np.linalg.eigh(S_local)
-            threshold = max(eigs.max(), 0) * eps_23
+            threshold = max(eigs.max(), 0) * _EPS_TWO_THIRDS
             D_diag = np.ones(block_size)
             mask = eigs > threshold
             D_diag[mask] = 1.0 / np.sqrt(eigs[mask])
@@ -499,7 +563,7 @@ def _compute_repara_D(
                     sub_k = sub_stop - sub_start
 
                     eigs, U = np.linalg.eigh(S_sub)
-                    threshold = max(eigs.max(), 0) * eps_23
+                    threshold = max(eigs.max(), 0) * _EPS_TWO_THIRDS
                     D_diag = np.ones(sub_k)
                     mask = eigs > threshold
                     D_diag[mask] = 1.0 / np.sqrt(eigs[mask])
@@ -509,7 +573,7 @@ def _compute_repara_D(
                 modified = True
             else:
                 # Tensor product: rotate into eigenspace of total penalty
-                St = sum(S_locals)
+                St = functools.reduce(np.add, S_locals)
                 _eigs, U = np.linalg.eigh(St)
                 D_global[col_start:col_stop, col_start:col_stop] = U
                 modified = True
