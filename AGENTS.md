@@ -1,8 +1,8 @@
-# AGENTS.md — PyMGCV
+# AGENTS.md — JaxGAM
 
 ## What This Project Is
 
-PyMGCV is a Python port of Simon Wood's R package `mgcv` (Mixed GAM Computation Vehicle) for fitting Generalized Additive Models. The v1.0 release is deliberately scoped: dense-only execution, four exponential families, three smooth types + tensor products, REML/ML optimization. See `docs/design.md` Section 1.2 for the full scope boundary.
+JaxGAM is a Python port of Simon Wood's R package `mgcv` (Mixed GAM Computation Vehicle) for fitting Generalized Additive Models. The v1.0 release is deliberately scoped: dense-only execution, four exponential families, three smooth types + tensor products, REML/ML optimization. See `docs/design.md` Section 1.2 for the full scope boundary.
 
 The design document at `docs/design.md` is the authoritative reference for all architectural decisions. It is ~8000 lines. **Do not attempt to read it entirely.** Instead, read the specific sections referenced in each task. The table of contents is in the first 30 lines.
 
@@ -91,7 +91,7 @@ Key sections by topic area:
 ### File Organization
 
 ```
-pymgcv/
+jaxgam/
 ├── __init__.py          # Public API only: gam, predict, summary, plot
 ├── api.py               # Top-level fitting orchestration
 ├── formula/             # Phase 1: parsing and term representation
@@ -137,7 +137,7 @@ pymgcv/
 - Use the tolerance classes from `tests/tolerances.py`: `STRICT`, `MODERATE`, `LOOSE`.
 - R comparison tests use `tests/r_bridge.py` to run the same model in R and compare results.
 - **important** R comparisons tests must be identical to R results with `STRICT`, or `MODERATE` tolerance.
-- pymgcv results (smooths, bases, coefficients, etc...) **must** be identical to the canonical R mgcv results.
+- jaxgam results (smooths, bases, coefficients, etc...) **must** be identical to the canonical R mgcv results.
 - Hard-gate invariants (§18.1) are tested in every CI run and block the build on failure. These include: objective monotonicity, H symmetry/PSD, penalty PSD, rank conditions, EDF bounds, deviance non-negativity, no NaN in converged model.
 - All new modules must have > 80% test coverage.
 

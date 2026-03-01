@@ -1,6 +1,6 @@
 # R Source Reference Map
 
-This document maps each PyMGCV implementation task to the specific R mgcv source files and functions that implement the equivalent logic.
+This document maps each JaxGAM implementation task to the specific R mgcv source files and functions that implement the equivalent logic.
 
 ## Setup: Local mgcv Clone
 

@@ -1,4 +1,4 @@
-"""Benchmark pymgcv vs R's mgcv wall-clock fitting speed.
+"""Benchmark jaxgam vs R's mgcv wall-clock fitting speed.
 
 Usage::
 
@@ -25,7 +25,7 @@ from statistics import median
 import numpy as np
 import pandas as pd
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -229,7 +229,7 @@ def time_py_fit(
     data: pd.DataFrame,
     family: str,
 ) -> tuple[float, int]:
-    """Time pymgcv GAM fitting and return (ms, n_iter)."""
+    """Time jaxgam GAM fitting and return (ms, n_iter)."""
     model = GAM(py_formula, family=family, method="REML")
     t0 = time.perf_counter()
     model.fit(data)
@@ -270,7 +270,7 @@ def main() -> None:
     # Clear persistent compilation cache so XLA must recompile from scratch.
     cache_dir = os.environ.get(
         "JAX_COMPILATION_CACHE_DIR",
-        str(pathlib.Path.home() / ".cache" / "pymgcv" / "jax"),
+        str(pathlib.Path.home() / ".cache" / "jaxgam" / "jax"),
     )
     if os.path.isdir(cache_dir):
         shutil.rmtree(cache_dir)

@@ -1,9 +1,9 @@
-# pymgcv
+# jaxgam
 
 Python port of R's [mgcv](https://cran.r-project.org/package=mgcv) package
 for Generalized Additive Models.
 
-pymgcv uses [JAX](https://github.com/google/jax) for JIT-compiled fitting
+jaxgam uses [JAX](https://github.com/google/jax) for JIT-compiled fitting
 with automatic differentiation through the PIRLS inner loop and Newton
 outer loop. No C compilation required.
 
@@ -11,8 +11,8 @@ outer loop. No C compilation required.
 
 ```bash
 # Clone and install with uv
-git clone https://github.com/<org>/pymgcv.git
-cd pymgcv
+git clone https://github.com/<org>/jaxgam.git
+cd jaxgam
 uv sync
 ```
 
@@ -21,7 +21,7 @@ uv sync
 ```python
 import numpy as np
 import pandas as pd
-from pymgcv import GAM
+from jaxgam import GAM
 
 # Generate data
 rng = np.random.default_rng(42)
@@ -91,14 +91,14 @@ is planned for v1.1+.
 
 ## Performance
 
-pymgcv uses JAX's XLA compiler for JIT-compiled fitting. Performance
+jaxgam uses JAX's XLA compiler for JIT-compiled fitting. Performance
 depends on whether the JIT cache is warm (compiled code reused) or cold
 (first fit triggers compilation).
 
 ### Warm fits (JIT cached)
 
 After the first fit for a given model structure, subsequent fits reuse
-compiled XLA code. pymgcv is **1.3--12x faster** than R across all
+compiled XLA code. jaxgam is **1.3--12x faster** than R across all
 families and smooth types, with the advantage growing at larger n:
 
 | n | Single smooth | Two smooths | Tensor product | Factor-by |
@@ -109,29 +109,29 @@ families and smooth types, with the advantage growing at larger n:
 | 500,000 | 2.9--4.6x | 2.5--3.5x | 2.4--12.0x | 1.8--3.1x |
 
 Tensor products with Gamma show the largest gains (12x at n=500k)
-because R's penalty iteration cost scales with complexity while pymgcv's
+because R's penalty iteration cost scales with complexity while jaxgam's
 fused XLA kernels amortize overhead.
 
 ### Cold starts
 
 The first fit includes JIT tracing + XLA compilation (~700--1200ms
-overhead). This makes pymgcv slower than R for small datasets on first
+overhead). This makes jaxgam slower than R for small datasets on first
 use, but the compiled code is cached to disk and reused across sessions.
 
 ![Cold-start speedup vs dataset size](docs/img/speedup_vs_n.png)
 
-The crossover where even a cold pymgcv fit beats R is around n=100,000.
+The crossover where even a cold jaxgam fit beats R is around n=100,000.
 
 ### High-dimensional models
 
-For models with many basis functions (k=100--500), pymgcv's XLA-compiled
+For models with many basis functions (k=100--500), jaxgam's XLA-compiled
 dense linear algebra outperforms R even on the very first cold-start fit:
 
-![pymgcv vs R at large p](docs/img/large_p_results.png)
+![jaxgam vs R at large p](docs/img/large_p_results.png)
 
-### When to use pymgcv over R
+### When to use jaxgam over R
 
-**pymgcv is a good fit when:**
+**jaxgam is a good fit when:**
 - You need GAMs in a Python workflow without switching to R
 - You fit the same model structure repeatedly (bootstrap, CV,
   simulation) --- warm fits are 2--12x faster than R
@@ -145,19 +145,19 @@ dense linear algebra outperforms R even on the very first cold-start fit:
   latency matters
 - You need features beyond v1.0 scope (sparse solvers, extended
   families, random effects, bam)
-- You need multi-GPU or distributed fitting --- pymgcv automatically
+- You need multi-GPU or distributed fitting --- jaxgam automatically
   parallelizes across CPU cores and runs on GPU, but multi-device
   SPMD is on the roadmap
 
-A persistent compilation cache (`~/.cache/pymgcv/jax/`) is enabled by
+A persistent compilation cache (`~/.cache/jaxgam/jax/`) is enabled by
 default to minimize cold-start overhead across Python sessions.
 Disable it with `PYMGCV_NO_COMPILATION_CACHE=1`.
 
 ## Correctness
 
-pymgcv is validated against R's mgcv 1.9-3 across a 1,461-test suite.
+jaxgam is validated against R's mgcv 1.9-3 across a 1,461-test suite.
 Every model configuration (4 families x 6 smooth types) is fitted in
-both pymgcv and R, then compared value-by-value:
+both jaxgam and R, then compared value-by-value:
 
 - **Coefficients, fitted values, deviance** --- must match R at STRICT
   (rtol=1e-10) or MODERATE (rtol=1e-4) tolerance depending on the

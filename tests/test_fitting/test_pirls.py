@@ -21,16 +21,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.families.base import ExponentialFamily
-from pymgcv.families.standard import Binomial, Gamma, Gaussian, Poisson
-from pymgcv.fitting.initialization import initialize_beta
-from pymgcv.fitting.pirls import (
+from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+from jaxgam.fitting.initialization import initialize_beta
+from jaxgam.fitting.pirls import (
     PIRLSResult,
     _penalized_deviance,
     _pirls_step,
     pirls_loop,
 )
-from pymgcv.jax_utils import to_jax, to_numpy
+from jaxgam.jax_utils import to_jax, to_numpy
 from tests.tolerances import MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -463,9 +463,9 @@ class TestVsR:
         smoothing parameters, and r_ref is a dict with R's coefficients,
         deviance, and fitted_values.
         """
-        from pymgcv.fitting.data import FittingData
-        from pymgcv.formula.design import ModelSetup
-        from pymgcv.formula.parser import parse_formula
+        from jaxgam.fitting.data import FittingData
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
         from tests.r_bridge import RBridge
 
         data = self._make_data(family_name)

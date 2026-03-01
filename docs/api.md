@@ -5,10 +5,10 @@
 The main entry point for fitting generalized additive models.
 
 ```python
-from pymgcv import GAM
+from jaxgam import GAM
 ```
 
-::: pymgcv.api.GAM
+::: jaxgam.api.GAM
     options:
       members:
         - __init__
@@ -27,12 +27,12 @@ string (`family="gaussian"`) when constructing a `GAM`, but the classes
 can be used directly for custom link functions.
 
 ```python
-from pymgcv.families import Gaussian, Binomial, Poisson, Gamma
+from jaxgam.families import Gaussian, Binomial, Poisson, Gamma
 ```
 
 ### Gaussian
 
-::: pymgcv.families.standard.Gaussian
+::: jaxgam.families.standard.Gaussian
     options:
       members:
         - __init__
@@ -42,7 +42,7 @@ from pymgcv.families import Gaussian, Binomial, Poisson, Gamma
 
 ### Binomial
 
-::: pymgcv.families.standard.Binomial
+::: jaxgam.families.standard.Binomial
     options:
       members:
         - __init__
@@ -52,7 +52,7 @@ from pymgcv.families import Gaussian, Binomial, Poisson, Gamma
 
 ### Poisson
 
-::: pymgcv.families.standard.Poisson
+::: jaxgam.families.standard.Poisson
     options:
       members:
         - __init__
@@ -62,7 +62,7 @@ from pymgcv.families import Gaussian, Binomial, Poisson, Gamma
 
 ### Gamma
 
-::: pymgcv.families.standard.Gamma
+::: jaxgam.families.standard.Gamma
     options:
       members:
         - __init__

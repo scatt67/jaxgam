@@ -17,7 +17,7 @@ import sys
 
 import pytest
 
-from pymgcv.formula import FormulaSpec, ParametricTerm, SmoothSpec, parse_formula
+from jaxgam.formula import FormulaSpec, ParametricTerm, SmoothSpec, parse_formula
 
 
 class TestBasicParsing:
@@ -385,12 +385,12 @@ class TestNoJaxImport:
     """Test 10: Phase 1 boundary -- no JAX imports."""
 
     def test_no_jax_in_modules(self) -> None:
-        """Importing pymgcv.formula does not trigger jax import."""
+        """Importing jaxgam.formula does not trigger jax import."""
         import importlib
 
         # Force reimport by removing cached formula modules
         formula_modules = [
-            key for key in list(sys.modules) if key.startswith("pymgcv.formula")
+            key for key in list(sys.modules) if key.startswith("jaxgam.formula")
         ]
         saved = {}
         for mod in formula_modules:
@@ -407,13 +407,13 @@ class TestNoJaxImport:
             for mod in jax_mods_to_remove:
                 saved_jax[mod] = sys.modules.pop(mod)
 
-            importlib.import_module("pymgcv.formula")
+            importlib.import_module("jaxgam.formula")
 
             jax_modules_after = {
                 key for key in sys.modules if key == "jax" or key.startswith("jax.")
             }
             assert not jax_modules_after, (
-                f"Importing pymgcv.formula triggered JAX imports: {jax_modules_after}"
+                f"Importing jaxgam.formula triggered JAX imports: {jax_modules_after}"
             )
         finally:
             # Restore modules to avoid breaking other tests

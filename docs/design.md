@@ -1,4 +1,4 @@
-# PyMGCV: Design Document for a Python Port of R's mgcv
+# JaxGAM: Design Document for a Python Port of R's mgcv
 
 **Version:** 1.18
 **Date:** February 2026
@@ -65,7 +65,7 @@ External review identified execution risk as the primary concern: the gap betwee
 
 | Issue | Fix |
 |---|---|
-| **CHOLMOD dependency hell — vendored wheel strategy requires building/maintaining platform-specific C library wheels** | Section 3.1: `uv` is the project package manager. `pyproject.toml` with optional extras (`sparse`, `gpu`, `distributed`, `full`). Pre-built scikit-sparse wheels hosted on `pymgcv-wheels` GitHub Pages index, referenced via `[tool.uv.sources]`. `uv sync --extra sparse` installs CHOLMOD with no C compiler. |
+| **CHOLMOD dependency hell — vendored wheel strategy requires building/maintaining platform-specific C library wheels** | Section 3.1: `uv` is the project package manager. `pyproject.toml` with optional extras (`sparse`, `gpu`, `distributed`, `full`). Pre-built scikit-sparse wheels hosted on `jaxgam-wheels` GitHub Pages index, referenced via `[tool.uv.sources]`. `uv sync --extra sparse` installs CHOLMOD with no C compiler. |
 | **Multi-host version consistency required custom `_collect_version_pins()` with per-package iteration** | Section 16.8: `SetupManifest.version_pins` replaced with `uv_lock_hash` — SHA-256 of the `uv.lock` file. Single string comparison replaces per-package iteration. If all hosts ran `uv sync --frozen`, versions are identical by construction. Fallback hashes key package versions if `uv.lock` not found. |
 | **Error messages reference `pip install scikit-sparse` — unhelpful for most users** | All error messages updated to reference `uv sync --extra sparse`. |
 | **Dependency table doesn't show install extras or distinguish core from optional** | Section 3.1: dependency table updated with `Install extra` column. Clear separation of core (always installed) vs optional (sparse, gpu, distributed). |
@@ -253,7 +253,7 @@ No new mechanisms — claim calibration only.
 | **"Feature-complete" scope is a schedule trap** — no parity tiers, no "done means X" | **Three-tier parity plan** (Section 1.1): Tier 1 (MVP) = tp/cr/ps + Gaussian/Binomial/Poisson/Gamma + REML/GCV, Dense-GPU + Sparse-CPU. Tier 2 = tensor/re/fs + NB/Tweedie/Beta + fREML/bam. Tier 3 = exotic (soap/Duchon/Cox/SHASH) + GAMM + distributed. Each tier has explicit "done" criteria. |
 | **Dense-GPU solver is O(p³) normal equations without bailout** — conditioning issues, no stated strategy | **Solver strategy specified per path.** Dense-GPU: Cholesky on H = XtWX + S_λ (default), pivoted QR fallback on `LinAlgError`, condition-number check triggers Sparse-CPU re-route. Explicit bailout rules documented. |
 | **Structured penalty log_det/trace not specified per type** — "we expose log_det" doesn't mean REML works | **Log-det/trace capability matrix** added to Section 10.2. Each `StructuredPenalty` subclass declares whether it supports exact `log_pseudo_det()`. Penalties without exact log-det route to Sparse-CPU for REML or use stochastic approximation. |
-| **No determinism policy** — knot selection, distributed reduction, GPU non-associativity all produce flapping tests | **Global RNG policy** (Section 4.5): `pymgcv.set_seed(n)` seeds both NumPy and JAX PRNG. Setup-phase randomness uses `np.random.Generator` from global seed. Distributed reduction uses deterministic tree-reduce with Kahan compensation. |
+| **No determinism policy** — knot selection, distributed reduction, GPU non-associativity all produce flapping tests | **Global RNG policy** (Section 4.5): `jaxgam.set_seed(n)` seeds both NumPy and JAX PRNG. Setup-phase randomness uses `np.random.Generator` from global seed. Distributed reduction uses deterministic tree-reduce with Kahan compensation. |
 | **Setup phase can OOM on large sparse terms** — identifiability SVD densifies term blocks | **Sparse-safe constraint discovery** added. `apply_joint_identifiability` uses randomized SVD (`scipy.sparse.linalg.svds`) when term blocks exceed 10k columns. Factor-smooth assembly stays sparse throughout. |
 | **Basis implementations are Python-loop placeholders** — cubic spline and P-spline sketches are unvectorized | **Labeled as reference implementations** with explicit "must vectorize" requirements. Production path uses `scipy.interpolate.BSpline` (vectorized) or JAX `vmap` over knot intervals. |
 | **Distributed accumulation has no precision/determinism contract** — nondeterministic reduce, no compensation | **Reduction protocol specified** (Section 16.1): deterministic sorted-key reduce with Kahan summation available via `set_deterministic(True)`. Default uses standard tree-reduce. Cost model added. |
@@ -325,7 +325,7 @@ No new mechanisms — claim calibration only.
 
 ## 1. Executive Summary
 
-PyMGCV is a tiered Python port of Simon Wood's R package `mgcv` (Mixed GAM Computation Vehicle). The initial release (Tier 1) provides production-quality Generalized Additive Models with the most-used smooth classes (thin-plate, cubic, P-spline), standard exponential families (Gaussian, Binomial, Poisson, Gamma), and REML/GCV smoothing parameter estimation. Subsequent tiers add tensor products, extended families, `bam()` for large data, and exotic smooths — each independently shippable. See Section 1.1 for the full tier plan.
+JaxGAM is a tiered Python port of Simon Wood's R package `mgcv` (Mixed GAM Computation Vehicle). The initial release (Tier 1) provides production-quality Generalized Additive Models with the most-used smooth classes (thin-plate, cubic, P-spline), standard exponential families (Gaussian, Binomial, Poisson, Gamma), and REML/GCV smoothing parameter estimation. Subsequent tiers add tensor products, extended families, `bam()` for large data, and exotic smooths — each independently shippable. See Section 1.1 for the full tier plan.
 
 **Key design differentiators from a naive port:**
 
@@ -641,7 +641,7 @@ We must support:
 ## 3. High-Level Architecture
 
 ```
-pymgcv/
+jaxgam/
 ├── __init__.py                    # Public API: gam(), bam(), gamm()
 ├── api.py                         # Top-level fitting functions
 ├── formula/
@@ -763,7 +763,7 @@ pymgcv/
 # pyproject.toml
 
 [project]
-name = "pymgcv"
+name = "jaxgam"
 version = "1.0.0"
 requires-python = ">=3.10"
 dependencies = [
@@ -779,9 +779,9 @@ dependencies = [
 sparse = ["scikit-sparse>=0.4.8"]
 gpu = ["jax[cuda12]>=0.4.20"]
 distributed = ["ray[default]>=2.9"]
-full = ["pymgcv[sparse,gpu,distributed]"]
+full = ["jaxgam[sparse,gpu,distributed]"]
 dev = [
-    "pymgcv[full]",
+    "jaxgam[full]",
     "pytest>=8.0",
     "rpy2>=3.5",           # R bridge for correctness tests
     "hypothesis>=6.0",     # Property-based testing
@@ -801,15 +801,15 @@ environments = [
 ]
 
 [[tool.uv.index]]
-name = "pymgcv-wheels"
-url = "https://pymgcv.github.io/wheels/"
+name = "jaxgam-wheels"
+url = "https://jaxgam.github.io/wheels/"
 explicit = true
 
 [tool.uv.sources]
 # Pre-built scikit-sparse wheels with statically-linked SuiteSparse.
 # Built in CI (GitHub Actions), hosted on GitHub Pages.
 # Users never need a C compiler.
-scikit-sparse = { index = "pymgcv-wheels" }
+scikit-sparse = { index = "jaxgam-wheels" }
 ```
 
 **Install paths:**
@@ -818,7 +818,7 @@ scikit-sparse = { index = "pymgcv-wheels" }
 # Basic (dense-only, no C dependencies):
 uv sync
 
-# With sparse solver (pre-built CHOLMOD wheel from pymgcv-wheels index):
+# With sparse solver (pre-built CHOLMOD wheel from jaxgam-wheels index):
 uv sync --extra sparse
 
 # With GPU:
@@ -850,7 +850,7 @@ The `--frozen` flag is critical for distributed: it guarantees every host instal
 
 **Pre-built scikit-sparse wheel infrastructure:**
 
-The `pymgcv-wheels` index hosts scikit-sparse wheels with SuiteSparse 7.x statically linked against OpenBLAS. These are built in GitHub Actions CI:
+The `jaxgam-wheels` index hosts scikit-sparse wheels with SuiteSparse 7.x statically linked against OpenBLAS. These are built in GitHub Actions CI:
 
 | Platform | Wheel | Status |
 |---|---|---|
@@ -859,9 +859,9 @@ The `pymgcv-wheels` index hosts scikit-sparse wheels with SuiteSparse 7.x static
 | macOS x86_64 | ✅ | Legacy Intel Macs |
 | Windows x86_64 | ❌ | Not built (MSVC ABI issues). Windows users: use WSL2 or conda. |
 
-When `uv sync --extra sparse` runs, uv checks `pymgcv-wheels` first (per the `explicit = true` + `[tool.uv.sources]` config), finds the pre-built wheel, and installs it. No C compiler needed. If the platform doesn't have a pre-built wheel, uv falls back to PyPI's scikit-sparse (which may require compilation), and if that fails, the install fails at install time — not at runtime.
+When `uv sync --extra sparse` runs, uv checks `jaxgam-wheels` first (per the `explicit = true` + `[tool.uv.sources]` config), finds the pre-built wheel, and installs it. No C compiler needed. If the platform doesn't have a pre-built wheel, uv falls back to PyPI's scikit-sparse (which may require compilation), and if that fails, the install fails at install time — not at runtime.
 
-**Docker image:** `ghcr.io/pymgcv/pymgcv:latest` runs `uv sync --extra full --frozen` from the repo's `uv.lock`. This is the recommended deployment target for production and multi-host clusters.
+**Docker image:** `ghcr.io/jaxgam/jaxgam:latest` runs `uv sync --extra full --frozen` from the repo's `uv.lock`. This is the recommended deployment target for production and multi-host clusters.
 
 ---
 
@@ -894,9 +894,9 @@ Instead, the codebase has two distinct implementations:
 JAX-first backend with NumPy reference fallback.
 
 Usage:
-    import pymgcv
-    pymgcv.configure(backend="jax", device="gpu")  # Production
-    pymgcv.configure(backend="numpy")               # Fallback / testing
+    import jaxgam
+    jaxgam.configure(backend="jax", device="gpu")  # Production
+    jaxgam.configure(backend="numpy")               # Fallback / testing
 
 All performance-critical code has two implementations:
     fitting/_pirls_jax.py     — JAX path (jax.lax loops, JIT'd)
@@ -958,14 +958,14 @@ class FitConfig:
     Per-model configuration context manager.
 
     v1.6: The global configure() is a concurrency footgun — multi-model
-    fits in parallel threads, or libraries embedding pymgcv, will get
+    fits in parallel threads, or libraries embedding jaxgam, will get
     heisenbugs. FitConfig provides per-call overrides:
 
-        with pymgcv.FitConfig(device="gpu", execution_path="dense_gpu"):
-            model1 = pymgcv.gam("y ~ s(x1)", data=df1)
+        with jaxgam.FitConfig(device="gpu", execution_path="dense_gpu"):
+            model1 = jaxgam.gam("y ~ s(x1)", data=df1)
 
-        with pymgcv.FitConfig(device="cpu", execution_path="sparse_cpu"):
-            model2 = pymgcv.gam("y ~ s(x1) + s(x2, bs='mrf')", data=df2)
+        with jaxgam.FitConfig(device="cpu", execution_path="sparse_cpu"):
+            model2 = jaxgam.gam("y ~ s(x1) + s(x2, bs='mrf')", data=df2)
 
     When used, FitConfig overrides the global _config for all operations
     within the context block. Thread-local storage ensures no cross-thread
@@ -1095,7 +1095,7 @@ def pirls_loop_jax(X, y, family_params, family_type, S_lambda,
 For the NumPy reference backend, performance-critical inner loops are implemented in Cython:
 
 ```
-pymgcv/
+jaxgam/
 ├── _cython/
 │   ├── _pirls_core.pyx        # PIRLS inner loop
 │   ├── _basis_eval.pyx        # Basis function evaluation (TPRS, B-splines)
@@ -1118,10 +1118,10 @@ import ast, sys, pathlib
 
 FORBIDDEN_IN_JAX = {"scipy", "numpy", "np"}
 JAX_PATH_GLOBS = [
-    "pymgcv/fitting/*_jax.py",
-    "pymgcv/autodiff/*.py",
-    "pymgcv/families/*_jax.py",
-    "pymgcv/linalg/*_jax.py",
+    "jaxgam/fitting/*_jax.py",
+    "jaxgam/autodiff/*.py",
+    "jaxgam/families/*_jax.py",
+    "jaxgam/linalg/*_jax.py",
 ]
 
 def check_file(path: pathlib.Path) -> list[str]:
@@ -1209,9 +1209,9 @@ wt_jax = jax.device_put(weights_numpy)    # Prior weights
 **Global seed:**
 
 ```python
-import pymgcv
+import jaxgam
 
-pymgcv.set_seed(42)  # Seeds BOTH np.random and jax.random
+jaxgam.set_seed(42)  # Seeds BOTH np.random and jax.random
 
 # Internally:
 # _rng = np.random.default_rng(seed)
@@ -1232,7 +1232,7 @@ pymgcv.set_seed(42)  # Seeds BOTH np.random and jax.random
 
 **Test modes:**
 
-- `pymgcv.set_deterministic(True)`: forces CPU-ordered reductions, enables `XLA_FLAGS=--xla_gpu_deterministic_ops=true`, uses sorted key reduction in distributed mode. Slower, but reproducible within STRICT tolerance (1e-10) **on the same hardware, OS, JAX version, and CUDA driver**. NOT guaranteed across toolchain updates — floating-point codegen can change between JAX/XLA releases. CI determinism tests pin specific versions.
+- `jaxgam.set_deterministic(True)`: forces CPU-ordered reductions, enables `XLA_FLAGS=--xla_gpu_deterministic_ops=true`, uses sorted key reduction in distributed mode. Slower, but reproducible within STRICT tolerance (1e-10) **on the same hardware, OS, JAX version, and CUDA driver**. NOT guaranteed across toolchain updates — floating-point codegen can change between JAX/XLA releases. CI determinism tests pin specific versions.
 - Default: allows XLA reordering for speed. Results are correct within MODERATE tolerance (1e-6) across runs on same hardware, but not reproducible at STRICT level.
 
 ---
@@ -2455,7 +2455,7 @@ def apply_joint_identifiability(X_raw, term_blocks_raw, smooth_objects):
 # families/base.py
 
 from abc import ABC, abstractmethod
-from pymgcv.links.links import Link
+from jaxgam.links.links import Link
 import numpy as np
 
 class Family(ABC):
@@ -2778,7 +2778,7 @@ class Tweedie(ExtendedFamily):
         amplifies truncation error. This is the only family in the
         library that needs this treatment.
         """
-        from pymgcv.autodiff.tweedie_jvp import tweedie_loglik_single
+        from jaxgam.autodiff.tweedie_jvp import tweedie_loglik_single
         return tweedie_loglik_single  # Has custom_jvp registered
         pass
 
@@ -3923,7 +3923,7 @@ Every extended family — whether using standard `jax.grad` or the Tweedie `cust
 
 def test_nb_autodiff_matches_finite_diff():
     """Verify jax.grad through NB loglik matches finite differences."""
-    from pymgcv.families.negbin import NegativeBinomial
+    from jaxgam.families.negbin import NegativeBinomial
     nb_loglik = NegativeBinomial().loglik_per_obs_fn()
 
     y, mu, log_theta = 5.0, 3.0, jnp.log(10.0)
@@ -4458,12 +4458,12 @@ The full Sparse-CPU path uses SuiteSparse CHOLMOD/SPQR via `scikit-sparse`. This
 
 **Install strategy (v1.16, uv-based):** The install hierarchy uses uv's index and lockfile infrastructure (Section 3.1):
 
-1. **`uv sync --extra sparse` (preferred):** Installs scikit-sparse from the `pymgcv-wheels` index, which hosts pre-built wheels with statically-linked SuiteSparse. No C compiler needed. If no pre-built wheel exists for the user's platform, install fails at install time with a clear error.
-2. **`conda install pymgcv` (conda-forge):** Links against conda-forge's SuiteSparse package, which is well-maintained and ABI-stable within conda environments.
+1. **`uv sync --extra sparse` (preferred):** Installs scikit-sparse from the `jaxgam-wheels` index, which hosts pre-built wheels with statically-linked SuiteSparse. No C compiler needed. If no pre-built wheel exists for the user's platform, install fails at install time with a clear error.
+2. **`conda install jaxgam` (conda-forge):** Links against conda-forge's SuiteSparse package, which is well-maintained and ABI-stable within conda environments.
 3. **System CHOLMOD (fallback):** If installed via plain `pip` without uv, falls back to whatever `scikit-sparse` can find on the system. This is the fragile path and is not the recommended install.
 4. **Degraded mode:** Dense fallback with hard gates (below). No silent OOM.
 
-**Docker image:** `ghcr.io/pymgcv/pymgcv:latest` runs `uv sync --extra full --frozen` and ships with CHOLMOD, JAX with CUDA, and all dependencies. Recommended for production.
+**Docker image:** `ghcr.io/jaxgam/jaxgam:latest` runs `uv sync --extra full --frozen` and ships with CHOLMOD, JAX with CUDA, and all dependencies. Recommended for production.
 
 **"Degraded mode will become the default for 80% of users" risk:** The uv + pre-built wheel strategy prevents this. `uv sync --extra sparse` either succeeds (pre-built wheel) or fails clearly at install time. Runtime degraded mode only triggers if the user deliberately installed without the `sparse` extra. Error messages reference `uv sync --extra sparse` as the fix.
 
@@ -4841,7 +4841,7 @@ def test_transfer_invariants_hold(transfer_iteration, n_smooth, gaussian_test_da
     PathTransferState that passes validate() on both sides.
     """
     # Fit on Dense path, interrupt at transfer_iteration
-    partial_result = pymgcv.gam(
+    partial_result = jaxgam.gam(
         "y ~ s(x1) + s(x2)", data=gaussian_test_data,
         execution_path="dense_gpu",
         _debug_max_inner_iter=transfer_iteration,
@@ -4865,7 +4865,7 @@ def test_transfer_rollback_on_pathological_input():
     raise RuntimeError (rollback), not silently diverge.
     """
     # Create problem that Dense-GPU can barely handle
-    ill_result = pymgcv.gam(
+    ill_result = jaxgam.gam(
         "y ~ s(x, k=200)", data=ill_conditioned_data,
         execution_path="dense_gpu",
         _debug_max_inner_iter=5,
@@ -5000,11 +5000,11 @@ The primary GPU path is through JAX's XLA compiler, which supports:
 ```python
 # Example: GPU-accelerated fitting
 
-import pymgcv
-pymgcv.configure(backend="jax", device="gpu")
+import jaxgam
+jaxgam.configure(backend="jax", device="gpu")
 
 # All subsequent operations automatically use GPU
-model = pymgcv.gam(
+model = jaxgam.gam(
     "y ~ s(x1) + s(x2) + te(x3, x4)",
     data=df,
     family="gaussian"
@@ -5357,7 +5357,7 @@ def build_model_matrix(parsed_formula: ParsedFormula,
     3. Concatenate horizontally: X = [X_parametric | X_smooth1 | X_smooth2 | ...]
     4. Build block-diagonal penalty matrix S = blockdiag(0, S_1, S_2, ...)
     """
-    from pymgcv.smooths.registry import get_smooth_class
+    from jaxgam.smooths.registry import get_smooth_class
 
     blocks = []
     penalties = []
@@ -6173,7 +6173,7 @@ Real distributed systems fail at process lifecycle boundaries, not in the math. 
 | Invariant | Requirement | Failure mode if violated |
 |---|---|---|
 | **Exactly-once init** | Each process calls `jax.distributed.initialize()` exactly once, before any JAX computation. Ray's `JaxTrainer` handles this. | Double init → crash. Missing init → process invisible to collective. |
-| **No elastic membership** | Worker count is fixed for the entire fit. No workers join or leave mid-fit. This is a hard constraint of JAX's SPMD model, not a PyMGCV limitation. | Added worker → not part of compiled collective → hang. Lost worker → collective waits forever. |
+| **No elastic membership** | Worker count is fixed for the entire fit. No workers join or leave mid-fit. This is a hard constraint of JAX's SPMD model, not a JaxGAM limitation. | Added worker → not part of compiled collective → hang. Lost worker → collective waits forever. |
 | **No worker restart** | If a worker dies, the entire fit is aborted. There is no checkpoint/resume within a single PIRLS+REML optimization. | Restarted worker has stale XLA program / different compilation → silent corruption or hang. |
 | **Straggler = hang** | If one worker is slow (GC, preemption, network), all others block at the next collective. Ray's health monitor should detect this and kill the job after a timeout. | Unbounded wait at all-reduce. |
 | **Clean shutdown** | All processes must complete the `lax.while_loop` (converge or hit max_iter) before any process exits. | Early exit → other processes hang at next collective. |
@@ -6357,13 +6357,13 @@ def implicit_dbeta_dlambda(H_factor, S_list, beta, lambdas):
 | Python coordinator round-trip per PIRLS iteration | No coordinator — all devices run same XLA program | Eliminates serialization latency |
 | Extended family AD unavailable on distributed workers | Works everywhere (all workers run JAX) | NB, Tweedie, Beta work in distributed mode |
 
-**The "missing middle" — distributed sparse (v1.15):** The architecture has a deliberate gap between "dense SPMD" (multi-GPU, p ≤ 3000) and "sparse single-host" (Sparse-CPU, any p but one node). High-cardinality random effects (`s(user_id, bs='re')` with 500k users) or massive factor-smooth interactions are too sparse for SPMD (densification would OOM) and potentially too large for single-host RAM. This is the standard "big data GAM" use case, and PyMGCV v1.0 cannot fit it.
+**The "missing middle" — distributed sparse (v1.15):** The architecture has a deliberate gap between "dense SPMD" (multi-GPU, p ≤ 3000) and "sparse single-host" (Sparse-CPU, any p but one node). High-cardinality random effects (`s(user_id, bs='re')` with 500k users) or massive factor-smooth interactions are too sparse for SPMD (densification would OOM) and potentially too large for single-host RAM. This is the standard "big data GAM" use case, and JaxGAM v1.0 cannot fit it.
 
 This is acceptable for Tier 1–2 but must be addressed for Tier 3. Potential future paths: (a) distributed conjugate gradient solver that keeps X sparse across workers, (b) block-diagonal exploitation where independent factor levels are solved on separate workers, (c) stochastic/minibatch approaches that avoid forming the full XtWX. The current architecture provides a hook for (b): `FactorBySmooth`'s block-diagonal structure (Section 5.7) means level-blocks are independent given λ, so a future "block-parallel" mode could solve each level's sub-problem on a separate device. This is not designed or specified; it's an architectural affordance.
 
 **Float64 requirement is a product constraint (v1.15):** The mandatory float64 on GPU paths (SPMD invariant, Section 16.3) is correct for numerical stability — mgcv-style inference needs it. But it is a significant performance constraint: consumer GPUs (RTX 3090, 4090) have ~1/32 FP64 throughput vs FP32, and some accelerators (TPU v3, older AMD MI-series) have limited or no FP64 support. "GPU acceleration" means "fast FP64 GPUs" — data center cards (A100, H100, MI250X). The doc should not market this as general GPU support. A future "reduced precision mode" (FP32 PIRLS with FP64 REML gradients) is mathematically possible but not designed.
 
-**fREML auto-switch alignment with R (v1.15):** The auto-switch from Newton REML to fREML at n_smooth > 50 (Section 16.7) introduces a behavioral cliff: adding one factor level can change results slightly (fREML is an approximation). R's mgcv also switches methods based on model size, but at different thresholds and with different approximations (`bam()` uses fREML by default; `gam()` uses Newton REML). PyMGCV's switch points do NOT align with R's, so the "correctness vs R" tests (Section 18.1) must account for this: when comparing fREML results against R's Newton REML, the tolerance class is LOOSE (not MODERATE). The `lambda_strategy_reason` field in `GAMResult` surfaces the switch so users understand the source of any difference.
+**fREML auto-switch alignment with R (v1.15):** The auto-switch from Newton REML to fREML at n_smooth > 50 (Section 16.7) introduces a behavioral cliff: adding one factor level can change results slightly (fREML is an approximation). R's mgcv also switches methods based on model size, but at different thresholds and with different approximations (`bam()` uses fREML by default; `gam()` uses Newton REML). JaxGAM's switch points do NOT align with R's, so the "correctness vs R" tests (Section 18.1) must account for this: when comparing fREML results against R's Newton REML, the tolerance class is LOOSE (not MODERATE). The `lambda_strategy_reason` field in `GAMResult` surfaces the switch so users understand the source of any difference.
 
 ### 16.7 Communication Cost Model
 
@@ -6742,10 +6742,10 @@ def verify_local_assembly(X_local_shape, manifest, process_index):
 # The only difference is the mesh argument.
 
 # Single GPU (default):
-model = pymgcv.gam("y ~ s(x1) + s(x2)", data=df, family="gaussian")
+model = jaxgam.gam("y ~ s(x1) + s(x2)", data=df, family="gaussian")
 
 # Multi-GPU, one host (all visible GPUs):
-model = pymgcv.gam(
+model = jaxgam.gam(
     "y ~ s(x1) + s(x2) + te(x3, x4)",
     data=df,
     family="gaussian",
@@ -6755,11 +6755,11 @@ model = pymgcv.gam(
 # Multi-host via Ray (call from Ray train_func):
 # jax.distributed.initialize() already called by JaxTrainer
 mesh = jax.make_mesh((jax.device_count(),), ('data',))
-model = pymgcv.gam("y ~ s(x1) + s(x2)", data=df_local, family="gaussian",
+model = jaxgam.gam("y ~ s(x1) + s(x2)", data=df_local, family="gaussian",
                     mesh=mesh)
 
 # Out-of-core (data on disk, too large for device memory):
-model = pymgcv.bam(
+model = jaxgam.bam(
     "y ~ s(x1) + s(x2) + te(x3, x4)",
     data="/path/to/data.parquet",
     family="gaussian",
@@ -6779,10 +6779,10 @@ model = pymgcv.bam(
 
 import pandas as pd
 import numpy as np
-from pymgcv.formula.parser import parse_formula
-from pymgcv.formula.design import build_model_matrix
-from pymgcv.fitting.pirls import pirls_fit
-from pymgcv.fitting.newton import optimize_smoothing_parameters
+from jaxgam.formula.parser import parse_formula
+from jaxgam.formula.design import build_model_matrix
+from jaxgam.fitting.pirls import pirls_fit
+from jaxgam.fitting.newton import optimize_smoothing_parameters
 
 
 class GAMResult:
@@ -6841,19 +6841,19 @@ class GAMResult:
         return "\n".join(lines)
 
     def predict(self, newdata=None, **kwargs):
-        from pymgcv.predict.predict import predict_gam
+        from jaxgam.predict.predict import predict_gam
         return predict_gam(self, newdata, **kwargs)
 
     def summary(self, **kwargs):
-        from pymgcv.summary.summary import summary_gam
+        from jaxgam.summary.summary import summary_gam
         return summary_gam(self, **kwargs)
 
     def plot(self, **kwargs):
-        from pymgcv.plot.plot_gam import plot_gam
+        from jaxgam.plot.plot_gam import plot_gam
         return plot_gam(self, **kwargs)
 
     def check(self, **kwargs):
-        from pymgcv.summary.diagnostics import gam_check
+        from jaxgam.summary.diagnostics import gam_check
         return gam_check(self, **kwargs)
 
 
@@ -6908,7 +6908,7 @@ def gam(formula: str, data: pd.DataFrame | dict,
 
     Examples
     --------
-    >>> import pymgcv
+    >>> import jaxgam
     >>> import pandas as pd
     >>> import numpy as np
     >>>
@@ -6919,11 +6919,11 @@ def gam(formula: str, data: pd.DataFrame | dict,
     ... })
     >>> df['y'] = np.sin(2 * np.pi * df['x1']) + np.random.normal(0, 0.2, n)
     >>>
-    >>> model = pymgcv.gam("y ~ s(x1) + s(x2)", data=df)
+    >>> model = jaxgam.gam("y ~ s(x1) + s(x2)", data=df)
     >>> model.summary()
     >>> model.plot()
     """
-    from pymgcv.linalg.backend import configure
+    from jaxgam.linalg.backend import configure
     configure(backend, device)
 
     # Parse formula
@@ -6931,7 +6931,7 @@ def gam(formula: str, data: pd.DataFrame | dict,
 
     # Resolve family
     if isinstance(family, str):
-        from pymgcv.families.registry import get_family
+        from jaxgam.families.registry import get_family
         family = get_family(family)
 
     # Convert data
@@ -6948,7 +6948,7 @@ def gam(formula: str, data: pd.DataFrame | dict,
 
     # Add extra shrinkage penalties if select=True
     if select:
-        from pymgcv.penalties.selection import add_shrinkage_penalties
+        from jaxgam.penalties.selection import add_shrinkage_penalties
         penalty_list, smooth_objects = add_shrinkage_penalties(
             penalty_list, smooth_objects
         )
@@ -7010,7 +7010,7 @@ def bam(formula: str, data: pd.DataFrame | dict,
 
     Handles millions of observations with O(p² + chunk_size × p) memory.
     """
-    from pymgcv.fitting.bam_fit import bam_fit
+    from jaxgam.fitting.bam_fit import bam_fit
     return bam_fit(formula, data, family, method, chunk_size, discrete, **kwargs)
 
 
@@ -7024,7 +7024,7 @@ def gamm(formula: str, data: pd.DataFrame | dict,
 
     Returns (gam_result, lme_result) tuple mirroring R's gamm().
     """
-    from pymgcv.fitting.gamm_fit import gamm_fit
+    from jaxgam.fitting.gamm_fit import gamm_fit
     return gamm_fit(formula, data, family, random=random,
                     correlation=correlation, **kwargs)
 ```
@@ -7084,7 +7084,7 @@ LOOSE    = ToleranceClass(rtol=1e-3,  atol=1e-5,  label="loose")
 - **Chunked vs Dense-GPU**: MODERATE. Chunked accumulation introduces summation-order differences.
 - **Multi-device SPMD vs single GPU**: MODERATE. XLA all-reduce is deterministic within a single compilation + fixed device count + fixed topology (Section 16.3). Cross-compilation or topology changes may shift results within MODERATE tolerance.
 - **Out-of-core (ChunkedJAXProvider) vs In-Memory**: MODERATE with `set_deterministic(True)` (Python accumulation order fixed); LOOSE with default chunk ordering.
-- **PyMGCV vs R mgcv**: LOOSE. Different implementations, different BLAS, sometimes different algorithms (especially for λ selection).
+- **JaxGAM vs R mgcv**: LOOSE. Different implementations, different BLAS, sometimes different algorithms (especially for λ selection).
 
 **Determinism testing contract (v1.9):**
 
@@ -7094,7 +7094,7 @@ The `set_deterministic(True)` flag is a feature toggle, not a universal CI mode.
 |---|---|---|
 | Unit tests (basis, link, penalty) | `False` (default) | These are deterministic by construction — no GPU reduce, no chunking. Testing with the flag off ensures they don't accidentally rely on it. |
 | Cross-path tests (Dense-GPU vs Sparse-CPU) | `False` (default) | MODERATE tolerance absorbs non-determinism. These test the same code paths users run. |
-| vs-R tests (PyMGCV vs mgcv) | `False` (default) | LOOSE tolerance. No point enabling determinism for cross-implementation comparison. |
+| vs-R tests (JaxGAM vs mgcv) | `False` (default) | LOOSE tolerance. No point enabling determinism for cross-implementation comparison. |
 | **CI determinism suite** (separate job) | **`True`** | Dedicated job, pinned JAX + CUDA + driver versions. Runs a subset of cross-path tests at STRICT tolerance. Checks that two identical runs produce identical results. Fails if STRICT tolerance is violated — this catches XLA codegen regressions. |
 | Multi-device SPMD tests | `False` (default) | XLA all-reduce is deterministic within a compiled program. MODERATE tolerance. |
 | Out-of-core tests (ChunkedJAXProvider) | `False` for default; `True` for reproducibility check | Default chunk ordering may vary. The `True` suite fixes chunk order and checks MODERATE. |
@@ -7105,7 +7105,7 @@ The `set_deterministic(True)` flag is a feature toggle, not a universal CI mode.
 # Example test using stratified tolerances:
 
 def test_gaussian_gam_coefficients():
-    result = pymgcv.gam("y ~ s(x1) + s(x2)", data=test_df)
+    result = jaxgam.gam("y ~ s(x1) + s(x2)", data=test_df)
     r_result = r_bridge.fit("y ~ s(x1) + s(x2)", data=test_df)
 
     # Coefficients: LOOSE vs R (different BLAS, optimizer path)
@@ -7132,7 +7132,7 @@ def test_extended_family_loglik_monotonicity(family_class, test_data):
 
     Tested at STRICT tolerance. Applies to NB, Tweedie, Beta, SHASH.
     """
-    model = pymgcv.gam("y ~ s(x)", data=test_data, family=family_class)
+    model = jaxgam.gam("y ~ s(x)", data=test_data, family=family_class)
 
     # Access PIRLS trace (logged during fit when debug=True)
     for i in range(1, len(model._debug_trace)):
@@ -7187,7 +7187,7 @@ def test_deviance_residual_identity(family_class, test_data):
 
     Tested at MODERATE tolerance.
     """
-    model = pymgcv.gam("y ~ s(x)", data=test_data, family=family_class)
+    model = jaxgam.gam("y ~ s(x)", data=test_data, family=family_class)
     if hasattr(model.family, 'loglik_per_obs_fn'):
         # Extended family: deviance = -2 * sum(loglik)
         ll_fn = model.family.loglik_per_obs_fn()
@@ -7374,7 +7374,7 @@ import numpy as np
 @pytest.fixture
 def r_bridge():
     """Fixture providing R bridge for reference comparison."""
-    from pymgcv.compat.r_bridge import RBridge
+    from jaxgam.compat.r_bridge import RBridge
     try:
         bridge = RBridge(mode="auto")
         return bridge
@@ -7442,8 +7442,8 @@ def random_effects_data():
 
 import numpy as np
 import pytest
-from pymgcv.smooths.tprs import ThinPlateSmooth, ThinPlateShrinkageSmooth
-from pymgcv.smooths.base import SmoothSpec
+from jaxgam.smooths.tprs import ThinPlateSmooth, ThinPlateShrinkageSmooth
+from jaxgam.smooths.base import SmoothSpec
 
 
 class TestTPRS:
@@ -7945,7 +7945,7 @@ def benchmark_pirls_scaling():
 | 7.1 Full test matrix | Test Agent | All | All cells in Section 18.6 pass |
 | 7.2 Documentation | Doc Agent | All | API docs, tutorials, examples |
 | 7.3 Stan/NumPyro export | API Agent | 3.8 | jagam() equivalent |
-| 7.4 PyPI packaging | Infra Agent | All | pip install pymgcv |
+| 7.4 PyPI packaging | Infra Agent | All | pip install jaxgam |
 | 7.5 Performance optimization | Performance Agent | 5.7 | Final tuning, profiling |
 | 7.6 Distributed smoke tests | Test Agent | 5b.5 | Dask + Ray end-to-end on sample clusters |
 

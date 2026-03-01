@@ -1,7 +1,7 @@
 """Tests for tensor product smooth basis and penalty construction.
 
 Validates TensorProductSmooth (te) and TensorInteractionSmooth (ti)
-from pymgcv.smooths.tensor:
+from jaxgam.smooths.tensor:
 - Row-wise Kronecker product tests (STRICT)
 - Constraint absorption tests (STRICT)
 - TensorProductSmooth structural tests (STRICT)
@@ -23,9 +23,9 @@ import sys
 import numpy as np
 import pytest
 
-from pymgcv.formula.terms import SmoothSpec
-from pymgcv.penalties.penalty import Penalty
-from pymgcv.smooths.tensor import (
+from jaxgam.formula.terms import SmoothSpec
+from jaxgam.penalties.penalty import Penalty
+from jaxgam.smooths.tensor import (
     TensorInteractionSmooth,
     TensorProductSmooth,
     _row_tensor,
@@ -168,7 +168,7 @@ class TestAbsorbConstraint:
 
     def test_penalty_symmetric_psd(self) -> None:
         """Constrained penalty remains symmetric PSD."""
-        from pymgcv.smooths.cubic import CubicRegressionSmooth
+        from jaxgam.smooths.cubic import CubicRegressionSmooth
 
         spec = SmoothSpec(variables=["x"], bs="cr", k=10)
         smooth = CubicRegressionSmooth(spec)
@@ -847,36 +847,36 @@ class TestRegistry:
     """Tests for smooth class registry with tensor types."""
 
     def test_te_lookup(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("te") is TensorProductSmooth
 
     def test_ti_lookup(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("ti") is TensorInteractionSmooth
 
 
 class TestNoJaxImport:
-    """Verify pymgcv.smooths.tensor does not trigger JAX import."""
+    """Verify jaxgam.smooths.tensor does not trigger JAX import."""
 
     def test_tensor_import_no_jax(self) -> None:
-        """Importing pymgcv.smooths.tensor must not cause jax import."""
+        """Importing jaxgam.smooths.tensor must not cause jax import."""
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.smooths.tensor")
+            importlib.import_module("jaxgam.smooths.tensor")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.smooths.tensor triggered a jax import. "
+                "Importing jaxgam.smooths.tensor triggered a jax import. "
                 "Phase 1 modules must not depend on JAX."
             )
         finally:
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)

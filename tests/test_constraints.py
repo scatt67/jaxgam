@@ -1,6 +1,6 @@
 """Tests for identifiability constraints and CoefficientMap.
 
-Validates the constraint pipeline from pymgcv.smooths.constraints:
+Validates the constraint pipeline from jaxgam.smooths.constraints:
 - CoefficientMap.apply_sum_to_zero: centering constraint absorption (STRICT)
 - CoefficientMap.fix_dependence: linear dependence detection (STRICT)
 - CoefficientMap.gam_side: inter-term identifiability (STRICT)
@@ -20,14 +20,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.formula.terms import SmoothSpec
-from pymgcv.smooths.by_variable import (
+from jaxgam.formula.terms import SmoothSpec
+from jaxgam.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
 )
-from pymgcv.smooths.constraints import CoefficientMap, TermBlock
-from pymgcv.smooths.tensor import TensorProductSmooth
-from pymgcv.smooths.tprs import TPRSSmooth
+from jaxgam.smooths.constraints import CoefficientMap, TermBlock
+from jaxgam.smooths.tensor import TensorProductSmooth
+from jaxgam.smooths.tprs import TPRSSmooth
 from tests.tolerances import (
     MODERATE,
     STRICT,
@@ -198,7 +198,7 @@ class TestApplySumToZero:
 
     def test_works_with_cr_basis(self):
         """Centering works with cubic regression splines."""
-        from pymgcv.smooths.cubic import CubicRegressionSmooth
+        from jaxgam.smooths.cubic import CubicRegressionSmooth
 
         data = _make_1d_data()
         spec = _make_spec(["x"], bs="cr", k=10)
@@ -214,7 +214,7 @@ class TestApplySumToZero:
 
     def test_works_with_cc_basis(self):
         """Centering works with cyclic cubic splines."""
-        from pymgcv.smooths.cubic import CyclicCubicSmooth
+        from jaxgam.smooths.cubic import CyclicCubicSmooth
 
         data = _make_1d_data()
         spec = _make_spec(["x"], bs="cc", k=10)
@@ -1052,21 +1052,21 @@ class TestPhaseBoundary:
     """Phase boundary: importing constraints must not import JAX."""
 
     def test_no_jax_import(self):
-        """Importing pymgcv.smooths.constraints must not trigger jax import."""
+        """Importing jaxgam.smooths.constraints must not trigger jax import."""
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.smooths.constraints")
+            importlib.import_module("jaxgam.smooths.constraints")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.smooths.constraints triggered a jax import."
+                "Importing jaxgam.smooths.constraints triggered a jax import."
             )
         finally:
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)

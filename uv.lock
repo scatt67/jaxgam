@@ -583,6 +583,60 @@ wheels = [
 ]
 
 [[package]]
+name = "jaxgam"
+version = "1.0.0a1"
+source = { editable = "." }
+dependencies = [
+    { name = "formulaic" },
+    { name = "jax" },
+    { name = "jaxlib" },
+    { name = "matplotlib" },
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "scipy" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "vulture" },
+]
+docs = [
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
+]
+r = [
+    { name = "rpy2" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "formulaic", specifier = ">=1.0" },
+    { name = "jax", specifier = ">=0.4.20" },
+    { name = "jaxlib", specifier = ">=0.4.20" },
+    { name = "matplotlib", specifier = ">=3.7" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.0" },
+    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.24" },
+    { name = "numba", specifier = ">=0.58" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "pandas", specifier = ">=2.0" },
+    { name = "pre-commit", marker = "extra == 'dev'" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "pytest-xdist", marker = "extra == 'dev'" },
+    { name = "rpy2", marker = "extra == 'r'", specifier = ">=3.5" },
+    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "scipy", specifier = ">=1.11" },
+    { name = "vulture", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev", "r", "docs"]
+
+[[package]]
 name = "jaxlib"
 version = "0.9.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1432,60 +1486,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/ba/63/06673d1eb6d8f83c0
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6f/2c/5b079febdc65e1c3fb2729bf958d18b45be7113828528e8a0b5850dd819a/pymdown_extensions-10.21-py3-none-any.whl", hash = "sha256:91b879f9f864d49794c2d9534372b10150e6141096c3908a455e45ca72ad9d3f", size = 268877, upload-time = "2026-02-15T20:44:05.464Z" },
 ]
-
-[[package]]
-name = "pymgcv"
-version = "1.0.0a1"
-source = { editable = "." }
-dependencies = [
-    { name = "formulaic" },
-    { name = "jax" },
-    { name = "jaxlib" },
-    { name = "matplotlib" },
-    { name = "numba" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "scipy" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "vulture" },
-]
-docs = [
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extra = ["python"] },
-]
-r = [
-    { name = "rpy2" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "formulaic", specifier = ">=1.0" },
-    { name = "jax", specifier = ">=0.4.20" },
-    { name = "jaxlib", specifier = ">=0.4.20" },
-    { name = "matplotlib", specifier = ">=3.7" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.0" },
-    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.24" },
-    { name = "numba", specifier = ">=0.58" },
-    { name = "numpy", specifier = ">=1.24" },
-    { name = "pandas", specifier = ">=2.0" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "rpy2", marker = "extra == 'r'", specifier = ">=3.5" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "scipy", specifier = ">=1.11" },
-    { name = "vulture", marker = "extra == 'dev'" },
-]
-provides-extras = ["dev", "r", "docs"]
 
 [[package]]
 name = "pyparsing"

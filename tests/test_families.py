@@ -1,4 +1,4 @@
-"""Tests for pymgcv.families.
+"""Tests for jaxgam.families.
 
 Coverage:
 1. TestVariance — V(mu) correct for each family at STRICT tolerance
@@ -7,7 +7,7 @@ Coverage:
 4. TestInitialization — family.initialize(y, wt) produces valid starting mu
 5. TestEdgeCases — Binomial y=0/y=1, Poisson y=0, Gamma small mu
 6. TestRegistry — get_family("gaussian") returns Gaussian, etc.
-7. TestNoJaxImports — importing pymgcv.families doesn't trigger jax import
+7. TestNoJaxImports — importing jaxgam.families doesn't trigger jax import
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pymgcv.families import (
+from jaxgam.families import (
     Binomial,
     ExponentialFamily,
     Gamma,
@@ -701,7 +701,7 @@ class TestFamilyProperties:
         fam = Gaussian()
         assert fam.family_name == "gaussian"
         assert not fam.scale_known
-        from pymgcv.links import IdentityLink
+        from jaxgam.links import IdentityLink
 
         assert isinstance(fam.link, IdentityLink)
 
@@ -709,7 +709,7 @@ class TestFamilyProperties:
         fam = Binomial()
         assert fam.family_name == "binomial"
         assert fam.scale_known
-        from pymgcv.links import LogitLink
+        from jaxgam.links import LogitLink
 
         assert isinstance(fam.link, LogitLink)
 
@@ -717,7 +717,7 @@ class TestFamilyProperties:
         fam = Poisson()
         assert fam.family_name == "poisson"
         assert fam.scale_known
-        from pymgcv.links import LogLink
+        from jaxgam.links import LogLink
 
         assert isinstance(fam.link, LogLink)
 
@@ -725,14 +725,14 @@ class TestFamilyProperties:
         fam = Gamma()
         assert fam.family_name == "Gamma"
         assert not fam.scale_known
-        from pymgcv.links import InverseLink
+        from jaxgam.links import InverseLink
 
         assert isinstance(fam.link, InverseLink)
 
     def test_custom_link(self) -> None:
         """Families accept non-default link functions."""
         fam = Poisson(link="identity")
-        from pymgcv.links import IdentityLink
+        from jaxgam.links import IdentityLink
 
         assert isinstance(fam.link, IdentityLink)
 

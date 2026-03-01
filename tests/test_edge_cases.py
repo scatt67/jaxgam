@@ -1,4 +1,4 @@
-"""Edge case and robustness tests for pymgcv.
+"""Edge case and robustness tests for jaxgam.
 
 Tests cover pathological inputs and boundary conditions that should
 either succeed gracefully or produce clear, actionable error messages.
@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 
 SEED = 123
 

@@ -1,4 +1,4 @@
-"""Benchmark pymgcv vs R mgcv with large basis dimensions (p=100,200,500).
+"""Benchmark jaxgam vs R mgcv with large basis dimensions (p=100,200,500).
 
 Usage::
 
@@ -6,7 +6,7 @@ Usage::
 
 At large p, R's O(np²) BLAS operations become significant and its OpenMP
 parallelism via ``control=list(nthreads=N)`` should matter.  This script
-compares pymgcv (JAX, single-device) against R with 1 thread and R with
+compares jaxgam (JAX, single-device) against R with 1 thread and R with
 all available threads.
 
 Produces ``scripts/large_p_results.png``.
@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 
 print = functools.partial(print, flush=True)
 
@@ -142,7 +142,7 @@ def main() -> None:
     # Clear JAX persistent compilation cache
     cache_dir = os.environ.get(
         "JAX_COMPILATION_CACHE_DIR",
-        str(pathlib.Path.home() / ".cache" / "pymgcv" / "jax"),
+        str(pathlib.Path.home() / ".cache" / "jaxgam" / "jax"),
     )
     if os.path.isdir(cache_dir):
         shutil.rmtree(cache_dir)
@@ -246,7 +246,7 @@ def main() -> None:
         return f"{v:.0f}"
 
     print("=" * 110)
-    print(f"LARGE-P BENCHMARK  |  R threads: 1 vs {r_ncores}  |  pymgcv: true cold")
+    print(f"LARGE-P BENCHMARK  |  R threads: 1 vs {r_ncores}  |  jaxgam: true cold")
     print("=" * 110)
     header = (
         f"| {'k':>4} | {'family':<8} | {'n':>7} "
@@ -327,7 +327,7 @@ def main() -> None:
         x - width,
         py_vals,
         width,
-        label="pymgcv (true cold)",
+        label="jaxgam (true cold)",
         color="#1f77b4",
     )
     bars_r1 = ax.bar(
@@ -365,7 +365,7 @@ def main() -> None:
     ax.set_xticks(x)
     ax.set_xticklabels(x_labels, fontsize=12)
     ax.set_title(
-        f"pymgcv (true cold) vs R mgcv at n={N_SIZES[0]:,}\n"
+        f"jaxgam (true cold) vs R mgcv at n={N_SIZES[0]:,}\n"
         "(geometric mean across gaussian & poisson)",
         fontsize=13,
     )

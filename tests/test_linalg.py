@@ -1,4 +1,4 @@
-"""Tests for pymgcv.linalg.
+"""Tests for jaxgam.linalg.
 
 Coverage:
 1. TestChoFactor — jittered Cholesky factorization
@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import scipy.linalg as sla
 
-from pymgcv.jax_utils import (
+from jaxgam.jax_utils import (
     cho_factor,
     numerical_rank,
     penalized_cholesky,

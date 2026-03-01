@@ -1,5 +1,5 @@
 [project]
-name = "pymgcv"
+name = "jaxgam"
 version = "1.0.0a1"
 description = "Python port of R's mgcv package for Generalized Additive Models"
 requires-python = ">=3.11"
@@ -50,14 +50,14 @@ select = ["E", "F", "W", "I", "ARG", "B", "UP", "SIM", "C4", "RUF", "T20", "PERF
 "scripts/**" = ["T201", "RUF059"]
 
 [tool.vulture]
-paths = ["pymgcv"]
+paths = ["jaxgam"]
 min_confidence = 80
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["pymgcv"]
+source = ["jaxgam"]
 
 [tool.coverage.report]
 fail_under = 80

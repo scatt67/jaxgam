@@ -1,6 +1,6 @@
 """Tests for TPRS basis and penalty construction.
 
-Validates TPRSSmooth and TPRSShrinkageSmooth from pymgcv.smooths.tprs:
+Validates TPRSSmooth and TPRSShrinkageSmooth from jaxgam.smooths.tprs:
 - Helper function unit tests (STRICT)
 - Structural invariant tests (STRICT)
 - R comparison tests (MODERATE, skip if R unavailable)
@@ -21,9 +21,9 @@ from math import comb, pi
 import numpy as np
 import pytest
 
-from pymgcv.formula.terms import SmoothSpec
-from pymgcv.penalties.penalty import Penalty
-from pymgcv.smooths.tprs import (
+from jaxgam.formula.terms import SmoothSpec
+from jaxgam.penalties.penalty import Penalty
+from jaxgam.smooths.tprs import (
     TPRSShrinkageSmooth,
     TPRSSmooth,
     _monomial_indices,
@@ -835,23 +835,23 @@ class TestRegistry:
     """Tests for smooth class registry."""
 
     def test_tp_lookup(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("tp") is TPRSSmooth
 
     def test_ts_lookup(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("ts") is TPRSShrinkageSmooth
 
     def test_unknown_raises(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         with pytest.raises(KeyError, match="Unknown"):
             get_smooth_class("xx")
 
     def test_case_insensitive(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("TP") is TPRSSmooth
 
@@ -862,66 +862,66 @@ class TestRegistry:
 
 
 class TestNoJaxImport:
-    """Verify that pymgcv.smooths does not trigger JAX import."""
+    """Verify that jaxgam.smooths does not trigger JAX import."""
 
     def test_smooths_tprs_import_no_jax(self) -> None:
-        """Importing pymgcv.smooths.tprs must not cause jax to be imported."""
+        """Importing jaxgam.smooths.tprs must not cause jax to be imported."""
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.smooths.tprs")
+            importlib.import_module("jaxgam.smooths.tprs")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.smooths.tprs triggered a jax import. "
+                "Importing jaxgam.smooths.tprs triggered a jax import. "
                 "Phase 1 modules must not depend on JAX."
             )
         finally:
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)
 
     def test_smooths_init_import_no_jax(self) -> None:
-        """Importing pymgcv.smooths must not cause jax import."""
+        """Importing jaxgam.smooths must not cause jax import."""
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.smooths")
+            importlib.import_module("jaxgam.smooths")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.smooths triggered a jax import."
+                "Importing jaxgam.smooths triggered a jax import."
             )
         finally:
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)
 
     def test_smooths_registry_import_no_jax(self) -> None:
-        """Importing pymgcv.smooths.registry must not cause jax import."""
+        """Importing jaxgam.smooths.registry must not cause jax import."""
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.smooths.registry")
+            importlib.import_module("jaxgam.smooths.registry")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.smooths.registry triggered a jax import."
+                "Importing jaxgam.smooths.registry triggered a jax import."
             )
         finally:
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)
 

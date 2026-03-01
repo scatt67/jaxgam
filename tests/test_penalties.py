@@ -1,6 +1,6 @@
 """Tests for penalty matrix classes.
 
-Validates Penalty and CompositePenalty from pymgcv.penalties:
+Validates Penalty and CompositePenalty from jaxgam.penalties:
 - PSD checks (eigenvalues >= 0)
 - Symmetry validation
 - Weighted penalty computation
@@ -20,7 +20,7 @@ import sys
 import numpy as np
 import pytest
 
-from pymgcv.penalties import CompositePenalty, Penalty
+from jaxgam.penalties import CompositePenalty, Penalty
 from tests.tolerances import STRICT
 
 # ---------------------------------------------------------------------------
@@ -687,47 +687,47 @@ class TestEdgeCases:
 
 
 class TestNoJaxImport:
-    """Verify that pymgcv.penalties does not trigger JAX import."""
+    """Verify that jaxgam.penalties does not trigger JAX import."""
 
     def test_penalties_import_no_jax(self) -> None:
-        """Importing pymgcv.penalties must not cause jax to be imported."""
-        # Remove jax and pymgcv modules from sys.modules
+        """Importing jaxgam.penalties must not cause jax to be imported."""
+        # Remove jax and jaxgam modules from sys.modules
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.penalties")
+            importlib.import_module("jaxgam.penalties")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.penalties triggered a jax import. "
+                "Importing jaxgam.penalties triggered a jax import. "
                 "Phase 1 modules must not depend on JAX."
             )
         finally:
             # Restore original sys.modules state
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)
 
     def test_penalty_module_import_no_jax(self) -> None:
-        """Importing pymgcv.penalties.penalty must not cause jax import."""
+        """Importing jaxgam.penalties.penalty must not cause jax import."""
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.penalties.penalty")
+            importlib.import_module("jaxgam.penalties.penalty")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.penalties.penalty triggered a jax import."
+                "Importing jaxgam.penalties.penalty triggered a jax import."
             )
         finally:
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)

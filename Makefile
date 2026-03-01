@@ -3,7 +3,7 @@
 UV ?= uv
 RUFF ?= ruff
 VULTURE ?= vulture
-DOCKER_IMAGE ?= pymgcv-test
+DOCKER_IMAGE ?= jaxgam-test
 DOCKER_TAG ?= latest
 COLIMA_CPU ?= 4
 COLIMA_MEMORY ?= 16
@@ -34,7 +34,7 @@ format: ## format python
 lint: ## run all linters (ruff check + format check + vulture)
 	$(UV) run $(RUFF) check
 	$(UV) run $(RUFF) format --check
-	$(UV) run $(VULTURE) pymgcv --min-confidence 80
+	$(UV) run $(VULTURE) jaxgam --min-confidence 80
 
 .PHONY: test
 test: docker-build ## run full test suite in Docker (includes R tests)

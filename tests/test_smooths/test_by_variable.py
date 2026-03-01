@@ -1,6 +1,6 @@
 """Tests for factor-by and numeric-by smooth expansion.
 
-Validates FactorBySmooth and NumericBySmooth from pymgcv.smooths.by_variable:
+Validates FactorBySmooth and NumericBySmooth from jaxgam.smooths.by_variable:
 - Factor detection tests (STRICT)
 - FactorBySmooth structural invariant tests (STRICT)
 - NumericBySmooth structural invariant tests (STRICT)
@@ -21,14 +21,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.formula.terms import SmoothSpec
-from pymgcv.smooths.by_variable import (
+from jaxgam.formula.terms import SmoothSpec
+from jaxgam.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
     is_factor,
     resolve_by_variable,
 )
-from pymgcv.smooths.tprs import TPRSSmooth
+from jaxgam.smooths.tprs import TPRSSmooth
 from tests.tolerances import (
     MODERATE,
     STRICT,
@@ -539,7 +539,7 @@ class TestFactorByWithDifferentBases:
     @pytest.mark.parametrize("bs", ["tp", "ts"])
     def test_tprs_variants(self, factor_data: pd.DataFrame, bs: str) -> None:
         """Factor-by works with tp and ts basis types."""
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         spec = _make_spec(["x"], bs=bs, k=10)
         smooth_cls = get_smooth_class(bs)
@@ -563,7 +563,7 @@ class TestFactorByWithDifferentBases:
     @pytest.mark.parametrize("bs", ["cr", "cs", "cc"])
     def test_cubic_variants(self, factor_data: pd.DataFrame, bs: str) -> None:
         """Factor-by works with cr, cs, cc basis types."""
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         spec = _make_spec(["x"], bs=bs, k=10)
         smooth_cls = get_smooth_class(bs)
@@ -1002,7 +1002,7 @@ class TestRComparison:
         for TPRS-based bases (tp). Cubic bases (cr) have no sign
         ambiguity so normalization is a no-op.
         """
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         data = self._make_shared_data()
         k = 10
@@ -1051,7 +1051,7 @@ class TestPhaseBoundary:
     def test_no_jax_import(self) -> None:
         """Importing by_variable must not trigger JAX import."""
         # Remove any cached by_variable module
-        mod_name = "pymgcv.smooths.by_variable"
+        mod_name = "jaxgam.smooths.by_variable"
         if mod_name in sys.modules:
             del sys.modules[mod_name]
 

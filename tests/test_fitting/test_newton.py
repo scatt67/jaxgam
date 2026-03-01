@@ -40,17 +40,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.families.standard import Binomial, Gamma, Gaussian, Poisson
-from pymgcv.fitting.data import FittingData
-from pymgcv.fitting.initialization import initialize_beta
-from pymgcv.fitting.newton import (
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.initialization import initialize_beta
+from jaxgam.fitting.newton import (
     NewtonOptimizer,
     NewtonResult,
     _safe_newton_step,
     newton_optimize,
 )
-from pymgcv.fitting.pirls import PIRLSResult, pirls_loop
-from pymgcv.jax_utils import to_jax
+from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
+from jaxgam.jax_utils import to_jax
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -102,8 +102,8 @@ def _setup_fd(
     family,
 ):
     """Build FittingData from formula + data."""
-    from pymgcv.formula.design import ModelSetup
-    from pymgcv.formula.parser import parse_formula
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
 
     spec = parse_formula(formula)
     setup = ModelSetup.build(spec, data)
@@ -290,7 +290,7 @@ class TestFamilyVsR:
         ids=["gaussian", "poisson", "binomial", "gamma"],
     )
     def family_fit(self, request):
-        """Fit both pymgcv and R for a given family, return both results."""
+        """Fit both jaxgam and R for a given family, return both results."""
         from tests.r_bridge import RBridge
 
         family_name, family_obj = request.param
@@ -884,7 +884,7 @@ class TestDiagnostics:
         Tested across Gaussian, Binomial, and Gamma — the families most
         likely to challenge monotonicity due to iterative PIRLS.
         """
-        from pymgcv.fitting.reml import REMLCriterion
+        from jaxgam.fitting.reml import REMLCriterion
 
         data = _make_data(family_name)
         fd = _setup_fd(self.FORMULA, data, family_obj)
@@ -1014,7 +1014,7 @@ class TestCustomJVP:
                 fd.wt,
                 fd.offset,
             )
-            from pymgcv.fitting.reml import estimate_edf, fletcher_scale
+            from jaxgam.fitting.reml import estimate_edf, fletcher_scale
 
             edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
             phi = fletcher_scale(fd.y, pirls_result.mu, fd.wt, fd.family, edf)

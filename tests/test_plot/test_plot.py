@@ -21,7 +21,7 @@ matplotlib.use("Agg")  # Non-interactive backend for testing
 import matplotlib.figure
 import matplotlib.pyplot as plt
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 
 SEED = 42
 

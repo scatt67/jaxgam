@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 SEED = 42

@@ -23,8 +23,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.formula.design import ModelSetup, SmoothInfo
-from pymgcv.formula.parser import parse_formula
+from jaxgam.formula.design import ModelSetup, SmoothInfo
+from jaxgam.formula.parser import parse_formula
 from tests.tolerances import MODERATE, STRICT, normalize_column_signs
 
 SEED = 42
@@ -590,24 +590,24 @@ class TestPhaseBoundary:
     """Phase 1 import guard."""
 
     def test_no_jax_import(self) -> None:
-        """Importing pymgcv.formula.design does not import JAX."""
+        """Importing jaxgam.formula.design does not import JAX."""
         import importlib
 
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.formula.design")
+            importlib.import_module("jaxgam.formula.design")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.formula.design triggered a jax import"
+                "Importing jaxgam.formula.design triggered a jax import"
             )
         finally:
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)
 

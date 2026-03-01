@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 
 OUT = "scripts/demo"
 

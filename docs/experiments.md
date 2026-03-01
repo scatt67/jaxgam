@@ -24,13 +24,13 @@ Committed code settings:
 
 These changes are independent of the Newton optimizer and should be kept:
 
-1. **`pymgcv/fitting/reml.py`**: Diagonal preconditioning for `log|H|` — replaces `slogdet(H)` with `cholesky(D^{-1} H D^{-1})` + `2*sum(log(diag(L))) + 2*sum(log(d))`. Improves conditioning for binomial (W varies 0–0.25) and reduces AD noise through jax.hessian.
+1. **`jaxgam/fitting/reml.py`**: Diagonal preconditioning for `log|H|` — replaces `slogdet(H)` with `cholesky(D^{-1} H D^{-1})` + `2*sum(log(diag(L))) + 2*sum(log(d))`. Improves conditioning for binomial (W varies 0–0.25) and reduces AD noise through jax.hessian.
 
-2. **`pymgcv/smooths/constraints.py`**: Skip sum-to-zero centering for `TensorInteractionSmooth` (ti). ti() already absorbs marginal constraints during construction; applying centering again incorrectly removes a column. **This fixed all 11 ti-* failures.**
+2. **`jaxgam/smooths/constraints.py`**: Skip sum-to-zero centering for `TensorInteractionSmooth` (ti). ti() already absorbs marginal constraints during construction; applying centering again incorrectly removes a column. **This fixed all 11 ti-* failures.**
 
-3. **`pymgcv/fitting/data.py`**: Added `multi_block_S_local` field to FittingData for adaptive reparameterization support.
+3. **`jaxgam/fitting/data.py`**: Added `multi_block_S_local` field to FittingData for adaptive reparameterization support.
 
-4. **`pymgcv/jax_utils.py`**: Added `recompute_multi_block_proj()` for adaptive reparameterization.
+4. **`jaxgam/jax_utils.py`**: Added `recompute_multi_block_proj()` for adaptive reparameterization.
 
 ## Experiment Results
 

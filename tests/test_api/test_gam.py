@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 SEED = 42
@@ -700,7 +700,7 @@ class TestEdgeCases:
 
     def test_family_object_accepted(self):
         """ExponentialFamily object works as family parameter."""
-        from pymgcv.families.standard import Gaussian
+        from jaxgam.families.standard import Gaussian
 
         data = _make_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')", family=Gaussian()).fit(data)

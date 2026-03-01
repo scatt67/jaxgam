@@ -3,7 +3,7 @@
 Three tolerance tiers for different comparison contexts:
 - STRICT: CPU self-consistency, exact algebraic properties
 - MODERATE: GPU vs CPU, cross-backend comparisons
-- LOOSE: PyMGCV vs R mgcv (different implementations, BLAS, algorithms)
+- LOOSE: JaxGAM vs R mgcv (different implementations, BLAS, algorithms)
 
 Sign normalization removes LAPACK eigenvector sign ambiguity so that
 element-wise comparisons work across different LAPACK implementations

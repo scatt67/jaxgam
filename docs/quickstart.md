@@ -1,6 +1,6 @@
 # Quickstart
 
-This tutorial walks through pymgcv's core features: fitting GAMs with
+This tutorial walks through jaxgam's core features: fitting GAMs with
 different families, using multiple smooth types, and post-estimation
 (prediction, summary, plotting).
 
@@ -9,7 +9,7 @@ All examples assume:
 ```python
 import numpy as np
 import pandas as pd
-from pymgcv import GAM
+from jaxgam import GAM
 ```
 
 ## 1. Gaussian GAM
@@ -151,7 +151,7 @@ The `by=fac` argument creates a separate smooth per factor level, each
 with its own smoothing parameter.
 
 **Important:** The factor column must be `pd.Categorical` (or string
-dtype) so pymgcv recognizes it as a factor.
+dtype) so jaxgam recognizes it as a factor.
 
 ## 8. Prediction
 
@@ -279,5 +279,5 @@ After calling `fit()`, the model exposes:
 
 - [Design document](design.md) --- architecture, algorithms, and
   implementation decisions
-- [R source map](R_SOURCE_MAP.md) --- correspondence between pymgcv
+- [R source map](R_SOURCE_MAP.md) --- correspondence between jaxgam
   modules and R mgcv source files

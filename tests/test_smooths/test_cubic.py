@@ -1,7 +1,7 @@
 """Tests for cubic regression spline basis and penalty construction.
 
 Validates CubicRegressionSmooth (cr), CubicShrinkageSmooth (cs),
-and CyclicCubicSmooth (cc) from pymgcv.smooths.cubic:
+and CyclicCubicSmooth (cc) from jaxgam.smooths.cubic:
 - Knot placement tests (STRICT)
 - Penalty construction unit tests (STRICT)
 - Basis matrix structural tests (STRICT)
@@ -24,9 +24,9 @@ import sys
 import numpy as np
 import pytest
 
-from pymgcv.formula.terms import SmoothSpec
-from pymgcv.penalties.penalty import Penalty
-from pymgcv.smooths.cubic import (
+from jaxgam.formula.terms import SmoothSpec
+from jaxgam.penalties.penalty import Penalty
+from jaxgam.smooths.cubic import (
     CubicRegressionSmooth,
     CubicShrinkageSmooth,
     CyclicCubicSmooth,
@@ -779,26 +779,26 @@ class TestEdgeCases:
 
 
 class TestNoJaxImport:
-    """Verify pymgcv.smooths.cubic does not trigger JAX import."""
+    """Verify jaxgam.smooths.cubic does not trigger JAX import."""
 
     def test_cubic_import_no_jax(self) -> None:
-        """Importing pymgcv.smooths.cubic must not cause jax import."""
+        """Importing jaxgam.smooths.cubic must not cause jax import."""
         modules_to_remove = [
             key
             for key in sys.modules
-            if key == "jax" or key.startswith(("jax.", "pymgcv."))
+            if key == "jax" or key.startswith(("jax.", "jaxgam."))
         ]
         saved = {key: sys.modules.pop(key) for key in modules_to_remove}
 
         try:
-            importlib.import_module("pymgcv.smooths.cubic")
+            importlib.import_module("jaxgam.smooths.cubic")
             assert "jax" not in sys.modules, (
-                "Importing pymgcv.smooths.cubic triggered a jax import. "
+                "Importing jaxgam.smooths.cubic triggered a jax import. "
                 "Phase 1 modules must not depend on JAX."
             )
         finally:
             for key in list(sys.modules):
-                if key.startswith("pymgcv."):
+                if key.startswith("jaxgam."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved)
 
@@ -874,16 +874,16 @@ class TestRegistry:
     """Tests for smooth class registry with cubic types."""
 
     def test_cr_lookup(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("cr") is CubicRegressionSmooth
 
     def test_cs_lookup(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("cs") is CubicShrinkageSmooth
 
     def test_cc_lookup(self) -> None:
-        from pymgcv.smooths.registry import get_smooth_class
+        from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("cc") is CyclicCubicSmooth

@@ -1,4 +1,4 @@
-"""Profile pymgcv GAM fitting pipeline by stage.
+"""Profile jaxgam GAM fitting pipeline by stage.
 
 Usage::
 
@@ -62,11 +62,11 @@ def profile_fit(
     method: str = "REML",
 ) -> dict:
     """Run a profiled GAM fit, returning timing breakdown."""
-    from pymgcv.families.registry import get_family
-    from pymgcv.fitting.data import FittingData
-    from pymgcv.fitting.newton import NewtonOptimizer
-    from pymgcv.formula.design import ModelSetup
-    from pymgcv.formula.parser import parse_formula
+    from jaxgam.families.registry import get_family
+    from jaxgam.fitting.data import FittingData
+    from jaxgam.fitting.newton import NewtonOptimizer
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
 
     timings = {}
 

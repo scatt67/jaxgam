@@ -24,12 +24,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.families.base import ExponentialFamily
-from pymgcv.families.standard import Binomial, Gamma, Gaussian, Poisson
-from pymgcv.fitting.data import FittingData
-from pymgcv.fitting.initialization import initialize_beta
-from pymgcv.fitting.pirls import pirls_loop
-from pymgcv.fitting.reml import (
+from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.initialization import initialize_beta
+from jaxgam.fitting.pirls import pirls_loop
+from jaxgam.fitting.reml import (
     MLCriterion,
     REMLCriterion,
     REMLResult,
@@ -40,7 +40,7 @@ from pymgcv.fitting.reml import (
     pearson_rss,
     reml_criterion,
 )
-from pymgcv.jax_utils import to_jax, to_numpy
+from jaxgam.jax_utils import to_jax, to_numpy
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -96,8 +96,8 @@ def _setup_pipeline(
 
     Returns (fd, pirls_result, log_lambda, r_result).
     """
-    from pymgcv.formula.design import ModelSetup
-    from pymgcv.formula.parser import parse_formula
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
     from tests.r_bridge import RBridge
 
     spec = parse_formula(formula)

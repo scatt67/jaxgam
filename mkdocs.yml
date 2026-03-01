@@ -1,7 +1,7 @@
-site_name: pymgcv
+site_name: jaxgam
 site_description: Python port of R's mgcv package for Generalized Additive Models
-repo_url: https://github.com/shanecatts/pymgcv
-repo_name: shanecatts/pymgcv
+repo_url: https://github.com/shanecatts/jaxgam
+repo_name: shanecatts/jaxgam
 
 theme:
   name: material

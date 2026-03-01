@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 
 rng = np.random.default_rng(123)
 n = 500

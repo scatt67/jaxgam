@@ -1,17 +1,17 @@
-# pymgcv
+# jaxgam
 
 Python port of R's [mgcv](https://cran.r-project.org/package=mgcv) package
 for Generalized Additive Models.
 
-pymgcv uses [JAX](https://github.com/google/jax) for JIT-compiled fitting
+jaxgam uses [JAX](https://github.com/google/jax) for JIT-compiled fitting
 with automatic differentiation through the PIRLS inner loop and Newton
 outer loop. No C compilation required.
 
 ## Installation
 
 ```bash
-git clone https://github.com/shanecatts/pymgcv.git
-cd pymgcv
+git clone https://github.com/shanecatts/jaxgam.git
+cd jaxgam
 uv sync
 ```
 
@@ -29,7 +29,7 @@ uv sync
 ```python
 import numpy as np
 import pandas as pd
-from pymgcv import GAM
+from jaxgam import GAM
 
 # Generate data
 rng = np.random.default_rng(42)
@@ -80,7 +80,7 @@ REML/ML smoothing parameter selection.
 
 ## Performance
 
-pymgcv uses JAX's XLA compiler. After a one-time JIT compilation
+jaxgam uses JAX's XLA compiler. After a one-time JIT compilation
 (~275ms with persistent disk cache), fits are 1-16x faster than R's mgcv
 at n=500 and competitive at n=10,000.
 

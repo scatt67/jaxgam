@@ -1,4 +1,4 @@
-"""Plot true-cold pymgcv/R speedup ratio vs dataset size.
+"""Plot true-cold jaxgam/R speedup ratio vs dataset size.
 
 Usage::
 
@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from pymgcv.api import GAM
+from jaxgam.api import GAM
 
 # Unbuffered print so background runs show progress
 print = functools.partial(print, flush=True)
@@ -215,7 +215,7 @@ def main() -> None:
     # Clear JAX persistent compilation cache
     cache_dir = os.environ.get(
         "JAX_COMPILATION_CACHE_DIR",
-        str(pathlib.Path.home() / ".cache" / "pymgcv" / "jax"),
+        str(pathlib.Path.home() / ".cache" / "jaxgam" / "jax"),
     )
     if os.path.isdir(cache_dir):
         shutil.rmtree(cache_dir)
@@ -367,9 +367,9 @@ def main() -> None:
     ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
     ax.set_xscale("log")
     ax.set_xlabel("Dataset size (n)", fontsize=12)
-    ax.set_ylabel("Speedup (R / pymgcv)", fontsize=12)
+    ax.set_ylabel("Speedup (R / jaxgam)", fontsize=12)
     ax.set_title(
-        "True cold-start pymgcv vs R mgcv\n(no JIT cache; R single-threaded)",
+        "True cold-start jaxgam vs R mgcv\n(no JIT cache; R single-threaded)",
         fontsize=13,
     )
     ax.legend(fontsize=10)

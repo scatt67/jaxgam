@@ -1,4 +1,4 @@
-"""Tests for pymgcv.links.
+"""Tests for jaxgam.links.
 
 Coverage:
 1. TestLinkRoundtrip — linkinv(link(mu)) ≈ mu for each link
@@ -19,7 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pymgcv.links import (
+from jaxgam.links import (
     CloglogLink,
     IdentityLink,
     InverseLink,

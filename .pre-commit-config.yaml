@@ -9,4 +9,4 @@ repos:
     rev: v2.14
     hooks:
       - id: vulture
-        args: ["pymgcv", "--min-confidence", "80"]
+        args: ["jaxgam", "--min-confidence", "80"]

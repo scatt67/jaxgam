@@ -20,14 +20,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymgcv.families.standard import Gaussian, Poisson
-from pymgcv.fitting.data import FittingData
-from pymgcv.fitting.initialization import initialize_beta
-from pymgcv.fitting.pirls import pirls_loop
-from pymgcv.fitting.reml import REMLCriterion, reml_criterion
-from pymgcv.formula.design import ModelSetup
-from pymgcv.formula.parser import parse_formula
-from pymgcv.jax_utils import build_S_lambda, to_jax, to_numpy
+from jaxgam.families.standard import Gaussian, Poisson
+from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.initialization import initialize_beta
+from jaxgam.fitting.pirls import pirls_loop
+from jaxgam.fitting.reml import REMLCriterion, reml_criterion
+from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.parser import parse_formula
+from jaxgam.jax_utils import build_S_lambda, to_jax, to_numpy
 from tests.tolerances import MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)

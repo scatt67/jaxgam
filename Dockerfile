@@ -38,7 +38,7 @@ RUN uv sync --extra dev --extra r --frozen --no-install-project
 # ── Stage 4: Source code + project install (rebuilt on code changes) ──
 FROM py-deps AS test
 
-COPY pymgcv/ pymgcv/
+COPY jaxgam/ jaxgam/
 COPY tests/ tests/
 COPY scripts/ scripts/
 COPY pyproject.toml uv.lock ./

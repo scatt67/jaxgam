@@ -6,7 +6,7 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
-      - "pymgcv/**"
+      - "jaxgam/**"
 
   workflow_dispatch:
 
@@ -28,7 +28,7 @@ jobs:
         run: |
           pip install mkdocs-material "mkdocstrings[python]>=0.24"
 
-      - name: Install pymgcv (for mkdocstrings introspection)
+      - name: Install jaxgam (for mkdocstrings introspection)
         run: pip install -e . --no-deps
 
       - name: Deploy to GitHub Pages

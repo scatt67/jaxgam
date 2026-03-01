@@ -1,4 +1,4 @@
-# PyMGCV v1.0 Implementation Plan
+# JaxGAM v1.0 Implementation Plan
 
 This plan breaks the v1.0 scope (docs/design.md §1.2) into ordered tasks. Each task is designed to be picked up by a Claude Code agent with clear inputs, outputs, acceptance criteria, and design doc references.
 
@@ -51,7 +51,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 5.1** — Eliminate per-fit JIT recompilation (module-level `_diff_score` with explicit args)
 - [x] **Task 5.2** — Fuse gradient + Hessian into single JIT dispatch (`grad_hess()`)
 - [x] **Task 5.3** — Fuse `_fit_and_score` into single JIT region (`_jit_fit_and_score`)
-- [x] **Task 5.4** — Persistent compilation cache (`~/.cache/pymgcv/jax/`), centralized JAX config
+- [x] **Task 5.4** — Persistent compilation cache (`~/.cache/jaxgam/jax/`), centralized JAX config
 - [x] **Task 5.5** — Benchmark script with cold/warm reporting (`scripts/benchmark_vs_r.py`)
 
 ### Current Stats
@@ -73,51 +73,51 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 **Create:**
 ```
 pyproject.toml              # Project metadata, dependencies, uv config
-pymgcv/__init__.py          # Public API stubs: gam, predict, summary, plot
-pymgcv/api.py               # Orchestration stub
-pymgcv/formula/__init__.py
-pymgcv/formula/parser.py
-pymgcv/formula/terms.py
-pymgcv/formula/design.py
-pymgcv/smooths/__init__.py
-pymgcv/smooths/base.py
-pymgcv/smooths/tprs.py
-pymgcv/smooths/cubic.py
-pymgcv/smooths/tensor.py
-pymgcv/smooths/registry.py
-pymgcv/families/__init__.py
-pymgcv/families/base.py
-pymgcv/families/standard.py
-pymgcv/families/registry.py
-pymgcv/links/__init__.py
-pymgcv/links/links.py
-pymgcv/penalties/__init__.py
-pymgcv/penalties/penalty.py
-pymgcv/fitting/__init__.py
-pymgcv/fitting/pirls.py
-pymgcv/fitting/newton.py
-pymgcv/fitting/reml.py
-pymgcv/fitting/initialization.py
-pymgcv/fitting/convergence.py
-pymgcv/fitting/constraints.py
-pymgcv/linalg/__init__.py
-pymgcv/linalg/backend.py
-pymgcv/linalg/qr.py
-pymgcv/linalg/cholesky.py
-pymgcv/linalg/eigen.py
-pymgcv/autodiff/__init__.py
-pymgcv/autodiff/jax_ad.py
-pymgcv/predict/__init__.py
-pymgcv/predict/predict.py
-pymgcv/predict/lpmatrix.py
-pymgcv/predict/posterior.py
-pymgcv/summary/__init__.py
-pymgcv/summary/summary.py
-pymgcv/summary/diagnostics.py
-pymgcv/plot/__init__.py
-pymgcv/plot/plot_gam.py
-pymgcv/compat/__init__.py
-pymgcv/compat/r_bridge.py
+jaxgam/__init__.py          # Public API stubs: gam, predict, summary, plot
+jaxgam/api.py               # Orchestration stub
+jaxgam/formula/__init__.py
+jaxgam/formula/parser.py
+jaxgam/formula/terms.py
+jaxgam/formula/design.py
+jaxgam/smooths/__init__.py
+jaxgam/smooths/base.py
+jaxgam/smooths/tprs.py
+jaxgam/smooths/cubic.py
+jaxgam/smooths/tensor.py
+jaxgam/smooths/registry.py
+jaxgam/families/__init__.py
+jaxgam/families/base.py
+jaxgam/families/standard.py
+jaxgam/families/registry.py
+jaxgam/links/__init__.py
+jaxgam/links/links.py
+jaxgam/penalties/__init__.py
+jaxgam/penalties/penalty.py
+jaxgam/fitting/__init__.py
+jaxgam/fitting/pirls.py
+jaxgam/fitting/newton.py
+jaxgam/fitting/reml.py
+jaxgam/fitting/initialization.py
+jaxgam/fitting/convergence.py
+jaxgam/fitting/constraints.py
+jaxgam/linalg/__init__.py
+jaxgam/linalg/backend.py
+jaxgam/linalg/qr.py
+jaxgam/linalg/cholesky.py
+jaxgam/linalg/eigen.py
+jaxgam/autodiff/__init__.py
+jaxgam/autodiff/jax_ad.py
+jaxgam/predict/__init__.py
+jaxgam/predict/predict.py
+jaxgam/predict/lpmatrix.py
+jaxgam/predict/posterior.py
+jaxgam/summary/__init__.py
+jaxgam/summary/summary.py
+jaxgam/summary/diagnostics.py
+jaxgam/plot/__init__.py
+jaxgam/plot/plot_gam.py
+jaxgam/compat/__init__.py
+jaxgam/compat/r_bridge.py
 tests/__init__.py
 tests/conftest.py
 tests/tolerances.py
@@ -132,7 +132,7 @@ IMPLEMENTATION_PLAN.md         # this file
 **pyproject.toml dependencies (no extras for v1.0):**
 ```toml
 [project]
-name = "pymgcv"
+name = "jaxgam"
 version = "1.0.0a1"
 requires-python = ">=3.11"
 dependencies = [
@@ -149,7 +149,7 @@ dependencies = [
 dev = ["pytest>=7.0", "pytest-xdist", "rpy2>=3.5"]
 ```
 
-**Acceptance:** `uv sync` succeeds. `python -c "import pymgcv"` succeeds (returns stubs). `pytest` runs (0 tests collected is fine).
+**Acceptance:** `uv sync` succeeds. `python -c "import jaxgam"` succeeds (returns stubs). `pytest` runs (0 tests collected is fine).
 
 **Prerequisites:** None.
 
@@ -164,7 +164,7 @@ dev = ["pytest>=7.0", "pytest-xdist", "rpy2>=3.5"]
 **Create:**
 - `tests/tolerances.py` — `STRICT`, `MODERATE`, `LOOSE` dataclasses with `rtol`/`atol`.
 - `tests/conftest.py` — shared fixtures: `simple_gaussian_data`, `simple_binomial_data`, `simple_poisson_data`, `simple_gamma_data` (small synthetic datasets, n=200, known generating process).
-- `tests/test_phase_boundary.py` — import guard: importing `pymgcv.smooths`, `pymgcv.formula`, `pymgcv.penalties` must NOT trigger a `jax` import.
+- `tests/test_phase_boundary.py` — import guard: importing `jaxgam.smooths`, `jaxgam.formula`, `jaxgam.penalties` must NOT trigger a `jax` import.
 
 **Acceptance:** `pytest tests/test_phase_boundary.py` passes. Tolerance classes importable. Fixtures generate reproducible data (seeded RNG).
 
@@ -179,7 +179,7 @@ dev = ["pytest>=7.0", "pytest-xdist", "rpy2>=3.5"]
 **Read first:** docs/design.md §18.2 (R bridge)
 
 **Create:**
-- `pymgcv/compat/r_bridge.py` — `RBridge` class with `fit_gam()` method. Supports rpy2 (preferred) and subprocess fallback. Returns dict with: `coefficients`, `fitted_values`, `smoothing_params`, `edf`, `deviance`, `scale`, `Vp`, `reml_score`, `basis_matrix`, `penalty_matrices`.
+- `jaxgam/compat/r_bridge.py` — `RBridge` class with `fit_gam()` method. Supports rpy2 (preferred) and subprocess fallback. Returns dict with: `coefficients`, `fitted_values`, `smoothing_params`, `edf`, `deviance`, `scale`, `Vp`, `reml_score`, `basis_matrix`, `penalty_matrices`.
 - `scripts/generate_reference_data.R` — R script that fits the 32-cell validation surface (3 smooth types × 4 families + tensor + factor-by) and saves results as JSON in `tests/reference_data/`. Each JSON file contains all the fields from `fit_gam()` plus the raw basis matrix and penalty matrix entries.
 - `tests/reference_data/*.json` — generated files.
 
@@ -200,7 +200,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **Read first:** docs/design.md §7
 
 **Create:**
-- `pymgcv/links/links.py` — `Link` base class with `link(mu)`, `linkinv(eta)`, `mu_eta(eta)` (derivative of inverse link). Concrete implementations: `IdentityLink`, `LogLink`, `LogitLink`, `InverseLink`, `ProbitLink`, `CloglogLink`, `SqrtLink`. Class method `Link.from_name(name)` for registry lookup.
+- `jaxgam/links/links.py` — `Link` base class with `link(mu)`, `linkinv(eta)`, `mu_eta(eta)` (derivative of inverse link). Concrete implementations: `IdentityLink`, `LogLink`, `LogitLink`, `InverseLink`, `ProbitLink`, `CloglogLink`, `SqrtLink`. Class method `Link.from_name(name)` for registry lookup.
 
 **Tests** (`tests/test_links.py`):
 - Roundtrip: `linkinv(link(mu))` == `mu` at STRICT tolerance for each link, across a range of mu values (including near boundaries: mu near 0 and 1 for logit, mu near 0 for log).
@@ -220,9 +220,9 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **Read first:** docs/design.md §6.1 (base class), §6.2 (standard families)
 
 **Create:**
-- `pymgcv/families/base.py` — `ExponentialFamily` base class with: `family_name`, `default_link`, `variance(mu)` (V(μ)), `deviance_resids(y, mu, wt)`, `dev_resids(y, mu, wt)` (scalar deviance), `aic(y, mu, wt, scale)`, `initialize(y, wt)` (starting mu), `valid_mu(mu)`, `valid_eta(eta)`.
-- `pymgcv/families/standard.py` — `Gaussian`, `Binomial`, `Poisson`, `Gamma`. Each provides V(μ), deviance residuals, valid ranges, default link.
-- `pymgcv/families/registry.py` — `get_family(name_or_instance)` returns family object.
+- `jaxgam/families/base.py` — `ExponentialFamily` base class with: `family_name`, `default_link`, `variance(mu)` (V(μ)), `deviance_resids(y, mu, wt)`, `dev_resids(y, mu, wt)` (scalar deviance), `aic(y, mu, wt, scale)`, `initialize(y, wt)` (starting mu), `valid_mu(mu)`, `valid_eta(eta)`.
+- `jaxgam/families/standard.py` — `Gaussian`, `Binomial`, `Poisson`, `Gamma`. Each provides V(μ), deviance residuals, valid ranges, default link.
+- `jaxgam/families/registry.py` — `get_family(name_or_instance)` returns family object.
 
 **Tests** (`tests/test_families.py`):
 - V(μ): Gaussian V=1, Binomial V=μ(1-μ), Poisson V=μ, Gamma V=μ².
@@ -244,7 +244,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **Read first:** docs/design.md §8 (penalties)
 
 **Create:**
-- `pymgcv/penalties/penalty.py` — `Penalty` class: stores `S` (penalty matrix, dense NumPy), `rank`, `null_space_dim`. `CompositePenalty` class: stores list of `Penalty` objects and their smoothing parameters. Method `weighted_penalty(log_lambda)` returns `S_λ = Σ exp(log_λ_j) * S_j`. Method `embed(S_j, col_start, total_p)` embeds a per-smooth penalty into the global penalty space.
+- `jaxgam/penalties/penalty.py` — `Penalty` class: stores `S` (penalty matrix, dense NumPy), `rank`, `null_space_dim`. `CompositePenalty` class: stores list of `Penalty` objects and their smoothing parameters. Method `weighted_penalty(log_lambda)` returns `S_λ = Σ exp(log_λ_j) * S_j`. Method `embed(S_j, col_start, total_p)` embeds a per-smooth penalty into the global penalty space.
 
 **Tests** (`tests/test_penalties.py`):
 - Penalty matrix is symmetric positive semi-definite (STRICT).
@@ -266,15 +266,15 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **R source:** `docs/R_SOURCE_MAP.md` → Task 1.4. Read `R/smooth.r::smooth.construct.tp.smooth.spec()` for the R wrapper and `src/tprs.c::construct_tprs()` for the actual eigendecomposition. The C code is the ground truth.
 
 **Create:**
-- `pymgcv/smooths/base.py` — `SmoothSpec` dataclass (variables, k, by, extra_args). `Smooth` abstract base class with `setup(data, k)` → `(X_s, S, null_space_dim)` and metadata. `setup()` is Phase 1; returns dense NumPy arrays.
-- `pymgcv/smooths/tprs.py` — `TPRSSmooth` implementing `tp` and `ts` basis types. Key steps:
+- `jaxgam/smooths/base.py` — `SmoothSpec` dataclass (variables, k, by, extra_args). `Smooth` abstract base class with `setup(data, k)` → `(X_s, S, null_space_dim)` and metadata. `setup()` is Phase 1; returns dense NumPy arrays.
+- `jaxgam/smooths/tprs.py` — `TPRSSmooth` implementing `tp` and `ts` basis types. Key steps:
   1. Compute TPS semi-kernel η(r) for dimension d and penalty order m.
   2. Form distance matrix E between knots.
   3. Eigendecompose to get truncated basis: `X_s = U_k @ D_k^{1/2}` (first k eigenvectors).
   4. Construct penalty S from the eigenvalues.
   5. For `ts` (shrinkage version): add extra penalty on the null space.
   6. Handle knot selection: max-min distance algorithm from data, or user-supplied knots.
-- `pymgcv/smooths/registry.py` — `get_smooth_class(bs_type)` returns smooth constructor.
+- `jaxgam/smooths/registry.py` — `get_smooth_class(bs_type)` returns smooth constructor.
 
 **Tests** (`tests/test_smooths/test_tprs.py`):
 - Basis matrix X matches R's `smoothCon(s(x, bs="tp", k=10), data)[[1]]$X` at MODERATE tolerance (knot placement may cause small differences — verify knots match first).
@@ -297,7 +297,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **Read first:** docs/design.md §5.3
 
 **Create:**
-- `pymgcv/smooths/cubic.py` — `CubicSmooth` implementing `cr` (natural cubic), `cs` (shrinkage), `cc` (cyclic). Key steps:
+- `jaxgam/smooths/cubic.py` — `CubicSmooth` implementing `cr` (natural cubic), `cs` (shrinkage), `cc` (cyclic). Key steps:
   1. Knot placement: quantile-based from data.
   2. B-spline basis construction, then absorb natural spline constraints via QR.
   3. Wiggliness penalty from integrated second derivative.
@@ -323,7 +323,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **Read first:** docs/design.md §5.5
 
 **Create:**
-- `pymgcv/smooths/tensor.py` — `TensorSmooth` implementing `te` and `ti`. Key steps:
+- `jaxgam/smooths/tensor.py` — `TensorSmooth` implementing `te` and `ti`. Key steps:
   1. Construct marginal bases from existing smooth classes (TPRS or cubic).
   2. Row-wise Kronecker product of marginal bases to form tensor basis.
   3. Penalty: sum of Kronecker products of marginal penalties (one penalty per marginal).
@@ -348,7 +348,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **Read first:** docs/design.md §13.1
 
 **Create:**
-- `pymgcv/formula/parser.py` — `parse_formula(formula_str)` returns `FormulaSpec` with `response` (str), `smooth_terms` (list of `SmoothSpec`), `parametric_terms` (list of str). Uses Python `ast` module to walk the expression tree. Must handle:
+- `jaxgam/formula/parser.py` — `parse_formula(formula_str)` returns `FormulaSpec` with `response` (str), `smooth_terms` (list of `SmoothSpec`), `parametric_terms` (list of str). Uses Python `ast` module to walk the expression tree. Must handle:
   - `y ~ s(x1) + s(x2)` — basic smooth terms
   - `y ~ s(x1, k=20) + s(x2, bs="cr")` — kwargs
   - `y ~ s(x1, by=fac)` — factor-by variable
@@ -356,7 +356,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
   - `y ~ te(x1, x2)` — tensor products
   - `y ~ s(x1, k=int(np.log(n)))` — not supported, raise clear error
   - `y ~ s(x1) + s(x2) + ti(x1, x2)` — smooth + interaction
-- `pymgcv/formula/terms.py` — `SmoothSpec` dataclass (from Task 1.4 base), `ParametricTerm`, `FormulaSpec`.
+- `jaxgam/formula/terms.py` — `SmoothSpec` dataclass (from Task 1.4 base), `ParametricTerm`, `FormulaSpec`.
 
 **Tests** (`tests/test_formula/test_parser.py`):
 - Parses all example formulas above correctly.
@@ -378,8 +378,8 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **Read first:** docs/design.md §5.7 (full section — §5.7.1 through §5.7.5)
 
 **Create:**
-- `pymgcv/smooths/by_variable.py` — `resolve_by_variable(smooth_spec, data)` detects factor vs numeric by-variable. Factor detection uses pandas dtype (Categorical, object, string). `FactorBySmooth` class: takes a base smooth and a factor variable, produces block-diagonal basis matrix (one block per level) and one penalty matrix per level. `NumericBySmooth` class: pointwise multiplication of basis by numeric variable.
-- Update `pymgcv/formula/parser.py` — `resolve_by_variable()` integrated into formula resolution.
+- `jaxgam/smooths/by_variable.py` — `resolve_by_variable(smooth_spec, data)` detects factor vs numeric by-variable. Factor detection uses pandas dtype (Categorical, object, string). `FactorBySmooth` class: takes a base smooth and a factor variable, produces block-diagonal basis matrix (one block per level) and one penalty matrix per level. `NumericBySmooth` class: pointwise multiplication of basis by numeric variable.
+- Update `jaxgam/formula/parser.py` — `resolve_by_variable()` integrated into formula resolution.
 
 **Tests** (`tests/test_smooths/test_by_variable.py`):
 - Factor-by with 3 levels: basis is block-diagonal with 3 blocks. Total columns = 3 × k.
@@ -403,7 +403,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **R source:** `docs/R_SOURCE_MAP.md` → Task 1.9. Read `R/gam.r::gam.side()` carefully — constraint detection order matters for matching R output.
 
 **Create:**
-- `pymgcv/smooths/constraints.py` — `CoefficientMap` frozen dataclass with all constraint pipeline methods as static/class methods: `apply_sum_to_zero()`, `apply_sum_to_zero_factor_by()`, `fix_dependence()`, `gam_side()` (static methods), and `build()` (classmethod factory). Instance methods: `constrained_to_full(beta_c)` → `beta`, `full_to_constrained(beta)` → `beta_c`, `transform_X(X)` → `X_c`, `transform_S(S_j)` → `S_c_j`. `TermBlock` frozen dataclass records per-term constraint info.
+- `jaxgam/smooths/constraints.py` — `CoefficientMap` frozen dataclass with all constraint pipeline methods as static/class methods: `apply_sum_to_zero()`, `apply_sum_to_zero_factor_by()`, `fix_dependence()`, `gam_side()` (static methods), and `build()` (classmethod factory). Instance methods: `constrained_to_full(beta_c)` → `beta`, `full_to_constrained(beta)` → `beta_c`, `transform_X(X)` → `X_c`, `transform_S(S_j)` → `S_c_j`. `TermBlock` frozen dataclass records per-term constraint info.
 - Handle §5.7.3: when `s(x, by=fac)` coexists with `s(x)`, absorb null space per level.
 
 **Tests** (`tests/test_constraints.py`):
@@ -426,7 +426,7 @@ All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.
 **Read first:** docs/design.md §13.2
 
 **Create:**
-- `pymgcv/formula/design.py` — `build_model_matrix(formula_spec, data)` returns `ModelSetup` containing:
+- `jaxgam/formula/design.py` — `build_model_matrix(formula_spec, data)` returns `ModelSetup` containing:
   - `X` — full model matrix (dense NumPy), columns = intercept + parametric + all smooth blocks.
   - `penalties` — `CompositePenalty` with all penalty matrices embedded in global space.
   - `coef_map` — `CoefficientMap` for prediction.
@@ -459,9 +459,9 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **Read first:** docs/design.md §4.2 (PIRLS numerics), §4.8 (jitter)
 
 **Create:**
-- `pymgcv/linalg/backend.py` — Backend-aware wrappers. For v1.0, just JAX. `cho_factor(H)`, `cho_solve(factor, b)`, `slogdet(H)`.
-- `pymgcv/linalg/cholesky.py` — `penalized_cholesky(XtWX, S_lambda)` computes Cholesky of `H = XtWX + S_λ`. Handles positive semi-definite case (jitter when needed). Jitter strategy from §4.8: `epsilon = max(eps_machine * trace(H) / p, 1e-10)`. Returns `(L, jitter_applied)`.
-- `pymgcv/linalg/qr.py` — Pivoted QR for null space detection. Not needed for PIRLS itself, but used in constraint absorption and rank detection.
+- `jaxgam/linalg/backend.py` — Backend-aware wrappers. For v1.0, just JAX. `cho_factor(H)`, `cho_solve(factor, b)`, `slogdet(H)`.
+- `jaxgam/linalg/cholesky.py` — `penalized_cholesky(XtWX, S_lambda)` computes Cholesky of `H = XtWX + S_λ`. Handles positive semi-definite case (jitter when needed). Jitter strategy from §4.8: `epsilon = max(eps_machine * trace(H) / p, 1e-10)`. Returns `(L, jitter_applied)`.
+- `jaxgam/linalg/qr.py` — Pivoted QR for null space detection. Not needed for PIRLS itself, but used in constraint absorption and rank detection.
 
 **Tests** (`tests/test_linalg.py`):
 - Cholesky of known PD matrix: `L @ L.T == H` at STRICT.
@@ -494,7 +494,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **R source:** `docs/R_SOURCE_MAP.md` → Task 2.3. Read `R/gam.fit.r::gam.fit3()` — the PIRLS loop is ~500 lines. Search for `step.half` for the halving logic. The convergence criterion is `abs(old.dev - dev) / (0.1 + abs(dev)) < control$epsilon`.
 
 **Create:**
-- `pymgcv/fitting/pirls.py` — `pirls_step(X, y, beta, S_lambda, family, link)` performs one PIRLS iteration:
+- `jaxgam/fitting/pirls.py` — `pirls_step(X, y, beta, S_lambda, family, link)` performs one PIRLS iteration:
   1. `eta = X @ beta`
   2. `mu = link.linkinv(eta)`
   3. `W = diag(wt / (V(mu) * g'(mu)^2))` (working weights from family)
@@ -506,7 +506,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 
 - `pirls_loop(X, y, beta_init, S_lambda, family, link, max_iter=200, tol=1e-7)` — full PIRLS loop using `jax.lax.while_loop`. Includes step-halving: if penalized deviance increases, halve the step `beta = beta_old + 0.5 * (beta_new - beta_old)` up to `max_half=15` times. Convergence: `|dev_old - dev_new| / (0.1 + |dev_new|) < tol`.
 
-- `pymgcv/fitting/initialization.py` — `initialize_beta(X, y, family, link)` computes starting values. For Gaussian: OLS. For others: `eta_init = link(family.initialize(y, wt))`, then `beta_init = lstsq(X, eta_init)`.
+- `jaxgam/fitting/initialization.py` — `initialize_beta(X, y, family, link)` computes starting values. For Gaussian: OLS. For others: `eta_init = link(family.initialize(y, wt))`, then `beta_init = lstsq(X, eta_init)`.
 
 **Tests** (`tests/test_fitting/test_pirls.py`):
 - Gaussian: converges in 1 iteration (PIRLS is exact for Gaussian).
@@ -532,7 +532,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **Read first:** docs/design.md §1.3 (phase boundaries), §4.4 (what REML needs)
 
 **Create:**
-- `pymgcv/fitting/data.py` — `FittingData` frozen dataclass with:
+- `jaxgam/fitting/data.py` — `FittingData` frozen dataclass with:
   - `from_setup(setup, family, device)` factory: transfers X, y, weights, offset, per-penalty S matrices to JAX device; extracts penalty metadata (ranks, null space dims).
   - `S_lambda(log_lambda)` method: computes `Σ exp(log_λ_j) * S_j`, pure JAX, differentiable via `jax.grad` for REML.
   - `n_penalties` property.
@@ -564,7 +564,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **R source:** `docs/R_SOURCE_MAP.md` → Task 2.4. Read `R/fast-REML.r::fast.REML.fit()` for criterion computation and `src/gdi.c::gdi()` for the analytical REML derivatives (helps validate our `jax.grad` output).
 
 **Create:**
-- `pymgcv/fitting/reml.py` —
+- `jaxgam/fitting/reml.py` —
   - `reml_criterion(log_lambda, X, y, family, link, penalties, wt)` → scalar REML score. This is the outer objective: calls `pirls_loop` to get β*(λ), then computes `V(λ) = deviance(β*) + log|H*| - log|S_λ| + const`. Must be a pure JAX function so `jax.grad` works through it.
   - `ml_criterion(log_lambda, ...)` → ML score (similar, different penalty on log determinant).
   - The key subtlety: β*(λ) is the result of PIRLS, which is an iterative procedure. For gradient computation, we differentiate through the converged solution using the implicit function theorem (the gradient of β* w.r.t. λ is available from the PIRLS stationarity condition). See §4.4 for details.
@@ -588,7 +588,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **Read first:** docs/design.md §4.3 (outer iteration), §4.5 (convergence). R source: `fast.REML.fit()` in `R/fast-REML.r` lines 1740–1875.
 
 **Created:**
-- `pymgcv/fitting/newton.py` — `NewtonOptimizer` class and `newton_optimize()` convenience function:
+- `jaxgam/fitting/newton.py` — `NewtonOptimizer` class and `newton_optimize()` convenience function:
   - `NewtonResult` frozen dataclass: log_lambda, smoothing_params, converged, n_iter, score, gradient, edf, scale, pirls_result, convergence_info.
   - `_safe_newton_step()` (JIT-compiled): eigenvalue-safe Newton direction with negative eigenvalue flip, small eigenvalue floor (`max(|D|) * sqrt(eps)`), and step norm capping to `max_step=5.0`.
   - `NewtonOptimizer` class with methods: `_initial_beta()`, `_make_criterion()`, `_fit_and_score()`, `_step_halve()` (up to 25 halvings with stuck detection), `_check_convergence()`, `_build_result()`, `run()`.
@@ -625,7 +625,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **Read first:** docs/design.md §1.3 (architecture diagram — data flow)
 
 **Create:**
-- `pymgcv/api.py` — `gam(formula, data, family="gaussian", method="REML", **kwargs)`:
+- `jaxgam/api.py` — `gam(formula, data, family="gaussian", method="REML", **kwargs)`:
   1. Parse formula (Phase 1).
   2. Build model matrix, penalties, CoefficientMap (Phase 1).
   3. Initialize β (Phase 1).
@@ -634,7 +634,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
   6. Extract results: `np.asarray(beta)`, `np.asarray(Vp)` (Phase 2→3 boundary).
   7. Construct and return `GAMResult`.
 
-- `pymgcv/api.py` — `GAMResult` dataclass:
+- `jaxgam/api.py` — `GAMResult` dataclass:
   - `coefficients`, `fitted_values`, `linear_predictor`
   - `smoothing_params`, `edf` (per smooth)
   - `deviance`, `null_deviance`, `scale`
@@ -645,7 +645,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
   - `formula`, `family`, `method`
   - `execution_path_reason`, `lambda_strategy_reason` (routing diagnostics)
 
-- `pymgcv/__init__.py` — export `gam`, `GAMResult`.
+- `jaxgam/__init__.py` — export `gam`, `GAMResult`.
 
 **Tests** (`tests/test_api/test_gam.py`):
 - End-to-end: `gam("y ~ s(x)", data, "gaussian")` returns a `GAMResult` with reasonable values.
@@ -670,13 +670,13 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **Implementation:** Prediction is implemented as OOP methods on the GAM class (not standalone functions), since the model object has all state needed for prediction.
 
 **Created:**
-- `pymgcv/api.py` — Added to GAM class:
+- `jaxgam/api.py` — Added to GAM class:
   - `predict(newdata=None, type="response", se_fit=False, offset=None)` — Full prediction method. Self-prediction (`newdata=None`) uses stored `linear_predictor_`/`fitted_values_`. New data builds prediction matrix via `_build_predict_matrix()`. Supports `type="response"` (applies `linkinv`) and `type="link"`. SE via `sqrt(rowSums((X_p @ Vp) * X_p))`.
   - `predict_matrix(newdata)` — Returns constrained prediction matrix `X_p` (equivalent to R's `predict.gam(type="lpmatrix")`).
   - `_build_predict_matrix(newdata)` — Private helper: builds parametric columns, calls each `term.smooth.predict_matrix(data_dict)`, applies `coef_map_.transform_X()` for constraints, column-stacks all blocks.
   - Stored at fit time: `formula_spec_` (parsed FormulaSpec), `_factor_info_` (training-time factor levels for consistent dummy encoding at predict time).
-- `pymgcv/api.py` — Module-level helpers: `_extract_factor_info()`, `_build_parametric_predict()`.
-- `pymgcv/compat/r_bridge.py` — `RBridge.predict_gam()` method (rpy2 only): fits model in R, calls `predict(model, newdata, type, se.fit)`, returns dict with `predictions` and optional `se`.
+- `jaxgam/api.py` — Module-level helpers: `_extract_factor_info()`, `_build_parametric_predict()`.
+- `jaxgam/compat/r_bridge.py` — `RBridge.predict_gam()` method (rpy2 only): fits model in R, calls `predict(model, newdata, type, se.fit)`, returns dict with `predictions` and optional `se`.
 
 **Tests** (`tests/test_predict/test_predict.py`, 45 tests):
 - **TestSelfPrediction** (20): predict response/link matches fitted_values_/linear_predictor_ at STRICT for all 4 families; predict_matrix @ coefs matches eta; predict_matrix shape/values match stored X_.
@@ -701,7 +701,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **Read first:** docs/design.md §15 (if present), §18.1 (tolerance for EDF and p-values)
 
 **Create:**
-- `pymgcv/summary/summary.py` — `summary(model)` prints and returns:
+- `jaxgam/summary/summary.py` — `summary(model)` prints and returns:
   - Parametric coefficients table (estimate, SE, z/t value, p-value).
   - Smooth terms table (EDF, Ref.df, F/Chi.sq, p-value).
   - R-sq (adjusted), deviance explained, scale estimate.
@@ -730,7 +730,7 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 **Read first:** docs/design.md (plot section, if present)
 
 **Create:**
-- `pymgcv/plot/plot_gam.py` — `plot(model, select=None, pages=0, rug=True, se=True, shade=True)`:
+- `jaxgam/plot/plot_gam.py` — `plot(model, select=None, pages=0, rug=True, se=True, shade=True)`:
   - One panel per smooth term.
   - For 1D smooths: line plot of smooth effect ± 2*SE, with rug plot of data.
   - For 2D smooths (tensor products): contour plot or perspective plot.
