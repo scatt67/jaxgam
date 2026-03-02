@@ -5,8 +5,10 @@ Usage::
     uv run python scripts/plot_speedup_vs_n.py
 
 Clears the JAX persistent compilation cache, then runs one fit per
-(smooth, family, n) combination — measuring the absolute worst-case
+(smooth, family, n) combination -- measuring the absolute worst-case
 first-ever-fit time including full JIT tracing + XLA compilation.
+
+R is benchmarked with both gam(method="REML") and bam(method="fREML").
 
 Produces ``scripts/speedup_vs_n.png``.
 """
@@ -61,7 +63,7 @@ SMOOTH_CONFIGS: dict[str, dict] = {
 }
 
 # ---------------------------------------------------------------------------
-# Data generators (same as benchmark_vs_r.py)
+# Data generators
 # ---------------------------------------------------------------------------
 
 
@@ -155,7 +157,14 @@ def setup_r():
     return ro
 
 
-def time_r_fit(ro, r_formula, data, family, nthreads=1):
+def time_r_fit(ro, r_formula, data, family, method="gam", nthreads=1):
+    """Time an R gam() or bam() fit.
+
+    Parameters
+    ----------
+    method : str
+        "gam" for gam(method="REML"), "bam" for bam(method="fREML").
+    """
     from rpy2.robjects import numpy2ri, pandas2ri
 
     family_map = {
@@ -170,13 +179,23 @@ def time_r_fit(ro, r_formula, data, family, nthreads=1):
         ro.globalenv["bench_data"] = ro.conversion.py2rpy(data)
 
     ctrl = f", control=list(nthreads={nthreads})" if nthreads > 1 else ""
-    r_code = f"""
-    tm <- system.time({{
-        mod <- gam({r_formula}, data=bench_data,
-                    family={family_map[family]}, method="REML"{ctrl})
-    }})
-    tm["elapsed"] * 1000
-    """
+    if method == "bam":
+        r_code = f"""
+        tm <- system.time({{
+            mod <- bam({r_formula}, data=bench_data,
+                        family={family_map[family]}, method="fREML",
+                        discrete=FALSE{ctrl})
+        }})
+        tm["elapsed"] * 1000
+        """
+    else:
+        r_code = f"""
+        tm <- system.time({{
+            mod <- gam({r_formula}, data=bench_data,
+                        family={family_map[family]}, method="REML"{ctrl})
+        }})
+        tm["elapsed"] * 1000
+        """
     return float(np.array(ro.r(r_code))[0])
 
 
@@ -197,8 +216,38 @@ def time_py_fit(py_formula, data, family):
 # ---------------------------------------------------------------------------
 
 
+def _run_r_benchmark(ro, label, r_method, results, total, nthreads=1):
+    """Run R benchmark with gam or bam and store results."""
+    key = "r_gam" if r_method == "gam" else "r_bam"
+    print(f"R benchmark ({label})...")
+    done = 0
+    for n in N_SIZES:
+        for smooth_key, cfg in SMOOTH_CONFIGS.items():
+            data_type = cfg["data_type"]
+            maker = DATA_MAKERS[data_type]
+            for family in FAMILIES:
+                done += 1
+                data = maker(n, family)
+                try:
+                    ms = time_r_fit(
+                        ro, cfg["r_formula"], data, family,
+                        method=r_method, nthreads=nthreads,
+                    )
+                    results[smooth_key][family][n][key] = ms
+                    print(
+                        f"  [{done}/{total}] {smooth_key}/{family}"
+                        f"/n={n:>9,}: {ms:>9.0f}ms"
+                    )
+                except Exception as e:
+                    results[smooth_key][family][n][key] = float("nan")
+                    print(
+                        f"  [{done}/{total}] {smooth_key}/{family}"
+                        f"/n={n:>9,}: FAILED ({e})"
+                    )
+    print()
+
+
 def main() -> None:
-    # Check R
     try:
         import rpy2.robjects  # noqa: F401
 
@@ -221,7 +270,7 @@ def main() -> None:
         shutil.rmtree(cache_dir)
         print(f"Cleared JAX compilation cache: {cache_dir}")
 
-    # Storage: results[smooth][family][n] = {"py": ms, "r": ms}
+    # Storage: results[smooth][family][n] = {"py": ms, "r_gam": ms, "r_bam": ms}
     results: dict[str, dict[str, dict[int, dict]]] = {
         s: {f: {} for f in FAMILIES} for s in SMOOTH_CONFIGS
     }
@@ -253,62 +302,40 @@ def main() -> None:
                     )
     print()
 
-    # --- R benchmark (single-threaded) ---
-    print("R benchmark (single-threaded)...")
-    done = 0
-    for n in N_SIZES:
-        for smooth_key, cfg in SMOOTH_CONFIGS.items():
-            data_type = cfg["data_type"]
-            maker = DATA_MAKERS[data_type]
+    # --- R benchmarks ---
+    _run_r_benchmark(ro, "gam + REML", "gam", results, total)
+    _run_r_benchmark(ro, "bam + fREML, 8 threads", "bam", results, total, nthreads=8)
+
+    # --- Print summary tables ---
+    for r_key, r_label in [("r_gam", "gam(REML)"), ("r_bam", "bam(fREML)")]:
+        print("=" * 80)
+        print(f"TRUE COLD SPEEDUP vs R {r_label}  (R_ms / py_ms)")
+        print("=" * 80)
+        header = f"| {'smooth':<6} | {'family':<8} |"
+        for n in N_SIZES:
+            header += f" {n:>9,} |"
+        print(header)
+        print(
+            "|" + "-" * 8 + "|" + "-" * 10 + "|"
+            + ("-" * 12 + "|") * len(N_SIZES)
+        )
+
+        for smooth_key in SMOOTH_CONFIGS:
             for family in FAMILIES:
-                done += 1
-                data = maker(n, family)
-                try:
-                    ms = time_r_fit(
-                        ro,
-                        cfg["r_formula"],
-                        data,
-                        family,
-                    )
-                    results[smooth_key][family][n]["r"] = ms
-                    print(
-                        f"  [{done}/{total}] {smooth_key}/{family}"
-                        f"/n={n:>9,}: {ms:>9.0f}ms"
-                    )
-                except Exception as e:
-                    results[smooth_key][family][n]["r"] = float("nan")
-                    print(
-                        f"  [{done}/{total}] {smooth_key}/{family}"
-                        f"/n={n:>9,}: FAILED ({e})"
-                    )
-    print()
+                row = f"| {smooth_key:<6} | {family:<8} |"
+                for n in N_SIZES:
+                    d = results[smooth_key][family].get(n, {})
+                    py = d.get("py", float("nan"))
+                    r = d.get(r_key, float("nan"))
+                    if np.isnan(py) or np.isnan(r) or py <= 0:
+                        row += f" {'N/A':>9} |"
+                    else:
+                        ratio = r / py
+                        row += f" {ratio:>8.1f}x |"
+                print(row)
+        print()
 
-    # --- Print summary table ---
-    print("=" * 80)
-    print("TRUE COLD SPEEDUP (R_ms / py_ms)")
-    print("=" * 80)
-    header = f"| {'smooth':<6} | {'family':<8} |"
-    for n in N_SIZES:
-        header += f" {n:>9,} |"
-    print(header)
-    print("|" + "-" * 8 + "|" + "-" * 10 + "|" + ("-" * 12 + "|") * len(N_SIZES))
-
-    for smooth_key in SMOOTH_CONFIGS:
-        for family in FAMILIES:
-            row = f"| {smooth_key:<6} | {family:<8} |"
-            for n in N_SIZES:
-                d = results[smooth_key][family].get(n, {})
-                py = d.get("py", float("nan"))
-                r = d.get("r", float("nan"))
-                if np.isnan(py) or np.isnan(r) or py <= 0:
-                    row += f" {'N/A':>9} |"
-                else:
-                    ratio = r / py
-                    row += f" {ratio:>8.1f}x |"
-            print(row)
-    print()
-
-    # --- Build plot ---
+    # --- Build plot (two subplots: gam and bam) ---
     smooth_labels = {
         "cr": "Single smooth (cr)",
         "two": "Two smooths",
@@ -322,68 +349,71 @@ def main() -> None:
         "cr_by": "#d62728",
     }
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
 
-    for smooth_key in SMOOTH_CONFIGS:
-        gmeans = []
-        mins = []
-        maxs = []
-        valid_ns = []
+    for ax, r_key, title_suffix, subtitle in [
+        (ax1, "r_gam", "R gam(REML)", "(no JIT cache; R single-threaded)"),
+        (ax2, "r_bam", "R bam(fREML)", "(no JIT cache; R 8 threads)"),
+    ]:
+        for smooth_key in SMOOTH_CONFIGS:
+            gmeans = []
+            mins = []
+            maxs = []
+            valid_ns = []
 
-        for n in N_SIZES:
-            ratios = []
-            for family in FAMILIES:
-                d = results[smooth_key][family].get(n, {})
-                py = d.get("py", float("nan"))
-                r = d.get("r", float("nan"))
-                if not (np.isnan(py) or np.isnan(r) or py <= 0):
-                    ratios.append(r / py)
+            for n in N_SIZES:
+                ratios = []
+                for family in FAMILIES:
+                    d = results[smooth_key][family].get(n, {})
+                    py = d.get("py", float("nan"))
+                    r = d.get(r_key, float("nan"))
+                    if not (np.isnan(py) or np.isnan(r) or py <= 0):
+                        ratios.append(r / py)
 
-            if ratios:
-                gmeans.append(geometric_mean(ratios))
-                mins.append(min(ratios))
-                maxs.append(max(ratios))
-                valid_ns.append(n)
+                if ratios:
+                    gmeans.append(geometric_mean(ratios))
+                    mins.append(min(ratios))
+                    maxs.append(max(ratios))
+                    valid_ns.append(n)
 
-        if valid_ns:
-            color = colors[smooth_key]
-            ax.plot(
-                valid_ns,
-                gmeans,
-                "o-",
-                color=color,
-                label=smooth_labels[smooth_key],
-                linewidth=2,
-                markersize=5,
-            )
-            ax.fill_between(
-                valid_ns,
-                mins,
-                maxs,
-                alpha=0.15,
-                color=color,
-            )
+            if valid_ns:
+                color = colors[smooth_key]
+                ax.plot(
+                    valid_ns,
+                    gmeans,
+                    "o-",
+                    color=color,
+                    label=smooth_labels[smooth_key],
+                    linewidth=2,
+                    markersize=5,
+                )
+                ax.fill_between(
+                    valid_ns,
+                    mins,
+                    maxs,
+                    alpha=0.15,
+                    color=color,
+                )
 
-    ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
-    ax.set_xscale("log")
-    ax.set_xlabel("Dataset size (n)", fontsize=12)
-    ax.set_ylabel("Speedup (R / jaxgam)", fontsize=12)
-    ax.set_title(
-        "True cold-start jaxgam vs R mgcv\n(no JIT cache; R single-threaded)",
-        fontsize=13,
-    )
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
+        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
+        ax.set_xscale("log")
+        ax.set_xlabel("Dataset size (n)", fontsize=12)
+        ax.set_title(
+            f"True cold-start jaxgam vs {title_suffix}\n{subtitle}",
+            fontsize=13,
+        )
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.text(
+            N_SIZES[0] * 0.7,
+            1.0,
+            "parity",
+            fontsize=9,
+            color="gray",
+            va="bottom",
+        )
 
-    # Label y-axis reference points
-    ax.text(
-        N_SIZES[0] * 0.7,
-        1.0,
-        "parity",
-        fontsize=9,
-        color="gray",
-        va="bottom",
-    )
+    ax1.set_ylabel("Speedup (R / jaxgam)", fontsize=12)
 
     fig.tight_layout()
     out_path = "scripts/speedup_vs_n.png"

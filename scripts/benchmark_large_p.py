@@ -4,10 +4,9 @@ Usage::
 
     uv run python scripts/benchmark_large_p.py
 
-At large p, R's O(np²) BLAS operations become significant and its OpenMP
+At large p, R's O(np^2) BLAS operations become significant and its OpenMP
 parallelism via ``control=list(nthreads=N)`` should matter.  This script
-compares jaxgam (JAX, single-device) against R with 1 thread and R with
-all available threads.
+compares jaxgam (JAX, single-device) against R gam(REML) and bam(fREML).
 
 Produces ``scripts/large_p_results.png``.
 """
@@ -36,6 +35,7 @@ print = functools.partial(print, flush=True)
 BASIS_DIMS = [100, 200, 500]
 N_SIZES = [100_000]
 FAMILIES = ["gaussian", "poisson"]
+BAM_NTHREADS = 8
 
 # ---------------------------------------------------------------------------
 # Data generators
@@ -74,7 +74,14 @@ def setup_r():
     return ro
 
 
-def time_r_fit(ro, k, data, family, nthreads=1):
+def time_r_fit(ro, k, data, family, method="gam", nthreads=1):
+    """Time an R gam() or bam() fit.
+
+    Parameters
+    ----------
+    method : str
+        "gam" for gam(method="REML"), "bam" for bam(method="fREML").
+    """
     from rpy2.robjects import numpy2ri, pandas2ri
 
     family_map = {"gaussian": "gaussian()", "poisson": "poisson()"}
@@ -85,20 +92,38 @@ def time_r_fit(ro, k, data, family, nthreads=1):
 
     r_family = family_map[family]
     ctrl = f", control=list(nthreads={nthreads})" if nthreads > 1 else ""
-    r_code = f"""
-    tm <- system.time({{
-        mod <- gam(y ~ s(x, k={k}, bs='cr'), data=bench_data,
-                   family={r_family}, method="REML"{ctrl})
-    }})
-    elapsed_ms <- tm["elapsed"] * 1000
-    n_iter <- tryCatch({{
-        oi <- mod$outer.info
-        if (!is.null(oi$iter)) as.integer(oi$iter[1])
-        else if (!is.null(oi$grad)) length(oi$grad)
-        else -1L
-    }}, error=function(e) -1L)
-    c(elapsed_ms, n_iter)
-    """
+
+    if method == "bam":
+        r_code = f"""
+        tm <- system.time({{
+            mod <- bam(y ~ s(x, k={k}, bs='cr'), data=bench_data,
+                       family={r_family}, method="fREML",
+                       discrete=FALSE{ctrl})
+        }})
+        elapsed_ms <- tm["elapsed"] * 1000
+        n_iter <- tryCatch({{
+            oi <- mod$outer.info
+            if (!is.null(oi$iter)) as.integer(oi$iter[1])
+            else if (!is.null(oi$grad)) length(oi$grad)
+            else -1L
+        }}, error=function(e) -1L)
+        c(elapsed_ms, n_iter)
+        """
+    else:
+        r_code = f"""
+        tm <- system.time({{
+            mod <- gam(y ~ s(x, k={k}, bs='cr'), data=bench_data,
+                       family={r_family}, method="REML"{ctrl})
+        }})
+        elapsed_ms <- tm["elapsed"] * 1000
+        n_iter <- tryCatch({{
+            oi <- mod$outer.info
+            if (!is.null(oi$iter)) as.integer(oi$iter[1])
+            else if (!is.null(oi$grad)) length(oi$grad)
+            else -1L
+        }}, error=function(e) -1L)
+        c(elapsed_ms, n_iter)
+        """
     result = np.array(ro.r(r_code))
     return float(result[0]), int(result[1])
 
@@ -136,8 +161,6 @@ def main() -> None:
         return
 
     ro = setup_r()
-    r_ncores = int(np.array(ro.r("parallel::detectCores()"))[0])
-    print(f"Detected {r_ncores} CPU cores for R nthreads.\n")
 
     # Clear JAX persistent compilation cache
     cache_dir = os.environ.get(
@@ -156,7 +179,7 @@ def main() -> None:
             datasets[(n, family)] = make_data(n, family)
     print(f"  {len(datasets)} datasets ready.\n")
 
-    # Storage: results[k][family][n] = {py_cold, py_warm, r_1t, r_mt, ...}
+    # Storage: results[k][family][n] = {py_cold, r_gam, r_bam, ...}
     results: dict[int, dict[str, dict[int, dict]]] = {
         k: {f: {} for f in FAMILIES} for k in BASIS_DIMS
     }
@@ -186,8 +209,8 @@ def main() -> None:
                     print(f"  [{done}/{total}] k={k}/{family}/n={n:>7,}: FAILED ({e})")
     print()
 
-    # --- R single-threaded ---
-    print("R benchmark (nthreads=1)...")
+    # --- R gam(REML) single-threaded ---
+    print("R benchmark: gam(REML, nthreads=1)...")
     done = 0
     for k in BASIS_DIMS:
         for family in FAMILIES:
@@ -195,20 +218,20 @@ def main() -> None:
                 done += 1
                 data = datasets[(n, family)]
                 try:
-                    ms, it = time_r_fit(ro, k, data, family, nthreads=1)
-                    results[k][family][n]["r_1t"] = ms
-                    results[k][family][n]["r_iter"] = it
+                    ms, it = time_r_fit(ro, k, data, family, method="gam")
+                    results[k][family][n]["r_gam"] = ms
+                    results[k][family][n]["r_gam_iter"] = it
                     print(
                         f"  [{done}/{total}] k={k}/{family}"
                         f"/n={n:>7,}: {ms:>8.0f}ms ({it} iter)"
                     )
                 except Exception as e:
-                    results[k][family][n]["r_1t"] = float("nan")
+                    results[k][family][n]["r_gam"] = float("nan")
                     print(f"  [{done}/{total}] k={k}/{family}/n={n:>7,}: FAILED ({e})")
     print()
 
-    # --- R multi-threaded ---
-    print(f"R benchmark (nthreads={r_ncores})...")
+    # --- R bam(fREML) with threads ---
+    print(f"R benchmark: bam(fREML, nthreads={BAM_NTHREADS})...")
     done = 0
     for k in BASIS_DIMS:
         for family in FAMILIES:
@@ -217,19 +240,17 @@ def main() -> None:
                 data = datasets[(n, family)]
                 try:
                     ms, it = time_r_fit(
-                        ro,
-                        k,
-                        data,
-                        family,
-                        nthreads=r_ncores,
+                        ro, k, data, family,
+                        method="bam", nthreads=BAM_NTHREADS,
                     )
-                    results[k][family][n]["r_mt"] = ms
+                    results[k][family][n]["r_bam"] = ms
+                    results[k][family][n]["r_bam_iter"] = it
                     print(
                         f"  [{done}/{total}] k={k}/{family}"
                         f"/n={n:>7,}: {ms:>8.0f}ms ({it} iter)"
                     )
                 except Exception as e:
-                    results[k][family][n]["r_mt"] = float("nan")
+                    results[k][family][n]["r_bam"] = float("nan")
                     print(f"  [{done}/{total}] k={k}/{family}/n={n:>7,}: FAILED ({e})")
     print()
 
@@ -245,24 +266,22 @@ def main() -> None:
             return "N/A"
         return f"{v:.0f}"
 
-    print("=" * 110)
-    print(f"LARGE-P BENCHMARK  |  R threads: 1 vs {r_ncores}  |  jaxgam: true cold")
-    print("=" * 110)
+    print("=" * 120)
+    print(f"LARGE-P BENCHMARK  |  R: gam(REML) vs bam(fREML, {BAM_NTHREADS}t)  |  jaxgam: true cold")
+    print("=" * 120)
     header = (
         f"| {'k':>4} | {'family':<8} | {'n':>7} "
         f"| {'py_cold':>8} "
-        f"| {'R(1t)':>8} | {'R(Mt)':>8} "
-        f"| {'R Mt/1t':>7} "
-        f"| {'cold/1t':>7} | {'cold/Mt':>7} "
-        f"| {'py_it':>5} | {'r_it':>5} |"
+        f"| {'R gam':>8} | {'R bam':>8} "
+        f"| {'py/gam':>7} | {'py/bam':>7} "
+        f"| {'py_it':>5} | {'gam_it':>6} | {'bam_it':>6} |"
     )
     sep = (
         f"|{'-' * 6}|{'-' * 10}|{'-' * 9}"
         f"|{'-' * 10}"
         f"|{'-' * 10}|{'-' * 10}"
-        f"|{'-' * 9}"
         f"|{'-' * 9}|{'-' * 9}"
-        f"|{'-' * 7}|{'-' * 7}|"
+        f"|{'-' * 7}|{'-' * 8}|{'-' * 8}|"
     )
     print(header)
     print(sep)
@@ -272,22 +291,21 @@ def main() -> None:
             for n in N_SIZES:
                 d = results[k][family].get(n, {})
                 pc = d.get("py_cold", float("nan"))
-                r1 = d.get("r_1t", float("nan"))
-                rm = d.get("r_mt", float("nan"))
+                rg = d.get("r_gam", float("nan"))
+                rb = d.get("r_bam", float("nan"))
                 pi = d.get("py_iter", -1)
-                ri = d.get("r_iter", -1)
+                gi = d.get("r_gam_iter", -1)
+                bi = d.get("r_bam_iter", -1)
 
-                r_thread_speedup = _ratio(rm, r1)
-                cold_vs_r1 = _ratio(pc, r1)
-                cold_vs_rm = _ratio(pc, rm)
+                cold_vs_gam = _ratio(pc, rg)
+                cold_vs_bam = _ratio(pc, rb)
 
                 print(
                     f"| {k:>4} | {family:<8} | {n:>7,} "
                     f"| {_fmt(pc):>8} "
-                    f"| {_fmt(r1):>8} | {_fmt(rm):>8} "
-                    f"| {r_thread_speedup:>7} "
-                    f"| {cold_vs_r1:>7} | {cold_vs_rm:>7} "
-                    f"| {pi:>5} | {ri:>5} |"
+                    f"| {_fmt(rg):>8} | {_fmt(rb):>8} "
+                    f"| {cold_vs_gam:>7} | {cold_vs_bam:>7} "
+                    f"| {pi:>5} | {gi:>6} | {bi:>6} |"
                 )
     print()
 
@@ -295,24 +313,24 @@ def main() -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # Compute geometric mean across families for each k
-    bar_data = {}  # k -> (py_cold, r_1t, r_mt)
+    bar_data = {}  # k -> (py_cold, r_gam, r_bam)
     for k in BASIS_DIMS:
-        pc_vals, r1_vals, rm_vals = [], [], []
+        pc_vals, rg_vals, rb_vals = [], [], []
         for family in FAMILIES:
             for n in N_SIZES:
                 d = results[k][family].get(n, {})
                 pc = d.get("py_cold", float("nan"))
-                r1 = d.get("r_1t", float("nan"))
-                rm = d.get("r_mt", float("nan"))
-                if not any(np.isnan(v) for v in [pc, r1, rm]):
+                rg = d.get("r_gam", float("nan"))
+                rb = d.get("r_bam", float("nan"))
+                if not any(np.isnan(v) for v in [pc, rg, rb]):
                     pc_vals.append(pc)
-                    r1_vals.append(r1)
-                    rm_vals.append(rm)
+                    rg_vals.append(rg)
+                    rb_vals.append(rb)
         if pc_vals:
             bar_data[k] = (
                 geometric_mean(pc_vals),
-                geometric_mean(r1_vals),
-                geometric_mean(rm_vals),
+                geometric_mean(rg_vals),
+                geometric_mean(rb_vals),
             )
 
     x_labels = [f"k={k}" for k in bar_data]
@@ -320,8 +338,8 @@ def main() -> None:
     width = 0.25
 
     py_vals = [bar_data[k][0] for k in bar_data]
-    r1_vals = [bar_data[k][1] for k in bar_data]
-    rm_vals = [bar_data[k][2] for k in bar_data]
+    rg_vals = [bar_data[k][1] for k in bar_data]
+    rb_vals = [bar_data[k][2] for k in bar_data]
 
     bars_py = ax.bar(
         x - width,
@@ -330,24 +348,24 @@ def main() -> None:
         label="jaxgam (true cold)",
         color="#1f77b4",
     )
-    bars_r1 = ax.bar(
+    bars_rg = ax.bar(
         x,
-        r1_vals,
+        rg_vals,
         width,
-        label="R (1 thread)",
+        label="R gam(REML)",
         color="#d62728",
         alpha=0.7,
     )
-    bars_rm = ax.bar(
+    bars_rb = ax.bar(
         x + width,
-        rm_vals,
+        rb_vals,
         width,
-        label=f"R ({r_ncores} threads)",
+        label=f"R bam(fREML, {BAM_NTHREADS}t)",
         color="#d62728",
     )
 
     # Add time labels on bars
-    for bars in [bars_py, bars_r1, bars_rm]:
+    for bars in [bars_py, bars_rg, bars_rb]:
         for bar in bars:
             h = bar.get_height()
             label = f"{h / 1000:.1f}s" if h >= 1000 else f"{h:.0f}ms"

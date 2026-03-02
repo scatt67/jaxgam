@@ -195,7 +195,7 @@ def time_r_fit(
     ctrl = f", control=list(nthreads={nthreads})" if nthreads > 1 else ""
     r_code = f"""
     tm <- system.time({{
-        mod <- gam({r_formula}, data=bench_data, family={r_family}, method="REML"{ctrl})
+        mod <- gam({r_formula}, data=bench_data, family={r_family}, method="fREML", discrete=FALSE{ctrl})
     }})
     elapsed_ms <- tm["elapsed"] * 1000
 

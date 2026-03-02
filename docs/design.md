@@ -2,7 +2,7 @@
 
 **Version:** 1.18
 **Date:** February 2026
-**Status:** Design Phase — Post-Seventeenth Review: Scope Freeze
+**Status:** Design Phase - Post-Seventeenth Review: Scope Freeze
 
 ---
 
@@ -35,7 +35,7 @@
 
 ## Changelog
 
-### v1.19 (February 2026) — Remove AD Wrapper Module
+### v1.19 (February 2026) - Remove AD Wrapper Module
 
 Implementation review during Phase 2 (Task 2.2) found that the `autodiff/interface.py` wrappers (`grad`, `hessian`, `hvp`) are trivial one-line delegations to `jax.grad`, `jax.hessian`, `jax.jvp`. The multi-backend abstraction they originally served was already removed in v1.18. Callers should use JAX directly. `per_obs_ll_derivatives` is deferred to v1.1+ with extended families.
 
@@ -46,85 +46,85 @@ Implementation review during Phase 2 (Task 2.2) found that the `autodiff/interfa
 
 ---
 
-### v1.18 (February 2026) — Post-Seventeenth Review: Scope Freeze + Architecture Diagram + AD Strategy Reframing
+### v1.18 (February 2026) - Post-Seventeenth Review: Scope Freeze + Architecture Diagram + AD Strategy Reframing
 
 External review identified execution risk as the primary concern: the gap between design and working library is enormous, and the original timeline didn't reflect that. This version freezes the v1.0 implementation scope, adds the missing architecture overview, and reframes the extended family AD strategy.
 
 | Issue | Fix |
 |---|---|
-| **No explicit v1.0 implementation boundary — design implies everything ships together** | Section 1.2: v1.0 scope section with explicit "ships" table (dense-only, 4 families, 3+2 smooth types, REML/ML only), "does NOT ship" table with target versions, "what users cannot do" list for the README, and 32-cell validation surface analysis. |
-| **Tier 1 table includes Sparse-CPU, Inverse Gaussian, P-splines, GCV/UBRE — too wide for v1.0** | Tier 1 (Section 1.1) updated to match v1.0 scope. Sparse-CPU, P-splines, Inverse Gaussian moved to Tier 2. GCV/UBRE deprioritized. Dependencies row added showing zero-C-compilation v1.0 install. |
-| **19-week timeline is fantasy for numerical computing at this rigor level** | Section 1.2: realistic timeline of 25–34 weeks (~6–8 months) with phase breakdown. Explicitly 2–3× the original estimate. |
-| **No single-page architecture overview — understanding requires reading 80 pages linearly** | Section 1.3: ASCII architecture diagram showing three phases (Setup/Fit/Post-estimation), phase boundaries (jax.device_put / np.asarray), data flow, v1.0 family/smooth scope, and future version hooks. Companion Mermaid diagram for interactive rendering. |
+| **No explicit v1.0 implementation boundary - design implies everything ships together** | Section 1.2: v1.0 scope section with explicit "ships" table (dense-only, 4 families, 3+2 smooth types, REML/ML only), "does NOT ship" table with target versions, "what users cannot do" list for the README, and 32-cell validation surface analysis. |
+| **Tier 1 table includes Sparse-CPU, Inverse Gaussian, P-splines, GCV/UBRE - too wide for v1.0** | Tier 1 (Section 1.1) updated to match v1.0 scope. Sparse-CPU, P-splines, Inverse Gaussian moved to Tier 2. GCV/UBRE deprioritized. Dependencies row added showing zero-C-compilation v1.0 install. |
+| **19-week timeline is fantasy for numerical computing at this rigor level** | Section 1.2: realistic timeline of 25-34 weeks (~6-8 months) with phase breakdown. Explicitly 2-3× the original estimate. |
+| **No single-page architecture overview - understanding requires reading 80 pages linearly** | Section 1.3: ASCII architecture diagram showing three phases (Setup/Fit/Post-estimation), phase boundaries (jax.device_put / np.asarray), data flow, v1.0 family/smooth scope, and future version hooks. Companion Mermaid diagram for interactive rendering. |
 | **Tier 2/3 timelines and contents don't reflect what was deferred from Tier 1** | Tier 2 updated: absorbs Sparse-CPU, CHOLMOD, NB/Tweedie/Beta, fREML, bam(), P-splines, re/fs. Tier 3 updated: absorbs distributed SPMD, multi-host, out-of-core. Realistic timelines (months, not weeks). |
 | **`custom_jvp` for all extended families is overly conservative and high-risk** | Section 9.1, 9.3, 9.4 rewritten. Per-family analysis shows 5/6 extended families (NB, Beta, Cox PH, SHASH, ordered categorical) work with standard `jax.grad` through stable forward passes. Only Tweedie's series evaluation genuinely needs `custom_jvp`. Reduces hand-derived gradient surface from 4+ families to 1. Propagated through exec summary, family docstrings, distributed section, testing, and implementation plan. |
 
 ---
 
-### v1.17 (February 2026) — Post-Sixteenth Review: uv as Project Package Manager
+### v1.17 (February 2026) - Post-Sixteenth Review: uv as Project Package Manager
 
 | Issue | Fix |
 |---|---|
-| **CHOLMOD dependency hell — vendored wheel strategy requires building/maintaining platform-specific C library wheels** | Section 3.1: `uv` is the project package manager. `pyproject.toml` with optional extras (`sparse`, `gpu`, `distributed`, `full`). Pre-built scikit-sparse wheels hosted on `jaxgam-wheels` GitHub Pages index, referenced via `[tool.uv.sources]`. `uv sync --extra sparse` installs CHOLMOD with no C compiler. |
-| **Multi-host version consistency required custom `_collect_version_pins()` with per-package iteration** | Section 16.8: `SetupManifest.version_pins` replaced with `uv_lock_hash` — SHA-256 of the `uv.lock` file. Single string comparison replaces per-package iteration. If all hosts ran `uv sync --frozen`, versions are identical by construction. Fallback hashes key package versions if `uv.lock` not found. |
-| **Error messages reference `pip install scikit-sparse` — unhelpful for most users** | All error messages updated to reference `uv sync --extra sparse`. |
+| **CHOLMOD dependency hell - vendored wheel strategy requires building/maintaining platform-specific C library wheels** | Section 3.1: `uv` is the project package manager. `pyproject.toml` with optional extras (`sparse`, `gpu`, `distributed`, `full`). Pre-built scikit-sparse wheels hosted on `jaxgam-wheels` GitHub Pages index, referenced via `[tool.uv.sources]`. `uv sync --extra sparse` installs CHOLMOD with no C compiler. |
+| **Multi-host version consistency required custom `_collect_version_pins()` with per-package iteration** | Section 16.8: `SetupManifest.version_pins` replaced with `uv_lock_hash` - SHA-256 of the `uv.lock` file. Single string comparison replaces per-package iteration. If all hosts ran `uv sync --frozen`, versions are identical by construction. Fallback hashes key package versions if `uv.lock` not found. |
+| **Error messages reference `pip install scikit-sparse` - unhelpful for most users** | All error messages updated to reference `uv sync --extra sparse`. |
 | **Dependency table doesn't show install extras or distinguish core from optional** | Section 3.1: dependency table updated with `Install extra` column. Clear separation of core (always installed) vs optional (sparse, gpu, distributed). |
 | **No reproducible environment story for CI or multi-host clusters** | Section 3.1: `uv lock` generates cross-platform lockfile. `uv sync --frozen` on CI and cluster nodes guarantees identical environments. Docker image uses `uv sync --extra full --frozen`. |
 
 ---
 
-### v1.16 (February 2026) — Post-Fifteenth Review: Dual Reviewer — Correctness, Packaging, Parser, Contracts
+### v1.16 (February 2026) - Post-Fifteenth Review: Dual Reviewer - Correctness, Packaging, Parser, Contracts
 
 Two reviewers: R1 focused on performance cliffs and contract completeness; R2 focused on correctness failure modes and deployment risks.
 
 | # | Source | Issue | Fix |
 |---|---|---|---|
-| 1 | R2#2 | **Formula parser uses regex — guaranteed bug factory for nested calls, interaction notation, operator precedence** | Section 13.1: complete rewrite using Python's `ast` module. `_SmoothExtractor` walks the AST to identify `Call` nodes for `s()`, `te()`, etc. Handles `s(x, k=int(log(n)))`, `y ~ a * s(x)`, and all nesting correctly. Regex eliminated. |
-| 2 | R2#3 | **CHOLMOD dependency (`scikit-sparse`) is fragile — 80% of pip users will hit degraded mode** | Section 10.4: pre-built scikit-sparse wheels via uv package index (superseded vendored approach in v1.17). conda-forge path as alternative. Docker image with all dependencies. Degraded mode is edge case, not default. |
+| 1 | R2#2 | **Formula parser uses regex - guaranteed bug factory for nested calls, interaction notation, operator precedence** | Section 13.1: complete rewrite using Python's `ast` module. `_SmoothExtractor` walks the AST to identify `Call` nodes for `s()`, `te()`, etc. Handles `s(x, k=int(log(n)))`, `y ~ a * s(x)`, and all nesting correctly. Regex eliminated. |
+| 2 | R2#3 | **CHOLMOD dependency (`scikit-sparse`) is fragile - 80% of pip users will hit degraded mode** | Section 10.4: pre-built scikit-sparse wheels via uv package index (superseded vendored approach in v1.17). conda-forge path as alternative. Docker image with all dependencies. Degraded mode is edge case, not default. |
 | 3 | R2#4 | **Step-halving in SPMD can diverge if decision variables differ across devices → collective deadlock** | Section 16.3: "Convergence decision broadcast" analysis. Current design is safe (all decision variables are post-all-reduce replicated scalars), but invariant explicitly stated and tested. Future refactoring must preserve "all decision variables are replicated" property. |
 | 4 | R2#6 | **IFT backward pass for out-of-core REML can use "clean" H while β* came from jittered H → gradient explosion** | Section 16.5: `implicit_dbeta_dlambda` docstring now requires H_factor to be the exact same factorization (including jitter, pivoting, rank handling) used in forward solve. Violation analysis added. |
-| 5 | R1#1,4 | **Execution path selection is opaque — users can't tell why they were routed or why multi-GPU is slow** | `GAMResult` gains `execution_path_reason`, `lambda_strategy`, `lambda_strategy_reason`, `routing_diagnostics` fields. `_routing_summary()` method for `summary()` output. Every automatic decision is explained and reversible. |
-| 6 | R1#2 | **Routing cost model only counts X bytes — misses WX, XtWX, S_λ, Cholesky factor temporaries** | Section 16.1: `estimate_peak_memory()` computes full per-device budget: X_shard + WX_shard + 3×p²×8 replicated arrays + vectors. Host memory check before densification (psutil). `PeakMemoryEstimate` dataclass. |
-| 7 | R1#3 | **SetupManifest checksum scope ambiguous — "what exactly is hashed?"** | Section 16.8: explicit field-by-field hash scope documented. Added `smooth_term_order`, `basis_types` fields. Per-package version pins checked for exact match across hosts (superseded by uv.lock hash in v1.17). |
-| 8 | R2#1 | **"Missing middle" — no path for distributed sparse models (500k random effects)** | Section 16.6: gap explicitly acknowledged. Not supported in v1.0. Architectural hook identified: FactorBySmooth block independence enables future "block-parallel" mode. Listed as Tier 3 future work. |
+| 5 | R1#1,4 | **Execution path selection is opaque - users can't tell why they were routed or why multi-GPU is slow** | `GAMResult` gains `execution_path_reason`, `lambda_strategy`, `lambda_strategy_reason`, `routing_diagnostics` fields. `_routing_summary()` method for `summary()` output. Every automatic decision is explained and reversible. |
+| 6 | R1#2 | **Routing cost model only counts X bytes - misses WX, XtWX, S_λ, Cholesky factor temporaries** | Section 16.1: `estimate_peak_memory()` computes full per-device budget: X_shard + WX_shard + 3×p²×8 replicated arrays + vectors. Host memory check before densification (psutil). `PeakMemoryEstimate` dataclass. |
+| 7 | R1#3 | **SetupManifest checksum scope ambiguous - "what exactly is hashed?"** | Section 16.8: explicit field-by-field hash scope documented. Added `smooth_term_order`, `basis_types` fields. Per-package version pins checked for exact match across hosts (superseded by uv.lock hash in v1.17). |
+| 8 | R2#1 | **"Missing middle" - no path for distributed sparse models (500k random effects)** | Section 16.6: gap explicitly acknowledged. Not supported in v1.0. Architectural hook identified: FactorBySmooth block independence enables future "block-parallel" mode. Listed as Tier 3 future work. |
 | 9 | R2#5 | **fREML auto-switch at n_smooth=50 creates behavioral cliff vs R; switch points don't align with mgcv** | Section 16.6: divergence from R's switching explicitly documented. vs-R tests at fREML boundary use LOOSE tolerance. `lambda_strategy_reason` surfaces the switch. |
 | 10 | R1-A | **Float64 mandatory = "GPU acceleration" only means data-center FP64 GPUs, not consumer cards** | Section 16.6: explicit caveat. Consumer GPUs have 1/32 FP64 throughput. "Reduced precision mode" is possible but not designed. |
-| 11 | R1-B | **LOOSE tolerance can hide "wrong but plausible" outcomes — no hard-gate invariants** | Section 18.1: hard-gate invariants table (9 invariants). Objective monotonicity, H symmetry/PSD, rank conditions, EDF bounds, deviance non-negativity, no NaN in converged model, cross-path agreement always MODERATE. These block CI regardless of mgcv tolerance. |
+| 11 | R1-B | **LOOSE tolerance can hide "wrong but plausible" outcomes - no hard-gate invariants** | Section 18.1: hard-gate invariants table (9 invariants). Objective monotonicity, H symmetry/PSD, rank conditions, EDF bounds, deviance non-negativity, no NaN in converged model, cross-path agreement always MODERATE. These block CI regardless of mgcv tolerance. |
 | 12 | R1-C | **bam() O(p² + chunk_size × p) memory claim has no enforcement** | Section 10.5: explicit memory invariant. Three conditions that must hold. "No full X allocation in bam path" is a CI-enforced gate. |
 
 ---
 
-### v1.15 (February 2026) — Post-Fourteenth Review: Performance Cliffs, Contracts, Operational Robustness
+### v1.15 (February 2026) - Post-Fourteenth Review: Performance Cliffs, Contracts, Operational Robustness
 
 | Issue | Fix |
 |---|---|
 | **Densifying sparse X to test SPMD gates can OOM before routing decision is made** | Section 16.1: `route_execution_path()` estimates p, n_smooth, and dense bytes from Phase 1 metadata alone (no allocation). Dense X is only materialized after confirming the model stays on SPMD. Explicit performance expectation added: sparse-dominated models may be slower on multi-GPU SPMD than single-host Sparse-CPU. |
-| **Coordinator broadcast is only half a contract — no verification that hosts assembled X identically** | Section 16.8: `SetupManifest` dataclass with SHA-256 checksum. Post-assembly `verify_local_assembly()` handshake on every host: checks column count, checksum integrity, and local-vs-global level consistency. Mismatch → immediate fail-fast error. SPMD invariant updated to reference verification. |
-| **"Auto-switch to fREML" when n_smooth > 200 is a silent behavioral change** | Section 16.7: `auto_select_distributed_mode()` now returns `DistributedModeSelection` dataclass with explicit `lambda_strategy` and `lambda_strategy_reason` fields. Three-tier auto-selection: Newton REML (≤50), fREML (51–200), Fellner-Schall (>200), with cost anchoring. User-specified method is always respected (with warning if costly). `lambda_strategy_reason` is mandatory in `GAMResult`; `summary()` prints it. |
-| **Scaling limits don't reflect dense S_λ commitment or dtype/determinism effects** | Section 16.7 scaling table updated: replicated memory per device computed as `3 * p² * 8` (XtWX + S_λ + Cholesky factor). Float64 mandatory noted. Determinism mode throughput caveat (10–30% reduction). Routing table adds λ strategy column. "Not a performance guarantee" caveat added. |
-| **Empty-level, unseen-level, and dropped-level policies for factor-by in distributed unspecified** | Section 16.8: explicit policy table — zero-row levels kept (preserve column layout), novel prediction levels error with guidance to use `bs="fs"`. `SetupManifest` includes `empty_level_policy` field. |
+| **Coordinator broadcast is only half a contract - no verification that hosts assembled X identically** | Section 16.8: `SetupManifest` dataclass with SHA-256 checksum. Post-assembly `verify_local_assembly()` handshake on every host: checks column count, checksum integrity, and local-vs-global level consistency. Mismatch → immediate fail-fast error. SPMD invariant updated to reference verification. |
+| **"Auto-switch to fREML" when n_smooth > 200 is a silent behavioral change** | Section 16.7: `auto_select_distributed_mode()` now returns `DistributedModeSelection` dataclass with explicit `lambda_strategy` and `lambda_strategy_reason` fields. Three-tier auto-selection: Newton REML (≤50), fREML (51-200), Fellner-Schall (>200), with cost anchoring. User-specified method is always respected (with warning if costly). `lambda_strategy_reason` is mandatory in `GAMResult`; `summary()` prints it. |
+| **Scaling limits don't reflect dense S_λ commitment or dtype/determinism effects** | Section 16.7 scaling table updated: replicated memory per device computed as `3 * p² * 8` (XtWX + S_λ + Cholesky factor). Float64 mandatory noted. Determinism mode throughput caveat (10-30% reduction). Routing table adds λ strategy column. "Not a performance guarantee" caveat added. |
+| **Empty-level, unseen-level, and dropped-level policies for factor-by in distributed unspecified** | Section 16.8: explicit policy table - zero-row levels kept (preserve column layout), novel prediction levels error with guidance to use `bs="fs"`. `SetupManifest` includes `empty_level_policy` field. |
 
 ---
 
-### v1.14 (February 2026) — Post-Thirteenth Review: FactorBySmooth × Distributed Integration
+### v1.14 (February 2026) - Post-Thirteenth Review: FactorBySmooth × Distributed Integration
 
 | Issue | Fix |
 |---|---|
-| **SPMD path assumes dense X, but FactorBySmooth produces sparse block-diagonal X — no routing rule** | Section 16.1: explicit dense-only constraint. Sparse smooth types (FactorBySmooth, fs, re, mrf) are densified before `jax.device_put`. For factor-by models where densification pushes p above SPMD gates, route to Sparse-CPU or chunked. |
+| **SPMD path assumes dense X, but FactorBySmooth produces sparse block-diagonal X - no routing rule** | Section 16.1: explicit dense-only constraint. Sparse smooth types (FactorBySmooth, fs, re, mrf) are densified before `jax.device_put`. For factor-by models where densification pushes p above SPMD gates, route to Sparse-CPU or chunked. |
 | **`auto_select_distributed_mode()` gates only on p, ignoring n_smooth blowup from per-level λ** | Section 16.7: `auto_select_distributed_mode()` now takes `n_smooth` parameter. n_smooth > 200 forces fREML (warns, does not error). Factor-by routing table added showing how p and n_smooth interact for realistic workloads. |
 | **Distributed solver forms dense (p,p) H, making FactorBySmooth's "sparse throughout" story misleading** | Section 16.2: explicit note that block-diagonal penalty structure is NOT exploited on SPMD path. S_λ is densified for Phase 2. "Sparse throughout" is a Phase 1 (setup) property that avoids OOM during assembly; SPMD path is dense by design for moderate p. |
-| **Setup determinism for factor-by not stated as distributed invariant** | SPMD invariants table (Section 16.3): new invariant "Identical setup outputs across hosts" — factor-level ordering, block-to-column mapping, and constraint absorption must be globally identical. Violation produces silent catastrophic error (incompatible column semantics across devices in all-reduce). |
+| **Setup determinism for factor-by not stated as distributed invariant** | SPMD invariants table (Section 16.3): new invariant "Identical setup outputs across hosts" - factor-level ordering, block-to-column mapping, and constraint absorption must be globally identical. Violation produces silent catastrophic error (incompatible column semantics across devices in all-reduce). |
 | **Distributed knot placement broadcasts knots but not factor-level ordering** | Section 16.8: coordinator now also broadcasts canonical factor-level ordering. All processes use coordinator's ordering in `FactorBySmooth.setup()`. Same gather/broadcast pattern as knots, Phase 1 only. |
 | **Scaling limits table missing n_smooth column** | Section 16.7 scaling limits table updated with n_smooth limit (200, warn + force fREML) alongside existing p limits. |
 
 ---
 
-### v1.13 (February 2026) — Post-Twelfth Review: Factor `by` Smooth Mechanism
+### v1.13 (February 2026) - Post-Twelfth Review: Factor `by` Smooth Mechanism
 
 | Issue | Fix |
 |---|---|
-| **Factor `by` variable produces separate smooths per level, but the doc had no assembly or penalty specification** | New Section 5.7: full `FactorBySmooth` class — block-diagonal sparse design matrix (one block per level, no `toarray()`), one penalty per level embedded in global coefficient space, each with its own λ. Numeric `by` (varying-coefficient) also specified. |
-| **Identifiability interaction between `s(x, by=fac)` and `s(x)` unspecified** | Section 5.7.3: three cases enumerated — factor-by alone (no constraint), factor-by alongside main-effect smooth (null-space absorption via QR), missing factor main effect (warning). Constraints recorded in `CoefficientMap`. |
+| **Factor `by` variable produces separate smooths per level, but the doc had no assembly or penalty specification** | New Section 5.7: full `FactorBySmooth` class - block-diagonal sparse design matrix (one block per level, no `toarray()`), one penalty per level embedded in global coefficient space, each with its own λ. Numeric `by` (varying-coefficient) also specified. |
+| **Identifiability interaction between `s(x, by=fac)` and `s(x)` unspecified** | Section 5.7.3: three cases enumerated - factor-by alone (no constraint), factor-by alongside main-effect smooth (null-space absorption via QR), missing factor main effect (warning). Constraints recorded in `CoefficientMap`. |
 | **REML outer loop dimension scales with factor levels but no guidance given** | Section 5.7.4: scaling table from 5 levels (trivial) to 500 parameters (O(125M) Newton cost). Explicit recommendation: switch to fREML/Fellner-Schall when n_smooth > 100. Runtime warning added. |
 | **Formula parser had no dispatch between numeric and factor `by`** | Section 5.7.5: `resolve_by_variable()` routes factor `by` to `FactorBySmooth`, numeric `by` to pointwise multiplication. Factor detection uses dtype, never auto-promotes integer columns. |
 | **Comparison with `bs="fs"` was implicit** | Explicit comparison table in 5.7.2: separate λ per level vs shared λ, independent estimation vs shrinkage, penalty count scaling, use-case guidance. |
@@ -132,7 +132,7 @@ Two reviewers: R1 focused on performance cliffs and contract completeness; R2 fo
 
 ---
 
-### v1.12 (February 2026) — Post-Eleventh Review: SPMD Constraints, Setup Boundary, Lifecycle
+### v1.12 (February 2026) - Post-Eleventh Review: SPMD Constraints, Setup Boundary, Lifecycle
 
 | Issue | Fix |
 |---|---|
@@ -145,17 +145,17 @@ Two reviewers: R1 focused on performance cliffs and contract completeness; R2 fo
 
 ---
 
-### v1.11 (February 2026) — Post-Tenth Review: JAX-Native Distributed Architecture
+### v1.11 (February 2026) - Post-Tenth Review: JAX-Native Distributed Architecture
 
-**Section 16 completely rewritten.** The NumPy-based Dask/Ray provider architecture (v1.0–v1.10) is replaced with JAX-native SPMD parallelism.
+**Section 16 completely rewritten.** The NumPy-based Dask/Ray provider architecture (v1.0-v1.10) is replaced with JAX-native SPMD parallelism.
 
 | Old (killed) | New | Why |
 |---|---|---|
-| `DaskProvider` — NumPy workers, Python coordinator | `jax.sharding` SPMD — same `pirls_step_jax`, row-sharded X | NumPy workers broke JIT, autodiff, extended family AD |
-| `RayProvider` — NumPy workers, Python coordinator | `JaxTrainer` bootstraps `jax.distributed`, then pure JAX SPMD | Ray orchestrates; JAX owns all computation |
+| `DaskProvider` - NumPy workers, Python coordinator | `jax.sharding` SPMD - same `pirls_step_jax`, row-sharded X | NumPy workers broke JIT, autodiff, extended family AD |
+| `RayProvider` - NumPy workers, Python coordinator | `JaxTrainer` bootstraps `jax.distributed`, then pure JAX SPMD | Ray orchestrates; JAX owns all computation |
 | `StatisticsProvider` for all distributed paths | Only needed for out-of-core (data > device memory) | SPMD uses same function as single-GPU |
 | `deterministic_reduce` with Kahan | XLA all-reduce (deterministic within single compilation; see v1.12 caveats) | Same compilation = same reduction tree |
-| Python round-trip per PIRLS iteration | Eliminated — all devices run same XLA program | No serialization latency |
+| Python round-trip per PIRLS iteration | Eliminated - all devices run same XLA program | No serialization latency |
 
 **Architecture tiers (revised):**
 
@@ -163,52 +163,52 @@ Two reviewers: R1 focused on performance cliffs and contract completeness; R2 fo
 |---|---|---|---|---|---|
 | Single GPU | `jax.jit` | Full JIT | Full | ✅ (jax.grad; Tweedie: custom_jvp) | 1 |
 | Multi-GPU, one host | `jax.sharding` + Mesh | Full JIT (SPMD) | Full | ✅ per device | 2 |
-| Multi-host cluster | `jax.distributed` + Ray | Full JIT (SPMD) | Full | ✅ per device | 2–3 |
+| Multi-host cluster | `jax.distributed` + Ray | Full JIT (SPMD) | Full | ✅ per device | 2-3 |
 | Out-of-core | `ChunkedJAXProvider` | JIT per chunk | Implicit fn thm | ✅ per chunk | 3 |
 
 ---
 
-### v1.10 (February 2026) — Post-Ninth Review: Claim Calibration
+### v1.10 (February 2026) - Post-Ninth Review: Claim Calibration
 
 | Issue | Fix |
 |---|---|
 | **Dense-GPU "≈ 5ms on A100" is a fantasy planning number** | Rewritten as "roofline best-case O(10ms), real cost higher due to kernel launch, HBM bandwidth, XLA graph boundaries." Framed as order-of-magnitude, not benchmark. |
-| **"Correctness preserved" for degraded mode is overconfident** | Changed to "same objective within MODERATE tolerance vs CHOLMOD path" — dense cho_factor may differ in pivoting/fill-in ordering. |
+| **"Correctness preserved" for degraded mode is overconfident** | Changed to "same objective within MODERATE tolerance vs CHOLMOD path" - dense cho_factor may differ in pivoting/fill-in ordering. |
 
-No new mechanisms — claim calibration only.
+No new mechanisms - claim calibration only.
 
 ---
 
-### v1.9 (February 2026) — Post-Eighth Review: Footguns Closed
+### v1.9 (February 2026) - Post-Eighth Review: Footguns Closed
 
 | Issue | Fix |
 |---|---|
-| **Degraded mode gates on p but not n×p — downstream X.toarray() can OOM** | Added second gate: `n * p * 8 > 500MB` also triggers hard error. `peak_bytes` now used in the actual branch condition, not just narrative. |
+| **Degraded mode gates on p but not n×p - downstream X.toarray() can OOM** | Added second gate: `n * p * 8 > 500MB` also triggers hard error. `peak_bytes` now used in the actual branch condition, not just narrative. |
 | **Stalled step-halving can livelock if max_iter is absent** | `max_iter` is now mandatory (no default=∞). Additionally: 3 consecutive stalled iterations (instability without progress) trigger early termination with `converged=False` and diagnostic message. |
 | **PathTransferState validate() has no specified call frequency or test strategy** | validate() called at both creation and consumption (two calls per transfer). Test strategy added: property tests that randomize transfer timing, verify invariants, and check objective monotonicity post-transfer. |
 | **Determinism testing story is a feature toggle, not a QA contract** | Section 18.1 now specifies: unit tests run default mode, cross-path and vs-R tests run default mode, CI determinism suite (separate job) runs `set_deterministic(True)` and checks STRICT reproducibility. No test depends on determinism it doesn't explicitly enable. |
 
 ---
 
-### v1.8 (February 2026) — Post-Seventh Review: Wiring, Invariants, Budgets
+### v1.8 (February 2026) - Post-Seventh Review: Wiring, Invariants, Budgets
 
 | Issue | Fix |
 |---|---|
-| **Step-halving exhaustion not wired into instability counter** — spec says it's a detector but code doesn't increment | Fixed: exhaustion now increments `_instability_count` identically to Cholesky failure / NaN. Single code path for all three signals. |
+| **Step-halving exhaustion not wired into instability counter** - spec says it's a detector but code doesn't increment | Fixed: exhaustion now increments `_instability_count` identically to Cholesky failure / NaN. Single code path for all three signals. |
 | **PIRLS snippet uses `np.*` in what should be Dense-GPU (JAX) path** | Snippet explicitly labeled `⚠️ REFERENCE IMPLEMENTATION (NumPy)`. Added note that JAX path uses `jnp.*` equivalents with same logic. Production JAX PIRLS is in Section 4.2. |
 | **Regularization jitter +1e-12/+1e-6 is scale-unaware** | Changed to `eps * trace(H) / p` (scale-relative). Jitter level recorded in `FitDiagnostics.regularization_applied` for surfacing in `summary()`. |
-| **Step-halving fallback takes 1e-4 step unconditionally — can violate monotonicity** | Tiny step now validated: if `pen_dev_try > pen_dev_prev`, step is rejected, iteration marked as stalled (increments instability counter), beta unchanged. |
+| **Step-halving fallback takes 1e-4 step unconditionally - can violate monotonicity** | Tiny step now validated: if `pen_dev_try > pen_dev_prev`, step is rejected, iteration marked as stalled (increments instability counter), beta unchanged. |
 | **PathTransferState has no real invariants / state machine** | Full state machine added: 5 representation invariants (verified by `validate()`), explicit "what's recomputed vs carried", rollback rule if first sparse iteration diverges. |
-| **Sparse-CPU degraded memory math is optimistic (32MB claim ignores temporaries)** | Replaced with actual budget: `3 * p² * 8` bytes (H + factor + temp) + `n * p * 8` for X. Threshold lowered to p ≤ 1500. Density gate removed — p threshold is sufficient. |
+| **Sparse-CPU degraded memory math is optimistic (32MB claim ignores temporaries)** | Replaced with actual budget: `3 * p² * 8` bytes (H + factor + temp) + `n * p * 8` for X. Threshold lowered to p ≤ 1500. Density gate removed - p threshold is sufficient. |
 | **Kahan/deterministic reduce is a perf landmine if always-on** | Clarified: Kahan + sorted-key reduce only active under `set_deterministic(True)`. Default path uses standard tree-reduce. |
 
 ---
 
-### v1.7 (February 2026) — Post-Sixth Review: Bailouts, Fallbacks, Invariants
+### v1.7 (February 2026) - Post-Sixth Review: Bailouts, Fallbacks, Invariants
 
 | Issue | Fix |
 |---|---|
-| **Dense-GPU bailout uses weak diag-ratio estimator, checked only at iterations 0/3** | Replaced with Cholesky-failure + NaN + step-halving-exhaustion detection every iteration (zero extra cost). Diag-ratio kept as cheap supplementary warning. No Lanczos needed — the natural failure modes are the detector. |
+| **Dense-GPU bailout uses weak diag-ratio estimator, checked only at iterations 0/3** | Replaced with Cholesky-failure + NaN + step-halving-exhaustion detection every iteration (zero extra cost). Diag-ratio kept as cheap supplementary warning. No Lanczos needed - the natural failure modes are the detector. |
 | **Sparse-CPU degraded mode silently densifies, causing OOM in exactly the cases that need sparse** | Degraded mode now fails fast with clear error when `p > 2000` or `nnz(X) / (n*p) < 0.3`. Only small/dense problems get the fallback. |
 | **Determinism contract claims bit-for-bit reproducibility that's impossible across driver/toolchain changes** | Reworded: "reproducible within tolerance on same stack+hardware+versions." CI determinism tests pin JAX/CUDA versions. |
 | **Tweedie test tolerance atol=0.5 masks correctness bugs** | Replaced with stratified invariant tests: loglik monotonicity under step-halving (STRICT), AD gradient vs finite-diff (1e-5), deviance residual identity (MODERATE). Prediction tolerance stays LOOSE for hard families. |
@@ -216,7 +216,7 @@ No new mechanisms — claim calibration only.
 
 ---
 
-### v1.6 (February 2026) — Post-Fifth Review: Contradictions, Allocations, Bailouts
+### v1.6 (February 2026) - Post-Fifth Review: Contradictions, Allocations, Bailouts
 
 **Contradictions resolved:**
 
@@ -229,7 +229,7 @@ No new mechanisms — claim calibration only.
 
 | Issue | Fix |
 |---|---|
-| **`_row_tensor(A, B)` allocates O(n × ka × kb)** — memory bomb for tensor products | Replaced with column-wise Kronecker: builds one column at a time, O(n) per column, O(n × ka × kb) total but O(n) peak. Chunked mode for n > 100k. |
+| **`_row_tensor(A, B)` allocates O(n × ka × kb)** - memory bomb for tensor products | Replaced with column-wise Kronecker: builds one column at a time, O(n) per column, O(n × ka × kb) total but O(n) peak. Chunked mode for n > 100k. |
 | **Factor-smooth `toarray()` before LIL insert** defeats sparse path for large k/levels | Removed `toarray()`: uses `scipy.sparse.lil_matrix` direct assignment from sparse blocks via COO conversion. |
 | **TPRS `np.diag(D_k ** -0.5)` allocates dense (k-M)×(k-M)** | Replaced with column scaling: `E_xk @ U_k * (D_k ** -0.5)[None, :]`. |
 
@@ -244,48 +244,48 @@ No new mechanisms — claim calibration only.
 
 ---
 
-### v1.5 (February 2026) — Post-Fourth Review: Scope, Solvers, Determinism
+### v1.5 (February 2026) - Post-Fourth Review: Scope, Solvers, Determinism
 
 **Structural risk reductions:**
 
 | Issue | Fix |
 |---|---|
-| **"Feature-complete" scope is a schedule trap** — no parity tiers, no "done means X" | **Three-tier parity plan** (Section 1.1): Tier 1 (MVP) = tp/cr/ps + Gaussian/Binomial/Poisson/Gamma + REML/GCV, Dense-GPU + Sparse-CPU. Tier 2 = tensor/re/fs + NB/Tweedie/Beta + fREML/bam. Tier 3 = exotic (soap/Duchon/Cox/SHASH) + GAMM + distributed. Each tier has explicit "done" criteria. |
-| **Dense-GPU solver is O(p³) normal equations without bailout** — conditioning issues, no stated strategy | **Solver strategy specified per path.** Dense-GPU: Cholesky on H = XtWX + S_λ (default), pivoted QR fallback on `LinAlgError`, condition-number check triggers Sparse-CPU re-route. Explicit bailout rules documented. |
-| **Structured penalty log_det/trace not specified per type** — "we expose log_det" doesn't mean REML works | **Log-det/trace capability matrix** added to Section 10.2. Each `StructuredPenalty` subclass declares whether it supports exact `log_pseudo_det()`. Penalties without exact log-det route to Sparse-CPU for REML or use stochastic approximation. |
-| **No determinism policy** — knot selection, distributed reduction, GPU non-associativity all produce flapping tests | **Global RNG policy** (Section 4.5): `jaxgam.set_seed(n)` seeds both NumPy and JAX PRNG. Setup-phase randomness uses `np.random.Generator` from global seed. Distributed reduction uses deterministic tree-reduce with Kahan compensation. |
-| **Setup phase can OOM on large sparse terms** — identifiability SVD densifies term blocks | **Sparse-safe constraint discovery** added. `apply_joint_identifiability` uses randomized SVD (`scipy.sparse.linalg.svds`) when term blocks exceed 10k columns. Factor-smooth assembly stays sparse throughout. |
-| **Basis implementations are Python-loop placeholders** — cubic spline and P-spline sketches are unvectorized | **Labeled as reference implementations** with explicit "must vectorize" requirements. Production path uses `scipy.interpolate.BSpline` (vectorized) or JAX `vmap` over knot intervals. |
-| **Distributed accumulation has no precision/determinism contract** — nondeterministic reduce, no compensation | **Reduction protocol specified** (Section 16.1): deterministic sorted-key reduce with Kahan summation available via `set_deterministic(True)`. Default uses standard tree-reduce. Cost model added. |
-| **Test tolerances not stratified** — GPU/BLAS differences cause either false failures or missed regressions | **Three tolerance classes** defined (Section 18.1): `STRICT` (1e-10, coefficient/deviance on CPU), `MODERATE` (1e-6, GPU vs CPU), `LOOSE` (1e-3, vs R mgcv). Per-quantity tolerance table added. |
+| **"Feature-complete" scope is a schedule trap** - no parity tiers, no "done means X" | **Three-tier parity plan** (Section 1.1): Tier 1 (MVP) = tp/cr/ps + Gaussian/Binomial/Poisson/Gamma + REML/GCV, Dense-GPU + Sparse-CPU. Tier 2 = tensor/re/fs + NB/Tweedie/Beta + fREML/bam. Tier 3 = exotic (soap/Duchon/Cox/SHASH) + GAMM + distributed. Each tier has explicit "done" criteria. |
+| **Dense-GPU solver is O(p³) normal equations without bailout** - conditioning issues, no stated strategy | **Solver strategy specified per path.** Dense-GPU: Cholesky on H = XtWX + S_λ (default), pivoted QR fallback on `LinAlgError`, condition-number check triggers Sparse-CPU re-route. Explicit bailout rules documented. |
+| **Structured penalty log_det/trace not specified per type** - "we expose log_det" doesn't mean REML works | **Log-det/trace capability matrix** added to Section 10.2. Each `StructuredPenalty` subclass declares whether it supports exact `log_pseudo_det()`. Penalties without exact log-det route to Sparse-CPU for REML or use stochastic approximation. |
+| **No determinism policy** - knot selection, distributed reduction, GPU non-associativity all produce flapping tests | **Global RNG policy** (Section 4.5): `jaxgam.set_seed(n)` seeds both NumPy and JAX PRNG. Setup-phase randomness uses `np.random.Generator` from global seed. Distributed reduction uses deterministic tree-reduce with Kahan compensation. |
+| **Setup phase can OOM on large sparse terms** - identifiability SVD densifies term blocks | **Sparse-safe constraint discovery** added. `apply_joint_identifiability` uses randomized SVD (`scipy.sparse.linalg.svds`) when term blocks exceed 10k columns. Factor-smooth assembly stays sparse throughout. |
+| **Basis implementations are Python-loop placeholders** - cubic spline and P-spline sketches are unvectorized | **Labeled as reference implementations** with explicit "must vectorize" requirements. Production path uses `scipy.interpolate.BSpline` (vectorized) or JAX `vmap` over knot intervals. |
+| **Distributed accumulation has no precision/determinism contract** - nondeterministic reduce, no compensation | **Reduction protocol specified** (Section 16.1): deterministic sorted-key reduce with Kahan summation available via `set_deterministic(True)`. Default uses standard tree-reduce. Cost model added. |
+| **Test tolerances not stratified** - GPU/BLAS differences cause either false failures or missed regressions | **Three tolerance classes** defined (Section 18.1): `STRICT` (1e-10, coefficient/deviance on CPU), `MODERATE` (1e-6, GPU vs CPU), `LOOSE` (1e-3, vs R mgcv). Per-quantity tolerance table added. |
 
 ---
 
-### v1.4 (February 2026) — Post-Third Review: Numerical Rigor
+### v1.4 (February 2026) - Post-Third Review: Numerical Rigor
 
 **Fixes for high-risk correctness / performance holes:**
 
 | Issue | Fix |
 |---|---|
-| **REML criterion mixes NumPy ops inside JAX autodiff** — `reml_criterion` used `np.linalg.cholesky`, `toarray()`, SciPy sparse sums, then was wrapped in `jax.grad`/`jax.hessian` which can't trace any of that | **Dual REML implementations.** `_reml_criterion_jax()` is pure `jax.numpy` end-to-end (receives dense `jax.Array` penalty, uses `jnp.linalg.slogdet` for log-dets). `_reml_criterion_numpy()` is the NumPy/SciPy reference. JAX path never touches `np.*` or `scipy.sparse` inside the traced function. |
-| **PIRLS init uses `pen_dev_old = inf + beta @ S @ beta`** — inf arithmetic on iteration 0 poisons NaN into deviance comparisons | **Clean initialization.** First iteration is unconditionally accepted (no deviance comparison). `pen_dev_old` is set from the first accepted iterate, not from `inf`. State tuple simplified to `(beta, pen_dev, iteration, converged)` — one objective value, not two. |
+| **REML criterion mixes NumPy ops inside JAX autodiff** - `reml_criterion` used `np.linalg.cholesky`, `toarray()`, SciPy sparse sums, then was wrapped in `jax.grad`/`jax.hessian` which can't trace any of that | **Dual REML implementations.** `_reml_criterion_jax()` is pure `jax.numpy` end-to-end (receives dense `jax.Array` penalty, uses `jnp.linalg.slogdet` for log-dets). `_reml_criterion_numpy()` is the NumPy/SciPy reference. JAX path never touches `np.*` or `scipy.sparse` inside the traced function. |
+| **PIRLS init uses `pen_dev_old = inf + beta @ S @ beta`** - inf arithmetic on iteration 0 poisons NaN into deviance comparisons | **Clean initialization.** First iteration is unconditionally accepted (no deviance comparison). `pen_dev_old` is set from the first accepted iterate, not from `inf`. State tuple simplified to `(beta, pen_dev, iteration, converged)` - one objective value, not two. |
 | **`PenaltySet.to_dense_jax()` eagerly densifies to (p,p)** despite narrative promising structured representations | **`StructuredPenalty` protocol replaces eager densification.** Dense-GPU solver accepts `penalty.matvec(beta)` and `penalty.log_det()` instead of a materialized matrix. Diagonal penalties stay as vectors. Kronecker penalties apply via factor chain. Dense materialization only as explicit fallback (`penalty.to_dense()`). |
-| **Auto path selector ignores penalty shape** — MRF with 50k levels hits `ValueError` in `to_dense_jax()` instead of routing to Sparse-CPU | **Selector now queries `penalty_set.has_large_penalty()`** before choosing Dense-GPU. Late failure replaced with early routing. |
+| **Auto path selector ignores penalty shape** - MRF with 50k levels hits `ValueError` in `to_dense_jax()` instead of routing to Sparse-CPU | **Selector now queries `penalty_set.has_large_penalty()`** before choosing Dense-GPU. Late failure replaced with early routing. |
 | **EDF trace via `np.linalg.inv(H)` is unstable and wasteful** | **Replaced with Cholesky-based solve:** `tr(H⁻¹ XtWX) = tr(L⁻¹ XtWX L⁻ᵀ) = ‖L⁻¹ XtWX_chol‖²_F` computed without forming H⁻¹. |
-| **"JAX purity boundary" definition fuzzy** — unclear which modules run at setup-time (CPU/NumPy OK) vs JIT-time (pure JAX required) | **Explicit two-phase architecture documented** in Section 4.4: "Setup phase" (knot selection, basis construction, constraint computation) runs on CPU with NumPy/SciPy. Only dense arrays + static metadata cross into "JIT phase". |
+| **"JAX purity boundary" definition fuzzy** - unclear which modules run at setup-time (CPU/NumPy OK) vs JIT-time (pure JAX required) | **Explicit two-phase architecture documented** in Section 4.4: "Setup phase" (knot selection, basis construction, constraint computation) runs on CPU with NumPy/SciPy. Only dense arrays + static metadata cross into "JIT phase". |
 | **Outer Newton for λ has no actual trust region** despite claiming one | **Damped Newton with eigenvalue truncation specified.** Hessian eigenvalues floored at `max(eig)/1000` before inversion. Step norm capped. Acceptance test: REML must decrease or step is rejected and damping increases. |
 
 ---
 
-### v1.3 (February 2026) — Post-Second Review: Interface Hardening
+### v1.3 (February 2026) - Post-Second Review: Interface Hardening
 
 **Fixes for high-risk holes identified in second review:**
 
 | Issue | Fix |
 |---|---|
-| **JAX/SciPy leakage** — NB log-lik used `scipy.special.gammaln` in what is supposed to be a JAX-differentiable path; Tweedie series body was `pass` | **JAX purity boundary enforced.** Hard rule: all `*_jax.py` and `autodiff/` modules import zero SciPy. NB now uses `jax.scipy.special.gammaln`. Tweedie series implemented with `jax.lax.while_loop`. CI lint guard added. All family code examples updated. |
-| **ExtendedFamily API internally inconsistent** — `ll_derivatives_autodiff` called undefined `ad`, `working_weights` referenced unset `self._y`/`self._scale`, no clear contract | **Single canonical contract chosen: Option B.** Extended families provide `loglik_per_obs(eta_i, y_i, theta) → scalar` as a pure JAX function. The framework owns all differentiation, stabilization (damping, clipping), and conversion to working weights/response. No family ever computes its own derivatives. |
-| **StatisticsProvider insufficient for smoothing selection** — `(XtWX, XtWz)` not enough for REML log-determinants, EDF traces, AIC/BIC | **Provider contract extended** to `IterationStatistics` dataclass returning `XtWX`, `XtWz`, `deviance`, `log_likelihood`, and `n_obs`. Trace/log-det computed from the p×p `H = XtWX + S_λ` (which the provider doesn't need to know about). Provider outputs explicitly documented per execution path. |
+| **JAX/SciPy leakage** - NB log-lik used `scipy.special.gammaln` in what is supposed to be a JAX-differentiable path; Tweedie series body was `pass` | **JAX purity boundary enforced.** Hard rule: all `*_jax.py` and `autodiff/` modules import zero SciPy. NB now uses `jax.scipy.special.gammaln`. Tweedie series implemented with `jax.lax.while_loop`. CI lint guard added. All family code examples updated. |
+| **ExtendedFamily API internally inconsistent** - `ll_derivatives_autodiff` called undefined `ad`, `working_weights` referenced unset `self._y`/`self._scale`, no clear contract | **Single canonical contract chosen: Option B.** Extended families provide `loglik_per_obs(eta_i, y_i, theta) → scalar` as a pure JAX function. The framework owns all differentiation, stabilization (damping, clipping), and conversion to working weights/response. No family ever computes its own derivatives. |
+| **StatisticsProvider insufficient for smoothing selection** - `(XtWX, XtWz)` not enough for REML log-determinants, EDF traces, AIC/BIC | **Provider contract extended** to `IterationStatistics` dataclass returning `XtWX`, `XtWz`, `deviance`, `log_likelihood`, and `n_obs`. Trace/log-det computed from the p×p `H = XtWX + S_λ` (which the provider doesn't need to know about). Provider outputs explicitly documented per execution path. |
 | **`gam_side` heuristic threshold + in-place mutation + dense blowup** | **Replaced with `CoefficientMap` layer.** All constraints/reparameterizations produce explicit linear operators recorded in a global `CoefficientMap`. Overlap detection uses SVD-based rank test (no arbitrary threshold). No in-place `term_info` mutation. Predict/summary always go through `CoefficientMap`. |
 | **TPRS `data_n` undefined, O(k³) eigendecomp unscalable, `abs(D_k)` hides sign errors** | Fixed: `data_n` → `n`. Added explicit `k ≤ 2000` ceiling with error for larger. Negative eigenvalues now raise instead of being silently abs'd. |
 | **FactorSmooth `X_level[~mask] = 0` invalid for sparse** | Replaced with per-level evaluation + sparse row-assembly via `scipy.sparse.lil_matrix`. |
@@ -301,14 +301,14 @@ No new mechanisms — claim calibration only.
 
 ---
 
-### v1.2 (February 2026) — Post-Review Revision
+### v1.2 (February 2026) - Post-Review Revision
 
 **Breaking architectural changes from v1.0:**
 
 | Change | Rationale |
 |---|---|
 | **JAX-first, single-backend design** replaces the multi-backend `ArrayBackend` Protocol | The v1.0 unified interface masked irreconcilable execution model differences (JAX tracing vs. PyTorch eager). Python control flow inside `jax.jit` silently produces wrong results. Maintaining 3 backends triples test surface with zero user benefit. NumPy+SciPy is retained as a reference/fallback only. |
-| **Closed-form derivatives for standard families**; autodiff restricted to REML and new extended families | Standard families gain nothing from AD since V(μ) gives working weights in O(1). Extended families use `jax.grad` through numerically stable forward passes — `lgamma`, `logsumexp`, log-space arithmetic make derivatives stable by construction (see Section 9.3 for per-family analysis). Only Tweedie's series evaluation requires `custom_jvp` due to truncation-dependent terms. |
+| **Closed-form derivatives for standard families**; autodiff restricted to REML and new extended families | Standard families gain nothing from AD since V(μ) gives working weights in O(1). Extended families use `jax.grad` through numerically stable forward passes - `lgamma`, `logsumexp`, log-space arithmetic make derivatives stable by construction (see Section 9.3 for per-family analysis). Only Tweedie's series evaluation requires `custom_jvp` due to truncation-dependent terms. |
 | **Three explicit execution paths** replace transparent sparse/dense switching | JAX sparse is experimental and cannot JIT. `scipy.sparse.linalg.lsqr` forces CPU round-trips from GPU. Transparent switching produced neither good GPU perf nor good sparse perf. Users/auto-selector now choose: Dense-GPU, Sparse-CPU, or Chunked-Hybrid. |
 | **`StatisticsProvider` protocol** decouples PIRLS from data layout | v1.0 PIRLS took raw `X` arrays, preventing distributed/streaming use without rewriting the fitting loop. Now PIRLS operates on `(XtWX, XtWz)` sufficient statistics, making distributed execution a data-access swap. |
 | **`formulaic` for parametric terms** replaces the custom parser | R formula semantics (contrasts, `*` expansion, `(a+b)^2`, `.`, `I()`) have decades of edge cases. `formulaic` handles this; we only write the smooth-term preprocessor. Budget increased from 1 week to 3 weeks. |
@@ -317,30 +317,30 @@ No new mechanisms — claim calibration only.
 
 **New sections:**
 
-- **Section 15: Model Comparison, Concurvity, and Diagnostics** — AIC/BIC infrastructure, `anova.gam`, concurvity detection.
-- **Section 16: Distributed and Multi-Device Compute** — JAX-native SPMD via `jax.sharding` (multi-GPU) and `jax.distributed` (multi-host), Ray bootstrap for clusters, `ChunkedJAXProvider` for out-of-core, implicit function theorem for out-of-core REML.
+- **Section 15: Model Comparison, Concurvity, and Diagnostics** - AIC/BIC infrastructure, `anova.gam`, concurvity detection.
+- **Section 16: Distributed and Multi-Device Compute** - JAX-native SPMD via `jax.sharding` (multi-GPU) and `jax.distributed` (multi-host), Ray bootstrap for clusters, `ChunkedJAXProvider` for out-of-core, implicit function theorem for out-of-core REML.
 - Updated implementation phases (Section 19) add distributed compute phase and extend formula parser timeline.
 
 ---
 
 ## 1. Executive Summary
 
-JaxGAM is a tiered Python port of Simon Wood's R package `mgcv` (Mixed GAM Computation Vehicle). The initial release (Tier 1) provides production-quality Generalized Additive Models with the most-used smooth classes (thin-plate, cubic, P-spline), standard exponential families (Gaussian, Binomial, Poisson, Gamma), and REML/GCV smoothing parameter estimation. Subsequent tiers add tensor products, extended families, `bam()` for large data, and exotic smooths — each independently shippable. See Section 1.1 for the full tier plan.
+JaxGAM is a tiered Python port of Simon Wood's R package `mgcv` (Mixed GAM Computation Vehicle). The initial release (Tier 1) provides production-quality Generalized Additive Models with the most-used smooth classes (thin-plate, cubic, P-spline), standard exponential families (Gaussian, Binomial, Poisson, Gamma), and REML/GCV smoothing parameter estimation. Subsequent tiers add tensor products, extended families, `bam()` for large data, and exotic smooths - each independently shippable. See Section 1.1 for the full tier plan.
 
 **Key design differentiators from a naive port:**
 
-- **JAX as the sole first-class backend.** All performance-critical code is written in JAX, compiled via XLA, and targets CPU, CUDA, Metal, and ROCm. A pure NumPy+SciPy reference implementation exists for testing and for environments where JAX cannot be installed, but it is not optimized and does not support AD or JIT. PyTorch and PyTensor are **not** supported as compute backends — they add nothing JAX doesn't provide and triple the test surface. Interop utilities are provided at the boundary for users who need conversion.
-- **Selective automatic differentiation** replaces hand-coded derivatives where it is both safe and beneficial. AD via `jax.grad` is used for REML/ML criterion derivatives w.r.t. smoothing parameters (small-dimensional, numerically benign, hard to hand-code). Standard exponential families retain closed-form variance functions `V(μ)` for working weights — AD adds overhead with no benefit here. Extended families (NB, Beta, Cox PH, SHASH, etc.) implement `log_likelihood` using numerically stable JAX primitives (`lgamma`, `logsumexp`, log-space arithmetic) and rely on standard `jax.grad` — if the forward pass is stable, the derivative is automatically stable. Only Tweedie requires `jax.custom_jvp` due to its series evaluation where truncation-dependent terms make naive AD unreliable (see Section 9.3).
+- **JAX as the sole first-class backend.** All performance-critical code is written in JAX, compiled via XLA, and targets CPU, CUDA, Metal, and ROCm. A pure NumPy+SciPy reference implementation exists for testing and for environments where JAX cannot be installed, but it is not optimized and does not support AD or JIT. PyTorch and PyTensor are **not** supported as compute backends - they add nothing JAX doesn't provide and triple the test surface. Interop utilities are provided at the boundary for users who need conversion.
+- **Selective automatic differentiation** replaces hand-coded derivatives where it is both safe and beneficial. AD via `jax.grad` is used for REML/ML criterion derivatives w.r.t. smoothing parameters (small-dimensional, numerically benign, hard to hand-code). Standard exponential families retain closed-form variance functions `V(μ)` for working weights - AD adds overhead with no benefit here. Extended families (NB, Beta, Cox PH, SHASH, etc.) implement `log_likelihood` using numerically stable JAX primitives (`lgamma`, `logsumexp`, log-space arithmetic) and rely on standard `jax.grad` - if the forward pass is stable, the derivative is automatically stable. Only Tweedie requires `jax.custom_jvp` due to its series evaluation where truncation-dependent terms make naive AD unreliable (see Section 9.3).
 - **Three explicit execution paths** instead of transparent sparse/dense switching: (1) Dense-GPU for n < ~200k with full JIT, (2) Sparse-CPU via SciPy+CHOLMOD for large n or high-dimensional smooths, (3) Chunked-Hybrid for n > ~1M combining GPU-accelerated per-chunk computation with CPU accumulation.
 - **Compiled inner loops** via JAX's XLA compilation, with Cython fallbacks for the NumPy reference backend.
-- **`StatisticsProvider` protocol** decouples PIRLS from data layout for in-memory and out-of-core execution. For multi-device/distributed compute, JAX-native SPMD (Section 16) is used instead — the same `pirls_step_jax` function works with sharded arrays.
+- **`StatisticsProvider` protocol** decouples PIRLS from data layout for in-memory and out-of-core execution. For multi-device/distributed compute, JAX-native SPMD (Section 16) is used instead - the same `pirls_step_jax` function works with sharded arrays.
 - **Memory-efficient algorithms** mirroring Wood's discretization, marginal discretization, and chunk-based processing for datasets with millions of rows.
 
 ### 1.1 Parity Tiers: "Done" Means X
 
 **v1.5:** "Feature-complete mgcv port" is a schedule risk disguised as scope. The combinatorial surface (smooth × family × method × path × constraints) makes "complete" a moving target. Instead, we define three parity tiers with explicit "done" criteria. Each tier is independently shippable.
 
-**Tier 1 — MVP (v1.0, ~6–8 months).** Covers ~80% of real-world mgcv usage. Dense-only. See Section 1.2 for the full scoping rationale.
+**Tier 1 - MVP (v1.0, ~6-8 months).** Covers ~80% of real-world mgcv usage. Dense-only. See Section 1.2 for the full scoping rationale.
 
 | Dimension | Included | "Done" criterion |
 |---|---|---|
@@ -351,9 +351,9 @@ JaxGAM is a tiered Python port of Simon Wood's R package `mgcv` (Mixed GAM Compu
 | Paths | Dense-GPU (JAX), Dense-CPU (NumPy reference) | Cross-path agreement within MODERATE (1e-6) |
 | Features | `gam()`, `predict()`, `summary()`, `plot()` basics | EDF, p-values, CI match R ±1e-4 |
 | Constraints | Sum-to-zero, `gam_side` identifiability | CoefficientMap predict roundtrip exact |
-| Dependencies | JAX, NumPy, SciPy, formulaic, matplotlib | `uv sync` — no C compilation, no optional extras |
+| Dependencies | JAX, NumPy, SciPy, formulaic, matplotlib | `uv sync` - no C compilation, no optional extras |
 
-**Tier 2 — Production (v1.1, ~4–6 months after v1.0).** Adds sparse path, big-data, extended families. Items deferred from Tier 1 land here.
+**Tier 2 - Production (v1.1, ~4-6 months after v1.0).** Adds sparse path, big-data, extended families. Items deferred from Tier 1 land here.
 
 | Dimension | Added | "Done" criterion |
 |---|---|---|
@@ -363,7 +363,7 @@ JaxGAM is a tiered Python port of Simon Wood's R package `mgcv` (Mixed GAM Compu
 | Paths | Sparse-CPU (CHOLMOD via `uv sync --extra sparse`), Chunked-Hybrid | Matches Dense-GPU results ±1e-6 |
 | Features | `bam()`, `anova.gam`, concurvity, path transfer (Dense→Sparse bailout) | bam on 10M rows completes in <5min |
 
-**Tier 3 — Advanced (v1.2+, incremental after v1.1).** Distributed compute, exotic smooths, GAMM. May ship incrementally.
+**Tier 3 - Advanced (v1.2+, incremental after v1.1).** Distributed compute, exotic smooths, GAMM. May ship incrementally.
 
 | Dimension | Added | "Done" criterion |
 |---|---|---|
@@ -377,17 +377,17 @@ JaxGAM is a tiered Python port of Simon Wood's R package `mgcv` (Mixed GAM Compu
 
 ### 1.2 v1.0 Implementation Scope (v1.17)
 
-The tier plan above describes the *full library vision*. This section describes what actually ships as v1.0 — a deliberately narrow cut that is useful, testable, and honest about its limits.
+The tier plan above describes the *full library vision*. This section describes what actually ships as v1.0 - a deliberately narrow cut that is useful, testable, and honest about its limits.
 
-**The scoping principle:** every dimension is cut to the minimum that produces a library people would actually use for real work, while keeping the architecture compatible with the full vision. Nothing in v1.0 forecloses a future feature — it's additive, not rearchitectural.
+**The scoping principle:** every dimension is cut to the minimum that produces a library people would actually use for real work, while keeping the architecture compatible with the full vision. Nothing in v1.0 forecloses a future feature - it's additive, not rearchitectural.
 
 #### What ships in v1.0
 
 | Dimension | v1.0 scope | Rationale |
 |---|---|---|
 | **Execution paths** | Dense-GPU (JAX) + Dense-CPU (NumPy reference) | Zero exotic dependencies. `uv sync` works everywhere. No CHOLMOD, no Ray, no Dask. |
-| **Families** | Gaussian, Binomial, Poisson, Gamma | ~90% of applied GAM usage. All have closed-form working weights — no AD needed for inner loop. |
-| **Smooths** | TPRS (`tp`/`ts`), cubic regression (`cr`/`cs`/`cc`), tensor products (`te`/`ti`), factor-by (`s(x, by=fac)`) | The workhorses. Factor-by is an assembly pattern, not a new basis type — low marginal cost. |
+| **Families** | Gaussian, Binomial, Poisson, Gamma | ~90% of applied GAM usage. All have closed-form working weights - no AD needed for inner loop. |
+| **Smooths** | TPRS (`tp`/`ts`), cubic regression (`cr`/`cs`/`cc`), tensor products (`te`/`ti`), factor-by (`s(x, by=fac)`) | The workhorses. Factor-by is an assembly pattern, not a new basis type - low marginal cost. |
 | **Links** | identity, log, logit, inverse, probit, cloglog, sqrt | All standard links for the four families. |
 | **Methods** | REML, ML | Newton optimizer with exact Hessian. GCV/UBRE are trivial to add but lower priority. |
 | **Features** | `gam()`, `predict()`, `summary()`, `plot()` | Core API. No `bam()`, no `gamm()`, no `anova.gam`. |
@@ -406,7 +406,7 @@ The tier plan above describes the *full library vision*. This section describes 
 | **fREML / Fellner-Schall** | Approximation-based optimizers. Need the exact Newton REML baseline to validate against. | v1.1 |
 | **P-splines** (`ps`/`cp`) | Lower priority than TPRS and cubic. Easy to add but increases test surface. | v1.1 |
 | **`bs="re"` / `bs="fs"`** | Random effects and factor-smooth interactions need Sparse-CPU for realistic cardinalities. | v1.1 |
-| **Multi-GPU SPMD** (Section 16) | Entire distributed story — Ray bootstrap, SPMD sharding, SetupManifest, multi-host. | v1.2 |
+| **Multi-GPU SPMD** (Section 16) | Entire distributed story - Ray bootstrap, SPMD sharding, SetupManifest, multi-host. | v1.2 |
 | **Out-of-core** (ChunkedJAXProvider) | Data-larger-than-memory. Requires IFT for REML, chunk streaming. | v1.2 |
 | **`gamm()` via PQL** | Notoriously tricky. Needs `lme4`-style mixed model machinery. | v1.2+ |
 | **Exotic smooths** (soap film, MRF, adaptive, Duchon, GP) | Niche. Each is a standalone implementation effort. | v1.2+ |
@@ -435,22 +435,22 @@ The scoped v1.0 has a manageable comparison surface against R:
 Total: ~32 cells to validate exhaustively against R
 ```
 
-Compare with the full spec: ~(12 smooth types × 15 families × 3 paths × 3 optimizers) = ~1,620 cells. The scoped v1.0 is 2% of the full surface — each cell can be hand-checked.
+Compare with the full spec: ~(12 smooth types × 15 families × 3 paths × 3 optimizers) = ~1,620 cells. The scoped v1.0 is 2% of the full surface - each cell can be hand-checked.
 
 #### Timeline reality check
 
-The tier plan says "Weeks 1–13" for Tier 1. Seventeen review rounds have already surfaced fundamental redesigns (distributed architecture rewritten in v1.11, formula parser replaced in v1.16). Implementation will surface more. A realistic v1.0 timeline for experienced numerical computing engineers:
+The tier plan says "Weeks 1-13" for Tier 1. Seventeen review rounds have already surfaced fundamental redesigns (distributed architecture rewritten in v1.11, formula parser replaced in v1.16). Implementation will surface more. A realistic v1.0 timeline for experienced numerical computing engineers:
 
 | Phase | Duration | Focus |
 |---|---|---|
-| Foundation (basis, penalty, link, family) | 8–10 weeks | Get the math right. TPRS eigendecomposition, cubic spline construction, penalty matrices. Every component validated against R individually. |
-| Fitting (PIRLS, REML Newton, convergence) | 6–8 weeks | The hardest part. Step-halving, jitter, convergence detection, identifiability constraints. Edge cases in every family × basis combination. |
-| Assembly (formula parser, design matrix, CoefficientMap) | 4–6 weeks | AST parser, factor-by expansion, constraint absorption. End-to-end `gam()` call. |
-| API + diagnostics (predict, summary, plot) | 3–4 weeks | predict with SEs, EDF computation, p-values, basic plotting. |
-| Testing + hardening | 4–6 weeks | 32-cell R comparison, edge cases, CI setup, documentation. |
-| **Total** | **25–34 weeks** | **~6–8 months** |
+| Foundation (basis, penalty, link, family) | 8-10 weeks | Get the math right. TPRS eigendecomposition, cubic spline construction, penalty matrices. Every component validated against R individually. |
+| Fitting (PIRLS, REML Newton, convergence) | 6-8 weeks | The hardest part. Step-halving, jitter, convergence detection, identifiability constraints. Edge cases in every family × basis combination. |
+| Assembly (formula parser, design matrix, CoefficientMap) | 4-6 weeks | AST parser, factor-by expansion, constraint absorption. End-to-end `gam()` call. |
+| API + diagnostics (predict, summary, plot) | 3-4 weeks | predict with SEs, EDF computation, p-values, basic plotting. |
+| Testing + hardening | 4-6 weeks | 32-cell R comparison, edge cases, CI setup, documentation. |
+| **Total** | **25-34 weeks** | **~6-8 months** |
 
-This is 2–3× the original estimate. The original was optimistic; this reflects the actual complexity of numerical computing at this level of rigor.
+This is 2-3× the original estimate. The original was optimistic; this reflects the actual complexity of numerical computing at this level of rigor.
 
 ### 1.3 Architecture Overview (One-Page Diagram)
 
@@ -472,7 +472,7 @@ This is 2–3× the original estimate. The original was optimistic; this reflect
                       │
     ┌─────────────────▼─────────────────┐
     │        PHASE 1: SETUP (CPU)       │
-    │         NumPy only — no JAX       │    ← CI guard: no jax imports
+    │         NumPy only - no JAX       │    ← CI guard: no jax imports
     │                                     │
     │  ┌─────────┐  ┌──────────────┐    │
     │  │ Smooth  │  │  Penalty     │    │
@@ -618,7 +618,7 @@ We must support:
 
 - **All 20+ smooth classes**: `tp` (thin plate), `ts` (thin plate with shrinkage), `cr` (cubic regression), `cs`, `cc` (cyclic), `ps` (P-splines), `cp` (cyclic P-splines), `ad` (adaptive), `bs` (B-splines), `gp` (Gaussian process), `mrf` (Markov random field), `re` (random effects), `fs` (factor-smooth interactions), `t2` (tensor product type 2), `te`/`ti` (tensor products and tensor interactions), `so` (soap film), `sz` (Duchon splines), linear functional terms, and others.
 - **All 30+ distribution families**: Gaussian, Binomial, Poisson, Gamma, Inverse Gaussian, Negative Binomial (nb, negbin), Tweedie (tw), Beta, Ordered Categorical (ocat), Categorical (multinom), Zero-Inflated Poisson (zip), Cox PH (cox.ph), Scaled t, SHASH, GEVD, ZAGA, ZIPL, and all `extended.family` classes.
-- **All fitting methods**: `gam()`, `bam()` (for big data), `gamm()` (via PQL/REML mixed model), `jagam()` (Bayesian via JAGS—we will provide Stan/NumPyro export instead).
+- **All fitting methods**: `gam()`, `bam()` (for big data), `gamm()` (via PQL/REML mixed model), `jagam()` (Bayesian via JAGS - we will provide Stan/NumPyro export instead).
 - **Smoothness estimation**: GCV, UBRE, REML, ML, fREML (fast REML for bam).
 - **All link functions per family**: identity, log, inverse, logit, probit, cloglog, sqrt, and family-specific links.
 - **Model comparison and selection**: AIC, BIC, concurvity, `anova.gam`, hypothesis testing.
@@ -757,7 +757,7 @@ jaxgam/
 
 ### 3.1 Dependency Stack and Package Management
 
-**uv is the project package manager (v1.16).** All dependency resolution, lockfile generation, environment creation, and CI reproducibility use `uv`. This is not a soft recommendation — `uv.lock` is the single source of truth for the dependency graph, and the multi-host distributed story (Section 16) depends on it for version consistency.
+**uv is the project package manager (v1.16).** All dependency resolution, lockfile generation, environment creation, and CI reproducibility use `uv`. This is not a soft recommendation - `uv.lock` is the single source of truth for the dependency graph, and the multi-host distributed story (Section 16) depends on it for version consistency.
 
 ```toml
 # pyproject.toml
@@ -831,21 +831,21 @@ uv sync --extra full
 uv sync --extra full --frozen  # --frozen = use exact lockfile, no resolution
 ```
 
-The `--frozen` flag is critical for distributed: it guarantees every host installs exactly the same versions, byte-for-byte. This replaces the custom `_collect_version_pins()` machinery in `SetupManifest` (Section 16.8) — if all hosts ran `uv sync --frozen` from the same `uv.lock`, version divergence is impossible by construction.
+The `--frozen` flag is critical for distributed: it guarantees every host installs exactly the same versions, byte-for-byte. This replaces the custom `_collect_version_pins()` machinery in `SetupManifest` (Section 16.8) - if all hosts ran `uv sync --frozen` from the same `uv.lock`, version divergence is impossible by construction.
 
 **Dependency table:**
 
 | Layer | Primary | Fallback | Install extra | Purpose |
 |---|---|---|---|---|
 | Array computation | JAX | NumPy (reference only) | (core) | Array ops, compilation |
-| Automatic differentiation | JAX (grad, jacfwd, custom_jvp for Tweedie only) | — | (core) | Derivatives of REML, extended family log-lik |
-| Sparse matrices | scipy.sparse (CSC/CSR) | — | (core) | Penalty and basis matrices (CPU path only) |
+| Automatic differentiation | JAX (grad, jacfwd, custom_jvp for Tweedie only) | - | (core) | Derivatives of REML, extended family log-lik |
+| Sparse matrices | scipy.sparse (CSC/CSR) | - | (core) | Penalty and basis matrices (CPU path only) |
 | Sparse solvers | SuiteSparse CHOLMOD/SPQR via scikit-sparse | scipy.sparse.linalg | `sparse` | Sparse Cholesky, sparse QR |
 | Dense linear algebra | JAX XLA (GPU path) / scipy.linalg (CPU path) | LAPACK via scipy | (core) | QR, Cholesky, eigendecomp |
-| GPU compilation | JAX XLA (CUDA, Metal, ROCm) | — | `gpu` | Hardware acceleration |
-| Formula parsing | formulaic (parametric) + AST-based (smooth terms) | — | (core) | R-style formula interface |
-| Visualization | matplotlib | — | (core) | Plotting |
-| Distributed | Ray (optional) | — | `distributed` | Multi-node cluster |
+| GPU compilation | JAX XLA (CUDA, Metal, ROCm) | - | `gpu` | Hardware acceleration |
+| Formula parsing | formulaic (parametric) + AST-based (smooth terms) | - | (core) | R-style formula interface |
+| Visualization | matplotlib | - | (core) | Plotting |
+| Distributed | Ray (optional) | - | `distributed` | Multi-node cluster |
 | R bridge (test only) | rpy2 | subprocess + Rscript | `dev` | Reference comparison |
 
 **Pre-built scikit-sparse wheel infrastructure:**
@@ -859,7 +859,7 @@ The `jaxgam-wheels` index hosts scikit-sparse wheels with SuiteSparse 7.x static
 | macOS x86_64 | ✅ | Legacy Intel Macs |
 | Windows x86_64 | ❌ | Not built (MSVC ABI issues). Windows users: use WSL2 or conda. |
 
-When `uv sync --extra sparse` runs, uv checks `jaxgam-wheels` first (per the `explicit = true` + `[tool.uv.sources]` config), finds the pre-built wheel, and installs it. No C compiler needed. If the platform doesn't have a pre-built wheel, uv falls back to PyPI's scikit-sparse (which may require compilation), and if that fails, the install fails at install time — not at runtime.
+When `uv sync --extra sparse` runs, uv checks `jaxgam-wheels` first (per the `explicit = true` + `[tool.uv.sources]` config), finds the pre-built wheel, and installs it. No C compiler needed. If the platform doesn't have a pre-built wheel, uv falls back to PyPI's scikit-sparse (which may require compilation), and if that fails, the install fails at install time - not at runtime.
 
 **Docker image:** `ghcr.io/jaxgam/jaxgam:latest` runs `uv sync --extra full --frozen` from the repo's `uv.lock`. This is the recommended deployment target for production and multi-host clusters.
 
@@ -871,7 +871,7 @@ When `uv sync --extra sparse` runs, uv checks `jaxgam-wheels` first (per the `ex
 
 **There is no multi-backend abstraction layer.** v1.0 proposed a `ArrayBackend` Protocol unifying JAX, NumPy, and PyTorch. This was removed because:
 
-1. JAX traces computation graphs — Python `for`/`if`/`break` inside `jax.jit` captures only one execution path, silently producing wrong results. The PIRLS step-halving loop and convergence checks require `jax.lax.while_loop` and `jax.lax.cond`, which have fundamentally different signatures from NumPy equivalents.
+1. JAX traces computation graphs - Python `for`/`if`/`break` inside `jax.jit` captures only one execution path, silently producing wrong results. The PIRLS step-halving loop and convergence checks require `jax.lax.while_loop` and `jax.lax.cond`, which have fundamentally different signatures from NumPy equivalents.
 2. Every iterative algorithm would need two genuinely different implementations hidden behind a "unified" interface, defeating the purpose of abstraction.
 3. PyTorch and PyTensor add nothing that JAX doesn't provide for this use case, but triple the test surface.
 
@@ -880,7 +880,7 @@ Instead, the codebase has two distinct implementations:
 | | **JAX path** (primary) | **NumPy path** (reference/fallback) |
 |---|---|---|
 | **Purpose** | Production use, performance, GPU | Testing, environments without JAX |
-| **AD support** | Full (grad, hessian; custom_jvp for Tweedie only) | None — analytical derivatives only |
+| **AD support** | Full (grad, hessian; custom_jvp for Tweedie only) | None - analytical derivatives only |
 | **JIT** | Yes (XLA compilation) | No |
 | **GPU** | Yes (CUDA, Metal, ROCm) | No |
 | **Sparse** | No (dense only on GPU) | Yes (scipy.sparse + CHOLMOD) |
@@ -899,8 +899,8 @@ Usage:
     jaxgam.configure(backend="numpy")               # Fallback / testing
 
 All performance-critical code has two implementations:
-    fitting/_pirls_jax.py     — JAX path (jax.lax loops, JIT'd)
-    fitting/_pirls_numpy.py   — NumPy path (Python loops, scipy solvers)
+    fitting/_pirls_jax.py     - JAX path (jax.lax loops, JIT'd)
+    fitting/_pirls_numpy.py   - NumPy path (Python loops, scipy solvers)
 
 The top-level fitting functions dispatch based on the configured backend.
 """
@@ -957,7 +957,7 @@ class FitConfig:
     """
     Per-model configuration context manager.
 
-    v1.6: The global configure() is a concurrency footgun — multi-model
+    v1.6: The global configure() is a concurrency footgun - multi-model
     fits in parallel threads, or libraries embedding jaxgam, will get
     heisenbugs. FitConfig provides per-call overrides:
 
@@ -1003,7 +1003,7 @@ import threading
 All performance-critical JAX functions use `jax.lax` control flow primitives to remain JIT-compatible. **Python-level control flow (`for`, `if`, `break`) is never used inside JIT-compiled functions.**
 
 ```python
-# fitting/_pirls_jax.py — JAX PIRLS inner step (JIT-safe)
+# fitting/_pirls_jax.py - JAX PIRLS inner step (JIT-safe)
 
 import jax
 import jax.numpy as jnp
@@ -1013,7 +1013,7 @@ from functools import partial
 def pirls_step_jax(X, y, beta, S_lambda, family_params, family_type):
     """
     One PIRLS iteration, fully JIT-compiled.
-    No Python control flow — all branching via jax.lax.
+    No Python control flow - all branching via jax.lax.
     """
     eta = X @ beta
     mu = _link_inverse(eta, family_type)
@@ -1112,7 +1112,7 @@ These are used only by the NumPy backend. The JAX backend relies entirely on XLA
 All modules in the JAX execution path (`fitting/_pirls_jax.py`, `autodiff/`, `families/*_jax.py`) must use only `jax`, `jax.numpy`, `jax.scipy`, and `jax.lax`. This is enforced by a CI lint guard:
 
 ```python
-# ci/check_jax_purity.py — runs in CI on every PR
+# ci/check_jax_purity.py - runs in CI on every PR
 
 import ast, sys, pathlib
 
@@ -1133,14 +1133,14 @@ def check_file(path: pathlib.Path) -> list[str]:
                 root = alias.name.split(".")[0]
                 if root in FORBIDDEN_IN_JAX:
                     violations.append(
-                        f"{path}:{node.lineno} imports '{alias.name}' — "
+                        f"{path}:{node.lineno} imports '{alias.name}' - "
                         f"JAX-path modules must not import {root}"
                     )
         elif isinstance(node, ast.ImportFrom) and node.module:
             root = node.module.split(".")[0]
             if root in FORBIDDEN_IN_JAX:
                 violations.append(
-                    f"{path}:{node.lineno} imports from '{node.module}' — "
+                    f"{path}:{node.lineno} imports from '{node.module}' - "
                     f"JAX-path modules must not import {root}"
                 )
     return violations
@@ -1159,7 +1159,7 @@ def check_file(path: pathlib.Path) -> list[str]:
 
 **Two-Phase Architecture (v1.4):**
 
-The JAX purity boundary is not just an import rule — it reflects a two-phase execution model that must be understood to avoid "setup leaked into JIT" bugs:
+The JAX purity boundary is not just an import rule - it reflects a two-phase execution model that must be understood to avoid "setup leaked into JIT" bugs:
 
 **Phase 1: Setup (CPU, NumPy/SciPy allowed).** All of the following run once, on CPU, using NumPy/SciPy freely:
 
@@ -1186,7 +1186,7 @@ wt_jax = jax.device_put(weights_numpy)    # Prior weights
 # S_lambda_dense is already jax.Array (for REML)
 ```
 
-**Phase 2: Fit (JAX-only, JIT-able).** All iterative computation — PIRLS, step-halving, REML evaluation, EDF computation — runs in Phase 2. This code:
+**Phase 2: Fit (JAX-only, JIT-able).** All iterative computation - PIRLS, step-halving, REML evaluation, EDF computation - runs in Phase 2. This code:
 
 - Imports only `jax`, `jax.numpy`, `jax.scipy`, `jax.lax`
 - Receives only `jax.Array` and `StructuredPenalty` objects
@@ -1232,7 +1232,7 @@ jaxgam.set_seed(42)  # Seeds BOTH np.random and jax.random
 
 **Test modes:**
 
-- `jaxgam.set_deterministic(True)`: forces CPU-ordered reductions, enables `XLA_FLAGS=--xla_gpu_deterministic_ops=true`, uses sorted key reduction in distributed mode. Slower, but reproducible within STRICT tolerance (1e-10) **on the same hardware, OS, JAX version, and CUDA driver**. NOT guaranteed across toolchain updates — floating-point codegen can change between JAX/XLA releases. CI determinism tests pin specific versions.
+- `jaxgam.set_deterministic(True)`: forces CPU-ordered reductions, enables `XLA_FLAGS=--xla_gpu_deterministic_ops=true`, uses sorted key reduction in distributed mode. Slower, but reproducible within STRICT tolerance (1e-10) **on the same hardware, OS, JAX version, and CUDA driver**. NOT guaranteed across toolchain updates - floating-point codegen can change between JAX/XLA releases. CI determinism tests pin specific versions.
 - Default: allows XLA reordering for speed. Results are correct within MODERATE tolerance (1e-6) across runs on same hardware, but not reproducible at STRICT level.
 
 ---
@@ -1311,7 +1311,7 @@ class Smooth(ABC):
         return self.build_design_matrix(new_data)
 ```
 
-### 5.2 Thin Plate Regression Splines (TPRS) — `tp`, `ts`
+### 5.2 Thin Plate Regression Splines (TPRS) - `tp`, `ts`
 
 This is the default and most complex smooth class. Implementation follows Wood (2003).
 
@@ -1397,7 +1397,7 @@ class ThinPlateSmooth(Smooth):
             raise ValueError(
                 f"TPRS eigendecomposition produced large negative eigenvalue "
                 f"({min_eig:.4e}). This indicates a degenerate distance "
-                f"matrix — check for duplicate or near-duplicate knots."
+                f"matrix - check for duplicate or near-duplicate knots."
             )
         # Floor small negatives to a small positive value
         D_k = np.maximum(D_k, 1e-12 * np.max(D_k))
@@ -1496,7 +1496,7 @@ class ThinPlateShrinkageSmooth(ThinPlateSmooth):
         return self.penalty_matrices
 ```
 
-### 5.3 Cubic Regression Splines — `cr`, `cs`, `cc`
+### 5.3 Cubic Regression Splines - `cr`, `cs`, `cc`
 
 ```python
 # smooths/cubic.py
@@ -1544,7 +1544,7 @@ class CubicRegressionSmooth(Smooth):
         """
         Evaluate natural cubic spline basis at x given knots.
 
-        ⚠️ REFERENCE IMPLEMENTATION ONLY — O(n*k) Python loops.
+        ⚠️ REFERENCE IMPLEMENTATION ONLY - O(n*k) Python loops.
         Production path MUST use one of:
         - scipy.interpolate.BSpline (vectorized C, ~100x faster)
         - JAX vmap over knot intervals (GPU-compatible)
@@ -1594,7 +1594,7 @@ class CyclicCubicSmooth(CubicRegressionSmooth):
         self.null_space_dim = 1  # constant functions only
 ```
 
-### 5.4 P-Splines — `ps`, `cp`
+### 5.4 P-Splines - `ps`, `cp`
 
 ```python
 # smooths/pspline.py
@@ -1632,7 +1632,7 @@ class PSplineSmooth(Smooth):
 
     def build_design_matrix(self, data):
         """
-        ⚠️ REFERENCE IMPLEMENTATION — evaluates each basis function
+        ⚠️ REFERENCE IMPLEMENTATION - evaluates each basis function
         individually via Python loop. O(n*k) with Python overhead.
 
         Production path: single vectorized BSpline call:
@@ -1662,7 +1662,7 @@ class PSplineSmooth(Smooth):
         return self.penalty_matrices
 ```
 
-### 5.5 Tensor Product Smooths — `te`, `ti`, `t2`
+### 5.5 Tensor Product Smooths - `te`, `ti`, `t2`
 
 ```python
 # smooths/tensor.py
@@ -1909,7 +1909,7 @@ def apply_numeric_by(X_smooth, z):
         return z[:, None] * X_smooth
 ```
 
-This is straightforward — same penalty count, same identifiability constraints. The only subtlety is that the smooth may need centering relative to the `by` variable.
+This is straightforward - same penalty count, same identifiability constraints. The only subtlety is that the smooth may need centering relative to the `by` variable.
 
 #### 5.7.2 Factor `by` (Separate Smooth Per Level)
 
@@ -1917,8 +1917,8 @@ This is straightforward — same penalty count, same identifiability constraints
 
 | | `s(x, by=fac)` (factor by) | `s(x, fac, bs="fs")` (factor-smooth) |
 |---|---|---|
-| Smoothing parameters | **Separate λ per level** — each group's wiggliness is estimated independently | Single shared λ — all levels share one smoothing parameter |
-| Shrinkage | None between levels — each smooth is fully independent | Levels shrink toward each other (random-effect-like) |
+| Smoothing parameters | **Separate λ per level** - each group's wiggliness is estimated independently | Single shared λ - all levels share one smoothing parameter |
+| Shrinkage | None between levels - each smooth is fully independent | Levels shrink toward each other (random-effect-like) |
 | Penalty count | `n_levels` penalties (one per level-smooth) | 1 penalty (block-diagonal, shared λ) |
 | Identifiability | Each level-smooth needs its own constraint (or a main-effect `s(x)` absorbs the null space) | Global identifiability via the shared penalty |
 | Use case | Genuinely different functional forms per group | Similar shapes across groups, borrowing strength |
@@ -2047,12 +2047,12 @@ class FactorBySmooth:
 
 #### 5.7.3 Identifiability: `s(x, by=fac)` Alongside `s(x)`
 
-When a model contains both `s(x)` and `s(x, by=fac)`, the smooth's null space (typically the constant and linear functions) is confounded between the main effect and the by-smooths. mgcv handles this by absorbing the null space of the by-smooths — each level-smooth is constrained so its null-space component is zero, leaving the main-effect `s(x)` to capture the shared constant/linear trend.
+When a model contains both `s(x)` and `s(x, by=fac)`, the smooth's null space (typically the constant and linear functions) is confounded between the main effect and the by-smooths. mgcv handles this by absorbing the null space of the by-smooths - each level-smooth is constrained so its null-space component is zero, leaving the main-effect `s(x)` to capture the shared constant/linear trend.
 
 This interacts with the `CoefficientMap` (Section 5.10) via `apply_joint_identifiability`:
 
 ```python
-# fitting/constraints.py — factor-by identifiability
+# fitting/constraints.py - factor-by identifiability
 
 def constrain_factor_by_smooths(factor_by_smooth, main_effect_present):
     """
@@ -2076,7 +2076,7 @@ def constrain_factor_by_smooths(factor_by_smooth, main_effect_present):
     Case 3: s(x, by=fac) WITHOUT factor main effect in the model.
         The factor main effect (dummy variables) should be in the
         parametric part of the model for identifiability. If absent,
-        warn — the level-smooths' intercepts are confounded.
+        warn - the level-smooths' intercepts are confounded.
     """
     if not main_effect_present:
         return  # Case 1: no constraint needed
@@ -2110,8 +2110,8 @@ Factor-by smooths directly affect the REML outer loop because each level adds it
 Model: y ~ s(x1) + s(x2, by=fac)   where fac has 5 levels
 
 Smoothing parameters to optimize:
-  λ_1          for s(x1)                         — 1 parameter
-  λ_2 ... λ_6  for s(x2, by=fac), one per level  — 5 parameters
+  λ_1          for s(x1)                         - 1 parameter
+  λ_2 ... λ_6  for s(x2, by=fac), one per level  - 5 parameters
   Total: 6 smoothing parameters (n_smooth = 6)
 
 REML gradient:  (6,) vector
@@ -2131,7 +2131,7 @@ This is still low-dimensional optimization, but it scales linearly with the numb
 For models where factor-by pushes n_smooth above ~100, the doc's fREML (Section 8.3) or Fellner-Schall update (Section 8.4) should be preferred over Newton-based REML, as they avoid forming the full Hessian.
 
 ```python
-# fitting/reml.py — scaling check
+# fitting/reml.py - scaling check
 
 def check_reml_dimension(n_smooth, method):
     """
@@ -2153,7 +2153,7 @@ def check_reml_dimension(n_smooth, method):
 The formula parser must detect whether `by` is numeric or factor and route to the correct assembly path:
 
 ```python
-# formula/smooth_parser.py — by-variable dispatch
+# formula/smooth_parser.py - by-variable dispatch
 
 def resolve_by_variable(spec: SmoothSpec, data) -> list:
     """
@@ -2370,7 +2370,7 @@ def apply_joint_identifiability(X_raw, term_blocks_raw, smooth_objects):
         # N_j is small (null_space_dim columns), so sparse @ dense is fine.
         X_j_block = X_raw[:, cols_j]
         if sparse.issparse(X_j_block):
-            XjN = X_j_block.toarray() @ N_j  # (n, null_dim) — null_dim is tiny
+            XjN = X_j_block.toarray() @ N_j  # (n, null_dim) - null_dim is tiny
         else:
             XjN = X_j_block @ N_j
 
@@ -2386,7 +2386,7 @@ def apply_joint_identifiability(X_raw, term_blocks_raw, smooth_objects):
             # use randomized SVD on the sparse matrix directly.
             LARGE_BLOCK = 10_000
             if sparse.issparse(X_k) and n_cols_k > LARGE_BLOCK:
-                # Randomized SVD via ARPACK — works on sparse, O(nnz * k)
+                # Randomized SVD via ARPACK - works on sparse, O(nnz * k)
                 from scipy.sparse.linalg import svds
                 # Only need top few singular vectors for overlap detection
                 n_svd = min(smooth_j.null_space_dim + 5, n_cols_k - 1)
@@ -2528,8 +2528,8 @@ class ExtendedFamily(Family):
     This function must be:
     1. A pure function of its arguments (no side effects, no self)
     2. Written in pure JAX (jax.numpy, jax.scipy, jax.lax only)
-    3. Differentiable by JAX — use stable primitives (lgamma, logsumexp, log-space arithmetic) so jax.grad produces stable gradients. Only Tweedie needs custom_jvp (see Section 9.3).
-    4. Parameterized in eta (linear predictor), NOT mu — this avoids
+    3. Differentiable by JAX - use stable primitives (lgamma, logsumexp, log-space arithmetic) so jax.grad produces stable gradients. Only Tweedie needs custom_jvp (see Section 9.3).
+    4. Parameterized in eta (linear predictor), NOT mu - this avoids
        a chain-rule step and keeps derivatives in the space where
        the fitting algorithm operates.
 
@@ -2732,7 +2732,7 @@ class NegativeBinomial(ExtendedFamily):
 
     def loglik_per_obs_fn(self):
         """Return pure JAX log-likelihood function."""
-        # This is a static function — no self, no scipy, no numpy
+        # This is a static function - no self, no scipy, no numpy
         def nb_loglik(eta_i, y_i, theta):
             import jax.numpy as jnp
             import jax.scipy.special as jsp
@@ -2754,7 +2754,7 @@ class Tweedie(ExtendedFamily):
 
     Implements Contract B with a custom_jvp-registered loglik because
     the series evaluation is numerically delicate under naive AD.
-    This is the ONLY family in the library requiring custom_jvp —
+    This is the ONLY family in the library requiring custom_jvp  - 
     all others use standard jax.grad through stable forward passes
     (see Section 9.3 for the full analysis).
     """
@@ -2773,7 +2773,7 @@ class Tweedie(ExtendedFamily):
         The series is computed via jax.lax.while_loop for JIT
         compatibility. A custom_jvp rule is registered separately
         (see autodiff/tweedie_jvp.py) because naive AD through
-        the while_loop produces unstable gradients — the truncation
+        the while_loop produces unstable gradients - the truncation
         point depends on data, and differentiating through it
         amplifies truncation error. This is the only family in the
         library that needs this treatment.
@@ -2790,7 +2790,7 @@ class BetaFamily(ExtendedFamily):
     Beta regression for y ∈ (0, 1).
     Parameterized as Beta(μφ, (1-μ)φ) where φ is precision.
 
-    Benign under naive AD — no custom_jvp needed.
+    Benign under naive AD - no custom_jvp needed.
     """
     family_name = "betar"
 
@@ -2954,7 +2954,7 @@ class SqrtLink(Link):
 
 
 class InverseSquaredLink(Link):
-    """g(μ) = 1/μ² — default link for Inverse Gaussian family."""
+    """g(μ) = 1/μ² - default link for Inverse Gaussian family."""
     def link(self, mu): return 1 / np.maximum(mu, 1e-10) ** 2
     def inverse(self, eta): return 1 / np.sqrt(np.maximum(eta, 1e-10))
     def derivative(self, mu): return -2 / np.maximum(mu, 1e-10) ** 3
@@ -2973,9 +2973,9 @@ _LINK_REGISTRY = {
 
 ### 7.1 StatisticsProvider Protocol
 
-**v1.11 note:** With JAX-native SPMD (Section 16), the distributed/multi-GPU path no longer needs `StatisticsProvider` — the same `pirls_step_jax` function works with sharded arrays. `StatisticsProvider` remains the abstraction for two cases: (1) the **out-of-core** path where data exceeds aggregate device memory (`ChunkedJAXProvider`, Section 16.5), and (2) the **NumPy reference** PIRLS path (Section 7.2) used for testing and Sparse-CPU execution.
+**v1.11 note:** With JAX-native SPMD (Section 16), the distributed/multi-GPU path no longer needs `StatisticsProvider` - the same `pirls_step_jax` function works with sharded arrays. `StatisticsProvider` remains the abstraction for two cases: (1) the **out-of-core** path where data exceeds aggregate device memory (`ChunkedJAXProvider`, Section 16.5), and (2) the **NumPy reference** PIRLS path (Section 7.2) used for testing and Sparse-CPU execution.
 
-The PIRLS loop only needs two p-dimensional objects per iteration — `XtWX` (p×p) and `XtWz` (p×1) — regardless of n. By abstracting data access behind a `StatisticsProvider`, the reference PIRLS loop works for in-memory and out-of-core data.
+The PIRLS loop only needs two p-dimensional objects per iteration - `XtWX` (p×p) and `XtWz` (p×1) - regardless of n. By abstracting data access behind a `StatisticsProvider`, the reference PIRLS loop works for in-memory and out-of-core data.
 
 ```python
 # distributed/stats_provider.py
@@ -2995,7 +2995,7 @@ class StatisticsProvider(Protocol):
 
     The key insight: all REML/GCV quantities derive from the p×p
     matrix H = XtWX + S_λ, which the PIRLS loop already computes.
-    The provider only needs to supply XtWX, deviance, and log-lik —
+    The provider only needs to supply XtWX, deviance, and log-lik  - 
     the smoothing parameter optimizer handles the rest using H.
     """
 
@@ -3030,7 +3030,7 @@ class IterationStatistics:
     deviance: float           # Scalar: family deviance at current beta
     log_likelihood: float     # Scalar: full log-likelihood (for AIC/BIC)
     n_obs: int                # Scalar: number of observations in this compute
-    sum_log_weights: float    # Scalar: Σ log(W_i) — needed for REML constant
+    sum_log_weights: float    # Scalar: Σ log(W_i) - needed for REML constant
 
     # ── Derived quantities (computed by the fitting loop, not the provider) ──
     # These are filled in by the PIRLS/outer loop using the above:
@@ -3164,7 +3164,7 @@ def pirls_fit(provider: "StatisticsProvider", family, smoothing_penalties,
 
     converged = False
     # State: one objective value (pen_dev), set after first accepted step.
-    # No inf initialization — first iteration is unconditionally accepted.
+    # No inf initialization - first iteration is unconditionally accepted.
     pen_dev_prev = None  # Sentinel: first iteration always accepted
     instability_count = 0  # Unified counter for all failure signals
     jitter_applied = 0.0   # Track regularization for diagnostics
@@ -3268,7 +3268,7 @@ def pirls_fit(provider: "StatisticsProvider", family, smoothing_penalties,
                     not np.isfinite(pen_dev_try)
                     or pen_dev_try > pen_dev_prev + 1e-7 * abs(pen_dev_prev)
                 ):
-                    # Tiny step also violates monotonicity — reject entirely
+                    # Tiny step also violates monotonicity - reject entirely
                     beta_try = beta
                     pen_dev_try = pen_dev_prev
             except (ValueError, FloatingPointError):
@@ -3438,14 +3438,14 @@ def extended_pirls_fit(X, y, family: ExtendedFamily, smoothing_penalties,
 
 ## 8. Smoothness Selection: Smoothing Parameter Estimation
 
-### 8.1 REML / ML Criterion — Dual Implementations
+### 8.1 REML / ML Criterion - Dual Implementations
 
 **v1.4 fix:** v1.3 showed `reml_criterion` using `np.linalg.cholesky`, `toarray()`, and SciPy sparse operations, then wrapped it in `jax.grad`/`jax.hessian`. JAX cannot trace any of that; the code would silently return wrong gradients or fail at JIT time.
 
-The fix: two completely separate implementations. The JAX path is pure `jax.numpy` and receives only dense `jax.Array` inputs — all SciPy/sparse conversion happens *before* entering the traced function.
+The fix: two completely separate implementations. The JAX path is pure `jax.numpy` and receives only dense `jax.Array` inputs - all SciPy/sparse conversion happens *before* entering the traced function.
 
 ```python
-# fitting/reml_jax.py — Pure JAX, JIT-able, autodiff-able
+# fitting/reml_jax.py - Pure JAX, JIT-able, autodiff-able
 
 import jax
 import jax.numpy as jnp
@@ -3461,13 +3461,13 @@ def reml_criterion_jax(log_lambda, XtWX, S_list_dense, beta,
     happens OUTSIDE this function, at the caller boundary.
 
     Inputs (all jax.Array):
-      log_lambda:    (n_smooth,) — log smoothing parameters
-      XtWX:          (p, p)     — from IterationStatistics
-      S_list_dense:  list of (p, p) — penalty matrices, pre-densified
-      beta:          (p,)       — current coefficients
-      pen_deviance:  scalar     — deviance at current beta
-      sum_log_w:     scalar     — Σ log(W_i) for REML constant
-      n:             int        — number of observations (static)
+      log_lambda:    (n_smooth,) - log smoothing parameters
+      XtWX:          (p, p)     - from IterationStatistics
+      S_list_dense:  list of (p, p) - penalty matrices, pre-densified
+      beta:          (p,)       - current coefficients
+      pen_deviance:  scalar     - deviance at current beta
+      sum_log_w:     scalar     - Σ log(W_i) for REML constant
+      n:             int        - number of observations (static)
 
     The key insight: REML as a function of log_lambda alone
     (with beta, XtWX, etc. held fixed from the inner PIRLS)
@@ -3488,10 +3488,10 @@ def reml_criterion_jax(log_lambda, XtWX, S_list_dense, beta,
 
     # log|H| via slogdet (numerically stable, JAX-differentiable)
     sign, log_det_H = jnp.linalg.slogdet(H)
-    # If sign < 0, H is not positive definite — return large value
+    # If sign < 0, H is not positive definite - return large value
     log_det_H = jnp.where(sign > 0, log_det_H, 1e10)
 
-    # log|S_λ^+| — log pseudo-determinant of penalty
+    # log|S_λ^+| - log pseudo-determinant of penalty
     # This is Σ_j (rank_j * log(λ_j)) for well-separated penalties
     # More precisely: log det of the non-zero eigenvalues of S_λ
     # We compute via eigendecomposition of S_λ
@@ -3533,14 +3533,14 @@ def _prepare_reml_inputs(pirls_result, penalty_set, provider):
 ```
 
 ```python
-# fitting/reml_numpy.py — NumPy/SciPy reference (no AD, analytical gradients)
+# fitting/reml_numpy.py - NumPy/SciPy reference (no AD, analytical gradients)
 
 import numpy as np
 from scipy import sparse
 
 def reml_criterion_numpy(log_lambda, XtWX, S_list, beta, deviance):
     """
-    NumPy reference REML. No autodiff — returns value only.
+    NumPy reference REML. No autodiff - returns value only.
     Used for testing and for the NumPy fallback backend.
     """
     lambdas = np.exp(log_lambda)
@@ -3704,7 +3704,7 @@ def fellner_schall_update(lambda_j, S_j, beta, F_inv, n, p):
 
     F = X^T W X + S_λ is the penalized Fisher information.
     """
-    # tr(F^{-1} S_j) — computed efficiently
+    # tr(F^{-1} S_j) - computed efficiently
     if sparse.issparse(S_j):
         trace_term = np.sum(F_inv * S_j.toarray())
     else:
@@ -3782,17 +3782,17 @@ In mgcv, Simon Wood hand-codes derivatives for:
 | Standard family working weights | **Closed-form V(μ)** | AD adds overhead with zero benefit. `W = wt / (V(μ) * g'(μ)²)` is trivially fast and numerically exact. |
 | Standard family deviance | **Closed-form** | Same rationale. |
 | REML criterion d/d(log λ) | **JAX autodiff** | Small-dimensional (n_smooth params, typically 2-10), numerically benign, extremely tedious to hand-code (~500 lines in mgcv). Best use case for AD. |
-| REML criterion d²/d(log λ)² | **JAX autodiff** | Same — the Hessian is even more tedious. |
+| REML criterion d²/d(log λ)² | **JAX autodiff** | Same - the Hessian is even more tedious. |
 | Extended family ll derivatives | **JAX autodiff through stable forward pass** | If the forward computation uses numerically stable primitives (`lgamma`, `logsumexp`, clamped inputs, log-space arithmetic), JAX's AD produces stable gradients automatically. This covers NB, Beta, Cox PH, SHASH, ordered categorical, zero-inflated, and all location-scale families. See Section 9.3 for detailed analysis. |
 | Tweedie series evaluation | **`jax.custom_jvp`** | The only family where standard AD provably fails. The series evaluation (Wright's generalized Bessel function) involves a truncated sum of terms that individually overflow while the sum converges. Differentiating through the truncation amplifies error. Requires hand-derived derivative of the series. |
-| Theta estimation | **JAX autodiff** | Extra params (NB size, Tweedie power) are optimized w.r.t. REML — same small-dimensional, benign case. |
+| Theta estimation | **JAX autodiff** | Extra params (NB size, Tweedie power) are optimized w.r.t. REML - same small-dimensional, benign case. |
 | Location-scale families | **JAX autodiff** | Multi-parameter families (gaulss, shash) have well-conditioned likelihoods in η-space. |
 
-**v1.18: The key insight is that "numerically tricky forward computation" ≠ "numerically tricky derivative."** For most extended families, if the forward log-likelihood is written in a stable way, the derivative is automatically stable because JAX differentiates the *stable computation*, not the mathematical expression. The doc previously conflated these two problems, leading to an overly conservative `custom_jvp` strategy that would have required hand-deriving and maintaining gradients for 6+ families — exactly the error-prone manual work that autodiff is designed to eliminate.
+**v1.18: The key insight is that "numerically tricky forward computation" ≠ "numerically tricky derivative."** For most extended families, if the forward log-likelihood is written in a stable way, the derivative is automatically stable because JAX differentiates the *stable computation*, not the mathematical expression. The doc previously conflated these two problems, leading to an overly conservative `custom_jvp` strategy that would have required hand-deriving and maintaining gradients for 6+ families - exactly the error-prone manual work that autodiff is designed to eliminate.
 
-### 9.2 JAX AD — No Wrapper Module
+### 9.2 JAX AD - No Wrapper Module
 
-v1.0 proposed an `ADBackend` Protocol with JAX, PyTensor, and PyTorch implementations. v1.18 removed multi-backend and kept thin JAX-only wrappers in `autodiff/interface.py`. **v1.19 removes those wrappers entirely.** Callers use `jax.grad`, `jax.hessian`, `jax.jvp` directly — wrapping trivial one-line delegations adds indirection with no value.
+v1.0 proposed an `ADBackend` Protocol with JAX, PyTensor, and PyTorch implementations. v1.18 removed multi-backend and kept thin JAX-only wrappers in `autodiff/interface.py`. **v1.19 removes those wrappers entirely.** Callers use `jax.grad`, `jax.hessian`, `jax.jvp` directly - wrapping trivial one-line delegations adds indirection with no value.
 
 The `autodiff/` module is no longer needed for v1.0. The only non-trivial AD pattern (Hessian-vector product via forward-over-reverse) is a two-line composition that belongs inline where REML uses it:
 
@@ -3808,20 +3808,20 @@ _, hvp_result = jax.jvp(grad_fn, (primals,), (tangents,))
 
 **v1.18: Replaces the previous "custom_jvp for all tricky families" strategy.**
 
-The previous design (v1.0–v1.17) treated NB, Tweedie, Cox PH, and SHASH as requiring hand-derived `custom_jvp` rules because "naive AD through `gammaln` differences produces catastrophic cancellation." This was overly conservative. The claim conflates two distinct problems:
+The previous design (v1.0-v1.17) treated NB, Tweedie, Cox PH, and SHASH as requiring hand-derived `custom_jvp` rules because "naive AD through `gammaln` differences produces catastrophic cancellation." This was overly conservative. The claim conflates two distinct problems:
 
-1. **Numerically unstable *forward computation*** — writing `gammaln(y+θ) - gammaln(θ)` in a way that loses precision for large θ.
-2. **Numerically unstable *derivative*** — the AD system producing bad gradients even when the forward pass is fine.
+1. **Numerically unstable *forward computation*** - writing `gammaln(y+θ) - gammaln(θ)` in a way that loses precision for large θ.
+2. **Numerically unstable *derivative*** - the AD system producing bad gradients even when the forward pass is fine.
 
-Problem (1) is real but is a forward-pass concern, solved by writing the log-likelihood using stable primitives. Problem (2) is much rarer — JAX differentiates the *computation graph*, not the mathematical formula. If the computation is stable, the derivative inherits that stability.
+Problem (1) is real but is a forward-pass concern, solved by writing the log-likelihood using stable primitives. Problem (2) is much rarer - JAX differentiates the *computation graph*, not the mathematical formula. If the computation is stable, the derivative inherits that stability.
 
 **Family-by-family analysis:**
 
 | Family | Forward stability concern | AD through stable forward? | custom_jvp needed? |
 |---|---|---|---|
-| **NB** | `lgamma(y+θ) - lgamma(θ)` cancels for large θ | ✅ JAX differentiates `lgamma` → `digamma`, which is a stable special function. At large θ where the difference is tiny, NB converges to Poisson anyway — gradient imprecision doesn't affect the fit. | **No** |
+| **NB** | `lgamma(y+θ) - lgamma(θ)` cancels for large θ | ✅ JAX differentiates `lgamma` → `digamma`, which is a stable special function. At large θ where the difference is tiny, NB converges to Poisson anyway - gradient imprecision doesn't affect the fit. | **No** |
 | **Beta** | `lgamma(μφ)`, `lgamma((1-μ)φ)` with μ near 0 or 1 | ✅ Edge cases handled by clamping μ in the forward pass. AD through the clamped version is correct (gradient is zero at the clamp, which is the right answer). | **No** |
-| **Cox PH** | `log(Σ exp(η_j))` over risk sets can overflow | ✅ Use `jax.scipy.special.logsumexp` — numerically stable by construction. AD through stable `logsumexp` produces stable gradients. | **No** |
+| **Cox PH** | `log(Σ exp(η_j))` over risk sets can overflow | ✅ Use `jax.scipy.special.logsumexp` - numerically stable by construction. AD through stable `logsumexp` produces stable gradients. | **No** |
 | **Ordered categorical** | `log(σ(a) - σ(b))` when a ≈ b | ✅ Write as `log_diff_exp(log_sigmoid(a), log_sigmoid(b))` in log-space. Stable forward → stable gradient. | **No** |
 | **SHASH** | `sinh(τ·arcsinh(x) - ε)` overflow for large args | ✅ `jnp.sinh`/`jnp.arcsinh` handle this. Normalizing constant needs log-space computation (forward-pass concern, not AD). | **No** |
 | **Tweedie** | Series evaluation (Wright's generalized Bessel function). Individual terms overflow while sum converges. Truncation is data-dependent. | ❌ Differentiating through a truncated `lax.while_loop` where truncation point depends on data amplifies truncation error. The derivative of the series needs its own convergence analysis. | **Yes** |
@@ -3831,7 +3831,7 @@ Problem (1) is real but is a forward-pass concern, solved by writing the log-lik
 1. Write each family's `log_likelihood` using numerically stable JAX primitives (`lgamma`, `logsumexp`, `log_sigmoid`, `jnp.clip`, log-space arithmetic).
 2. Let `jax.grad` differentiate it. No `custom_jvp`.
 3. Validate against finite differences across the full parameter space, including extreme regions (large θ, μ near boundaries, zero counts, high overdispersion).
-4. **Only if step 3 reveals a genuine AD failure** — not a forward-pass issue — add `custom_jvp` for the specific failing function.
+4. **Only if step 3 reveals a genuine AD failure** - not a forward-pass issue - add `custom_jvp` for the specific failing function.
 5. Currently, only Tweedie's series evaluation requires `custom_jvp`.
 
 ```python
@@ -3887,34 +3887,34 @@ def tweedie_ll_jvp(primals, tangents):
     pass
 ```
 
-**What this changes from v1.0–v1.17:**
+**What this changes from v1.0-v1.17:**
 
-| | Previous (v1.0–v1.17) | New (v1.18) |
+| | Previous (v1.0-v1.17) | New (v1.18) |
 |---|---|---|
 | NB | `custom_jvp` with hand-coded digamma recurrence | `jax.grad` through stable `lgamma`-based forward pass |
 | Cox PH | `custom_jvp` planned | `jax.grad` through `logsumexp`-based partial likelihood |
 | SHASH | `custom_jvp` planned | `jax.grad` through stable sinh/arcsinh forward pass |
-| Beta | Already marked "benign" | Unchanged — `jax.grad` |
-| Tweedie | `custom_jvp` | `custom_jvp` (unchanged — genuinely needed) |
+| Beta | Already marked "benign" | Unchanged - `jax.grad` |
+| Tweedie | `custom_jvp` | `custom_jvp` (unchanged - genuinely needed) |
 | Maintenance burden | Hand-derived gradients for 4+ families | Hand-derived gradient for 1 family |
 | Correctness risk | High (each custom rule is a potential sign error) | Low (trust JAX's AD for 5/6 families) |
 
-**Validation contract (unchanged):** Every extended family — whether using standard AD or custom_jvp — must pass the finite-difference validation in Section 9.5 across the full parameter space including extreme regions. The validation is family-agnostic; it doesn't care whether the gradient came from AD or a custom rule.
+**Validation contract (unchanged):** Every extended family - whether using standard AD or custom_jvp - must pass the finite-difference validation in Section 9.5 across the full parameter space including extreme regions. The validation is family-agnostic; it doesn't care whether the gradient came from AD or a custom rule.
 
 ### 9.4 AD Integration Points (Revised v1.18)
 
 | Component | Method | AD Mode | Notes |
 |---|---|---|---|
 | Standard family weights W | **Closed-form V(μ)** | N/A | No AD. Direct formula. |
-| Extended family ll derivs (all except Tweedie) | **JAX autodiff** | vmap(grad) + vmap(grad(grad)) | NB, Beta, Cox PH, SHASH, ocat, zip, gaulss, gammals — all use stable forward passes |
-| Tweedie ll derivs | **`custom_jvp`** | Registered custom rule | Only family needing it — series evaluation truncation |
+| Extended family ll derivs (all except Tweedie) | **JAX autodiff** | vmap(grad) + vmap(grad(grad)) | NB, Beta, Cox PH, SHASH, ocat, zip, gaulss, gammals - all use stable forward passes |
+| Tweedie ll derivs | **`custom_jvp`** | Registered custom rule | Only family needing it - series evaluation truncation |
 | REML criterion | JAX autodiff | Reverse + reverse | Best use of AD: small dim, benign |
 | Theta estimation | JAX autodiff | Reverse | Same as REML |
 | GCV/UBRE | JAX autodiff | Reverse | Alternative to REML |
 
 ### 9.5 Validation: AD vs. Finite Differences
 
-Every extended family — whether using standard `jax.grad` or the Tweedie `custom_jvp` — must be validated against finite differences across the full parameter space, including extreme regions. The validation is family-agnostic; it doesn't care how the gradient was computed.
+Every extended family - whether using standard `jax.grad` or the Tweedie `custom_jvp` - must be validated against finite differences across the full parameter space, including extreme regions. The validation is family-agnostic; it doesn't care how the gradient was computed.
 
 ```python
 # Test pattern for ALL extended family implementations.
@@ -3928,7 +3928,7 @@ def test_nb_autodiff_matches_finite_diff():
 
     y, mu, log_theta = 5.0, 3.0, jnp.log(10.0)
 
-    # AD gradient (standard jax.grad — no custom_jvp)
+    # AD gradient (standard jax.grad - no custom_jvp)
     grad_fn = jax.grad(nb_loglik, argnums=(1, 2))
     ad_grad = grad_fn(y, mu, log_theta)
 
@@ -3965,8 +3965,8 @@ v1.0 proposed transparent sparse/dense switching. This was removed because JAX s
 
 | Path | When Used | Inner Loop | Sparse | GPU | Memory |
 |---|---|---|---|---|---|
-| **Dense-GPU** | n < ~200k, p < ~5k | JAX JIT (fused PIRLS) | No — all dense | Yes | O(n × p) |
-| **Sparse-CPU** | n < ~1M, large p or sparse bases | SciPy + CHOLMOD/SPQR | Yes — full sparse pipeline | No | O(nnz + p²) |
+| **Dense-GPU** | n < ~200k, p < ~5k | JAX JIT (fused PIRLS) | No - all dense | Yes | O(n × p) |
+| **Sparse-CPU** | n < ~1M, large p or sparse bases | SciPy + CHOLMOD/SPQR | Yes - full sparse pipeline | No | O(nnz + p²) |
 | **Chunked-Hybrid** | n > ~1M (bam) | Per-chunk: Dense-GPU; accumulate: CPU | Penalty only | Chunks on GPU | O(p² + chunk × p) |
 
 ```python
@@ -4011,7 +4011,7 @@ def auto_select_path(n: int, p: int, has_sparse_basis: bool,
 
 **v1.4 fix:** v1.3's `PenaltySet.to_dense_jax()` built a full `(p, p)` dense matrix via `jnp.zeros((p, p))` + `jnp.diag(...)`, making the "structured penalty" narrative fiction. The solver consumed only a materialized matrix, so diagonal/Kronecker structure provided zero benefit.
 
-**The fix:** Penalties are represented as structured linear operators. The solver interface accepts `.matvec(beta)` and `.quadform(beta)` — never a materialized matrix. Dense fallback exists but is opt-in, not default.
+**The fix:** Penalties are represented as structured linear operators. The solver interface accepts `.matvec(beta)` and `.quadform(beta)` - never a materialized matrix. Dense fallback exists but is opt-in, not default.
 
 ```python
 # penalties/structured.py
@@ -4041,7 +4041,7 @@ class StructuredPenalty(ABC):
 
     All StructuredPenalty subclasses must be registered as JAX PyTrees
     so they can be passed into JIT-compiled functions. This means:
-    - "Children" (dynamic, jax.Array): d, lam, S, A, B — anything
+    - "Children" (dynamic, jax.Array): d, lam, S, A, B - anything
       that varies during optimization (e.g., lam changes with λ updates)
     - "Aux data" (static, hashable): col_start, col_end, total_p, shape info
     - All methods used inside JIT must be pure functions of children + aux
@@ -4209,7 +4209,7 @@ class KroneckerPenalty(StructuredPenalty):
         result = jnp.zeros_like(beta)
         block = beta[self.col_start:self.col_end]
         X = block.reshape(self.k, self.m)      # Reshape to matrix
-        Y = self.B @ X @ self.A.T              # (k,m) — two small matmuls
+        Y = self.B @ X @ self.A.T              # (k,m) - two small matmuls
         result = result.at[self.col_start:self.col_end].set(
             self.lam * Y.ravel()
         )
@@ -4350,12 +4350,12 @@ Not all penalty structures can provide exact `log_pseudo_det()`. The REML criter
 
 | Penalty type | `matvec` | `quadform` | `log_pseudo_det` | `add_to_dense` | REML path |
 |---|---|---|---|---|---|
-| `DiagonalPenalty` | O(p) exact | O(p) exact | O(p) exact — sum of log(d_i) | O(p) | Dense-GPU or Sparse-CPU |
-| `DensePenalty` (small block, p_j < 500) | O(p_j²) | O(p_j²) | O(p_j³) exact — eigvalsh of block | O(p_j²) | Dense-GPU or Sparse-CPU |
-| `KroneckerPenalty` | O(mk) exact | O(mk) exact | O(m³+k³) exact — eigenvalues of factors | O(m²k²) reluctantly | Dense-GPU or Sparse-CPU |
-| MRF Laplacian (large, sparse) | O(nnz) via sparse matvec | O(nnz) | **NOT exact** — routes to Sparse-CPU with `CHOLMOD.logdet()` | N/A (too large) | Sparse-CPU only |
+| `DiagonalPenalty` | O(p) exact | O(p) exact | O(p) exact - sum of log(d_i) | O(p) | Dense-GPU or Sparse-CPU |
+| `DensePenalty` (small block, p_j < 500) | O(p_j²) | O(p_j²) | O(p_j³) exact - eigvalsh of block | O(p_j²) | Dense-GPU or Sparse-CPU |
+| `KroneckerPenalty` | O(mk) exact | O(mk) exact | O(m³+k³) exact - eigenvalues of factors | O(m²k²) reluctantly | Dense-GPU or Sparse-CPU |
+| MRF Laplacian (large, sparse) | O(nnz) via sparse matvec | O(nnz) | **NOT exact** - routes to Sparse-CPU with `CHOLMOD.logdet()` | N/A (too large) | Sparse-CPU only |
 | Soap film / Duchon | O(p²) dense | O(p²) dense | O(p³) exact (dense block) | O(p²) | Dense-GPU if p small; Sparse-CPU otherwise |
-| Adaptive (spatially varying λ) | Depends on base | Depends on base | **Approximated** — stochastic trace est. for REML gradient | Depends | Sparse-CPU + Fellner-Schall |
+| Adaptive (spatially varying λ) | Depends on base | Depends on base | **Approximated** - stochastic trace est. for REML gradient | Depends | Sparse-CPU + Fellner-Schall |
 
 **Routing rule:** If any penalty in the `CompositePenalty` cannot provide exact `log_pseudo_det()`, the REML optimizer either (a) routes to Sparse-CPU where `CHOLMOD` can compute log-det of the full `H` directly, or (b) uses the Fellner-Schall update (Section 8.3) which requires only traces, not log-dets. This is declared per penalty via:
 
@@ -4386,11 +4386,11 @@ pen_dev = dev + penalty.quadform(beta)  # O(p) for all-diagonal
 log_det_S = penalty.log_pseudo_det()    # O(Σ p_j³) per-block, not O(p³)
 ```
 
-For diagonal-only penalties (TPRS after reparameterization), the entire penalty contribution is `O(p)` per iteration — no `(p, p)` allocation at all. For Kronecker penalties from `te()`, `matvec` costs `O(mk + mk)` instead of `O(m²k²)`.
+For diagonal-only penalties (TPRS after reparameterization), the entire penalty contribution is `O(p)` per iteration - no `(p, p)` allocation at all. For Kronecker penalties from `te()`, `matvec` costs `O(mk + mk)` instead of `O(m²k²)`.
 
 **When dense materialization is unavoidable:**
 
-The `add_to_dense(XtWX)` call does modify a `(p, p)` matrix — but that matrix (`XtWX`) *already exists* as dense because the Dense-GPU path computes `X.T @ W @ X` densely. The penalty is being added *into an existing dense matrix*, not creating a new one. The savings are:
+The `add_to_dense(XtWX)` call does modify a `(p, p)` matrix - but that matrix (`XtWX`) *already exists* as dense because the Dense-GPU path computes `X.T @ W @ X` densely. The penalty is being added *into an existing dense matrix*, not creating a new one. The savings are:
 
 1. No separate `(p, p)` penalty allocation
 2. Diagonal penalties add to diagonal only: `O(p)` not `O(p²)`
@@ -4398,7 +4398,7 @@ The `add_to_dense(XtWX)` call does modify a `(p, p)` matrix — but that matrix 
 
 ### 10.3 Dense-GPU Path
 
-Everything is a dense JAX array on the GPU device. The entire PIRLS iteration is a single JIT-compiled function — no CPU/GPU round-trips.
+Everything is a dense JAX array on the GPU device. The entire PIRLS iteration is a single JIT-compiled function - no CPU/GPU round-trips.
 
 **Solver strategy (v1.5):**
 
@@ -4409,7 +4409,7 @@ The core solve at each PIRLS iteration is `H β = g` where `H = XtWX + S_λ` is 
 | Primary | `jnp.linalg.cholesky(H + ε_s·I)` → two triangular solves, where `ε_s = 1e-12 · tr(H)/p` (scale-relative) | O(p³/3) | Default. H is SPD by construction. |
 | Fallback 1 | Add `ε_L·I` where `ε_L = 1e-6 · tr(H)/p` (scale-relative) and re-try Cholesky. **Records `ε_L` in `FitDiagnostics.regularization_applied`** for surfacing in `summary()`. | O(p³/3) | `LinAlgError` from near-singular H |
 | Fallback 2 | `jnp.linalg.lstsq(H, g)` (SVD-based) | O(p³) | Double `LinAlgError`. Logs warning. |
-| Bailout | Warn to re-route to Sparse-CPU | — | After 2+ instability events (Cholesky failure, NaN in β, step-halving exhaustion) across any iterations. Zero-cost detection — these are the natural failure modes, not a separate estimator. |
+| Bailout | Warn to re-route to Sparse-CPU | - | After 2+ instability events (Cholesky failure, NaN in β, step-halving exhaustion) across any iterations. Zero-cost detection - these are the natural failure modes, not a separate estimator. |
 
 **Operating envelope constraints:**
 
@@ -4417,22 +4417,22 @@ The core solve at each PIRLS iteration is `H β = g` where `H = XtWX + S_λ` is 
 |---|---|---|
 | p (basis dimension) | ≤ 5,000 | p³ ≈ 125G FLOPs; Cholesky takes ~0.5s on A100 |
 | n × p (design matrix) | ≤ 1G elements | 8GB at float64; fits in 40GB GPU memory |
-| Iteration count | Typically 5–15 | Gaussian: 1 iter; Binomial boundary: up to 50 |
+| Iteration count | Typically 5-15 | Gaussian: 1 iter; Binomial boundary: up to 50 |
 
 The auto-selector enforces these limits. If exceeded, routes to Chunked-Hybrid or Sparse-CPU.
 
 **What the GPU actually does per iteration:**
 
-1. `eta = X @ beta + offset` — GEMV, O(np)
-2. `mu, W, z` from family — elementwise, O(n) via `jax.vmap`
-3. `WX = sqrt(W)[:,None] * X` — broadcasting, O(np) *memory bandwidth bound*
-4. `XtWX = WX.T @ WX` — GEMM, O(np²) *compute bound, the expensive step*
-5. `XtWz = WX.T @ (sqrt(W) * z)` — GEMV, O(np)
-6. `H = XtWX + S_λ` — penalty.add_to_dense, O(p) to O(p²)
-7. `L = cholesky(H); β = solve(L, solve(L, g))` — O(p³/3)
-8. Step-halving: repeat steps 1–2 with trial β, O(n) each
+1. `eta = X @ beta + offset` - GEMV, O(np)
+2. `mu, W, z` from family - elementwise, O(n) via `jax.vmap`
+3. `WX = sqrt(W)[:,None] * X` - broadcasting, O(np) *memory bandwidth bound*
+4. `XtWX = WX.T @ WX` - GEMM, O(np²) *compute bound, the expensive step*
+5. `XtWz = WX.T @ (sqrt(W) * z)` - GEMV, O(np)
+6. `H = XtWX + S_λ` - penalty.add_to_dense, O(p) to O(p²)
+7. `L = cholesky(H); β = solve(L, solve(L, g))` - O(p³/3)
+8. Step-halving: repeat steps 1-2 with trial β, O(n) each
 
-Steps 3–4 dominate. Total per-iteration: O(np² + p³). For n=100k, p=1000: ~100G FLOPs. Roofline best-case on A100 is O(10ms) per iteration, but real end-to-end cost will be higher due to kernel launch overhead, HBM bandwidth limits on XtWX formation, XLA graph boundaries, and non-fused operations. Use as order-of-magnitude planning number, not a benchmark.
+Steps 3-4 dominate. Total per-iteration: O(np² + p³). For n=100k, p=1000: ~100G FLOPs. Roofline best-case on A100 is O(10ms) per iteration, but real end-to-end cost will be higher due to kernel launch overhead, HBM bandwidth limits on XtWX formation, XLA graph boundaries, and non-fused operations. Use as order-of-magnitude planning number, not a benchmark.
 
 ```python
 # StatisticsProvider implementation:
@@ -4454,7 +4454,7 @@ Penalty matrices, random effects design matrices, and banded basis matrices stay
 
 **Dependency chain and degraded mode (v1.6, revised v1.16):**
 
-The full Sparse-CPU path uses SuiteSparse CHOLMOD/SPQR via `scikit-sparse`. This is not a trivial dependency — it requires compiled C libraries and has ABI compatibility issues across OS/architecture combinations. Since Sparse-CPU is a first-class execution path, we need a story for when CHOLMOD is unavailable:
+The full Sparse-CPU path uses SuiteSparse CHOLMOD/SPQR via `scikit-sparse`. This is not a trivial dependency - it requires compiled C libraries and has ABI compatibility issues across OS/architecture combinations. Since Sparse-CPU is a first-class execution path, we need a story for when CHOLMOD is unavailable:
 
 **Install strategy (v1.16, uv-based):** The install hierarchy uses uv's index and lockfile infrastructure (Section 3.1):
 
@@ -4469,10 +4469,10 @@ The full Sparse-CPU path uses SuiteSparse CHOLMOD/SPQR via `scikit-sparse`. This
 
 | Capability | With CHOLMOD (`scikit-sparse`) | Without CHOLMOD (degraded: p ≤ 1500 AND n×p×8 ≤ 500MB) |
 |---|---|---|
-| Sparse Cholesky | `sksparse.cholmod.cholesky(H)` — O(nnz) fill-in | `scipy.linalg.cho_factor(H.toarray())` — O(p³), dense |
-| Sparse log-det | `factor.logdet()` — O(nnz) | `2 * sum(log(diag(L)))` from dense Cholesky — O(p³) |
-| Sparse QR | SPQR via `scipy.sparse.linalg` | `scipy.linalg.qr(X.toarray())` — O(n×p²) |
-| p > 1500 OR n×p×8 > 500MB | Full performance | **Hard error with install instructions** — no silent OOM |
+| Sparse Cholesky | `sksparse.cholmod.cholesky(H)` - O(nnz) fill-in | `scipy.linalg.cho_factor(H.toarray())` - O(p³), dense |
+| Sparse log-det | `factor.logdet()` - O(nnz) | `2 * sum(log(diag(L)))` from dense Cholesky - O(p³) |
+| Sparse QR | SPQR via `scipy.sparse.linalg` | `scipy.linalg.qr(X.toarray())` - O(n×p²) |
+| p > 1500 OR n×p×8 > 500MB | Full performance | **Hard error with install instructions** - no silent OOM |
 | Peak memory (in envelope) | O(nnz) | ~3×p²×8 bytes (H) + n×p×8 bytes (X if QR fallback) |
 | Correctness | Full | Same objective within MODERATE tolerance vs CHOLMOD path (dense cho_factor may differ in pivoting/fill-in ordering) |
 
@@ -4508,7 +4508,7 @@ def sparse_cholesky(H_sparse, n_obs=None):
         from sksparse.cholmod import cholesky
         return cholesky(H_sparse)
 
-    # No CHOLMOD — check if dense fallback is safe
+    # No CHOLMOD - check if dense fallback is safe
     p = H_sparse.shape[0]
     SAFE_DENSE_P = 1500
     SAFE_X_BYTES = 500 * 1024 * 1024  # 500MB
@@ -4589,7 +4589,7 @@ For n > ~1M, data is processed in chunks. Each chunk can optionally use GPU for 
 
 **Memory invariant (v1.15):** `bam()` must never allocate a dense `(n, p)` matrix for the full dataset. The O(p² + chunk_size × p) claim holds only if:
 
-1. `X` is stored as a sparse matrix (CSC/CSR) or memory-mapped on disk — never densified for full n.
+1. `X` is stored as a sparse matrix (CSC/CSR) or memory-mapped on disk - never densified for full n.
 2. Per-chunk processing creates at most `WX_c` (chunk_size × p) and `chunk_XtWX` (p × p) temporaries, freed after accumulation.
 3. No code path downstream of `ChunkedProvider` calls `X.toarray()` or equivalent.
 
@@ -4672,7 +4672,7 @@ class ChunkedProvider:
 
 ### 10.6 Mid-Fit Path Transfer (v1.7, revised v1.8)
 
-When the Dense-GPU path detects instability (Section 10.3 bailout), the user may warm-start Sparse-CPU from the current state. This is the highest-risk correctness seam in the library — it's where algebra implementations meet.
+When the Dense-GPU path detects instability (Section 10.3 bailout), the user may warm-start Sparse-CPU from the current state. This is the highest-risk correctness seam in the library - it's where algebra implementations meet.
 
 **Transfer state:**
 
@@ -4704,8 +4704,8 @@ class PathTransferState:
            - Penalty column ranges match CoefficientMap (path-independent)
            - Sign convention: S_j is positive semi-definite (all paths)
     """
-    beta: np.ndarray           # (p,) — current coefficients
-    log_lambda: np.ndarray     # (n_smooth,) — log smoothing params
+    beta: np.ndarray           # (p,) - current coefficients
+    log_lambda: np.ndarray     # (n_smooth,) - log smoothing params
     iteration: int             # PIRLS (inner) iteration count
     outer_iteration: int       # Smoothing param (outer) iteration count
     pen_deviance: float        # Last ACCEPTED penalized deviance
@@ -4753,7 +4753,7 @@ class PathTransferState:
 | log(λ) (smoothing params) | ✅ Yes | Outer-loop state, path-independent |
 | pen_deviance | ✅ Yes | Needed for convergence check continuity |
 | iteration counts | ✅ Yes | Convergence check needs iteration history |
-| W, z, μ, η (working quantities) | ❌ No | Recomputed from β — these are deterministic given β + family + data |
+| W, z, μ, η (working quantities) | ❌ No | Recomputed from β - these are deterministic given β + family + data |
 | XtWX, XtWz | ❌ No | Recomputed by target provider (different sparse/dense representation) |
 | Cholesky factors | ❌ No | Path-specific solver state |
 | Penalty matrices | ❌ No | Rebuilt in target format from shared `CoefficientMap` + λ |
@@ -4817,7 +4817,7 @@ If the first iteration on the target path produces any instability signal (Chole
 
 **Validation frequency (v1.9):**
 
-`validate()` is called exactly twice per transfer — once at creation (source side) and once at consumption (target side, before first PIRLS iteration). This catches:
+`validate()` is called exactly twice per transfer - once at creation (source side) and once at consumption (target side, before first PIRLS iteration). This catches:
 - Source-side bugs: β has NaN from an undetected instability, log_λ has wrong length from a penalty mismatch
 - Boundary corruption: dtype downcast during device-to-host transfer, shape change from a stale CoefficientMap
 
@@ -4957,7 +4957,7 @@ def edf_per_term(XtWX, S_lambda, coefficient_map):
     edf_j = tr(H^{-1} XtWX restricted to columns of term j)
 
     Uses a single Cholesky factorization of H, then extracts
-    per-term traces via column slicing — O(p³) total, not O(p³)
+    per-term traces via column slicing - O(p³) total, not O(p³)
     per term.
     """
     from scipy.linalg import solve_triangular
@@ -4983,7 +4983,7 @@ def edf_per_term(XtWX, S_lambda, coefficient_map):
 
 ### 10.9 Discretization (bam-specific)
 
-Covariate discretization for `bam()` lives in `data/discretize.py`. This is orthogonal to execution path selection — discretization reduces n effectively by mapping covariates to a small number of bins, after which any execution path can be used. See Phase 5 (Section 19) for implementation details.
+Covariate discretization for `bam()` lives in `data/discretize.py`. This is orthogonal to execution path selection - discretization reduces n effectively by mapping covariates to a small number of bins, after which any execution path can be used. See Phase 5 (Section 19) for implementation details.
 
 ---
 
@@ -5341,7 +5341,7 @@ def build_model_matrix(parsed_formula: ParsedFormula,
     Assemble the full model matrix from parsed formula.
 
     Returns:
-    - X: Full model matrix (n × p) — may be sparse
+    - X: Full model matrix (n × p) - may be sparse
     - term_info: Metadata mapping column ranges to terms
     - penalty_matrices: List of (sparse) penalty matrices
     - constraint_matrices: Identifiability constraints
@@ -5684,13 +5684,13 @@ def concurvity(model, full=True):
 
         # v1.5: skip concurvity for very large sparse terms (e.g., MRF).
         # Densifying these would OOM. Concurvity is a diagnostic, not
-        # required for fitting — better to skip and warn than to crash.
+        # required for fitting - better to skip and warn than to crash.
         MAX_CONCURVITY_COLS = 10_000
         if n_cols_j > MAX_CONCURVITY_COLS:
             import warnings
             warnings.warn(
                 f"Skipping concurvity for term '{info_j.get('label', j)}' "
-                f"({n_cols_j} columns) — too large to densify. "
+                f"({n_cols_j} columns) - too large to densify. "
                 f"Use individual term comparisons instead."
             )
             continue
@@ -5739,11 +5739,11 @@ def concurvity(model, full=True):
 
 ## 16. Distributed and Multi-Device Compute
 
-**v1.11: Complete rewrite.** Previous versions (v1.0–v1.10) used NumPy-based Dask/Ray providers where workers computed sufficient statistics in NumPy and shipped them to a Python coordinator. This broke JAX out of the loop: no JIT for the outer PIRLS loop, no autodiff through the full computation, no extended family AD on workers (breaking NB/Tweedie), and a Python round-trip per iteration. The new architecture uses JAX's native SPMD model at every scale.
+**v1.11: Complete rewrite.** Previous versions (v1.0-v1.10) used NumPy-based Dask/Ray providers where workers computed sufficient statistics in NumPy and shipped them to a Python coordinator. This broke JAX out of the loop: no JIT for the outer PIRLS loop, no autodiff through the full computation, no extended family AD on workers (breaking NB/Tweedie), and a Python round-trip per iteration. The new architecture uses JAX's native SPMD model at every scale.
 
 ### 16.1 Design Principle: Same Code, Different Shardings
 
-The key insight is that JAX's SPMD model means the distributed PIRLS step is **identical code** to the single-GPU step. You don't write a distributed version — you shard the input arrays and JAX's compiler handles communication.
+The key insight is that JAX's SPMD model means the distributed PIRLS step is **identical code** to the single-GPU step. You don't write a distributed version - you shard the input arrays and JAX's compiler handles communication.
 
 ```python
 # Single GPU:
@@ -5763,12 +5763,12 @@ X = jax.device_put(X_local, NamedSharding(mesh, P('data', None)))
 
 This replaces the `StatisticsProvider` abstraction for the distributed case. `StatisticsProvider` remains relevant only for the out-of-core case (Section 16.5) where data doesn't fit in aggregate device memory.
 
-**Dense-only constraint (v1.14):** The SPMD path operates on **dense** `jax.Array` objects. The row-sharding model (`P('data', None)`) assumes a dense `(n, p)` matrix where every device's local shard has the same column count and layout. Smooth types that produce structurally sparse design matrices — `FactorBySmooth` (Section 5.7), `bs="fs"` (Section 5.6), `bs="re"` (Section 5.6), `bs="mrf"` (Section 5.8) — must be densified before `jax.device_put` into the SPMD mesh.
+**Dense-only constraint (v1.14):** The SPMD path operates on **dense** `jax.Array` objects. The row-sharding model (`P('data', None)`) assumes a dense `(n, p)` matrix where every device's local shard has the same column count and layout. Smooth types that produce structurally sparse design matrices - `FactorBySmooth` (Section 5.7), `bs="fs"` (Section 5.6), `bs="re"` (Section 5.6), `bs="mrf"` (Section 5.8) - must be densified before `jax.device_put` into the SPMD mesh.
 
-**Critical: route BEFORE densifying (v1.14).** Densifying a large sparse X can be the dominant memory event — potentially OOM on the host before any GPU work begins. The routing decision must therefore be made from Phase 1 metadata alone, without materializing the dense matrix:
+**Critical: route BEFORE densifying (v1.14).** Densifying a large sparse X can be the dominant memory event - potentially OOM on the host before any GPU work begins. The routing decision must therefore be made from Phase 1 metadata alone, without materializing the dense matrix:
 
 ```python
-# fitting/model_assembly.py — pre-materialization routing
+# fitting/model_assembly.py - pre-materialization routing
 
 def estimate_peak_memory(smooth_specs, data, n_devices=1):
     """
@@ -5776,13 +5776,13 @@ def estimate_peak_memory(smooth_specs, data, n_devices=1):
     No dense allocation occurs here.
 
     Components estimated (all on each device for SPMD):
-      X_shard:     (n/d) * p * 8    — row-sharded design matrix
-      WX_shard:    (n/d) * p * 8    — weighted X (same shape, temporary per iteration)
-      XtWX:        p * p * 8        — replicated (post all-reduce)
-      S_lambda:    p * p * 8        — replicated (dense, even if structurally block-diag)
-      Cholesky:    p * p * 8        — replicated (factorization of XtWX + S_lambda)
-      XtWz:        p * 8            — replicated (negligible)
-      beta/mu/eta: n/d * 8 * 3      — per-device vectors (negligible vs above)
+      X_shard:     (n/d) * p * 8    - row-sharded design matrix
+      WX_shard:    (n/d) * p * 8    - weighted X (same shape, temporary per iteration)
+      XtWX:        p * p * 8        - replicated (post all-reduce)
+      S_lambda:    p * p * 8        - replicated (dense, even if structurally block-diag)
+      Cholesky:    p * p * 8        - replicated (factorization of XtWX + S_lambda)
+      XtWz:        p * 8            - replicated (negligible)
+      beta/mu/eta: n/d * 8 * 3      - per-device vectors (negligible vs above)
 
     Total per device ≈ 2*(n/d)*p*8 + 3*p²*8
 
@@ -5901,7 +5901,7 @@ def route_execution_path(smooth_specs, data, mesh=None, interconnect="nvlink",
 
 For moderate p (within the gates in Section 16.7), densification is acceptable: a 2000-column dense X costs 16KB/row regardless of sparsity pattern. For factor-by smooths with many levels where the estimated p exceeds SPMD gates, routing diverts to Sparse-CPU or out-of-core without ever allocating the dense matrix.
 
-**Performance expectation (v1.14):** Users with naturally sparse models (FactorBySmooth with many levels, `bs="re"` with many groups) should expect that multi-GPU SPMD can be **slower** than single-host Sparse-CPU for their workload, because SPMD discards sparsity structure. This is inherent to the "same code, different shardings" design — JAX's SPMD model has no sparse-aware sharding. The doc does not treat this as a bug. If a user's model is sparse-dominated and p is moderate, Sparse-CPU is the correct path. Multi-GPU SPMD is for dense-dominated models with large n.
+**Performance expectation (v1.14):** Users with naturally sparse models (FactorBySmooth with many levels, `bs="re"` with many groups) should expect that multi-GPU SPMD can be **slower** than single-host Sparse-CPU for their workload, because SPMD discards sparsity structure. This is inherent to the "same code, different shardings" design - JAX's SPMD model has no sparse-aware sharding. The doc does not treat this as a bug. If a user's model is sparse-dominated and p is moderate, Sparse-CPU is the correct path. Multi-GPU SPMD is for dense-dominated models with large n.
 
 ### 16.2 How XtWX Formation Parallelizes
 
@@ -5917,9 +5917,9 @@ XtWX = Σ_i X_i^T W_i X_i  →  XLA inserts all-reduce (p×p, single communicati
 XtWz = Σ_i X_i^T W_i z_i  →  XLA inserts all-reduce (p×1, single communication)
 ```
 
-The solve `β = (XtWX + S_λ)⁻¹ XtWz` is replicated: every device computes it (p×p Cholesky, cheap) and gets the same β. No broadcast needed — the all-reduce already puts XtWX on all devices.
+The solve `β = (XtWX + S_λ)⁻¹ XtWz` is replicated: every device computes it (p×p Cholesky, cheap) and gets the same β. No broadcast needed - the all-reduce already puts XtWX on all devices.
 
-**v1.13 note on penalty structure:** On the SPMD path, S_λ is a dense `(p, p)` replicated array, even when the underlying penalty is structurally block-diagonal (as with `FactorBySmooth`, Section 5.7, or tensor products, Section 5.5). FactorBySmooth's "sparse throughout" assembly (Section 5.7.2) is a Phase 1 (setup) property — it avoids OOM during basis construction. Once the model enters Phase 2 (JIT fitting), the assembled S_λ is densified for `jax.device_put`. For p within the SPMD gates (≤ 3000), this is a `(3000)² × 8 = 72MB` replicated array per device — acceptable. The block-diagonal structure of FactorBySmooth penalties is not exploited on the SPMD path. Exploiting it would require a block-sparse solver, which JAX does not natively support and which would break the "same code, different shardings" principle.
+**v1.13 note on penalty structure:** On the SPMD path, S_λ is a dense `(p, p)` replicated array, even when the underlying penalty is structurally block-diagonal (as with `FactorBySmooth`, Section 5.7, or tensor products, Section 5.5). FactorBySmooth's "sparse throughout" assembly (Section 5.7.2) is a Phase 1 (setup) property - it avoids OOM during basis construction. Once the model enters Phase 2 (JIT fitting), the assembled S_λ is densified for `jax.device_put`. For p within the SPMD gates (≤ 3000), this is a `(3000)² × 8 = 72MB` replicated array per device - acceptable. The block-diagonal structure of FactorBySmooth penalties is not exploited on the SPMD path. Exploiting it would require a block-sparse solver, which JAX does not natively support and which would break the "same code, different shardings" principle.
 
 ```python
 # distributed/sharding.py
@@ -5939,9 +5939,9 @@ def create_gam_mesh(devices=None):
     for typical GAM sizes.
 
     v1.12: Replicated solve is a conscious inefficiency. Every device
-    independently solves the same (p,p) system — O(p³) wasted compute
+    independently solves the same (p,p) system - O(p³) wasted compute
     per extra device. This is acceptable because:
-    - For p ≤ 2000, Cholesky takes <10ms — negligible vs XtWX formation
+    - For p ≤ 2000, Cholesky takes <10ms - negligible vs XtWX formation
     - It avoids a broadcast of β (which would add latency)
     - It keeps the XLA program simple (no asymmetric device roles)
 
@@ -5957,9 +5957,9 @@ def shard_gam_data(X, y, weights, offset, mesh):
     """
     Shard GAM data for distributed fitting.
 
-    X: (n, p) — row-sharded across 'data' axis
-    y: (n,)   — sharded to match X rows
-    β, S_λ:   — replicated (all devices get full copy)
+    X: (n, p) - row-sharded across 'data' axis
+    y: (n,)   - sharded to match X rows
+    β, S_λ:   - replicated (all devices get full copy)
 
     Returns sharded jax.Arrays. After this call, the same
     pirls_step_jax function works without modification.
@@ -5980,7 +5980,7 @@ def shard_gam_data(X, y, weights, offset, mesh):
 The PIRLS step function from Section 4.2 works unchanged under sharding. JAX's compiler traces through the matmuls, sees that `WX.T @ WX` contracts over a sharded axis, and inserts an all-reduce:
 
 ```python
-# fitting/_pirls_jax.py — UNCHANGED from single-GPU version
+# fitting/_pirls_jax.py - UNCHANGED from single-GPU version
 
 @partial(jax.jit, static_argnums=(5,))
 def pirls_step_jax(X, y, beta, S_lambda, family_params, family_type):
@@ -6016,13 +6016,13 @@ def pirls_step_jax(X, y, beta, S_lambda, family_params, family_type):
 
 **Why this works for autodiff:**
 
-The `pirls_loop_jax` (Section 4.2) wraps `pirls_step_jax` in `jax.lax.while_loop`. The entire loop — including the all-reduces that XLA inserts — compiles to a single XLA program. `jax.grad` and `jax.hessian` can differentiate through this program, including through the collective operations. This means:
+The `pirls_loop_jax` (Section 4.2) wraps `pirls_step_jax` in `jax.lax.while_loop`. The entire loop - including the all-reduces that XLA inserts - compiles to a single XLA program. `jax.grad` and `jax.hessian` can differentiate through this program, including through the collective operations. This means:
 
 - **REML autodiff works end-to-end.** `jax.grad(reml_criterion_jax)` differentiates through the sharded XtWX formation. No implicit function theorem workaround needed (though it remains available as a fallback for the out-of-core path).
-- **Extended family AD works on every device.** Each device evaluates the family's log-likelihood on its local data shard. Standard `jax.grad` (and Tweedie's `custom_jvp`) executes locally — no special distributed handling.
+- **Extended family AD works on every device.** Each device evaluates the family's log-likelihood on its local data shard. Standard `jax.grad` (and Tweedie's `custom_jvp`) executes locally - no special distributed handling.
 - **fREML works.** The fast REML update needs derivatives of β* w.r.t. λ. In the SPMD path, these flow through the JIT-compiled while_loop naturally.
 
-**Convergence decision broadcast (v1.15, critical correctness fix):** In JAX SPMD, the deviance `pen_dev` is computed via an all-reduce. Within a single compiled XLA program, the all-reduce is deterministic — all devices get the same bit-for-bit result. The `while_loop`'s `cond_fn` evaluates identically on every device because it operates on replicated scalars (deviance, β norm, iteration count) that are all post-all-reduce.
+**Convergence decision broadcast (v1.15, critical correctness fix):** In JAX SPMD, the deviance `pen_dev` is computed via an all-reduce. Within a single compiled XLA program, the all-reduce is deterministic - all devices get the same bit-for-bit result. The `while_loop`'s `cond_fn` evaluates identically on every device because it operates on replicated scalars (deviance, β norm, iteration count) that are all post-all-reduce.
 
 However, step-halving adds a second decision point: `pen_dev_try <= pen_dev_prev`. If the step-halving check uses any locally-computed quantity that differs across devices (e.g., a deviance computed before the all-reduce), devices can diverge in their acceptance decision, causing some to accept the step and others to reject it. In `lax.while_loop`, divergent `cond_fn` results across SPMD devices cause a collective deadlock.
 
@@ -6065,7 +6065,7 @@ The SPMD PIRLS path requires all of the following to hold. Violations produce ha
 | **dtype = float64** | All arrays in SPMD path must be float64 | XtWX all-reduce + Cholesky at float32 loses ~4 digits; insufficient for REML gradients. `jax.config.update("jax_enable_x64", True)` enforced at init. |
 | **X row-sharded, β/S_λ replicated** | Sharding annotations as specified in Section 16.2 | Wrong sharding → silent wrong results (XtWX not summed correctly) |
 | **No elastic membership** | Workers cannot be added or removed mid-fit | See Section 16.4 lifecycle invariants |
-| **Identical setup outputs across hosts (v1.14)** | All processes must produce the same column layout, factor-level ordering, constraint absorption, and `CoefficientMap` after Phase 1. For `FactorBySmooth` (Section 5.7), this means: same factor levels in the same order, same block-to-column mapping, same null-space constraints. Enforced by: (a) coordinator broadcasts `SetupManifest` including knots, factor-level ordering, and constraint spec (Section 16.8), (b) each process verifies post-assembly column count and manifest checksum via `verify_local_assembly()` (Section 16.8), (c) mismatch → immediate fail-fast error, never silent. | Silent catastrophic error if verification is skipped: devices have "same shapes, different column semantics" — XtWX all-reduce sums incompatible matrices, producing garbage β with no detectable signal. |
+| **Identical setup outputs across hosts (v1.14)** | All processes must produce the same column layout, factor-level ordering, constraint absorption, and `CoefficientMap` after Phase 1. For `FactorBySmooth` (Section 5.7), this means: same factor levels in the same order, same block-to-column mapping, same null-space constraints. Enforced by: (a) coordinator broadcasts `SetupManifest` including knots, factor-level ordering, and constraint spec (Section 16.8), (b) each process verifies post-assembly column count and manifest checksum via `verify_local_assembly()` (Section 16.8), (c) mismatch → immediate fail-fast error, never silent. | Silent catastrophic error if verification is skipped: devices have "same shapes, different column semantics" - XtWX all-reduce sums incompatible matrices, producing garbage β with no detectable signal. |
 
 **Determinism in SPMD (v1.12):**
 
@@ -6075,7 +6075,7 @@ XLA's all-reduce is deterministic within a single compiled program execution: sa
 - Different XLA/JAX versions (compiler may choose different reduction strategy)
 - Different hardware topologies (ring vs tree vs recursive halving)
 
-Cross-compilation determinism still requires `set_deterministic(True)` + pinned JAX/XLA/driver versions, as specified in Section 4.5. The SPMD path does not change the determinism contract — it inherits it.
+Cross-compilation determinism still requires `set_deterministic(True)` + pinned JAX/XLA/driver versions, as specified in Section 4.5. The SPMD path does not change the determinism contract - it inherits it.
 
 ### 16.4 Multi-Host Clusters: Ray Bootstraps, JAX Computes
 
@@ -6106,7 +6106,7 @@ def fit_distributed(formula, data_path, family, n_workers, gpus_per_worker=1):
     JAX handles:
     - SPMD compilation of the PIRLS loop
     - Inter-device all-reduce for XtWX/XtWz
-    - Autodiff, JIT — all native (extended family AD works per-device)
+    - Autodiff, JIT - all native (extended family AD works per-device)
     """
 
     def train_func():
@@ -6140,7 +6140,7 @@ def fit_distributed(formula, data_path, family, n_workers, gpus_per_worker=1):
             S_lambda, beta_init, max_iter=100, tol=1e-7,
         )
 
-        # REML outer loop — also SPMD, also JIT-able
+        # REML outer loop - also SPMD, also JIT-able
         # jax.grad(reml_criterion_jax) works through the sharded computation
         for outer_iter in range(max_outer):
             reml_grad = jax.grad(reml_criterion_jax)(log_lambda, ...)
@@ -6162,7 +6162,7 @@ def fit_distributed(formula, data_path, family, n_workers, gpus_per_worker=1):
 
 **Critical constraint:** All processes must run the same JAX operations in the same order. This is natural for PIRLS (every iteration is the same function applied to the same globally-sharded arrays), but means:
 
-- Convergence decisions must be identical on all processes (they will be — the converged XtWX/β are replicated).
+- Convergence decisions must be identical on all processes (they will be - the converged XtWX/β are replicated).
 - No process can skip an iteration or take a different code path. `jax.lax.while_loop` guarantees this (same cond_fn evaluated on replicated state).
 - If one process crashes, all will hang unless detected and killed.
 
@@ -6179,7 +6179,7 @@ Real distributed systems fail at process lifecycle boundaries, not in the math. 
 | **Clean shutdown** | All processes must complete the `lax.while_loop` (converge or hit max_iter) before any process exits. | Early exit → other processes hang at next collective. |
 
 ```python
-# distributed/ray_launcher.py — lifecycle management
+# distributed/ray_launcher.py - lifecycle management
 
 def _validate_ray_cluster(scaling_config):
     """Pre-flight checks before launching distributed fit."""
@@ -6201,7 +6201,7 @@ def _validate_ray_cluster(scaling_config):
 
 ### 16.5 Out-of-Core: Data Larger Than Aggregate Device Memory
 
-When data exceeds total device memory (e.g., n=1B rows, 10 GPUs with 80GB each), the SPMD approach doesn't work — X can't be sharded because it won't fit. This is the **only** case that needs a Python outer loop and the `StatisticsProvider` abstraction.
+When data exceeds total device memory (e.g., n=1B rows, 10 GPUs with 80GB each), the SPMD approach doesn't work - X can't be sharded because it won't fit. This is the **only** case that needs a Python outer loop and the `StatisticsProvider` abstraction.
 
 ```python
 # distributed/chunked_jax_provider.py
@@ -6263,7 +6263,7 @@ class ChunkedJAXProvider:
 def _compute_chunk_stats_jax(X_chunk, y_chunk, beta, family_params, family_type):
     """
     Per-chunk sufficient statistics. JIT-compiled, runs on GPU.
-    Extended family AD (and Tweedie's custom_jvp) works here — this is pure JAX.
+    Extended family AD (and Tweedie's custom_jvp) works here - this is pure JAX.
     """
     eta = X_chunk @ beta
     mu = _link_inverse(eta, family_type)
@@ -6285,11 +6285,11 @@ def _compute_chunk_stats_jax(X_chunk, y_chunk, beta, family_params, family_type)
 Because the PIRLS outer loop is Python (not JIT), `jax.grad` can't trace through it. REML uses the **implicit function theorem** instead.
 
 **What is differentiated:** The exact REML objective at the converged β*, not a per-chunk approximation. At convergence, PIRLS has produced:
-- `H = XtWX + S_λ` (accumulated across all chunks — the exact full-data matrix)
+- `H = XtWX + S_λ` (accumulated across all chunks - the exact full-data matrix)
 - `β*` (the converged coefficients)
 - `pen_deviance` (the exact full-data penalized deviance)
 
-The implicit function theorem gives `dβ*/dλ` from these converged quantities alone. Chunks affect only how H was accumulated (summation order), not the mathematical function being differentiated. The REML criterion `V(λ) = pen_dev + log|H| - log|S⁺|` is the exact same objective as in the SPMD path — just evaluated on identically-accumulated statistics.
+The implicit function theorem gives `dβ*/dλ` from these converged quantities alone. Chunks affect only how H was accumulated (summation order), not the mathematical function being differentiated. The REML criterion `V(λ) = pen_dev + log|H| - log|S⁺|` is the exact same objective as in the SPMD path - just evaluated on identically-accumulated statistics.
 
 ```python
 def implicit_dbeta_dlambda(H_factor, S_list, beta, lambdas):
@@ -6297,14 +6297,14 @@ def implicit_dbeta_dlambda(H_factor, S_list, beta, lambdas):
     dβ*/d(log λ_j) = -H⁻¹ (λ_j S_j β*)
 
     From the fixed-point condition ∂L/∂β = 0 at convergence.
-    Only needs the converged H, β*, and penalty structure —
+    Only needs the converged H, β*, and penalty structure  - 
     NOT tracing through PIRLS iterations.
 
     This is Wood (2004, 2011): the same approach mgcv uses.
     Works regardless of how H was formed (SPMD, chunked, etc.).
 
     CRITICAL (v1.15): The H_factor used here MUST be the exact same
-    factorization used in the forward solve — including any jitter
+    factorization used in the forward solve - including any jitter
     (Section 10.3 regularization_applied), pivoting strategy, and
     null-space handling. If the forward solve added ε·I to H for
     numerical stability, the IFT backward pass must use the
@@ -6343,25 +6343,25 @@ def implicit_dbeta_dlambda(H_factor, S_list, beta, lambdas):
 | Single GPU | `jax.jit` | Full JIT | Single device | Full | ✅ (jax.grad; Tweedie: custom_jvp) | 5000 | 1 |
 | Multi-GPU, one host (p ≤ 3000) | `jax.sharding` + `Mesh` | Full JIT (SPMD) | Replicated | Full | ✅ per device | 3000 | 2 |
 | Multi-GPU, one host (p > 3000) | `jax.sharding` + `Mesh` | Full JIT (SPMD) | Device 0 + broadcast | Full | ✅ per device | 5000 | 2 |
-| Multi-host cluster | `jax.distributed` + Ray | Full JIT (SPMD) | Replicated | Full | ✅ per device | 2000 (IB) / 1500 (Eth) | 2–3 |
+| Multi-host cluster | `jax.distributed` + Ray | Full JIT (SPMD) | Replicated | Full | ✅ per device | 2000 (IB) / 1500 (Eth) | 2-3 |
 | Out-of-core (data > memory) | `ChunkedJAXProvider` | JIT per chunk | Single device | Implicit fn thm | ✅ per chunk | 5000 | 3 |
 
-**What changed from v1.0–v1.10:**
+**What changed from v1.0-v1.10:**
 
-| Old (v1.0–v1.10) | New (v1.11) | Why |
+| Old (v1.0-v1.10) | New (v1.11) | Why |
 |---|---|---|
 | `DaskProvider` (NumPy workers, Python coordinator) | `jax.sharding` SPMD or `ChunkedJAXProvider` (JAX workers) | NumPy workers broke JIT, autodiff, extended family AD |
 | `RayProvider` (NumPy workers, Python coordinator) | `JaxTrainer` bootstraps `jax.distributed`, pure JAX SPMD | Ray orchestrates processes; JAX owns all computation |
 | `StatisticsProvider` needed for all distributed paths | Only needed for out-of-core (data > device memory) | SPMD path uses same `pirls_step_jax` as single-GPU |
 | `deterministic_reduce` with Kahan summation | XLA's all-reduce (deterministic within single compilation + fixed topology; see Section 16.3 caveats) | No manual reduction code needed for SPMD path |
-| Python coordinator round-trip per PIRLS iteration | No coordinator — all devices run same XLA program | Eliminates serialization latency |
+| Python coordinator round-trip per PIRLS iteration | No coordinator - all devices run same XLA program | Eliminates serialization latency |
 | Extended family AD unavailable on distributed workers | Works everywhere (all workers run JAX) | NB, Tweedie, Beta work in distributed mode |
 
-**The "missing middle" — distributed sparse (v1.15):** The architecture has a deliberate gap between "dense SPMD" (multi-GPU, p ≤ 3000) and "sparse single-host" (Sparse-CPU, any p but one node). High-cardinality random effects (`s(user_id, bs='re')` with 500k users) or massive factor-smooth interactions are too sparse for SPMD (densification would OOM) and potentially too large for single-host RAM. This is the standard "big data GAM" use case, and JaxGAM v1.0 cannot fit it.
+**The "missing middle" - distributed sparse (v1.15):** The architecture has a deliberate gap between "dense SPMD" (multi-GPU, p ≤ 3000) and "sparse single-host" (Sparse-CPU, any p but one node). High-cardinality random effects (`s(user_id, bs='re')` with 500k users) or massive factor-smooth interactions are too sparse for SPMD (densification would OOM) and potentially too large for single-host RAM. This is the standard "big data GAM" use case, and JaxGAM v1.0 cannot fit it.
 
-This is acceptable for Tier 1–2 but must be addressed for Tier 3. Potential future paths: (a) distributed conjugate gradient solver that keeps X sparse across workers, (b) block-diagonal exploitation where independent factor levels are solved on separate workers, (c) stochastic/minibatch approaches that avoid forming the full XtWX. The current architecture provides a hook for (b): `FactorBySmooth`'s block-diagonal structure (Section 5.7) means level-blocks are independent given λ, so a future "block-parallel" mode could solve each level's sub-problem on a separate device. This is not designed or specified; it's an architectural affordance.
+This is acceptable for Tier 1-2 but must be addressed for Tier 3. Potential future paths: (a) distributed conjugate gradient solver that keeps X sparse across workers, (b) block-diagonal exploitation where independent factor levels are solved on separate workers, (c) stochastic/minibatch approaches that avoid forming the full XtWX. The current architecture provides a hook for (b): `FactorBySmooth`'s block-diagonal structure (Section 5.7) means level-blocks are independent given λ, so a future "block-parallel" mode could solve each level's sub-problem on a separate device. This is not designed or specified; it's an architectural affordance.
 
-**Float64 requirement is a product constraint (v1.15):** The mandatory float64 on GPU paths (SPMD invariant, Section 16.3) is correct for numerical stability — mgcv-style inference needs it. But it is a significant performance constraint: consumer GPUs (RTX 3090, 4090) have ~1/32 FP64 throughput vs FP32, and some accelerators (TPU v3, older AMD MI-series) have limited or no FP64 support. "GPU acceleration" means "fast FP64 GPUs" — data center cards (A100, H100, MI250X). The doc should not market this as general GPU support. A future "reduced precision mode" (FP32 PIRLS with FP64 REML gradients) is mathematically possible but not designed.
+**Float64 requirement is a product constraint (v1.15):** The mandatory float64 on GPU paths (SPMD invariant, Section 16.3) is correct for numerical stability - mgcv-style inference needs it. But it is a significant performance constraint: consumer GPUs (RTX 3090, 4090) have ~1/32 FP64 throughput vs FP32, and some accelerators (TPU v3, older AMD MI-series) have limited or no FP64 support. "GPU acceleration" means "fast FP64 GPUs" - data center cards (A100, H100, MI250X). The doc should not market this as general GPU support. A future "reduced precision mode" (FP32 PIRLS with FP64 REML gradients) is mathematically possible but not designed.
 
 **fREML auto-switch alignment with R (v1.15):** The auto-switch from Newton REML to fREML at n_smooth > 50 (Section 16.7) introduces a behavioral cliff: adding one factor level can change results slightly (fREML is an approximation). R's mgcv also switches methods based on model size, but at different thresholds and with different approximations (`bam()` uses fREML by default; `gam()` uses Newton REML). JaxGAM's switch points do NOT align with R's, so the "correctness vs R" tests (Section 18.1) must account for this: when comparing fREML results against R's Newton REML, the tolerance class is LOOSE (not MODERATE). The `lambda_strategy_reason` field in `GAMResult` surfaces the switch so users understand the source of any difference.
 
@@ -6378,15 +6378,15 @@ The SPMD approach's communication cost per PIRLS iteration:
 
 **Scaling limits (v1.14: enforcement gates reflecting dense X and dense S_λ):**
 
-These limits assume float64 (mandatory on SPMD, see invariant table in Section 16.3) and default (non-deterministic) mode. Deterministic mode (`set_deterministic(True)`) may reduce throughput by 10–30% due to `--xla_gpu_deterministic_ops`, effectively lowering the practical n limit.
+These limits assume float64 (mandatory on SPMD, see invariant table in Section 16.3) and default (non-deterministic) mode. Deterministic mode (`set_deterministic(True)`) may reduce throughput by 10-30% due to `--xla_gpu_deterministic_ops`, effectively lowering the practical n limit.
 
 The p limits account for **three** dense (p, p) arrays on every device: XtWX, S_λ (dense even when structurally block-diagonal, per Section 16.2), and the Cholesky factor. Total replicated memory per device: `3 * p² * 8` bytes.
 
 | Topology | p limit | λ strategy (auto) | Replicated mem/device at p limit | n limit | Bottleneck |
 |---|---|---|---|---|---|
-| Single host, NVLink (4–8 GPUs) | 3000 | REML (≤50), fREML (51–200), F-S (>200) | 216MB | ~1B (aggregate HBM) | p³ replicated solve time |
-| Multi-host, InfiniBand (16–64 GPUs) | 2000 | REML (≤50), fREML (51–200), F-S (>200) | 96MB | ~10B | All-reduce bandwidth for p² |
-| Multi-host, Ethernet (16–64 GPUs) | 1500 | REML (≤50), fREML (51–200), F-S (>200) | 54MB | ~10B | Network bandwidth |
+| Single host, NVLink (4-8 GPUs) | 3000 | REML (≤50), fREML (51-200), F-S (>200) | 216MB | ~1B (aggregate HBM) | p³ replicated solve time |
+| Multi-host, InfiniBand (16-64 GPUs) | 2000 | REML (≤50), fREML (51-200), F-S (>200) | 96MB | ~10B | All-reduce bandwidth for p² |
+| Multi-host, Ethernet (16-64 GPUs) | 1500 | REML (≤50), fREML (51-200), F-S (>200) | 54MB | ~10B | Network bandwidth |
 
 **Factor-by routing rules (v1.14):**
 
@@ -6399,9 +6399,9 @@ Factor-by smooths (Section 5.7) push both p and n_smooth. The interaction determ
 | `s(x, by=state)`, 50 levels, k=50 | +2500 | +50 | SPMD single-solve (single-host) or **error** (multi-host) | REML | p exceeds multi-host gate |
 | 3 factor-by smooths × 50 levels × k=20 | +3000 | +150 | SPMD single-solve | fREML (auto) | p at gate ceiling; n_smooth in fREML range |
 | 5 factor-by smooths × 50 levels × k=20 | +5000 | +250 | **Sparse-CPU or chunked** | Fellner-Schall (auto) | p exceeds all SPMD gates |
-| 10 factor-by smooths × 5 levels × k=10 | +500 | +50 | SPMD | REML | Small p, moderate n_smooth — the n_smooth gate catches this if levels grow |
+| 10 factor-by smooths × 5 levels × k=10 | +500 | +50 | SPMD | REML | Small p, moderate n_smooth - the n_smooth gate catches this if levels grow |
 
-The key insight: factor-by with many levels and moderate basis dimension will hit the **p gate** before the n_smooth gate in most practical cases (because p grows as `n_levels × k` while n_smooth grows as `n_levels`). The n_smooth gate catches the remaining case: many factor-by terms with small bases where p is modest but the REML outer loop is expensive. These are heuristic routing rules, not performance guarantees — actual throughput depends on hardware, data distribution, and model structure.
+The key insight: factor-by with many levels and moderate basis dimension will hit the **p gate** before the n_smooth gate in most practical cases (because p grows as `n_levels × k` while n_smooth grows as `n_levels`). The n_smooth gate catches the remaining case: many factor-by terms with small bases where p is modest but the REML outer loop is expensive. These are heuristic routing rules, not performance guarantees - actual throughput depends on hardware, data distribution, and model structure.
 
 ```python
 # distributed/selector.py
@@ -6410,7 +6410,7 @@ The key insight: factor-by with many levels and moderate basis dimension will hi
 class DistributedModeSelection:
     """
     v1.14: Structured return from path selection. Every behavioral
-    decision is explicit and inspectable — no silent mode changes.
+    decision is explicit and inspectable - no silent mode changes.
     """
     spmd_mode: str              # 'spmd', 'spmd_single_solve', 'chunked', 'sparse_cpu'
     lambda_strategy: str        # 'reml', 'freml', 'fellner_schall'
@@ -6426,7 +6426,7 @@ def auto_select_distributed_mode(p, n, n_smooth, mesh, interconnect="nvlink",
     v1.14: Gate SPMD mode based on comms model AND outer-loop cost.
     Returns DistributedModeSelection (never silently changes behavior).
 
-    This is NOT advisory — it enforces the scaling limits.
+    This is NOT advisory - it enforces the scaling limits.
 
     Gates on TWO dimensions:
       - p: determines all-reduce cost (p² bytes) and solve cost (p³ FLOPS)
@@ -6468,7 +6468,7 @@ def auto_select_distributed_mode(p, n, n_smooth, mesh, interconnect="nvlink",
 
     # Gate 2 (v1.14): lambda strategy selection
     if user_method is not None:
-        # User explicitly chose — respect it, but warn if costly
+        # User explicitly chose - respect it, but warn if costly
         lambda_strategy = user_method
         lambda_reason = ""
         if user_method == "REML" and n_smooth > 50:
@@ -6517,7 +6517,7 @@ def auto_select_distributed_mode(p, n, n_smooth, mesh, interconnect="nvlink",
         p=p, n_smooth=n_smooth, dense_bytes=dense_bytes,
     )
 
-    # Surface the decision — always logged, never silent
+    # Surface the decision - always logged, never silent
     if lambda_reason:
         import warnings
         warnings.warn(lambda_reason)
@@ -6525,13 +6525,13 @@ def auto_select_distributed_mode(p, n, n_smooth, mesh, interconnect="nvlink",
     return result
 ```
 
-**v1.14: The `lambda_strategy_reason` field is mandatory in `GAMResult`.** If the selector auto-switched from Newton REML to fREML or Fellner-Schall, `GAMResult.lambda_strategy_reason` contains the explanation and the override instruction. `summary()` prints it. This ensures the behavioral change is never silent — the user always sees what happened and how to revert it.
+**v1.14: The `lambda_strategy_reason` field is mandatory in `GAMResult`.** If the selector auto-switched from Newton REML to fREML or Fellner-Schall, `GAMResult.lambda_strategy_reason` contains the explanation and the override instruction. `summary()` prints it. This ensures the behavioral change is never silent - the user always sees what happened and how to revert it.
 
 For `'spmd_single_solve'` mode (p > 3000 on single-host): XtWX formation uses all-reduce as usual, but `jnp.linalg.solve` runs on device 0 only and β is broadcast. This avoids N redundant O(p³) solves at the cost of one p-vector broadcast (~24KB for p=3000, negligible).
 
 ### 16.8 Distributed Knot Placement
 
-Knot selection (max-min distance subsample) is a **Phase 1 (setup) operation**. Phase 1 is CPU/NumPy (Section 4.4). In distributed mode, data is sharded across devices, but we do NOT run knot selection as a JAX program — that would violate the Phase 1/Phase 2 boundary.
+Knot selection (max-min distance subsample) is a **Phase 1 (setup) operation**. Phase 1 is CPU/NumPy (Section 4.4). In distributed mode, data is sharded across devices, but we do NOT run knot selection as a JAX program - that would violate the Phase 1/Phase 2 boundary.
 
 Instead, each process contributes a local subsample, and a coordinator runs the final selection on CPU:
 
@@ -6544,7 +6544,7 @@ def distributed_knot_selection(data_path, variable_name, n_knots, process_index,
     Each process loads its local data shard (NumPy), subsamples,
     then process 0 gathers candidates and runs final selection.
 
-    This runs BEFORE jax.device_put — no JAX arrays exist yet.
+    This runs BEFORE jax.device_put - no JAX arrays exist yet.
     """
     # Step 1: each process loads its local shard and subsamples (NumPy)
     local_data = _load_local_column(data_path, variable_name, process_index)
@@ -6567,9 +6567,9 @@ def distributed_knot_selection(data_path, variable_name, n_knots, process_index,
 
 This preserves the clean boundary: knots are computed in Phase 1 (CPU/NumPy), then used during basis construction (also Phase 1), and the resulting X matrix is `jax.device_put` into the SPMD mesh for Phase 2. No JAX arrays or collectives during setup.
 
-**v1.14: Factor-level ordering in distributed setup.** When the model contains factor-by smooths (Section 5.7), the coordinator must also broadcast the canonical factor-level ordering alongside knots. Each process may see a different subset of factor levels in its local data shard. If processes independently compute `np.unique(fac)` on their local data, they can produce different level orderings (or miss levels entirely), which means their locally-assembled X matrices have different column semantics — catastrophic for the XtWX all-reduce (see SPMD invariant "Identical setup outputs across hosts"). The fix: process 0 computes the global level ordering from the gathered factor columns, broadcasts it, and all processes use that ordering in `FactorBySmooth.setup()`. This is the same gather/broadcast pattern as knot selection, adds negligible communication (a list of level labels), and runs entirely in Phase 1 (NumPy/Ray, no JAX).
+**v1.14: Factor-level ordering in distributed setup.** When the model contains factor-by smooths (Section 5.7), the coordinator must also broadcast the canonical factor-level ordering alongside knots. Each process may see a different subset of factor levels in its local data shard. If processes independently compute `np.unique(fac)` on their local data, they can produce different level orderings (or miss levels entirely), which means their locally-assembled X matrices have different column semantics - catastrophic for the XtWX all-reduce (see SPMD invariant "Identical setup outputs across hosts"). The fix: process 0 computes the global level ordering from the gathered factor columns, broadcasts it, and all processes use that ordering in `FactorBySmooth.setup()`. This is the same gather/broadcast pattern as knot selection, adds negligible communication (a list of level labels), and runs entirely in Phase 1 (NumPy/Ray, no JAX).
 
-**Coordinator broadcast contract (v1.14).** The coordinator broadcasts a `SetupManifest` — not just knots and level orderings, but the full specification needed to assemble X identically on every host:
+**Coordinator broadcast contract (v1.14).** The coordinator broadcasts a `SetupManifest` - not just knots and level orderings, but the full specification needed to assemble X identically on every host:
 
 ```python
 # distributed/setup_manifest.py
@@ -6588,18 +6588,18 @@ class SetupManifest:
     inclusion rationale:
 
     HASHED (affect column layout):
-      knots              — different knots → different basis → different columns
-      factor_levels      — different level ordering → columns in wrong blocks
-      level_to_index     — redundant with factor_levels but cheap to verify
-      empty_level_policy — 'keep' vs 'drop' changes column count
-      constraint_spec    — different constraints → different effective columns
-      total_p            — summary check
-      smooth_term_order  — order of smooth terms in the model matrix
-      basis_types        — different basis type → different columns
+      knots              - different knots → different basis → different columns
+      factor_levels      - different level ordering → columns in wrong blocks
+      level_to_index     - redundant with factor_levels but cheap to verify
+      empty_level_policy - 'keep' vs 'drop' changes column count
+      constraint_spec    - different constraints → different effective columns
+      total_p            - summary check
+      smooth_term_order  - order of smooth terms in the model matrix
+      basis_types        - different basis type → different columns
 
     NOT HASHED (don't affect column layout):
-      uv_lock_hash       — checked separately (exact match, not hash)
-      checksum itself    — obviously
+      uv_lock_hash       - checked separately (exact match, not hash)
+      checksum itself    - obviously
     """
     knots: dict[str, np.ndarray]          # variable -> knot array
     factor_levels: dict[str, list[str]]   # by-variable -> ordered level list
@@ -6646,7 +6646,7 @@ def _compute_uv_lock_hash():
 
     If all hosts used `uv sync --frozen` from the same uv.lock,
     this hash is identical everywhere and version verification is
-    a single string comparison — no per-package iteration needed.
+    a single string comparison - no per-package iteration needed.
 
     Falls back to per-package version collection if uv.lock is
     not found (e.g., user installed via pip directly).
@@ -6700,7 +6700,7 @@ def verify_local_assembly(X_local_shape, manifest, process_index):
         raise RuntimeError(
             f"Process {process_index}: assembled X has "
             f"{X_local_shape[1]} columns, expected {manifest.total_p}. "
-            f"Column layout divergence detected — aborting."
+            f"Column layout divergence detected - aborting."
         )
 
     # Check 2: checksum integrity
@@ -6713,7 +6713,7 @@ def verify_local_assembly(X_local_shape, manifest, process_index):
 
     # Check 3 is performed during assembly (see FactorBySmooth.setup)
 
-    # Check 4 (v1.16): uv.lock hash — single comparison replaces
+    # Check 4 (v1.16): uv.lock hash - single comparison replaces
     # per-package version iteration. If this passes, ALL package
     # versions (including transitive deps) are identical.
     local_lock_hash = _compute_uv_lock_hash()
@@ -6732,8 +6732,8 @@ def verify_local_assembly(X_local_shape, manifest, process_index):
 | Situation | Policy | Rationale |
 |---|---|---|
 | **Level present globally but zero rows on this host** | `keep`: allocate the block columns, fill with zeros. The host's local X has the correct column count; zero rows contribute nothing to XtWX. | Dropping the block would change the column layout, breaking the all-reduce invariant. Zero-row blocks cost columns but no FLOPS. |
-| **Level present in training but absent in new prediction data** | `keep`: the block columns exist in the coefficient vector. Prediction for that level returns zero contribution (no rows activate those columns). | Standard GAM prediction behavior — β for unused levels exists but isn't evaluated. |
-| **Novel level in prediction data not seen during training** | `error`: raise with guidance to refit or use a factor-smooth (`bs="fs"`) model that shrinks toward a population smooth. | Factor-by has no sharing between levels. A novel level has no estimated β — prediction would be meaningless. This differs from `bs="fs"`, which has a population-level smooth to fall back on. |
+| **Level present in training but absent in new prediction data** | `keep`: the block columns exist in the coefficient vector. Prediction for that level returns zero contribution (no rows activate those columns). | Standard GAM prediction behavior - β for unused levels exists but isn't evaluated. |
+| **Novel level in prediction data not seen during training** | `error`: raise with guidance to refit or use a factor-smooth (`bs="fs"`) model that shrinks toward a population smooth. | Factor-by has no sharing between levels. A novel level has no estimated β - prediction would be meaningless. This differs from `bs="fs"`, which has a population-level smooth to fall back on. |
 
 ### 16.9 API Integration
 
@@ -6808,12 +6808,12 @@ class GAMResult:
         self.formula: str = ""
         self.X: np.ndarray = None       # Model matrix
         self.offset: np.ndarray = None
-        # v1.8: Fit diagnostics — surfaced in summary()
+        # v1.8: Fit diagnostics - surfaced in summary()
         self.n_iter: int = 0            # PIRLS iterations used
         self.instability_count: int = 0 # Cholesky fail + NaN + halving exhaust
         self.regularization_applied: float = 0.0  # Max jitter added to H
         self.execution_path: str = ""   # Which path actually ran
-        # v1.15: Routing diagnostics — surfaced in summary()
+        # v1.15: Routing diagnostics - surfaced in summary()
         # These make every automatic decision explicit and reversible.
         self.execution_path_reason: str = ""   # WHY this path was selected
         self.lambda_strategy: str = ""         # REML / fREML / fellner_schall
@@ -7069,14 +7069,14 @@ LOOSE    = ToleranceClass(rtol=1e-3,  atol=1e-5,  label="loose")
 | Quantity | STRICT (CPU self-consistency) | MODERATE (GPU vs CPU) | LOOSE (vs R mgcv) |
 |---|---|---|---|
 | Link function g(μ), g⁻¹(η) | ✓ (1e-12) | ✓ (1e-10) | ✓ (1e-12) |
-| Basis matrix X entries | ✓ (1e-10) | ✓ (1e-8) | ✓ (1e-6) — knot placement may differ |
+| Basis matrix X entries | ✓ (1e-10) | ✓ (1e-8) | ✓ (1e-6) - knot placement may differ |
 | Penalty matrix S entries | ✓ (1e-10) | ✓ (1e-8) | ✓ (1e-6) |
-| Deviance at convergence | ✓ (1e-10) | ✓ (1e-8) | — (1e-6) |
-| Coefficients β | — | — (1e-6) | — (1e-4) — ill-conditioned models vary more |
-| Smoothing parameters λ | — | — (1e-4) | — (1e-3) — REML is flat near optimum |
-| EDF per term | — | — (1e-4) | — (1e-2) — sensitive to λ differences |
-| p-values | — | — | — (1e-2) — notoriously unstable |
-| AD gradient vs finite-diff | — (1e-5) | ✓ (1e-5) | N/A |
+| Deviance at convergence | ✓ (1e-10) | ✓ (1e-8) | - (1e-6) |
+| Coefficients β | - | - (1e-6) | - (1e-4) - ill-conditioned models vary more |
+| Smoothing parameters λ | - | - (1e-4) | - (1e-3) - REML is flat near optimum |
+| EDF per term | - | - (1e-4) | - (1e-2) - sensitive to λ differences |
+| p-values | - | - | - (1e-2) - notoriously unstable |
+| AD gradient vs finite-diff | - (1e-5) | ✓ (1e-5) | N/A |
 
 **Path-specific tolerance rules:**
 
@@ -7092,10 +7092,10 @@ The `set_deterministic(True)` flag is a feature toggle, not a universal CI mode.
 
 | Test suite | `deterministic=` | Why |
 |---|---|---|
-| Unit tests (basis, link, penalty) | `False` (default) | These are deterministic by construction — no GPU reduce, no chunking. Testing with the flag off ensures they don't accidentally rely on it. |
+| Unit tests (basis, link, penalty) | `False` (default) | These are deterministic by construction - no GPU reduce, no chunking. Testing with the flag off ensures they don't accidentally rely on it. |
 | Cross-path tests (Dense-GPU vs Sparse-CPU) | `False` (default) | MODERATE tolerance absorbs non-determinism. These test the same code paths users run. |
 | vs-R tests (JaxGAM vs mgcv) | `False` (default) | LOOSE tolerance. No point enabling determinism for cross-implementation comparison. |
-| **CI determinism suite** (separate job) | **`True`** | Dedicated job, pinned JAX + CUDA + driver versions. Runs a subset of cross-path tests at STRICT tolerance. Checks that two identical runs produce identical results. Fails if STRICT tolerance is violated — this catches XLA codegen regressions. |
+| **CI determinism suite** (separate job) | **`True`** | Dedicated job, pinned JAX + CUDA + driver versions. Runs a subset of cross-path tests at STRICT tolerance. Checks that two identical runs produce identical results. Fails if STRICT tolerance is violated - this catches XLA codegen regressions. |
 | Multi-device SPMD tests | `False` (default) | XLA all-reduce is deterministic within a compiled program. MODERATE tolerance. |
 | Out-of-core tests (ChunkedJAXProvider) | `False` for default; `True` for reproducibility check | Default chunk ordering may vary. The `True` suite fixes chunk order and checks MODERATE. |
 
@@ -7152,7 +7152,7 @@ def test_extended_family_gradient_accuracy(family_class):
     custom_jvp) must match finite differences at MODERATE tolerance
     across the parameter space, including extreme regions.
 
-    This test is family-agnostic — it validates the gradient regardless
+    This test is family-agnostic - it validates the gradient regardless
     of whether it came from standard AD or a custom rule. The v1.18
     claim is that stable forward passes make standard AD sufficient for
     all families except Tweedie.
@@ -7201,9 +7201,9 @@ def test_deviance_residual_identity(family_class, test_data):
         )
 ```
 
-**Hard-gate invariants — never LOOSE (v1.15):**
+**Hard-gate invariants - never LOOSE (v1.15):**
 
-The tolerance strategy allows LOOSE comparisons vs R for quantities like p-values and EDF. But some mathematical invariants must hold regardless of mgcv comparison tolerance. These are correctness gates, not comparison tests — if they fail, the implementation is wrong, not merely imprecise:
+The tolerance strategy allows LOOSE comparisons vs R for quantities like p-values and EDF. But some mathematical invariants must hold regardless of mgcv comparison tolerance. These are correctness gates, not comparison tests - if they fail, the implementation is wrong, not merely imprecise:
 
 | Invariant | Tolerance | Rationale |
 |---|---|---|
@@ -7214,7 +7214,7 @@ The tolerance strategy allows LOOSE comparisons vs R for quantities like p-value
 | **EDF ∈ [0, p] per term, total EDF ∈ [0, n]** | Exact bounds | Negative or impossible EDF → wrong hat matrix trace. |
 | **Deviance ≥ 0** | Exact | Negative deviance → log-likelihood computation error. |
 | **Converged β produces finite η, μ** | Exact (no NaN/Inf) | NaN in converged model → family link implementation bug. |
-| **Cross-path β agreement** | MODERATE (1e-6) | Dense-GPU and Sparse-CPU must agree. If they don't, one path has a bug. Never LOOSE — these are the same algorithm, different arithmetic. |
+| **Cross-path β agreement** | MODERATE (1e-6) | Dense-GPU and Sparse-CPU must agree. If they don't, one path has a bug. Never LOOSE - these are the same algorithm, different arithmetic. |
 | **bam() never allocates dense (n, p)** | Exact (assert) | Memory invariant from Section 10.5. If violated, bam loses its purpose. |
 
 These invariants are checked in every CI run, not just the determinism suite. A failure in any of them blocks the build regardless of tolerance class.
@@ -7715,16 +7715,16 @@ The following test matrix ensures comprehensive coverage. Each cell must pass:
 | s(x, bs="cr") | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | s(x, bs="ps") | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | s(x, bs="cc") | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| te(x1, x2) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | — |
-| ti(x1, x2) | ✓ | ✓ | ✓ | — | — | — | — | — |
-| s(g, bs="re") | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — |
-| s(x, g, bs="fs") | ✓ | ✓ | — | — | — | — | — | — |
-| s(x, by=g) | ✓ | ✓ | ✓ | — | — | — | — | — |
+| te(x1, x2) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - | - |
+| ti(x1, x2) | ✓ | ✓ | ✓ | - | - | - | - | - |
+| s(g, bs="re") | ✓ | ✓ | ✓ | ✓ | ✓ | - | - | - |
+| s(x, g, bs="fs") | ✓ | ✓ | - | - | - | - | - | - |
+| s(x, by=g) | ✓ | ✓ | ✓ | - | - | - | - | - |
 | Fixed effects | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| select=TRUE | ✓ | ✓ | ✓ | — | — | — | — | — |
-| method=GCV | ✓ | — | — | — | — | — | — | — |
+| select=TRUE | ✓ | ✓ | ✓ | - | - | - | - | - |
+| method=GCV | ✓ | - | - | - | - | - | - | - |
 | method=REML | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| bam() | ✓ | ✓ | ✓ | — | ✓ | — | — | — |
+| bam() | ✓ | ✓ | ✓ | - | ✓ | - | - | - |
 
 ### 18.7 Reference Data Generation Script
 
@@ -7889,9 +7889,9 @@ def benchmark_pirls_scaling():
 |---|---|---|---|
 | 4.1 Extended PIRLS (gam.fit5) | Fitting Agent | 3.1, 1.3 | Extended family fitting |
 | 4.2 Negative Binomial | Family Agent | 4.1 | nb() with stable lgamma forward pass, validated via jax.grad |
-| 4.3 Tweedie + custom_jvp | Family Agent | 4.1 | tw() with series derivative rules — only family needing custom_jvp |
-| 4.4 Beta regression | Family Agent | 4.1 | betar() — stable forward, plain AD |
-| 4.5 Ordered categorical | Family Agent | 4.1 | ocat() — log_diff_exp forward, plain AD |
+| 4.3 Tweedie + custom_jvp | Family Agent | 4.1 | tw() with series derivative rules - only family needing custom_jvp |
+| 4.4 Beta regression | Family Agent | 4.1 | betar() - stable forward, plain AD |
+| 4.5 Ordered categorical | Family Agent | 4.1 | ocat() - log_diff_exp forward, plain AD |
 | 4.6 Zero-inflated (ZIP, ZAGA) | Family Agent | 4.1 | All zero-inflated families |
 | 4.7 Location-scale families | Family Agent | 4.1 | gaulss, gammals, shash, gevlss |
 | 4.8 Cox PH | Family Agent | 4.1 | Survival GAM with logsumexp-based partial ll, plain AD |
@@ -7978,25 +7978,25 @@ def benchmark_pirls_scaling():
 
 | Family | Type | Extra Params | Default Link | Log-lik Implementation |
 |---|---|---|---|---|
-| gaussian | Standard | — | identity | Closed form |
-| binomial | Standard | — | logit | Closed form |
-| poisson | Standard | — | log | Closed form |
-| Gamma | Standard | — | inverse | Closed form |
-| inverse.gaussian | Standard | — | 1/μ² | Closed form |
+| gaussian | Standard | - | identity | Closed form |
+| binomial | Standard | - | logit | Closed form |
+| poisson | Standard | - | log | Closed form |
+| Gamma | Standard | - | inverse | Closed form |
+| inverse.gaussian | Standard | - | 1/μ² | Closed form |
 | nb | Extended | θ (size) | log | gammaln series |
 | negbin | Extended | θ (fixed) | log | gammaln series |
 | tw | Extended | p (power) | log | Tweedie series/FFT |
 | betar | Extended | φ (precision) | logit | Beta density |
-| ocat | Extended | θ (cut points) | — | Ordered probit/logit |
-| multinom | Extended | — | — | Softmax categorical |
+| ocat | Extended | θ (cut points) | - | Ordered probit/logit |
+| multinom | Extended | - | - | Softmax categorical |
 | zip | Extended | π (zero prob) | log | Mixture |
-| cox.ph | Extended | — | log | Partial likelihood |
+| cox.ph | Extended | - | log | Partial likelihood |
 | scat | Extended | ν (df) | identity | Scaled t |
-| gaulss | Location-scale | — | identity, log | Normal with σ(x) |
-| gammals | Location-scale | — | log, log | Gamma with shape(x) |
-| gevlss | Location-scale | — | identity, log, logit | GEV with all params |
-| shash | Location-scale | — | identity, log, identity, log | Sinh-arcsinh |
-| ziplss | Location-scale | — | log, logit | ZIP with both params |
+| gaulss | Location-scale | - | identity, log | Normal with σ(x) |
+| gammals | Location-scale | - | log, log | Gamma with shape(x) |
+| gevlss | Location-scale | - | identity, log, logit | GEV with all params |
+| shash | Location-scale | - | identity, log, identity, log | Sinh-arcsinh |
+| ziplss | Location-scale | - | log, logit | ZIP with both params |
 
 ## Appendix C: Reference Test Cases
 
@@ -8031,7 +8031,7 @@ def test_function_additive():
 |---|---|---|---|
 | Coefficients β | 1e-4 | 1e-3 | After matching parameterization |
 | Fitted values μ | 1e-4 | 1e-3 | Most reliable comparison |
-| Smoothing params λ | — | 0.1 (10%) | λ is on log scale; 10% is tight |
+| Smoothing params λ | - | 0.1 (10%) | λ is on log scale; 10% is tight |
 | EDF per term | 0.5 | 0.05 | Can vary due to λ differences |
 | Deviance | 1e-2 | 1e-3 | Should match closely |
 | Scale estimate | 1e-3 | 1e-2 | Depends on EDF |

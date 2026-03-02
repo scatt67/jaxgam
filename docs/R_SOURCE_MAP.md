@@ -15,7 +15,7 @@ Add the export to your shell profile (`.zshrc`, `.bashrc`, etc.) so it persists.
 
 ## How to Use This File
 
-**When implementing a task**, find it in the table below. Read the listed R functions *before* writing Python using the local clone. The R code is the ground truth for numerical behavior — edge cases, special handling, and algorithmic choices that aren't captured in the design doc.
+**When implementing a task**, find it in the table below. Read the listed R functions *before* writing Python using the local clone. The R code is the ground truth for numerical behavior - edge cases, special handling, and algorithmic choices that aren't captured in the design doc.
 
 **Source layout:**
 ```
@@ -33,7 +33,7 @@ $MGCV_SOURCE/R/smooth.r
 **Reading R code tips for agents:**
 - R uses 1-based indexing. Adjust when porting.
 - `<-` is assignment. `<<-` is assignment to parent scope.
-- `.C()` and `.Call()` invoke compiled C code in `src/`. The C implementations are the actual hot paths — the R wrappers often just do argument validation.
+- `.C()` and `.Call()` invoke compiled C code in `src/`. The C implementations are the actual hot paths - the R wrappers often just do argument validation.
 - `@` accesses S4 slots. `$` accesses list elements or S3 components.
 - `mgcv:::` accesses unexported (internal) functions. These are often the ones we need most.
 
@@ -48,18 +48,18 @@ $MGCV_SOURCE/
 │   ├── smooth.r          # All smooth constructors (basis + penalty)
 │   ├── fast-REML.r       # REML/ML criterion, Newton optimizer
 │   ├── gam.r             # Top-level gam(), predict.gam, summary.gam
-│   ├── bam.r             # bam() — NOT needed for v1.0
-│   ├── gamm.r            # gamm() — NOT needed for v1.0
+│   ├── bam.r             # bam() - NOT needed for v1.0
+│   ├── gamm.r            # gamm() - NOT needed for v1.0
 │   ├── plots.r           # plot.gam
 │   ├── families.r        # Family definitions (not extended)
-│   ├── efam.r            # Extended families — NOT needed for v1.0
-│   ├── sparse.r          # Sparse matrix routines — NOT needed for v1.0
+│   ├── efam.r            # Extended families - NOT needed for v1.0
+│   ├── sparse.r          # Sparse matrix routines - NOT needed for v1.0
 │   └── mgcv.r            # Package-level utilities
 ├── src/                  # C source files
 │   ├── tprs.c            # TPRS eigendecomposition (the real implementation)
 │   ├── mat.c             # Matrix operations (Cholesky, QR, etc.)
 │   ├── gdi.c             # Generalized derivative information (REML)
-│   ├── discrete.c        # Discretization for bam — NOT needed for v1.0
+│   ├── discrete.c        # Discretization for bam - NOT needed for v1.0
 │   └── mgcv.c            # Package init, misc C utilities
 └── man/                  # Documentation (useful for parameter descriptions)
     ├── gam.Rd
@@ -73,7 +73,7 @@ $MGCV_SOURCE/
 
 ### Phase 1: Foundation
 
-#### Task 1.1 — Link Functions
+#### Task 1.1 - Link Functions
 
 | R file | Function | What it does |
 |---|---|---|
@@ -82,36 +82,36 @@ $MGCV_SOURCE/
 
 **Key detail:** R's `mu.eta` is dμ/dη (derivative of inverse link), not dη/dμ. Make sure our naming matches.
 
-#### Task 1.2 — Families
+#### Task 1.2 - Families
 
 | R file | Function | What it does |
 |---|---|---|
 | `R/families.r` | `gaussian()` | Returns family object with `variance`, `dev.resids`, `aic`, `initialize`, `validmu` |
 | `R/families.r` | `binomial()` | Same structure. Note `initialize` handles proportion vs count input |
-| `R/families.r` | `poisson()` | Note `dev.resids` uses `2 * wt * (y * log(ifelse(y==0, 1, y/mu)) - (y - mu))` — the `ifelse` for y=0 is critical |
+| `R/families.r` | `poisson()` | Note `dev.resids` uses `2 * wt * (y * log(ifelse(y==0, 1, y/mu)) - (y - mu))` - the `ifelse` for y=0 is critical |
 | `R/families.r` | `Gamma()` | Note capital G. `dev.resids` uses `-2 * wt * (log(ifelse(y==0, 1, y/mu)) - (y - mu)/mu)` |
 
-**Key detail:** R's `dev.resids` returns *per-observation* deviance contributions (not squared residuals and not summed). The total deviance is `sum(dev.resids(...))`. Watch for the sign — deviance residuals are `sign(y - mu) * sqrt(abs(dev.resids))`.
+**Key detail:** R's `dev.resids` returns *per-observation* deviance contributions (not squared residuals and not summed). The total deviance is `sum(dev.resids(...))`. Watch for the sign - deviance residuals are `sign(y - mu) * sqrt(abs(dev.resids))`.
 
-**Key detail:** `initialize` expressions in R families use the `eval(family$initialize)` pattern with `mustart` being set in the calling environment. This is R-specific — in Python, just return a starting μ vector.
+**Key detail:** `initialize` expressions in R families use the `eval(family$initialize)` pattern with `mustart` being set in the calling environment. This is R-specific - in Python, just return a starting μ vector.
 
-#### Task 1.3 — Penalty Matrices
+#### Task 1.3 - Penalty Matrices
 
 | R file | Function | What it does |
 |---|---|---|
-| `R/smooth.r` | `smooth.construct.*.smooth.spec()` (each smooth type) | Returns `$S` — list of penalty matrices |
+| `R/smooth.r` | `smooth.construct.*.smooth.spec()` (each smooth type) | Returns `$S` - list of penalty matrices |
 | `R/smooth.r` | `smooth2penalty()` | Converts smooth object to penalty representation |
 
 **Key detail:** Each smooth's `$S` is a *list* of penalty matrices (usually length 1, but tensor products have one per marginal). The `$sp` vector in the fitted model gives the corresponding smoothing parameters.
 
-#### Task 1.4 — TPRS Basis and Penalty
+#### Task 1.4 - TPRS Basis and Penalty
 
 | R file | Function | What it does |
 |---|---|---|
 | `R/smooth.r` | `smooth.construct.tp.smooth.spec()` | **START HERE.** R-level TPRS constructor. Calls C code for the heavy lifting. |
 | `R/smooth.r` | `Predict.matrix.tprs.smooth()` | Prediction matrix construction for new data |
 | `R/smooth.r` | `null.space.dimension()` | Computes null space dimension for given d and m |
-| `src/tprs.c` | `construct_tprs()` | **THE REAL IMPLEMENTATION.** Eigendecomposition, knot selection, basis truncation. Read this carefully — the R wrapper just packages arguments. |
+| `src/tprs.c` | `construct_tprs()` | **THE REAL IMPLEMENTATION.** Eigendecomposition, knot selection, basis truncation. Read this carefully - the R wrapper just packages arguments. |
 | `src/tprs.c` | `gen_tps_grad()` | TPS semi-kernel evaluation η(r) |
 | `src/tprs.c` | `tprs_setup()` | Knot selection via max-min distance |
 
@@ -120,7 +120,7 @@ $MGCV_SOURCE/
 - `ts` (shrinkage) adds an extra penalty: the eigenvalues corresponding to the null space get a small penalty (1e-4 × max eigenvalue of the wiggly penalty). The exact scaling matters for matching R.
 - Knot selection: when n > k, mgcv selects k knots from the data using a greedy max-min distance algorithm (`tprs_setup` in `src/tprs.c`). The knot order affects the basis, so it must match.
 
-#### Task 1.5 — Cubic Regression Splines
+#### Task 1.5 - Cubic Regression Splines
 
 | R file | Function | What it does |
 |---|---|---|
@@ -131,20 +131,20 @@ $MGCV_SOURCE/
 | `R/smooth.r` | `place.knots()` | Quantile-based knot placement |
 | `src/mat.c` | `CRpenalty()` | C implementation of cubic spline penalty |
 
-**Key detail:** mgcv's cubic regression splines are NOT B-splines. They use a specific natural spline basis evaluated at the knots directly. The penalty is the integrated squared second derivative, computed analytically from the spline coefficients. `place.knots()` uses quantiles of unique data values, not raw quantiles — this matters when data has ties.
+**Key detail:** mgcv's cubic regression splines are NOT B-splines. They use a specific natural spline basis evaluated at the knots directly. The penalty is the integrated squared second derivative, computed analytically from the spline coefficients. `place.knots()` uses quantiles of unique data values, not raw quantiles - this matters when data has ties.
 
-#### Task 1.6 — Tensor Products
+#### Task 1.6 - Tensor Products
 
 | R file | Function | What it does |
 |---|---|---|
 | `R/smooth.r` | `smooth.construct.tensor.smooth.spec()` | `te()` constructor |
 | `R/smooth.r` | `tensor.prod.model.matrix()` | Row-wise Kronecker product of marginal bases |
 | `R/smooth.r` | `tensor.prod.penalties()` | Penalty construction from marginal penalties |
-| `R/smooth.r` | `smooth.construct.t2.smooth.spec()` | `t2()` — different penalty structure than `te()` |
+| `R/smooth.r` | `smooth.construct.t2.smooth.spec()` | `t2()` - different penalty structure than `te()` |
 
-**Key detail:** `te()` penalties are `I ⊗ S_1`, `S_2 ⊗ I`, etc. — one penalty per marginal, each Kronecker-producted with identity matrices for the other marginals. `ti()` is `te()` with main effects removed via constraints. `t2()` uses a different penalty construction (sum of Kronecker products) — defer `t2` to later if needed.
+**Key detail:** `te()` penalties are `I ⊗ S_1`, `S_2 ⊗ I`, etc. - one penalty per marginal, each Kronecker-producted with identity matrices for the other marginals. `ti()` is `te()` with main effects removed via constraints. `t2()` uses a different penalty construction (sum of Kronecker products) - defer `t2` to later if needed.
 
-#### Task 1.7 — Formula Parser
+#### Task 1.7 - Formula Parser
 
 | R file | Function | What it does |
 |---|---|---|
@@ -153,20 +153,20 @@ $MGCV_SOURCE/
 | `R/smooth.r` | `s()` | Smooth term specification (captures arguments, doesn't build basis) |
 | `R/smooth.r` | `te()`, `ti()`, `t2()` | Tensor product term specifications |
 
-**Key detail:** `interpret.gam()` returns a list with `$pf` (parametric formula), `$smooth.spec` (list of smooth specs), and `$response` (response name). Each smooth spec is essentially our `SmoothSpec` — it holds the variable names, basis type, dimension, and options, but doesn't construct the basis yet. That happens later in `gam.setup()`.
+**Key detail:** `interpret.gam()` returns a list with `$pf` (parametric formula), `$smooth.spec` (list of smooth specs), and `$response` (response name). Each smooth spec is essentially our `SmoothSpec` - it holds the variable names, basis type, dimension, and options, but doesn't construct the basis yet. That happens later in `gam.setup()`.
 
-#### Task 1.8 — Factor-By Smooths
+#### Task 1.8 - Factor-By Smooths
 
 | R file | Function | What it does |
 |---|---|---|
 | `R/smooth.r` | `smooth.construct()` (search for `by.var`) | The `by` variable handling in smooth construction |
 | `R/gam.r` | `gam.setup()` (search for `by`) | How `by` variables are resolved during model setup |
 
-**Key detail:** When `by` is a factor, mgcv creates one smooth per level and sets `$by.level` on each. The design matrix is block-diagonal — row i has nonzeros only in the block for its factor level. The penalty is duplicated per level (each gets its own λ). When `by` is numeric, the basis matrix is simply multiplied column-wise by the numeric variable.
+**Key detail:** When `by` is a factor, mgcv creates one smooth per level and sets `$by.level` on each. The design matrix is block-diagonal - row i has nonzeros only in the block for its factor level. The penalty is duplicated per level (each gets its own λ). When `by` is numeric, the basis matrix is simply multiplied column-wise by the numeric variable.
 
 **Key detail:** mgcv detects factor vs numeric `by` using `is.factor()`. Integers are NOT treated as factors. Character vectors are NOT automatically converted. Only explicit R factors trigger the factor-by path.
 
-#### Task 1.9 — Identifiability Constraints
+#### Task 1.9 - Identifiability Constraints
 
 | R file | Function | What it does |
 |---|---|---|
@@ -178,7 +178,7 @@ $MGCV_SOURCE/
 
 **Key detail:** The order of constraint application matters. `gam.side()` processes smooths in a specific order. If constraints are applied in a different order, the basis differs and results won't match R.
 
-#### Task 1.10 — Design Matrix Assembly
+#### Task 1.10 - Design Matrix Assembly
 
 | R file | Function | What it does |
 |---|---|---|
@@ -191,7 +191,7 @@ $MGCV_SOURCE/
 
 ### Phase 2: Fitting
 
-#### Task 2.3 — PIRLS Inner Loop
+#### Task 2.3 - PIRLS Inner Loop
 
 | R file | Function | What it does |
 |---|---|---|
@@ -206,7 +206,7 @@ $MGCV_SOURCE/
 - Working response: `z <- (eta - offset) + (y - mu) / mu.eta.val`. Note the offset handling.
 - Initialization: `eval(family$initialize)` sets `mustart`. Then `eta <- family$linkfun(mustart)`.
 
-#### Task 2.4 — REML Criterion
+#### Task 2.4 - REML Criterion
 
 | R file | Function | What it does |
 |---|---|---|
@@ -217,24 +217,24 @@ $MGCV_SOURCE/
 | `R/gam.fit.r` | `gam.fit3()` (search for `reml` or `ldetS`) | Where REML is evaluated during fitting |
 
 **Key details:**
-- The REML criterion in mgcv is: `V = deviance + log|XtWX + S_λ| - log|S_λ*|` where `S_λ*` is the penalty projected onto its range. The `ldetS` (log determinant of S_λ) computation is subtle — it only includes the non-zero eigenvalues.
+- The REML criterion in mgcv is: `V = deviance + log|XtWX + S_λ| - log|S_λ*|` where `S_λ*` is the penalty projected onto its range. The `ldetS` (log determinant of S_λ) computation is subtle - it only includes the non-zero eigenvalues.
 - `gdi()` in C computes the derivatives of V w.r.t. `log(sp)` analytically. This is what we replace with `jax.grad`. But reading the analytical derivatives helps validate our AD output.
-- `Sl.initial.repara()` reparameterizes the problem so each penalty has a nice form. This is an optimization for the Newton step — we may or may not need it.
+- `Sl.initial.repara()` reparameterizes the problem so each penalty has a nice form. This is an optimization for the Newton step - we may or may not need it.
 
-#### Task 2.5 — Newton Outer Optimizer
+#### Task 2.5 - Newton Outer Optimizer
 
 | R file | Function | What it does |
 |---|---|---|
 | `R/fast-REML.r` | `fast.REML.fit()` | The outer Newton loop. Search for `while` to find the iteration. |
 | `R/gam.fit.r` | `gam.fit3()` (search for `while`) | The outer-outer loop that alternates between PIRLS and λ updates |
 
-**Key detail:** mgcv's outer iteration in `gam.fit3` is NOT a clean Newton loop on REML. It interleaves PIRLS convergence checks with smoothing parameter updates. The exact interleaving matters for convergence on difficult models. Read the `while` loop structure in `gam.fit3` carefully — it has PIRLS inner iterations nested inside λ update outer iterations, with a specific convergence protocol.
+**Key detail:** mgcv's outer iteration in `gam.fit3` is NOT a clean Newton loop on REML. It interleaves PIRLS convergence checks with smoothing parameter updates. The exact interleaving matters for convergence on difficult models. Read the `while` loop structure in `gam.fit3` carefully - it has PIRLS inner iterations nested inside λ update outer iterations, with a specific convergence protocol.
 
 ---
 
 ### Phase 3: Post-Estimation
 
-#### Task 3.1 — Prediction
+#### Task 3.1 - Prediction
 
 | R file | Function | What it does |
 |---|---|---|
@@ -244,7 +244,7 @@ $MGCV_SOURCE/
 
 **Key detail:** `predict.gam()` with `type="lpmatrix"` returns the full prediction matrix (our `X_p`). This is invaluable for debugging: if `X_p` matches, any prediction difference is in the coefficients, not the basis construction.
 
-#### Task 3.2 — Summary and EDF
+#### Task 3.2 - Summary and EDF
 
 | R file | Function | What it does |
 |---|---|---|
@@ -254,7 +254,7 @@ $MGCV_SOURCE/
 
 **Key detail:** EDF is computed as `trace(F)` where `F = X (XtWX + S_λ)^{-1} XtW`. Per-smooth EDF is the trace of the corresponding diagonal block. mgcv computes this from the Bayesian covariance: `edf = rowSums(Vp * crossprod(X))` (which is `diag(Vp @ X.T @ X)` but computed without forming the full product).
 
-#### Task 3.3 — Plotting
+#### Task 3.3 - Plotting
 
 | R file | Function | What it does |
 |---|---|---|

@@ -1,4 +1,4 @@
-# AGENTS.md — JaxGAM
+# AGENTS.md - JaxGAM
 
 ## What This Project Is
 
@@ -19,18 +19,18 @@ We use `make` and `Makefile` to orchestrate common tasks such as running linters
 ## Docker Test Environment
 R comparison tests require pinned R 4.5.2 + mgcv 1.9-3 (enforced by `RBridge.check_versions()`). Without the correct versions, R tests auto-skip.
 
-- `make test` — full suite in Docker (includes R comparison tests)
-- `make test-local` — local tests only (R tests skip if R unavailable/wrong version)
+- `make test` - full suite in Docker (includes R comparison tests)
+- `make test-local` - local tests only (R tests skip if R unavailable/wrong version)
 
 ## Architecture (Three Phases)
 
-Every `gam()` call flows through three phases. This boundary is load-bearing — do not mix phases.
+Every `gam()` call flows through three phases. This boundary is load-bearing - do not mix phases.
 
-**Phase 1 — Setup (CPU, NumPy only).** Parse formula → construct basis matrices → build penalty matrices → assemble full model matrix X → apply identifiability constraints via `CoefficientMap`. No JAX imports permitted in Phase 1 code.
+**Phase 1 - Setup (CPU, NumPy only).** Parse formula → construct basis matrices → build penalty matrices → assemble full model matrix X → apply identifiability constraints via `CoefficientMap`. No JAX imports permitted in Phase 1 code.
 
-**Phase 2 — Fit (JAX, JIT-compiled).** Dense X and S_λ are transferred to device via `jax.device_put`. PIRLS inner loop (penalized iteratively reweighted least squares) nested inside a REML outer Newton loop. All code in `fitting/` must be JIT-compatible — no Python-level control flow that depends on array values (use `jax.lax.while_loop`, `jax.lax.cond`).
+**Phase 2 - Fit (JAX, JIT-compiled).** Dense X and S_λ are transferred to device via `jax.device_put`. PIRLS inner loop (penalized iteratively reweighted least squares) nested inside a REML outer Newton loop. All code in `fitting/` must be JIT-compatible - no Python-level control flow that depends on array values (use `jax.lax.while_loop`, `jax.lax.cond`).
 
-**Phase 3 — Post-estimation (CPU, NumPy).** Coefficients come back via `np.asarray()`. `predict()`, `summary()`, `plot()` operate on CPU NumPy arrays using the `CoefficientMap` from Phase 1.
+**Phase 3 - Post-estimation (CPU, NumPy).** Coefficients come back via `np.asarray()`. `predict()`, `summary()`, `plot()` operate on CPU NumPy arrays using the `CoefficientMap` from Phase 1.
 
 ```
 Phase 1 (NumPy)  ──jax.device_put──▶  Phase 2 (JAX JIT)  ──np.asarray──▶  Phase 3 (NumPy)
@@ -58,7 +58,7 @@ Key R files you'll reference most often:
 
 **R reading tips:**
 - `<-` is assignment. `.C()` / `.Call()` invoke C code in `src/`.
-- R uses 1-based indexing — adjust when porting.
+- R uses 1-based indexing - adjust when porting.
 - `mgcv:::function_name` accesses unexported internals. These are often the functions we need most.
 - Run `debug(mgcv:::gam.fit3)` in R to step through PIRLS and compare intermediate values.
 
@@ -75,7 +75,7 @@ Key sections by topic area:
 | Distribution families | §6.1 (base class), §6.2 (standard families) |
 | Link functions | §7 |
 | Penalty matrices | §8 |
-| Autodiff strategy | §9.1 (where AD helps/hurts), §9.3 (extended family strategy — v1.18 rewrite) |
+| Autodiff strategy | §9.1 (where AD helps/hurts), §9.3 (extended family strategy - v1.18 rewrite) |
 | PIRLS inner loop | §4.1, §4.2 |
 | REML/ML outer loop | §4.3, §4.4 |
 | Convergence & step-halving | §4.5 |
@@ -121,11 +121,11 @@ jaxgam/
 
 ### JAX Rules (Phase 2 code)
 
-- All functions that will be JIT-compiled must be pure — no side effects, no Python `if` on array values.
+- All functions that will be JIT-compiled must be pure - no side effects, no Python `if` on array values.
 - Use `jax.lax.while_loop` for PIRLS iteration, not Python `while`.
 - Use `jax.lax.cond` for conditional logic on array values, not Python `if`.
 - Debugging: functions should accept a `debug=False` parameter. When True, use `jax.debug.print()` (not Python print) and `jax.debug.callback()` to log PIRLS traces.
-- Float64 everywhere: set `jax.config.update("jax_enable_x64", True)` at module import. GAMs are numerically sensitive — float32 is not acceptable.
+- Float64 everywhere: set `jax.config.update("jax_enable_x64", True)` at module import. GAMs are numerically sensitive - float32 is not acceptable.
 
 ### NumPy Rules (Phase 1 and 3 code)
 
@@ -145,7 +145,7 @@ jaxgam/
 
 - One logical change per commit. "Add TPRS basis construction" not "Add smooths".
 - Every PR must include tests. No code without tests.
-- PR title format: `[phase] component: description` — e.g., `[phase1] smooths/tprs: implement thin plate basis construction`.
+- PR title format: `[phase] component: description` - e.g., `[phase1] smooths/tprs: implement thin plate basis construction`.
 - If a change touches Phase 2 code, the PR must include a JIT compilation test (the function compiles and runs without error under `jax.jit`).
 
 ## What Is NOT in v1.0
@@ -178,7 +178,7 @@ raise NotImplementedError(
 
 3. **CoefficientMap is the contract between Phase 1 and Phase 3.** It maps constrained coefficients (from the fit) back to the original basis for prediction. If this is wrong, `predict()` produces garbage even when the fit is correct. Test the roundtrip: `predict(model, original_data)` must reproduce `model.fitted_values`.
 
-4. **The REML criterion is flat near the optimum.** Smoothing parameters (λ) can differ by 1e-3 from R and the fit is still correct. Don't chase λ precision — validate deviance and coefficients instead.
+4. **The REML criterion is flat near the optimum.** Smoothing parameters (λ) can differ by 1e-3 from R and the fit is still correct. Don't chase λ precision - validate deviance and coefficients instead.
 
 5. **Step-halving is essential, not optional.** PIRLS without step-halving diverges on Binomial and Gamma models. The step-halving logic (halve step until penalized deviance decreases) must be in the first PIRLS implementation, not added later.
 

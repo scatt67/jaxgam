@@ -1,17 +1,35 @@
-# jaxgam
+<p align="center">
+  <img src="docs/img/jaxgam_icon.svg" alt="jaxgam" width="400"/>
+</p>
 
 A Python reimplementation of R's
 [mgcv](https://cran.r-project.org/package=mgcv) package by
 [Simon N. Wood](https://people.bath.ac.uk/sw283/), for fitting
 Generalized Additive Models. mgcv is the gold-standard GAM library and
-the algorithms in jaxgam — penalised iteratively re-weighted least
-squares (PIRLS), Laplace-approximate REML, and the full smooth
-construction pipeline — follow Wood's published methods and his
+the algorithms in jaxgam - penalised iteratively re-weighted least
+squares (PIRLS), Laplace-approximate REML (empirical bayes), and the full smooth
+construction pipeline - follow Wood's published methods and his
 [*Generalized Additive Models: An Introduction with R*](https://www.routledge.com/Generalized-Additive-Models-An-Introduction-with-R-Second-Edition/Wood/p/book/9781498728331) textbook.
 
-jaxgam uses [JAX](https://github.com/google/jax) for JIT-compiled fitting
+jaxgam uses [jax](https://github.com/google/jax) for JIT-compiled fitting
 with automatic differentiation through the PIRLS inner loop and Newton
-outer loop. No C compilation required.
+outer loop, and [numba](https://numba.pydata.org/)  eager compilation for smooth construction and diagnostic hot paths. The reason for doing this is because `mgcv` has custom C code for performance critical portions of the code.
+
+## AI-assisted development note
+
+This project was built heavily with [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+I wanted to learn the tool while porting my favorite R package, so this
+was the excuse. It's a side project for fun and learning, but I tried to
+test thoroughly against R's reference output so it might actually be useful
+to someone.
+
+My strategy was to first create an in depth [design document](docs/design.md) which I went back and forth with claude and third party AI reviewers on to flesh out the design and scope. I then used claude to create an [implementation plan](docs/IMPLEMENTATION_PLAN.md) from the design doc.
+
+What I found helpful was including a local mgcv source and an [R reference map](docs/R_SOURCE_MAP.md) for agents to utilize when porting certain functionality. While others have used skills, I just used an [AGENTS.md](AGENTS.md) file with certain instructions.
+
+Some issues I found with claude/agents, 1. I had to review the tests closely, they tried to cheat by changing the tolerances for `np.assert*`, 2. When they read a lot of R code they don't adhere to idiomatic python (which I thought was personally interesting). I used ruff in our pre-commit to try and catch some of this, but whatever ruff or I didn't catch I add an independent review agent go through later and check for PEP violations. 
+
+Overall, this was fun I learned a lot about agents/claude code, but I also learned more about mgcv. While I thought I knew a decent amount, and I have perused the source code and docs many times there was still implementations I never knew of (A lot of custom C implementations!). 
 
 ## Installation
 
@@ -89,8 +107,7 @@ These are deliberate scope boundaries, not bugs:
    require chunked processing, which is not implemented.
 4. **No random effects.** `bs="re"` (random effects) and `bs="fs"`
    (factor-smooth interactions) require sparse linear algebra.
-5. **Single device only.** No multi-GPU or distributed fitting.
-6. **No GAMM.** Correlated random effects (`gamm()`) are not supported.
+5. **No GAMM.** Correlated random effects (`gamm()`) are not supported.
 
 See the [design document](docs/design.md) Section 1.2 for details on what
 is planned for v1.1+.
@@ -99,24 +116,97 @@ is planned for v1.1+.
 
 jaxgam uses JAX's XLA compiler for JIT-compiled fitting. Performance
 depends on whether the JIT cache is warm (compiled code reused) or cold
-(first fit triggers compilation).
+(first fit triggers compilation). R is benchmarked with both
+`gam(method="REML")` and `bam(method="fREML")`.
 
-### Warm fits (JIT cached)
+### Benchmark results
 
-After the first fit for a given model structure, subsequent fits reuse
-compiled XLA code. jaxgam is **1.3--12x faster** than R across all
-families and smooth types, with the advantage growing at larger n:
+Full benchmark comparing jaxgam (true cold, cold, warm) against R
+`gam(REML)`. Iteration counts are included to show that both
+implementations converge in a similar number of outer Newton steps.
 
-| n | Single smooth | Two smooths | Tensor product | Factor-by |
-|---:|---:|---:|---:|---:|
-| 500 | 1.3--1.5x | 1.1--2.3x | 0.4--1.4x | 0.9--1.4x |
-| 10,000 | 1.9--3.6x | 1.7--6.0x | 1.5--8.5x | 2.5--3.7x |
-| 100,000 | 3.2--6.6x | 3.0--4.7x | 3.1--5.7x | 2.0--4.1x |
-| 500,000 | 2.9--4.6x | 2.5--3.5x | 2.4--12.0x | 1.8--3.1x |
-
-Tensor products with Gamma show the largest gains (12x at n=500k)
-because R's penalty iteration cost scales with complexity while jaxgam's
-fused XLA kernels amortize overhead.
+| smooth | family | n | true cold (ms) | cold (ms) | warm (ms) | R gam (ms) | cold/R | warm/R | py iter | R iter |
+|--------|--------|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| cr | gaussian | 500 | | 4 | 5 | 7 | 1.7x | 1.5x | 5 | 5 |
+| cr | gaussian | 2,000 | | 716 | 8 | 11 | 0.02x | 1.3x | 7 | 7 |
+| cr | gaussian | 10,000 | | 794 | 21 | 49 | 0.06x | 2.4x | 8 | 8 |
+| cr | gaussian | 100,000 | | 1,010 | 172 | 854 | 0.85x | 5.0x | 10 | 10 |
+| cr | gaussian | 500,000 | 1,766 | 1,109 | 1,036 | 3,558 | 3.2x | 3.4x | 11 | 11 |
+| cr | poisson | 500 | | 6 | 7 | 4 | 0.68x | 0.61x | 3 | 2 |
+| cr | poisson | 2,000 | | 822 | 7 | 12 | 0.01x | 1.8x | 3 | 4 |
+| cr | poisson | 10,000 | | 713 | 23 | 68 | 0.10x | 3.0x | 5 | 5 |
+| cr | poisson | 100,000 | | 1,018 | 187 | 941 | 0.92x | 5.0x | 6 | 7 |
+| cr | poisson | 500,000 | 1,811 | 1,285 | 1,175 | 4,713 | 3.7x | 4.0x | 7 | 8 |
+| cr | binomial | 500 | | 6 | 5 | 6 | 1.0x | 1.3x | 3 | 3 |
+| cr | binomial | 2,000 | | 855 | 11 | 12 | 0.01x | 1.1x | 5 | 4 |
+| cr | binomial | 10,000 | | 794 | 30 | 57 | 0.07x | 1.9x | 6 | 5 |
+| cr | binomial | 100,000 | | 1,185 | 221 | 703 | 0.59x | 3.2x | 7 | 6 |
+| cr | binomial | 500,000 | 1,940 | 1,762 | 1,580 | 4,579 | 2.6x | 2.9x | 9 | 8 |
+| cr | gamma | 500 | | 8 | 6 | 7 | 0.91x | 1.3x | 3 | 5 |
+| cr | gamma | 2,000 | | 1,161 | 9 | 16 | 0.01x | 1.9x | 3 | 6 |
+| cr | gamma | 10,000 | | 942 | 25 | 91 | 0.10x | 3.6x | 3 | 7 |
+| cr | gamma | 100,000 | | 1,271 | 202 | 1,324 | 1.0x | 6.6x | 5 | 9 |
+| cr | gamma | 500,000 | 1,991 | 1,479 | 1,326 | 6,068 | 4.1x | 4.6x | 6 | 10 |
+| two | gaussian | 500 | | 39 | 7 | 9 | 0.23x | 1.3x | 6 | 6 |
+| two | gaussian | 2,000 | | 790 | 14 | 16 | 0.02x | 1.1x | 8 | 8 |
+| two | gaussian | 10,000 | | 936 | 43 | 72 | 0.08x | 1.7x | 12 | 9 |
+| two | gaussian | 100,000 | | 1,092 | 321 | 956 | 0.88x | 3.0x | 11 | 11 |
+| two | gaussian | 500,000 | 2,587 | 2,061 | 1,857 | 5,056 | 2.5x | 2.7x | 12 | 12 |
+| two | poisson | 500 | | 52 | 10 | 11 | 0.21x | 1.1x | 8 | 8 |
+| two | poisson | 2,000 | | 944 | 14 | 18 | 0.02x | 1.3x | 6 | 5 |
+| two | poisson | 10,000 | | 699 | 43 | 99 | 0.14x | 2.3x | 6 | 7 |
+| two | poisson | 100,000 | | 1,151 | 350 | 1,251 | 1.1x | 3.6x | 7 | 8 |
+| two | poisson | 500,000 | 2,593 | 2,403 | 2,286 | 6,703 | 2.8x | 2.9x | 8 | 9 |
+| two | binomial | 500 | | 33 | 10 | 12 | 0.36x | 1.2x | 9 | 9 |
+| two | binomial | 2,000 | | 866 | 10 | 18 | 0.02x | 1.8x | 3 | 5 |
+| two | binomial | 10,000 | | 928 | 40 | 87 | 0.09x | 2.2x | 5 | 6 |
+| two | binomial | 100,000 | | 1,106 | 366 | 1,130 | 1.0x | 3.1x | 7 | 7 |
+| two | binomial | 500,000 | 2,675 | 2,520 | 2,450 | 6,069 | 2.4x | 2.5x | 8 | 8 |
+| two | gamma | 500 | | 10 | 7 | 17 | 1.6x | 2.3x | 4 | 6 |
+| two | gamma | 2,000 | | 1,144 | 18 | 38 | 0.03x | 2.1x | 6 | 8 |
+| two | gamma | 10,000 | | 965 | 37 | 225 | 0.23x | 6.0x | 4 | 9 |
+| two | gamma | 100,000 | | 1,391 | 376 | 1,765 | 1.3x | 4.7x | 6 | 10 |
+| two | gamma | 500,000 | 3,028 | 2,652 | 2,494 | 8,724 | 3.3x | 3.5x | 7 | 11 |
+| te | gaussian | 500 | | 18 | 14 | 14 | 0.78x | 0.98x | 14 | 10 |
+| te | gaussian | 2,000 | | 1,166 | 18 | 36 | 0.03x | 2.0x | 8 | 9 |
+| te | gaussian | 10,000 | | 954 | 54 | 591 | 0.62x | 11.0x | 10 | 10 |
+| te | gaussian | 100,000 | | 1,963 | 682 | 3,909 | 2.0x | 5.7x | 14 | 11 |
+| te | gaussian | 500,000 | 3,966 | 3,439 | 3,453 | 40,432 | 11.8x | 11.7x | 12 | 13 |
+| te | poisson | 500 | | 16 | 11 | 16 | 1.0x | 1.4x | 8 | 6 |
+| te | poisson | 2,000 | | 794 | 19 | 27 | 0.03x | 1.4x | 5 | 5 |
+| te | poisson | 10,000 | | 1,018 | 60 | 145 | 0.14x | 2.4x | 6 | 7 |
+| te | poisson | 100,000 | | 1,479 | 694 | 2,172 | 1.5x | 3.1x | 8 | 8 |
+| te | poisson | 500,000 | 4,097 | 4,027 | 4,370 | 16,049 | 4.0x | 3.7x | 8 | 9 |
+| te | binomial | 500 | | 30 | 32 | 13 | 0.43x | 0.41x | 15 | 6 |
+| te | binomial | 2,000 | | 903 | 23 | 28 | 0.03x | 1.2x | 5 | 5 |
+| te | binomial | 10,000 | | 904 | 69 | 107 | 0.12x | 1.5x | 5 | 5 |
+| te | binomial | 100,000 | | 1,561 | 725 | 2,228 | 1.4x | 3.1x | 7 | 8 |
+| te | binomial | 500,000 | 4,386 | 4,435 | 4,843 | 11,582 | 2.6x | 2.4x | 8 | 9 |
+| te | gamma | 500 | | 17 | 15 | 14 | 0.81x | 0.94x | 6 | 6 |
+| te | gamma | 2,000 | | 1,123 | 38 | 39 | 0.03x | 1.0x | 8 | 7 |
+| te | gamma | 10,000 | | 1,159 | 79 | 671 | 0.58x | 8.5x | 5 | 9 |
+| te | gamma | 100,000 | | 1,853 | 799 | 4,300 | 2.3x | 5.4x | 7 | 10 |
+| te | gamma | 500,000 | 4,691 | 4,443 | 4,361 | 52,525 | 11.8x | 12.0x | 7 | 11 |
+| cr_by | gaussian | 500 | | 27 | 18 | 17 | 0.62x | 0.95x | 14 | 10 |
+| cr_by | gaussian | 2,000 | | 819 | 26 | 30 | 0.04x | 1.2x | 13 | 8 |
+| cr_by | gaussian | 10,000 | | 820 | 40 | 99 | 0.12x | 2.5x | 7 | 7 |
+| cr_by | gaussian | 100,000 | | 1,377 | 513 | 1,554 | 1.1x | 3.0x | 9 | 9 |
+| cr_by | gaussian | 500,000 | 4,239 | 3,631 | 3,284 | 9,219 | 2.5x | 2.8x | 10 | 10 |
+| cr_by | poisson | 500 | | 23 | 15 | 20 | 0.87x | 1.4x | 8 | 8 |
+| cr_by | poisson | 2,000 | | 746 | 24 | 41 | 0.05x | 1.7x | 7 | 7 |
+| cr_by | poisson | 10,000 | | 796 | 49 | 147 | 0.18x | 3.0x | 5 | 5 |
+| cr_by | poisson | 100,000 | | 1,420 | 625 | 1,816 | 1.3x | 2.9x | 6 | 6 |
+| cr_by | poisson | 500,000 | 4,341 | 4,342 | 3,940 | 10,061 | 2.3x | 2.6x | 6 | 7 |
+| cr_by | binomial | 500 | | 24 | 17 | 19 | 0.81x | 1.1x | 8 | 8 |
+| cr_by | binomial | 2,000 | | 1,097 | 27 | 41 | 0.04x | 1.5x | 8 | 7 |
+| cr_by | binomial | 10,000 | | 894 | 51 | 129 | 0.14x | 2.5x | 5 | 5 |
+| cr_by | binomial | 100,000 | | 1,640 | 740 | 1,491 | 0.91x | 2.0x | 7 | 5 |
+| cr_by | binomial | 500,000 | 5,543 | 5,853 | 4,993 | 8,777 | 1.5x | 1.8x | 8 | 6 |
+| cr_by | gamma | 500 | | 14 | 12 | 15 | 1.1x | 1.3x | 4 | 5 |
+| cr_by | gamma | 2,000 | | 1,075 | 13 | 36 | 0.03x | 2.7x | 3 | 5 |
+| cr_by | gamma | 10,000 | | 1,105 | 57 | 210 | 0.19x | 3.7x | 5 | 6 |
+| cr_by | gamma | 100,000 | | 1,649 | 566 | 2,325 | 1.4x | 4.1x | 4 | 8 |
+| cr_by | gamma | 500,000 | 4,756 | 4,553 | 4,039 | 12,502 | 2.7x | 3.1x | 5 | 9 |
 
 ### Cold starts
 
@@ -126,38 +216,46 @@ use, but the compiled code is cached to disk and reused across sessions.
 
 ![Cold-start speedup vs dataset size](docs/img/speedup_vs_n.png)
 
-The crossover where even a cold jaxgam fit beats R is around n=100,000.
+The crossover where even a cold jaxgam fit beats `gam(REML)` is around n=100,000. The `bam(fREML)` wins in all n as it was purpose built for fitting very large data! Many people don't associate `mgcv` for large scale training, but if this benchmark shows anything is that it is certainly up for the task!
 
 ### High-dimensional models
 
 For models with many basis functions (k=100--500), jaxgam's XLA-compiled
-dense linear algebra outperforms R even on the very first cold-start fit:
+dense linear algebra outperforms R `gam(REML)` even on the very first
+cold-start fit. We also benchmark against R's `bam(fREML)` with 8
+threads, which was purpose-built for large datasets and is very fast at
+high k. A `bam(fREML)` port is on the roadmap.
 
 ![jaxgam vs R at large p](docs/img/large_p_results.png)
 
-### When to use jaxgam over R
+Note: jaxgam currently implements `gam(REML)` only. The benchmarks above
+compare against both R's `gam(REML)` (apples-to-apples) and `bam(fREML)`
+(to show what mgcv can do with its large data optimizer!).
+
+### When to use jaxgam
 
 **jaxgam is a good fit when:**
-- You need GAMs in a Python workflow without switching to R
+- You want REML based GAMs in Python. AFAIK other Python GAM
+  implementations offer Generalized Cross Validation (GCV) or full
+  Bayes, whereas REML (empirical Bayes) is generally more robust than
+  GCV and faster than full Bayes
 - You fit the same model structure repeatedly (bootstrap, CV,
-  simulation) --- warm fits are 2--12x faster than R
-- Your datasets are large (n > 10,000) --- the XLA advantage grows
+  simulation) -- warm fits are 2--12x faster than R `gam(REML)`
+- Your datasets are large (n > 100,000) -- the XLA advantage grows
   with n
-- You use tensor products or Gamma family --- these see the largest
-  speedups
 
 **R's mgcv may be better when:**
-- You need one-shot fits on small data (n < 2,000) and cold-start
+- You don't care about using python or R you just care about the best tool for the job, or you can use R in your production environement (R is a great tool) !
+- You need one-shot fits on small data (n < 100,000) and cold-start
   latency matters
-- You need features beyond v1.0 scope (sparse solvers, extended
-  families, random effects, bam)
-- You need multi-GPU or distributed fitting --- jaxgam automatically
-  parallelizes across CPU cores and runs on GPU, but multi-device
-  SPMD is on the roadmap
+- You can use `bam(fREML)` for very large datasets, or features beyond
+  v1.0 scope (sparse solvers, extended families, random effects)
+
+In most cases you probably should just use the original `mgcv` in R it's very robust and efficient! If you are a pure python user, or your tech stack only supports python maybe jaxgam can be useful.
 
 A persistent compilation cache (`~/.cache/jaxgam/jax/`) is enabled by
 default to minimize cold-start overhead across Python sessions.
-Disable it with `PYMGCV_NO_COMPILATION_CACHE=1`.
+Disable it with `JAXGAM_NO_COMPILATION_CACHE=1`.
 
 ## Correctness
 

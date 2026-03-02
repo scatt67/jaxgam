@@ -60,25 +60,25 @@ make test
 
 Read [AGENTS.md](AGENTS.md) for the full architecture guide.
 
-Every `GAM.fit()` call flows through three phases. This boundary is load-bearing — do not mix phases. Phase 1 modules must never import JAX.
+Every `GAM.fit()` call flows through three phases. This boundary is load-bearing - do not mix phases. Phase 1 modules must never import JAX.
 
 ```mermaid
 flowchart LR
-    subgraph Phase1["Phase 1 — Setup (NumPy)"]
+    subgraph Phase1["Phase 1 - Setup (NumPy)"]
         direction TB
         P["Formula Parser"]
         P --> S["Smooth Construction<br/>basis + penalty matrices"]
         S --> D["Design Matrix Assembly<br/>X, S, constraints"]
     end
 
-    subgraph Phase2["Phase 2 — Fit (JAX JIT)"]
+    subgraph Phase2["Phase 2 - Fit (JAX JIT)"]
         direction TB
         PIRLS["PIRLS Inner Loop<br/>penalized IRLS"]
         REML["REML/ML Outer Loop<br/>Newton optimization of λ"]
         REML --> PIRLS
     end
 
-    subgraph Phase3["Phase 3 — Post-estimation (NumPy)"]
+    subgraph Phase3["Phase 3 - Post-estimation (NumPy)"]
         direction TB
         PR["predict()"]
         SU["summary()"]
