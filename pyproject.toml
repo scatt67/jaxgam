@@ -9,7 +9,6 @@ dependencies = [
     "numba>=0.58",
     "jax>=0.4.20",
     "jaxlib>=0.4.20",
-    "formulaic>=1.0",
     "matplotlib>=3.7",
     "pandas>=2.0",
 ]

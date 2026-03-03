@@ -92,23 +92,22 @@ Key sections by topic area:
 
 ```
 jaxgam/
-├── __init__.py          # Public API only: gam, predict, summary, plot
-├── api.py               # Top-level fitting orchestration
+├── __init__.py          # Public API: GAM
+├── api.py               # GAM class, fit orchestration
+├── jax_utils.py         # JAX helpers (slogdet, pseudo-det, penalized solve)
 ├── formula/             # Phase 1: parsing and term representation
 ├── smooths/             # Phase 1: basis and penalty construction
 ├── families/            # Families and link functions (used in Phase 1 + 2)
 ├── links/               # Link function implementations
 ├── penalties/           # Penalty matrix construction
 ├── fitting/             # Phase 2: PIRLS, REML, convergence (JAX)
-├── linalg/              # Linear algebra (backend-aware)
-├── autodiff/            # JAX AD wrappers
-├── predict/             # Phase 3: prediction
 ├── summary/             # Phase 3: summary, EDF, p-values
 ├── plot/                # Phase 3: matplotlib plotting
-└── tests/
-    ├── r_bridge.py      # R bridge for testing (pinned R 4.5.2 + mgcv 1.9-3)
-    ├── tolerances.py    # STRICT / MODERATE / LOOSE definitions
-    └── conftest.py      # Shared fixtures, R bridge setup
+tests/
+├── r_bridge.py          # R bridge for testing (pinned R 4.5.2 + mgcv 1.9-3)
+├── tolerances.py        # STRICT / MODERATE / LOOSE definitions
+├── helpers.py           # Shared test helpers (SEED, N, r_available, etc.)
+└── conftest.py          # Shared fixtures, R bridge setup
 ```
 
 ### Naming and Style

@@ -107,7 +107,6 @@ graph TD
         end
 
         subgraph "Phase 3 modules"
-            PRED["predict/<br/>predictions + SE"]
             SUM["summary/<br/>EDF, p-values, significance"]
             PLT["plot/<br/>1D curves, 2D contours, rug"]
         end
@@ -119,7 +118,6 @@ graph TD
     API --> FAM
     API --> LNK
     API --> FIT
-    API --> PRED
     API --> SUM
     API --> PLT
 ```
@@ -158,7 +156,6 @@ jaxgam/
 │   │   ├── reml.py             # REML/ML criterion + derivatives
 │   │   ├── newton.py           # Outer Newton optimizer for λ
 │   │   └── initialization.py   # Initial smoothing parameters
-│   ├── predict/                # Phase 3: prediction
 │   ├── summary/                # Phase 3: summary + significance
 │   │   ├── summary.py          # EDF, p-values, R-squared
 │   │   └── _davies.py          # Chi-squared mixture approximation
