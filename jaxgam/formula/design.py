@@ -101,6 +101,13 @@ class ModelSetup:
         Per-smooth metadata.
     term_names : tuple[str, ...]
         Human-readable names, one per column of X.
+    factor_info : dict[str, list]
+        Mapping from factor variable name to ordered levels,
+        captured at training time for prediction-time encoding.
+    has_intercept : bool
+        Whether the model includes an intercept.
+    parametric_terms : tuple[ParametricTerm, ...]
+        Parametric terms from the formula specification.
     """
 
     X: npt.NDArray[np.floating]
@@ -112,6 +119,9 @@ class ModelSetup:
     coef_map: CoefficientMap
     smooth_info: tuple[SmoothInfo, ...]
     term_names: tuple[str, ...]
+    factor_info: dict[str, list]
+    has_intercept: bool
+    parametric_terms: tuple[ParametricTerm, ...]
 
     # ------------------------------------------------------------------
     # Factory
@@ -262,6 +272,11 @@ class ModelSetup:
         smooth_infos = cls._build_smooth_info(smooths, coef_map)
         term_names = cls._build_term_names(param_names, smooths, coef_map)
 
+        # 2g+. Extract factor levels for prediction-time encoding
+        factor_info = cls._extract_factor_info(
+            formula_spec.parametric_terms, original_data
+        )
+
         # 2h. Return frozen ModelSetup
         return cls(
             X=X,
@@ -273,6 +288,9 @@ class ModelSetup:
             coef_map=coef_map,
             smooth_info=tuple(smooth_infos),
             term_names=term_names,
+            factor_info=factor_info,
+            has_intercept=formula_spec.has_intercept,
+            parametric_terms=tuple(formula_spec.parametric_terms),
         )
 
     # ------------------------------------------------------------------
@@ -332,6 +350,64 @@ class ModelSetup:
         """
         info = self.get_smooth(label)
         return range(info.first_penalty, info.first_penalty + info.n_penalties)
+
+    def build_predict_matrix(
+        self,
+        newdata: dict[str, npt.NDArray[np.floating]] | pd.DataFrame,
+    ) -> npt.NDArray[np.floating]:
+        """Build the full constrained prediction matrix for new data.
+
+        Uses stored factor levels from training time for consistent
+        parametric encoding. Equivalent to the matrix-building portion
+        of R's ``predict.gam(type="lpmatrix")``.
+
+        Parameters
+        ----------
+        newdata : DataFrame or dict
+            New data containing all required variables.
+
+        Returns
+        -------
+        np.ndarray, shape ``(n_new, total_coefs)``
+        """
+        data_dict = self._to_dict(newdata)
+
+        if not data_dict:
+            raise ValueError("newdata is empty — no variables found.")
+
+        # Determine n_obs from first available variable
+        first_key = next(iter(data_dict))
+        n_new = len(data_dict[first_key])
+
+        # Build parametric columns (prediction mode: use stored factor_info)
+        X_parametric, _ = self._build_parametric_matrix(
+            self.parametric_terms,
+            newdata,
+            self.has_intercept,
+            n_new,
+            factor_info=self.factor_info,
+        )
+
+        # Build smooth columns
+        blocks: list[npt.NDArray[np.floating]] = [X_parametric]
+        coef_map = self.coef_map
+
+        for term in coef_map.terms:
+            if term.term_type == "parametric":
+                continue
+            # Get raw prediction matrix from the smooth
+            X_raw = term.smooth.predict_matrix(data_dict)
+            # Apply constraint transform (centering + gam_side)
+            X_c = coef_map.transform_X(X_raw, term.label)
+            blocks.append(X_c)
+
+        X_p = np.column_stack(blocks) if len(blocks) > 1 else blocks[0]
+        if X_p.shape[1] != coef_map.total_coefs:
+            raise RuntimeError(
+                f"Prediction matrix has {X_p.shape[1]} columns but model "
+                f"expects {coef_map.total_coefs}."
+            )
+        return X_p
 
     # ------------------------------------------------------------------
     # Private static methods (pipeline steps)
@@ -394,6 +470,32 @@ class ModelSetup:
                 )
 
     @staticmethod
+    def _extract_factor_info(
+        parametric_terms: list[ParametricTerm] | tuple[ParametricTerm, ...],
+        data: dict[str, npt.NDArray] | pd.DataFrame,
+    ) -> dict[str, list]:
+        """Extract factor level info from parametric terms at training time.
+
+        Parameters
+        ----------
+        parametric_terms : list or tuple of ParametricTerm
+            Parametric terms from the formula.
+        data : DataFrame or dict
+            Training data.
+
+        Returns
+        -------
+        dict[str, list]
+            Mapping from factor variable name to its ordered levels.
+        """
+        factor_info: dict[str, list] = {}
+        for term in parametric_terms:
+            col = data[term.name]
+            if is_factor(col):
+                factor_info[term.name] = get_factor_levels(col)
+        return factor_info
+
+    @staticmethod
     def _encode_factor(
         col: npt.NDArray | pd.Series,
         levels: list,
@@ -435,23 +537,31 @@ class ModelSetup:
 
     @staticmethod
     def _build_parametric_matrix(
-        parametric_terms: list[ParametricTerm],
+        parametric_terms: list[ParametricTerm] | tuple[ParametricTerm, ...],
         data: dict[str, npt.NDArray] | pd.DataFrame,
         has_intercept: bool,
         n_obs: int,
+        factor_info: dict[str, list] | None = None,
     ) -> tuple[npt.NDArray[np.floating], list[str]]:
         """Build the parametric portion of the model matrix.
 
+        Handles both training (auto-detect factors) and prediction
+        (use stored factor levels) modes.
+
         Parameters
         ----------
-        parametric_terms : list[ParametricTerm]
+        parametric_terms : list or tuple of ParametricTerm
             Parametric terms from formula.
         data : dict or DataFrame
-            Original data (preserving dtypes for factor detection).
+            Data (preserving dtypes for factor detection at training time).
         has_intercept : bool
             Whether to include an intercept column.
         n_obs : int
             Number of observations.
+        factor_info : dict[str, list] or None
+            If provided (prediction mode), uses these stored factor levels
+            instead of auto-detecting from data. If None (training mode),
+            auto-detects factors via ``is_factor()``.
 
         Returns
         -------
@@ -470,9 +580,17 @@ class ModelSetup:
         for term in parametric_terms:
             col = data[term.name]
 
-            if is_factor(col):
-                levels = get_factor_levels(col)
-                if len(levels) < 2:
+            if factor_info is not None:
+                # Prediction mode: use stored factor levels
+                is_fac = term.name in factor_info
+                levels = factor_info.get(term.name)
+            else:
+                # Training mode: auto-detect
+                is_fac = is_factor(col)
+                levels = get_factor_levels(col) if is_fac else None
+
+            if is_fac:
+                if factor_info is None and len(levels) < 2:
                     raise ValueError(
                         f"Factor variable '{term.name}' has fewer than 2 levels "
                         f"({levels}). Cannot create dummy variables."

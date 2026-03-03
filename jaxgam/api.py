@@ -24,9 +24,9 @@ from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import estimate_edf, estimate_scale
 from jaxgam.formula.design import ModelSetup, SmoothInfo
 from jaxgam.formula.parser import parse_formula
-from jaxgam.formula.terms import FormulaSpec, ParametricTerm
+from jaxgam.formula.terms import FormulaSpec
 from jaxgam.jax_utils import to_numpy
-from jaxgam.smooths.by_variable import get_factor_levels, is_factor
+from jaxgam.smooths.by_variable import is_factor
 
 if TYPE_CHECKING:
     import jax
@@ -196,7 +196,7 @@ class GAM:
             eta = self.linear_predictor_.copy()
             X_p = self.X_ if se_fit else None
         else:
-            X_p = self._build_predict_matrix(newdata)
+            X_p = self.setup_.build_predict_matrix(newdata)
             eta = X_p @ self.coefficients_
             if offset is not None:
                 eta = eta + np.asarray(offset, dtype=np.float64).ravel()
@@ -229,58 +229,7 @@ class GAM:
             Constrained prediction matrix.
         """
         self._check_fitted()
-        return self._build_predict_matrix(newdata)
-
-    def _build_predict_matrix(self, newdata: pd.DataFrame | dict) -> np.ndarray:
-        """Build the full constrained prediction matrix for new data.
-
-        Parameters
-        ----------
-        newdata : DataFrame or dict
-            New data containing all required variables.
-
-        Returns
-        -------
-        np.ndarray, shape ``(n_new, total_coefs)``
-        """
-        data_dict = ModelSetup._to_dict(newdata)
-
-        if not data_dict:
-            raise ValueError("newdata is empty — no variables found.")
-
-        # Determine n_obs from first available variable
-        first_key = next(iter(data_dict))
-        n_new = len(data_dict[first_key])
-
-        # Build parametric columns
-        X_parametric = _build_parametric_predict(
-            self.formula_spec_.parametric_terms,
-            newdata,
-            self.formula_spec_.has_intercept,
-            n_new,
-            self._factor_info_,
-        )
-
-        # Build smooth columns
-        blocks: list[np.ndarray] = [X_parametric]
-        coef_map = self.coef_map_
-
-        for term in coef_map.terms:
-            if term.term_type == "parametric":
-                continue
-            # Get raw prediction matrix from the smooth
-            X_raw = term.smooth.predict_matrix(data_dict)
-            # Apply constraint transform (centering + gam_side)
-            X_c = coef_map.transform_X(X_raw, term.label)
-            blocks.append(X_c)
-
-        X_p = np.column_stack(blocks) if len(blocks) > 1 else blocks[0]
-        if X_p.shape[1] != coef_map.total_coefs:
-            raise RuntimeError(
-                f"Prediction matrix has {X_p.shape[1]} columns but model "
-                f"expects {coef_map.total_coefs}."
-            )
-        return X_p
+        return self.setup_.build_predict_matrix(newdata)
 
     def summary(self) -> GAMSummary:
         """Print and return summary of a fitted GAM.
@@ -447,11 +396,10 @@ class GAM:
         self.coef_map_ = setup.coef_map
         self.smooth_info_ = setup.smooth_info
         self.term_names_ = setup.term_names
+        self.setup_ = setup
         # Currently always "jax"; reserved for future backend dispatch.
         self.execution_path_ = "jax"
         self.lambda_strategy_ = lambda_strategy
-        self.formula_spec_ = spec
-        self._factor_info_ = _extract_factor_info(spec.parametric_terms, data)
         self.y_ = y_np
         self.weights_ = wt_np
         self.score_ = float(to_numpy(result.score))
@@ -701,33 +649,6 @@ def _compute_null_deviance(
     return float(family.dev_resids(y, mu_null_arr, wt))
 
 
-def _extract_factor_info(
-    parametric_terms: list[ParametricTerm],
-    data: pd.DataFrame | dict,
-) -> dict[str, list]:
-    """Extract factor level info from parametric terms at training time.
-
-    Parameters
-    ----------
-    parametric_terms : list[ParametricTerm]
-        Parametric terms from the formula.
-    data : DataFrame or dict
-        Training data.
-
-    Returns
-    -------
-    dict[str, list]
-        Mapping from factor variable name to its ordered levels.
-    """
-
-    factor_info: dict[str, list] = {}
-    for term in parametric_terms:
-        col = data[term.name]
-        if is_factor(col):
-            factor_info[term.name] = get_factor_levels(col)
-    return factor_info
-
-
 def _extract_training_data(
     spec: FormulaSpec,
     data: pd.DataFrame | dict,
@@ -770,55 +691,3 @@ def _extract_training_data(
             training[name] = np.asarray(col, dtype=np.float64).ravel()
 
     return training
-
-
-def _build_parametric_predict(
-    parametric_terms: list[ParametricTerm],
-    data: pd.DataFrame | dict,
-    has_intercept: bool,
-    n_obs: int,
-    factor_info: dict[str, list],
-) -> np.ndarray:
-    """Build the parametric portion of the prediction matrix.
-
-    Uses stored factor levels from training time for consistent encoding.
-
-    Parameters
-    ----------
-    parametric_terms : list[ParametricTerm]
-        Parametric terms from formula.
-    data : DataFrame or dict
-        New data for prediction.
-    has_intercept : bool
-        Whether model includes an intercept.
-    n_obs : int
-        Number of new observations.
-    factor_info : dict[str, list]
-        Training-time factor levels.
-
-    Returns
-    -------
-    np.ndarray, shape ``(n_obs, n_parametric_cols)``
-    """
-
-    blocks: list[np.ndarray] = []
-
-    if has_intercept:
-        blocks.append(np.ones((n_obs, 1), dtype=np.float64))
-
-    for term in parametric_terms:
-        col = data[term.name]
-
-        if term.name in factor_info:
-            # Use training-time levels for consistent dummy encoding
-            levels = factor_info[term.name]
-            drop_ref = has_intercept
-            dummy, _ = ModelSetup._encode_factor(col, levels, drop_reference=drop_ref)
-            blocks.append(dummy)
-        else:
-            col_arr = np.asarray(col, dtype=np.float64).ravel()
-            blocks.append(col_arr[:, np.newaxis])
-
-    if blocks:
-        return np.column_stack(blocks)
-    return np.empty((n_obs, 0), dtype=np.float64)
