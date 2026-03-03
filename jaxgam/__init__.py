@@ -4,7 +4,7 @@ Importing this package has global side effects:
 
 * ``jax.config.update("jax_enable_x64", True)`` — enables float64 in JAX.
 * A persistent compilation cache directory is configured (unless
-  ``PYMGCV_NO_COMPILATION_CACHE=1`` or ``JAX_COMPILATION_CACHE_DIR`` is
+  ``JAXGAM_NO_COMPILATION_CACHE=1`` or ``JAX_COMPILATION_CACHE_DIR`` is
   already set).
 
 These calls are idempotent and follow standard JAX project conventions.
@@ -30,8 +30,8 @@ jax.config.update("jax_enable_x64", True)
 #   jax.config.update("jax_compilation_cache_dir", "/your/path")
 # before importing jaxgam.
 #
-# Disable: set PYMGCV_NO_COMPILATION_CACHE=1.
-if not os.environ.get("PYMGCV_NO_COMPILATION_CACHE"):
+# Disable: set JAXGAM_NO_COMPILATION_CACHE=1.
+if not os.environ.get("JAXGAM_NO_COMPILATION_CACHE"):
     _cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR")
     if not _cache_dir:
         # JAX reads JAX_COMPILATION_CACHE_DIR automatically; only override
