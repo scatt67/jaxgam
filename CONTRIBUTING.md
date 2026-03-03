@@ -85,8 +85,8 @@ flowchart LR
         PL["plot()"]
     end
 
-    Phase1 -- "jax.device_put<br/>X, S_λ → device" --> Phase2
-    Phase2 -- "np.asarray<br/>β, H⁻¹ → CPU" --> Phase3
+    Phase1 - "jax.device_put<br/>X, S_λ → device" --> Phase2
+    Phase2 - "np.asarray<br/>β, H⁻¹ → CPU" --> Phase3
 ```
 
 ```mermaid
@@ -202,7 +202,7 @@ jaxgam/
 
 - One logical change per commit.
 - Every PR must include tests.
-- PR title format: `[phase] component: description` -- e.g., `[phase1] smooths/tprs: implement thin plate basis construction`.
+- PR title format: `[phase] component: description` - e.g., `[phase1] smooths/tprs: implement thin plate basis construction`.
 - If a change touches Phase 2 code, include a JIT compilation test.
 
 ## What Is NOT in v1.0

@@ -280,7 +280,7 @@ After calling `fit()`, the model exposes:
 
 ## Further reading
 
-- [Design document](design.md) --- architecture, algorithms, and
+- [Design document](design.md) -- architecture, algorithms, and
   implementation decisions
-- [R source map](R_SOURCE_MAP.md) --- correspondence between jaxgam
+- [R source map](R_SOURCE_MAP.md) -- correspondence between jaxgam
   modules and R mgcv source files
