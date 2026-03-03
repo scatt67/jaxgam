@@ -1,0 +1,8 @@
+*.pyc
+*.nbc
+*.nbi
+.claude/worktrees/*
+*.csv
+site/
+.coverage
+docker/renv/library/

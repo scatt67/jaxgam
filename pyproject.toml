@@ -1,0 +1,69 @@
+[project]
+name = "jaxgam"
+version = "1.0.0a1"
+description = "Python port of R's mgcv package for Generalized Additive Models"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.11",
+    "numba>=0.58",
+    "jax>=0.4.20",
+    "jaxlib>=0.4.20",
+    "formulaic>=1.0",
+    "matplotlib>=3.7",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-xdist",
+    "pytest-cov",
+    "pre-commit",
+    "ruff",
+    "vulture",
+]
+r = [
+    "rpy2>=3.5",
+]
+
+docs = [
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.24",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "ARG", "B", "UP", "SIM", "C4", "RUF", "T20", "PERF", "NPY", "PT", "PIE"]
+
+[tool.ruff.lint.per-file-ignores]
+# R bridge contains embedded R scripts in f-strings with long lines
+"tests/r_bridge.py" = ["E501"]
+# Scripts are not library code — print, unused vars, etc. are fine
+"scripts/**" = ["T201", "RUF059"]
+
+[tool.vulture]
+paths = ["jaxgam"]
+min_confidence = 80
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["jaxgam"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.",
+]
