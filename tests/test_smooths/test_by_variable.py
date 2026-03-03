@@ -1014,5 +1014,3 @@ class TestRComparison:
                     f"bs={bs}, level {r_sm['by_level']}: design matrix does not match R"
                 ),
             )
-
-

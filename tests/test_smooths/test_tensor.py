@@ -784,5 +784,3 @@ class TestRegistry:
         from jaxgam.smooths.registry import get_smooth_class
 
         assert get_smooth_class("ti") is TensorInteractionSmooth
-
-

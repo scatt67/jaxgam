@@ -240,8 +240,12 @@ def main() -> None:
                 data = datasets[(n, family)]
                 try:
                     ms, it = time_r_fit(
-                        ro, k, data, family,
-                        method="bam", nthreads=BAM_NTHREADS,
+                        ro,
+                        k,
+                        data,
+                        family,
+                        method="bam",
+                        nthreads=BAM_NTHREADS,
                     )
                     results[k][family][n]["r_bam"] = ms
                     results[k][family][n]["r_bam_iter"] = it
@@ -267,7 +271,10 @@ def main() -> None:
         return f"{v:.0f}"
 
     print("=" * 120)
-    print(f"LARGE-P BENCHMARK  |  R: gam(REML) vs bam(fREML, {BAM_NTHREADS}t)  |  jaxgam: true cold")
+    print(
+        f"LARGE-P BENCHMARK  |  R: gam(REML) vs bam(fREML, {BAM_NTHREADS}t)"
+        "  |  jaxgam: true cold"
+    )
     print("=" * 120)
     header = (
         f"| {'k':>4} | {'family':<8} | {'n':>7} "

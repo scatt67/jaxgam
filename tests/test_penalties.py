@@ -676,5 +676,3 @@ class TestEdgeCases:
         r = repr(cp)
         assert "CompositePenalty" in r
         assert "n_penalties=2" in r
-
-

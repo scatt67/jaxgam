@@ -87,9 +87,7 @@ def make_smooth_spec(
 # ---------------------------------------------------------------------------
 
 
-def _generate_family_data(
-    family_name: str, n: int | None = None
-) -> pd.DataFrame:
+def _generate_family_data(family_name: str, n: int | None = None) -> pd.DataFrame:
     """Generate single-predictor synthetic data for a given family.
 
     Parameters

@@ -659,7 +659,9 @@ class TestEdgeCases:
             smooth.predict_matrix({"x": np.zeros(10)})
 
     @pytest.mark.parametrize("smooth_1d_data", [100], indirect=True)
-    def test_predict_new_data_different_n(self, smooth_1d_data, pred_smooth_1d_data) -> None:
+    def test_predict_new_data_different_n(
+        self, smooth_1d_data, pred_smooth_1d_data
+    ) -> None:
         """predict_matrix works with different n than training data."""
         spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)

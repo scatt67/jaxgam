@@ -29,7 +29,8 @@ from jaxgam.api import GAM
 
 # TODO benchmark is done against mgcv::gam(REML) with R's native BLAS, and LAPACK
 # which is notoriously slow. We can build R with OpenBLAS which will provide a speedup.
-# I avoided this for now as we would need to build OpenBLAS from source with multi-threading
+# I avoided this for now as we would need to build OpenBLAS from
+# source with multi-threading
 # turned off due to issues noted by Simon Wood in mgcv CHANGELOG:
 # https://github.com/cran/mgcv/blob/master/ChangeLog#L13-L16
 
@@ -201,7 +202,8 @@ def time_r_fit(
     ctrl = f", control=list(nthreads={nthreads})" if nthreads > 1 else ""
     r_code = f"""
     tm <- system.time({{
-        mod <- gam({r_formula}, data=bench_data, family={r_family}, method="fREML", discrete=FALSE{ctrl})
+        mod <- gam({r_formula}, data=bench_data, family={r_family},
+            method="fREML", discrete=FALSE{ctrl})
     }})
     elapsed_ms <- tm["elapsed"] * 1000
 

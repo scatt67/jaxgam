@@ -230,8 +230,12 @@ def _run_r_benchmark(ro, label, r_method, results, total, nthreads=1):
                 data = maker(n, family)
                 try:
                     ms = time_r_fit(
-                        ro, cfg["r_formula"], data, family,
-                        method=r_method, nthreads=nthreads,
+                        ro,
+                        cfg["r_formula"],
+                        data,
+                        family,
+                        method=r_method,
+                        nthreads=nthreads,
                     )
                     results[smooth_key][family][n][key] = ms
                     print(
@@ -315,10 +319,7 @@ def main() -> None:
         for n in N_SIZES:
             header += f" {n:>9,} |"
         print(header)
-        print(
-            "|" + "-" * 8 + "|" + "-" * 10 + "|"
-            + ("-" * 12 + "|") * len(N_SIZES)
-        )
+        print("|" + "-" * 8 + "|" + "-" * 10 + "|" + ("-" * 12 + "|") * len(N_SIZES))
 
         for smooth_key in SMOOTH_CONFIGS:
             for family in FAMILIES:

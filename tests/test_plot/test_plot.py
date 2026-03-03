@@ -75,7 +75,8 @@ class TestSmokeTests:
 
     def test_multi_smooth_plot(self, two_smooth_data):
         """Two-smooth model plots without error."""
-        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(two_smooth_data)
+        formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
+        model = GAM(formula).fit(two_smooth_data)
         fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
@@ -109,7 +110,8 @@ class TestPanelCounts:
         assert len(visible_axes) == 1
 
     def test_two_smooth_has_two_panels(self, two_smooth_data):
-        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(two_smooth_data)
+        formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
+        model = GAM(formula).fit(two_smooth_data)
         _fig, axes = model.plot()
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 2
@@ -254,7 +256,8 @@ class TestReturnValues:
         assert isinstance(axes, np.ndarray)
 
     def test_multi_smooth_axes_shape(self, two_smooth_data):
-        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(two_smooth_data)
+        formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
+        model = GAM(formula).fit(two_smooth_data)
         _fig, axes = model.plot()
         # axes should be 2D array
         assert axes.ndim == 2

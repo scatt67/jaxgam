@@ -213,7 +213,9 @@ class TestApplySumToZero:
 
     def test_works_with_multiple_penalties(self, constraint_2d_data):
         """Centering works with tensor product (multiple penalties)."""
-        data_dict = {"x1": constraint_2d_data["x1"].values, "x2": constraint_2d_data["x2"].values}
+        x1 = constraint_2d_data["x1"].values
+        x2 = constraint_2d_data["x2"].values
+        data_dict = {"x1": x1, "x2": x2}
         sm = _setup_te(["x1", "x2"], data_dict, k=5)
         X, S_list = _get_X_S(sm, data_dict)
 
@@ -407,7 +409,9 @@ class TestGamSide:
 
     def test_no_nesting_no_deletion(self, constraint_2d_data):
         """s(x1) + s(x2) -> no columns deleted."""
-        sm1, sm2, X1_c, X2_c, S1_c, S2_c, X_param, _ = self._make_two_smooth_setup(constraint_2d_data)
+        sm1, sm2, X1_c, X2_c, S1_c, S2_c, X_param, _ = self._make_two_smooth_setup(
+            constraint_2d_data
+        )
 
         del_indices = CoefficientMap.gam_side(
             [sm1, sm2],
@@ -1020,5 +1024,3 @@ class TestRComparison:
                 assert len(term.del_index) == 0, (
                     f"{term.label} has del_index but R has none"
                 )
-
-
