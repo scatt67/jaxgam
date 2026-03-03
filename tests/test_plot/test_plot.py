@@ -22,48 +22,14 @@ import matplotlib.figure
 import matplotlib.pyplot as plt
 
 from jaxgam.api import GAM
-
-SEED = 42
-
+from tests.helpers import (
+    SEED,
+    _generate_family_data,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_single_smooth_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """Generate data for a single smooth model."""
-    rng = np.random.default_rng(seed)
-    n = 200
-    x = rng.uniform(0, 1, n)
-
-    if family_name == "gaussian":
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-    elif family_name == "binomial":
-        eta = 2 * np.sin(2 * np.pi * x)
-        prob = 1.0 / (1.0 + np.exp(-eta))
-        y = rng.binomial(1, prob, n).astype(float)
-    elif family_name == "poisson":
-        eta = np.sin(2 * np.pi * x) + 0.5
-        y = rng.poisson(np.exp(eta)).astype(float)
-    elif family_name == "gamma":
-        eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
-        mu = np.exp(eta)
-        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
-    else:
-        raise ValueError(f"Unknown family: {family_name}")
-
-    return pd.DataFrame({"x": x, "y": y})
-
-
-def _make_two_smooth_data(seed: int = SEED) -> pd.DataFrame:
-    """Generate data for a two-smooth model."""
-    rng = np.random.default_rng(seed)
-    n = 200
-    x1 = rng.uniform(0, 1, n)
-    x2 = rng.uniform(0, 1, n)
-    y = np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(0, 0.3, n)
-    return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
 
 
 def _make_tensor_data(seed: int = SEED) -> pd.DataFrame:
@@ -74,26 +40,6 @@ def _make_tensor_data(seed: int = SEED) -> pd.DataFrame:
     x2 = rng.uniform(0, 1, n)
     y = np.sin(2 * np.pi * x1) * x2 + rng.normal(0, 0.3, n)
     return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
-
-
-def _make_factor_by_data(seed: int = SEED) -> pd.DataFrame:
-    """Generate data for a factor-by model."""
-    rng = np.random.default_rng(seed)
-    n = 300
-    x = rng.uniform(0, 1, n)
-    levels = ["a", "b", "c"]
-    fac = rng.choice(levels, n)
-    eta = np.where(
-        fac == "a", np.sin(2 * np.pi * x), np.where(fac == "b", 0.5 * x, -0.3 * x)
-    )
-    y = eta + rng.normal(0, 0.3, n)
-    return pd.DataFrame(
-        {
-            "x": x,
-            "fac": pd.Categorical(fac, categories=levels),
-            "y": y,
-        }
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -117,7 +63,7 @@ class TestSmokeTests:
     )
     def single_smooth_model(self, request):
         family_name = request.param
-        data = _make_single_smooth_data(family_name)
+        data = _generate_family_data(family_name, n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')", family=family_name).fit(data)
         return model
 
@@ -127,10 +73,9 @@ class TestSmokeTests:
         assert isinstance(fig, matplotlib.figure.Figure)
         assert axes is not None
 
-    def test_multi_smooth_plot(self):
+    def test_multi_smooth_plot(self, two_smooth_data):
         """Two-smooth model plots without error."""
-        data = _make_two_smooth_data()
-        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
+        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(two_smooth_data)
         fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
@@ -141,10 +86,9 @@ class TestSmokeTests:
         fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
-    def test_factor_by_plot(self):
+    def test_factor_by_plot(self, factor_by_data):
         """Factor-by model plots without error."""
-        data = _make_factor_by_data()
-        model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
+        model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(factor_by_data)
         fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
@@ -158,15 +102,14 @@ class TestPanelCounts:
     """Correct number of panels/axes for each model type."""
 
     def test_single_smooth_has_one_panel(self):
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         _fig, axes = model.plot()
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 1
 
-    def test_two_smooth_has_two_panels(self):
-        data = _make_two_smooth_data()
-        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
+    def test_two_smooth_has_two_panels(self, two_smooth_data):
+        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(two_smooth_data)
         _fig, axes = model.plot()
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 2
@@ -178,9 +121,8 @@ class TestPanelCounts:
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 1
 
-    def test_factor_by_has_one_panel_per_level(self):
-        data = _make_factor_by_data()
-        model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
+    def test_factor_by_has_one_panel_per_level(self, factor_by_data):
+        model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(factor_by_data)
         _fig, axes = model.plot()
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         # 3 levels = 3 panels
@@ -196,9 +138,8 @@ class TestParameters:
     """Test various plot parameter combinations."""
 
     @pytest.fixture
-    def two_smooth_model(self):
-        data = _make_two_smooth_data()
-        return GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
+    def two_smooth_model(self, two_smooth_data):
+        return GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(two_smooth_data)
 
     def test_select_single(self, two_smooth_model):
         """select=0 shows only first smooth."""
@@ -226,7 +167,7 @@ class TestParameters:
 
     def test_se_false_no_bands(self):
         """se=False produces no SE bands."""
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         _fig, axes = model.plot(se=False)
         ax = axes.ravel()[0]
@@ -241,7 +182,7 @@ class TestParameters:
 
     def test_se_true_has_bands(self):
         """se=True with shade produces fill_between."""
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         _fig, axes = model.plot(se=True, shade=True)
         ax = axes.ravel()[0]
@@ -254,7 +195,7 @@ class TestParameters:
 
     def test_shade_false_dashed_lines(self):
         """shade=False produces dashed SE lines instead of shading."""
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         _fig, axes = model.plot(se=True, shade=False)
         ax = axes.ravel()[0]
@@ -266,7 +207,7 @@ class TestParameters:
 
     def test_rug_true(self):
         """rug=True adds rug marks."""
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         _fig, axes = model.plot(rug=True, se=False)
         ax = axes.ravel()[0]
@@ -276,7 +217,7 @@ class TestParameters:
 
     def test_rug_false_no_rug(self):
         """rug=False produces no rug marks."""
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         _fig, axes = model.plot(rug=False, se=False)
         ax = axes.ravel()[0]
@@ -294,27 +235,26 @@ class TestReturnValues:
     """Test that plot returns the expected types."""
 
     def test_returns_tuple(self):
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         result = model.plot()
         assert isinstance(result, tuple)
         assert len(result) == 2
 
     def test_fig_is_figure(self):
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         fig, _axes = model.plot()
         assert isinstance(fig, matplotlib.figure.Figure)
 
     def test_axes_is_ndarray(self):
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         _fig, axes = model.plot()
         assert isinstance(axes, np.ndarray)
 
-    def test_multi_smooth_axes_shape(self):
-        data = _make_two_smooth_data()
-        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
+    def test_multi_smooth_axes_shape(self, two_smooth_data):
+        model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(two_smooth_data)
         _fig, axes = model.plot()
         # axes should be 2D array
         assert axes.ndim == 2
@@ -334,7 +274,7 @@ class TestEdgeCases:
             model.plot()
 
     def test_select_out_of_range_raises(self):
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         with pytest.raises(ValueError, match="out of range"):
             model.plot(select=5)
@@ -354,7 +294,7 @@ class TestEdgeCases:
 
     def test_labels_contain_edf(self):
         """Y-axis labels include EDF value."""
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         _fig, axes = model.plot()
         ax = axes.ravel()[0]
@@ -371,10 +311,9 @@ class TestEdgeCases:
         # The colorbar adds an extra axes to the figure
         assert len(fig.axes) > 1
 
-    def test_factor_by_titles_contain_level(self):
+    def test_factor_by_titles_contain_level(self, factor_by_data):
         """Factor-by panels have the level name in the title."""
-        data = _make_factor_by_data()
-        model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
+        model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(factor_by_data)
         _fig, axes = model.plot()
         titles = [ax.get_title() for ax in axes.ravel() if ax.get_visible()]
         # Should have 3 titles: "a", "b", "c"
@@ -385,7 +324,7 @@ class TestEdgeCases:
 
     def test_training_data_stored(self):
         """Verify that _training_data is stored after fitting."""
-        data = _make_single_smooth_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         assert hasattr(model, "_training_data")
         assert "x" in model._training_data

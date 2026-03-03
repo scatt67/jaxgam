@@ -25,6 +25,11 @@ from jaxgam.smooths.by_variable import (
 from jaxgam.smooths.constraints import CoefficientMap, TermBlock
 from jaxgam.smooths.tensor import TensorProductSmooth
 from jaxgam.smooths.tprs import TPRSSmooth
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+from tests.helpers import SEED, N
 from tests.tolerances import (
     MODERATE,
     STRICT,
@@ -32,12 +37,16 @@ from tests.tolerances import (
     normalize_symmetric_signs,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-SEED = 42
-N = 200
+@pytest.fixture
+def constraint_2d_data():
+    """2D data with factor and numeric by-variable columns for constraint tests."""
+    rng = np.random.default_rng(SEED)
+    x1 = rng.uniform(0, 1, N)
+    x2 = rng.uniform(0, 1, N)
+    fac = pd.Categorical(rng.choice(["a", "b", "c"], N))
+    z = rng.uniform(0, 1, N)
+    return pd.DataFrame({"x1": x1, "x2": x2, "fac": fac, "z": z})
 
 
 def _make_spec(
@@ -57,22 +66,6 @@ def _make_spec(
         smooth_type=smooth_type,
         extra_args=dict(extra_args),
     )
-
-
-def _make_1d_data(n: int = N, seed: int = SEED) -> dict[str, np.ndarray]:
-    """Generate simple 1D test data."""
-    rng = np.random.default_rng(seed)
-    return {"x": rng.uniform(0, 1, n)}
-
-
-def _make_2d_data(n: int = N, seed: int = SEED) -> pd.DataFrame:
-    """Generate simple 2D test data with optional factor column."""
-    rng = np.random.default_rng(seed)
-    x1 = rng.uniform(0, 1, n)
-    x2 = rng.uniform(0, 1, n)
-    fac = pd.Categorical(rng.choice(["a", "b", "c"], n))
-    z = rng.uniform(0, 1, n)
-    return pd.DataFrame({"x1": x1, "x2": x2, "fac": fac, "z": z})
 
 
 def _setup_tprs(var_name: str, data_values: np.ndarray, k: int = 10) -> TPRSSmooth:
@@ -113,11 +106,10 @@ def _get_X_S(smooth, data: dict[str, np.ndarray]):
 class TestApplySumToZero:
     """Tests for sum-to-zero centering constraint absorption."""
 
-    def test_reduces_columns_by_one(self):
+    def test_reduces_columns_by_one(self, smooth_1d_data):
         """Centering reduces columns from k to k-1."""
-        data = _make_1d_data()
-        sm = _setup_tprs("x", data["x"])
-        X, S_list = _get_X_S(sm, data)
+        sm = _setup_tprs("x", smooth_1d_data["x"])
+        X, S_list = _get_X_S(sm, smooth_1d_data)
 
         X_c, S_c_list, Z = CoefficientMap.apply_sum_to_zero(X, S_list)
 
@@ -126,11 +118,10 @@ class TestApplySumToZero:
         for S_c in S_c_list:
             assert S_c.shape == (9, 9)
 
-    def test_constraint_satisfied(self):
+    def test_constraint_satisfied(self, smooth_1d_data):
         """After centering, column sums of X_c should be near zero."""
-        data = _make_1d_data()
-        sm = _setup_tprs("x", data["x"])
-        X, S_list = _get_X_S(sm, data)
+        sm = _setup_tprs("x", smooth_1d_data["x"])
+        X, S_list = _get_X_S(sm, smooth_1d_data)
 
         X_c, _, _ = CoefficientMap.apply_sum_to_zero(X, S_list)
 
@@ -142,11 +133,10 @@ class TestApplySumToZero:
             err_msg="Column sums should be near zero after centering",
         )
 
-    def test_prediction_roundtrip(self):
+    def test_prediction_roundtrip(self, smooth_1d_data):
         """X @ Z @ beta_c == X_c @ beta_c for any beta_c."""
-        data = _make_1d_data()
-        sm = _setup_tprs("x", data["x"])
-        X, S_list = _get_X_S(sm, data)
+        sm = _setup_tprs("x", smooth_1d_data["x"])
+        X, S_list = _get_X_S(sm, smooth_1d_data)
 
         X_c, _, Z = CoefficientMap.apply_sum_to_zero(X, S_list)
 
@@ -163,11 +153,10 @@ class TestApplySumToZero:
             atol=STRICT.atol,
         )
 
-    def test_penalty_psd(self):
+    def test_penalty_psd(self, smooth_1d_data):
         """Constrained penalty matrices must remain PSD."""
-        data = _make_1d_data()
-        sm = _setup_tprs("x", data["x"])
-        X, S_list = _get_X_S(sm, data)
+        sm = _setup_tprs("x", smooth_1d_data["x"])
+        X, S_list = _get_X_S(sm, smooth_1d_data)
 
         _, S_c_list, _ = CoefficientMap.apply_sum_to_zero(X, S_list)
 
@@ -177,11 +166,10 @@ class TestApplySumToZero:
                 f"Constrained penalty has negative eigenvalue: {np.min(eigvals)}"
             )
 
-    def test_penalty_symmetric(self):
+    def test_penalty_symmetric(self, smooth_1d_data):
         """Constrained penalty matrices must be symmetric."""
-        data = _make_1d_data()
-        sm = _setup_tprs("x", data["x"])
-        X, S_list = _get_X_S(sm, data)
+        sm = _setup_tprs("x", smooth_1d_data["x"])
+        X, S_list = _get_X_S(sm, smooth_1d_data)
 
         _, S_c_list, _ = CoefficientMap.apply_sum_to_zero(X, S_list)
 
@@ -193,15 +181,14 @@ class TestApplySumToZero:
                 atol=STRICT.atol,
             )
 
-    def test_works_with_cr_basis(self):
+    def test_works_with_cr_basis(self, smooth_1d_data):
         """Centering works with cubic regression splines."""
         from jaxgam.smooths.cubic import CubicRegressionSmooth
 
-        data = _make_1d_data()
         spec = _make_spec(["x"], bs="cr", k=10)
         sm = CubicRegressionSmooth(spec)
-        sm.setup(data)
-        X, S_list = _get_X_S(sm, data)
+        sm.setup(smooth_1d_data)
+        X, S_list = _get_X_S(sm, smooth_1d_data)
 
         X_c, _, _ = CoefficientMap.apply_sum_to_zero(X, S_list)
 
@@ -209,15 +196,14 @@ class TestApplySumToZero:
         col_sums = np.sum(X_c, axis=0)
         np.testing.assert_allclose(col_sums, 0.0, atol=STRICT.atol)
 
-    def test_works_with_cc_basis(self):
+    def test_works_with_cc_basis(self, smooth_1d_data):
         """Centering works with cyclic cubic splines."""
         from jaxgam.smooths.cubic import CyclicCubicSmooth
 
-        data = _make_1d_data()
         spec = _make_spec(["x"], bs="cc", k=10)
         sm = CyclicCubicSmooth(spec)
-        sm.setup(data)
-        X, S_list = _get_X_S(sm, data)
+        sm.setup(smooth_1d_data)
+        X, S_list = _get_X_S(sm, smooth_1d_data)
 
         X_c, _, _ = CoefficientMap.apply_sum_to_zero(X, S_list)
 
@@ -225,10 +211,9 @@ class TestApplySumToZero:
         col_sums = np.sum(X_c, axis=0)
         np.testing.assert_allclose(col_sums, 0.0, atol=STRICT.atol)
 
-    def test_works_with_multiple_penalties(self):
+    def test_works_with_multiple_penalties(self, constraint_2d_data):
         """Centering works with tensor product (multiple penalties)."""
-        df = _make_2d_data()
-        data_dict = {"x1": df["x1"].values, "x2": df["x2"].values}
+        data_dict = {"x1": constraint_2d_data["x1"].values, "x2": constraint_2d_data["x2"].values}
         sm = _setup_te(["x1", "x2"], data_dict, k=5)
         X, S_list = _get_X_S(sm, data_dict)
 
@@ -241,11 +226,10 @@ class TestApplySumToZero:
             eigvals = np.linalg.eigvalsh(S_c)
             assert np.all(eigvals >= -STRICT.atol)
 
-    def test_Z_orthogonal(self):
+    def test_Z_orthogonal(self, smooth_1d_data):
         """Z columns must be orthonormal."""
-        data = _make_1d_data()
-        sm = _setup_tprs("x", data["x"])
-        X, S_list = _get_X_S(sm, data)
+        sm = _setup_tprs("x", smooth_1d_data["x"])
+        X, S_list = _get_X_S(sm, smooth_1d_data)
 
         _, _, Z = CoefficientMap.apply_sum_to_zero(X, S_list)
 
@@ -265,9 +249,9 @@ class TestApplySumToZero:
 class TestApplySumToZeroFactorBy:
     """Tests for factor-by centering constraint."""
 
-    def test_reduces_columns_per_level(self):
+    def test_reduces_columns_per_level(self, constraint_2d_data):
         """Each level block loses 1 column."""
-        df = _make_2d_data()
+        df = constraint_2d_data
         sm = _setup_tprs("x1", df["x1"].values)
 
         spec = _make_spec(["x1"], k=10, by="fac")
@@ -283,9 +267,9 @@ class TestApplySumToZeroFactorBy:
         assert X_c.shape[1] == 27
         assert Z.shape == (30, 27)
 
-    def test_block_diagonal_Z(self):
+    def test_block_diagonal_Z(self, constraint_2d_data):
         """Z should be block-diagonal."""
-        df = _make_2d_data()
+        df = constraint_2d_data
         sm = _setup_tprs("x1", df["x1"].values)
 
         spec = _make_spec(["x1"], k=10, by="fac")
@@ -388,9 +372,8 @@ class TestFixDependence:
 class TestGamSide:
     """Tests for inter-term identifiability constraint detection."""
 
-    def _make_two_smooth_setup(self):
+    def _make_two_smooth_setup(self, df):
         """Set up s(x1) + s(x2) with centered X blocks."""
-        df = _make_2d_data()
         sm1 = _setup_tprs("x1", df["x1"].values)
         sm2 = _setup_tprs("x2", df["x2"].values)
 
@@ -403,9 +386,8 @@ class TestGamSide:
         X_param = np.ones((N, 1))
         return sm1, sm2, X1_c, X2_c, S1_c, S2_c, X_param, df
 
-    def _make_te_setup(self):
+    def _make_te_setup(self, df):
         """Set up s(x1) + s(x2) + te(x1,x2) with centered X blocks."""
-        df = _make_2d_data()
         data_dict = {"x1": df["x1"].values, "x2": df["x2"].values}
 
         sm1 = _setup_tprs("x1", df["x1"].values)
@@ -423,9 +405,9 @@ class TestGamSide:
         X_param = np.ones((N, 1))
         return (sm1, sm2, sm_te, X1_c, X2_c, X_te_c, S1_c, S2_c, S_te_c, X_param, df)
 
-    def test_no_nesting_no_deletion(self):
+    def test_no_nesting_no_deletion(self, constraint_2d_data):
         """s(x1) + s(x2) -> no columns deleted."""
-        sm1, sm2, X1_c, X2_c, S1_c, S2_c, X_param, _ = self._make_two_smooth_setup()
+        sm1, sm2, X1_c, X2_c, S1_c, S2_c, X_param, _ = self._make_two_smooth_setup(constraint_2d_data)
 
         del_indices = CoefficientMap.gam_side(
             [sm1, sm2],
@@ -437,10 +419,10 @@ class TestGamSide:
         assert del_indices[0] is None
         assert del_indices[1] is None
 
-    def test_te_nesting_deletes_columns(self):
+    def test_te_nesting_deletes_columns(self, constraint_2d_data):
         """s(x1) + s(x2) + te(x1,x2) -> te columns deleted."""
         (sm1, sm2, sm_te, X1_c, X2_c, X_te_c, S1_c, S2_c, S_te_c, X_param, _) = (
-            self._make_te_setup()
+            self._make_te_setup(constraint_2d_data)
         )
 
         del_indices = CoefficientMap.gam_side(
@@ -457,9 +439,9 @@ class TestGamSide:
         assert del_indices[2] is not None
         assert len(del_indices[2]) > 0
 
-    def test_factor_by_not_nested_with_main(self):
+    def test_factor_by_not_nested_with_main(self, constraint_2d_data):
         """s(x1) + s(x1, by=fac): different variable names -> no nesting."""
-        df = _make_2d_data()
+        df = constraint_2d_data
         sm1 = _setup_tprs("x1", df["x1"].values)
 
         spec_by = _make_spec(["x1"], k=10, by="fac")
@@ -493,10 +475,10 @@ class TestGamSide:
         assert del_indices[0] is None
         assert del_indices[1] is None
 
-    def test_processing_order_low_to_high(self):
+    def test_processing_order_low_to_high(self, constraint_2d_data):
         """Smooths are processed low->high dimension (1D before 2D)."""
         (sm1, sm2, sm_te, X1_c, X2_c, X_te_c, S1_c, S2_c, S_te_c, X_param, _) = (
-            self._make_te_setup()
+            self._make_te_setup(constraint_2d_data)
         )
 
         # Put te first in the list — should still process 1D first
@@ -514,10 +496,10 @@ class TestGamSide:
         # te should have deletions (it's 2D, processed after 1D terms)
         assert del_indices[0] is not None
 
-    def test_deleted_columns_from_X_and_S(self):
+    def test_deleted_columns_from_X_and_S(self, constraint_2d_data):
         """Deleted columns are actually removed from X and S blocks."""
         (sm1, sm2, sm_te, X1_c, X2_c, X_te_c, S1_c, S2_c, S_te_c, X_param, _) = (
-            self._make_te_setup()
+            self._make_te_setup(constraint_2d_data)
         )
 
         orig_te_cols = X_te_c.shape[1]
@@ -613,9 +595,9 @@ class TestCoefficientMap:
         beta_raw = cm.constrained_to_full(beta_c)
         assert len(beta_raw) == cm.total_coefs_raw
 
-    def test_prediction_equivalence(self):
+    def test_prediction_equivalence(self, smooth_1d_data):
         """X_c @ beta_c == X_raw @ constrained_to_full(beta_c)."""
-        data = _make_1d_data()
+        data = smooth_1d_data
         sm = _setup_tprs("x", data["x"])
         X_raw, S_list = _get_X_S(sm, data)
 
@@ -650,9 +632,9 @@ class TestCoefficientMap:
             atol=STRICT.atol,
         )
 
-    def test_transform_S_preserves_psd(self):
+    def test_transform_S_preserves_psd(self, smooth_1d_data):
         """transform_S on a PSD matrix must produce PSD result."""
-        data = _make_1d_data()
+        data = smooth_1d_data
         sm = _setup_tprs("x", data["x"])
         X_raw, S_list = _get_X_S(sm, data)
 
@@ -677,9 +659,9 @@ class TestCoefficientMap:
         eigvals = np.linalg.eigvalsh(S_transformed)
         assert np.all(eigvals >= -STRICT.atol)
 
-    def test_transform_X_consistent_with_manual(self):
+    def test_transform_X_consistent_with_manual(self, smooth_1d_data):
         """transform_X matches manual apply_sum_to_zero."""
-        data = _make_1d_data()
+        data = smooth_1d_data
         sm = _setup_tprs("x", data["x"])
         X_raw, S_list = _get_X_S(sm, data)
 
@@ -748,9 +730,9 @@ class TestCoefficientMap:
 class TestBuildCoefficientMap:
     """Integration tests for the full constraint pipeline."""
 
-    def test_simple_two_smooth_model(self):
+    def test_simple_two_smooth_model(self, constraint_2d_data):
         """s(x1) + s(x2): centering applied, no gam_side deletion."""
-        df = _make_2d_data()
+        df = constraint_2d_data
 
         sm1 = _setup_tprs("x1", df["x1"].values)
         sm2 = _setup_tprs("x2", df["x2"].values)
@@ -775,9 +757,9 @@ class TestBuildCoefficientMap:
         assert coef_map.has_intercept
         assert len(coef_map.terms) == 3  # parametric + 2 smooths
 
-    def test_te_model_with_nesting(self):
+    def test_te_model_with_nesting(self, constraint_2d_data):
         """s(x1) + s(x2) + te(x1,x2): te gets side-constrained."""
-        df = _make_2d_data()
+        df = constraint_2d_data
         data_dict = {"x1": df["x1"].values, "x2": df["x2"].values}
 
         sm1 = _setup_tprs("x1", df["x1"].values)
@@ -804,9 +786,9 @@ class TestBuildCoefficientMap:
         assert len(te_term.del_index) > 0, "te should have columns deleted"
         assert te_term.n_coefs < te_term.n_coefs_raw
 
-    def test_numeric_by_no_centering(self):
+    def test_numeric_by_no_centering(self, constraint_2d_data):
         """s(x1, by=z): no centering constraint applied."""
-        df = _make_2d_data()
+        df = constraint_2d_data
         sm_base = _setup_tprs("x1", df["x1"].values)
 
         spec = _make_spec(["x1"], k=10, by="z")

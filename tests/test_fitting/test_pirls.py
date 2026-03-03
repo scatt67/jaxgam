@@ -18,7 +18,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pandas as pd
 import pytest
 
 from jaxgam.families.base import ExponentialFamily
@@ -31,13 +30,10 @@ from jaxgam.fitting.pirls import (
     pirls_loop,
 )
 from jaxgam.jax_utils import to_jax, to_numpy
+from tests.helpers import SEED, _generate_family_data, r_available
 from tests.tolerances import MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
-
-# ---- Seed and helpers ----
-
-SEED = 42
 
 
 def _make_polynomial_data(
@@ -408,17 +404,7 @@ class TestPIRLSStep:
 # ---- R comparison tests ----
 
 
-def _r_available() -> bool:
-    """Check if R and mgcv are available with correct versions."""
-    from tests.r_bridge import RBridge
-
-    if not RBridge.available():
-        return False
-    ok, _ = RBridge.check_versions()
-    return ok
-
-
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestVsR:
     """Compare PIRLS output against mgcv::gam() with REML-estimated sp.
 
@@ -429,31 +415,6 @@ class TestVsR:
     """
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    @staticmethod
-    def _make_data(family_name: str) -> pd.DataFrame:
-        """Generate synthetic data as a DataFrame."""
-        rng = np.random.default_rng(SEED)
-        n = 200 if family_name != "binomial" else 300
-        x = rng.uniform(0, 1, n)
-
-        if family_name == "gaussian":
-            y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-        elif family_name == "binomial":
-            eta = 2 * np.sin(2 * np.pi * x)
-            prob = 1.0 / (1.0 + np.exp(-eta))
-            y = rng.binomial(1, prob, n).astype(float)
-        elif family_name == "poisson":
-            eta = np.sin(2 * np.pi * x) + 0.5
-            y = rng.poisson(np.exp(eta)).astype(float)
-        elif family_name == "gamma":
-            eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
-            mu = np.exp(eta)
-            y = rng.gamma(5.0, scale=mu / 5.0, size=n)
-        else:
-            raise ValueError(f"Unknown family: {family_name}")
-
-        return pd.DataFrame({"x": x, "y": y})
 
     def _setup(self, family_name: str, family_r: str, family: ExponentialFamily):
         """Build Python pipeline and get R reference values.
@@ -468,7 +429,7 @@ class TestVsR:
         from jaxgam.formula.parser import parse_formula
         from tests.r_bridge import RBridge
 
-        data = self._make_data(family_name)
+        data = _generate_family_data(family_name)
 
         # Python pipeline: parse → setup → transfer
         spec = parse_formula(self.FORMULA)

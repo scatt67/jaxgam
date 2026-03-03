@@ -2,6 +2,12 @@
   <img src="docs/img/jaxgam_icon.svg" alt="jaxgam" width="400"/>
 </p>
 
+<p align="center">
+  <a href="https://codecov.io/gh/GITHUB_USERNAME/jaxgam">
+    <img src="https://codecov.io/gh/GITHUB_USERNAME/jaxgam/branch/main/graph/badge.svg" alt="coverage"/>
+  </a>
+</p>
+
 A Python reimplementation of R's
 [mgcv](https://cran.r-project.org/package=mgcv) package by
 [Simon N. Wood](https://people.bath.ac.uk/sw283/), for fitting

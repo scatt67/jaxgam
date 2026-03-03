@@ -41,49 +41,10 @@ from jaxgam.fitting.reml import (
     reml_criterion,
 )
 from jaxgam.jax_utils import to_jax, to_numpy
+from tests.helpers import SEED, _generate_family_data, r_available
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
-
-SEED = 42
-
-
-# ---- Helpers ----
-
-
-def _r_available() -> bool:
-    """Check if R and mgcv are available with correct versions."""
-    from tests.r_bridge import RBridge
-
-    if not RBridge.available():
-        return False
-    ok, _ = RBridge.check_versions()
-    return ok
-
-
-def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """Generate synthetic data as a DataFrame."""
-    rng = np.random.default_rng(seed)
-    n = 200 if family_name != "binomial" else 300
-    x = rng.uniform(0, 1, n)
-
-    if family_name == "gaussian":
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-    elif family_name == "binomial":
-        eta = 2 * np.sin(2 * np.pi * x)
-        prob = 1.0 / (1.0 + np.exp(-eta))
-        y = rng.binomial(1, prob, n).astype(float)
-    elif family_name == "poisson":
-        eta = np.sin(2 * np.pi * x) + 0.5
-        y = rng.poisson(np.exp(eta)).astype(float)
-    elif family_name == "gamma":
-        eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
-        mu = np.exp(eta)
-        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
-    else:
-        raise ValueError(f"Unknown family: {family_name}")
-
-    return pd.DataFrame({"x": x, "y": y})
 
 
 def _setup_pipeline(
@@ -154,7 +115,7 @@ def _reml_args(fd, pirls_result, log_lambda):
 # ---- REML score vs R ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestREMLScore:
     """REML score must match R's gcv.ubre.
 
@@ -166,7 +127,7 @@ class TestREMLScore:
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
     def _check_reml_score(self, family_name, family_r, family):
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         fd, pirls_result, log_lambda, r_result = _setup_pipeline(
             self.FORMULA, data, family, family_r
         )
@@ -198,7 +159,7 @@ class TestREMLScore:
 # ---- REML gradient ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestREMLGradient:
     """jax.grad(reml_criterion) must produce valid gradients."""
 
@@ -206,7 +167,7 @@ class TestREMLGradient:
 
     @classmethod
     def setup_class(cls):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         cls.fd, cls.pirls_result, cls.log_lambda, cls.r_result = _setup_pipeline(
             cls.FORMULA, data, Gaussian(), "gaussian"
         )
@@ -254,7 +215,7 @@ class TestREMLGradient:
 # ---- REML Hessian ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestREMLHessian:
     """jax.hessian(reml_criterion) must be finite and match FD."""
 
@@ -262,7 +223,7 @@ class TestREMLHessian:
 
     @classmethod
     def setup_class(cls):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         cls.fd, cls.pirls_result, cls.log_lambda, _ = _setup_pipeline(
             cls.FORMULA, data, Gaussian(), "gaussian"
         )
@@ -300,7 +261,7 @@ class TestREMLHessian:
 # ---- ML criterion ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestMLCriterion:
     """ML criterion tests."""
 
@@ -308,7 +269,7 @@ class TestMLCriterion:
 
     @classmethod
     def setup_class(cls):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         cls.fd, cls.pirls_result, cls.log_lambda, _ = _setup_pipeline(
             cls.FORMULA, data, Gaussian(), "gaussian"
         )
@@ -375,7 +336,7 @@ class TestPearsonRSS:
 # ---- Multi-penalty models ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestMultiPenalty:
     """REML handles multi-penalty models (multiple smooths)."""
 
@@ -502,7 +463,7 @@ class TestPurelyParametric:
 # ---- Criterion classes ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestCriterionClasses:
     """REMLCriterion / MLCriterion class API."""
 
@@ -510,7 +471,7 @@ class TestCriterionClasses:
 
     @classmethod
     def setup_class(cls):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         cls.fd, cls.pirls_result, cls.log_lambda, _ = _setup_pipeline(
             cls.FORMULA, data, Gaussian(), "gaussian"
         )
@@ -572,7 +533,7 @@ class TestCriterionClasses:
 # ---- Scale handling ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestScaleHandling:
     """Dispersion parameter handling."""
 
@@ -580,7 +541,7 @@ class TestScaleHandling:
 
     def test_known_scale_phi_one(self):
         """For Binomial/Poisson, phi should be 1.0."""
-        data = _make_data("poisson")
+        data = _generate_family_data("poisson")
         _, pirls_result, _, _ = _setup_pipeline(
             self.FORMULA, data, Poisson(), "poisson"
         )
@@ -594,7 +555,7 @@ class TestScaleHandling:
 
     def test_unknown_scale_positive(self):
         """For Gaussian, phi = dev/(n-p) should be positive."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         _, pirls_result, _, _ = _setup_pipeline(
             self.FORMULA, data, Gaussian(), "gaussian"
         )
@@ -605,7 +566,7 @@ class TestScaleHandling:
 # ---- Fletcher scale ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestFletcherScale:
     """Fletcher (2012) bias-corrected scale estimator."""
 
@@ -613,7 +574,7 @@ class TestFletcherScale:
 
     def test_gaussian_no_correction(self):
         """For Gaussian, V'(mu)=0 so Fletcher = Pearson."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd, pirls_result, _log_lambda, _ = _setup_pipeline(
             self.FORMULA, data, Gaussian(), "gaussian"
         )
@@ -632,7 +593,7 @@ class TestFletcherScale:
 
     def test_poisson_differs_from_pearson(self):
         """For Poisson, V'(mu)=1 so Fletcher != Pearson."""
-        data = _make_data("poisson")
+        data = _generate_family_data("poisson")
         fd, pirls_result, _log_lambda, _ = _setup_pipeline(
             self.FORMULA, data, Poisson(), "poisson"
         )
@@ -654,7 +615,7 @@ class TestFletcherScale:
             ("binomial", "binomial", Binomial()),
             ("gamma", "gamma", Gamma()),
         ]:
-            data = _make_data(family_name)
+            data = _generate_family_data(family_name)
             fd, pirls_result, _log_lambda, _ = _setup_pipeline(
                 self.FORMULA, data, family, family_r
             )
@@ -668,7 +629,7 @@ class TestFletcherScale:
             ("gaussian", "gaussian", Gaussian()),
             ("gamma", "gamma", Gamma()),
         ]:
-            data = _make_data(family_name)
+            data = _generate_family_data(family_name)
             fd, pirls_result, _log_lambda, r_result = _setup_pipeline(
                 self.FORMULA, data, family, family_r
             )
@@ -686,7 +647,7 @@ class TestFletcherScale:
 # ---- EDF estimation ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestEstimateEdf:
     """EDF estimation from PIRLS Cholesky factor."""
 
@@ -698,7 +659,7 @@ class TestEstimateEdf:
         R's edf vector reports per-smooth EDF. Our trace(H^{-1} XtWX)
         is the total hat matrix trace including the unpenalized intercept.
         """
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         _fd, pirls_result, _log_lambda, r_result = _setup_pipeline(
             self.FORMULA, data, Gaussian(), "gaussian"
         )
@@ -715,7 +676,7 @@ class TestEstimateEdf:
 
     def test_edf_bounded(self):
         """EDF should be between 0 and p (number of coefficients)."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd, pirls_result, _log_lambda, _ = _setup_pipeline(
             self.FORMULA, data, Gaussian(), "gaussian"
         )
@@ -790,7 +751,7 @@ class TestSaturatedLoglik:
 # ---- JIT compilation tests ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestJITCompilation:
     """JIT compilation of REML/ML criterion classes."""
 
@@ -798,7 +759,7 @@ class TestJITCompilation:
 
     @classmethod
     def setup_class(cls):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         cls.fd, cls.pirls_result, cls.log_lambda, _ = _setup_pipeline(
             cls.FORMULA, data, Gaussian(), "gaussian"
         )

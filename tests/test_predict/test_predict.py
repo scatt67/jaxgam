@@ -20,48 +20,17 @@ import pandas as pd
 import pytest
 
 from jaxgam.api import GAM
+from tests.helpers import (
+    SEED,
+    _generate_family_data,
+    r_available,
+    r_tolerance,
+)
 from tests.tolerances import LOOSE, MODERATE, STRICT
-
-SEED = 42
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _r_available() -> bool:
-    from tests.r_bridge import RBridge
-
-    if not RBridge.available():
-        return False
-    ok, _ = RBridge.check_versions()
-    return ok
-
-
-def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """Generate synthetic data for a given family."""
-    rng = np.random.default_rng(seed)
-    n = 200 if family_name != "binomial" else 300
-    x = rng.uniform(0, 1, n)
-
-    if family_name == "gaussian":
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-    elif family_name == "binomial":
-        eta = 2 * np.sin(2 * np.pi * x)
-        prob = 1.0 / (1.0 + np.exp(-eta))
-        y = rng.binomial(1, prob, n).astype(float)
-    elif family_name == "poisson":
-        eta = np.sin(2 * np.pi * x) + 0.5
-        y = rng.poisson(np.exp(eta)).astype(float)
-    elif family_name == "gamma":
-        eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
-        mu = np.exp(eta)
-        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
-    else:
-        raise ValueError(f"Unknown family: {family_name}")
-
-    return pd.DataFrame({"x": x, "y": y})
 
 
 def _make_newdata(family_name: str) -> pd.DataFrame:
@@ -83,40 +52,6 @@ def _make_newdata(family_name: str) -> pd.DataFrame:
     return pd.DataFrame({"x": x, "y": y})
 
 
-def _make_two_smooth_data(seed: int = SEED) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    n = 200
-    x1 = rng.uniform(0, 1, n)
-    x2 = rng.uniform(0, 1, n)
-    y = np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(0, 0.3, n)
-    return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
-
-
-def _make_factor_by_data(seed: int = SEED) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    n = 300
-    x = rng.uniform(0, 1, n)
-    levels = ["a", "b", "c"]
-    fac = rng.choice(levels, n)
-    eta = np.where(
-        fac == "a", np.sin(2 * np.pi * x), np.where(fac == "b", 0.5 * x, -0.3 * x)
-    )
-    y = eta + rng.normal(0, 0.3, n)
-    return pd.DataFrame(
-        {
-            "x": x,
-            "fac": pd.Categorical(fac, categories=levels),
-            "y": y,
-        }
-    )
-
-
-def _r_tol(family_name: str):
-    if family_name == "gaussian":
-        return MODERATE
-    return LOOSE
-
-
 # ---------------------------------------------------------------------------
 # A. Self-prediction roundtrip (STRICT)
 # ---------------------------------------------------------------------------
@@ -133,7 +68,7 @@ class TestSelfPrediction:
     )
     def fitted_model(self, request):
         family_name = request.param
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         model = GAM(self.FORMULA, family=family_name).fit(data)
         return family_name, model, data
 
@@ -194,7 +129,7 @@ class TestSelfPrediction:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestNewDataVsR:
     """New data predictions compared to R."""
 
@@ -213,7 +148,7 @@ class TestNewDataVsR:
         from tests.r_bridge import RBridge
 
         family_name, family_r = request.param
-        train = _make_data(family_name)
+        train = _generate_family_data(family_name)
         newdata = _make_newdata(family_name)
 
         model = GAM(self.FORMULA, family=family_name).fit(train)
@@ -230,7 +165,7 @@ class TestNewDataVsR:
 
     def test_response_vs_r(self, prediction_pair):
         family_name, model, newdata, r_response, _ = prediction_pair
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         pred = model.predict(newdata, pred_type="response")
         np.testing.assert_allclose(
             pred,
@@ -242,7 +177,7 @@ class TestNewDataVsR:
 
     def test_link_vs_r(self, prediction_pair):
         family_name, model, newdata, _, r_link = prediction_pair
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         pred = model.predict(newdata, pred_type="link")
         np.testing.assert_allclose(
             pred,
@@ -258,7 +193,7 @@ class TestNewDataVsR:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestSEVsR:
     """Standard errors compared to R's predict.gam(se.fit=TRUE)."""
 
@@ -277,7 +212,7 @@ class TestSEVsR:
         from tests.r_bridge import RBridge
 
         family_name, family_r = request.param
-        train = _make_data(family_name)
+        train = _generate_family_data(family_name)
         newdata = _make_newdata(family_name)
 
         model = GAM(self.FORMULA, family=family_name).fit(train)
@@ -290,7 +225,7 @@ class TestSEVsR:
 
     def test_se_vs_r(self, se_pair):
         family_name, model, newdata, r_result = se_pair
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         _, se = model.predict(newdata, pred_type="link", se_fit=True)
         np.testing.assert_allclose(
             se,
@@ -309,9 +244,9 @@ class TestSEVsR:
 class TestMultiSmoothPrediction:
     """Prediction for multi-smooth models."""
 
-    def test_two_smooth_self_prediction(self):
+    def test_two_smooth_self_prediction(self, two_smooth_data):
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        data = _make_two_smooth_data()
+        data = two_smooth_data
         model = GAM(formula).fit(data)
 
         pred = model.predict()
@@ -323,17 +258,17 @@ class TestMultiSmoothPrediction:
             err_msg="Two-smooth self-prediction roundtrip failed",
         )
 
-    def test_two_smooth_predict_matrix_shape(self):
+    def test_two_smooth_predict_matrix_shape(self, two_smooth_data):
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        data = _make_two_smooth_data()
+        data = two_smooth_data
         model = GAM(formula).fit(data)
 
         X_p = model.predict_matrix(data)
         assert X_p.shape == model.X_.shape
 
-    def test_tensor_product_self_prediction(self):
+    def test_tensor_product_self_prediction(self, two_smooth_data):
         formula = "y ~ te(x1, x2, k=5)"
-        data = _make_two_smooth_data()
+        data = two_smooth_data
         model = GAM(formula).fit(data)
 
         pred = model.predict()
@@ -345,9 +280,9 @@ class TestMultiSmoothPrediction:
             err_msg="Tensor product self-prediction roundtrip failed",
         )
 
-    def test_factor_by_self_prediction(self):
+    def test_factor_by_self_prediction(self, factor_by_data):
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        data = _make_factor_by_data()
+        data = factor_by_data
         model = GAM(formula).fit(data)
 
         pred = model.predict()
@@ -360,15 +295,15 @@ class TestMultiSmoothPrediction:
         )
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestMultiSmoothVsR:
     """Multi-smooth new-data prediction vs R."""
 
-    def test_two_smooth_newdata_vs_r(self):
+    def test_two_smooth_newdata_vs_r(self, two_smooth_data):
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        train = _make_two_smooth_data()
+        train = two_smooth_data
         rng = np.random.default_rng(SEED + 200)
         newdata = pd.DataFrame(
             {
@@ -391,12 +326,12 @@ class TestMultiSmoothVsR:
             err_msg="Two-smooth new-data prediction differs from R",
         )
 
-    def test_tensor_product_newdata_vs_r(self):
+    def test_tensor_product_newdata_vs_r(self, two_smooth_data):
         from tests.r_bridge import RBridge
 
         py_formula = "y ~ te(x1, x2, k=5)"
         r_formula = "y ~ te(x1, x2, k=c(5,5))"
-        train = _make_two_smooth_data()
+        train = two_smooth_data
         rng = np.random.default_rng(SEED + 200)
         newdata = pd.DataFrame(
             {
@@ -419,11 +354,11 @@ class TestMultiSmoothVsR:
             err_msg="Tensor product new-data prediction differs from R",
         )
 
-    def test_factor_by_newdata_vs_r(self):
+    def test_factor_by_newdata_vs_r(self, factor_by_data):
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        train = _make_factor_by_data()
+        train = factor_by_data
 
         rng = np.random.default_rng(SEED + 200)
         n_new = 60
@@ -492,7 +427,7 @@ class TestEdgeCases:
         assert np.all(np.isfinite(pred_new))
 
     def test_offset_predict(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         n = len(data)
         offset = np.ones(n) * 0.5
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data, offset=offset)
@@ -507,7 +442,7 @@ class TestEdgeCases:
         )
 
     def test_predict_with_newdata_offset(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
 
         newdata = _make_newdata("gaussian")
@@ -524,7 +459,7 @@ class TestEdgeCases:
         )
 
     def test_se_fit_returns_tuple(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         result = model.predict(se_fit=True)
         assert isinstance(result, tuple)
@@ -535,7 +470,7 @@ class TestEdgeCases:
         assert np.all(se >= 0), "SE must be non-negative"
 
     def test_invalid_type_raises(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         with pytest.raises(ValueError, match="pred_type must be"):
             model.predict(pred_type="terms")

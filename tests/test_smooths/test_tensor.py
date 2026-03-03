@@ -27,50 +27,13 @@ from jaxgam.smooths.tensor import (
     TensorProductSmooth,
     _row_tensor,
 )
+from tests.helpers import make_smooth_spec, r_available
 from tests.tolerances import (
     MODERATE,
     STRICT,
     normalize_column_signs,
     normalize_symmetric_signs,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_spec(
-    variables: list[str],
-    bs: str = "cr",
-    k: int = 5,
-    smooth_type: str = "te",
-    **extra_args: object,
-) -> SmoothSpec:
-    """Create a SmoothSpec for testing."""
-    return SmoothSpec(
-        variables=variables,
-        bs=bs,
-        k=k,
-        smooth_type=smooth_type,
-        extra_args=dict(extra_args),
-    )
-
-
-def _make_2d_data(n: int = 200, seed: int = 42) -> dict[str, np.ndarray]:
-    """Generate 2D test data."""
-    rng = np.random.default_rng(seed)
-    return {"x1": rng.uniform(0, 1, n), "x2": rng.uniform(0, 1, n)}
-
-
-def _make_3d_data(n: int = 200, seed: int = 42) -> dict[str, np.ndarray]:
-    """Generate 3D test data."""
-    rng = np.random.default_rng(seed)
-    return {
-        "x1": rng.uniform(0, 1, n),
-        "x2": rng.uniform(0, 1, n),
-        "x3": rng.uniform(0, 1, n),
-    }
-
 
 # ===========================================================================
 # 1. Row-wise Kronecker product tests (STRICT)
@@ -208,65 +171,63 @@ class TestAbsorbConstraint:
 class TestTensorProductStructure:
     """Structural properties of TensorProductSmooth."""
 
-    def test_te_shape_cr(self) -> None:
+    def test_te_shape_cr(self, smooth_2d_data) -> None:
         """te(x1, x2, k=5, bs='cr') produces (n, 25) basis."""
-        n = 200
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        data = _make_2d_data(n=n)
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(data)
-        assert X.shape == (n, 25)
+        X = smooth.build_design_matrix(smooth_2d_data)
+        assert X.shape == (200, 25)
 
-    def test_n_coefs(self) -> None:
+    def test_n_coefs(self, smooth_2d_data) -> None:
         """n_coefs = product of marginal n_coefs."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         assert smooth.n_coefs == 5 * 5
 
-    def test_null_space_dim_cr(self) -> None:
+    def test_null_space_dim_cr(self, smooth_2d_data) -> None:
         """null_space_dim for cr: 2*2 = 4."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         assert smooth.null_space_dim == 2 * 2
 
-    def test_penalty_count(self) -> None:
+    def test_penalty_count(self, smooth_2d_data) -> None:
         """Penalty count equals number of marginals."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         penalties = smooth.build_penalty_matrices()
         assert len(penalties) == 2
 
-    def test_penalty_shape(self) -> None:
+    def test_penalty_shape(self, smooth_2d_data) -> None:
         """Each penalty is (n_coefs, n_coefs)."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         for p in smooth.build_penalty_matrices():
             assert p.shape == (25, 25)
 
-    def test_penalty_symmetry(self) -> None:
+    def test_penalty_symmetry(self, smooth_2d_data) -> None:
         """Penalty matrices are symmetric."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         for p in smooth.build_penalty_matrices():
             np.testing.assert_allclose(p.S, p.S.T, rtol=STRICT.rtol, atol=STRICT.atol)
 
-    def test_penalty_psd(self) -> None:
+    def test_penalty_psd(self, smooth_2d_data) -> None:
         """Penalty matrices are PSD."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         for p in smooth.build_penalty_matrices():
             eigvals = np.linalg.eigvalsh(p.S)
@@ -274,36 +235,35 @@ class TestTensorProductStructure:
                 f"Penalty has negative eigenvalue: {np.min(eigvals):.2e}"
             )
 
-    def test_penalty_rank(self) -> None:
+    def test_penalty_rank(self, smooth_2d_data) -> None:
         """Penalty rank: rank(S_j) * product(d_i for i != j)."""
         k = 5
-        spec = _make_spec(["x1", "x2"], bs="cr", k=k)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=k)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         penalties = smooth.build_penalty_matrices()
         # cr has rank k-2=3, so each tensor penalty has rank 3*5=15
         for p in penalties:
             assert p.rank == (k - 2) * k
 
-    def test_predict_matches_design(self) -> None:
+    def test_predict_matches_design(self, smooth_2d_data) -> None:
         """predict_matrix(train_data) matches build_design_matrix(train_data)."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        data = _make_2d_data()
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X_design = smooth.build_design_matrix(data)
-        X_predict = smooth.predict_matrix(data)
+        X_design = smooth.build_design_matrix(smooth_2d_data)
+        X_predict = smooth.predict_matrix(smooth_2d_data)
         np.testing.assert_allclose(
             X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
         )
 
-    def test_returns_penalty_objects(self) -> None:
+    def test_returns_penalty_objects(self, smooth_2d_data) -> None:
         """build_penalty_matrices returns list[Penalty]."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         penalties = smooth.build_penalty_matrices()
         assert isinstance(penalties, list)
@@ -319,44 +279,38 @@ class TestTensorProductStructure:
 class TestTensorInteractionStructure:
     """Structural properties of TensorInteractionSmooth."""
 
-    def test_ti_shape_cr(self) -> None:
+    def test_ti_shape_cr(self, smooth_2d_data) -> None:
         """ti(x1, x2, k=5, bs='cr') produces (n, 16) basis (4*4)."""
-        n = 200
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        data = _make_2d_data(n=n)
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(data)
-        assert X.shape == (n, 16)
+        X = smooth.build_design_matrix(smooth_2d_data)
+        assert X.shape == (200, 16)
 
-    def test_smaller_than_te(self) -> None:
+    def test_smaller_than_te(self, smooth_2d_data) -> None:
         """ti columns < te columns for same k."""
-        data = _make_2d_data()
-
-        spec_te = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="te")
+        spec_te = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="te")
         te_smooth = TensorProductSmooth(spec_te)
-        te_smooth.setup(data)
+        te_smooth.setup(smooth_2d_data)
 
-        spec_ti = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec_ti = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         ti_smooth = TensorInteractionSmooth(spec_ti)
-        ti_smooth.setup(data)
+        ti_smooth.setup(smooth_2d_data)
 
         assert ti_smooth.n_coefs < te_smooth.n_coefs
 
-    def test_subspace_of_te(self) -> None:
+    def test_subspace_of_te(self, smooth_2d_data) -> None:
         """Column space of ti is a subspace of te (verified via projection)."""
-        data = _make_2d_data()
-
-        spec_te = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="te")
+        spec_te = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="te")
         te_smooth = TensorProductSmooth(spec_te)
-        te_smooth.setup(data)
-        X_te = te_smooth.build_design_matrix(data)
+        te_smooth.setup(smooth_2d_data)
+        X_te = te_smooth.build_design_matrix(smooth_2d_data)
 
-        spec_ti = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec_ti = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         ti_smooth = TensorInteractionSmooth(spec_ti)
-        ti_smooth.setup(data)
-        X_ti = ti_smooth.build_design_matrix(data)
+        ti_smooth.setup(smooth_2d_data)
+        X_ti = ti_smooth.build_design_matrix(smooth_2d_data)
 
         # Project X_ti onto column space of X_te
         # If X_ti is a subspace of X_te, then P @ X_ti ≈ X_ti
@@ -370,48 +324,48 @@ class TestTensorInteractionStructure:
             err_msg="ti column space is not a subspace of te",
         )
 
-    def test_null_space_dim(self) -> None:
+    def test_null_space_dim(self, smooth_2d_data) -> None:
         """null_space_dim: product of (marginal_nsd - 1) for each marginal."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         # cr has nsd=2, so constrained nsd = 2-1 = 1 per marginal
         # product = 1*1 = 1
         assert smooth.null_space_dim == 1
 
-    def test_penalty_count(self) -> None:
+    def test_penalty_count(self, smooth_2d_data) -> None:
         """ti has same number of penalties as marginals."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         penalties = smooth.build_penalty_matrices()
         assert len(penalties) == 2
 
-    def test_penalty_shape(self) -> None:
+    def test_penalty_shape(self, smooth_2d_data) -> None:
         """ti penalty shape matches n_coefs."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         for p in smooth.build_penalty_matrices():
             assert p.shape == (16, 16)
 
-    def test_penalty_symmetry(self) -> None:
+    def test_penalty_symmetry(self, smooth_2d_data) -> None:
         """ti penalty matrices are symmetric."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         for p in smooth.build_penalty_matrices():
             np.testing.assert_allclose(p.S, p.S.T, rtol=STRICT.rtol, atol=STRICT.atol)
 
-    def test_penalty_psd(self) -> None:
+    def test_penalty_psd(self, smooth_2d_data) -> None:
         """ti penalty matrices are PSD."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         for p in smooth.build_penalty_matrices():
             eigvals = np.linalg.eigvalsh(p.S)
@@ -419,12 +373,12 @@ class TestTensorInteractionStructure:
                 f"ti penalty has negative eigenvalue: {np.min(eigvals):.2e}"
             )
 
-    def test_penalty_rank(self) -> None:
+    def test_penalty_rank(self, smooth_2d_data) -> None:
         """ti penalty rank: constrained_rank * product(constrained_d_i for i != j)."""
         k = 5
-        spec = _make_spec(["x1", "x2"], bs="cr", k=k, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=k, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         penalties = smooth.build_penalty_matrices()
         # cr k=5: rank=3, nsd=2. Constrained: dim=4, nsd=1, rank=3.
@@ -434,15 +388,14 @@ class TestTensorInteractionStructure:
         for p in penalties:
             assert p.rank == constrained_rank * constrained_dim
 
-    def test_predict_matches_design(self) -> None:
+    def test_predict_matches_design(self, smooth_2d_data) -> None:
         """predict_matrix(train_data) matches build_design_matrix(train_data)."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        data = _make_2d_data()
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X_design = smooth.build_design_matrix(data)
-        X_predict = smooth.predict_matrix(data)
+        X_design = smooth.build_design_matrix(smooth_2d_data)
+        X_predict = smooth.predict_matrix(smooth_2d_data)
         np.testing.assert_allclose(
             X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
         )
@@ -456,45 +409,42 @@ class TestTensorInteractionStructure:
 class TestMarginalBasisTypes:
     """Tests for different marginal basis types."""
 
-    def test_te_with_tprs(self) -> None:
+    def test_te_with_tprs(self, smooth_2d_data) -> None:
         """te(x1, x2, bs='tp') works with TPRS marginals."""
-        spec = _make_spec(["x1", "x2"], bs="tp", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="tp", k=5)
         smooth = TensorProductSmooth(spec)
-        data = _make_2d_data()
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (200, 25)
         assert np.all(np.isfinite(X))
 
-    def test_te_with_cr(self) -> None:
+    def test_te_with_cr(self, smooth_2d_data) -> None:
         """te(x1, x2, bs='cr') works with cubic marginals."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        data = _make_2d_data()
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (200, 25)
         assert np.all(np.isfinite(X))
 
-    def test_te_with_cc(self) -> None:
+    def test_te_with_cc(self, smooth_2d_data) -> None:
         """te(x1, x2, bs='cc') works with cyclic cubic marginals."""
-        spec = _make_spec(["x1", "x2"], bs="cc", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cc", k=5)
         smooth = TensorProductSmooth(spec)
-        data = _make_2d_data()
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
         # cc has k-1 = 4 coefs per marginal
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (200, 16)
         assert np.all(np.isfinite(X))
 
-    def test_null_space_dim_tp(self) -> None:
+    def test_null_space_dim_tp(self, smooth_2d_data) -> None:
         """null_space_dim for tp: 2*2 = 4 (for 1D marginals with m=2)."""
-        spec = _make_spec(["x1", "x2"], bs="tp", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="tp", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data())
+        smooth.setup(smooth_2d_data)
 
         assert smooth.null_space_dim == 2 * 2
 
@@ -504,20 +454,7 @@ class TestMarginalBasisTypes:
 # ===========================================================================
 
 
-def _r_available() -> bool:
-    """Check if R bridge is available with correct versions."""
-    try:
-        from tests.r_bridge import RBridge
-
-        if not RBridge.available():
-            return False
-        ok, _ = RBridge.check_versions()
-        return ok
-    except Exception:
-        return False
-
-
-@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
 class TestRComparison:
     """Compare tensor product construction against R's smoothCon().
 
@@ -540,7 +477,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("te(x1, x2, bs='cr', k=5)", data_pd)
 
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
         smooth.setup({"x1": x1, "x2": x2})
 
@@ -560,7 +497,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("te(x1, x2, bs='tp', k=5)", data_pd)
 
-        spec = _make_spec(["x1", "x2"], bs="tp", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="tp", k=5)
         smooth = TensorProductSmooth(spec)
         smooth.setup({"x1": x1, "x2": x2})
 
@@ -580,7 +517,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("ti(x1, x2, bs='cr', k=5)", data_pd)
 
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
         smooth.setup({"x1": x1, "x2": x2})
 
@@ -600,7 +537,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("ti(x1, x2, bs='tp', k=5)", data_pd)
 
-        spec = _make_spec(["x1", "x2"], bs="tp", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="tp", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
         smooth.setup({"x1": x1, "x2": x2})
 
@@ -747,87 +684,82 @@ class TestRComparison:
 class TestEdgeCases:
     """Edge case tests for tensor product smooths."""
 
-    def test_3d_tensor(self) -> None:
+    def test_3d_tensor(self, smooth_3d_data) -> None:
         """3D tensor: te(x1, x2, x3, k=3, bs='cr') — 27 columns, 3 penalties."""
-        spec = _make_spec(["x1", "x2", "x3"], bs="cr", k=3)
+        spec = make_smooth_spec(["x1", "x2", "x3"], bs="cr", k=3)
         smooth = TensorProductSmooth(spec)
-        data = _make_3d_data()
-        smooth.setup(data)
+        smooth.setup(smooth_3d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_3d_data)
         assert X.shape == (200, 27)
         assert smooth.n_coefs == 27
 
         penalties = smooth.build_penalty_matrices()
         assert len(penalties) == 3
 
-    def test_small_k(self) -> None:
+    def test_small_k(self, smooth_2d_data) -> None:
         """k=3 for cr marginals (minimum viable)."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=3)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=3)
         smooth = TensorProductSmooth(spec)
-        data = _make_2d_data()
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (200, 9)
         assert np.all(np.isfinite(X))
 
-    def test_large_n(self) -> None:
+    @pytest.mark.parametrize("smooth_2d_data", [1000], indirect=True)
+    def test_large_n(self, smooth_2d_data) -> None:
         """n=1000 runs without memory issues."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        data = _make_2d_data(n=1000)
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (1000, 25)
         assert np.all(np.isfinite(X))
 
-    def test_predict_different_n(self) -> None:
+    def test_predict_different_n(self, smooth_2d_data, pred_smooth_2d_data) -> None:
         """predict_matrix with different data size than training data."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
-        smooth.setup(_make_2d_data(n=200))
+        smooth.setup(smooth_2d_data)
 
-        new_data = _make_2d_data(n=50, seed=99)
-        X_new = smooth.predict_matrix(new_data)
+        X_new = smooth.predict_matrix(pred_smooth_2d_data)
         assert X_new.shape == (50, 25)
         assert np.all(np.isfinite(X_new))
 
-    def test_ti_predict_different_n(self) -> None:
+    def test_ti_predict_different_n(self, smooth_2d_data, pred_smooth_2d_data) -> None:
         """ti predict_matrix with different data size than training data."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        smooth.setup(_make_2d_data(n=200))
+        smooth.setup(smooth_2d_data)
 
-        new_data = _make_2d_data(n=50, seed=99)
-        X_new = smooth.predict_matrix(new_data)
+        X_new = smooth.predict_matrix(pred_smooth_2d_data)
         assert X_new.shape == (50, 16)
         assert np.all(np.isfinite(X_new))
 
-    def test_setup_required(self) -> None:
+    def test_setup_required(self, smooth_2d_data) -> None:
         """build_design_matrix before setup raises RuntimeError."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5)
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
         smooth = TensorProductSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
-            smooth.build_design_matrix(_make_2d_data())
+            smooth.build_design_matrix(smooth_2d_data)
 
-    def test_ti_setup_required(self) -> None:
+    def test_ti_setup_required(self, smooth_2d_data) -> None:
         """ti build_design_matrix before setup raises RuntimeError."""
-        spec = _make_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
-            smooth.build_design_matrix(_make_2d_data())
+            smooth.build_design_matrix(smooth_2d_data)
 
-    def test_3d_ti(self) -> None:
+    def test_3d_ti(self, smooth_3d_data) -> None:
         """3D ti: ti(x1, x2, x3, k=3, bs='cr')."""
-        spec = _make_spec(["x1", "x2", "x3"], bs="cr", k=3, smooth_type="ti")
+        spec = make_smooth_spec(["x1", "x2", "x3"], bs="cr", k=3, smooth_type="ti")
         smooth = TensorInteractionSmooth(spec)
-        data = _make_3d_data()
-        smooth.setup(data)
+        smooth.setup(smooth_3d_data)
 
         # cr k=3 -> 3 coefs, constrained -> 2 each, so 2*2*2=8
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_3d_data)
         assert X.shape == (200, 8)
         assert smooth.n_coefs == 8
 

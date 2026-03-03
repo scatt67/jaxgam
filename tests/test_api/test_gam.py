@@ -29,93 +29,13 @@ import pandas as pd
 import pytest
 
 from jaxgam.api import GAM
+from tests.helpers import (
+    SEED,
+    _generate_family_data,
+    r_available,
+    r_tolerance,
+)
 from tests.tolerances import LOOSE, MODERATE, STRICT
-
-SEED = 42
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _r_available() -> bool:
-    from tests.r_bridge import RBridge
-
-    if not RBridge.available():
-        return False
-    ok, _ = RBridge.check_versions()
-    return ok
-
-
-def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """Generate synthetic data for a given family."""
-    rng = np.random.default_rng(seed)
-    n = 200 if family_name != "binomial" else 300
-    x = rng.uniform(0, 1, n)
-
-    if family_name == "gaussian":
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-    elif family_name == "binomial":
-        eta = 2 * np.sin(2 * np.pi * x)
-        prob = 1.0 / (1.0 + np.exp(-eta))
-        y = rng.binomial(1, prob, n).astype(float)
-    elif family_name == "poisson":
-        eta = np.sin(2 * np.pi * x) + 0.5
-        y = rng.poisson(np.exp(eta)).astype(float)
-    elif family_name == "gamma":
-        eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
-        mu = np.exp(eta)
-        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
-    else:
-        raise ValueError(f"Unknown family: {family_name}")
-
-    return pd.DataFrame({"x": x, "y": y})
-
-
-def _make_two_smooth_data(seed: int = SEED) -> pd.DataFrame:
-    """Two-predictor data for multi-smooth tests."""
-    rng = np.random.default_rng(seed)
-    n = 200
-    x1 = rng.uniform(0, 1, n)
-    x2 = rng.uniform(0, 1, n)
-    y = np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(0, 0.3, n)
-    return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
-
-
-def _make_factor_by_data(seed: int = SEED) -> pd.DataFrame:
-    """Factor-by data for s(x, by=fac) tests.
-
-    Uses pd.Categorical so rpy2 converts to R factor correctly.
-    """
-    rng = np.random.default_rng(seed)
-    n = 300
-    x = rng.uniform(0, 1, n)
-    levels = ["a", "b", "c"]
-    fac = rng.choice(levels, n)
-    eta = np.where(
-        fac == "a", np.sin(2 * np.pi * x), np.where(fac == "b", 0.5 * x, -0.3 * x)
-    )
-    y = eta + rng.normal(0, 0.3, n)
-    return pd.DataFrame(
-        {
-            "x": x,
-            "fac": pd.Categorical(fac, categories=levels),
-            "y": y,
-        }
-    )
-
-
-def _r_tol(family_name: str):
-    """Return tolerance class for R comparison by family.
-
-    Gaussian: MODERATE (single PIRLS iteration, no compounding).
-    GLM families: LOOSE (iterative PIRLS + Newton, differences compound).
-    """
-    if family_name == "gaussian":
-        return MODERATE
-    return LOOSE
-
 
 # ---------------------------------------------------------------------------
 # A. TestGAMClass — basic API tests (no R)
@@ -143,13 +63,13 @@ class TestGAMClass:
             model.plot()
 
     def test_fit_returns_self(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA)
         result = model.fit(data)
         assert result is model
 
     def test_fitted_attributes_are_numpy(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
         assert isinstance(model.coefficients_, np.ndarray)
         assert isinstance(model.fitted_values_, np.ndarray)
@@ -162,7 +82,7 @@ class TestGAMClass:
         import matplotlib
 
         matplotlib.use("Agg")
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
         # summary() is now implemented (Task 3.2)
         s = model.summary()
@@ -175,12 +95,12 @@ class TestGAMClass:
         plt.close("all")
 
     def test_ve_is_none(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
         assert model.Ve_ is None
 
     def test_routing_fields(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
         assert model.execution_path_ == "jax"
         assert model.lambda_strategy_ == "newton_reml"
@@ -197,13 +117,13 @@ class TestEndToEnd:
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
     def test_gaussian_basic(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
         assert model.converged_
         assert model.n_ == 200
 
     def test_all_fields_finite(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
         assert np.all(np.isfinite(model.coefficients_))
         assert np.all(np.isfinite(model.fitted_values_))
@@ -216,7 +136,7 @@ class TestEndToEnd:
         assert np.isfinite(model.edf_total_)
 
     def test_shapes(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
         n = model.n_
         p = model.X_.shape[1]
@@ -229,7 +149,7 @@ class TestEndToEnd:
         assert model.X_.shape == (n, p)
 
     def test_vp_symmetric_psd(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA).fit(data)
         Vp = model.Vp_
         np.testing.assert_allclose(
@@ -260,7 +180,7 @@ class TestHardGateInvariants:
     )
     def fitted_model(self, request):
         family_name = request.param
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         model = GAM(self.FORMULA, family=family_name).fit(data)
         return family_name, model
 
@@ -306,7 +226,7 @@ class TestHardGateInvariants:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestFamilyVsR:
     """R comparison across all four v1.0 families."""
 
@@ -325,7 +245,7 @@ class TestFamilyVsR:
         from tests.r_bridge import RBridge
 
         family_name, family_r = request.param
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         model = GAM(self.FORMULA, family=family_name).fit(data)
         bridge = RBridge()
         r_result = bridge.fit_gam(self.FORMULA, data, family=family_r)
@@ -333,7 +253,7 @@ class TestFamilyVsR:
 
     def test_deviance_vs_r(self, family_fit):
         family_name, model, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             model.deviance_,
             r_result["deviance"],
@@ -344,7 +264,7 @@ class TestFamilyVsR:
 
     def test_coefficients_vs_r(self, family_fit):
         family_name, model, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             model.coefficients_,
             r_result["coefficients"],
@@ -355,7 +275,7 @@ class TestFamilyVsR:
 
     def test_fitted_values_vs_r(self, family_fit):
         family_name, model, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             model.fitted_values_,
             r_result["fitted_values"],
@@ -366,7 +286,7 @@ class TestFamilyVsR:
 
     def test_scale_vs_r(self, family_fit):
         family_name, model, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             model.scale_,
             r_result["scale"],
@@ -377,7 +297,7 @@ class TestFamilyVsR:
 
     def test_vp_vs_r(self, family_fit):
         family_name, model, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             model.Vp_,
             r_result["Vp"],
@@ -388,7 +308,7 @@ class TestFamilyVsR:
 
     def test_per_smooth_edf_vs_r(self, family_fit):
         family_name, model, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             model.edf_,
             r_result["edf"],
@@ -399,7 +319,7 @@ class TestFamilyVsR:
 
     def test_null_deviance_vs_r(self, family_fit):
         family_name, model, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             model.null_deviance_,
             r_result["null_deviance"],
@@ -414,18 +334,17 @@ class TestFamilyVsR:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestMultiSmooth:
     """Multi-smooth models compared to R."""
 
-    def test_two_smooths(self):
+    def test_two_smooths(self, two_smooth_data):
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        data = _make_two_smooth_data()
-        model = GAM(formula).fit(data)
+        model = GAM(formula).fit(two_smooth_data)
         bridge = RBridge()
-        r_result = bridge.fit_gam(formula, data)
+        r_result = bridge.fit_gam(formula, two_smooth_data)
 
         np.testing.assert_allclose(
             model.deviance_,
@@ -450,7 +369,7 @@ class TestMultiSmooth:
             err_msg="Two-smooth per-EDF differs from R",
         )
 
-    def test_tensor_product(self):
+    def test_tensor_product(self, two_smooth_data):
         """te(x1, x2, k=5): Python parser uses scalar k (not R's c(5,5)).
 
         With the default basis fix (te defaults to cr, matching R),
@@ -461,10 +380,9 @@ class TestMultiSmooth:
 
         py_formula = "y ~ te(x1, x2, k=5)"
         r_formula = "y ~ te(x1, x2, k=c(5,5))"
-        data = _make_two_smooth_data()
-        model = GAM(py_formula).fit(data)
+        model = GAM(py_formula).fit(two_smooth_data)
         bridge = RBridge()
-        r_result = bridge.fit_gam(r_formula, data)
+        r_result = bridge.fit_gam(r_formula, two_smooth_data)
 
         np.testing.assert_allclose(
             model.deviance_,
@@ -496,18 +414,17 @@ class TestMultiSmooth:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestFactorBy:
     """Factor-by smooth comparisons with R."""
 
-    def test_factor_by_gaussian(self):
+    def test_factor_by_gaussian(self, factor_by_data):
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        data = _make_factor_by_data()
-        model = GAM(formula).fit(data)
+        model = GAM(formula).fit(factor_by_data)
         bridge = RBridge()
-        r_result = bridge.fit_gam(formula, data)
+        r_result = bridge.fit_gam(formula, factor_by_data)
 
         np.testing.assert_allclose(
             model.deviance_,
@@ -533,11 +450,10 @@ class TestFactorBy:
             err_msg="Factor-by fitted values differ from R",
         )
 
-    def test_factor_by_edf_count(self):
+    def test_factor_by_edf_count(self, factor_by_data):
         """Factor-by smooth is stored as one combined SmoothInfo entry."""
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        data = _make_factor_by_data()
-        model = GAM(formula).fit(data)
+        model = GAM(formula).fit(factor_by_data)
         # Our architecture stores factor-by as a single combined SmoothInfo
         # with 3 penalties (one per level), not 3 separate smooths.
         assert len(model.edf_) == 1, (
@@ -557,13 +473,13 @@ class TestMLOptimization:
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
     def test_ml_converges(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA, method="ML").fit(data)
         assert model.converged_
         assert model.lambda_strategy_ == "newton_ml"
 
     def test_ml_differs_from_reml(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         reml = GAM(self.FORMULA, method="REML").fit(data)
         ml = GAM(self.FORMULA, method="ML").fit(data)
         # ML and REML should give different smoothing params
@@ -585,13 +501,13 @@ class TestFixedSP:
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
     def test_fixed_sp_returns_gam(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA, sp=[1.0]).fit(data)
         assert isinstance(model.coefficients_, np.ndarray)
         assert model.converged_
 
     def test_fixed_sp_lambda_matches(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         sp = [2.5]
         model = GAM(self.FORMULA, sp=sp).fit(data)
         np.testing.assert_allclose(
@@ -603,12 +519,12 @@ class TestFixedSP:
         )
 
     def test_fixed_sp_lambda_strategy(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA, sp=[1.0]).fit(data)
         assert model.lambda_strategy_ == "fixed"
 
     def test_fixed_sp_n_iter_zero(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA, sp=[1.0]).fit(data)
         assert model.n_iter_ == 0
 
@@ -674,7 +590,7 @@ class TestEdgeCases:
 
     def test_offset_support(self):
         """Offset changes coefficients."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         n = len(data)
         model_no_offset = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         offset = np.ones(n) * 0.5
@@ -688,13 +604,13 @@ class TestEdgeCases:
 
     def test_method_case_insensitive(self):
         """Method name is case-insensitive."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')", method="reml").fit(data)
         assert model.converged_
 
     def test_chaining_api(self):
         """GAM(...).fit(data) chaining works."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         assert model.coefficients_.shape[0] > 0
 
@@ -702,6 +618,6 @@ class TestEdgeCases:
         """ExponentialFamily object works as family parameter."""
         from jaxgam.families.standard import Gaussian
 
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')", family=Gaussian()).fit(data)
         assert model.converged_

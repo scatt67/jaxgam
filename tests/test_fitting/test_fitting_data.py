@@ -28,12 +28,10 @@ from jaxgam.fitting.reml import REMLCriterion, reml_criterion
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.jax_utils import build_S_lambda, to_jax, to_numpy
+from tests.helpers import SEED, N
 from tests.tolerances import MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
-
-SEED = 42
-N = 200
 
 
 # ---------------------------------------------------------------------------

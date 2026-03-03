@@ -21,41 +21,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.cubic import (
     CubicRegressionSmooth,
     CubicShrinkageSmooth,
     CyclicCubicSmooth,
 )
+from tests.helpers import make_smooth_spec, r_available
 from tests.tolerances import MODERATE, STRICT
 
 _place_knots = CubicRegressionSmooth._place_knots
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_spec(
-    variables: list[str],
-    bs: str = "cr",
-    k: int = 10,
-    **extra_args: object,
-) -> SmoothSpec:
-    """Create a SmoothSpec for testing."""
-    return SmoothSpec(
-        variables=variables,
-        bs=bs,
-        k=k,
-        extra_args=dict(extra_args),
-    )
-
-
-def _make_1d_data(n: int = 200, seed: int = 42) -> dict[str, np.ndarray]:
-    """Generate simple 1D test data."""
-    rng = np.random.default_rng(seed)
-    return {"x": rng.uniform(0, 1, n)}
 
 
 # ===========================================================================
@@ -121,11 +96,11 @@ class TestKnotPlacement:
 class TestPenaltyConstruction:
     """Tests for penalty matrix construction."""
 
-    def test_cr_S_symmetric_psd(self) -> None:
+    def test_cr_S_symmetric_psd(self, smooth_1d_data) -> None:
         """cr penalty S is symmetric PSD."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         np.testing.assert_allclose(S, S.T, rtol=STRICT.rtol, atol=STRICT.atol)
@@ -134,22 +109,22 @@ class TestPenaltyConstruction:
             f"cr S has negative eigenvalue: {np.min(eigvals):.2e}"
         )
 
-    def test_cs_S_symmetric_psd(self) -> None:
+    def test_cs_S_symmetric_psd(self, smooth_1d_data) -> None:
         """cs penalty S is symmetric PSD."""
-        spec = _make_spec(["x"], bs="cs", k=10)
+        spec = make_smooth_spec(["x"], bs="cs", k=10)
         smooth = CubicShrinkageSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         np.testing.assert_allclose(S, S.T, rtol=STRICT.rtol, atol=STRICT.atol)
         eigvals = np.linalg.eigvalsh(S)
         assert np.all(eigvals >= -STRICT.atol)
 
-    def test_cc_S_symmetric_psd(self) -> None:
+    def test_cc_S_symmetric_psd(self, smooth_1d_data) -> None:
         """cc penalty S is symmetric PSD."""
-        spec = _make_spec(["x"], bs="cc", k=10)
+        spec = make_smooth_spec(["x"], bs="cc", k=10)
         smooth = CyclicCubicSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         np.testing.assert_allclose(S, S.T, rtol=STRICT.rtol, atol=STRICT.atol)
@@ -158,48 +133,48 @@ class TestPenaltyConstruction:
             f"cc S has negative eigenvalue: {np.min(eigvals):.2e}"
         )
 
-    def test_cr_S_rank(self) -> None:
+    def test_cr_S_rank(self, smooth_1d_data) -> None:
         """cr penalty rank = k-2."""
         k = 10
-        spec = _make_spec(["x"], k=k)
+        spec = make_smooth_spec(["x"], k=k)
         smooth = CubicRegressionSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         assert smooth.rank == k - 2
         penalty = smooth.build_penalty_matrices()[0]
         assert penalty.rank == k - 2
         assert penalty.null_space_dim == 2
 
-    def test_cs_S_rank(self) -> None:
+    def test_cs_S_rank(self, smooth_1d_data) -> None:
         """cs penalty rank = k (full rank)."""
         k = 10
-        spec = _make_spec(["x"], bs="cs", k=k)
+        spec = make_smooth_spec(["x"], bs="cs", k=k)
         smooth = CubicShrinkageSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         assert smooth.rank == k
         penalty = smooth.build_penalty_matrices()[0]
         assert penalty.rank == k
         assert penalty.null_space_dim == 0
 
-    def test_cc_S_rank(self) -> None:
+    def test_cc_S_rank(self, smooth_1d_data) -> None:
         """cc penalty rank = k-2, null_space_dim = 1."""
         k = 10
-        spec = _make_spec(["x"], bs="cc", k=k)
+        spec = make_smooth_spec(["x"], bs="cc", k=k)
         smooth = CyclicCubicSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         assert smooth.rank == k - 2
         penalty = smooth.build_penalty_matrices()[0]
         assert penalty.rank == k - 2
         assert penalty.null_space_dim == 1
 
-    def test_cr_null_space_contains_linear(self) -> None:
+    def test_cr_null_space_contains_linear(self, smooth_1d_data) -> None:
         """cr null space is aligned with constant + linear functions."""
         k = 10
-        spec = _make_spec(["x"], k=k)
+        spec = make_smooth_spec(["x"], k=k)
         smooth = CubicRegressionSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         # S @ ones ≈ 0 (constant in null space)
@@ -207,12 +182,12 @@ class TestPenaltyConstruction:
         # S @ knots ≈ 0 (linear in null space)
         np.testing.assert_allclose(S @ smooth._knots, np.zeros(k), atol=STRICT.atol)
 
-    def test_cc_null_space_contains_constant(self) -> None:
+    def test_cc_null_space_contains_constant(self, smooth_1d_data) -> None:
         """cc null space contains constant function."""
         k = 10
-        spec = _make_spec(["x"], bs="cc", k=k)
+        spec = make_smooth_spec(["x"], bs="cc", k=k)
         smooth = CyclicCubicSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         np.testing.assert_allclose(
@@ -228,95 +203,92 @@ class TestPenaltyConstruction:
 class TestBasisMatrixStructure:
     """Structural properties of the basis matrix."""
 
-    def test_cr_X_shape(self) -> None:
+    def test_cr_X_shape(self, smooth_1d_data) -> None:
         """cr X shape = (n, k)."""
         n, k = 200, 10
-        spec = _make_spec(["x"], k=k)
+        spec = make_smooth_spec(["x"], k=k)
         smooth = CubicRegressionSmooth(spec)
-        data = _make_1d_data(n=n)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_1d_data)
         assert X.shape == (n, k)
 
-    def test_cs_X_shape(self) -> None:
+    def test_cs_X_shape(self, smooth_1d_data) -> None:
         """cs X shape = (n, k)."""
         n, k = 200, 10
-        spec = _make_spec(["x"], bs="cs", k=k)
+        spec = make_smooth_spec(["x"], bs="cs", k=k)
         smooth = CubicShrinkageSmooth(spec)
-        data = _make_1d_data(n=n)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_1d_data)
         assert X.shape == (n, k)
 
-    def test_cc_X_shape(self) -> None:
+    def test_cc_X_shape(self, smooth_1d_data) -> None:
         """cc X shape = (n, k-1)."""
         n, k = 200, 10
-        spec = _make_spec(["x"], bs="cc", k=k)
+        spec = make_smooth_spec(["x"], bs="cc", k=k)
         smooth = CyclicCubicSmooth(spec)
-        data = _make_1d_data(n=n)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_1d_data)
         assert X.shape == (n, k - 1)
 
-    def test_predict_equals_design_matrix_cr(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [100], indirect=True)
+    def test_predict_equals_design_matrix_cr(self, smooth_1d_data) -> None:
         """predict_matrix == build_design_matrix for cr."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
-        data = _make_1d_data(n=100)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X_design = smooth.build_design_matrix(data)
-        X_predict = smooth.predict_matrix(data)
+        X_design = smooth.build_design_matrix(smooth_1d_data)
+        X_predict = smooth.predict_matrix(smooth_1d_data)
         np.testing.assert_allclose(
             X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
         )
 
-    def test_predict_equals_design_matrix_cc(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [100], indirect=True)
+    def test_predict_equals_design_matrix_cc(self, smooth_1d_data) -> None:
         """predict_matrix == build_design_matrix for cc."""
-        spec = _make_spec(["x"], bs="cc", k=10)
+        spec = make_smooth_spec(["x"], bs="cc", k=10)
         smooth = CyclicCubicSmooth(spec)
-        data = _make_1d_data(n=100)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X_design = smooth.build_design_matrix(data)
-        X_predict = smooth.predict_matrix(data)
+        X_design = smooth.build_design_matrix(smooth_1d_data)
+        X_predict = smooth.predict_matrix(smooth_1d_data)
         np.testing.assert_allclose(
             X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
         )
 
-    def test_penalty_returns_list_of_penalty(self) -> None:
+    def test_penalty_returns_list_of_penalty(self, smooth_1d_data) -> None:
         """build_penalty_matrices returns list[Penalty]."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         penalties = smooth.build_penalty_matrices()
         assert isinstance(penalties, list)
         assert len(penalties) == 1
         assert isinstance(penalties[0], Penalty)
 
-    def test_n_coefs_cr(self) -> None:
+    def test_n_coefs_cr(self, smooth_1d_data) -> None:
         """n_coefs = k for cr."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 10
 
-    def test_n_coefs_cs(self) -> None:
+    def test_n_coefs_cs(self, smooth_1d_data) -> None:
         """n_coefs = k for cs."""
-        spec = _make_spec(["x"], bs="cs", k=10)
+        spec = make_smooth_spec(["x"], bs="cs", k=10)
         smooth = CubicShrinkageSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 10
 
-    def test_n_coefs_cc(self) -> None:
+    def test_n_coefs_cc(self, smooth_1d_data) -> None:
         """n_coefs = k-1 for cc."""
-        spec = _make_spec(["x"], bs="cc", k=10)
+        spec = make_smooth_spec(["x"], bs="cc", k=10)
         smooth = CyclicCubicSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 9
 
 
@@ -325,20 +297,7 @@ class TestBasisMatrixStructure:
 # ===========================================================================
 
 
-def _r_available() -> bool:
-    """Check if R bridge is available with correct versions."""
-    try:
-        from tests.r_bridge import RBridge
-
-        if not RBridge.available():
-            return False
-        ok, _ = RBridge.check_versions()
-        return ok
-    except Exception:
-        return False
-
-
-@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
 class TestRComparison:
     """Compare cubic spline construction against R's smoothCon().
 
@@ -361,7 +320,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("s(x, bs='cr', k=10)", data)
 
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
         smooth.setup({"x": x})
         return smooth, r_result, x
@@ -379,7 +338,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("s(x, bs='cc', k=10)", data)
 
-        spec = _make_spec(["x"], bs="cc", k=10)
+        spec = make_smooth_spec(["x"], bs="cc", k=10)
         smooth = CyclicCubicSmooth(spec)
         smooth.setup({"x": x})
         return smooth, r_result, x
@@ -397,7 +356,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("s(x, bs='cs', k=10)", data)
 
-        spec = _make_spec(["x"], bs="cs", k=10)
+        spec = make_smooth_spec(["x"], bs="cs", k=10)
         smooth = CubicShrinkageSmooth(spec)
         smooth.setup({"x": x})
         return smooth, r_result, x
@@ -604,7 +563,7 @@ class TestCyclicSpecific:
 
     def test_cc_periodicity(self) -> None:
         """cc basis is periodic: predict at lower_bound ≈ predict at upper_bound."""
-        spec = _make_spec(["x"], bs="cc", k=10)
+        spec = make_smooth_spec(["x"], bs="cc", k=10)
         smooth = CyclicCubicSmooth(spec)
         x = np.linspace(0, 1, 200)
         smooth.setup({"x": x})
@@ -619,12 +578,12 @@ class TestCyclicSpecific:
             err_msg="cc basis not periodic at boundaries",
         )
 
-    def test_cc_penalty_penalizes_non_constant(self) -> None:
+    def test_cc_penalty_penalizes_non_constant(self, smooth_1d_data) -> None:
         """cc penalty penalizes all non-constant functions."""
         k = 10
-        spec = _make_spec(["x"], bs="cc", k=k)
+        spec = make_smooth_spec(["x"], bs="cc", k=k)
         smooth = CyclicCubicSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         eigvals = np.sort(np.linalg.eigvalsh(S))
@@ -642,19 +601,17 @@ class TestCyclicSpecific:
 class TestShrinkage:
     """Tests for CubicShrinkageSmooth."""
 
-    def test_cs_basis_identical_to_cr(self) -> None:
+    def test_cs_basis_identical_to_cr(self, smooth_1d_data) -> None:
         """cs and cr produce the same basis matrix X."""
-        data = _make_1d_data()
-
-        spec_cr = _make_spec(["x"], bs="cr", k=10)
+        spec_cr = make_smooth_spec(["x"], bs="cr", k=10)
         smooth_cr = CubicRegressionSmooth(spec_cr)
-        smooth_cr.setup(data)
-        X_cr = smooth_cr.build_design_matrix(data)
+        smooth_cr.setup(smooth_1d_data)
+        X_cr = smooth_cr.build_design_matrix(smooth_1d_data)
 
-        spec_cs = _make_spec(["x"], bs="cs", k=10)
+        spec_cs = make_smooth_spec(["x"], bs="cs", k=10)
         smooth_cs = CubicShrinkageSmooth(spec_cs)
-        smooth_cs.setup(data)
-        X_cs = smooth_cs.build_design_matrix(data)
+        smooth_cs.setup(smooth_1d_data)
+        X_cs = smooth_cs.build_design_matrix(smooth_1d_data)
 
         np.testing.assert_allclose(
             X_cs,
@@ -664,21 +621,21 @@ class TestShrinkage:
             err_msg="cs and cr should have the same basis matrix",
         )
 
-    def test_cs_penalty_full_rank(self) -> None:
+    def test_cs_penalty_full_rank(self, smooth_1d_data) -> None:
         """cs penalty has full rank."""
-        spec = _make_spec(["x"], bs="cs", k=10)
+        spec = make_smooth_spec(["x"], bs="cs", k=10)
         smooth = CubicShrinkageSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         penalty = smooth.build_penalty_matrices()[0]
         assert penalty.rank == 10
         assert penalty.null_space_dim == 0
 
-    def test_cs_penalty_psd(self) -> None:
+    def test_cs_penalty_psd(self, smooth_1d_data) -> None:
         """cs penalty is strictly positive definite."""
-        spec = _make_spec(["x"], bs="cs", k=10)
+        spec = make_smooth_spec(["x"], bs="cs", k=10)
         smooth = CubicShrinkageSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         eigvals = np.linalg.eigvalsh(S)
@@ -696,7 +653,7 @@ class TestEdgeCases:
     def test_duplicate_data_points(self) -> None:
         """Duplicate data points handled correctly."""
         x = np.array([0.1, 0.2, 0.3, 0.4, 0.5] * 20)
-        spec = _make_spec(["x"], k=5)
+        spec = make_smooth_spec(["x"], k=5)
         smooth = CubicRegressionSmooth(spec)
         smooth.setup({"x": x})
 
@@ -708,7 +665,7 @@ class TestEdgeCases:
         """Small n with appropriate k works."""
         rng = np.random.default_rng(42)
         x = rng.uniform(0, 1, 10)
-        spec = _make_spec(["x"], k=5)
+        spec = make_smooth_spec(["x"], k=5)
         smooth = CubicRegressionSmooth(spec)
         smooth.setup({"x": x})
 
@@ -718,54 +675,54 @@ class TestEdgeCases:
     def test_k_exceeds_n_unique_raises(self) -> None:
         """k > n_unique raises ValueError."""
         x = np.array([0.1, 0.2, 0.3] * 30)
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
         with pytest.raises(ValueError, match="exceeds"):
             smooth.setup({"x": x})
 
-    def test_k_less_than_3_raises(self) -> None:
+    def test_k_less_than_3_raises(self, smooth_1d_data) -> None:
         """k < 3 raises ValueError."""
-        spec = _make_spec(["x"], k=2)
+        spec = make_smooth_spec(["x"], k=2)
         smooth = CubicRegressionSmooth(spec)
         with pytest.raises(ValueError, match="at least 3"):
-            smooth.setup(_make_1d_data())
+            smooth.setup(smooth_1d_data)
 
     def test_setup_required_for_design_matrix(self) -> None:
         """build_design_matrix before setup raises RuntimeError."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
             smooth.build_design_matrix({"x": np.zeros(10)})
 
     def test_setup_required_for_penalty(self) -> None:
         """build_penalty_matrices before setup raises RuntimeError."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
             smooth.build_penalty_matrices()
 
     def test_setup_required_for_predict(self) -> None:
         """predict_matrix before setup raises RuntimeError."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
             smooth.predict_matrix({"x": np.zeros(10)})
 
     def test_multivariate_raises(self) -> None:
         """Multi-variable spec raises ValueError."""
-        spec = _make_spec(["x1", "x2"], k=10)
+        spec = make_smooth_spec(["x1", "x2"], k=10)
         smooth = CubicRegressionSmooth(spec)
         with pytest.raises(ValueError, match="univariate"):
             smooth.setup({"x1": np.zeros(10), "x2": np.zeros(10)})
 
-    def test_predict_new_data_different_n(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [100], indirect=True)
+    def test_predict_new_data_different_n(self, smooth_1d_data, pred_smooth_1d_data) -> None:
         """predict_matrix works with different n than training data."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = CubicRegressionSmooth(spec)
-        smooth.setup(_make_1d_data(n=100))
+        smooth.setup(smooth_1d_data)
 
-        new_data = _make_1d_data(n=50, seed=99)
-        X_new = smooth.predict_matrix(new_data)
+        X_new = smooth.predict_matrix(pred_smooth_1d_data)
         assert X_new.shape == (50, 10)
         assert np.all(np.isfinite(X_new))
 
@@ -779,14 +736,13 @@ class TestParameterized:
     """Parameterized tests for various k values."""
 
     @pytest.mark.parametrize("k", [5, 10, 15, 20])
-    def test_cr_various_k(self, k: int) -> None:
+    def test_cr_various_k(self, k: int, smooth_1d_data) -> None:
         """cr works for various k values."""
-        spec = _make_spec(["x"], k=k)
+        spec = make_smooth_spec(["x"], k=k)
         smooth = CubicRegressionSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_1d_data)
         assert X.shape == (200, k)
         assert smooth.n_coefs == k
         assert smooth.rank == k - 2
@@ -797,38 +753,36 @@ class TestParameterized:
         assert S.shape == (k, k)
 
     @pytest.mark.parametrize("k", [5, 10, 15, 20])
-    def test_cs_various_k(self, k: int) -> None:
+    def test_cs_various_k(self, k: int, smooth_1d_data) -> None:
         """cs works for various k values."""
-        spec = _make_spec(["x"], bs="cs", k=k)
+        spec = make_smooth_spec(["x"], bs="cs", k=k)
         smooth = CubicShrinkageSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_1d_data)
         assert X.shape == (200, k)
         assert smooth.n_coefs == k
         assert smooth.rank == k
         assert smooth.null_space_dim == 0
 
     @pytest.mark.parametrize("k", [5, 10, 15, 20])
-    def test_cc_various_k(self, k: int) -> None:
+    def test_cc_various_k(self, k: int, smooth_1d_data) -> None:
         """cc works for various k values."""
-        spec = _make_spec(["x"], bs="cc", k=k)
+        spec = make_smooth_spec(["x"], bs="cc", k=k)
         smooth = CyclicCubicSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_1d_data)
         assert X.shape == (200, k - 1)
         assert smooth.n_coefs == k - 1
         assert smooth.rank == k - 2
         assert smooth.null_space_dim == 1
 
-    def test_default_k(self) -> None:
+    def test_default_k(self, smooth_1d_data) -> None:
         """Default k (k=-1) uses 10."""
-        spec = _make_spec(["x"], k=-1)
+        spec = make_smooth_spec(["x"], k=-1)
         smooth = CubicRegressionSmooth(spec)
-        smooth.setup(_make_1d_data())
+        smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 10
 
 

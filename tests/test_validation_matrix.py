@@ -26,10 +26,8 @@ import pandas as pd
 import pytest
 
 from jaxgam.api import GAM
+from tests.helpers import SEED, r_available
 from tests.tolerances import LOOSE, MODERATE, STRICT
-
-SEED = 42
-
 
 # ---------------------------------------------------------------------------
 # Data generators
@@ -220,15 +218,6 @@ FAMILIES = ["gaussian", "binomial", "poisson", "gamma"]
 # ---------------------------------------------------------------------------
 
 
-def _r_available() -> bool:
-    from tests.r_bridge import RBridge
-
-    if not RBridge.available():
-        return False
-    ok, _ = RBridge.check_versions()
-    return ok
-
-
 def _get_data(config: SmoothConfig, family: str) -> pd.DataFrame:
     """Generate data for a given smooth config and family."""
     if config.data_type == "single":
@@ -296,7 +285,7 @@ def _cell_id(val):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestValidationMatrix:
     """Systematic R comparison across all smooth type x family cells."""
 

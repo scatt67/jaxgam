@@ -14,12 +14,10 @@ R source reference: R/smooth.r smoothCon() by-variable handling
 
 from __future__ import annotations
 
-
 import numpy as np
 import pandas as pd
 import pytest
 
-from jaxgam.formula.terms import SmoothSpec
 from jaxgam.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
@@ -27,33 +25,13 @@ from jaxgam.smooths.by_variable import (
     resolve_by_variable,
 )
 from jaxgam.smooths.tprs import TPRSSmooth
+from tests.helpers import make_smooth_spec
 from tests.tolerances import (
     MODERATE,
     STRICT,
     normalize_column_signs,
     normalize_symmetric_signs,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_spec(
-    variables: list[str],
-    bs: str = "tp",
-    k: int = 10,
-    by: str | None = None,
-    **extra_args: object,
-) -> SmoothSpec:
-    """Create a SmoothSpec for testing."""
-    return SmoothSpec(
-        variables=variables,
-        bs=bs,
-        k=k,
-        by=by,
-        extra_args=dict(extra_args),
-    )
 
 
 def _make_factor_data(
@@ -78,7 +56,7 @@ def _make_factor_data(
 
 def _setup_base_smooth(data: pd.DataFrame, k: int = 10, bs: str = "tp") -> TPRSSmooth:
     """Create and setup a base TPRS smooth on x."""
-    spec = _make_spec(["x"], bs=bs, k=k)
+    spec = make_smooth_spec(["x"], bs=bs, k=k)
     smooth = TPRSSmooth(spec)
     data_dict = {"x": data["x"].values}
     smooth.setup(data_dict)
@@ -165,7 +143,7 @@ class TestFactorBySmoothStructure:
     def factor_by(
         self, base_smooth: TPRSSmooth, factor_data: pd.DataFrame
     ) -> FactorBySmooth:
-        spec = _make_spec(["x"], k=10, by="fac")
+        spec = make_smooth_spec(["x"], k=10, by="fac")
         levels = sorted(factor_data["fac"].cat.categories.tolist())
         return FactorBySmooth(
             base_smooth=base_smooth,
@@ -361,7 +339,7 @@ class TestNumericBySmoothStructure:
 
     @pytest.fixture
     def numeric_by(self, base_smooth: TPRSSmooth) -> NumericBySmooth:
-        spec = _make_spec(["x"], k=10, by="z")
+        spec = make_smooth_spec(["x"], k=10, by="z")
         return NumericBySmooth(
             base_smooth=base_smooth,
             spec=spec,
@@ -462,7 +440,7 @@ class TestResolveByVariable:
         self, base_smooth: TPRSSmooth, factor_data: pd.DataFrame
     ) -> None:
         """No by-variable returns the base smooth."""
-        spec = _make_spec(["x"], k=10, by=None)
+        spec = make_smooth_spec(["x"], k=10, by=None)
         result = resolve_by_variable(spec, factor_data, base_smooth)
         assert result is base_smooth
 
@@ -470,7 +448,7 @@ class TestResolveByVariable:
         self, base_smooth: TPRSSmooth, factor_data: pd.DataFrame
     ) -> None:
         """Factor by-variable returns FactorBySmooth."""
-        spec = _make_spec(["x"], k=10, by="fac")
+        spec = make_smooth_spec(["x"], k=10, by="fac")
         result = resolve_by_variable(spec, factor_data, base_smooth)
         assert isinstance(result, FactorBySmooth)
 
@@ -478,7 +456,7 @@ class TestResolveByVariable:
         self, base_smooth: TPRSSmooth, factor_data: pd.DataFrame
     ) -> None:
         """Numeric by-variable returns NumericBySmooth."""
-        spec = _make_spec(["x"], k=10, by="z")
+        spec = make_smooth_spec(["x"], k=10, by="z")
         result = resolve_by_variable(spec, factor_data, base_smooth)
         assert isinstance(result, NumericBySmooth)
 
@@ -486,7 +464,7 @@ class TestResolveByVariable:
         self, base_smooth: TPRSSmooth, factor_data: pd.DataFrame
     ) -> None:
         """Factor-by has correct levels."""
-        spec = _make_spec(["x"], k=10, by="fac")
+        spec = make_smooth_spec(["x"], k=10, by="fac")
         result = resolve_by_variable(spec, factor_data, base_smooth)
         assert isinstance(result, FactorBySmooth)
         assert result.levels == ["level0", "level1", "level2"]
@@ -496,7 +474,7 @@ class TestResolveByVariable:
     ) -> None:
         """Ordered factor skips the first (reference) level."""
         data = _make_factor_data(n=200, n_levels=3, ordered=True)
-        spec = _make_spec(["x"], k=10, by="fac")
+        spec = make_smooth_spec(["x"], k=10, by="fac")
         result = resolve_by_variable(spec, data, base_smooth)
         assert isinstance(result, FactorBySmooth)
         # First level ("level0") should be skipped
@@ -507,7 +485,7 @@ class TestResolveByVariable:
         self, base_smooth: TPRSSmooth, factor_data: pd.DataFrame
     ) -> None:
         """Missing by-variable raises KeyError."""
-        spec = _make_spec(["x"], k=10, by="nonexistent")
+        spec = make_smooth_spec(["x"], k=10, by="nonexistent")
         with pytest.raises(KeyError, match="nonexistent"):
             resolve_by_variable(spec, factor_data, base_smooth)
 
@@ -517,7 +495,7 @@ class TestResolveByVariable:
         """NaN in numeric by-variable raises ValueError."""
         data = factor_data.copy()
         data.loc[0, "z"] = np.nan
-        spec = _make_spec(["x"], k=10, by="z")
+        spec = make_smooth_spec(["x"], k=10, by="z")
         with pytest.raises(ValueError, match="NaN"):
             resolve_by_variable(spec, data, base_smooth)
 
@@ -539,12 +517,12 @@ class TestFactorByWithDifferentBases:
         """Factor-by works with tp and ts basis types."""
         from jaxgam.smooths.registry import get_smooth_class
 
-        spec = _make_spec(["x"], bs=bs, k=10)
+        spec = make_smooth_spec(["x"], bs=bs, k=10)
         smooth_cls = get_smooth_class(bs)
         smooth = smooth_cls(spec)
         smooth.setup({"x": factor_data["x"].values})
 
-        by_spec = _make_spec(["x"], bs=bs, k=10, by="fac")
+        by_spec = make_smooth_spec(["x"], bs=bs, k=10, by="fac")
         levels = sorted(factor_data["fac"].cat.categories.tolist())
         fbs = FactorBySmooth(
             base_smooth=smooth,
@@ -563,12 +541,12 @@ class TestFactorByWithDifferentBases:
         """Factor-by works with cr, cs, cc basis types."""
         from jaxgam.smooths.registry import get_smooth_class
 
-        spec = _make_spec(["x"], bs=bs, k=10)
+        spec = make_smooth_spec(["x"], bs=bs, k=10)
         smooth_cls = get_smooth_class(bs)
         smooth = smooth_cls(spec)
         smooth.setup({"x": factor_data["x"].values})
 
-        by_spec = _make_spec(["x"], bs=bs, k=10, by="fac")
+        by_spec = make_smooth_spec(["x"], bs=bs, k=10, by="fac")
         levels = sorted(factor_data["fac"].cat.categories.tolist())
         fbs = FactorBySmooth(
             base_smooth=smooth,
@@ -597,7 +575,7 @@ class TestEdgeCases:
         data = _make_factor_data(n=100, n_levels=1)
         smooth = _setup_base_smooth(data, k=8)
 
-        spec = _make_spec(["x"], k=8, by="fac")
+        spec = make_smooth_spec(["x"], k=8, by="fac")
         result = resolve_by_variable(spec, data, smooth)
         assert isinstance(result, FactorBySmooth)
         assert result.n_levels == 1
@@ -612,7 +590,7 @@ class TestEdgeCases:
         data = _make_factor_data(n=500, n_levels=10)
         smooth = _setup_base_smooth(data, k=8)
 
-        spec = _make_spec(["x"], k=8, by="fac")
+        spec = make_smooth_spec(["x"], k=8, by="fac")
         result = resolve_by_variable(spec, data, smooth)
         assert isinstance(result, FactorBySmooth)
         assert result.n_levels == 10
@@ -629,7 +607,7 @@ class TestEdgeCases:
         data["z_const"] = 2.0
         smooth = _setup_base_smooth(data, k=8)
 
-        spec = _make_spec(["x"], k=8, by="z_const")
+        spec = make_smooth_spec(["x"], k=8, by="z_const")
         result = resolve_by_variable(spec, data, smooth)
         assert isinstance(result, NumericBySmooth)
 
@@ -644,7 +622,7 @@ class TestEdgeCases:
         data["z_zero"] = 0.0
         smooth = _setup_base_smooth(data, k=8)
 
-        spec = _make_spec(["x"], k=8, by="z_zero")
+        spec = make_smooth_spec(["x"], k=8, by="z_zero")
         result = resolve_by_variable(spec, data, smooth)
 
         X = result.build_design_matrix(data)
@@ -652,8 +630,8 @@ class TestEdgeCases:
 
     def test_base_smooth_must_be_setup(self) -> None:
         """FactorBySmooth requires base smooth to be setup."""
-        spec = _make_spec(["x"], k=10, by="fac")
-        smooth = TPRSSmooth(_make_spec(["x"], k=10))
+        spec = make_smooth_spec(["x"], k=10, by="fac")
+        smooth = TPRSSmooth(make_smooth_spec(["x"], k=10))
         # smooth.setup() NOT called
 
         with pytest.raises(RuntimeError, match="setup"):
@@ -666,8 +644,8 @@ class TestEdgeCases:
 
     def test_numeric_by_smooth_requires_setup(self) -> None:
         """NumericBySmooth requires base smooth to be setup."""
-        spec = _make_spec(["x"], k=10, by="z")
-        smooth = TPRSSmooth(_make_spec(["x"], k=10))
+        spec = make_smooth_spec(["x"], k=10, by="z")
+        smooth = TPRSSmooth(make_smooth_spec(["x"], k=10))
 
         with pytest.raises(RuntimeError, match="setup"):
             NumericBySmooth(
@@ -686,19 +664,19 @@ class TestEdgeCases:
 
         data = {"x": x, "fac": fac, "z": z}
 
-        spec = _make_spec(["x"], k=8)
+        spec = make_smooth_spec(["x"], k=8)
         smooth = TPRSSmooth(spec)
         smooth.setup({"x": x})
 
         # Factor by with dict
-        by_spec = _make_spec(["x"], k=8, by="fac")
+        by_spec = make_smooth_spec(["x"], k=8, by="fac")
         result = resolve_by_variable(by_spec, data, smooth)
         assert isinstance(result, FactorBySmooth)
         X = result.build_design_matrix(data)
         assert X.shape == (n, 3 * smooth.n_coefs)
 
         # Numeric by with dict
-        num_spec = _make_spec(["x"], k=8, by="z")
+        num_spec = make_smooth_spec(["x"], k=8, by="z")
         result_num = resolve_by_variable(num_spec, data, smooth)
         assert isinstance(result_num, NumericBySmooth)
         X_num = result_num.build_design_matrix(data)
@@ -708,7 +686,7 @@ class TestEdgeCases:
         """predict_matrix with data where some levels have no observations."""
         data = _make_factor_data(n=200, n_levels=3)
         smooth = _setup_base_smooth(data, k=8)
-        spec = _make_spec(["x"], k=8, by="fac")
+        spec = make_smooth_spec(["x"], k=8, by="fac")
         result = resolve_by_variable(spec, data, smooth)
         assert isinstance(result, FactorBySmooth)
 
@@ -807,8 +785,8 @@ class TestRComparison:
         )
 
         # --- Python side: construct matching FactorBySmooth ---
-        spec = _make_spec(["x"], bs="tp", k=k, by="fac")
-        smooth = TPRSSmooth(_make_spec(["x"], bs="tp", k=k))
+        spec = make_smooth_spec(["x"], bs="tp", k=k, by="fac")
+        smooth = TPRSSmooth(make_smooth_spec(["x"], bs="tp", k=k))
         smooth.setup({"x": data["x"].values})
 
         fbs = FactorBySmooth(
@@ -857,8 +835,8 @@ class TestRComparison:
             "s(x, by=fac, bs='tp', k=10)", data, absorb_cons=False
         )
 
-        spec = _make_spec(["x"], bs="tp", k=k, by="fac")
-        smooth = TPRSSmooth(_make_spec(["x"], bs="tp", k=k))
+        spec = make_smooth_spec(["x"], bs="tp", k=k, by="fac")
+        smooth = TPRSSmooth(make_smooth_spec(["x"], bs="tp", k=k))
         smooth.setup({"x": data["x"].values})
 
         fbs = FactorBySmooth(
@@ -904,7 +882,7 @@ class TestRComparison:
             "s(x, by=fac, bs='tp', k=10)", data, absorb_cons=False
         )
 
-        smooth = TPRSSmooth(_make_spec(["x"], bs="tp", k=10))
+        smooth = TPRSSmooth(make_smooth_spec(["x"], bs="tp", k=10))
         smooth.setup({"x": data["x"].values})
 
         for r_sm in r_smooths:
@@ -934,10 +912,10 @@ class TestRComparison:
         r_X = r_smooths[0]["X"]
 
         # Python side
-        smooth = TPRSSmooth(_make_spec(["x"], bs="tp", k=k))
+        smooth = TPRSSmooth(make_smooth_spec(["x"], bs="tp", k=k))
         smooth.setup({"x": data["x"].values})
 
-        spec = _make_spec(["x"], bs="tp", k=k, by="z")
+        spec = make_smooth_spec(["x"], bs="tp", k=k, by="z")
         nbs = NumericBySmooth(
             base_smooth=smooth,
             spec=spec,
@@ -972,10 +950,10 @@ class TestRComparison:
         r_X = r_smooths[0]["X"]
         r_S = r_smooths[0]["S"][0]
 
-        smooth = TPRSSmooth(_make_spec(["x"], bs="tp", k=k))
+        smooth = TPRSSmooth(make_smooth_spec(["x"], bs="tp", k=k))
         smooth.setup({"x": data["x"].values})
 
-        spec = _make_spec(["x"], bs="tp", k=k, by="z")
+        spec = make_smooth_spec(["x"], bs="tp", k=k, by="z")
         nbs = NumericBySmooth(
             base_smooth=smooth,
             spec=spec,
@@ -1011,12 +989,12 @@ class TestRComparison:
         assert len(r_smooths) == 3
 
         smooth_cls = get_smooth_class(bs)
-        smooth = smooth_cls(_make_spec(["x"], bs=bs, k=k))
+        smooth = smooth_cls(make_smooth_spec(["x"], bs=bs, k=k))
         smooth.setup({"x": data["x"].values})
 
         fbs = FactorBySmooth(
             base_smooth=smooth,
-            spec=_make_spec(["x"], bs=bs, k=k, by="fac"),
+            spec=make_smooth_spec(["x"], bs=bs, k=k, by="fac"),
             levels=["a", "b", "c"],
             by_variable="fac",
         )

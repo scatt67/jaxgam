@@ -24,94 +24,13 @@ import pytest
 
 from jaxgam.api import GAM
 from jaxgam.summary.summary import GAMSummary, summary
+from tests.helpers import (
+    SEED,
+    _generate_family_data,
+    r_available,
+    r_tolerance,
+)
 from tests.tolerances import LOOSE, MODERATE, STRICT
-
-SEED = 42
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _r_available() -> bool:
-    from tests.r_bridge import RBridge
-
-    if not RBridge.available():
-        return False
-    ok, _ = RBridge.check_versions()
-    return ok
-
-
-def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """Generate synthetic data for a given family."""
-    rng = np.random.default_rng(seed)
-    n = 200
-    x = rng.uniform(0, 1, n)
-
-    if family_name == "gaussian":
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-    elif family_name == "binomial":
-        eta = 2 * np.sin(2 * np.pi * x)
-        prob = 1.0 / (1.0 + np.exp(-eta))
-        y = rng.binomial(1, prob, n).astype(float)
-    elif family_name == "poisson":
-        eta = np.sin(2 * np.pi * x) + 0.5
-        y = rng.poisson(np.exp(eta)).astype(float)
-    elif family_name == "gamma":
-        eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
-        mu = np.exp(eta)
-        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
-    else:
-        raise ValueError(f"Unknown family: {family_name}")
-
-    return pd.DataFrame({"x": x, "y": y})
-
-
-def _make_two_smooth_data(seed: int = SEED) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    n = 200
-    x1 = rng.uniform(0, 1, n)
-    x2 = rng.uniform(0, 1, n)
-    y = np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(0, 0.3, n)
-    return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
-
-
-def _make_tensor_data(seed: int = SEED) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    n = 200
-    x1 = rng.uniform(0, 1, n)
-    x2 = rng.uniform(0, 1, n)
-    y = np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(0, 0.3, n)
-    return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
-
-
-def _make_factor_by_data(seed: int = SEED) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    n = 300
-    x = rng.uniform(0, 1, n)
-    levels = ["a", "b", "c"]
-    fac = rng.choice(levels, n)
-    eta = np.where(
-        fac == "a",
-        np.sin(2 * np.pi * x),
-        np.where(fac == "b", 0.5 * x, -0.3 * x),
-    )
-    y = eta + rng.normal(0, 0.3, n)
-    return pd.DataFrame(
-        {
-            "x": x,
-            "fac": pd.Categorical(fac, categories=levels),
-            "y": y,
-        }
-    )
-
-
-def _r_tol(family_name: str):
-    if family_name == "gaussian":
-        return MODERATE
-    return LOOSE
-
 
 # ---------------------------------------------------------------------------
 # A. Self-consistency tests (STRICT)
@@ -129,7 +48,7 @@ class TestSelfConsistency:
     )
     def fitted_summary(self, request):
         family_name = request.param
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name, n=200)
         model = GAM(self.FORMULA, family=family_name).fit(data)
         s = summary(model)
         return family_name, model, s
@@ -216,7 +135,7 @@ class TestSelfConsistency:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestSummaryVsR:
     """Summary statistics compared to R's summary.gam()."""
 
@@ -235,7 +154,7 @@ class TestSummaryVsR:
         from tests.r_bridge import RBridge
 
         family_name, family_r = request.param
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name, n=200)
 
         model = GAM(self.FORMULA, family=family_name).fit(data)
         py_summary = summary(model)
@@ -268,7 +187,7 @@ class TestSummaryVsR:
         if py_s.p_table is None or r_s["p_table"] is None:
             pytest.skip("No parametric terms")
 
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
 
         py_pv = py_s.p_table[:, 3]
         r_pv = r_s["p_table"][:, 3]
@@ -298,7 +217,7 @@ class TestSummaryVsR:
     def test_deviance_explained_vs_r(self, summary_pair):
         """Deviance explained should match R at MODERATE."""
         family_name, py_s, r_s, _ = summary_pair
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
 
         np.testing.assert_allclose(
             py_s.dev_explained,
@@ -311,7 +230,7 @@ class TestSummaryVsR:
     def test_scale_vs_r(self, summary_pair):
         """Scale estimate should match R at MODERATE."""
         family_name, py_s, r_s, _ = summary_pair
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
 
         np.testing.assert_allclose(
             py_s.scale,
@@ -331,7 +250,7 @@ class TestSummaryVsR:
         if py_s.s_table is None or r_s["s_table"] is None:
             pytest.skip("No smooth terms")
 
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
 
         # Column 2 is F (for unknown-scale) or Chi.sq (for known-scale)
         py_stat = py_s.s_table[:, 2]
@@ -354,7 +273,7 @@ class TestSummaryVsR:
         if py_s.s_table is None or r_s["s_table"] is None:
             pytest.skip("No smooth terms")
 
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
 
         # Column 3 is p-value
         py_pval = py_s.s_table[:, 3]
@@ -369,15 +288,15 @@ class TestSummaryVsR:
         )
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestMultiSmoothSummaryVsR:
     """Summary for multi-smooth models vs R."""
 
-    def test_two_smooth_edf_vs_r(self):
+    def test_two_smooth_edf_vs_r(self, two_smooth_data):
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        data = _make_two_smooth_data()
+        data = two_smooth_data
 
         model = GAM(formula).fit(data)
         py_s = summary(model)
@@ -396,11 +315,11 @@ class TestMultiSmoothSummaryVsR:
             err_msg="Two-smooth EDF differs from R",
         )
 
-    def test_two_smooth_deviance_explained_vs_r(self):
+    def test_two_smooth_deviance_explained_vs_r(self, two_smooth_data):
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        data = _make_two_smooth_data()
+        data = two_smooth_data
 
         model = GAM(formula).fit(data)
         py_s = summary(model)
@@ -426,7 +345,7 @@ class TestSmokeTests:
     """Smoke tests: summary prints without error for all smooth types."""
 
     def test_single_smooth_gaussian(self):
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')", family="gaussian").fit(data)
         s = summary(model)
         text = str(s)
@@ -437,7 +356,7 @@ class TestSmokeTests:
         assert "Scale est." in text
 
     def test_single_smooth_binomial(self):
-        data = _make_data("binomial")
+        data = _generate_family_data("binomial", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')", family="binomial").fit(data)
         s = summary(model)
         text = str(s)
@@ -445,37 +364,37 @@ class TestSmokeTests:
         assert "Chi.sq" in text or "z value" in text
 
     def test_single_smooth_poisson(self):
-        data = _make_data("poisson")
+        data = _generate_family_data("poisson", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')", family="poisson").fit(data)
         s = summary(model)
         text = str(s)
         assert "poisson" in text.lower()
 
     def test_single_smooth_gamma(self):
-        data = _make_data("gamma")
+        data = _generate_family_data("gamma", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')", family="gamma").fit(data)
         s = summary(model)
         text = str(s)
         assert "gamma" in text.lower()
 
-    def test_two_smooth(self):
-        data = _make_two_smooth_data()
+    def test_two_smooth(self, two_smooth_data):
+        data = two_smooth_data
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
         model = GAM(formula).fit(data)
         s = summary(model)
         assert s.s_table is not None
         assert s.s_table.shape[0] == 2
 
-    def test_tensor_product(self):
-        data = _make_tensor_data()
+    def test_tensor_product(self, two_smooth_data):
+        data = two_smooth_data
         formula = "y ~ te(x1, x2, k=5)"
         model = GAM(formula).fit(data)
         s = summary(model)
         assert s.s_table is not None
         assert s.s_table.shape[0] == 1
 
-    def test_factor_by(self):
-        data = _make_factor_by_data()
+    def test_factor_by(self, factor_by_data):
+        data = factor_by_data
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
         model = GAM(formula).fit(data)
         s = summary(model)
@@ -485,14 +404,14 @@ class TestSmokeTests:
 
     def test_summary_returns_gam_summary(self):
         """summary() should return a GAMSummary instance."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         s = summary(model)
         assert isinstance(s, GAMSummary)
 
     def test_summary_method_returns_gam_summary(self, capsys):
         """GAM.summary() should print and return GAMSummary."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         s = model.summary()
         assert isinstance(s, GAMSummary)
@@ -502,7 +421,7 @@ class TestSmokeTests:
 
     def test_str_representation(self):
         """str(GAMSummary) should return formatted summary."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         s = summary(model)
         text = str(s)
@@ -542,7 +461,7 @@ class TestEdgeCases:
 
     def test_known_scale_uses_z_test(self):
         """Binomial/Poisson should use z-test, not t-test."""
-        data = _make_data("binomial")
+        data = _generate_family_data("binomial", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')", family="binomial").fit(data)
         s = summary(model)
         assert s.p_test_name == "z value"
@@ -551,7 +470,7 @@ class TestEdgeCases:
 
     def test_unknown_scale_uses_t_test(self):
         """Gaussian/Gamma should use t-test, not z-test."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')", family="gaussian").fit(data)
         s = summary(model)
         assert s.p_test_name == "t value"
@@ -560,7 +479,7 @@ class TestEdgeCases:
 
     def test_formula_stored(self):
         """Formula should be stored in summary."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian", n=200)
         formula = "y ~ s(x, k=10, bs='cr')"
         model = GAM(formula).fit(data)
         s = summary(model)
@@ -568,7 +487,7 @@ class TestEdgeCases:
 
     def test_n_correct(self):
         """Number of observations should match data."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         s = summary(model)
         assert s.n == len(data)
@@ -754,7 +673,7 @@ class TestPsumChisqDavies:
         assert 0.0 <= result <= 1.0
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestDaviesVsR:
     """Davies implementation compared to R's psum.chisq."""
 

@@ -23,23 +23,8 @@ import pytest
 
 from jaxgam.formula.design import ModelSetup, SmoothInfo
 from jaxgam.formula.parser import parse_formula
+from tests.helpers import SEED, N, r_available
 from tests.tolerances import MODERATE, STRICT, normalize_column_signs
-
-SEED = 42
-N = 200
-
-
-def _r_available() -> bool:
-    """Check if R bridge is available with correct versions."""
-    try:
-        from tests.r_bridge import RBridge
-
-        if not RBridge.available():
-            return False
-        ok, _ = RBridge.check_versions()
-        return ok
-    except Exception:
-        return False
 
 
 @pytest.fixture
@@ -417,7 +402,7 @@ class TestInstanceMethods:
 # ===========================================================================
 
 
-@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
 class TestRComparison:
     """Compare ModelSetup results against R mgcv."""
 

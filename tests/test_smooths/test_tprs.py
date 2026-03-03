@@ -19,7 +19,6 @@ from math import comb, pi
 import numpy as np
 import pytest
 
-from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.tprs import (
     TPRSShrinkageSmooth,
@@ -32,44 +31,13 @@ from jaxgam.smooths.tprs import (
     null_space_dimension,
     tps_semi_kernel,
 )
+from tests.helpers import make_smooth_spec, r_available
 from tests.tolerances import (
     MODERATE,
     STRICT,
     normalize_column_signs,
     normalize_symmetric_signs,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_spec(
-    variables: list[str],
-    bs: str = "tp",
-    k: int = 10,
-    **extra_args: object,
-) -> SmoothSpec:
-    """Create a SmoothSpec for testing."""
-    return SmoothSpec(
-        variables=variables,
-        bs=bs,
-        k=k,
-        extra_args=dict(extra_args),
-    )
-
-
-def _make_1d_data(n: int = 200, seed: int = 42) -> dict[str, np.ndarray]:
-    """Generate simple 1D test data."""
-    rng = np.random.default_rng(seed)
-    return {"x": rng.uniform(0, 1, n)}
-
-
-def _make_2d_data(n: int = 200, seed: int = 42) -> dict[str, np.ndarray]:
-    """Generate simple 2D test data."""
-    rng = np.random.default_rng(seed)
-    return {"x1": rng.uniform(0, 1, n), "x2": rng.uniform(0, 1, n)}
-
 
 # ===========================================================================
 # 1. Helper function unit tests (STRICT)
@@ -215,12 +183,11 @@ class TestStructuralInvariants:
     """Structural properties that must hold for any TPRS smooth."""
 
     @pytest.mark.parametrize("k", [5, 10, 15])
-    def test_S_symmetric_psd_1d(self, k: int) -> None:
+    def test_S_symmetric_psd_1d(self, k: int, smooth_1d_data) -> None:
         """S is symmetric PSD for 1D smooth."""
-        spec = _make_spec(["x"], k=k)
+        spec = make_smooth_spec(["x"], k=k)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
         penalties = smooth.build_penalty_matrices()
         S = penalties[0].S
@@ -233,12 +200,11 @@ class TestStructuralInvariants:
             f"S has negative eigenvalue: {np.min(eigvals):.2e}"
         )
 
-    def test_S_symmetric_psd_2d(self) -> None:
+    def test_S_symmetric_psd_2d(self, smooth_2d_data) -> None:
         """S is symmetric PSD for 2D smooth."""
-        spec = _make_spec(["x1", "x2"], k=10)
+        spec = make_smooth_spec(["x1", "x2"], k=10)
         smooth = TPRSSmooth(spec)
-        data = _make_2d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         np.testing.assert_allclose(S, S.T, rtol=STRICT.rtol, atol=STRICT.atol)
@@ -246,72 +212,65 @@ class TestStructuralInvariants:
         assert np.all(eigvals >= -STRICT.atol)
 
     @pytest.mark.parametrize("k", [5, 10, 20])
-    def test_S_rank_equals_k_minus_M_1d(self, k: int) -> None:
+    def test_S_rank_equals_k_minus_M_1d(self, k: int, smooth_1d_data) -> None:
         """For tp, S rank = k - M (M=2 for d=1)."""
-        spec = _make_spec(["x"], k=k)
+        spec = make_smooth_spec(["x"], k=k)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
         assert smooth.rank == k - 2
         penalty = smooth.build_penalty_matrices()[0]
         assert penalty.rank == k - 2
         assert penalty.null_space_dim == 2
 
-    def test_S_rank_2d(self) -> None:
+    def test_S_rank_2d(self, smooth_2d_data) -> None:
         """For tp with d=2, S rank = k - 3."""
-        spec = _make_spec(["x1", "x2"], k=10)
+        spec = make_smooth_spec(["x1", "x2"], k=10)
         smooth = TPRSSmooth(spec)
-        data = _make_2d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
         assert smooth.rank == 10 - 3
         assert smooth.null_space_dim == 3
 
     @pytest.mark.parametrize("k", [5, 10, 15])
-    def test_X_shape_1d(self, k: int) -> None:
+    def test_X_shape_1d(self, k: int, smooth_1d_data) -> None:
         """X shape = (n, k) for 1D smooth."""
-        n = 200
-        spec = _make_spec(["x"], k=k)
+        spec = make_smooth_spec(["x"], k=k)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=n)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X = smooth.build_design_matrix(data)
-        assert X.shape == (n, k)
+        X = smooth.build_design_matrix(smooth_1d_data)
+        assert X.shape == (200, k)
 
-    def test_X_shape_2d(self) -> None:
+    def test_X_shape_2d(self, smooth_2d_data) -> None:
         """X shape = (n, k) for 2D smooth."""
-        n = 200
-        spec = _make_spec(["x1", "x2"], k=15)
+        spec = make_smooth_spec(["x1", "x2"], k=15)
         smooth = TPRSSmooth(spec)
-        data = _make_2d_data(n=n)
-        smooth.setup(data)
+        smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(data)
-        assert X.shape == (n, 15)
+        X = smooth.build_design_matrix(smooth_2d_data)
+        assert X.shape == (200, 15)
 
-    def test_penalty_returns_list_of_penalty(self) -> None:
+    def test_penalty_returns_list_of_penalty(self, smooth_1d_data) -> None:
         """build_penalty_matrices returns list[Penalty]."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
         penalties = smooth.build_penalty_matrices()
         assert isinstance(penalties, list)
         assert len(penalties) == 1
         assert isinstance(penalties[0], Penalty)
 
-    def test_predict_equals_design_matrix(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [100], indirect=True)
+    def test_predict_equals_design_matrix(self, smooth_1d_data) -> None:
         """predict_matrix(original_data) == build_design_matrix(original_data)."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=100)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X_design = smooth.build_design_matrix(data)
-        X_predict = smooth.predict_matrix(data)
+        X_design = smooth.build_design_matrix(smooth_1d_data)
+        X_predict = smooth.predict_matrix(smooth_1d_data)
         np.testing.assert_allclose(
             X_predict,
             X_design,
@@ -320,12 +279,11 @@ class TestStructuralInvariants:
             err_msg="predict_matrix should equal build_design_matrix for same data",
         )
 
-    def test_penalty_null_space_aligned_with_polynomial(self) -> None:
+    def test_penalty_null_space_aligned_with_polynomial(self, smooth_1d_data) -> None:
         """Null space of S spans polynomial space."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         eigvals, _eigvecs = np.linalg.eigh(S)
@@ -337,12 +295,11 @@ class TestStructuralInvariants:
             f"Expected {M} near-zero eigenvalues, got {null_eigvals}"
         )
 
-    def test_n_coefs_matches_k(self) -> None:
+    def test_n_coefs_matches_k(self, smooth_1d_data) -> None:
         """n_coefs equals k after setup."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 10
 
 
@@ -351,20 +308,7 @@ class TestStructuralInvariants:
 # ===========================================================================
 
 
-def _r_available() -> bool:
-    """Check if R bridge is available with correct versions."""
-    try:
-        from tests.r_bridge import RBridge
-
-        if not RBridge.available():
-            return False
-        ok, _ = RBridge.check_versions()
-        return ok
-    except Exception:
-        return False
-
-
-@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
 class TestRComparison:
     """Compare TPRS construction against R's smoothCon().
 
@@ -388,7 +332,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("s(x, bs='tp', k=10)", data)
 
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
         smooth.setup({"x": x})
         return smooth, r_result, x
@@ -496,7 +440,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("s(x1, x2, bs='tp', k=10)", data)
 
-        spec = _make_spec(["x1", "x2"], k=10)
+        spec = make_smooth_spec(["x1", "x2"], k=10)
         smooth = TPRSSmooth(spec)
         smooth.setup({"x1": x1, "x2": x2})
         return smooth, r_result, x1, x2
@@ -570,7 +514,7 @@ class TestRComparison:
         bridge = RBridge()
         r_result = bridge.smooth_construct("s(x, bs='ts', k=10)", data)
 
-        spec = _make_spec(["x"], bs="ts", k=10)
+        spec = make_smooth_spec(["x"], bs="ts", k=10)
         smooth = TPRSShrinkageSmooth(spec)
         smooth.setup({"x": x})
         return smooth, r_result, x
@@ -625,14 +569,13 @@ class TestParameterized:
     """Parameterized tests for various k values."""
 
     @pytest.mark.parametrize("k", [5, 10, 15, 20, 50])
-    def test_various_k_1d(self, k: int) -> None:
+    def test_various_k_1d(self, k: int, smooth_1d_data) -> None:
         """TPRS works for various k values (1D)."""
-        spec = _make_spec(["x"], k=k)
+        spec = make_smooth_spec(["x"], k=k)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        X = smooth.build_design_matrix(data)
+        X = smooth.build_design_matrix(smooth_1d_data)
         assert X.shape == (200, k)
         assert smooth.n_coefs == k
         assert smooth.rank == k - 2
@@ -643,29 +586,27 @@ class TestParameterized:
         S = penalties[0].S
         assert S.shape == (k, k)
 
-    def test_k_exceeds_n_raises(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [20], indirect=True)
+    def test_k_exceeds_n_raises(self, smooth_1d_data) -> None:
         """k > n raises ValueError."""
-        spec = _make_spec(["x"], k=50)
+        spec = make_smooth_spec(["x"], k=50)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=20)
         with pytest.raises(ValueError, match="exceeds"):
-            smooth.setup(data)
+            smooth.setup(smooth_1d_data)
 
-    def test_k_auto_increased_below_M_plus_1(self) -> None:
+    def test_k_auto_increased_below_M_plus_1(self, smooth_1d_data) -> None:
         """k < M+1 is auto-increased to M+1."""
         # For d=1, M=2, so k=2 should be increased to 3
-        spec = _make_spec(["x"], k=2)
+        spec = make_smooth_spec(["x"], k=2)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 3  # M+1 = 3
 
-    def test_default_k(self) -> None:
+    def test_default_k(self, smooth_1d_data) -> None:
         """Default k (k=-1) uses R's default."""
-        spec = _make_spec(["x"], k=-1)
+        spec = make_smooth_spec(["x"], k=-1)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 10  # default for d=1
 
 
@@ -680,7 +621,7 @@ class TestEdgeCases:
     def test_duplicate_data_points(self) -> None:
         """Duplicate data points are handled correctly."""
         x = np.array([0.1, 0.2, 0.3, 0.1, 0.2, 0.3] * 20)
-        spec = _make_spec(["x"], k=3)  # Only 3 unique values
+        spec = make_smooth_spec(["x"], k=3)  # Only 3 unique values
         smooth = TPRSSmooth(spec)
         smooth.setup({"x": x})
 
@@ -691,41 +632,40 @@ class TestEdgeCases:
     def test_too_few_unique_values(self) -> None:
         """Raises error when unique values < k."""
         x = np.array([0.1, 0.2] * 50)
-        spec = _make_spec(["x"], k=5)
+        spec = make_smooth_spec(["x"], k=5)
         smooth = TPRSSmooth(spec)
         with pytest.raises(ValueError, match="unique"):
             smooth.setup({"x": x})
 
     def test_setup_required_for_design_matrix(self) -> None:
         """build_design_matrix before setup raises RuntimeError."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
             smooth.build_design_matrix({"x": np.zeros(10)})
 
     def test_setup_required_for_penalty(self) -> None:
         """build_penalty_matrices before setup raises RuntimeError."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
             smooth.build_penalty_matrices()
 
     def test_setup_required_for_predict(self) -> None:
         """predict_matrix before setup raises RuntimeError."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
             smooth.predict_matrix({"x": np.zeros(10)})
 
-    def test_predict_new_data_different_n(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [100], indirect=True)
+    def test_predict_new_data_different_n(self, smooth_1d_data, pred_smooth_1d_data) -> None:
         """predict_matrix works with different n than training data."""
-        spec = _make_spec(["x"], k=10)
+        spec = make_smooth_spec(["x"], k=10)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=100)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
-        new_data = _make_1d_data(n=50, seed=99)
-        X_new = smooth.predict_matrix(new_data)
+        X_new = smooth.predict_matrix(pred_smooth_1d_data)
         assert X_new.shape == (50, 10)
         assert np.all(np.isfinite(X_new))
 
@@ -733,7 +673,7 @@ class TestEdgeCases:
         """Small n with appropriate k works."""
         rng = np.random.default_rng(42)
         x = rng.uniform(0, 1, 10)
-        spec = _make_spec(["x"], k=5)
+        spec = make_smooth_spec(["x"], k=5)
         smooth = TPRSSmooth(spec)
         smooth.setup({"x": x})
 
@@ -749,12 +689,11 @@ class TestEdgeCases:
 class TestTPRSShrinkageSmooth:
     """Tests for the ts (shrinkage) variant."""
 
-    def test_ts_S_full_rank(self) -> None:
+    def test_ts_S_full_rank(self, smooth_1d_data) -> None:
         """ts penalty S has full rank (k, not k-M)."""
-        spec = _make_spec(["x"], bs="ts", k=10)
+        spec = make_smooth_spec(["x"], bs="ts", k=10)
         smooth = TPRSShrinkageSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
         assert smooth.rank == 10
         assert smooth.null_space_dim == 0
@@ -763,12 +702,11 @@ class TestTPRSShrinkageSmooth:
         assert penalty.rank == 10
         assert penalty.null_space_dim == 0
 
-    def test_ts_S_psd(self) -> None:
+    def test_ts_S_psd(self, smooth_1d_data) -> None:
         """ts penalty S is PSD (all eigenvalues > 0)."""
-        spec = _make_spec(["x"], bs="ts", k=10)
+        spec = make_smooth_spec(["x"], bs="ts", k=10)
         smooth = TPRSShrinkageSmooth(spec)
-        data = _make_1d_data(n=200)
-        smooth.setup(data)
+        smooth.setup(smooth_1d_data)
 
         S = smooth.build_penalty_matrices()[0].S
         eigvals = np.linalg.eigvalsh(S)
@@ -778,19 +716,17 @@ class TestTPRSShrinkageSmooth:
         # All should be strictly positive
         assert np.all(eigvals > 0), "ts penalty should be strictly positive definite"
 
-    def test_ts_basis_matches_tp(self) -> None:
+    def test_ts_basis_matches_tp(self, smooth_1d_data) -> None:
         """ts and tp produce the same basis matrix X."""
-        data = _make_1d_data(n=200)
-
-        spec_tp = _make_spec(["x"], bs="tp", k=10)
+        spec_tp = make_smooth_spec(["x"], bs="tp", k=10)
         smooth_tp = TPRSSmooth(spec_tp)
-        smooth_tp.setup(data)
-        X_tp = smooth_tp.build_design_matrix(data)
+        smooth_tp.setup(smooth_1d_data)
+        X_tp = smooth_tp.build_design_matrix(smooth_1d_data)
 
-        spec_ts = _make_spec(["x"], bs="ts", k=10)
+        spec_ts = make_smooth_spec(["x"], bs="ts", k=10)
         smooth_ts = TPRSShrinkageSmooth(spec_ts)
-        smooth_ts.setup(data)
-        X_ts = smooth_ts.build_design_matrix(data)
+        smooth_ts.setup(smooth_1d_data)
+        X_ts = smooth_ts.build_design_matrix(smooth_1d_data)
 
         np.testing.assert_allclose(
             X_ts,
@@ -800,21 +736,19 @@ class TestTPRSShrinkageSmooth:
             err_msg="ts and tp should have the same basis matrix",
         )
 
-    def test_ts_predict_matches_tp(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [100], indirect=True)
+    def test_ts_predict_matches_tp(self, smooth_1d_data, pred_smooth_1d_data) -> None:
         """ts predict_matrix equals tp predict_matrix."""
-        data = _make_1d_data(n=100)
-
-        spec_tp = _make_spec(["x"], bs="tp", k=10)
+        spec_tp = make_smooth_spec(["x"], bs="tp", k=10)
         smooth_tp = TPRSSmooth(spec_tp)
-        smooth_tp.setup(data)
+        smooth_tp.setup(smooth_1d_data)
 
-        spec_ts = _make_spec(["x"], bs="ts", k=10)
+        spec_ts = make_smooth_spec(["x"], bs="ts", k=10)
         smooth_ts = TPRSShrinkageSmooth(spec_ts)
-        smooth_ts.setup(data)
+        smooth_ts.setup(smooth_1d_data)
 
-        new_data = _make_1d_data(n=50, seed=99)
-        X_tp = smooth_tp.predict_matrix(new_data)
-        X_ts = smooth_ts.predict_matrix(new_data)
+        X_tp = smooth_tp.predict_matrix(pred_smooth_1d_data)
+        X_ts = smooth_ts.predict_matrix(pred_smooth_1d_data)
 
         np.testing.assert_allclose(
             X_ts,
@@ -867,7 +801,7 @@ class TestCoveragePaths:
         rng = np.random.RandomState(42)
         n = 100
         x = rng.randn(n)
-        spec = _make_spec(["x"], k=5, max_knots=20)
+        spec = make_smooth_spec(["x"], k=5, max_knots=20)
         smooth = TPRSSmooth(spec)
         smooth.setup({"x": x})
         assert smooth._is_setup
@@ -884,18 +818,18 @@ class TestCoveragePaths:
         """build_design_matrix falls back to predict_matrix for different n."""
         rng = np.random.RandomState(42)
         x_train = rng.randn(50)
-        spec = _make_spec(["x"], k=5)
+        spec = make_smooth_spec(["x"], k=5)
         smooth = TPRSSmooth(spec)
         smooth.setup({"x": x_train})
         x_new = rng.randn(30)
         X_new = smooth.build_design_matrix({"x": x_new})
         assert X_new.shape == (30, 5)
 
-    def test_s_scale_fallback_when_maxx_zero(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [50], indirect=True)
+    def test_s_scale_fallback_when_maxx_zero(self, smooth_1d_data) -> None:
         """_s_scale = 1.0 when X_design is all zeros (max_x_sq == 0)."""
-        spec = _make_spec(["x"], k=5)
+        spec = make_smooth_spec(["x"], k=5)
         smooth = TPRSSmooth(spec)
-        data = _make_1d_data(n=50)
         # Patch np.linalg.norm to return 0.0 for the X inf-norm call
         # during smoothCon normalization (step 14)
         orig_norm = np.linalg.norm
@@ -913,16 +847,16 @@ class TestCoveragePaths:
         import unittest.mock
 
         with unittest.mock.patch("numpy.linalg.norm", side_effect=patched_norm):
-            smooth.setup(data)
+            smooth.setup(smooth_1d_data)
         assert smooth._s_scale == 1.0
 
-    def test_ts_smallest_nonzero_fallback(self) -> None:
+    @pytest.mark.parametrize("smooth_1d_data", [50], indirect=True)
+    def test_ts_smallest_nonzero_fallback(self, smooth_1d_data) -> None:
         """smallest_nonzero = 1.0 when all S eigenvalues are zero."""
         import unittest.mock
 
-        spec = _make_spec(["x"], bs="ts", k=5)
+        spec = make_smooth_spec(["x"], bs="ts", k=5)
         smooth = TPRSShrinkageSmooth(spec)
-        data = _make_1d_data(n=50)
 
         # Patch _apply_shrinkage's input: zero out S before shrinkage runs
         orig_apply = TPRSShrinkageSmooth._apply_shrinkage
@@ -933,7 +867,7 @@ class TestCoveragePaths:
         with unittest.mock.patch.object(
             TPRSShrinkageSmooth, "_apply_shrinkage", patched_apply
         ):
-            smooth.setup(data)
+            smooth.setup(smooth_1d_data)
 
         # After uniform shrinkage with all-zero input eigenvalues:
         # smallest_nonzero = 1.0, all eigenvalues = 1.0 * 0.1 = 0.1

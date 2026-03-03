@@ -51,49 +51,10 @@ from jaxgam.fitting.newton import (
 )
 from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
 from jaxgam.jax_utils import to_jax
+from tests.helpers import SEED, _generate_family_data, r_available, r_tolerance
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
-
-SEED = 42
-
-
-# ---- Helpers ----
-
-
-def _r_available() -> bool:
-    """Check if R and mgcv are available with correct versions."""
-    from tests.r_bridge import RBridge
-
-    if not RBridge.available():
-        return False
-    ok, _ = RBridge.check_versions()
-    return ok
-
-
-def _make_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """Generate synthetic data as a DataFrame."""
-    rng = np.random.default_rng(seed)
-    n = 200 if family_name != "binomial" else 300
-    x = rng.uniform(0, 1, n)
-
-    if family_name == "gaussian":
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-    elif family_name == "binomial":
-        eta = 2 * np.sin(2 * np.pi * x)
-        prob = 1.0 / (1.0 + np.exp(-eta))
-        y = rng.binomial(1, prob, n).astype(float)
-    elif family_name == "poisson":
-        eta = np.sin(2 * np.pi * x) + 0.5
-        y = rng.poisson(np.exp(eta)).astype(float)
-    elif family_name == "gamma":
-        eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
-        mu = np.exp(eta)
-        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
-    else:
-        raise ValueError(f"Unknown family: {family_name}")
-
-    return pd.DataFrame({"x": x, "y": y})
 
 
 def _setup_fd(
@@ -108,17 +69,6 @@ def _setup_fd(
     spec = parse_formula(formula)
     setup = ModelSetup.build(spec, data)
     return FittingData.from_setup(setup, family)
-
-
-def _r_tol(family_name: str):
-    """Return the tolerance class for a given family's R comparison.
-
-    Gaussian: MODERATE (single PIRLS iteration, no compounding).
-    GLM families: LOOSE (iterative PIRLS + Newton, differences compound).
-    """
-    if family_name == "gaussian":
-        return MODERATE
-    return LOOSE
 
 
 def _back_transform_coefs(result, fd):
@@ -198,7 +148,7 @@ class TestSafeNewtonStep:
 # ---- B. Hard-gate invariants ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestInvariants:
     """Hard-gate invariants that must hold for every converged model.
 
@@ -220,7 +170,7 @@ class TestInvariants:
     def converged_result(self, request):
         """Fit a converged model for each family."""
         family_name, family_obj = request.param
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         fd = _setup_fd(self.FORMULA, data, family_obj)
         result = newton_optimize(fd)
         return family_name, fd, result
@@ -269,7 +219,7 @@ class TestInvariants:
 # ---- C. Parametrized R comparison across all families ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestFamilyVsR:
     """Comprehensive R comparison across all four families.
 
@@ -294,7 +244,7 @@ class TestFamilyVsR:
         from tests.r_bridge import RBridge
 
         family_name, family_obj = request.param
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         fd = _setup_fd(self.FORMULA, data, family_obj)
         result = newton_optimize(fd)
 
@@ -312,7 +262,7 @@ class TestFamilyVsR:
     def test_deviance_vs_r(self, family_fit):
         """Deviance matches R."""
         family_name, _, result, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             float(result.pirls_result.deviance),
             r_result["deviance"],
@@ -324,7 +274,7 @@ class TestFamilyVsR:
     def test_coefficients_vs_r(self, family_fit):
         """Coefficients match R (back-transformed from Sl.setup space)."""
         family_name, fd, result, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             _back_transform_coefs(result, fd),
             r_result["coefficients"],
@@ -336,7 +286,7 @@ class TestFamilyVsR:
     def test_fitted_values_vs_r(self, family_fit):
         """Fitted values match R."""
         family_name, _, result, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             np.asarray(result.pirls_result.mu),
             r_result["fitted_values"],
@@ -348,7 +298,7 @@ class TestFamilyVsR:
     def test_scale_vs_r(self, family_fit):
         """Scale estimate matches R."""
         family_name, _, result, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             float(result.scale),
             r_result["scale"],
@@ -360,7 +310,7 @@ class TestFamilyVsR:
     def test_reml_score_vs_r(self, family_fit):
         """REML criterion score matches R."""
         family_name, _, result, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         np.testing.assert_allclose(
             float(result.score),
             r_result["reml_score"],
@@ -395,7 +345,7 @@ class TestFamilyVsR:
         with intercept, total EDF = sum(per-smooth EDF) + 1 (intercept).
         """
         family_name, _, result, r_result = family_fit
-        tol = _r_tol(family_name)
+        tol = r_tolerance(family_name)
         r_total_edf = float(np.sum(r_result["edf"])) + 1.0
         np.testing.assert_allclose(
             float(result.edf),
@@ -409,7 +359,7 @@ class TestFamilyVsR:
 # ---- D. Two-smooth and TPRS tests ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestMultiSmooth:
     """Multi-smooth and alternative basis tests."""
 
@@ -660,7 +610,7 @@ class TestMultiSmooth:
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x, k=10, bs='tp')"
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(formula, data, Gaussian())
         result = newton_optimize(fd)
 
@@ -688,7 +638,7 @@ class TestMultiSmooth:
 # ---- E. ML criterion ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestMLOptimization:
     """ML criterion optimization tests."""
 
@@ -696,7 +646,7 @@ class TestMLOptimization:
 
     def test_ml_converges(self):
         """ML optimization converges."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         result = newton_optimize(fd, method="ML")
         assert result.converged
@@ -711,7 +661,7 @@ class TestMLOptimization:
         """
         from tests.r_bridge import RBridge
 
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         result = newton_optimize(fd, method="ML")
 
@@ -733,7 +683,7 @@ class TestMLOptimization:
     )
     def test_ml_glm_converges(self, family_name, family_obj):
         """ML optimization converges for GLM families."""
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         fd = _setup_fd(self.FORMULA, data, family_obj)
         result = newton_optimize(fd, method="ML")
         assert result.converged
@@ -745,7 +695,7 @@ class TestMLOptimization:
         that ML does not. While optimal lambda may coincide at large n,
         the criterion values must differ.
         """
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         result_reml = newton_optimize(fd, method="REML")
         result_ml = newton_optimize(fd, method="ML")
@@ -757,7 +707,7 @@ class TestMLOptimization:
 # ---- F. Diagnostics and edge cases ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestDiagnostics:
     """Result fields, edge cases, and invariants."""
 
@@ -765,7 +715,7 @@ class TestDiagnostics:
 
     def test_result_fields(self):
         """NewtonResult has all expected fields with correct types."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         result = newton_optimize(fd)
 
@@ -826,7 +776,7 @@ class TestDiagnostics:
         fitting with offset=c and y produces different coefficients
         than fitting without offset.
         """
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd_no_offset = _setup_fd(self.FORMULA, data, Gaussian())
         result_no_offset = newton_optimize(fd_no_offset)
 
@@ -886,7 +836,7 @@ class TestDiagnostics:
         """
         from jaxgam.fitting.reml import REMLCriterion
 
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         fd = _setup_fd(self.FORMULA, data, family_obj)
 
         # Run with a deliberately bad start to force multiple iterations
@@ -908,7 +858,7 @@ class TestDiagnostics:
 
     def test_convergence_info_values(self):
         """convergence_info is one of the three expected strings."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         result = newton_optimize(fd)
         assert result.convergence_info in {
@@ -919,14 +869,14 @@ class TestDiagnostics:
 
     def test_invalid_method_raises(self):
         """Invalid method string raises ValueError."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         with pytest.raises(ValueError, match="Unknown method"):
             newton_optimize(fd, method="INVALID")
 
     def test_iteration_limit(self):
         """max_iter=1 triggers 'iteration limit' convergence info."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         result = newton_optimize(fd, max_iter=1)
         assert result.convergence_info == "iteration limit"
@@ -937,7 +887,7 @@ class TestDiagnostics:
 # ---- G. Step-halving ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestStepHalving:
     """Step-halving behavior."""
 
@@ -948,7 +898,7 @@ class TestStepHalving:
         step-halving. We verify convergence and that extra iterations
         were needed (more than the default-start case).
         """
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         formula = "y ~ s(x, k=10, bs='cr')"
         fd = _setup_fd(formula, data, Gaussian())
 
@@ -968,7 +918,7 @@ class TestStepHalving:
 # ---- H. custom_jvp differentiable score ----
 
 
-@pytest.mark.skipif(not _r_available(), reason="R/mgcv not available")
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestCustomJVP:
     """Tests for the custom_jvp-based differentiable score function.
 
@@ -991,7 +941,7 @@ class TestCustomJVP:
         true gradient. The custom_jvp gradient should match this to
         O(h²) accuracy.
         """
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         fd = _setup_fd(self.FORMULA, data, family_obj)
         optimizer = NewtonOptimizer(fd)
 
@@ -1070,7 +1020,7 @@ class TestCustomJVP:
         Central FD of the custom_jvp gradient (which itself re-runs
         PIRLS via _fit_and_score). The custom_jvp Hessian should match.
         """
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         fd = _setup_fd(self.FORMULA, data, family_obj)
         optimizer = NewtonOptimizer(fd)
 
@@ -1121,7 +1071,7 @@ class TestCustomJVP:
 
     def test_gaussian_uses_custom_jvp(self):
         """Gaussian families use custom_jvp for correct multi-smooth Hessian."""
-        data = _make_data("gaussian")
+        data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
         optimizer = NewtonOptimizer(fd)
 
@@ -1134,7 +1084,7 @@ class TestCustomJVP:
     )
     def test_convergence_speed(self, family_name, family_obj):
         """Non-Gaussian single-smooth models converge in <30 iterations."""
-        data = _make_data(family_name)
+        data = _generate_family_data(family_name)
         fd = _setup_fd(self.FORMULA, data, family_obj)
         result = newton_optimize(fd)
 
