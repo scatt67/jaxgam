@@ -57,7 +57,7 @@ all families, smooth types, and post-estimation tools.
 
 ### Families
 
-Gaussian, Binomial, Poisson, Gamma --- each with its default link and
+Gaussian, Binomial, Poisson, Gamma -- each with its default link and
 REML/ML smoothing parameter selection.
 
 ### Smooth types
@@ -74,9 +74,9 @@ REML/ML smoothing parameter selection.
 
 ### Post-estimation
 
-- `predict()` --- response or link scale, with optional standard errors
-- `summary()` --- parametric and smooth term significance tests
-- `plot()` --- 1D smooth curves with SE bands, 2D contour plots, rug marks
+- `predict()` -- response or link scale, with optional standard errors
+- `summary()` -- parametric and smooth term significance tests
+- `plot()` -- 1D smooth curves with SE bands, 2D contour plots, rug marks
 
 ## Performance
 
