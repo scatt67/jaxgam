@@ -51,7 +51,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           docker run --rm -v ${{ github.workspace }}/coverage:/coverage jaxgam-test:ci \
-            uv run pytest --tb=short --cov=jaxgam --cov-report=xml:/coverage/coverage.xml
+            uv run pytest --tb=short --cov=jaxgam --cov-branch --cov-report=xml:/coverage/coverage.xml
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:
