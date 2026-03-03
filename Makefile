@@ -18,10 +18,6 @@ help:
 install: ## install dependencies (uv sync --extra dev)
 	$(UV) sync --extra dev
 
-.PHONY: main
-main: ## run main.py
-	$(UV) run python main.py
-
 .PHONY: check
 check: ## check with ruff
 	$(UV) run $(RUFF) check

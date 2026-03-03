@@ -294,7 +294,7 @@ No new mechanisms - claim calibration only.
 
 **New architectural elements:**
 
-- **`CoefficientMap`** (Section 5.10): immutable record of all reparameterizations, used by predict/summary/diagnostics. Replaces in-place `term_info` mutation.
+- **`CoefficientMap`** (Section 5.10): immutable record of all reparameterizations, used by summary and plotting. Replaces in-place `term_info` mutation.
 - **`JAX purity boundary`** (Section 4.4): CI-enforced import guard. JAX path modules cannot import scipy/numpy (except `numpy` for type annotations).
 - **`PenaltySet`** (Section 10.1): path-aware penalty container with `.to_dense_jax()` / `.to_sparse_scipy()` / `.as_structured()` methods.
 - **`IterationStatistics`** (Section 7.1): extended provider return type sufficient for REML/GCV/EDF computation.
@@ -572,7 +572,7 @@ DATA FLOW (v1.0 only):
   [np.asarray] ──→ β, Vp on CPU  ← Phase 2→3 boundary
        │
        ▼
-  [predict/summary/plot] ──→ GAMResult  ← Phase 3
+  [GAM.predict/summary/plot] ──→ fitted GAM  ← Phase 3
 
 
 FUTURE PATHS (not in v1.0, designed for):
@@ -677,8 +677,6 @@ jaxgam/
 ├── penalties/
 │   ├── __init__.py
 │   └── penalty.py                 # Penalty matrix construction
-├── predict/
-│   └── __init__.py
 ├── summary/
 │   ├── __init__.py
 │   ├── summary.py                 # summary.gam equivalent
@@ -5365,74 +5363,21 @@ def build_model_matrix(parsed_formula: FormulaSpec,
 
 ### 14.1 Prediction
 
+Prediction logic lives in `jaxgam/api.py` as methods on the `GAM` class:
+
 ```python
-# predict/predict.py
+# api.py — GAM methods
 
-def predict_gam(model, newdata=None, type="link", se_fit=False,
-                terms=None, exclude=None, n_samples=0):
-    """
-    Prediction from fitted GAM.
+GAM.predict(newdata, pred_type="link", se_fit=False)
+# pred_type: "link" (linear predictor) or "response" (μ scale)
+# se_fit: If True, returns (predictions, standard_errors)
 
-    type: "link" (linear predictor), "response" (μ scale), "terms" (per-term)
-    se_fit: If True, return standard errors
-    n_samples: If > 0, return posterior samples
-
-    Standard errors are based on the Bayesian posterior covariance:
-    Var(Xp β) = Xp Vβ Xp^T
-
-    where Vβ is the posterior covariance from the fit.
-    """
-    if newdata is None:
-        Xp = model.X
-    else:
-        Xp = _build_prediction_matrix(model, newdata, terms, exclude)
-
-    # Point prediction
-    eta = Xp @ model.coefficients
-    if model.offset is not None and newdata is None:
-        eta += model.offset
-
-    if type == "response":
-        mu = model.family.link.inverse(eta)
-        prediction = mu
-    elif type == "terms":
-        # Per-term contributions
-        prediction = {}
-        for info in model.term_info:
-            cols = slice(info['col_start'], info['col_end'])
-            prediction[info.get('label', 'parametric')] = \
-                Xp[:, cols] @ model.coefficients[cols]
-    else:
-        prediction = eta
-
-    result = {'fit': prediction}
-
-    if se_fit:
-        # Bayesian standard errors
-        if sparse.issparse(Xp):
-            # Avoid forming full XVX^T
-            V = model.Vp
-            se = np.sqrt(np.array(
-                (Xp @ V @ Xp.T).diagonal()
-            ).flatten())
-        else:
-            se = np.sqrt(np.sum((Xp @ model.Vp) * Xp, axis=1))
-        result['se'] = se
-
-    if n_samples > 0:
-        # Posterior simulation
-        from numpy.random import multivariate_normal
-        beta_samples = multivariate_normal(
-            model.coefficients, model.Vp, size=n_samples
-        )
-        eta_samples = Xp @ beta_samples.T
-        if type == "response":
-            result['samples'] = model.family.link.inverse(eta_samples)
-        else:
-            result['samples'] = eta_samples
-
-    return result
+GAM.predict_matrix(newdata)
+# Returns the LP matrix Xp for new data
 ```
+
+Standard errors are based on the Bayesian posterior covariance:
+`Var(Xp β) = Xp Vβ Xp^T`
 
 ### 14.2 Summary
 
