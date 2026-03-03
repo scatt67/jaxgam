@@ -136,6 +136,15 @@ depends on whether the JIT cache is warm (compiled code reused) or cold
 (first fit triggers compilation). R is benchmarked with both
 `gam(method="REML")` and `bam(method="fREML")`.
 
+**Note on R's BLAS:** R is benchmarked using its default (reference) BLAS
+and LAPACK, which are notoriously slow. Building R with OpenBLAS would
+give R a significant speedup, but we avoided this because OpenBLAS must
+be compiled from source with multi-threading disabled — Simon Wood notes
+in the [mgcv changelog](https://github.com/cran/mgcv/blob/master/ChangeLog#L13-L16)
+that multi-threaded BLAS can cause issues with mgcv's internal
+parallelism. The benchmarks therefore reflect a common R installation
+rather than an optimally configured one.
+
 ### Benchmark results
 
 Full benchmark comparing jaxgam (true cold, cold, warm) against R
