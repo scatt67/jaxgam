@@ -642,117 +642,50 @@ We must support:
 
 ```
 jaxgam/
-├── __init__.py                    # Public API: gam(), bam(), gamm()
-├── api.py                         # Top-level fitting functions
+├── __init__.py                    # Public API: GAM class
+├── api.py                         # GAM class: fitting orchestration
+├── jax_utils.py                   # JAX ↔ NumPy transfer utilities
 ├── formula/
 │   ├── __init__.py
-│   ├── parser.py                  # Formula string parser (Wilkinson notation)
-│   ├── terms.py                   # Term representation: smooth, parametric, random
-│   └── design.py                  # Design matrix construction
+│   ├── parser.py                  # Formula string parser (AST-based)
+│   ├── terms.py                   # SmoothSpec, FormulaSpec, ParametricTerm
+│   └── design.py                  # ModelSetup: design matrix assembly
 ├── smooths/
 │   ├── __init__.py
-│   ├── base.py                    # Abstract SmoothSpec / Smooth base classes
-│   ├── tprs.py                    # Thin plate regression splines (tp, ts)
+│   ├── base.py                    # Abstract Smooth base class
+│   ├── tprs.py                    # Thin plate regression splines (tp)
 │   ├── cubic.py                   # Cubic regression splines (cr, cs, cc)
-│   ├── pspline.py                 # P-splines (ps, cp)
-│   ├── bspline.py                 # B-splines (bs)
-│   ├── tensor.py                  # Tensor product smooths (te, ti, t2)
-│   ├── adaptive.py                # Adaptive smooths (ad)
-│   ├── gaussian_process.py        # GP smooths (gp)
-│   ├── mrf.py                     # Markov random fields (mrf)
-│   ├── soap_film.py               # Soap film smooths (so)
-│   ├── duchon.py                  # Duchon splines (sz)
-│   ├── random_effects.py          # re, fs smooth classes
-│   ├── linear_functional.py       # Linear functional terms
+│   ├── tensor.py                  # Tensor product smooths (te)
+│   ├── by_variable.py             # Factor-by smooth expansion
+│   ├── constraints.py             # CoefficientMap, identifiability constraints
 │   └── registry.py                # Smooth class registry & dispatch
 ├── families/
 │   ├── __init__.py
-│   ├── base.py                    # Family / ExponentialFamily base class
-│   ├── standard.py                # Gaussian, Binomial, Poisson, Gamma, InvGauss
-│   ├── extended.py                # ExtendedFamily base with full log-lik interface
-│   ├── negbin.py                  # Negative binomial (nb, negbin)
-│   ├── tweedie.py                 # Tweedie (tw)
-│   ├── beta_family.py             # Beta regression (betar)
-│   ├── ordered_categorical.py     # Ordered categorical (ocat)
-│   ├── multinomial.py             # Multinomial (multinom)
-│   ├── zero_inflated.py           # ZIP, ZAGA, ZIPL
-│   ├── survival.py                # Cox PH (cox.ph)
-│   ├── location_scale.py          # gaulss, gammals, gevlss, shash, etc.
-│   ├── scat.py                    # Scaled t (scat)
+│   ├── base.py                    # ExponentialFamily ABC
+│   ├── standard.py                # Gaussian, Binomial, Poisson, Gamma
 │   └── registry.py                # Family registry & dispatch
 ├── links/
 │   ├── __init__.py
-│   └── links.py                   # Link functions: logit, probit, cloglog, log, etc.
+│   └── links.py                   # Link functions: identity, logit, log, inverse
 ├── fitting/
 │   ├── __init__.py
-│   ├── pirls.py                   # PIRLS inner loop (gam.fit3 / gam.fit5 equivalent)
+│   ├── pirls.py                   # PIRLS inner loop (pirls_loop)
 │   ├── newton.py                  # Outer Newton iteration for λ
-│   ├── fellner_schall.py          # Fellner-Schall updates (fast REML)
-│   ├── reml.py                    # REML / ML / GCV / UBRE criteria
-│   ├── bam_fit.py                 # bam()-specific: discretize, fREML, chunk processing
-│   ├── gamm_fit.py                # gamm() via PQL
+│   ├── reml.py                    # REML / ML criterion and derivatives
 │   ├── initialization.py          # Starting value computation
-│   ├── convergence.py             # Convergence criteria and diagnostics
-│   └── constraints.py             # Sum-to-zero and identifiability constraints
+│   └── data.py                    # FittingData: Phase 1→2 boundary object
 ├── penalties/
 │   ├── __init__.py
-│   ├── penalty.py                 # Penalty matrix construction and manipulation
-│   └── selection.py               # Extra shrinkage penalties, null space penalties
-├── linalg/
-│   ├── __init__.py
-│   ├── backend.py                 # JAX-first backend; NumPy reference fallback
-│   ├── qr.py                      # Pivoted QR, stable Householder
-│   ├── cholesky.py                # Penalized Cholesky, sparse Cholesky
-│   ├── sparse_ops.py              # Sparse matrix utilities
-│   ├── woodbury.py                # Woodbury identity for efficient updates
-│   └── eigen.py                   # Eigendecompositions for TPRS etc.
-├── autodiff/
-│   ├── __init__.py
-│   ├── jax_ad.py                  # JAX grad/hessian/hvp wrappers
-│   ├── custom_jvp_rules.py        # Tweedie series custom JVP (only family needing it)
-│   └── interface.py               # Thin wrapper (JAX only; no multi-backend AD)
-├── data/
-│   ├── __init__.py
-│   ├── discretize.py              # Covariate discretization (bam)
-│   ├── chunk.py                   # Chunk-based processing
-│   └── transforms.py              # Variable transformations, centering
-├── distributed/
-│   ├── __init__.py
-│   ├── sharding.py                # Mesh creation + data sharding helpers
-│   ├── chunked_jax_provider.py    # Out-of-core JAX chunked provider
-│   ├── ray_launcher.py            # Ray JaxTrainer bootstrap
-│   └── streaming.py               # Streaming/online GAM updates
+│   └── penalty.py                 # Penalty matrix construction
 ├── predict/
-│   ├── __init__.py
-│   ├── predict.py                 # predict.gam equivalent
-│   ├── lpmatrix.py                # Linear predictor matrix construction
-│   └── posterior.py               # Posterior simulation, Bayesian CIs
+│   └── __init__.py
 ├── summary/
 │   ├── __init__.py
 │   ├── summary.py                 # summary.gam equivalent
-│   ├── anova.py                   # anova.gam equivalent
-│   ├── diagnostics.py             # gam.check, influence
-│   ├── concurvity.py              # Concurvity detection and reporting
-│   ├── model_comparison.py        # AIC, BIC, model comparison infrastructure
-│   └── information_criteria.py    # AIC, BIC, GCV score
-├── plot/
-│   ├── __init__.py
-│   └── plot_gam.py                # plot.gam equivalent using matplotlib
-├── compat/
-│   ├── __init__.py
-│   ├── r_bridge.py                # rpy2-based bridge for testing against R
-│   └── export.py                  # Export to Stan, NumPyro (jagam equivalent)
-└── tests/
+│   └── _davies.py                 # Davies algorithm for p-values
+└── plot/
     ├── __init__.py
-    ├── conftest.py                # Shared fixtures, R bridge setup
-    ├── reference_data/            # Pre-computed R results (JSON/pickle)
-    ├── test_smooths/              # Per-smooth-class tests
-    ├── test_families/             # Per-family tests
-    ├── test_fitting/              # Fitting algorithm tests
-    ├── test_api/                  # End-to-end API tests
-    ├── test_sparse/               # Sparse correctness tests
-    ├── test_gpu/                  # GPU parity tests
-    └── benchmarks/                # Performance benchmarks
+    └── plot_gam.py                # plot.gam equivalent using matplotlib
 ```
 
 ### 3.1 Dependency Stack and Package Management
@@ -764,27 +697,30 @@ jaxgam/
 
 [project]
 name = "jaxgam"
-version = "1.0.0"
-requires-python = ">=3.10"
+version = "1.0.0a1"
+requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
+    "numba>=0.58",
     "jax>=0.4.20",
     "jaxlib>=0.4.20",
-    "formulaic>=1.0",
+    "formulaic>=1.0",       # listed but not currently used; parser is pure AST-based
     "matplotlib>=3.7",
+    "pandas>=2.0",
 ]
 
 [project.optional-dependencies]
-sparse = ["scikit-sparse>=0.4.8"]
-gpu = ["jax[cuda12]>=0.4.20"]
-distributed = ["ray[default]>=2.9"]
-full = ["jaxgam[sparse,gpu,distributed]"]
 dev = [
-    "jaxgam[full]",
-    "pytest>=8.0",
-    "rpy2>=3.5",           # R bridge for correctness tests
-    "hypothesis>=6.0",     # Property-based testing
+    "pytest>=7.0",
+    "pytest-xdist",
+    "pytest-cov",
+    "pre-commit",
+    "ruff",
+    "vulture",
+]
+r = [
+    "rpy2>=3.5",            # R bridge for correctness tests
 ]
 
 [build-system]
@@ -1165,7 +1101,7 @@ The JAX purity boundary is not just an import rule - it reflects a two-phase exe
 
 | Module | What it does | Output type |
 |---|---|---|
-| `formula/parser.py` | Parse formula, extract smooth terms | `ParsedFormula` (Python objects) |
+| `formula/parser.py` | Parse formula, extract smooth terms | `FormulaSpec` (Python objects) |
 | `smooths/*.py` `.setup()` | Select knots, compute eigendecompositions | NumPy arrays stored in Smooth |
 | `smooths/*.py` `.build_design_matrix()` | Evaluate basis functions at data | NumPy array or scipy.sparse |
 | `smooths/*.py` `.build_penalty_matrices()` | Construct penalty matrices | NumPy/scipy.sparse |
@@ -1242,7 +1178,7 @@ jaxgam.set_seed(42)  # Seeds BOTH np.random and jax.random
 ### 5.1 Base Smooth Class
 
 ```python
-# smooths/base.py
+# formula/terms.py  (SmoothSpec lives here, not smooths/base.py)
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -2250,7 +2186,7 @@ register_smooth("sz", DuchonSplineSmooth)
 **The `CoefficientMap` is a first-class, immutable object** that records every constraint and reparameterization applied to the model matrix. It is stored in the `GAMResult` and used by all post-estimation code (predict, summary, concurvity, anova). No code ever mutates `term_info` column indices in-place.
 
 ```python
-# fitting/coefficient_map.py
+# smooths/constraints.py  (not fitting/coefficient_map.py as originally planned)
 
 from dataclasses import dataclass, field
 import numpy as np
@@ -2458,13 +2394,13 @@ from abc import ABC, abstractmethod
 from jaxgam.links.links import Link
 import numpy as np
 
-class Family(ABC):
+class ExponentialFamily(ABC):
     """
     Base class for exponential family distributions.
 
     Standard families provide:
     - variance(mu): V(μ)
-    - deviance_residuals(y, mu, wt): deviance residuals
+    - dev_resids(y, mu, wt): deviance residuals
     - log_likelihood(y, mu, scale, wt): log-likelihood
 
     The PIRLS algorithm uses: working weights W = 1/(V(μ) * g'(μ)²)
@@ -3112,43 +3048,44 @@ class PIRLSResult:
     final_stats: object = None     # IterationStatistics for REML/GCV
 
 
-def pirls_fit(provider: "StatisticsProvider", family, smoothing_penalties,
-              weights=None, beta_init=None, max_iter=100, tol=1e-7):
+def pirls_loop(X: jax.Array, y: jax.Array, beta_init: jax.Array,
+               S_lambda: jax.Array, family: ExponentialFamily,
+               wt: jax.Array = None, offset: jax.Array = None,
+               max_iter: int = 100, tol: float = 1e-7) -> PIRLSResult:
     """
-    Penalized IRLS for GAM fitting.
+    Penalized IRLS inner loop for GAM fitting.
 
-    v1.9: max_iter is mandatory and always enforced (default 100, never
-    None or inf). Additionally, 3 consecutive "stalled" iterations
-    (instability event with no objective progress) trigger early
-    termination to prevent livelock from expensive stats recomputation.
+    Finds coefficients beta that minimize the penalized deviance:
+        dev(y, mu, wt) + beta^T @ S_lambda @ beta
+    where mu = linkinv(X @ beta + offset).
 
-    This implements the core of mgcv's gam.fit3, now accepting a
-    StatisticsProvider instead of raw arrays:
+    All array inputs must be JAX arrays on the target device.
+
+    This implements the core of mgcv's gam.fit3:
     1. Initialize μ from family.initialize()
     2. Iterate:
-       a. Provider computes XtWX, XtWz (sufficient statistics)
-       b. Solve (XtWX + S_λ) β = XtWz
+       a. Compute XtWX, XtWz (sufficient statistics)
+       b. Solve (XtWX + S_λ) β = XtWz via Cholesky
        c. Step halving with penalized deviance monitoring
        d. Check convergence on BOTH penalized deviance AND coefficient change
     3. Return coefficients and diagnostics
 
-    Convergence improvements over v1.0 (matching mgcv's battle-tested logic):
-    - Tracks penalized deviance (not raw deviance) to prevent false convergence
-    - Allows deviance increase for first 3 iterations (warm-up phase)
-    - Dual convergence criterion: deviance change AND coefficient change
-    - Weight floor at 1e-7 * max(W) to handle binomial boundary cases
-    - Trust-region fallback when step halving exhausts
-
     Parameters
     ----------
-    provider : StatisticsProvider
-        Data access abstraction (in-memory, Dask, Ray, etc.)
-    family : Family
+    X : jax.Array, shape (n, p)
+        Design matrix (dense, on device)
+    y : jax.Array, shape (n,)
+        Response vector
+    beta_init : jax.Array, shape (p,)
+        Initial coefficient vector
+    S_lambda : jax.Array, shape (p, p)
+        Combined weighted penalty matrix: S_λ = Σ λ_j S_j
+    family : ExponentialFamily
         Distribution family with link function
-    smoothing_penalties : array, shape (p, p)
-        Combined penalty matrix: S_λ = Σ λ_j S_j
-    weights : array, shape (n,), optional
+    wt : jax.Array, shape (n,), optional
         Prior weights
+    offset : jax.Array, shape (n,), optional
+        Offset vector
     """
     n = provider.n_observations
     p = provider.n_parameters
@@ -3377,7 +3314,7 @@ For extended families, the fitting uses derivatives of the log-likelihood direct
 ```python
 # fitting/pirls.py (continued)
 
-def extended_pirls_fit(X, y, family: ExtendedFamily, smoothing_penalties,
+def extended_pirls_loop(X, y, family: ExtendedFamily, smoothing_penalties,
                        weights=None, offset=None, beta_init=None,
                        max_iter=200, tol=1e-7, backend=None):
     """
@@ -3445,7 +3382,9 @@ def extended_pirls_fit(X, y, family: ExtendedFamily, smoothing_penalties,
 The fix: two completely separate implementations. The JAX path is pure `jax.numpy` and receives only dense `jax.Array` inputs - all SciPy/sparse conversion happens *before* entering the traced function.
 
 ```python
-# fitting/reml_jax.py - Pure JAX, JIT-able, autodiff-able
+# fitting/reml.py - Pure JAX, JIT-able, autodiff-able
+# (Note: the design originally split this into reml_jax.py and reml_numpy.py,
+# but the actual implementation is a single fitting/reml.py module.)
 
 import jax
 import jax.numpy as jnp
@@ -3533,7 +3472,7 @@ def _prepare_reml_inputs(pirls_result, penalty_set, provider):
 ```
 
 ```python
-# fitting/reml_numpy.py - NumPy/SciPy reference (no AD, analytical gradients)
+# fitting/reml.py (continued) - NumPy reference functions are in the same module
 
 import numpy as np
 from scipy import sparse
@@ -3606,7 +3545,7 @@ def optimize_smoothing_parameters(provider, penalty_set, family, weights,
     for outer_iter in range(max_iter):
         # 1. Inner PIRLS at current λ
         S_combined = penalty_set.to_combined(jnp.exp(log_lambda))
-        pirls_result = pirls_fit(provider, family, S_combined, weights)
+        pirls_result = pirls_loop(provider, family, S_combined, weights)
 
         # 2. Prepare pure-JAX inputs
         XtWX_j, S_list_j, beta_j, dev, slw = _prepare_reml_inputs(
@@ -3650,7 +3589,7 @@ def optimize_smoothing_parameters(provider, penalty_set, family, weights,
         log_lambda_new = log_lambda + step
         # Re-fit PIRLS at proposed λ (cheap inner check)
         S_new = penalty_set.to_combined(jnp.exp(log_lambda_new))
-        pirls_new = pirls_fit(provider, family, S_new, weights)
+        pirls_new = pirls_loop(provider, family, S_new, weights)
         XtWX_n, S_list_n, beta_n, dev_n, slw_n = _prepare_reml_inputs(
             pirls_new, penalty_set, provider
         )
@@ -4792,7 +4731,7 @@ def transfer_to_path(source_state: PathTransferState,
 
     # PIRLS warm-start
     # pen_dev_prev = None → first iteration unconditionally accepted
-    result = pirls_fit(
+    result = pirls_loop(
         target_provider, family, S_lambda, weights,
         beta_init=source_state.beta,
         start_iteration=source_state.iteration,
@@ -5204,7 +5143,7 @@ _OFFSET_FUNCTIONS = {'offset'}
 
 
 @dataclass
-class ParsedFormula:
+class FormulaSpec:
     response: str
     parametric_formula: str          # Passed to formulaic
     parametric_terms: list[str]      # Resolved by formulaic
@@ -5258,7 +5197,7 @@ def _parse_smooth_call_ast(func_name, call_node):
     )
 
 
-def parse_formula(formula_str: str, data=None) -> ParsedFormula:
+def parse_formula(formula_str: str, data=None) -> FormulaSpec:
     """
     Parse a formula string into components using AST extraction.
 
@@ -5304,7 +5243,7 @@ def parse_formula(formula_str: str, data=None) -> ParsedFormula:
     randoms = [s for t, s in smooth_specs if t == 'random']
     offsets = [var for _, _, var in extractor.offset_calls]
 
-    return ParsedFormula(
+    return FormulaSpec(
         response=response,
         parametric_formula=parametric_formula,
         parametric_terms=[],
@@ -5335,7 +5274,7 @@ def build_parametric_matrix(parametric_formula: str, data):
 ```python
 # formula/design.py
 
-def build_model_matrix(parsed_formula: ParsedFormula,
+def build_model_matrix(parsed_formula: FormulaSpec,
                        data: dict[str, np.ndarray]):
     """
     Assemble the full model matrix from parsed formula.
@@ -6772,261 +6711,139 @@ model = jaxgam.bam(
 
 ## 17. Public API Design
 
-### 15.1 Main Entry Points
+### 17.1 Main Entry Point
+
+The public API is class-based. `GAM` is the only public export from
+`jaxgam.__init__`. There are no top-level `gam()`, `bam()`, or `gamm()`
+functions; `bam()` and `gamm()` are deferred to v1.1+.
 
 ```python
 # api.py
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.registry import get_family
+from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.initialization import initialize_beta
+from jaxgam.fitting.newton import newton_optimize
+from jaxgam.fitting.pirls import pirls_loop
+from jaxgam.fitting.reml import estimate_edf, estimate_scale
+from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
-from jaxgam.formula.design import build_model_matrix
-from jaxgam.fitting.pirls import pirls_fit
-from jaxgam.fitting.newton import optimize_smoothing_parameters
+from jaxgam.formula.terms import FormulaSpec
 
 
-class GAMResult:
-    """Container for fitted GAM results."""
-    def __init__(self):
-        self.coefficients: np.ndarray = None
-        self.fitted_values: np.ndarray = None
-        self.linear_predictor: np.ndarray = None
-        self.family: Family = None
-        self.smooth_terms: list = []
-        self.term_info: list = []
-        self.Vp: np.ndarray = None      # Bayesian covariance
-        self.Ve: np.ndarray = None      # Frequentist covariance
-        self.scale: float = 1.0
-        self.edf: np.ndarray = None     # Per-term EDF
-        self.edf_total: float = 0
-        self.smoothing_params: np.ndarray = None
-        self.deviance: float = 0
-        self.null_deviance: float = 0
-        self.n: int = 0
-        self.converged: bool = False
-        self.method: str = "REML"
-        self.formula: str = ""
-        self.X: np.ndarray = None       # Model matrix
-        self.offset: np.ndarray = None
-        # v1.8: Fit diagnostics - surfaced in summary()
-        self.n_iter: int = 0            # PIRLS iterations used
-        self.instability_count: int = 0 # Cholesky fail + NaN + halving exhaust
-        self.regularization_applied: float = 0.0  # Max jitter added to H
-        self.execution_path: str = ""   # Which path actually ran
-        # v1.15: Routing diagnostics - surfaced in summary()
-        # These make every automatic decision explicit and reversible.
-        self.execution_path_reason: str = ""   # WHY this path was selected
-        self.lambda_strategy: str = ""         # REML / fREML / fellner_schall
-        self.lambda_strategy_reason: str = ""  # WHY this strategy (empty if user chose)
-        self.routing_diagnostics: dict = None  # Full routing metadata (p, n_smooth, dense_bytes, gates hit)
-
-    def _routing_summary(self):
-        """
-        Human-readable routing explanation for summary() output.
-
-        Example output:
-          Execution path: spmd (multi-GPU, 4 devices)
-            Reason: p=1200, n=5M, dense_bytes=48MB (within SPMD gates)
-            Sparse-dominated model: multi-GPU may be slower than sparse-CPU for this workload.
-          Lambda strategy: fREML (auto-selected)
-            Reason: n_smooth=120 > 50: auto-selected fREML to avoid O(120³) Newton Hessian.
-                    Override with method='REML'.
-        """
-        lines = [f"  Execution path: {self.execution_path}"]
-        if self.execution_path_reason:
-            lines.append(f"    Reason: {self.execution_path_reason}")
-        lines.append(f"  Lambda strategy: {self.lambda_strategy}")
-        if self.lambda_strategy_reason:
-            lines.append(f"    Reason: {self.lambda_strategy_reason}")
-        return "\n".join(lines)
-
-    def predict(self, newdata=None, **kwargs):
-        from jaxgam.predict.predict import predict_gam
-        return predict_gam(self, newdata, **kwargs)
-
-    def summary(self, **kwargs):
-        from jaxgam.summary.summary import summary_gam
-        return summary_gam(self, **kwargs)
-
-    def plot(self, **kwargs):
-        from jaxgam.plot.plot_gam import plot_gam
-        return plot_gam(self, **kwargs)
-
-    def check(self, **kwargs):
-        from jaxgam.summary.diagnostics import gam_check
-        return gam_check(self, **kwargs)
-
-
-def gam(formula: str, data: pd.DataFrame | dict,
-        family: str | Family = "gaussian",
-        method: str = "REML",
-        weights: np.ndarray = None,
-        offset: np.ndarray = None,
-        optimizer: str = "newton",
-        scale: float = 0,
-        select: bool = False,
-        gamma: float = 1.0,
-        knots: dict = None,
-        sp: list = None,
-        backend: str = "jax",
-        device: str = "cpu",
-        **kwargs) -> GAMResult:
-    """
-    Fit a Generalized Additive Model.
+class GAM:
+    """Generalized Additive Model (sklearn-style API).
 
     Parameters
     ----------
     formula : str
-        Model formula in R-style notation.
-        Example: "y ~ s(x1) + s(x2) + x3 + te(x4, x5)"
-    data : DataFrame or dict
-        Data containing variables referenced in formula.
-    family : str or Family
-        Distribution family. One of: "gaussian", "binomial", "poisson",
-        "Gamma", "inverse.gaussian", "nb", "tw", "betar", "ocat",
-        "multinom", "zip", "cox.ph", "scat", "gaulss", "shash", etc.
+        Model formula in R-style Wilkinson notation,
+        e.g. ``"y ~ s(x)"``.
+    family : str or ExponentialFamily
+        Distribution family. One of ``'gaussian'``, ``'binomial'``,
+        ``'poisson'``, ``'gamma'``, or an ``ExponentialFamily`` instance.
     method : str
-        Smoothness selection: "REML" (default), "ML", "GCV.Cp", "UBRE".
-    optimizer : str
-        Outer optimizer: "newton" (default), "efs" (extended Fellner-Schall),
-        "bfgs".
-    select : bool
-        If True, add extra shrinkage penalties for variable selection.
-    gamma : float
-        Multiplier for effective degrees of freedom in GCV/UBRE.
-    sp : list, optional
-        Fixed smoothing parameters (one per penalty).
-    backend : str
-        Computation backend: "jax" (default) or "numpy".
-    device : str
-        Device: "cpu" (default) or "gpu".
+        Smoothing parameter estimation: ``'REML'`` or ``'ML'``.
+    sp : np.ndarray or list, optional
+        Fixed smoothing parameters. If provided, skips Newton optimization.
 
-    Returns
-    -------
-    GAMResult
-        Fitted model object with predict(), summary(), plot() methods.
-
-    Examples
-    --------
-    >>> import jaxgam
-    >>> import pandas as pd
-    >>> import numpy as np
-    >>>
-    >>> n = 1000
-    >>> df = pd.DataFrame({
-    ...     'x1': np.random.uniform(0, 1, n),
-    ...     'x2': np.random.uniform(0, 1, n),
-    ... })
-    >>> df['y'] = np.sin(2 * np.pi * df['x1']) + np.random.normal(0, 0.2, n)
-    >>>
-    >>> model = jaxgam.gam("y ~ s(x1) + s(x2)", data=df)
-    >>> model.summary()
-    >>> model.plot()
+    Attributes (set after ``fit()``)
+    --------------------------------
+    coefficients_ : np.ndarray     # Fitted coefficient vector
+    fitted_values_ : np.ndarray    # Fitted values (response scale)
+    linear_predictor_ : np.ndarray # Linear predictor (link scale)
+    family_ : ExponentialFamily    # Fitted family object
+    Vp_ : np.ndarray              # Bayesian posterior covariance
+    scale_ : float                 # Estimated or fixed scale parameter
+    edf_ : np.ndarray             # Per-smooth effective degrees of freedom
+    edf_total_ : float            # Total effective degrees of freedom
+    smoothing_params_ : np.ndarray # Estimated smoothing parameters
+    deviance_ : float             # Model deviance
+    null_deviance_ : float        # Null model deviance
+    converged_ : bool             # Whether the outer Newton loop converged
+    n_iter_ : int                 # Number of outer Newton iterations
     """
-    from jaxgam.linalg.backend import configure
-    configure(backend, device)
 
-    # Parse formula
-    parsed = parse_formula(formula)
+    def __init__(
+        self,
+        formula: str,
+        family: str | ExponentialFamily = "gaussian",
+        method: str = "REML",
+        sp: np.ndarray | list | None = None,
+        **kwargs,
+    ) -> None: ...
 
-    # Resolve family
-    if isinstance(family, str):
-        from jaxgam.families.registry import get_family
-        family = get_family(family)
+    def fit(
+        self,
+        data: pd.DataFrame | dict,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+    ) -> "GAM":
+        """Fit the GAM to data.
 
-    # Convert data
-    if isinstance(data, pd.DataFrame):
-        data_dict = {col: data[col].values for col in data.columns}
-    else:
-        data_dict = data
+        Orchestrates the three-phase pipeline:
+        - Phase 1: parse_formula() -> ModelSetup.build()
+        - Phase 2: FittingData.from_setup() -> newton_optimize() / pirls_loop()
+        - Phase 3: Post-estimation -> fitted attributes on GAM instance
 
-    y = data_dict[parsed.response]
-    n = len(y)
+        Returns self for method chaining.
+        """
+        ...
 
-    # Build model matrix
-    X, term_info, penalty_list, smooth_objects = build_model_matrix(parsed, data_dict)
+    def predict(
+        self,
+        newdata: pd.DataFrame | dict | None = None,
+        pred_type: str = "response",
+        se_fit: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        """Predict from a fitted GAM.
 
-    # Add extra shrinkage penalties if select=True
-    if select:
-        from jaxgam.penalties.selection import add_shrinkage_penalties
-        penalty_list, smooth_objects = add_shrinkage_penalties(
-            penalty_list, smooth_objects
-        )
+        If newdata is None, uses training data. pred_type is 'response'
+        or 'link'. If se_fit=True, returns (predictions, standard_errors).
+        """
+        ...
 
-    # Smoothing parameter optimization
-    if sp is not None:
-        # Fixed smoothing parameters
-        lambdas = np.array(sp)
-        S_lambda = sum(lam * S for lam, S in zip(lambdas, penalty_list)
-                       if S.nnz > 0)
-        result = pirls_fit(X, y, family, S_lambda, weights, offset)
-    else:
-        lambdas, result = optimize_smoothing_parameters(
-            X, penalty_list, y, family,
-            weights=weights,
-            method=method,
-            optimizer=optimizer,
-            gamma=gamma,
-        )
+    def predict_matrix(
+        self, newdata: pd.DataFrame | dict
+    ) -> np.ndarray:
+        """Build constrained prediction matrix for new data.
 
-    # Package results
-    gam_result = GAMResult()
-    gam_result.coefficients = result.coefficients
-    gam_result.fitted_values = result.fitted_values
-    gam_result.linear_predictor = result.linear_predictor
-    gam_result.family = family
-    gam_result.smooth_terms = smooth_objects
-    gam_result.term_info = term_info
-    gam_result.Vp = result.Vp
-    gam_result.scale = family.scale_estimate(
-        y, result.fitted_values, weights or np.ones(n),
-        n, result.hat_matrix_trace
-    )
-    gam_result.smoothing_params = lambdas
-    gam_result.deviance = result.deviance
-    gam_result.n = n
-    gam_result.converged = result.converged
-    gam_result.method = method
-    gam_result.formula = formula
-    gam_result.X = X
-    gam_result.offset = offset
-    gam_result.edf_total = result.hat_matrix_trace
+        Equivalent to R's ``predict.gam(type="lpmatrix")``.
+        """
+        ...
 
-    return gam_result
+    def summary(self) -> "GAMSummary":
+        """Print and return summary of a fitted GAM.
+
+        Computes parametric coefficient significance (z/t tests),
+        smooth term significance (Wood 2013 testStat), and model-level
+        statistics.
+        """
+        ...
+
+    def plot(self, **kwargs):
+        """Plot smooth components of a fitted GAM.
+
+        Equivalent to R's ``plot.gam()``. Produces one panel per smooth
+        term showing the partial effect with optional SE bands and rug marks.
+        """
+        ...
 
 
-def bam(formula: str, data: pd.DataFrame | dict,
-        family: str | Family = "gaussian",
-        method: str = "fREML",
-        chunk_size: int = 10000,
-        discrete: bool = True,
-        n_threads: int = 1,
-        **kwargs) -> GAMResult:
-    """
-    Fit a GAM to large datasets.
+# Usage:
+#
+# >>> model = GAM("y ~ s(x1) + s(x2)", family="gaussian").fit(df)
+# >>> model.summary()
+# >>> model.plot()
+# >>> preds = model.predict(new_df)
+# >>> preds, se = model.predict(new_df, se_fit=True)
+```
 
-    Uses discretization, chunked processing, and fREML
-    (fast REML via Fellner-Schall updates) for scalability.
-
-    Handles millions of observations with O(p² + chunk_size × p) memory.
-    """
-    from jaxgam.fitting.bam_fit import bam_fit
-    return bam_fit(formula, data, family, method, chunk_size, discrete, **kwargs)
-
-
-def gamm(formula: str, data: pd.DataFrame | dict,
-         family: str | Family = "gaussian",
-         random: dict = None,
-         correlation: CorrelationStructure = None,
-         **kwargs) -> tuple:
-    """
-    Fit a GAMM via PQL.
-
-    Returns (gam_result, lme_result) tuple mirroring R's gamm().
-    """
-    from jaxgam.fitting.gamm_fit import gamm_fit
-    return gamm_fit(formula, data, family, random=random,
-                    correlation=correlation, **kwargs)
+**`bam()` and `gamm()` are not implemented in v1.0.** They are designed for
+but deferred. See Section 1.2 for the full scope boundary
 ```
 
 ---
@@ -7443,7 +7260,7 @@ def random_effects_data():
 import numpy as np
 import pytest
 from jaxgam.smooths.tprs import ThinPlateSmooth, ThinPlateShrinkageSmooth
-from jaxgam.smooths.base import SmoothSpec
+from jaxgam.formula.terms import SmoothSpec
 
 
 class TestTPRS:

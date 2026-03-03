@@ -94,15 +94,15 @@ GAM("y ~ s(x, by=fac, k=10) + fac")
 
 | Argument | Description | Default |
 |---|---|---|
-| `k` | Basis dimension (number of knots) | 10 |
-| `bs` | Basis type: `'tp'`, `'cr'`, `'cs'`, `'cc'` | `'tp'` |
+| `k` | Basis dimension (number of knots). `-1` means auto-select: resolves to `10` for 1D TPRS/cubic, `30` for 2D TPRS. | -1 (auto) |
+| `bs` | Basis type: `'tp'`, `'ts'`, `'cr'`, `'cs'`, `'cc'` | `'tp'` |
 | `by` | Factor variable for factor-by smooths | None |
 
 ### Tensor product arguments
 
 | Argument | Description | Default |
 |---|---|---|
-| `k` | Marginal basis dimension (scalar applied to all margins) | 5 |
+| `k` | Marginal basis dimension (scalar applied to all margins). `-1` means auto-select (resolves to `10` for the default `cr` marginals). | -1 (auto) |
 
 Use `te()` for full tensor products and `ti()` for interaction-only terms
 (excludes main effects).

@@ -3,14 +3,14 @@
 </p>
 
 <p align="center">
-  <a href="https://codecov.io/gh/GITHUB_USERNAME/jaxgam">
-    <img src="https://codecov.io/gh/GITHUB_USERNAME/jaxgam/branch/main/graph/badge.svg" alt="coverage"/>
+  <a href="https://codecov.io/gh/scatt67/jaxgam">
+    <img src="https://codecov.io/gh/scatt67/jaxgam/branch/main/graph/badge.svg" alt="coverage"/>
   </a>
 </p>
 
 A Python reimplementation of R's
 [mgcv](https://cran.r-project.org/package=mgcv) package by
-[Simon N. Wood](https://people.bath.ac.uk/sw283/), for fitting
+[Simon N. Wood](https://webhomes.maths.ed.ac.uk/~swood34/), for fitting
 Generalized Additive Models. mgcv is the gold-standard GAM library and
 the algorithms in jaxgam - penalised iteratively re-weighted least
 squares (PIRLS), Laplace-approximate REML (empirical bayes), and the full smooth
@@ -19,7 +19,7 @@ construction pipeline - follow Wood's published methods and his
 
 jaxgam uses [jax](https://github.com/google/jax) for JIT-compiled fitting
 with automatic differentiation through the PIRLS inner loop and Newton
-outer loop, and [numba](https://numba.pydata.org/)  eager compilation for smooth construction and diagnostic hot paths. The reason for doing this is because `mgcv` has custom C code for performance critical portions of the code.
+outer loop, and [numba](https://numba.pydata.org/) eager compilation for TPRS/tensor basis construction and p-value computation. The reason for doing this is because `mgcv` has custom C code for performance critical portions of the code.
 
 ## AI / Agentic development transparency note
 
@@ -52,7 +52,7 @@ The break through came when we setup an experiment document to track past experi
 
 ```bash
 # Clone and install with uv
-git clone https://github.com/<org>/jaxgam.git
+git clone https://github.com/scatt67/jaxgam.git
 cd jaxgam
 uv sync
 ```
@@ -90,7 +90,7 @@ all families, smooth types, and post-estimation tools.
 
 ### Families
 
-Gaussian, Binomial, Poisson, Gamma --- each with its default link and
+Gaussian, Binomial, Poisson, Gamma - each with its default link and
 REML/ML smoothing parameter selection.
 
 ### Smooth types
@@ -107,9 +107,9 @@ REML/ML smoothing parameter selection.
 
 ### Post-estimation
 
-- `predict()` --- response or link scale, with optional standard errors
-- `summary()` --- parametric and smooth term significance tests
-- `plot()` --- 1D smooth curves with SE bands, 2D contour plots, rug marks
+- `predict()` - response or link scale, with optional standard errors
+- `summary()` - parametric and smooth term significance tests
+- `plot()` - 1D smooth curves with SE bands, 2D contour plots, rug marks
 
 ## v1.0 limitations
 
@@ -236,7 +236,7 @@ implementations converge in a similar number of outer Newton steps.
 
 ### Cold starts
 
-The first fit includes JIT tracing + XLA compilation (~700--1200ms
+The first fit includes JIT tracing + XLA compilation (~700-1200ms
 overhead). This makes jaxgam slower than R for small datasets on first
 use, but the compiled code is cached to disk and reused across sessions.
 
@@ -246,7 +246,7 @@ The crossover where even a cold jaxgam fit beats `gam(REML)` is around n=100,000
 
 ### High-dimensional models
 
-For models with many basis functions (k=100--500), jaxgam's XLA-compiled
+For models with many basis functions (k=100-500), jaxgam's XLA-compiled
 dense linear algebra outperforms R `gam(REML)` even on the very first
 cold-start fit. We also benchmark against R's `bam(fREML)` with 8
 threads, which was purpose-built for large datasets and is very fast at
@@ -266,8 +266,8 @@ compare against both R's `gam(REML)` (apples-to-apples) and `bam(fREML)`
   Bayes, whereas REML (empirical Bayes) is generally more robust than
   GCV and faster than full Bayes
 - You fit the same model structure repeatedly (bootstrap, CV,
-  simulation) -- warm fits are 2--12x faster than R `gam(REML)`
-- Your datasets are large (n > 100,000) -- the XLA advantage grows
+  simulation) - warm fits are 2-12x faster than R `gam(REML)`
+- Your datasets are large (n > 100,000) - the XLA advantage grows
   with n
 
 **R's mgcv may be better when:**
@@ -285,21 +285,21 @@ Disable it with `JAXGAM_NO_COMPILATION_CACHE=1`.
 
 ## Correctness
 
-jaxgam is validated against R's mgcv 1.9-3 across a 1,461-test suite.
+jaxgam is validated against R's mgcv 1.9-3 across a 1,450-test suite.
 Every model configuration (4 families x 6 smooth types) is fitted in
 both jaxgam and R, then compared value-by-value:
 
-- **Coefficients, fitted values, deviance** --- must match R at STRICT
+- **Coefficients, fitted values, deviance** - must match R at STRICT
   (rtol=1e-10) or MODERATE (rtol=1e-4) tolerance depending on the
   model type
-- **Smoothing parameters** --- compared at MODERATE or LOOSE (rtol=1e-2)
+- **Smoothing parameters** - compared at MODERATE or LOOSE (rtol=1e-2)
   because the REML surface is flat near the optimum
-- **Basis matrices and penalty matrices** --- compared element-wise
+- **Basis matrices and penalty matrices** - compared element-wise
   against R's `smoothCon()` output with sign normalization to handle
   LAPACK eigenvector sign ambiguity
-- **Summary statistics** --- EDF, p-values, and significance tests
+- **Summary statistics** - EDF, p-values, and significance tests
   validated against R's `summary.gam()`
-- **Predictions and standard errors** --- `predict()` output compared
+- **Predictions and standard errors** - `predict()` output compared
   against R's `predict.gam()` on both training and new data
 
 R comparison tests run inside a Docker container with pinned R 4.5.2 +

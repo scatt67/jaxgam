@@ -71,9 +71,12 @@ model = GAM("y ~ s(x, k=10, bs='cr')", family="poisson").fit(data)
 
 ## 4. Gamma GAM
 
-Positive continuous response with an inverse link.
+Positive continuous response with a log link. The data-generating process
+uses `mu = exp(eta)`, so we pass `Gamma(link="log")` to match.
 
 ```python
+from jaxgam.families import Gamma
+
 rng = np.random.default_rng(42)
 n = 200
 x = rng.uniform(0, 1, n)
@@ -82,7 +85,7 @@ mu = np.exp(eta)
 y = rng.gamma(5.0, scale=mu / 5.0, size=n)
 data = pd.DataFrame({"x": x, "y": y})
 
-model = GAM("y ~ s(x, k=10, bs='cr')", family="gamma").fit(data)
+model = GAM("y ~ s(x, k=10, bs='cr')", family=Gamma(link="log")).fit(data)
 ```
 
 ## 5. Multiple smooths
