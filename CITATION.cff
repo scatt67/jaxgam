@@ -5,8 +5,11 @@ message: >-
   jaxgam is a Python port of Simon Wood's mgcv R package; the
   statistical methods are entirely his work.
 type: software
-license: GPL-2.0-only
+license: GPL-2.0-or-later
 repository-code: "https://github.com/scatt67/jaxgam"
+authors:
+  - family-names: Catts
+    given-names: Shane
 
 references:
   - type: article
@@ -15,7 +18,7 @@ references:
       estimation of semiparametric generalized linear models
     authors:
       - family-names: Wood
-        given-names: Simon N.
+        given-names: "Simon N."
     journal: "Journal of the Royal Statistical Society (B)"
     volume: 73
     issue: 1
@@ -34,10 +37,10 @@ references:
       (with discussion)
     authors:
       - family-names: Wood
-        given-names: Simon N.
+        given-names: "Simon N."
       - family-names: Pya
         given-names: Natalya
-      - family-names: "S\xE4fken"
+      - family-names: Säfken
         given-names: Benjamin
     journal: "Journal of the American Statistical Association"
     volume: 111
@@ -54,7 +57,7 @@ references:
       generalized additive models
     authors:
       - family-names: Wood
-        given-names: Simon N.
+        given-names: "Simon N."
     journal: "Journal of the American Statistical Association"
     volume: 99
     issue: 467
@@ -69,8 +72,8 @@ references:
     title: "Generalized Additive Models: An Introduction with R"
     authors:
       - family-names: Wood
-        given-names: Simon N.
-    edition: 2
+        given-names: "Simon N."
+    edition: "2"
     publisher:
       name: "Chapman and Hall/CRC"
     year: 2017
@@ -81,7 +84,7 @@ references:
     title: "Thin-plate regression splines"
     authors:
       - family-names: Wood
-        given-names: Simon N.
+        given-names: "Simon N."
     journal: "Journal of the Royal Statistical Society (B)"
     volume: 65
     issue: 1
