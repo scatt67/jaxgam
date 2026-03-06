@@ -1,0 +1,94 @@
+cff-version: 1.2.0
+title: "jaxgam: JAX-accelerated Generalized Additive Models"
+message: >-
+  If you use jaxgam, please cite the underlying mgcv methodology.
+  jaxgam is a Python port of Simon Wood's mgcv R package; the
+  statistical methods are entirely his work.
+type: software
+license: GPL-2.0-only
+repository-code: "https://github.com/scatt67/jaxgam"
+
+references:
+  - type: article
+    title: >-
+      Fast stable restricted maximum likelihood and marginal likelihood
+      estimation of semiparametric generalized linear models
+    authors:
+      - family-names: Wood
+        given-names: Simon N.
+    journal: "Journal of the Royal Statistical Society (B)"
+    volume: 73
+    issue: 1
+    start: 3
+    end: 36
+    year: 2011
+    doi: "10.1111/j.1467-9868.2010.00749.x"
+    scope: >-
+      Core method for REML/ML estimation of GAMs. This is the primary
+      reference for jaxgam's fitting algorithm (PIRLS + Laplace-approximate
+      REML).
+
+  - type: article
+    title: >-
+      Smoothing parameter and model selection for general smooth models
+      (with discussion)
+    authors:
+      - family-names: Wood
+        given-names: Simon N.
+      - family-names: Pya
+        given-names: Natalya
+      - family-names: "S\xE4fken"
+        given-names: Benjamin
+    journal: "Journal of the American Statistical Association"
+    volume: 111
+    start: 1548
+    end: 1575
+    year: 2016
+    doi: "10.1080/01621459.2016.1180986"
+    scope: >-
+      Beyond exponential family models and general smooth model selection.
+
+  - type: article
+    title: >-
+      Stable and efficient multiple smoothing parameter estimation for
+      generalized additive models
+    authors:
+      - family-names: Wood
+        given-names: Simon N.
+    journal: "Journal of the American Statistical Association"
+    volume: 99
+    issue: 467
+    start: 673
+    end: 686
+    year: 2004
+    doi: "10.1198/016214504000000980"
+    scope: >-
+      GCV-based smoothing parameter estimation and the basics of GAMM.
+
+  - type: book
+    title: "Generalized Additive Models: An Introduction with R"
+    authors:
+      - family-names: Wood
+        given-names: Simon N.
+    edition: 2
+    publisher:
+      name: "Chapman and Hall/CRC"
+    year: 2017
+    scope: >-
+      Comprehensive overview of GAM theory and mgcv implementation.
+
+  - type: article
+    title: "Thin-plate regression splines"
+    authors:
+      - family-names: Wood
+        given-names: Simon N.
+    journal: "Journal of the Royal Statistical Society (B)"
+    volume: 65
+    issue: 1
+    start: 95
+    end: 114
+    year: 2003
+    doi: "10.1111/1467-9868.00374"
+    scope: >-
+      Thin plate regression splines, the default basis type in mgcv and
+      jaxgam.

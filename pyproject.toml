@@ -2,6 +2,7 @@
 name = "jaxgam"
 version = "1.0.0a1"
 description = "Python port of R's mgcv package for Generalized Additive Models"
+license = "GPL-2.0-only"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.24",
