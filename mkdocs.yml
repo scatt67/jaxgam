@@ -57,5 +57,6 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - API Reference: api.md
+  - Citations: citations.md
   - Design Doc: design.md
   - R Source Map: R_SOURCE_MAP.md

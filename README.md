@@ -338,9 +338,9 @@ cite the relevant mgcv papers:
 
 - **GAM method (REML/ML estimation)** -- Wood SN (2011). "Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models." *Journal of the Royal Statistical Society (B)*, 73(1), 3--36. [doi:10.1111/j.1467-9868.2010.00749.x](https://doi.org/10.1111/j.1467-9868.2010.00749.x)
 
-- **Beyond exponential family** -- Wood SN, Pya N, Safken B (2016). "Smoothing parameter and model selection for general smooth models (with discussion)." *Journal of the American Statistical Association*, 111, 1548--1575. [doi:10.1080/01621459.2016.1180986](https://doi.org/10.1080/01621459.2016.1180986)
+- **Beyond exponential family** -- Wood SN, Pya N, Säfken B (2016). "Smoothing parameter and model selection for general smooth models (with discussion)." *Journal of the American Statistical Association*, 111, 1548--1575. [doi:10.1080/01621459.2016.1180986](https://doi.org/10.1080/01621459.2016.1180986)
 
-- **GCV-based estimation and GAMM basics** -- Wood SN (2004). "Stable and efficient multiple smoothing parameter estimation for generalized additive models." *Journal of the American Statistical Association*, 99(467), 673--686. [doi:10.1198/016214504000000980](https://doi.org/10.1198/016214504000000980)
+- **GCV-based model method and basics of GAMM** -- Wood SN (2004). "Stable and efficient multiple smoothing parameter estimation for generalized additive models." *Journal of the American Statistical Association*, 99(467), 673--686. [doi:10.1198/016214504000000980](https://doi.org/10.1198/016214504000000980)
 
 - **Overview** -- Wood SN (2017). *Generalized Additive Models: An Introduction with R* (2nd ed.). Chapman and Hall/CRC.
 
@@ -351,4 +351,6 @@ and BibTeX entries.
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+Licensed under [GPL-2.0-or-later](LICENSE), matching mgcv's `GPL (>= 2)`
+license. As a derivative work of mgcv, this ensures downstream users have
+the same freedoms granted by the original package.
