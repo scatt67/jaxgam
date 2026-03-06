@@ -258,13 +258,17 @@ def fletcher_scale(
         Fletcher-corrected scale estimate.
     """
     n = y.shape[0]
+    tiny = jnp.finfo(y.dtype).tiny
+    eps = jnp.finfo(y.dtype).eps
     pearson = pearson_rss(y, mu, wt, family)
-    phi_pearson = pearson / (n - edf)
+    denom = jnp.maximum(n - edf, eps)
+    phi_pearson = pearson / denom
 
     V = family.variance(mu)
     dV = family.dvar(mu)
     s_bar = jnp.maximum(-0.9, jnp.mean(dV * (y - mu) / V))
-    return phi_pearson / (1.0 + s_bar)
+    result = phi_pearson / (1.0 + s_bar)
+    return jnp.maximum(result, tiny)
 
 
 @jax.jit
