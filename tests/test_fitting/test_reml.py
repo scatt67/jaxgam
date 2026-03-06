@@ -623,6 +623,27 @@ class TestFletcherScale:
             phi = float(fletcher_scale(fd.y, pirls_result.mu, fd.wt, fd.family, edf))
             assert phi > 0, f"{family_name} Fletcher scale not positive"
 
+    def test_near_saturated_edf_finite(self):
+        """When edf ≈ n (near-saturated), fletcher_scale returns finite positive."""
+        rng = np.random.default_rng(SEED)
+        n = 50
+        y = jnp.array(rng.normal(0, 1, n))
+        mu = jnp.array(rng.normal(0, 0.1, n))
+        wt = jnp.ones(n)
+        family = Gaussian()
+
+        # edf exactly equal to n
+        edf_equal = jnp.array(float(n))
+        phi = fletcher_scale(y, mu, wt, family, edf_equal)
+        assert jnp.isfinite(phi), "fletcher_scale not finite when edf == n"
+        assert float(phi) > 0, "fletcher_scale not positive when edf == n"
+
+        # edf slightly exceeding n (pathological conditioning)
+        edf_over = jnp.array(float(n) + 1.0)
+        phi_over = fletcher_scale(y, mu, wt, family, edf_over)
+        assert jnp.isfinite(phi_over), "fletcher_scale not finite when edf > n"
+        assert float(phi_over) > 0, "fletcher_scale not positive when edf > n"
+
     def test_fletcher_matches_r_scale(self):
         """Our Fletcher scale matches R's model$scale for all families."""
         for family_name, family_r, family in [
