@@ -30,8 +30,8 @@ cite the relevant mgcv papers.
 
 **Overview**
 
-> Wood SN (2017). *Generalized Additive Models: An Introduction with R*
-> (2nd ed.). Chapman and Hall/CRC.
+> Wood SN (2017). *Generalized Additive Models: An Introduction with R*,
+> 2 edition. Chapman and Hall/CRC.
 
 **Thin plate regression splines**
 
