@@ -10,7 +10,8 @@ outer loop. No C compilation required.
 ## Installation
 
 ```bash
-git clone https://github.com/shanecatts/jaxgam.git
+# Clone and install with uv
+git clone https://github.com/scatt67/jaxgam.git
 cd jaxgam
 uv sync
 ```
