@@ -759,7 +759,7 @@ class NewtonOptimizer:
             else:
                 not_moved = 0
 
-            # Break conditions (R line 1832: step.failed <- TRUE)
+            # Break conditions (R line 1832)
             if k == _MAX_HALVINGS_GAUSSIAN or not_moved > 3:
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
             if bool(jnp.allclose(log_lambda, log_lambda + step)):
