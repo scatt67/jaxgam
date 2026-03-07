@@ -66,7 +66,7 @@ from jaxgam.fitting.reml import (
     estimate_edf,
     fletcher_scale,
 )
-from jaxgam.jax_utils import build_S_lambda
+from jaxgam.jax_utils import build_S_lambda, cho_factor
 
 # R's default Newton convergence tolerance (gam.control()$newton$conv.tol).
 # This is ~67x looser than sqrt(eps) ≈ 1.5e-8, matching R's deliberate
@@ -200,7 +200,7 @@ def _diff_score(
 
         # IFT: dβ = -H⁻¹(dS @ β)
         H = XtWX + S_lambda
-        L = jnp.linalg.cholesky(H)
+        L, _ = cho_factor(H)
         dbeta = cho_solve((L, True), -(dS @ beta))
 
         # Chain: dη → dW → dXtWX
