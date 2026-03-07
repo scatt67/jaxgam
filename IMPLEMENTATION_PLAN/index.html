@@ -1,0 +1,1976 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.4">
+    
+    
+      
+        <title>JaxGAM v1.0 Implementation Plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#jaxgam-v10-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              JaxGAM v1.0 Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#progress-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Progress Checklist
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Progress Checklist">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-project-scaffolding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0: Project Scaffolding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-foundation-components-setup-cpu-numpy-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Foundation Components (Setup - CPU, NumPy Only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-fitting-engine-jax-jit-compiled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Fitting Engine (JAX, JIT-compiled)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-post-estimation-cpu-numpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Post-Estimation (CPU, NumPy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-integration-testing-and-hardening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4: Integration Testing and Hardening
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-5-performance-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 5: Performance Optimization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current Stats
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-0-project-scaffolding_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0: Project Scaffolding
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 0: Project Scaffolding">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-01-repository-structure-and-build-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 0.1 - Repository Structure and Build System
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-02-tolerance-classes-and-test-infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 0.2 - Tolerance Classes and Test Infrastructure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-03-r-bridge-and-reference-data-generator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 0.3 - R Bridge and Reference Data Generator
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-1-foundation-components-setup-cpu-numpy-only_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Foundation Components (Setup - CPU, NumPy Only)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1: Foundation Components (Setup - CPU, NumPy Only)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-11-link-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.1 - Link Functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-12-family-base-class-and-standard-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.2 - Family Base Class and Standard Families
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-13-penalty-matrix-base-class" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.3 - Penalty Matrix Base Class
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-14-tprs-basis-and-penalty-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.4 - TPRS Basis and Penalty Construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-15-cubic-regression-spline-basis-and-penalty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.5 - Cubic Regression Spline Basis and Penalty
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-16-tensor-product-smooths-te-ti" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.6 - Tensor Product Smooths (te, ti)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-17-formula-parser-ast-based" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.7 - Formula Parser (AST-Based)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-18-factor-by-smooth-expansion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.8 - Factor-By Smooth Expansion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-19-identifiability-constraints-and-coefficientmap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.9 - Identifiability Constraints and CoefficientMap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-110-design-matrix-assembly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.10 - Design Matrix Assembly
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-2-fitting-engine-jax-jit-compiled_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Fitting Engine (JAX, JIT-compiled)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2: Fitting Engine (JAX, JIT-compiled)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-21-jax-linear-algebra-primitives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.1 - JAX Linear Algebra Primitives
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-22-jax-ad-wrappers-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.2 - ~~JAX AD Wrappers~~ Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-23-pirls-inner-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.3 - PIRLS Inner Loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-23b-fittingdata-phase-12-boundary-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.3b - FittingData Phase 1→2 Boundary Contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-24-reml-and-ml-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.4 - REML and ML Criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-25-newton-outer-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.5 - Newton Outer Optimizer ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-26-full-gam-fitting-orchestration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.6 - Full GAM Fitting Orchestration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-3-post-estimation-cpu-numpy_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Post-Estimation (CPU, NumPy)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 3: Post-Estimation (CPU, NumPy)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-31-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.1 - Prediction ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-32-summary-and-edf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.2 - Summary and EDF ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-33-plotting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.3 - Plotting ✅
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-4-integration-testing-and-hardening_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4: Integration Testing and Hardening
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 4: Integration Testing and Hardening">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-41-32-cell-validation-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 4.1 - 32-Cell Validation Matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-43-edge-cases-and-robustness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 4.3 - Edge Cases and Robustness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-44-documentation-and-readme" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 4.4 - Documentation and README
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-dependency-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task Dependency Graph
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parallelization-opportunities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallelization Opportunities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#estimated-effort-per-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Estimated Effort Per Task
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="jaxgam-v10-implementation-plan">JaxGAM v1.0 Implementation Plan<a class="headerlink" href="#jaxgam-v10-implementation-plan" title="Permanent link">&para;</a></h1>
+<p>This plan breaks the v1.0 scope (docs/design.md §1.2) into ordered tasks. Each task is designed to be picked up by a Claude Code agent with clear inputs, outputs, acceptance criteria, and design doc references.</p>
+<p><strong>Before starting any task:</strong> read the corresponding entry in <code>docs/R_SOURCE_MAP.md</code> to find the exact R functions that implement the same logic. Read those R functions before writing Python.</p>
+<p>Tasks are grouped into phases that correspond to the architecture (Setup → Fit → Post-estimation), preceded by project scaffolding. Within each phase, tasks are ordered by dependency - a task's prerequisites are listed explicitly.</p>
+<hr />
+<h2 id="progress-checklist">Progress Checklist<a class="headerlink" href="#progress-checklist" title="Permanent link">&para;</a></h2>
+<h3 id="phase-0-project-scaffolding">Phase 0: Project Scaffolding<a class="headerlink" href="#phase-0-project-scaffolding" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[x] <strong>Task 0.1</strong> - Repository Structure and Build System</li>
+<li>[x] <strong>Task 0.2</strong> - Tolerance Classes and Test Infrastructure</li>
+<li>[x] <strong>Task 0.3</strong> - R Bridge and Reference Data Generator</li>
+</ul>
+<h3 id="phase-1-foundation-components-setup-cpu-numpy-only">Phase 1: Foundation Components (Setup - CPU, NumPy Only)<a class="headerlink" href="#phase-1-foundation-components-setup-cpu-numpy-only" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[x] <strong>Task 1.1</strong> - Link Functions (8 links, registry, 42 tests)</li>
+<li>[x] <strong>Task 1.2</strong> - Family Base Class and Standard Families (4 families, 50 tests)</li>
+<li>[x] <strong>Task 1.3</strong> - Penalty Matrix Base Class (Penalty, CompositePenalty, 55 tests)</li>
+<li>[x] <strong>Task 1.4</strong> - TPRS Basis and Penalty Construction <em>(HIGH RISK)</em></li>
+<li>[x] <strong>Task 1.5</strong> - Cubic Regression Spline Basis and Penalty</li>
+<li>[x] <strong>Task 1.6</strong> - Tensor Product Smooths (te, ti)</li>
+<li>[x] <strong>Task 1.7</strong> - Formula Parser (AST-based, 46 tests)</li>
+<li>[x] <strong>Task 1.8</strong> - Factor-By Smooth Expansion (FactorBySmooth, NumericBySmooth, 54 tests)</li>
+<li>[x] <strong>Task 1.9</strong> - Identifiability Constraints and CoefficientMap</li>
+<li>[x] <strong>Task 1.10</strong> - Design Matrix Assembly (ModelSetup, SmoothInfo, 45 tests)</li>
+</ul>
+<h3 id="phase-2-fitting-engine-jax-jit-compiled">Phase 2: Fitting Engine (JAX, JIT-compiled)<a class="headerlink" href="#phase-2-fitting-engine-jax-jit-compiled" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[x] <strong>Task 2.1</strong> - JAX Linear Algebra Primitives</li>
+<li>[x] <strong>Task 2.2</strong> - ~~JAX AD Wrappers~~ <em>Removed (design.md v1.19). Use <code>jax.grad</code>/<code>jax.hessian</code>/<code>jax.jvp</code> directly.</em></li>
+<li>[x] <strong>Task 2.3</strong> - PIRLS Inner Loop <em>(HIGH RISK)</em> - <em>blocked by 1.2, 1.1, 2.1</em></li>
+<li>[x] <strong>Task 2.3b</strong> - FittingData Phase 1→2 Boundary Contract - <em>blocked by 1.10, 2.3</em></li>
+<li>[x] <strong>Task 2.4</strong> - REML and ML Criteria <em>(HIGH RISK)</em> - <em>blocked by 2.3b</em></li>
+<li>[x] <strong>Task 2.5</strong> - Newton Outer Optimizer - <em>blocked by 2.4</em></li>
+<li>[x] <strong>Task 2.6</strong> - Full GAM Fitting Orchestration (sklearn-style GAM class, 82 tests)</li>
+</ul>
+<h3 id="phase-3-post-estimation-cpu-numpy">Phase 3: Post-Estimation (CPU, NumPy)<a class="headerlink" href="#phase-3-post-estimation-cpu-numpy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[x] <strong>Task 3.1</strong> - Prediction - <em>blocked by 2.6</em></li>
+<li>[x] <strong>Task 3.2</strong> - Summary and EDF - <em>blocked by 2.6</em></li>
+<li>[x] <strong>Task 3.3</strong> - Plotting - <em>blocked by 3.1</em></li>
+</ul>
+<h3 id="phase-4-integration-testing-and-hardening">Phase 4: Integration Testing and Hardening<a class="headerlink" href="#phase-4-integration-testing-and-hardening" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[x] <strong>Task 4.1</strong> - 32-Cell Validation Matrix - <em>blocked by 3.1, 3.2</em></li>
+<li>[x] <strong>Task 4.3</strong> - Edge Cases and Robustness - <em>blocked by 2.6</em></li>
+<li>[x] <strong>Task 4.4</strong> - Documentation and README - <em>blocked by 3.3</em></li>
+</ul>
+<h3 id="phase-5-performance-optimization">Phase 5: Performance Optimization<a class="headerlink" href="#phase-5-performance-optimization" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[x] <strong>Task 5.0</strong> - Profiling script (<code>scripts/profile_fit.py</code>)</li>
+<li>[x] <strong>Task 5.1</strong> - Eliminate per-fit JIT recompilation (module-level <code>_diff_score</code> with explicit args)</li>
+<li>[x] <strong>Task 5.2</strong> - Fuse gradient + Hessian into single JIT dispatch (<code>grad_hess()</code>)</li>
+<li>[x] <strong>Task 5.3</strong> - Fuse <code>_fit_and_score</code> into single JIT region (<code>_jit_fit_and_score</code>)</li>
+<li>[x] <strong>Task 5.4</strong> - Persistent compilation cache (<code>~/.cache/jaxgam/jax/</code>), centralized JAX config</li>
+<li>[x] <strong>Task 5.5</strong> - Benchmark script with cold/warm reporting (<code>scripts/benchmark_vs_r.py</code>)</li>
+</ul>
+<h3 id="current-stats">Current Stats<a class="headerlink" href="#current-stats" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Tests:</strong> 1448 passing, 0 xfailed</li>
+<li><strong>Phases 0-3 complete.</strong> Phase 4.1 (Validation Matrix) complete. Phase 5 (Performance) complete.</li>
+<li><strong>Performance:</strong> 1.1-15.8x faster than R (JIT warm); ~275ms cold start with disk cache.</li>
+<li><strong>Phase 4 complete.</strong> All integration testing and hardening tasks done.</li>
+</ul>
+<hr />
+<h2 id="phase-0-project-scaffolding_1">Phase 0: Project Scaffolding<a class="headerlink" href="#phase-0-project-scaffolding_1" title="Permanent link">&para;</a></h2>
+<h3 id="task-01-repository-structure-and-build-system">Task 0.1 - Repository Structure and Build System<a class="headerlink" href="#task-01-repository-structure-and-build-system" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Create the full directory structure, <code>pyproject.toml</code> with uv, and empty <code>__init__.py</code> files.</p>
+<p><strong>Read first:</strong> docs/design.md §3 (architecture tree), §3.1 (dependency stack)</p>
+<p><strong>Create:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pyproject.toml              # Project metadata, dependencies, uv config
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>jaxgam/__init__.py          # Public API stubs: gam, predict, summary, plot
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>jaxgam/api.py               # Orchestration stub
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>jaxgam/formula/__init__.py
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>jaxgam/formula/parser.py
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>jaxgam/formula/terms.py
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>jaxgam/formula/design.py
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>jaxgam/smooths/__init__.py
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>jaxgam/smooths/base.py
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>jaxgam/smooths/tprs.py
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>jaxgam/smooths/cubic.py
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>jaxgam/smooths/tensor.py
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>jaxgam/smooths/registry.py
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>jaxgam/families/__init__.py
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>jaxgam/families/base.py
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>jaxgam/families/standard.py
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>jaxgam/families/registry.py
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>jaxgam/links/__init__.py
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>jaxgam/links/links.py
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>jaxgam/penalties/__init__.py
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>jaxgam/penalties/penalty.py
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>jaxgam/fitting/__init__.py
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>jaxgam/fitting/pirls.py
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>jaxgam/fitting/newton.py
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>jaxgam/fitting/reml.py
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>jaxgam/fitting/initialization.py
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>jaxgam/fitting/convergence.py
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>jaxgam/fitting/constraints.py
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>jaxgam/linalg/__init__.py
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>jaxgam/linalg/backend.py
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>jaxgam/linalg/qr.py
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>jaxgam/linalg/cholesky.py
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>jaxgam/linalg/eigen.py
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>jaxgam/autodiff/__init__.py
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>jaxgam/autodiff/jax_ad.py
+<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>jaxgam/predict/__init__.py
+<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>jaxgam/predict/predict.py
+<a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>jaxgam/predict/lpmatrix.py
+<a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>jaxgam/predict/posterior.py
+<a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>jaxgam/summary/__init__.py
+<a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>jaxgam/summary/summary.py
+<a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>jaxgam/summary/diagnostics.py
+<a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>jaxgam/plot/__init__.py
+<a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>jaxgam/plot/plot_gam.py
+<a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>jaxgam/compat/__init__.py
+<a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>jaxgam/compat/r_bridge.py
+<a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a>tests/__init__.py
+<a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a>tests/conftest.py
+<a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>tests/tolerances.py
+<a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a>tests/reference_data/          # directory
+<a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a>scripts/generate_reference_data.R
+<a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>docs/design.md                 # copy of design document
+<a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>docs/R_SOURCE_MAP.md           # R function → Python task mapping
+<a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a>AGENTS.md                      # agent instructions
+<a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a>IMPLEMENTATION_PLAN.md         # this file
+</code></pre></div></p>
+<p><strong>pyproject.toml dependencies (no extras for v1.0):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[project]</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;jaxgam&quot;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;1.0.0a1&quot;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">requires-python</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;&gt;=3.11&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">dependencies</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="s2">&quot;numpy&gt;=1.24&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="s2">&quot;scipy&gt;=1.11&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="s2">&quot;jax&gt;=0.4.20&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="s2">&quot;jaxlib&gt;=0.4.20&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="s2">&quot;formulaic&gt;=1.0&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="s2">&quot;matplotlib&gt;=3.7&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="s2">&quot;pandas&gt;=2.0&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="p">]</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="k">[project.optional-dependencies]</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="n">dev</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;pytest&gt;=7.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;pytest-xdist&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;rpy2&gt;=3.5&quot;</span><span class="p">]</span>
+</code></pre></div></p>
+<p><strong>Acceptance:</strong> <code>uv sync</code> succeeds. <code>python -c "import jaxgam"</code> succeeds (returns stubs). <code>pytest</code> runs (0 tests collected is fine).</p>
+<p><strong>Prerequisites:</strong> None.</p>
+<hr />
+<h3 id="task-02-tolerance-classes-and-test-infrastructure">Task 0.2 - Tolerance Classes and Test Infrastructure<a class="headerlink" href="#task-02-tolerance-classes-and-test-infrastructure" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the three tolerance classes and shared test fixtures.</p>
+<p><strong>Read first:</strong> docs/design.md §18.1 (tolerance classes, hard-gate invariants)</p>
+<p><strong>Create:</strong>
+- <code>tests/tolerances.py</code> - <code>STRICT</code>, <code>MODERATE</code>, <code>LOOSE</code> dataclasses with <code>rtol</code>/<code>atol</code>.
+- <code>tests/conftest.py</code> - shared fixtures: <code>simple_gaussian_data</code>, <code>simple_binomial_data</code>, <code>simple_poisson_data</code>, <code>simple_gamma_data</code> (small synthetic datasets, n=200, known generating process).
+- <code>tests/test_phase_boundary.py</code> - import guard: importing <code>jaxgam.smooths</code>, <code>jaxgam.formula</code>, <code>jaxgam.penalties</code> must NOT trigger a <code>jax</code> import.</p>
+<p><strong>Acceptance:</strong> <code>pytest tests/test_phase_boundary.py</code> passes. Tolerance classes importable. Fixtures generate reproducible data (seeded RNG).</p>
+<p><strong>Prerequisites:</strong> Task 0.1.</p>
+<hr />
+<h3 id="task-03-r-bridge-and-reference-data-generator">Task 0.3 - R Bridge and Reference Data Generator<a class="headerlink" href="#task-03-r-bridge-and-reference-data-generator" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the R bridge for testing, and the R script that generates reference data.</p>
+<p><strong>Read first:</strong> docs/design.md §18.2 (R bridge)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/compat/r_bridge.py</code> - <code>RBridge</code> class with <code>fit_gam()</code> method. Supports rpy2 (preferred) and subprocess fallback. Returns dict with: <code>coefficients</code>, <code>fitted_values</code>, <code>smoothing_params</code>, <code>edf</code>, <code>deviance</code>, <code>scale</code>, <code>Vp</code>, <code>reml_score</code>, <code>basis_matrix</code>, <code>penalty_matrices</code>.
+- <code>scripts/generate_reference_data.R</code> - R script that fits the 32-cell validation surface (3 smooth types × 4 families + tensor + factor-by) and saves results as JSON in <code>tests/reference_data/</code>. Each JSON file contains all the fields from <code>fit_gam()</code> plus the raw basis matrix and penalty matrix entries.
+- <code>tests/reference_data/*.json</code> - generated files.</p>
+<p><strong>Acceptance:</strong> <code>Rscript scripts/generate_reference_data.R</code> succeeds and produces JSON files. <code>RBridge().fit_gam("y ~ s(x)", data, "gaussian")</code> returns results matching the JSON files.</p>
+<p><strong>Prerequisites:</strong> Task 0.1. Requires R + mgcv installed.</p>
+<hr />
+<h2 id="phase-1-foundation-components-setup-cpu-numpy-only_1">Phase 1: Foundation Components (Setup - CPU, NumPy Only)<a class="headerlink" href="#phase-1-foundation-components-setup-cpu-numpy-only_1" title="Permanent link">&para;</a></h2>
+<p>All Phase 1 tasks produce code that uses NumPy/SciPy only. No JAX imports.</p>
+<h3 id="task-11-link-functions">Task 1.1 - Link Functions<a class="headerlink" href="#task-11-link-functions" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement all v1.0 link functions with their inverses and derivatives.</p>
+<p><strong>Read first:</strong> docs/design.md §7</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/links/links.py</code> - <code>Link</code> base class with <code>link(mu)</code>, <code>linkinv(eta)</code>, <code>mu_eta(eta)</code> (derivative of inverse link). Concrete implementations: <code>IdentityLink</code>, <code>LogLink</code>, <code>LogitLink</code>, <code>InverseLink</code>, <code>ProbitLink</code>, <code>CloglogLink</code>, <code>SqrtLink</code>. Class method <code>Link.from_name(name)</code> for registry lookup.</p>
+<p><strong>Tests</strong> (<code>tests/test_links.py</code>):
+- Roundtrip: <code>linkinv(link(mu))</code> == <code>mu</code> at STRICT tolerance for each link, across a range of mu values (including near boundaries: mu near 0 and 1 for logit, mu near 0 for log).
+- Derivative: <code>mu_eta(eta)</code> matches finite differences at STRICT tolerance.
+- R comparison: link values match R's <code>make.link()</code> at STRICT tolerance.</p>
+<p><strong>Acceptance:</strong> All tests pass at STRICT tolerance. No JAX imports.</p>
+<p><strong>Prerequisites:</strong> Task 0.2.</p>
+<hr />
+<h3 id="task-12-family-base-class-and-standard-families">Task 1.2 - Family Base Class and Standard Families<a class="headerlink" href="#task-12-family-base-class-and-standard-families" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the four v1.0 families with closed-form working weights.</p>
+<p><strong>Read first:</strong> docs/design.md §6.1 (base class), §6.2 (standard families)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/families/base.py</code> - <code>ExponentialFamily</code> base class with: <code>family_name</code>, <code>default_link</code>, <code>variance(mu)</code> (V(μ)), <code>deviance_resids(y, mu, wt)</code>, <code>dev_resids(y, mu, wt)</code> (scalar deviance), <code>aic(y, mu, wt, scale)</code>, <code>initialize(y, wt)</code> (starting mu), <code>valid_mu(mu)</code>, <code>valid_eta(eta)</code>.
+- <code>jaxgam/families/standard.py</code> - <code>Gaussian</code>, <code>Binomial</code>, <code>Poisson</code>, <code>Gamma</code>. Each provides V(μ), deviance residuals, valid ranges, default link.
+- <code>jaxgam/families/registry.py</code> - <code>get_family(name_or_instance)</code> returns family object.</p>
+<p><strong>Tests</strong> (<code>tests/test_families.py</code>):
+- V(μ): Gaussian V=1, Binomial V=μ(1-μ), Poisson V=μ, Gamma V=μ².
+- Deviance: matches R's <code>family$dev.resids()</code> at STRICT tolerance on synthetic data.
+- Working weights: <code>1 / (V(mu) * g'(mu)^2)</code> matches R's <code>family$mu.eta()</code> derived weights.
+- Initialization: <code>family.initialize(y, wt)</code> produces valid starting μ for each family.
+- Edge cases: Binomial with y=0, y=1. Poisson with y=0. Gamma with small mu.</p>
+<p><strong>Acceptance:</strong> All deviance residuals match R at STRICT. No JAX imports.</p>
+<p><strong>Prerequisites:</strong> Task 1.1 (families use links).</p>
+<hr />
+<h3 id="task-13-penalty-matrix-base-class">Task 1.3 - Penalty Matrix Base Class<a class="headerlink" href="#task-13-penalty-matrix-base-class" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement penalty matrix construction infrastructure.</p>
+<p><strong>Read first:</strong> docs/design.md §8 (penalties)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/penalties/penalty.py</code> - <code>Penalty</code> class: stores <code>S</code> (penalty matrix, dense NumPy), <code>rank</code>, <code>null_space_dim</code>. <code>CompositePenalty</code> class: stores list of <code>Penalty</code> objects and their smoothing parameters. Method <code>weighted_penalty(log_lambda)</code> returns <code>S_λ = Σ exp(log_λ_j) * S_j</code>. Method <code>embed(S_j, col_start, total_p)</code> embeds a per-smooth penalty into the global penalty space.</p>
+<p><strong>Tests</strong> (<code>tests/test_penalties.py</code>):
+- Penalty matrix is symmetric positive semi-definite (STRICT).
+- <code>weighted_penalty</code> produces correct linear combination.
+- Embedding: embedded penalty has correct block structure and zeros elsewhere.</p>
+<p><strong>Acceptance:</strong> PSD checks pass. Embedding roundtrips correctly. No JAX imports.</p>
+<p><strong>Prerequisites:</strong> Task 0.2.</p>
+<hr />
+<h3 id="task-14-tprs-basis-and-penalty-construction">Task 1.4 - TPRS Basis and Penalty Construction<a class="headerlink" href="#task-14-tprs-basis-and-penalty-construction" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement thin plate regression spline basis construction (the hardest smooth type).</p>
+<p><strong>Read first:</strong> docs/design.md §5.1 (base class), §5.2 (TPRS - full section, carefully)</p>
+<p><strong>R source:</strong> <code>docs/R_SOURCE_MAP.md</code> → Task 1.4. Read <code>R/smooth.r::smooth.construct.tp.smooth.spec()</code> for the R wrapper and <code>src/tprs.c::construct_tprs()</code> for the actual eigendecomposition. The C code is the ground truth.</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/smooths/base.py</code> - <code>SmoothSpec</code> dataclass (variables, k, by, extra_args). <code>Smooth</code> abstract base class with <code>setup(data, k)</code> → <code>(X_s, S, null_space_dim)</code> and metadata. <code>setup()</code> is Phase 1; returns dense NumPy arrays.
+- <code>jaxgam/smooths/tprs.py</code> - <code>TPRSSmooth</code> implementing <code>tp</code> and <code>ts</code> basis types. Key steps:
+  1. Compute TPS semi-kernel η(r) for dimension d and penalty order m.
+  2. Form distance matrix E between knots.
+  3. Eigendecompose to get truncated basis: <code>X_s = U_k @ D_k^{1/2}</code> (first k eigenvectors).
+  4. Construct penalty S from the eigenvalues.
+  5. For <code>ts</code> (shrinkage version): add extra penalty on the null space.
+  6. Handle knot selection: max-min distance algorithm from data, or user-supplied knots.
+- <code>jaxgam/smooths/registry.py</code> - <code>get_smooth_class(bs_type)</code> returns smooth constructor.</p>
+<p><strong>Tests</strong> (<code>tests/test_smooths/test_tprs.py</code>):
+- Basis matrix X matches R's <code>smoothCon(s(x, bs="tp", k=10), data)[[1]]$X</code> at MODERATE tolerance (knot placement may cause small differences - verify knots match first).
+- Penalty matrix S matches R at MODERATE.
+- Null space dimension: d=1 → null_dim=2 (intercept + linear), d=2 → null_dim=3.
+- Eigenvalues of S match R at MODERATE.
+- <code>ts</code> penalty: extra penalty has correct rank (covers null space of <code>tp</code> penalty).
+- k=5, 10, 20, 50 all work. k &gt; n raises informative error.</p>
+<p><strong>Acceptance:</strong> Basis and penalty match R at MODERATE tolerance. Knots match R's selection algorithm. This is the highest-risk task in Phase 1 - budget extra time for debugging eigendecomposition edge cases.</p>
+<p><strong>Prerequisites:</strong> Task 1.3 (penalty base class).</p>
+<hr />
+<h3 id="task-15-cubic-regression-spline-basis-and-penalty">Task 1.5 - Cubic Regression Spline Basis and Penalty<a class="headerlink" href="#task-15-cubic-regression-spline-basis-and-penalty" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement cubic regression splines (cr, cs, cc).</p>
+<p><strong>Read first:</strong> docs/design.md §5.3</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/smooths/cubic.py</code> - <code>CubicSmooth</code> implementing <code>cr</code> (natural cubic), <code>cs</code> (shrinkage), <code>cc</code> (cyclic). Key steps:
+  1. Knot placement: quantile-based from data.
+  2. B-spline basis construction, then absorb natural spline constraints via QR.
+  3. Wiggliness penalty from integrated second derivative.
+  4. For <code>cs</code>: add null space penalty (same pattern as <code>ts</code>).
+  5. For <code>cc</code>: enforce periodicity (first and last basis functions wrap).</p>
+<p><strong>Tests</strong> (<code>tests/test_smooths/test_cubic.py</code>):
+- Basis matrix matches R's <code>smoothCon(s(x, bs="cr", k=10), data)[[1]]$X</code> at MODERATE.
+- Penalty matrix matches R at MODERATE.
+- <code>cc</code> basis is periodic: predict at x=min and x=max produces same value.
+- <code>cs</code> penalty covers null space.</p>
+<p><strong>Acceptance:</strong> Basis and penalty match R at MODERATE for all three variants.</p>
+<p><strong>Prerequisites:</strong> Task 1.3.</p>
+<hr />
+<h3 id="task-16-tensor-product-smooths-te-ti">Task 1.6 - Tensor Product Smooths (te, ti)<a class="headerlink" href="#task-16-tensor-product-smooths-te-ti" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement tensor product smooth construction from marginal bases.</p>
+<p><strong>Read first:</strong> docs/design.md §5.5</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/smooths/tensor.py</code> - <code>TensorSmooth</code> implementing <code>te</code> and <code>ti</code>. Key steps:
+  1. Construct marginal bases from existing smooth classes (TPRS or cubic).
+  2. Row-wise Kronecker product of marginal bases to form tensor basis.
+  3. Penalty: sum of Kronecker products of marginal penalties (one penalty per marginal).
+  4. For <code>ti</code>: tensor product interaction - remove marginal main effects, keeping only the interaction surface. Implemented via constraint matrix.</p>
+<p><strong>Tests</strong> (<code>tests/test_smooths/test_tensor.py</code>):
+- <code>te(x1, x2)</code> basis matches R at MODERATE.
+- Penalty structure: number of penalty matrices equals number of marginals.
+- <code>ti(x1, x2)</code> basis spans only the interaction (null space of marginals removed).
+- Basis dimension: <code>te</code> with k1=5, k2=5 produces 25 columns. <code>ti</code> produces fewer.</p>
+<p><strong>Acceptance:</strong> Basis and penalty match R at MODERATE. Kronecker structure verified.</p>
+<p><strong>Prerequisites:</strong> Task 1.4, Task 1.5 (marginal bases needed for tensor products).</p>
+<hr />
+<h3 id="task-17-formula-parser-ast-based">Task 1.7 - Formula Parser (AST-Based)<a class="headerlink" href="#task-17-formula-parser-ast-based" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Parse R-style formula strings into structured term specifications.</p>
+<p><strong>Read first:</strong> docs/design.md §13.1</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/formula/parser.py</code> - <code>parse_formula(formula_str)</code> returns <code>FormulaSpec</code> with <code>response</code> (str), <code>smooth_terms</code> (list of <code>SmoothSpec</code>), <code>parametric_terms</code> (list of str). Uses Python <code>ast</code> module to walk the expression tree. Must handle:
+  - <code>y ~ s(x1) + s(x2)</code> - basic smooth terms
+  - <code>y ~ s(x1, k=20) + s(x2, bs="cr")</code> - kwargs
+  - <code>y ~ s(x1, by=fac)</code> - factor-by variable
+  - <code>y ~ s(x1) + x2 + x3</code> - parametric terms mixed with smooth
+  - <code>y ~ te(x1, x2)</code> - tensor products
+  - <code>y ~ s(x1, k=int(np.log(n)))</code> - not supported, raise clear error
+  - <code>y ~ s(x1) + s(x2) + ti(x1, x2)</code> - smooth + interaction
+- <code>jaxgam/formula/terms.py</code> - <code>SmoothSpec</code> dataclass (from Task 1.4 base), <code>ParametricTerm</code>, <code>FormulaSpec</code>.</p>
+<p><strong>Tests</strong> (<code>tests/test_formula/test_parser.py</code>):
+- Parses all example formulas above correctly.
+- Rejects malformed formulas with informative error messages.
+- <code>s(x, by=fac)</code> correctly identifies <code>by</code> variable.
+- <code>te(x1, x2)</code> produces a tensor spec with two variables.
+- Parametric terms extracted correctly.</p>
+<p><strong>Acceptance:</strong> All parse tests pass. Parser handles the v1.0 formula surface without regex.</p>
+<p><strong>Prerequisites:</strong> Task 0.1 (term dataclasses).</p>
+<hr />
+<h3 id="task-18-factor-by-smooth-expansion">Task 1.8 - Factor-By Smooth Expansion<a class="headerlink" href="#task-18-factor-by-smooth-expansion" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the FactorBySmooth mechanism for <code>s(x, by=fac)</code>.</p>
+<p><strong>Read first:</strong> docs/design.md §5.7 (full section - §5.7.1 through §5.7.5)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/smooths/by_variable.py</code> - <code>resolve_by_variable(smooth_spec, data)</code> detects factor vs numeric by-variable. Factor detection uses pandas dtype (Categorical, object, string). <code>FactorBySmooth</code> class: takes a base smooth and a factor variable, produces block-diagonal basis matrix (one block per level) and one penalty matrix per level. <code>NumericBySmooth</code> class: pointwise multiplication of basis by numeric variable.
+- Update <code>jaxgam/formula/parser.py</code> - <code>resolve_by_variable()</code> integrated into formula resolution.</p>
+<p><strong>Tests</strong> (<code>tests/test_smooths/test_by_variable.py</code>):
+- Factor-by with 3 levels: basis is block-diagonal with 3 blocks. Total columns = 3 × k.
+- One penalty per level, each embedded in global space.
+- Numeric-by: basis columns multiplied elementwise by the numeric variable.
+- Factor detection: pandas Categorical → factor. Integer column → NOT promoted to factor (error or numeric).
+- R comparison: <code>s(x, by=fac)</code> basis matches R at MODERATE.</p>
+<p><strong>Acceptance:</strong> Block-diagonal structure matches R. Penalty count matches number of levels.</p>
+<p><strong>Prerequisites:</strong> Task 1.4 or 1.5 (base smooth to wrap), Task 1.7 (parser identifies by-variable).</p>
+<hr />
+<h3 id="task-19-identifiability-constraints-and-coefficientmap">Task 1.9 - Identifiability Constraints and CoefficientMap<a class="headerlink" href="#task-19-identifiability-constraints-and-coefficientmap" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement sum-to-zero constraints and the CoefficientMap that maps between constrained and unconstrained coefficient spaces.</p>
+<p><strong>Read first:</strong> docs/design.md §5.10 (CoefficientMap), §5.7.3 (factor-by identifiability)</p>
+<p><strong>R source:</strong> <code>docs/R_SOURCE_MAP.md</code> → Task 1.9. Read <code>R/gam.r::gam.side()</code> carefully - constraint detection order matters for matching R output.</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/smooths/constraints.py</code> - <code>CoefficientMap</code> frozen dataclass with all constraint pipeline methods as static/class methods: <code>apply_sum_to_zero()</code>, <code>apply_sum_to_zero_factor_by()</code>, <code>fix_dependence()</code>, <code>gam_side()</code> (static methods), and <code>build()</code> (classmethod factory). Instance methods: <code>constrained_to_full(beta_c)</code> → <code>beta</code>, <code>full_to_constrained(beta)</code> → <code>beta_c</code>, <code>transform_X(X)</code> → <code>X_c</code>, <code>transform_S(S_j)</code> → <code>S_c_j</code>. <code>TermBlock</code> frozen dataclass records per-term constraint info.
+- Handle §5.7.3: when <code>s(x, by=fac)</code> coexists with <code>s(x)</code>, absorb null space per level.</p>
+<p><strong>Tests</strong> (<code>tests/test_constraints.py</code>):
+- Roundtrip: <code>constrained_to_full(full_to_constrained(beta))</code> recovers original (up to null space).
+- Prediction roundtrip: <code>X_c @ beta_c</code> == <code>X @ beta</code> at STRICT.
+- With constraint: <code>X_c</code> has one fewer column than <code>X</code> per constrained smooth.
+- Penalty transform: <code>S_c</code> is still PSD.
+- Factor-by + main effect: correct constraint absorption.</p>
+<p><strong>Acceptance:</strong> Roundtrip tests pass at STRICT. Constraint structure matches R's <code>gam_side</code> behavior.</p>
+<p><strong>Prerequisites:</strong> Task 1.4 or 1.5 (smooth basis to constrain).</p>
+<hr />
+<h3 id="task-110-design-matrix-assembly">Task 1.10 - Design Matrix Assembly<a class="headerlink" href="#task-110-design-matrix-assembly" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Assemble the full model matrix from formula spec + data, applying constraints.</p>
+<p><strong>Read first:</strong> docs/design.md §13.2</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/formula/design.py</code> - <code>build_model_matrix(formula_spec, data)</code> returns <code>ModelSetup</code> containing:
+  - <code>X</code> - full model matrix (dense NumPy), columns = intercept + parametric + all smooth blocks.
+  - <code>penalties</code> - <code>CompositePenalty</code> with all penalty matrices embedded in global space.
+  - <code>coef_map</code> - <code>CoefficientMap</code> for prediction.
+  - <code>smooth_info</code> - per-smooth metadata (column ranges, EDF will go here later).
+  - <code>term_names</code> - human-readable names for summary output.
+  Uses <code>formulaic</code> for parametric terms. Constructs smooth bases via registry. Applies constraints. Handles factor-by expansion.</p>
+<p><strong>Tests</strong> (<code>tests/test_formula/test_design.py</code>):
+- <code>y ~ s(x1) + s(x2)</code>: X has intercept + two smooth blocks. Column count = 1 + k1 + k2 - 2 (two sum-to-zero constraints).
+- <code>y ~ s(x1) + x2</code>: parametric column present alongside smooth.
+- <code>y ~ s(x1, by=fac)</code>: block-diagonal structure.
+- <code>y ~ s(x1) + te(x1, x2)</code>: tensor product alongside marginal.
+- Penalty embedding: each penalty matrix is (total_p × total_p) with nonzeros only in its smooth's column range.
+- Full model matrix matches R's <code>model.matrix(gam(...))</code> at MODERATE tolerance.</p>
+<p><strong>Acceptance:</strong> Model matrix structure and values match R. Penalties correctly embedded.</p>
+<p><strong>Prerequisites:</strong> Task 1.4, 1.5, 1.6 (smooth types), Task 1.7 (parser), Task 1.8 (factor-by), Task 1.9 (constraints).</p>
+<hr />
+<h2 id="phase-2-fitting-engine-jax-jit-compiled_1">Phase 2: Fitting Engine (JAX, JIT-compiled)<a class="headerlink" href="#phase-2-fitting-engine-jax-jit-compiled_1" title="Permanent link">&para;</a></h2>
+<p>All Phase 2 tasks produce JIT-compatible JAX code.</p>
+<h3 id="task-21-jax-linear-algebra-primitives">Task 2.1 - JAX Linear Algebra Primitives<a class="headerlink" href="#task-21-jax-linear-algebra-primitives" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the core linear algebra operations needed by PIRLS and REML.</p>
+<p><strong>Read first:</strong> docs/design.md §4.2 (PIRLS numerics), §4.8 (jitter)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/linalg/backend.py</code> - Backend-aware wrappers. For v1.0, just JAX. <code>cho_factor(H)</code>, <code>cho_solve(factor, b)</code>, <code>slogdet(H)</code>.
+- <code>jaxgam/linalg/cholesky.py</code> - <code>penalized_cholesky(XtWX, S_lambda)</code> computes Cholesky of <code>H = XtWX + S_λ</code>. Handles positive semi-definite case (jitter when needed). Jitter strategy from §4.8: <code>epsilon = max(eps_machine * trace(H) / p, 1e-10)</code>. Returns <code>(L, jitter_applied)</code>.
+- <code>jaxgam/linalg/qr.py</code> - Pivoted QR for null space detection. Not needed for PIRLS itself, but used in constraint absorption and rank detection.</p>
+<p><strong>Tests</strong> (<code>tests/test_linalg.py</code>):
+- Cholesky of known PD matrix: <code>L @ L.T == H</code> at STRICT.
+- Jitter triggers correctly on near-singular H.
+- All functions JIT-compile without error.
+- Roundtrip: <code>cho_solve(cho_factor(H), b)</code> == <code>H^{-1} b</code> at STRICT for well-conditioned H.</p>
+<p><strong>Acceptance:</strong> All operations JIT-compile. Results match scipy.linalg equivalents at STRICT.</p>
+<p><strong>Prerequisites:</strong> Task 0.2.</p>
+<hr />
+<h3 id="task-22-jax-ad-wrappers-removed">Task 2.2 - ~~JAX AD Wrappers~~ Removed<a class="headerlink" href="#task-22-jax-ad-wrappers-removed" title="Permanent link">&para;</a></h3>
+<p><strong>Status:</strong> Removed in design.md v1.19.</p>
+<p><strong>Rationale:</strong> The original <code>autodiff/interface.py</code> module (<code>grad</code>, <code>hessian</code>, <code>hvp</code>, <code>value_and_grad</code>) consisted entirely of trivial one-line delegations to <code>jax.grad</code>, <code>jax.hessian</code>, <code>jax.jvp</code>. The multi-backend abstraction they originally served was removed in v1.18. Callers use JAX directly. The HVP pattern (forward-over-reverse) is a two-line composition inlined at point of use in REML. <code>per_obs_ll_derivatives</code> is deferred to v1.1+ with extended families.</p>
+<p><strong>No implementation, tests, or module needed.</strong></p>
+<hr />
+<h3 id="task-23-pirls-inner-loop">Task 2.3 - PIRLS Inner Loop<a class="headerlink" href="#task-23-pirls-inner-loop" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the penalized iteratively reweighted least squares inner loop.</p>
+<p><strong>Read first:</strong> docs/design.md §4.1, §4.2, §4.5 (step-halving)</p>
+<p><strong>R source:</strong> <code>docs/R_SOURCE_MAP.md</code> → Task 2.3. Read <code>R/gam.fit.r::gam.fit3()</code> - the PIRLS loop is ~500 lines. Search for <code>step.half</code> for the halving logic. The convergence criterion is <code>abs(old.dev - dev) / (0.1 + abs(dev)) &lt; control$epsilon</code>.</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/fitting/pirls.py</code> - <code>pirls_step(X, y, beta, S_lambda, family, link)</code> performs one PIRLS iteration:
+  1. <code>eta = X @ beta</code>
+  2. <code>mu = link.linkinv(eta)</code>
+  3. <code>W = diag(wt / (V(mu) * g'(mu)^2))</code> (working weights from family)
+  4. <code>z = eta + (y - mu) / g'(mu)</code> (working response)
+  5. <code>H = X.T @ diag(W) @ X + S_lambda</code>
+  6. <code>beta_new = cho_solve(cho_factor(H), X.T @ diag(W) @ z)</code>
+  7. Compute penalized deviance.
+  Return <code>(beta_new, mu_new, eta_new, dev, H)</code>.</p>
+<ul>
+<li>
+<p><code>pirls_loop(X, y, beta_init, S_lambda, family, link, max_iter=200, tol=1e-7)</code> - full PIRLS loop using <code>jax.lax.while_loop</code>. Includes step-halving: if penalized deviance increases, halve the step <code>beta = beta_old + 0.5 * (beta_new - beta_old)</code> up to <code>max_half=15</code> times. Convergence: <code>|dev_old - dev_new| / (0.1 + |dev_new|) &lt; tol</code>.</p>
+</li>
+<li>
+<p><code>jaxgam/fitting/initialization.py</code> - <code>initialize_beta(X, y, family, link)</code> computes starting values. For Gaussian: OLS. For others: <code>eta_init = link(family.initialize(y, wt))</code>, then <code>beta_init = lstsq(X, eta_init)</code>.</p>
+</li>
+</ul>
+<p><strong>Tests</strong> (<code>tests/test_fitting/test_pirls.py</code>):
+- Gaussian: converges in 1 iteration (PIRLS is exact for Gaussian).
+- Binomial (logistic regression): converges in &lt;25 iterations on a well-separated dataset.
+- Poisson: converges on count data.
+- Gamma: converges on positive continuous data.
+- Step-halving: on a deliberately difficult Binomial dataset (near-separation), PIRLS converges where it would diverge without step-halving.
+- JIT compilation: <code>pirls_loop</code> compiles and runs under <code>jax.jit</code>.
+- Hard-gate: penalized deviance is monotonically non-increasing (within STRICT tolerance) at every accepted step.</p>
+<p><strong>Acceptance:</strong> Converges for all four families. Step-halving works. JIT-compiles. Monotonicity invariant holds.</p>
+<p><strong>Important - Link/Family backend dispatch:</strong> Link functions (Task 1.1) and family methods (Task 1.2) are implemented in NumPy for Phase 1. PIRLS calls them inside <code>jax.lax.while_loop</code>, which requires JAX-traceable operations. Before implementing PIRLS, make link and family classes backend-agnostic: detect array type at call time and dispatch to <code>numpy</code> or <code>jax.numpy</code> accordingly. The import guard only prohibits JAX imports at <em>module load</em> time, not at runtime. This also enables <code>jax.grad</code> to differentiate through link/family calls in Task 2.4 (REML).</p>
+<p><strong>Prerequisites:</strong> Task 1.2 (families), Task 1.1 (links), Task 2.1 (linalg).</p>
+<hr />
+<h3 id="task-23b-fittingdata-phase-12-boundary-contract">Task 2.3b - FittingData Phase 1→2 Boundary Contract<a class="headerlink" href="#task-23b-fittingdata-phase-12-boundary-contract" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the <code>FittingData</code> container that formalizes the Phase 1→2 boundary between <code>ModelSetup</code> (NumPy) and PIRLS/REML (JAX).</p>
+<p><strong>Read first:</strong> docs/design.md §1.3 (phase boundaries), §4.4 (what REML needs)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/fitting/data.py</code> - <code>FittingData</code> frozen dataclass with:
+  - <code>from_setup(setup, family, device)</code> factory: transfers X, y, weights, offset, per-penalty S matrices to JAX device; extracts penalty metadata (ranks, null space dims).
+  - <code>S_lambda(log_lambda)</code> method: computes <code>Σ exp(log_λ_j) * S_j</code>, pure JAX, differentiable via <code>jax.grad</code> for REML.
+  - <code>n_penalties</code> property.
+  - Handles purely parametric models (empty S_list, zero-dim log_lambda_init).</p>
+<p><strong>Tests</strong> (<code>tests/test_fitting/test_fitting_data.py</code>, 21 tests):
+- Array transfer: shapes, values (STRICT), JAX type checks.
+- Offset handling (present and None).
+- Purely parametric models (no penalties → empty tuples).
+- Penalty metadata cross-checked against Penalty objects.
+- Tensor product multi-penalty support.
+- <code>S_lambda</code> correctness (single/multi penalty, manual computation match at STRICT).
+- <code>jax.grad</code> traceability with gradient verification.
+- End-to-end: ModelSetup → FittingData → pirls_loop convergence (Gaussian, Poisson).
+- Device placement verification.</p>
+<p><strong>Acceptance:</strong> All 21 tests pass. <code>make lint</code> clean. No regressions in existing tests.</p>
+<p><strong>Prerequisites:</strong> Task 1.10 (ModelSetup), Task 2.3 (PIRLS).</p>
+<hr />
+<h3 id="task-24-reml-and-ml-criteria">Task 2.4 - REML and ML Criteria<a class="headerlink" href="#task-24-reml-and-ml-criteria" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the REML and ML smoothness selection criteria as differentiable JAX functions.</p>
+<p><strong>Read first:</strong> docs/design.md §4.3, §4.4</p>
+<p><strong>R source:</strong> <code>docs/R_SOURCE_MAP.md</code> → Task 2.4. Read <code>R/fast-REML.r::fast.REML.fit()</code> for criterion computation and <code>src/gdi.c::gdi()</code> for the analytical REML derivatives (helps validate our <code>jax.grad</code> output).</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/fitting/reml.py</code>  - 
+  - <code>reml_criterion(log_lambda, X, y, family, link, penalties, wt)</code> → scalar REML score. This is the outer objective: calls <code>pirls_loop</code> to get β<em>(λ), then computes <code>V(λ) = deviance(β*) + log|H*| - log|S_λ| + const</code>. Must be a pure JAX function so <code>jax.grad</code> works through it.
+  - <code>ml_criterion(log_lambda, ...)</code> → ML score (similar, different penalty on log determinant).
+  - The key subtlety: β</em>(λ) is the result of PIRLS, which is an iterative procedure. For gradient computation, we differentiate through the converged solution using the implicit function theorem (the gradient of β* w.r.t. λ is available from the PIRLS stationarity condition). See §4.4 for details.</p>
+<p><strong>Tests</strong> (<code>tests/test_fitting/test_reml.py</code>):
+- REML score matches R's <code>gam(...)$gcv.ubre</code> (which is actually the REML score when method="REML") at MODERATE.
+- <code>jax.grad(reml_criterion)</code> produces finite gradients (no NaN).
+- ML score differs from REML score (they're not the same criterion).
+- At the optimum, gradient is near zero (MODERATE tolerance).</p>
+<p><strong>Acceptance:</strong> REML/ML scores match R at MODERATE. Differentiable via <code>jax.grad</code>.</p>
+<p><strong>Prerequisites:</strong> Task 2.3 (PIRLS).</p>
+<hr />
+<h3 id="task-25-newton-outer-optimizer">Task 2.5 - Newton Outer Optimizer ✅<a class="headerlink" href="#task-25-newton-outer-optimizer" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement the Newton iteration for smoothing parameter estimation.</p>
+<p><strong>Read first:</strong> docs/design.md §4.3 (outer iteration), §4.5 (convergence). R source: <code>fast.REML.fit()</code> in <code>R/fast-REML.r</code> lines 1740-1875.</p>
+<p><strong>Created:</strong>
+- <code>jaxgam/fitting/newton.py</code> - <code>NewtonOptimizer</code> class and <code>newton_optimize()</code> convenience function:
+  - <code>NewtonResult</code> frozen dataclass: log_lambda, smoothing_params, converged, n_iter, score, gradient, edf, scale, pirls_result, convergence_info.
+  - <code>_safe_newton_step()</code> (JIT-compiled): eigenvalue-safe Newton direction with negative eigenvalue flip, small eigenvalue floor (<code>max(|D|) * sqrt(eps)</code>), and step norm capping to <code>max_step=5.0</code>.
+  - <code>NewtonOptimizer</code> class with methods: <code>_initial_beta()</code>, <code>_make_criterion()</code>, <code>_fit_and_score()</code>, <code>_step_halve()</code> (up to 25 halvings with stuck detection), <code>_check_convergence()</code>, <code>_build_result()</code>, <code>run()</code>.
+  - Purely parametric shortcut: if <code>n_penalties == 0</code>, PIRLS once, return immediately.
+  - Python-level loop (not <code>jax.lax.while_loop</code>) since each iteration involves PIRLS re-convergence.
+  - Convergence: <code>max(|grad|) &lt; reml_scale * tol</code> and <code>|score_new - score_old| &lt; reml_scale * tol</code>, where <code>reml_scale = |score| + deviance/n_obs</code>.
+  - Three outcome states: "full convergence", "step failed", "iteration limit".</p>
+<p><strong>Tests</strong> (<code>tests/test_fitting/test_newton.py</code>, 70 tests):
+- <strong>TestSafeNewtonStep</strong> (5): quadratic 1-step, negative eigenvalue flip, norm capping, near-singular Hessian, eigenvalue floor dominance.
+- <strong>TestInvariants</strong> (4×4=16): hard-gate invariants across all 4 families - deviance ≥ 0, all-finite, EDF bounds, H symmetric PSD.
+- <strong>TestFamilyVsR</strong> (4×8=32): parametrized R comparison across Gaussian/Poisson/Binomial/Gamma - convergence, deviance, coefficients, fitted values, scale, REML score, smoothing params, EDF. Gaussian at MODERATE, GLM families at LOOSE.
+- <strong>TestMultiSmooth</strong> (2): two-smooth Gaussian with full R comparison (deviance, coefficients, fitted values, smoothing params); TPRS basis end-to-end.
+- <strong>TestMLOptimization</strong> (4): ML convergence, ML deviance vs R (LOOSE), ML GLM convergence (Poisson, Binomial), ML differs from REML.
+- <strong>TestDiagnostics</strong> (8): result fields/types, purely parametric, offset support, REML monotonicity (Gaussian/Binomial/Gamma), convergence info strings, invalid method, iteration limit.
+- <strong>TestStepHalving</strong> (1): adversarial start forces step-halving, still converges.</p>
+<p><strong>Tolerance notes:</strong>
+- MODERATE (rtol=1e-4, atol=1e-6) for Gaussian REML - single PIRLS iteration, no compounding.
+- LOOSE (rtol=1e-2, atol=1e-4) for GLM families - iterative PIRLS + Newton differences compound.
+- ML criterion differs from R by a normalization constant, so only deviance compared (at LOOSE).
+- Smoothing params and EDF use wider atol (0.02) due to flat lambda landscape near optimum.</p>
+<p><strong>Acceptance:</strong> 70 tests pass. 818 total suite. All four families converge. REML matches R. Hard-gate invariants hold.</p>
+<p><strong>Prerequisites:</strong> Task 2.4 (REML criterion).</p>
+<hr />
+<h3 id="task-26-full-gam-fitting-orchestration">Task 2.6 - Full GAM Fitting Orchestration<a class="headerlink" href="#task-26-full-gam-fitting-orchestration" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Wire everything together into the <code>gam()</code> function.</p>
+<p><strong>Read first:</strong> docs/design.md §1.3 (architecture diagram - data flow)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/api.py</code> - <code>gam(formula, data, family="gaussian", method="REML", **kwargs)</code>:
+  1. Parse formula (Phase 1).
+  2. Build model matrix, penalties, CoefficientMap (Phase 1).
+  3. Initialize β (Phase 1).
+  4. Transfer to JAX: <code>jax.device_put(X)</code>, <code>jax.device_put(S_lambda)</code> (Phase 1→2 boundary).
+  5. Run <code>newton_optimize(reml_criterion, ...)</code> (Phase 2).
+  6. Extract results: <code>np.asarray(beta)</code>, <code>np.asarray(Vp)</code> (Phase 2→3 boundary).
+  7. Construct and return <code>GAMResult</code>.</p>
+<ul>
+<li><code>jaxgam/api.py</code> - <code>GAMResult</code> dataclass:</li>
+<li><code>coefficients</code>, <code>fitted_values</code>, <code>linear_predictor</code></li>
+<li><code>smoothing_params</code>, <code>edf</code> (per smooth)</li>
+<li><code>deviance</code>, <code>null_deviance</code>, <code>scale</code></li>
+<li><code>Vp</code> (Bayesian covariance matrix)</li>
+<li><code>converged</code>, <code>n_iter</code></li>
+<li><code>coef_map</code> (CoefficientMap for prediction)</li>
+<li><code>smooth_info</code> (per-smooth metadata)</li>
+<li><code>formula</code>, <code>family</code>, <code>method</code></li>
+<li>
+<p><code>execution_path_reason</code>, <code>lambda_strategy_reason</code> (routing diagnostics)</p>
+</li>
+<li>
+<p><code>jaxgam/__init__.py</code> - export <code>gam</code>, <code>GAMResult</code>.</p>
+</li>
+</ul>
+<p><strong>Tests</strong> (<code>tests/test_api/test_gam.py</code>):
+- End-to-end: <code>gam("y ~ s(x)", data, "gaussian")</code> returns a <code>GAMResult</code> with reasonable values.
+- All four families: Gaussian, Binomial, Poisson, Gamma.
+- Multi-smooth: <code>y ~ s(x1) + s(x2)</code>.
+- Factor-by: <code>y ~ s(x, by=fac)</code>.
+- Tensor: <code>y ~ te(x1, x2)</code>.
+- Results match R at LOOSE (coefficients) and MODERATE (deviance).</p>
+<p><strong>Acceptance:</strong> <code>gam()</code> works end-to-end for all 32 validation cells. Results match R.</p>
+<p><strong>Prerequisites:</strong> Task 1.10 (design matrix), Task 2.5 (Newton optimizer).</p>
+<hr />
+<h2 id="phase-3-post-estimation-cpu-numpy_1">Phase 3: Post-Estimation (CPU, NumPy)<a class="headerlink" href="#phase-3-post-estimation-cpu-numpy_1" title="Permanent link">&para;</a></h2>
+<h3 id="task-31-prediction">Task 3.1 - Prediction ✅<a class="headerlink" href="#task-31-prediction" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement <code>predict()</code> and <code>predict_matrix()</code> as methods on the GAM class.</p>
+<p><strong>Implementation:</strong> Prediction is implemented as OOP methods on the GAM class (not standalone functions), since the model object has all state needed for prediction.</p>
+<p><strong>Created:</strong>
+- <code>jaxgam/api.py</code> - Added to GAM class:
+  - <code>predict(newdata=None, type="response", se_fit=False, offset=None)</code> - Full prediction method. Self-prediction (<code>newdata=None</code>) uses stored <code>linear_predictor_</code>/<code>fitted_values_</code>. New data builds prediction matrix via <code>_build_predict_matrix()</code>. Supports <code>type="response"</code> (applies <code>linkinv</code>) and <code>type="link"</code>. SE via <code>sqrt(rowSums((X_p @ Vp) * X_p))</code>.
+  - <code>predict_matrix(newdata)</code> - Returns constrained prediction matrix <code>X_p</code> (equivalent to R's <code>predict.gam(type="lpmatrix")</code>).
+  - <code>_build_predict_matrix(newdata)</code> - Private helper: builds parametric columns, calls each <code>term.smooth.predict_matrix(data_dict)</code>, applies <code>coef_map_.transform_X()</code> for constraints, column-stacks all blocks.
+  - Stored at fit time: <code>formula_spec_</code> (parsed FormulaSpec), <code>_factor_info_</code> (training-time factor levels for consistent dummy encoding at predict time).
+- <code>jaxgam/api.py</code> - Module-level helpers: <code>_extract_factor_info()</code>, <code>_build_parametric_predict()</code>.
+- <code>jaxgam/compat/r_bridge.py</code> - <code>RBridge.predict_gam()</code> method (rpy2 only): fits model in R, calls <code>predict(model, newdata, type, se.fit)</code>, returns dict with <code>predictions</code> and optional <code>se</code>.</p>
+<p><strong>Tests</strong> (<code>tests/test_predict/test_predict.py</code>, 45 tests):
+- <strong>TestSelfPrediction</strong> (20): predict response/link matches fitted_values_/linear_predictor_ at STRICT for all 4 families; predict_matrix @ coefs matches eta; predict_matrix shape/values match stored X_.
+- <strong>TestNewDataVsR</strong> (8): response and link predictions vs R for all 4 families (MODERATE for Gaussian, LOOSE for GLM).
+- <strong>TestSEVsR</strong> (4): SE computation vs R's <code>predict.gam(se.fit=TRUE)</code>.
+- <strong>TestMultiSmoothPrediction</strong> (4): self-prediction for two-smooth, tensor, factor-by.
+- <strong>TestMultiSmoothVsR</strong> (3): new-data vs R. Two-smooth passes at MODERATE. Tensor product and factor-by xfailed due to fit-level smoothing parameter discrepancies (not prediction bugs - self-prediction roundtrip passes at STRICT).
+- <strong>TestEdgeCases</strong> (6): parametric-only, offset, newdata offset, se_fit tuple, invalid type, unfitted raises.</p>
+<p><strong>xfails (2):</strong> Tensor product and factor-by new-data vs R fail because fit-level smoothing parameters diverge from R by orders of magnitude. This is a pre-existing fitting issue (test_gam.py only checks deviance for these smooth types, not coefficients). Self-prediction roundtrip at STRICT confirms prediction logic is correct.</p>
+<p><strong>Acceptance:</strong> 943 tests pass, 2 xfailed. Self-prediction matches fitted values at STRICT. R comparison at MODERATE/LOOSE for new-data predictions.</p>
+<p><strong>Prerequisites:</strong> Task 2.6 (fitted model to predict from).</p>
+<hr />
+<h3 id="task-32-summary-and-edf">Task 3.2 - Summary and EDF ✅<a class="headerlink" href="#task-32-summary-and-edf" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement <code>summary()</code> with effective degrees of freedom, p-values, and smooth significance tests.</p>
+<p><strong>Read first:</strong> docs/design.md §15 (if present), §18.1 (tolerance for EDF and p-values)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/summary/summary.py</code> - <code>summary(model)</code> prints and returns:
+  - Parametric coefficients table (estimate, SE, z/t value, p-value).
+  - Smooth terms table (EDF, Ref.df, F/Chi.sq, p-value).
+  - R-sq (adjusted), deviance explained, scale estimate.
+  - Routing diagnostics (execution_path_reason, lambda_strategy_reason).</p>
+<ul>
+<li>
+<p>EDF computation: <code>edf_j = trace(F_j)</code> where <code>F</code> is the hat-like matrix <code>F = X (XtWX + S_λ)^{-1} XtW</code>. Per-smooth EDF is the trace of the relevant block.</p>
+</li>
+<li>
+<p>P-values: Wood's (2013) test statistic for smooth terms. This is approximate - use LOOSE tolerance for R comparison.</p>
+</li>
+</ul>
+<p><strong>Tests</strong> (<code>tests/test_summary.py</code>):
+- EDF matches R's <code>summary(gam(...))$s.table[, "edf"]</code> at LOOSE (1e-2).
+- Parametric p-values match R at MODERATE.
+- R-squared and deviance explained match R at MODERATE.
+- Summary string output is human-readable and includes routing diagnostics.</p>
+<p><strong>Acceptance:</strong> EDF and p-values match R at LOOSE. Summary prints cleanly.</p>
+<p><strong>Prerequisites:</strong> Task 2.6 (fitted model).</p>
+<hr />
+<h3 id="task-33-plotting">Task 3.3 - Plotting ✅<a class="headerlink" href="#task-33-plotting" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Implement basic smooth effect plots.</p>
+<p><strong>Read first:</strong> docs/design.md (plot section, if present)</p>
+<p><strong>Create:</strong>
+- <code>jaxgam/plot/plot_gam.py</code> - <code>plot(model, select=None, pages=0, rug=True, se=True, shade=True)</code>:
+  - One panel per smooth term.
+  - For 1D smooths: line plot of smooth effect ± 2*SE, with rug plot of data.
+  - For 2D smooths (tensor products): contour plot or perspective plot.
+  - For factor-by smooths: one curve per level, overlaid or faceted.
+  - Uses matplotlib. Returns figure and axes for customization.</p>
+<p><strong>Tests</strong> (<code>tests/test_plot.py</code>):
+- Smoke test: <code>plot(model)</code> produces a matplotlib figure without error for each smooth type.
+- Correct number of panels.
+- SE bands are symmetric around the smooth effect.
+- 2D plots render for tensor products.</p>
+<p><strong>Acceptance:</strong> Plots render for all smooth types. Visual inspection shows reasonable smooth curves.</p>
+<p><strong>Prerequisites:</strong> Task 3.1 (prediction used internally for generating plot data).</p>
+<hr />
+<h2 id="phase-4-integration-testing-and-hardening_1">Phase 4: Integration Testing and Hardening<a class="headerlink" href="#phase-4-integration-testing-and-hardening_1" title="Permanent link">&para;</a></h2>
+<h3 id="task-41-32-cell-validation-matrix">Task 4.1 - 32-Cell Validation Matrix<a class="headerlink" href="#task-41-32-cell-validation-matrix" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Systematically validate all 32 cells of the v1.0 surface against R.</p>
+<p><strong>Read first:</strong> docs/design.md §1.2 (validation surface), §18.1 (tolerance assignments)</p>
+<p><strong>Create:</strong>
+- <code>tests/test_validation_matrix.py</code> - Parametrized test that runs all 32 combinations:
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>@pytest.mark.parametrize(&quot;smooth&quot;, [&quot;tp&quot;, &quot;cr&quot;, &quot;te&quot;, &quot;ti&quot;, &quot;tp_by&quot;, &quot;cr_by&quot;, &quot;te_by&quot;])
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>@pytest.mark.parametrize(&quot;family&quot;, [&quot;gaussian&quot;, &quot;binomial&quot;, &quot;poisson&quot;, &quot;gamma&quot;])
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>def test_vs_r(smooth, family):
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    ...
+</code></pre></div>
+  For each cell: fit in Python, load R reference data, compare coefficients (LOOSE), deviance (MODERATE), EDF (LOOSE), predictions (MODERATE).</p>
+<ul>
+<li><code>tests/test_hard_gates.py</code> - Run all 9 hard-gate invariants (§18.1) on every fitted model: objective monotonicity, H symmetry/PSD, penalty PSD, rank conditions, EDF bounds, deviance non-negativity, no NaN, cross-path agreement (skip for v1.0 - single path).</li>
+</ul>
+<p><strong>Acceptance:</strong> All 32 cells pass at specified tolerances. All hard-gate invariants hold.</p>
+<p><strong>Prerequisites:</strong> Task 2.6 (gam), Task 3.1 (predict), Task 3.2 (summary), Task 0.3 (reference data).</p>
+<hr />
+<h3 id="task-43-edge-cases-and-robustness">Task 4.3 - Edge Cases and Robustness<a class="headerlink" href="#task-43-edge-cases-and-robustness" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Test failure modes, edge cases, and error messages.</p>
+<p><strong>Create:</strong>
+- <code>tests/test_edge_cases.py</code>:
+  - Near-separation in Binomial: model converges (step-halving saves it) or fails gracefully.
+  - All-zero response in Poisson: informative error, not NaN.
+  - k &gt; n: informative error.
+  - Single-observation data: informative error.
+  - Constant covariate: rank detection catches it, informative error.
+  - Missing values in data: informative error (not silent NaN propagation).
+  - Factor-by with only 1 level: works, equivalent to no factor-by.
+  - Factor-by with empty level (no observations): informative error referencing §5.7.
+  - Very large k (k=500): works but slow. No OOM on reasonable hardware.
+  - λ at boundary (log_lambda = ±20): REML still evaluates, gradient finite.</p>
+<p><strong>Acceptance:</strong> Every edge case either succeeds or produces a clear, actionable error message. No silent NaN. No unhandled exceptions.</p>
+<p><strong>Prerequisites:</strong> Task 2.6.</p>
+<hr />
+<h3 id="task-44-documentation-and-readme">Task 4.4 - Documentation and README<a class="headerlink" href="#task-44-documentation-and-readme" title="Permanent link">&para;</a></h3>
+<p><strong>What:</strong> Write user-facing documentation.</p>
+<p><strong>Create:</strong>
+- <code>README.md</code> - Installation (<code>uv sync</code>), quickstart, what v1.0 does and does NOT do (the 6 limitations from §1.2), links to design doc.
+- <code>docs/quickstart.md</code> - Tutorial: Gaussian GAM, Binomial GAM, multi-smooth, tensor product, factor-by, prediction, plotting.
+- <code>docs/design.md</code> - Copy of design document (already in place from Task 0.1).
+- Docstrings: every public function (<code>gam</code>, <code>predict</code>, <code>summary</code>, <code>plot</code>) has a complete docstring with parameters, returns, examples.</p>
+<p><strong>Acceptance:</strong> <code>README.md</code> is honest about limitations. Quickstart examples all run.</p>
+<p><strong>Prerequisites:</strong> Task 2.6, Task 3.1, Task 3.2, Task 3.3.</p>
+<hr />
+<h2 id="task-dependency-graph">Task Dependency Graph<a class="headerlink" href="#task-dependency-graph" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Phase 0:  0.1 ──▶ 0.2 ──▶ 0.3
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>                    │
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>Phase 1:           ▼
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>              ┌── 1.1 ──▶ 1.2
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>              │              │
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>              ├── 1.3 ──┬───┤
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>              │         │   │
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>              │      ┌──▼── ▼──┐
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>              │      │ 1.4  1.5│
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>              │      │  │   │  │
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>              │      │  └─┬─┘  │
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>              │      │    ▼    │
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>              │      │   1.6   │
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>              │      └────┬────┘
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>              │           │
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>              ├── 1.7 ────┤
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>              │           │
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>              ├── 1.8 ────┤
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>              │           │
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>              └── 1.9 ────┤
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>                          ▼
+<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>                        1.10
+<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>                          │
+<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>Phase 2:                  ▼
+<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>              ┌── 2.1 ──▶ 2.3 ──▶ 2.3b ──▶ 2.4 ──▶ 2.5 ──▶ 2.6
+<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>              │           (2.2 removed)               │
+<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>                                                      │
+<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>Phase 3:                                              ▼
+<a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a>                                                ┌── 3.1 ──▶ 3.3
+<a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>                                                │
+<a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>                                                └── 3.2
+<a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>                                                      │
+<a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a>Phase 4:                                              ▼
+<a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a>                                                ┌── 4.1
+<a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a>                                                ├── 4.3
+<a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a>                                                └── 4.4
+</code></pre></div>
+<h2 id="parallelization-opportunities">Parallelization Opportunities<a class="headerlink" href="#parallelization-opportunities" title="Permanent link">&para;</a></h2>
+<p>These task groups can run concurrently if multiple agents are available:</p>
+<ul>
+<li><strong>Group A</strong> (links + families): Tasks 1.1, 1.2 - no dependency on smooths.</li>
+<li><strong>Group B</strong> (smooths): Tasks 1.3, 1.4, 1.5, 1.6 - depends on penalty base only.</li>
+<li><strong>Group C</strong> (formula): Tasks 1.7, 1.8 - depends on term dataclasses only.</li>
+<li><strong>Group D</strong> (linalg): Task 2.1 - no dependency on Phase 1 outputs. (Task 2.2 removed.)</li>
+</ul>
+<p>Groups A, B, C, D can all proceed in parallel. They converge at Task 1.10 (design matrix assembly) and Task 2.3 (PIRLS, which needs families + linalg).</p>
+<h2 id="estimated-effort-per-task">Estimated Effort Per Task<a class="headerlink" href="#estimated-effort-per-task" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Complexity</th>
+<th>Estimate</th>
+<th>Risk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0.1 Scaffolding</td>
+<td>Low</td>
+<td>1 day</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>0.2 Test infra</td>
+<td>Low</td>
+<td>1 day</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>0.3 R bridge</td>
+<td>Medium</td>
+<td>3 days</td>
+<td>Medium (rpy2 quirks)</td>
+</tr>
+<tr>
+<td>1.1 Links</td>
+<td>Low</td>
+<td>2 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>1.2 Families</td>
+<td>Medium</td>
+<td>3 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>1.3 Penalties</td>
+<td>Low</td>
+<td>2 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>1.4 TPRS</td>
+<td><strong>High</strong></td>
+<td><strong>8-12 days</strong></td>
+<td><strong>High</strong> (eigendecomposition, knot selection)</td>
+</tr>
+<tr>
+<td>1.5 Cubic</td>
+<td>Medium</td>
+<td>4-6 days</td>
+<td>Medium</td>
+</tr>
+<tr>
+<td>1.6 Tensor</td>
+<td>Medium</td>
+<td>5-7 days</td>
+<td>Medium (Kronecker structure)</td>
+</tr>
+<tr>
+<td>1.7 Parser</td>
+<td>Medium</td>
+<td>3-4 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>1.8 Factor-by</td>
+<td>Medium</td>
+<td>4-5 days</td>
+<td>Medium</td>
+</tr>
+<tr>
+<td>1.9 Constraints</td>
+<td><strong>High</strong></td>
+<td><strong>5-7 days</strong></td>
+<td><strong>High</strong> (CoefficientMap is subtle)</td>
+</tr>
+<tr>
+<td>1.10 Assembly</td>
+<td>Medium</td>
+<td>4-5 days</td>
+<td>Medium (integration point)</td>
+</tr>
+<tr>
+<td>2.1 Linalg</td>
+<td>Medium</td>
+<td>3 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>2.2 AD wrappers</td>
+<td>~~Low~~</td>
+<td>~~1 day~~</td>
+<td><em>Removed</em></td>
+</tr>
+<tr>
+<td>2.3 PIRLS</td>
+<td><strong>High</strong></td>
+<td><strong>8-12 days</strong></td>
+<td><strong>High</strong> (step-halving, convergence)</td>
+</tr>
+<tr>
+<td>2.4 REML</td>
+<td><strong>High</strong></td>
+<td><strong>6-10 days</strong></td>
+<td><strong>High</strong> (implicit differentiation)</td>
+</tr>
+<tr>
+<td>2.5 Newton</td>
+<td>Medium</td>
+<td>3-5 days</td>
+<td>Medium</td>
+</tr>
+<tr>
+<td>2.6 Orchestration</td>
+<td>Medium</td>
+<td>3-5 days</td>
+<td>Medium (integration point)</td>
+</tr>
+<tr>
+<td>3.1 Predict</td>
+<td>Medium</td>
+<td>3-4 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>3.2 Summary</td>
+<td>Medium</td>
+<td>4-5 days</td>
+<td>Medium (EDF computation)</td>
+</tr>
+<tr>
+<td>3.3 Plot</td>
+<td>Low</td>
+<td>2-3 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>4.1 Validation</td>
+<td>Medium</td>
+<td>5-7 days</td>
+<td>Medium</td>
+</tr>
+<tr>
+<td>4.3 Edge cases</td>
+<td>Medium</td>
+<td>3-5 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td>4.4 Documentation</td>
+<td>Low</td>
+<td>3-4 days</td>
+<td>Low</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td></td>
+<td><strong>~95-140 days</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>The four high-risk tasks (TPRS, constraints, PIRLS, REML) account for ~40% of the effort. Budget extra time for them. Everything else is medium-complexity integration work.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

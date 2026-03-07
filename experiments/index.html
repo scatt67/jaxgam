@@ -1,0 +1,1487 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.4">
+    
+    
+      
+        <title>Newton Optimizer Experiments Log - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#newton-optimizer-experiments-log" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Newton Optimizer Experiments Log
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Baseline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-newton-changes-applied-in-all-experiments-below" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-Newton Changes (applied in all experiments below)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#experiment-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment Results
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Experiment Results">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#experiment-1-lsp_max40-no-uconv-no-adaptive-reparam-no-practical-convergence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 1: lsp_max=40, no uconv, no adaptive reparam, no practical convergence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-2-lsp_max40-component-wise-step-clamp-no-uconv-no-adaptive-reparam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 2: lsp_max=40, component-wise step clamp, no uconv, no adaptive reparam
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-3-lsp_max40-no-uconv-with-adaptive-reparam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 3: lsp_max=40, no uconv, WITH adaptive reparam
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-4-lsp_max40-with-uconvind-no-adaptive-reparam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 4: lsp_max=40, WITH uconv.ind, no adaptive reparam
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-5-lsp_max15-no-uconv-no-adaptive-reparam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 5: lsp_max=15, no uconv, no adaptive reparam
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-6-lsp_max40-practical-convergence-5-consecutive-reml_converged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 6: lsp_max=40, practical convergence (5 consecutive reml_converged)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-7-lsp_max40-practical-convergence-10-consecutive-reml_converged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 7: lsp_max=40, practical convergence (10 consecutive reml_converged)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-8-lsp_max15-practical-convergence-10-consecutive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 8: lsp_max=15, practical convergence (10 consecutive)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-9-lsp_max15-expected-change-convergence-gt-step-tol-reml_scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 9: lsp_max=15, expected change convergence (|g^T step| &lt; tol * reml_scale)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-10-lsp_max40-expected-change-convergence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 10: lsp_max=40, expected change convergence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pirls-outer-newton-inner-experiments-from-previous-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PIRLS-outer / Newton-inner experiments (from previous session)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#root-cause-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Root Cause Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Root Cause Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-12-persistent-glm-failures-tp_by-binomial-cr_by-binomial-te_by-binomial-te_by-poisson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The 12 persistent GLM failures (tp_by-binomial, cr_by-binomial, te_by-binomial, te_by-poisson)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-2-convergence-failures-te-gamma-ti-gamma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The 2 convergence failures (te-gamma, ti-gamma)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-findings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Findings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Key Findings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#experiment-11-r-matching-newton-changes-family-dependent-tol-rs-convergence-logic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 11: R-matching Newton changes (family-dependent tol, R's convergence logic)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-12-ift-gradient-correction-for-non-gaussian-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 12: IFT gradient correction for non-Gaussian families
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-13-family-dependent-tolerance-1e-6-for-non-gaussian" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 13: Family-dependent tolerance (1e-6 for non-Gaussian)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-14-ift-hessian-correction-terms-1245-reverted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 14: IFT Hessian correction (terms [1]+[2]+[4]+[5]) - reverted
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-15-fd-hessian-from-ift-corrected-gradient-reverted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 15: FD Hessian from IFT-corrected gradient - reverted
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-16-fd-hessian-with-pirls-reconvergence-the-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 16: FD Hessian with PIRLS reconvergence - the fix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-17-fd-hessian-threshold-m-4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 17: FD Hessian threshold (m ≤ 4)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-18-custom_jvp-on-pirls-analytical-hessian-via-implicit-differentiation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment 18: custom_jvp on PIRLS - analytical Hessian via implicit differentiation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-configuration-found" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Configuration Found
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="newton-optimizer-experiments-log">Newton Optimizer Experiments Log<a class="headerlink" href="#newton-optimizer-experiments-log" title="Permanent link">&para;</a></h1>
+<h2 id="baseline">Baseline<a class="headerlink" href="#baseline" title="Permanent link">&para;</a></h2>
+<p><strong>Committed code (HEAD = b44d3c0)</strong>: 26 validation matrix failures, 72/72 Newton tests pass.</p>
+<p>Failures breakdown:
+- <strong>ti-* (all 4 families)</strong>: 3 fitted + 4 edf + 4 coef = 11 failures - caused by incorrect centering constraint on <code>ti()</code> smooths (constraints.py applies sum-to-zero after ti already absorbed marginal constraints)
+- <strong>tp_by-binomial, cr_by-binomial, te_by-binomial, te_by-poisson</strong>: 4 fitted + 4 edf + 4 coef = 12 failures - factor-by / tensor GLM models with multiple sp on flat REML surfaces
+- <strong>te-gamma</strong>: 1 convergence failure - flat REML surface, optimizer never converges
+- <strong>ti-gaussian</strong>: 1 edf + 1 coef = 2 failures (part of ti centering bug)</p>
+<p>Committed code settings:
+- <code>lsp_max = 15.0</code>
+- Norm-based step cap (<code>step * max_step / step_norm</code>)
+- Quadratic error check + steepest descent fallback + STUCK outcome
+- NO uconv.ind subsetting
+- NO adaptive reparameterization
+- AD gradient for all families (no FD)
+- <code>_check_convergence()</code> combines grad + reml checks
+- <code>max_iter = 200</code></p>
+<h2 id="non-newton-changes-applied-in-all-experiments-below">Non-Newton Changes (applied in all experiments below)<a class="headerlink" href="#non-newton-changes-applied-in-all-experiments-below" title="Permanent link">&para;</a></h2>
+<p>These changes are independent of the Newton optimizer and should be kept:</p>
+<ol>
+<li>
+<p><strong><code>jaxgam/fitting/reml.py</code></strong>: Diagonal preconditioning for <code>log|H|</code> - replaces <code>slogdet(H)</code> with <code>cholesky(D^{-1} H D^{-1})</code> + <code>2*sum(log(diag(L))) + 2*sum(log(d))</code>. Improves conditioning for binomial (W varies 0-0.25) and reduces AD noise through jax.hessian.</p>
+</li>
+<li>
+<p><strong><code>jaxgam/smooths/constraints.py</code></strong>: Skip sum-to-zero centering for <code>TensorInteractionSmooth</code> (ti). ti() already absorbs marginal constraints during construction; applying centering again incorrectly removes a column. <strong>This fixed all 11 ti-* failures.</strong></p>
+</li>
+<li>
+<p><strong><code>jaxgam/fitting/data.py</code></strong>: Added <code>multi_block_S_local</code> field to FittingData for adaptive reparameterization support.</p>
+</li>
+<li>
+<p><strong><code>jaxgam/jax_utils.py</code></strong>: Added <code>recompute_multi_block_proj()</code> for adaptive reparameterization.</p>
+</li>
+</ol>
+<h2 id="experiment-results">Experiment Results<a class="headerlink" href="#experiment-results" title="Permanent link">&para;</a></h2>
+<p>All experiments below include the 4 non-Newton changes listed above.</p>
+<h3 id="experiment-1-lsp_max40-no-uconv-no-adaptive-reparam-no-practical-convergence">Experiment 1: lsp_max=40, no uconv, no adaptive reparam, no practical convergence<a class="headerlink" href="#experiment-1-lsp_max40-no-uconv-no-adaptive-reparam-no-practical-convergence" title="Permanent link">&para;</a></h3>
+<p>Settings: <code>lsp_max=40</code>, norm-based step cap, quadratic error check + STUCK, no uconv.ind, no adaptive reparameterization.</p>
+<p><strong>Result: 14 failures, 72/72 Newton tests pass</strong></p>
+<p>Failures:
+- tp_by-binomial, cr_by-binomial, te_by-binomial, te_by-poisson: fitted + edf + coef (12)
+- te-gamma, ti-gamma: convergence (2)</p>
+<h3 id="experiment-2-lsp_max40-component-wise-step-clamp-no-uconv-no-adaptive-reparam">Experiment 2: lsp_max=40, component-wise step clamp, no uconv, no adaptive reparam<a class="headerlink" href="#experiment-2-lsp_max40-component-wise-step-clamp-no-uconv-no-adaptive-reparam" title="Permanent link">&para;</a></h3>
+<p>Same as Exp 1 but with component-wise clamping (<code>step * max_step / max(|step|)</code>) instead of norm-based.</p>
+<p><strong>Result: 14 failures, 72/72 Newton tests pass</strong></p>
+<p>Same failures as Exp 1. Step capping approach makes no difference.</p>
+<h3 id="experiment-3-lsp_max40-no-uconv-with-adaptive-reparam">Experiment 3: lsp_max=40, no uconv, WITH adaptive reparam<a class="headerlink" href="#experiment-3-lsp_max40-no-uconv-with-adaptive-reparam" title="Permanent link">&para;</a></h3>
+<p>Same as Exp 1 but with adaptive reparameterization (recompute multi-block projections at each Newton iteration).</p>
+<p><strong>Result: 14 failures, 72/72 Newton tests pass</strong></p>
+<p>Same failures as Exp 1. Adaptive reparameterization makes no difference.</p>
+<h3 id="experiment-4-lsp_max40-with-uconvind-no-adaptive-reparam">Experiment 4: lsp_max=40, WITH uconv.ind, no adaptive reparam<a class="headerlink" href="#experiment-4-lsp_max40-with-uconvind-no-adaptive-reparam" title="Permanent link">&para;</a></h3>
+<p>Same as Exp 1 but with uconv.ind subsetting of converged dimensions.</p>
+<p><strong>Result: 14 failures, 72/72 Newton tests pass</strong></p>
+<p>Same failures as Exp 1. uconv.ind makes no difference.</p>
+<h3 id="experiment-5-lsp_max15-no-uconv-no-adaptive-reparam">Experiment 5: lsp_max=15, no uconv, no adaptive reparam<a class="headerlink" href="#experiment-5-lsp_max15-no-uconv-no-adaptive-reparam" title="Permanent link">&para;</a></h3>
+<p>Same as Exp 1 but with <code>lsp_max=15</code> (matching committed code).</p>
+<p><strong>Result: 16 failures, 72/72 Newton tests pass</strong></p>
+<p>Extra failures vs Exp 1: cr_by-gaussian and te_by-gaussian convergence failures. lsp_max=15 is too restrictive for these models.</p>
+<h3 id="experiment-6-lsp_max40-practical-convergence-5-consecutive-reml_converged">Experiment 6: lsp_max=40, practical convergence (5 consecutive reml_converged)<a class="headerlink" href="#experiment-6-lsp_max40-practical-convergence-5-consecutive-reml_converged" title="Permanent link">&para;</a></h3>
+<p>Same as Exp 1 plus: if <code>reml_converged</code> is True for 5 consecutive accepted steps, declare convergence.</p>
+<p><strong>Result: 13 validation failures, 1 Newton test failure</strong></p>
+<p>Fixed: te-gamma and ti-gamma convergence. New failure: ti-gamma EDF. <strong>Regressed</strong>: <code>TestMultiSmooth::test_two_smooths_vs_r</code> Newton test - practical convergence exits too early for two-smooth Gaussian (deviance 15.919 vs R's 15.917, rtol 1.3e-4 &gt; 1e-4 threshold).</p>
+<h3 id="experiment-7-lsp_max40-practical-convergence-10-consecutive-reml_converged">Experiment 7: lsp_max=40, practical convergence (10 consecutive reml_converged)<a class="headerlink" href="#experiment-7-lsp_max40-practical-convergence-10-consecutive-reml_converged" title="Permanent link">&para;</a></h3>
+<p>Same as Exp 6 but with threshold increased to 10 consecutive.</p>
+<p><strong>Result: 13 validation failures, 1 Newton test failure</strong></p>
+<p>Same results as Exp 6 - the two-smooth model's reml_converged stays True from iter ~78 onward, so threshold 10 triggers at iter ~88, still too early.</p>
+<h3 id="experiment-8-lsp_max15-practical-convergence-10-consecutive">Experiment 8: lsp_max=15, practical convergence (10 consecutive)<a class="headerlink" href="#experiment-8-lsp_max15-practical-convergence-10-consecutive" title="Permanent link">&para;</a></h3>
+<p>Combining lsp_max=15 with practical convergence.</p>
+<p><strong>Result: 13 validation failures, 1 Newton test failure</strong></p>
+<p>Same as Exp 7 - practical convergence dominates over lsp_max.</p>
+<h3 id="experiment-9-lsp_max15-expected-change-convergence-gt-step-tol-reml_scale">Experiment 9: lsp_max=15, expected change convergence (<code>|g^T step| &lt; tol * reml_scale</code>)<a class="headerlink" href="#experiment-9-lsp_max15-expected-change-convergence-gt-step-tol-reml_scale" title="Permanent link">&para;</a></h3>
+<p>Instead of counting consecutive reml_converged, check if the expected first-order score change from the Newton step is below threshold.</p>
+<p><strong>Result: 16 validation failures, 1 Newton test failure</strong></p>
+<p>Worse - the expected change check is too aggressive for single-smooth Gaussian models (tp-gaussian, cr-gaussian now fail because sp hits lsp_max=15 and expected change is trivially small).</p>
+<h3 id="experiment-10-lsp_max40-expected-change-convergence">Experiment 10: lsp_max=40, expected change convergence<a class="headerlink" href="#experiment-10-lsp_max40-expected-change-convergence" title="Permanent link">&para;</a></h3>
+<p>Same as Exp 9 but with lsp_max=40.</p>
+<p><strong>Result: Not fully tested</strong> (interrupted), but Newton test <code>test_fitted_values_vs_r[gaussian]</code> failed - expected change convergence too aggressive even with lsp_max=40.</p>
+<h3 id="pirls-outer-newton-inner-experiments-from-previous-session">PIRLS-outer / Newton-inner experiments (from previous session)<a class="headerlink" href="#pirls-outer-newton-inner-experiments-from-previous-session" title="Permanent link">&para;</a></h3>
+<p><strong>PIRLS-outer dispatch enabled</strong> (non-Gaussian families use <code>_run_glm()</code> with inner Newton at fixed XtWX):</p>
+<p><strong>Result: 24 validation failures</strong></p>
+<p>The inner Newton over-optimizes sp in flat REML directions because it runs to full convergence at each PIRLS iteration. On flat surfaces, inner Newton pushes sp to extreme values (10^9-10^10 vs R's 10^4-10^7).</p>
+<h2 id="root-cause-analysis">Root Cause Analysis<a class="headerlink" href="#root-cause-analysis" title="Permanent link">&para;</a></h2>
+<h3 id="the-12-persistent-glm-failures-tp_by-binomial-cr_by-binomial-te_by-binomial-te_by-poisson">The 12 persistent GLM failures (tp_by-binomial, cr_by-binomial, te_by-binomial, te_by-poisson)<a class="headerlink" href="#the-12-persistent-glm-failures-tp_by-binomial-cr_by-binomial-te_by-binomial-te_by-poisson" title="Permanent link">&para;</a></h3>
+<p>These 4 cells fail fitted values, EDF, and coefficients in ALL experiments. They are factor-by or tensor models with binomial/poisson families (non-constant working weights) and multiple smoothing parameters.</p>
+<p>The core issue: AD gradient treats PIRLS output as fixed. By PIRLS stationarity (IFT), this is asymptotically exact at the converged solution. But for factor-by models with binomial, the PIRLS convergence is approximate (not exact), and the residual gradient error is enough to push the optimizer to slightly different sp values than R.</p>
+<p>The plan's hypothesis was that PIRLS-outer/Newton-inner (fixing XtWX per outer iteration) would make AD exact. This was correct in theory but failed in practice because the inner Newton over-optimized on flat surfaces.</p>
+<h3 id="the-2-convergence-failures-te-gamma-ti-gamma">The 2 convergence failures (te-gamma, ti-gamma)<a class="headerlink" href="#the-2-convergence-failures-te-gamma-ti-gamma" title="Permanent link">&para;</a></h3>
+<p>These are tensor/interaction models with Gamma family (unknown scale, joint optimization of log_lambda + log_phi = 3 params). One smoothing parameter is on a flat REML surface where the Hessian eigenvalue is ~0.004 vs ~104 for the well-conditioned direction (condition number 26000:1).</p>
+<p>The gradient decreases linearly (not quadratically): from 9.58 to 0.06 in 200 iterations. Linear convergence is characteristic of inaccurate Hessian (AD through PIRLS). The gradient threshold is <code>tol * reml_scale ≈ 5e-6</code>, and at iter 200 the gradient is still 12x above threshold.</p>
+<p>R handles this via lsp_max=15: the flat parameter hits the cap, projected gradient zeros it, and convergence triggers. Our lsp_max=40 is too permissive for this mechanism to work, but lsp_max=15 causes other convergence failures.</p>
+<p>Practical convergence (consecutive reml_converged) fixes these but regresses the two-smooth Gaussian Newton test. Expected change convergence (<code>|g^T step|</code>) is too aggressive.</p>
+<h2 id="key-findings">Key Findings<a class="headerlink" href="#key-findings" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Step capping approach (norm vs component-wise)</strong>: No effect.</li>
+<li><strong>uconv.ind subsetting</strong>: No effect.</li>
+<li><strong>Adaptive reparameterization</strong>: No effect.</li>
+<li><strong>lsp_max</strong>: 15 causes extra convergence failures; 40 causes flat-surface drift but allows more models to converge.</li>
+<li><strong>Practical convergence</strong>: Fixes te-gamma/ti-gamma convergence but regresses two-smooth Gaussian Newton test.</li>
+<li><strong>PIRLS-outer/Newton-inner</strong>: Makes things worse (24 failures) due to over-optimization in flat directions.</li>
+<li><strong>The 12 core GLM failures are robust to ALL optimizer tuning</strong> - they appear in every experiment. The issue is fundamental to AD-through-PIRLS gradient accuracy for these specific model configurations.</li>
+<li><strong>The reml.py preconditioning and constraints.py ti fix together improved from 26 → 14 failures</strong> (12 failure reduction), which is the main improvement.</li>
+</ol>
+<h3 id="experiment-11-r-matching-newton-changes-family-dependent-tol-rs-convergence-logic">Experiment 11: R-matching Newton changes (family-dependent tol, R's convergence logic)<a class="headerlink" href="#experiment-11-r-matching-newton-changes-family-dependent-tol-rs-convergence-logic" title="Permanent link">&para;</a></h3>
+<p>Comprehensive set of changes to match R's <code>newton()</code> (gam.fit3.r lines 1290-1719), identified by reading R source:</p>
+<p><strong>New changes</strong> (not previously tried):
+- Family-dependent tolerance: <code>sqrt(eps)</code> for Gaussian (matching <code>fast.REML.fit</code>), <code>1e-6</code> for non-Gaussian (matching <code>gam.control()$newton$conv.tol</code>)
+- PIRLS tolerance tightened to <code>min(tol/100, 1e-8)</code> (R line 1308)
+- R's <code>score_scale = abs(log(scale)) + abs(score)</code> for REML convergence (R line 1648)
+- Gradient convergence uses <code>5 * conv_tol</code> factor (R line 1652)
+- Eigenvalue floor <code>eps^0.7</code> instead of <code>sqrt(eps)</code> (R line 1450)
+- <code>is_pdef</code> gating: only accept Newton step immediately if Hessian is positive definite (R line 1499)</p>
+<p><strong>Already tried</strong> (included for completeness, no independent effect per Exp 2/4):
+- Component-wise step cap (same as Exp 2)
+- uconv.ind subsetting (same as Exp 4)</p>
+<p>Settings: <code>lsp_max=40</code>, component-wise step cap, R's convergence logic, uconv.ind, projected gradient at bounds.</p>
+<p><strong>Result: 15 validation failures (+1 vs Exp 1), 5 Newton test signature failures + 1 Newton test regression</strong></p>
+<p>Changes vs Exp 1 (14 failures):
+- <strong>Fixed</strong>: te-gamma, ti-gamma convergence (2 fixed) - the <code>1e-6</code> tolerance is loose enough to declare convergence before 200 iterations
+- <strong>New failures</strong>: te-gamma EDF, ti-poisson EDF, ti-gamma EDF (3 new) - models now converge but to slightly different sp values than R, causing EDF mismatch
+- <strong>Newton test regression</strong>: <code>test_tensor_product_vs_r</code> - sp drifts to 3.24e6 on flat surface (R: 4.80e5), outside the <code>well_determined</code> threshold</p>
+<p>The 5 <code>TestSafeNewtonStep</code> unit test failures are purely signature changes (function now returns tuple <code>(step, is_pdef)</code> instead of just <code>step</code>) - not behavioral regressions.</p>
+<p><strong>Analysis</strong>: The family-dependent tolerance is the key change. For non-Gaussian, <code>1e-6</code> (67x looser than <code>sqrt(eps)</code>) allows convergence in flat-surface models, but the looser stopping point lands at different sp values. The other R-matching changes (score_scale, 5*tol factor, eps^0.7 floor, is_pdef gating) have marginal or no independent effect - the tolerance dominates.</p>
+<p><strong>Net assessment</strong>: Experiment 11 trades 2 convergence failures for 3 EDF failures - a net regression. The family-dependent tolerance concept is sound but needs refinement to avoid the EDF regressions.</p>
+<h3 id="experiment-12-ift-gradient-correction-for-non-gaussian-families">Experiment 12: IFT gradient correction for non-Gaussian families<a class="headerlink" href="#experiment-12-ift-gradient-correction-for-non-gaussian-families" title="Permanent link">&para;</a></h3>
+<p>The AD gradient through the REML criterion treats XtWX in <code>H = XtWX + S_λ</code> as constant w.r.t. ρ = log(λ). For non-Gaussian families, the working weights W depend on μ(β*(ρ)) through the implicit function theorem. The missing gradient term is:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Δ(dREML/dρ_j) = (1/2) tr(H⁻¹ dXtWX_j)
+</code></pre></div>
+<p>where <code>dXtWX_j = X^T diag(dW_j) X</code>, <code>dW_j = (dW/dη) * (X @ dβ*/dρ_j)</code>, and <code>dβ*/dρ_j = -H⁻¹(λ_j S_j β*)</code> by IFT at PIRLS stationarity.</p>
+<p>Implementation: <code>_ift_gradient_correction()</code> method on <code>NewtonOptimizer</code>. Uses <code>jax.jvp</code> through <code>η → μ → W</code> for <code>dW/dη</code>, batched <code>cho_solve</code> for <code>dβ*/dρ_j</code>, and the efficient formula <code>correction_j = 0.5 * dW_j · diag(X H⁻¹ X^T)</code>. For Gaussian, W is constant (dW/dη = 0), so the correction is exactly zero and computation is skipped.</p>
+<p>Settings: All Exp 11 changes + IFT gradient correction added to <code>_check_convergence()</code>.</p>
+<p><strong>Result: 3 validation failures, 80/80 Newton tests pass (8 new IFT tests)</strong></p>
+<p>Failures:
+- te-poisson: convergence
+- ti-poisson: convergence
+- te_by-binomial: convergence</p>
+<p>Changes vs Exp 11 (15 failures):
+- <strong>Fixed</strong>: All 12 persistent GLM fitted/edf/coef failures (tp_by-binomial, cr_by-binomial, te_by-binomial, te_by-poisson fitted + edf + coef) - the corrected gradient steers the optimizer to the same sp as R
+- <strong>Fixed</strong>: te-gamma, ti-gamma convergence - corrected gradient has faster convergence on flat surfaces
+- <strong>Fixed</strong>: te-gamma EDF, ti-poisson EDF, ti-gamma EDF - optimizer reaches correct sp with accurate gradient
+- <strong>Remaining</strong>: 3 convergence failures for multi-penalty non-Gaussian tensor/interaction models</p>
+<p>New tests added:
+- <code>test_gaussian_correction_is_zero</code>: IFT correction is exactly 0 for Gaussian
+- <code>test_non_gaussian_correction_nonzero</code>: correction is nonzero for Poisson/Binomial/Gamma
+- <code>test_corrected_grad_closer_to_fd</code>: IFT-corrected gradient is closer to central FD gradient than uncorrected
+- <code>test_convergence_speed</code>: single-smooth non-Gaussian converges in &lt;30 iterations</p>
+<p><strong>Analysis</strong>: The IFT correction is the single most impactful change across all experiments. It fixes the fundamental issue: AD-through-PIRLS misses the <code>dXtWX/dρ</code> contribution to <code>d(log|H|)/dρ</code>. Without it, the gradient has a systematic bias for non-Gaussian families that compounds through the optimization. The 3 remaining convergence failures are multi-penalty tensor/interaction models where flat REML surfaces and the <code>sqrt(eps)</code> convergence tolerance make convergence difficult within 200 iterations.</p>
+<h3 id="experiment-13-family-dependent-tolerance-1e-6-for-non-gaussian">Experiment 13: Family-dependent tolerance (1e-6 for non-Gaussian)<a class="headerlink" href="#experiment-13-family-dependent-tolerance-1e-6-for-non-gaussian" title="Permanent link">&para;</a></h3>
+<p>Same as Exp 12 plus: <code>tol = 1e-6</code> for non-Gaussian families (matching R's <code>gam.control()$newton$conv.tol</code>), <code>sqrt(eps)</code> for Gaussian (matching <code>fast.REML.fit</code>).</p>
+<p><strong>Result: 2 validation failures, 80/80 Newton tests pass</strong></p>
+<p>Failures:
+- ti-poisson: EDF
+- ti-gamma: EDF (2.368 vs R's 2.335, 1.4%)</p>
+<p>Changes vs Exp 12 (3 failures):
+- <strong>Fixed</strong>: te-poisson, ti-poisson, te_by-binomial convergence - 1e-6 tolerance allows convergence on flat surfaces
+- <strong>New</strong>: ti-poisson EDF, ti-gamma EDF - optimizer converges to different sp on flat REML surfaces (scores match R to 4 sig figs)</p>
+<h3 id="experiment-14-ift-hessian-correction-terms-1245-reverted">Experiment 14: IFT Hessian correction (terms [1]+[2]+[4]+[5]) - reverted<a class="headerlink" href="#experiment-14-ift-hessian-correction-terms-1245-reverted" title="Permanent link">&para;</a></h3>
+<p>Tried adding the missing d²(log|H|)/dρ² terms to the Hessian: term [1] (second-order IFT with d²β/dρ² and d²W/dη²), term [2] (product of first weight derivs), terms [4]+[5] (cross weight-penalty coupling). This matches R's analytical Hessian from <code>get_ddetXWXpS</code> in gdi.c.</p>
+<p><strong>Result: 2 validation failures, 80/80 Newton tests pass - identical to Exp 13</strong></p>
+<p>Ablation study comparing no Hessian correction / partial / full showed <strong>zero effect</strong> on iteration counts:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>No Hess</th>
+<th>[2]+[4]+[5]</th>
+<th>Full [1-5]</th>
+<th>R</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tp-poisson</td>
+<td>7</td>
+<td>7</td>
+<td>7</td>
+<td>3</td>
+</tr>
+<tr>
+<td>tp-binomial</td>
+<td>15</td>
+<td>15</td>
+<td>15</td>
+<td>3</td>
+</tr>
+<tr>
+<td>te-poisson</td>
+<td>72</td>
+<td>72</td>
+<td>71</td>
+<td>7</td>
+</tr>
+<tr>
+<td>ti-poisson</td>
+<td>89</td>
+<td>89</td>
+<td>88</td>
+<td>7</td>
+</tr>
+<tr>
+<td>te_by-binomial</td>
+<td>153</td>
+<td>152</td>
+<td>148</td>
+<td>10</td>
+</tr>
+</tbody>
+</table>
+<p>The IFT Hessian correction terms are numerically small relative to the AD Hessian (<code>jax.hessian</code> captures terms [3]+[6] which dominate). The 2-15x iteration gap vs R is driven by AD noise in <code>jax.hessian</code> through PIRLS/slogdet, not systematic Hessian bias.</p>
+<p><strong>Decision</strong>: Hessian correction reverted - no benefit for the added complexity.</p>
+<h3 id="experiment-15-fd-hessian-from-ift-corrected-gradient-reverted">Experiment 15: FD Hessian from IFT-corrected gradient - reverted<a class="headerlink" href="#experiment-15-fd-hessian-from-ift-corrected-gradient-reverted" title="Permanent link">&para;</a></h3>
+<p>Hypothesis: <code>jax.hessian</code> has noise from differentiating twice through PIRLS/slogdet, causing erratic Newton steps. Replace with central FD of the (accurate) IFT-corrected gradient for non-Gaussian families.</p>
+<p><strong>Result: 2 validation failures, 80/80 Newton tests pass - identical to Exp 13</strong></p>
+<p>Iteration counts unchanged for ALL models. Diagnostic at convergence (ti-poisson) revealed:
+- <code>|AD_hess - FD_of_AD_grad| = 1.3e-10</code> - the AD Hessian is NOT noisy
+- <code>|AD_hess - FD_of_corrected_grad| = 8e-4</code> - the IFT Hessian correction is negligible
+- AD eigenvalues [0.110, 0.161] vs FD eigenvalues [0.111, 0.161] - both well-conditioned
+- Gradient at convergence: |grad_max| = 1.8e-3, right at the 5<em>tol</em>score_scale threshold</p>
+<p><strong>Key insight</strong>: The Hessian was never the bottleneck - it's already accurate via <code>jax.hessian</code>. The 2-15x iteration gap vs R is NOT from Hessian noise. The AD second derivative through PIRLS/slogdet is clean. The slow convergence must stem from a different cause (step acceptance logic, quadratic error checks, or trajectory differences from the non-analytical gradient).</p>
+<p><strong>Decision</strong>: FD Hessian reverted - identical results with added complexity.</p>
+<p><strong>CRITICAL NOTE</strong>: Exp 15's FD Hessian was computed incorrectly. It used a FIXED PIRLS result for all FD perturbations (same β<em>, W, XtWX at ρ±h). This is equivalent to the AD Hessian. The TRUE FD Hessian requires re-running PIRLS at each perturbed ρ to capture how β</em> and W change with ρ. See Experiment 16 for the correct approach.</p>
+<h3 id="experiment-16-fd-hessian-with-pirls-reconvergence-the-fix">Experiment 16: FD Hessian with PIRLS reconvergence - <strong>the fix</strong><a class="headerlink" href="#experiment-16-fd-hessian-with-pirls-reconvergence-the-fix" title="Permanent link">&para;</a></h3>
+<p><strong>Root cause discovery</strong>: Instrumented comparison of Python vs R trajectories on ti-poisson revealed:
+1. Python converges linearly (~5% gradient reduction/iter, 89 iterations vs R's 7)
+2. All 89 Newton steps accepted immediately (PD Hessian, qerror &lt; 0.8) - no halving
+3. qerror ~0.45 throughout early optimization (quadratic model predicts only 55% of actual change)
+4. R's REML criterion and gradient match Python's exactly (at R's optimum: score diff 2e-12, gradient diff 0)</p>
+<p>Key diagnostic: computed the TRUE Hessian at multiple points along the optimization path by FD of the IFT-corrected gradient with PIRLS reconvergence at each perturbation (unlike Exp 15 which used a fixed PIRLS):</p>
+<table>
+<thead>
+<tr>
+<th>Point</th>
+<th>AD Hessian eigs</th>
+<th>True Hessian eigs</th>
+<th>Relative error</th>
+<th>Step error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>iter 1 (sp=[0,0])</td>
+<td>[0.87, 1.16]</td>
+<td>[0.26, 0.47]</td>
+<td>71%</td>
+<td>369%</td>
+</tr>
+<tr>
+<td>iter 5 (sp=[3.4,0.9])</td>
+<td>[0.87, 1.16]</td>
+<td>[0.26, 0.47]</td>
+<td>71%</td>
+<td>378%</td>
+</tr>
+<tr>
+<td>iter 20 (sp=[4.4,2.6])</td>
+<td>[0.52, 0.74]</td>
+<td>[0.03, 0.20]</td>
+<td>93%</td>
+<td>2606%</td>
+</tr>
+<tr>
+<td>converged (sp=[5.5,5.8])</td>
+<td>[0.11, 0.16]</td>
+<td>[0.005, 0.013]</td>
+<td>92%</td>
+<td>2261%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The AD Hessian is 71-93% wrong</strong> throughout the optimization because it treats β*, W, and XtWX from PIRLS as constants. The true Hessian (accounting for how PIRLS reconverges at each ρ) has 10-30x smaller eigenvalues. The AD Hessian massively overestimates curvature, producing Newton steps that are 10-30x too small, causing linear convergence.</p>
+<p>Exp 15's FD Hessian didn't help because it used a FIXED PIRLS result: <code>criterion.gradient(ρ±h)</code> evaluates the gradient at perturbed ρ but with the SAME baked-in PIRLS result. The correct approach re-runs PIRLS at each ρ±h.</p>
+<p><strong>Implementation</strong>: <code>_fd_hessian()</code> method on <code>NewtonOptimizer</code>. For each of the 2m perturbations (central FD), runs PIRLS to convergence at the perturbed ρ, computes the IFT-corrected gradient, and assembles the Hessian. Used for non-Gaussian families only; Gaussian uses the exact AD Hessian (W is constant).</p>
+<p><strong>Cost</strong>: 2m extra PIRLS calls per Newton iteration (m = number of smoothing parameters). But 5-12x fewer Newton iterations, so total PIRLS calls decrease:
+- ti-poisson (m=2): 9 iters × 5 PIRLS = 45 total (was 89 × 1 = 89)
+- te-poisson (m=4): 7 iters × 9 PIRLS = 63 total (was 72 × 1 = 72)
+- tp-poisson (m=1): 4 iters × 3 PIRLS = 12 total (was 9 × 1 = 9)</p>
+<p><strong>Result: 0 validation failures, 80/80 Newton tests, 1448/1448 total tests pass</strong></p>
+<p>Full iteration comparison vs R:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>FD Hess (Exp 16)</th>
+<th>AD Hess (Exp 13)</th>
+<th>R</th>
+<th>Ratio</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tp-poisson</td>
+<td>4</td>
+<td>9</td>
+<td>3</td>
+<td>1.3x</td>
+</tr>
+<tr>
+<td>tp-binomial</td>
+<td>4</td>
+<td>15</td>
+<td>3</td>
+<td>1.3x</td>
+</tr>
+<tr>
+<td>tp-gamma</td>
+<td>2</td>
+<td>6</td>
+<td>6</td>
+<td>0.3x</td>
+</tr>
+<tr>
+<td>te-poisson</td>
+<td>7</td>
+<td>72</td>
+<td>7</td>
+<td>1.0x</td>
+</tr>
+<tr>
+<td>te-gamma</td>
+<td>9</td>
+<td>46</td>
+<td>10</td>
+<td>0.9x</td>
+</tr>
+<tr>
+<td>ti-poisson</td>
+<td>9</td>
+<td>89</td>
+<td>7</td>
+<td>1.3x</td>
+</tr>
+<tr>
+<td>ti-gamma</td>
+<td>10</td>
+<td>33</td>
+<td>6</td>
+<td>1.7x</td>
+</tr>
+<tr>
+<td>tp_by-poisson</td>
+<td>8</td>
+<td>22</td>
+<td>8</td>
+<td>1.0x</td>
+</tr>
+<tr>
+<td>tp_by-binomial</td>
+<td>10</td>
+<td>20</td>
+<td>10</td>
+<td>1.0x</td>
+</tr>
+<tr>
+<td>te_by-binomial</td>
+<td>10</td>
+<td>153</td>
+<td>10</td>
+<td>1.0x</td>
+</tr>
+<tr>
+<td>te_by-poisson</td>
+<td>11</td>
+<td>61</td>
+<td>11</td>
+<td>1.0x</td>
+</tr>
+</tbody>
+</table>
+<p>ti-poisson sp convergence:
+- FD Hessian: [5.652, 6.279] - matches R's [5.645, 6.276] within 0.01
+- AD Hessian: [5.464, 5.807] - differs by [0.18, 0.47]
+- REML score: 368.442559 vs R's 368.442560 (diff 1e-6)</p>
+<h3 id="experiment-17-fd-hessian-threshold-m-4">Experiment 17: FD Hessian threshold (m ≤ 4)<a class="headerlink" href="#experiment-17-fd-hessian-threshold-m-4" title="Permanent link">&para;</a></h3>
+<p><strong>Goal</strong>: Reduce total PIRLS cost by only using FD Hessian when m is small enough to be cost-effective.</p>
+<p><strong>Analysis</strong>: Pure FD Hessian (Exp 16) costs 2m extra PIRLS per Newton iteration. For small m (1-4), the 5-12x iteration reduction more than compensates. For large m (12+), the per-iteration overhead dominates: te_by models cost 25x more PIRLS with FD vs AD.</p>
+<p><strong>Implementation</strong>: In <code>_check_convergence()</code>, use <code>len(params) ≤ 4</code> as the threshold:
+- m ≤ 4: FD Hessian with PIRLS reconvergence (near-quadratic convergence)
+- m &gt; 4: AD Hessian (linear convergence, but cheaper per iteration)</p>
+<p><strong>Cost comparison</strong> (total PIRLS calls across all 11 test models):
+- Pure AD (Exp 13): 537 PIRLS, 2 validation failures
+- Pure FD (Exp 16): 5894 PIRLS (11x), 0 failures
+- Threshold m≤4 (Exp 17): 647 PIRLS (1.2x), 0 failures</p>
+<p>The threshold gives 0 failures at only ~20% overhead vs pure AD, avoiding the 11x blowup from pure FD on high-m models.</p>
+<p><strong>Result: 0 validation failures, 80/80 Newton tests, 1448/1448 total tests pass</strong></p>
+<h3 id="experiment-18-custom_jvp-on-pirls-analytical-hessian-via-implicit-differentiation">Experiment 18: custom_jvp on PIRLS - analytical Hessian via implicit differentiation<a class="headerlink" href="#experiment-18-custom_jvp-on-pirls-analytical-hessian-via-implicit-differentiation" title="Permanent link">&para;</a></h3>
+<p><strong>Goal</strong>: Replace both <code>_ift_gradient_correction()</code> and <code>_fd_hessian()</code> with a single <code>jax.custom_jvp</code> mechanism that gives the correct analytical gradient and Hessian at O(p²n) cost per iteration, with no extra PIRLS calls.</p>
+<p><strong>Approach</strong>: Define <code>jax.custom_jvp</code> on the PIRLS output function <code>(S_lambda, beta_warm) -&gt; (beta*, XtWX, deviance)</code>. The JVP rule computes tangents via the IFT:
+- <code>dβ = -H⁻¹(dS @ β)</code> (Cholesky solve)
+- <code>dW = jax.jvp</code> through <code>η → μ → W</code> chain
+- <code>dXtWX = X^T diag(dW) X</code>
+- <code>ddeviance = jax.jvp</code> through <code>η → μ → deviance</code> chain</p>
+<p>Then compose with <code>_criterion_core</code> to form an end-to-end <code>score(params, beta_warm)</code> function. <code>jax.grad(score)</code> gives the correct gradient (no separate IFT correction needed). <code>jax.hessian(score)</code> gives the correct Hessian by differentiating through the JVP rule itself - since the rule uses standard JAX ops (cho_solve, jvp, matmul), higher-order AD works automatically.</p>
+<p><strong>Implementation</strong>:
+- <code>_build_differentiable_fns()</code> method on <code>NewtonOptimizer</code>, called once in <code>__init__</code> for non-Gaussian families
+- Returns pre-JIT'd <code>(grad_fn, hess_fn)</code> closures
+- <code>_check_convergence()</code> uses these instead of <code>criterion.gradient() + _ift_gradient_correction()</code> + <code>_fd_hessian()</code> / <code>criterion.hessian()</code>
+- Handles all 4 variants: REML/ML × fixed/joint scale
+- <code>_ift_gradient_correction()</code> and <code>_fd_hessian()</code> removed (dead code)</p>
+<p><strong>Result: 0 validation failures, 86/86 Newton tests, 1448/1448 total tests pass</strong></p>
+<p>Iteration comparison vs Exp 17 and R:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Exp 18 (custom_jvp)</th>
+<th>Exp 17 (FD m≤4)</th>
+<th>Exp 13 (AD)</th>
+<th>R</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cr-poisson (m=1)</td>
+<td>3</td>
+<td>4</td>
+<td>9</td>
+<td>3</td>
+</tr>
+<tr>
+<td>cr-binomial (m=1)</td>
+<td>4</td>
+<td>4</td>
+<td>15</td>
+<td>3</td>
+</tr>
+<tr>
+<td>cr-gamma (m=1)</td>
+<td>4</td>
+<td>2</td>
+<td>6</td>
+<td>6</td>
+</tr>
+<tr>
+<td>ti-poisson (m=2)</td>
+<td>10</td>
+<td>9</td>
+<td>89</td>
+<td>7</td>
+</tr>
+<tr>
+<td>te-poisson (m=2)</td>
+<td>9</td>
+<td>7</td>
+<td>72</td>
+<td>7</td>
+</tr>
+<tr>
+<td>te-gamma (m=2+1)</td>
+<td>10</td>
+<td>9</td>
+<td>46</td>
+<td>10</td>
+</tr>
+<tr>
+<td>ti-gamma (m=2+1)</td>
+<td>11</td>
+<td>10</td>
+<td>33</td>
+<td>6</td>
+</tr>
+<tr>
+<td>cr_by-binomial (m=3)</td>
+<td>10</td>
+<td>10</td>
+<td>20</td>
+<td>10</td>
+</tr>
+<tr>
+<td>cr_by-poisson (m=3)</td>
+<td>10</td>
+<td>8</td>
+<td>22</td>
+<td>8</td>
+</tr>
+<tr>
+<td>te_by-binomial (m=6)</td>
+<td>10</td>
+<td><strong>153</strong></td>
+<td>153</td>
+<td>10</td>
+</tr>
+</tbody>
+</table>
+<p>Key improvements over Exp 17:
+- <strong>te_by-binomial (m=6)</strong>: 10 iters (was 153 with AD Hessian since m&gt;4 threshold)
+- <strong>No m≤4 threshold needed</strong>: all models get the correct Hessian regardless of m
+- <strong>1 PIRLS per Newton iter</strong> (was 1 + 2m for m≤4 models)
+- <strong>Total PIRLS calls across all models</strong>: ~100 (was 647 for Exp 17, 537 for Exp 13)</p>
+<p>Cost comparison per Newton iteration:</p>
+<table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>PIRLS per iter</th>
+<th>Hessian cost</th>
+<th>Newton iters (te_by, m=6)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pure AD (Exp 13)</td>
+<td>1</td>
+<td>O(m² · JIT trace)</td>
+<td>153</td>
+</tr>
+<tr>
+<td>FD m≤4 (Exp 17)</td>
+<td>1 + 2m (m≤4) / 1 (m&gt;4)</td>
+<td>O(m · PIRLS)</td>
+<td>153 (m&gt;4, AD)</td>
+</tr>
+<tr>
+<td>custom_jvp (Exp 18)</td>
+<td>1</td>
+<td>O(p²n) analytical</td>
+<td>10</td>
+</tr>
+<tr>
+<td>R (gdi.c)</td>
+<td>1</td>
+<td>O(p²n) analytical</td>
+<td>10</td>
+</tr>
+</tbody>
+</table>
+<h2 id="best-configuration-found">Best Configuration Found<a class="headerlink" href="#best-configuration-found" title="Permanent link">&para;</a></h2>
+<p><strong>Experiment 18</strong> (0 failures, 0 Newton test regressions): <code>custom_jvp</code> on PIRLS for non-Gaussian families gives the correct analytical Hessian via implicit differentiation at O(p²n) cost, matching R's <code>gdi.c</code> approach. No m≤4 threshold, no extra PIRLS calls, near-quadratic convergence for all models. Down from 26 failures at baseline to 0.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

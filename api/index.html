@@ -1,0 +1,2896 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../quickstart/">
+      
+      
+        <link rel="next" href="../citations/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.4">
+    
+    
+      
+        <title>API Reference - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#api-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              API Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#gam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GAM
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GAM
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GAM">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.predict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        predict
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.predict_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        predict_matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.plot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Families
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Families">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gaussian" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gaussian
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gaussian" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gaussian
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gaussian">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gaussian.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gaussian.deviance_resids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deviance_resids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gaussian.initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#binomial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binomial
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Binomial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binomial
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Binomial">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Binomial.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Binomial.deviance_resids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deviance_resids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Binomial.initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poisson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Poisson
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Poisson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Poisson
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Poisson">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Poisson.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Poisson.deviance_resids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deviance_resids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Poisson.initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gamma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gamma
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gamma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gamma
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gamma">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gamma.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gamma.deviance_resids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deviance_resids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gamma.initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#formula-syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Formula syntax
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Formula syntax">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#smooth-term-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smooth term arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensor-product-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tensor product arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fitted-model-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fitted model attributes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#gam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GAM
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GAM
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GAM">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.predict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        predict
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.predict_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        predict_matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.api.GAM.plot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Families
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Families">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gaussian" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gaussian
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gaussian" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gaussian
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gaussian">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gaussian.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gaussian.deviance_resids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deviance_resids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gaussian.initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#binomial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binomial
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Binomial" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Binomial
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Binomial">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Binomial.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Binomial.deviance_resids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deviance_resids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Binomial.initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#poisson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Poisson
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Poisson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Poisson
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Poisson">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Poisson.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Poisson.deviance_resids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deviance_resids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Poisson.initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gamma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gamma
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gamma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gamma
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gamma">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gamma.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gamma.deviance_resids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deviance_resids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jaxgam.families.standard.Gamma.initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#formula-syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Formula syntax
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Formula syntax">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#smooth-term-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smooth term arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensor-product-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tensor product arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fitted-model-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fitted model attributes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h1>
+<h2 id="gam">GAM<a class="headerlink" href="#gam" title="Permanent link">&para;</a></h2>
+<p>The main entry point for fitting generalized additive models.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam</span><span class="w"> </span><span class="kn">import</span> <span class="n">GAM</span>
+</code></pre></div>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="jaxgam.api.GAM" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">GAM</span><span class="p">(</span><span class="n">formula</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">family</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ExponentialFamily</span> <span class="o">=</span> <span class="s1">&#39;gaussian&#39;</span><span class="p">,</span> <span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;REML&#39;</span><span class="p">,</span> <span class="n">sp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="nb">list</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></code>
+
+<a href="#jaxgam.api.GAM" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Generalized Additive Model (sklearn-style API).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>formula</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Model formula in R-style Wilkinson notation, e.g. <code>"y ~ s(x)"</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>family</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="jaxgam.families.base.ExponentialFamily">ExponentialFamily</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Distribution family. One of <code>'gaussian'</code>, <code>'binomial'</code>,
+<code>'poisson'</code>, <code>'gamma'</code>, or an <code>ExponentialFamily</code> instance.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;gaussian&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>method</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Smoothing parameter estimation method: <code>'REML'</code> or <code>'ML'</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;REML&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>sp</code>
+            </td>
+            <td>
+                  <code><span title="numpy.ndarray">ndarray</span> or <span title="list">list</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Fixed smoothing parameters. If provided, skips Newton optimization.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>device</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Target device: <code>'cpu'</code>, <code>'gpu'</code>, or <code>None</code> (auto-detect).
+GPU requires <code>jax[cuda12]</code> (NVIDIA) or <code>jax-metal</code> (Apple).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>**kwargs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Additional arguments. Supported scope guards:
+<code>backend</code>, <code>optimizer</code>, <code>select</code>, <code>gamma</code>, <code>knots</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>{}</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="attributes-(set-after-``fit()``)" open>
+  <summary>Attributes (set after <code>fit()</code>)</summary>
+  <p>coefficients_ : np.ndarray
+    Fitted coefficient vector.
+fitted_values_ : np.ndarray
+    Fitted values (response scale).
+linear_predictor_ : np.ndarray
+    Linear predictor (link scale).
+family_ : ExponentialFamily
+    Fitted family object.
+Vp_ : np.ndarray
+    Bayesian posterior covariance of coefficients.
+scale_ : float
+    Estimated or fixed scale parameter (phi).
+edf_ : np.ndarray
+    Per-smooth effective degrees of freedom.
+edf_total_ : float
+    Total effective degrees of freedom.
+smoothing_params_ : np.ndarray
+    Estimated smoothing parameters (original scale).
+deviance_ : float
+    Model deviance.
+null_deviance_ : float
+    Null model deviance.
+converged_ : bool
+    Whether the outer Newton loop converged.
+n_iter_ : int
+    Number of outer Newton iterations.</p>
+</details>
+
+<p><span class="doc-section-title">Examples:</span></p>
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">&gt;&gt;&gt; </span><span class="n">model</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">&quot;y ~ s(x)&quot;</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="s2">&quot;gaussian&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="gp">&gt;&gt;&gt; </span><span class="n">model</span><span class="o">.</span><span class="n">coefficients_</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="go">array([...])</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.api.GAM.fit" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">fit</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">weights</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">offset</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">GAM</span></code>
+
+<a href="#jaxgam.api.GAM.fit" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Fit the GAM to data.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>data</code>
+            </td>
+            <td>
+                  <code><span title="pandas.DataFrame">DataFrame</span> or <span title="dict">dict</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Data frame containing the variables in the formula.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>weights</code>
+            </td>
+            <td>
+                  <code><span title="numpy.ndarray">ndarray</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Prior weights, shape <code>(n,)</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>offset</code>
+            </td>
+            <td>
+                  <code><span title="numpy.ndarray">ndarray</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Offset vector, shape <code>(n,)</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="GAM(formula: str, family: str | ExponentialFamily = 'gaussian', method: str = 'REML', sp: np.ndarray | list | None = None, **kwargs) (jaxgam.api.GAM)" href="#jaxgam.api.GAM">GAM</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Self, for method chaining.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.api.GAM.predict" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">predict</span><span class="p">(</span><span class="n">newdata</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">pred_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;response&#39;</span><span class="p">,</span> <span class="n">se_fit</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">offset</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span></code>
+
+<a href="#jaxgam.api.GAM.predict" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Predict from a fitted GAM.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>newdata</code>
+            </td>
+            <td>
+                  <code><span title="pandas.DataFrame">DataFrame</span> or <span title="dict">dict</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>New data for prediction. If None, uses the training data.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>pred_type</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Type of prediction: <code>'response'</code> or <code>'link'</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;response&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>se_fit</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether to return standard errors.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>offset</code>
+            </td>
+            <td>
+                  <code><span title="array">array</span> - <span title="like">like</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Offset for new data predictions.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="numpy.ndarray">ndarray</span> or <span title="tuple">tuple</span>[<span title="numpy.ndarray">ndarray</span>, <span title="numpy.ndarray">ndarray</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Predictions, or <code>(predictions, standard_errors)</code> if <code>se_fit=True</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.api.GAM.predict_matrix" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">predict_matrix</span><span class="p">(</span><span class="n">newdata</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.api.GAM.predict_matrix" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build constrained prediction matrix for new data.</p>
+<p>Equivalent to R's <code>predict.gam(type="lpmatrix")</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>newdata</code>
+            </td>
+            <td>
+                  <code><span title="DataFrame">DataFrame</span> or <span title="dict">dict</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>New data for prediction.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code>np.ndarray, shape ``(n_new, total_coefs)``</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Constrained prediction matrix.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.api.GAM.summary" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">summary</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">GAMSummary</span></code>
+
+<a href="#jaxgam.api.GAM.summary" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Print and return summary of a fitted GAM.</p>
+<p>Computes parametric coefficient significance (z/t tests),
+smooth term significance (Wood 2013 testStat), and model-level
+statistics (R-squared, deviance explained, scale estimate).</p>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="jaxgam.summary.summary.GAMSummary">GAMSummary</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Summary object with parametric and smooth term tables.
+The summary is also printed to stdout.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.api.GAM.plot" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot</span><span class="p">(</span><span class="n">select</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">list</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">pages</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">rug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">se</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">shade</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">matplotlib</span><span class="o">.</span><span class="n">figure</span><span class="o">.</span><span class="n">Figure</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span></code>
+
+<a href="#jaxgam.api.GAM.plot" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot smooth components of a fitted GAM.</p>
+<p>Equivalent to R's <code>plot.gam()</code>. Produces one panel per smooth
+term (or per factor level for factor-by smooths) showing the
+partial effect on the link scale, with optional SE bands and
+rug marks.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>select</code>
+            </td>
+            <td>
+                  <code>int, list, or None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Select specific smooth term(s) to plot (0-indexed). If None,
+plots all smooth terms.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>pages</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of pages. 0 means automatic layout.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>rug</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Show rug marks at data covariate values.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>se</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Show standard error bands.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>shade</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If True, use shaded SE bands; if False, use dashed lines.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>**kwargs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Additional arguments passed to <code>plot_gam()</code>. See
+<code>jaxgam.plot.plot_gam.plot_gam</code> for full parameter list.</p>
+              </div>
+            </td>
+            <td>
+                  <code>{}</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>fig</code></td>            <td>
+                  <code><span title="matplotlib.figure.Figure">Figure</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The figure.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+<td><code>axes</code></td>            <td>
+                  <code><span title="numpy.ndarray">ndarray</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Array of Axes objects.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><hr />
+<h2 id="families">Families<a class="headerlink" href="#families" title="Permanent link">&para;</a></h2>
+<p>Distribution families for the response variable. Normally specified as a
+string (<code>family="gaussian"</code>) when constructing a <code>GAM</code>, but the classes
+can be used directly for custom link functions.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam.families</span><span class="w"> </span><span class="kn">import</span> <span class="n">Gaussian</span><span class="p">,</span> <span class="n">Binomial</span><span class="p">,</span> <span class="n">Poisson</span><span class="p">,</span> <span class="n">Gamma</span>
+</code></pre></div>
+<h3 id="gaussian">Gaussian<a class="headerlink" href="#gaussian" title="Permanent link">&para;</a></h3>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="jaxgam.families.standard.Gaussian" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">Gaussian</span><span class="p">(</span><span class="n">link</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Link</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#jaxgam.families.standard.Gaussian" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="jaxgam.families.base.ExponentialFamily">ExponentialFamily</span></code></p>
+
+
+
+        <p>Gaussian (normal) family with V(mu) = 1.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>link</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="jaxgam.links.links.Link">Link</span> or None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Link function. Default is identity.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Gaussian.variance" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">variance</span><span class="p">(</span><span class="n">mu</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Gaussian.variance" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>V(mu) = 1 for all mu.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Gaussian.deviance_resids" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">deviance_resids</span><span class="p">(</span><span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">mu</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Gaussian.deviance_resids" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Deviance residuals: sign(y - mu) * sqrt(wt * (y - mu)^2).</p>
+<p>The unit deviance for Gaussian is (y - mu)^2.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Gaussian.initialize" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">initialize</span><span class="p">(</span><span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Gaussian.initialize" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Initialize mu = y for Gaussian.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h3 id="binomial">Binomial<a class="headerlink" href="#binomial" title="Permanent link">&para;</a></h3>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="jaxgam.families.standard.Binomial" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">Binomial</span><span class="p">(</span><span class="n">link</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Link</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#jaxgam.families.standard.Binomial" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="jaxgam.families.base.ExponentialFamily">ExponentialFamily</span></code></p>
+
+
+
+        <p>Binomial family with V(mu) = mu * (1 - mu).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>link</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="jaxgam.links.links.Link">Link</span> or None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Link function. Default is logit.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Binomial.variance" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">variance</span><span class="p">(</span><span class="n">mu</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Binomial.variance" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>V(mu) = mu * (1 - mu).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Binomial.deviance_resids" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">deviance_resids</span><span class="p">(</span><span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">mu</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Binomial.deviance_resids" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Deviance residuals for Binomial.</p>
+<p>Unit deviance: 2 * [y * log(y/mu) + (1-y) * log((1-y)/(1-mu))]
+with edge-case handling for y=0 and y=1.</p>
+<p>Matches R's binomial()$dev.resids.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Binomial.initialize" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">initialize</span><span class="p">(</span><span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Binomial.initialize" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Initialize mu = (y + 0.5) / 2 for Binomial.</p>
+<p>This R convention maps y in {0, 1} to mu in (0.25, 0.75),
+ensuring the starting mu is safely away from the boundary.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h3 id="poisson">Poisson<a class="headerlink" href="#poisson" title="Permanent link">&para;</a></h3>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="jaxgam.families.standard.Poisson" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">Poisson</span><span class="p">(</span><span class="n">link</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Link</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#jaxgam.families.standard.Poisson" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="jaxgam.families.base.ExponentialFamily">ExponentialFamily</span></code></p>
+
+
+
+        <p>Poisson family with V(mu) = mu.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>link</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="jaxgam.links.links.Link">Link</span> or None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Link function. Default is log.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Poisson.variance" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">variance</span><span class="p">(</span><span class="n">mu</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Poisson.variance" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>V(mu) = mu.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Poisson.deviance_resids" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">deviance_resids</span><span class="p">(</span><span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">mu</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Poisson.deviance_resids" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Deviance residuals for Poisson.</p>
+<p>Unit deviance: 2 * [y * log(y/mu) - (y - mu)]
+with y=0 handled as a special case (term = 0).</p>
+<p>Matches R's poisson()$dev.resids.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Poisson.initialize" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">initialize</span><span class="p">(</span><span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Poisson.initialize" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Initialize mu for Poisson: mu = y + 0.1 where y == 0.</p>
+<p>Following R's convention, this avoids log(0) in the first
+evaluation of the working quantities.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h3 id="gamma">Gamma<a class="headerlink" href="#gamma" title="Permanent link">&para;</a></h3>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="jaxgam.families.standard.Gamma" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">Gamma</span><span class="p">(</span><span class="n">link</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Link</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#jaxgam.families.standard.Gamma" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="jaxgam.families.base.ExponentialFamily">ExponentialFamily</span></code></p>
+
+
+
+        <p>Gamma family with V(mu) = mu^2.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>link</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> or <span title="jaxgam.links.links.Link">Link</span> or None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Link function. Default is inverse (1/mu).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Gamma.variance" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">variance</span><span class="p">(</span><span class="n">mu</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Gamma.variance" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>V(mu) = mu^2.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Gamma.deviance_resids" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">deviance_resids</span><span class="p">(</span><span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">mu</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Gamma.deviance_resids" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Deviance residuals for Gamma.</p>
+<p>Unit deviance: 2 * [-log(y/mu) + (y - mu)/mu]
+= -2 * [log(y/mu) - (y - mu)/mu]</p>
+<p>Matches R's Gamma()$dev.resids.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="jaxgam.families.standard.Gamma.initialize" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">initialize</span><span class="p">(</span><span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span></code>
+
+<a href="#jaxgam.families.standard.Gamma.initialize" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Initialize mu for Gamma: mu = y, clipped to positive values.</p>
+<p>Follows R's Gamma()$initialize which ensures mu &gt; 0.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><hr />
+<h2 id="formula-syntax">Formula syntax<a class="headerlink" href="#formula-syntax" title="Permanent link">&para;</a></h2>
+<p>Models are specified with R-style formulas:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Single smooth</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">GAM</span><span class="p">(</span><span class="s2">&quot;y ~ s(x)&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Multiple smooths</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">GAM</span><span class="p">(</span><span class="s2">&quot;y ~ s(x1) + s(x2)&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Tensor product</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">GAM</span><span class="p">(</span><span class="s2">&quot;y ~ te(x1, x2, k=5)&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># Factor-by smooth</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="n">GAM</span><span class="p">(</span><span class="s2">&quot;y ~ s(x, by=fac, k=10) + fac&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="smooth-term-arguments">Smooth term arguments<a class="headerlink" href="#smooth-term-arguments" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k</code></td>
+<td>Basis dimension (number of knots). <code>-1</code> means auto-select: resolves to <code>10</code> for 1D TPRS/cubic, <code>30</code> for 2D TPRS.</td>
+<td>-1 (auto)</td>
+</tr>
+<tr>
+<td><code>bs</code></td>
+<td>Basis type: <code>'tp'</code>, <code>'ts'</code>, <code>'cr'</code>, <code>'cs'</code>, <code>'cc'</code></td>
+<td><code>'tp'</code></td>
+</tr>
+<tr>
+<td><code>by</code></td>
+<td>Factor variable for factor-by smooths</td>
+<td>None</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tensor-product-arguments">Tensor product arguments<a class="headerlink" href="#tensor-product-arguments" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k</code></td>
+<td>Marginal basis dimension (scalar applied to all margins). <code>-1</code> means auto-select (resolves to <code>10</code> for the default <code>cr</code> marginals).</td>
+<td>-1 (auto)</td>
+</tr>
+</tbody>
+</table>
+<p>Use <code>te()</code> for full tensor products and <code>ti()</code> for interaction-only terms
+(excludes main effects).</p>
+<hr />
+<h2 id="fitted-model-attributes">Fitted model attributes<a class="headerlink" href="#fitted-model-attributes" title="Permanent link">&para;</a></h2>
+<p>After calling <code>fit()</code>, these attributes are available on the <code>GAM</code> instance:</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coefficients_</code></td>
+<td><code>ndarray (p,)</code></td>
+<td>Coefficient vector</td>
+</tr>
+<tr>
+<td><code>fitted_values_</code></td>
+<td><code>ndarray (n,)</code></td>
+<td>Fitted values on response scale</td>
+</tr>
+<tr>
+<td><code>linear_predictor_</code></td>
+<td><code>ndarray (n,)</code></td>
+<td>Linear predictor</td>
+</tr>
+<tr>
+<td><code>Vp_</code></td>
+<td><code>ndarray (p, p)</code></td>
+<td>Bayesian covariance matrix</td>
+</tr>
+<tr>
+<td><code>edf_</code></td>
+<td><code>ndarray</code></td>
+<td>Per-smooth effective degrees of freedom</td>
+</tr>
+<tr>
+<td><code>edf_total_</code></td>
+<td><code>float</code></td>
+<td>Total effective degrees of freedom</td>
+</tr>
+<tr>
+<td><code>scale_</code></td>
+<td><code>float</code></td>
+<td>Estimated scale (dispersion) parameter</td>
+</tr>
+<tr>
+<td><code>deviance_</code></td>
+<td><code>float</code></td>
+<td>Model deviance</td>
+</tr>
+<tr>
+<td><code>null_deviance_</code></td>
+<td><code>float</code></td>
+<td>Null model deviance</td>
+</tr>
+<tr>
+<td><code>smoothing_params_</code></td>
+<td><code>ndarray</code></td>
+<td>Estimated smoothing parameters</td>
+</tr>
+<tr>
+<td><code>converged_</code></td>
+<td><code>bool</code></td>
+<td>Whether the optimizer converged</td>
+</tr>
+<tr>
+<td><code>n_iter_</code></td>
+<td><code>int</code></td>
+<td>Number of Newton iterations</td>
+</tr>
+<tr>
+<td><code>X_</code></td>
+<td><code>ndarray (n, p)</code></td>
+<td>Design matrix</td>
+</tr>
+<tr>
+<td><code>family_</code></td>
+<td><code>ExponentialFamily</code></td>
+<td>Family object used for fitting</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

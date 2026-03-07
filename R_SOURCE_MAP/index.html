@@ -1,0 +1,1941 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+        <link rel="prev" href="../design/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.4">
+    
+    
+      
+        <title>R Source Map - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#r-source-reference-map" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              R Source Map
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#setup-local-mgcv-clone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup: Local mgcv Clone
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-to-use-this-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to Use This File
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#source-file-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source File Inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-to-source-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task-to-Source Mapping
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Task-to-Source Mapping">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-foundation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Foundation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1: Foundation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-11-link-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.1 - Link Functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-12-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.2 - Families
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-13-penalty-matrices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.3 - Penalty Matrices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-14-tprs-basis-and-penalty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.4 - TPRS Basis and Penalty
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-15-cubic-regression-splines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.5 - Cubic Regression Splines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-16-tensor-products" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.6 - Tensor Products
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-17-formula-parser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.7 - Formula Parser
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-18-factor-by-smooths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.8 - Factor-By Smooths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-19-identifiability-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.9 - Identifiability Constraints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-110-design-matrix-assembly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.10 - Design Matrix Assembly
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-fitting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Fitting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2: Fitting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-23-pirls-inner-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.3 - PIRLS Inner Loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-24-reml-criterion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.4 - REML Criterion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-25-newton-outer-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.5 - Newton Outer Optimizer
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-post-estimation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Post-Estimation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 3: Post-Estimation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-31-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.1 - Prediction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-32-summary-and-edf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.2 - Summary and EDF
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-33-plotting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.3 - Plotting
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#accessing-the-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Accessing the Source
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-lookup-im-debugging-x-where-do-i-look" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Lookup: "I'm Debugging X, Where Do I Look?"
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#setup-local-mgcv-clone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup: Local mgcv Clone
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-to-use-this-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to Use This File
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#source-file-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source File Inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-to-source-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task-to-Source Mapping
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Task-to-Source Mapping">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-foundation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Foundation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1: Foundation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-11-link-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.1 - Link Functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-12-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.2 - Families
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-13-penalty-matrices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.3 - Penalty Matrices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-14-tprs-basis-and-penalty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.4 - TPRS Basis and Penalty
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-15-cubic-regression-splines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.5 - Cubic Regression Splines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-16-tensor-products" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.6 - Tensor Products
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-17-formula-parser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.7 - Formula Parser
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-18-factor-by-smooths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.8 - Factor-By Smooths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-19-identifiability-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.9 - Identifiability Constraints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-110-design-matrix-assembly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1.10 - Design Matrix Assembly
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-fitting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Fitting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2: Fitting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-23-pirls-inner-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.3 - PIRLS Inner Loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-24-reml-criterion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.4 - REML Criterion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-25-newton-outer-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2.5 - Newton Outer Optimizer
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-post-estimation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Post-Estimation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 3: Post-Estimation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-31-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.1 - Prediction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-32-summary-and-edf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.2 - Summary and EDF
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-33-plotting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 3.3 - Plotting
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#accessing-the-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Accessing the Source
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-lookup-im-debugging-x-where-do-i-look" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Lookup: "I'm Debugging X, Where Do I Look?"
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="r-source-reference-map">R Source Reference Map<a class="headerlink" href="#r-source-reference-map" title="Permanent link">&para;</a></h1>
+<p>This document maps each JaxGAM implementation task to the specific R mgcv source files and functions that implement the equivalent logic.</p>
+<h2 id="setup-local-mgcv-clone">Setup: Local mgcv Clone<a class="headerlink" href="#setup-local-mgcv-clone" title="Permanent link">&para;</a></h2>
+<p>Clone the CRAN GitHub mirror and set the <code>MGCV_SOURCE</code> environment variable:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/cran/mgcv.git<span class="w"> </span>&lt;your-path&gt;/mgcv
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MGCV_SOURCE</span><span class="o">=</span>&lt;your-path&gt;/mgcv
+</code></pre></div>
+<p>Add the export to your shell profile (<code>.zshrc</code>, <code>.bashrc</code>, etc.) so it persists. Agents can run <code>echo $MGCV_SOURCE</code> to discover the clone location.</p>
+<h2 id="how-to-use-this-file">How to Use This File<a class="headerlink" href="#how-to-use-this-file" title="Permanent link">&para;</a></h2>
+<p><strong>When implementing a task</strong>, find it in the table below. Read the listed R functions <em>before</em> writing Python using the local clone. The R code is the ground truth for numerical behavior - edge cases, special handling, and algorithmic choices that aren't captured in the design doc.</p>
+<p><strong>Source layout:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$MGCV_SOURCE/R/       # R source files
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>$MGCV_SOURCE/src/     # C source files
+</code></pre></div></p>
+<p>For example, to read the smooth constructors:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>$MGCV_SOURCE/R/smooth.r
+</code></pre></div></p>
+<p><strong>When debugging a mismatch with R</strong>, the R function listed here is where to look. Run the R code in an R session with <code>debug(function_name)</code> to step through and compare intermediate values.</p>
+<p><strong>Reading R code tips for agents:</strong>
+- R uses 1-based indexing. Adjust when porting.
+- <code>&lt;-</code> is assignment. <code>&lt;&lt;-</code> is assignment to parent scope.
+- <code>.C()</code> and <code>.Call()</code> invoke compiled C code in <code>src/</code>. The C implementations are the actual hot paths - the R wrappers often just do argument validation.
+- <code>@</code> accesses S4 slots. <code>$</code> accesses list elements or S3 components.
+- <code>mgcv:::</code> accesses unexported (internal) functions. These are often the ones we need most.</p>
+<hr />
+<h2 id="source-file-inventory">Source File Inventory<a class="headerlink" href="#source-file-inventory" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>$MGCV_SOURCE/
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>├── R/                    # R source files
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>│   ├── gam.fit3.r        # PIRLS, working weights, convergence
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>│   ├── smooth.r          # All smooth constructors (basis + penalty)
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>│   ├── fast-REML.r       # REML/ML criterion, Newton optimizer
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>│   ├── mgcv.r            # Main file: gam(), predict.gam(), summary.gam(), gam.setup(), gam.side(), interpret.gam(), pen.edf(), testStat()
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>│   ├── bam.r             # bam() - NOT needed for v1.0
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>│   ├── gamm.r            # gamm() - NOT needed for v1.0
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>│   ├── plots.r           # plot.gam
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>│   ├── efam.r            # Extended families - NOT needed for v1.0
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>│   └── sparse.r          # Sparse matrix routines - NOT needed for v1.0
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>├── src/                  # C source files
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>│   ├── tprs.c            # TPRS eigendecomposition (the real implementation)
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>│   ├── mat.c             # Matrix operations (Cholesky, QR, etc.)
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>│   ├── gdi.c             # Generalized derivative information (REML)
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>│   ├── discrete.c        # Discretization for bam - NOT needed for v1.0
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>│   └── mgcv.c            # Package init, misc C utilities
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>└── man/                  # Documentation (useful for parameter descriptions)
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    ├── gam.Rd
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>    ├── s.Rd
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>    └── ...
+</code></pre></div>
+<hr />
+<h2 id="task-to-source-mapping">Task-to-Source Mapping<a class="headerlink" href="#task-to-source-mapping" title="Permanent link">&para;</a></h2>
+<h3 id="phase-1-foundation">Phase 1: Foundation<a class="headerlink" href="#phase-1-foundation" title="Permanent link">&para;</a></h3>
+<h4 id="task-11-link-functions">Task 1.1 - Link Functions<a class="headerlink" href="#task-11-link-functions" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>base R <code>stats</code> package</td>
+<td><code>make.link()</code></td>
+<td>Constructs link with <code>linkfun</code>, <code>linkinv</code>, <code>mu.eta</code>, <code>valideta</code></td>
+</tr>
+<tr>
+<td>base R <code>stats</code> package</td>
+<td>Individual family functions (e.g., <code>binomial()$linkfun</code>)</td>
+<td>Per-family link implementations</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> R's <code>mu.eta</code> is dμ/dη (derivative of inverse link), not dη/dμ. Make sure our naming matches.</p>
+<h4 id="task-12-families">Task 1.2 - Families<a class="headerlink" href="#task-12-families" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>base R <code>stats</code> package</td>
+<td><code>gaussian()</code></td>
+<td>Returns family object with <code>variance</code>, <code>dev.resids</code>, <code>aic</code>, <code>initialize</code>, <code>validmu</code></td>
+</tr>
+<tr>
+<td>base R <code>stats</code> package</td>
+<td><code>binomial()</code></td>
+<td>Same structure. Note <code>initialize</code> handles proportion vs count input</td>
+</tr>
+<tr>
+<td>base R <code>stats</code> package</td>
+<td><code>poisson()</code></td>
+<td>Note <code>dev.resids</code> uses <code>2 * wt * (y * log(ifelse(y==0, 1, y/mu)) - (y - mu))</code> - the <code>ifelse</code> for y=0 is critical</td>
+</tr>
+<tr>
+<td>base R <code>stats</code> package</td>
+<td><code>Gamma()</code></td>
+<td>Note capital G. <code>dev.resids</code> uses <code>-2 * wt * (log(ifelse(y==0, 1, y/mu)) - (y - mu)/mu)</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> R's <code>dev.resids</code> returns <em>per-observation</em> deviance contributions (not squared residuals and not summed). The total deviance is <code>sum(dev.resids(...))</code>. Watch for the sign - deviance residuals are <code>sign(y - mu) * sqrt(abs(dev.resids))</code>.</p>
+<p><strong>Key detail:</strong> <code>initialize</code> expressions in R families use the <code>eval(family$initialize)</code> pattern with <code>mustart</code> being set in the calling environment. This is R-specific - in Python, just return a starting μ vector.</p>
+<h4 id="task-13-penalty-matrices">Task 1.3 - Penalty Matrices<a class="headerlink" href="#task-13-penalty-matrices" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct.*.smooth.spec()</code> (each smooth type)</td>
+<td>Returns <code>$S</code> - list of penalty matrices</td>
+</tr>
+<tr>
+<td><strong>Key detail:</strong> Each smooth's <code>$S</code> is a <em>list</em> of penalty matrices (usually length 1, but tensor products have one per marginal). The <code>$sp</code> vector in the fitted model gives the corresponding smoothing parameters.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="task-14-tprs-basis-and-penalty">Task 1.4 - TPRS Basis and Penalty<a class="headerlink" href="#task-14-tprs-basis-and-penalty" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct.tp.smooth.spec()</code></td>
+<td><strong>START HERE.</strong> R-level TPRS constructor. Calls C code for the heavy lifting.</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>Predict.matrix.tprs.smooth()</code></td>
+<td>Prediction matrix construction for new data</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>null.space.dimension()</code></td>
+<td>Computes null space dimension for given d and m</td>
+</tr>
+<tr>
+<td><code>src/tprs.c</code></td>
+<td><code>construct_tprs()</code></td>
+<td><strong>THE REAL IMPLEMENTATION.</strong> Eigendecomposition, knot selection, basis truncation. Read this carefully - the R wrapper just packages arguments.</td>
+</tr>
+<tr>
+<td><code>src/tprs.c</code></td>
+<td><code>tps_g()</code></td>
+<td>TPS semi-kernel evaluation η(r)</td>
+</tr>
+<tr>
+<td><code>src/tprs.c</code></td>
+<td><code>tprs_setup()</code></td>
+<td>Knot selection via max-min distance</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key details:</strong>
+- The eigendecomposition is of the <strong>augmented</strong> matrix <code>[E T; T' 0]</code> where E is the TPS kernel matrix evaluated at knots and T is the polynomial null space basis. This is not a simple eigendecomposition of E alone.
+- <code>ts</code> (shrinkage) adds an extra penalty: the eigenvalues corresponding to the null space get a small penalty (1e-4 × max eigenvalue of the wiggly penalty). The exact scaling matters for matching R.
+- Knot selection: when n &gt; k, mgcv selects k knots from the data using a greedy max-min distance algorithm (<code>tprs_setup</code> in <code>src/tprs.c</code>). The knot order affects the basis, so it must match.</p>
+<h4 id="task-15-cubic-regression-splines">Task 1.5 - Cubic Regression Splines<a class="headerlink" href="#task-15-cubic-regression-splines" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct.cr.smooth.spec()</code></td>
+<td>Natural cubic regression spline constructor</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct.cs.smooth.spec()</code></td>
+<td>Shrinkage cubic (same as cr + null space penalty)</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct.cc.smooth.spec()</code></td>
+<td>Cyclic cubic</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>Predict.matrix.cr.smooth()</code></td>
+<td>Prediction matrix for cr</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>place.knots()</code></td>
+<td>Quantile-based knot placement</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> mgcv's cubic regression splines are NOT B-splines. They use a specific natural spline basis evaluated at the knots directly. The penalty is the integrated squared second derivative, computed analytically from the spline coefficients. <code>place.knots()</code> uses quantiles of unique data values, not raw quantiles - this matters when data has ties.</p>
+<h4 id="task-16-tensor-products">Task 1.6 - Tensor Products<a class="headerlink" href="#task-16-tensor-products" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct.tensor.smooth.spec()</code></td>
+<td><code>te()</code> constructor</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>tensor.prod.model.matrix()</code></td>
+<td>Row-wise Kronecker product of marginal bases</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>tensor.prod.penalties()</code></td>
+<td>Penalty construction from marginal penalties</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct.t2.smooth.spec()</code></td>
+<td><code>t2()</code> - different penalty structure than <code>te()</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> <code>te()</code> penalties are <code>I ⊗ S_1</code>, <code>S_2 ⊗ I</code>, etc. - one penalty per marginal, each Kronecker-producted with identity matrices for the other marginals. <code>ti()</code> is <code>te()</code> with main effects removed via constraints. <code>t2()</code> uses a different penalty construction (sum of Kronecker products) - defer <code>t2</code> to later if needed.</p>
+<h4 id="task-17-formula-parser">Task 1.7 - Formula Parser<a class="headerlink" href="#task-17-formula-parser" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>interpret.gam()</code></td>
+<td><strong>THE KEY FUNCTION.</strong> Parses formula, identifies smooth terms, separates parametric from smooth.</td>
+</tr>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>interpret.gam0()</code></td>
+<td>Helper that walks the formula tree</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>s()</code></td>
+<td>Smooth term specification (captures arguments, doesn't build basis)</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>te()</code>, <code>ti()</code>, <code>t2()</code></td>
+<td>Tensor product term specifications</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> <code>interpret.gam()</code> returns a list with <code>$pf</code> (parametric formula), <code>$smooth.spec</code> (list of smooth specs), and <code>$response</code> (response name). Each smooth spec is essentially our <code>SmoothSpec</code> - it holds the variable names, basis type, dimension, and options, but doesn't construct the basis yet. That happens later in <code>gam.setup()</code>.</p>
+<h4 id="task-18-factor-by-smooths">Task 1.8 - Factor-By Smooths<a class="headerlink" href="#task-18-factor-by-smooths" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct()</code> (search for <code>by.var</code>)</td>
+<td>The <code>by</code> variable handling in smooth construction</td>
+</tr>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>gam.setup()</code> (search for <code>by</code>)</td>
+<td>How <code>by</code> variables are resolved during model setup</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> When <code>by</code> is a factor, mgcv creates one smooth per level and sets <code>$by.level</code> on each. The design matrix is block-diagonal - row i has nonzeros only in the block for its factor level. The penalty is duplicated per level (each gets its own λ). When <code>by</code> is numeric, the basis matrix is simply multiplied column-wise by the numeric variable.</p>
+<p><strong>Key detail:</strong> mgcv detects factor vs numeric <code>by</code> using <code>is.factor()</code>. Integers are NOT treated as factors. Character vectors are NOT automatically converted. Only explicit R factors trigger the factor-by path.</p>
+<h4 id="task-19-identifiability-constraints">Task 1.9 - Identifiability Constraints<a class="headerlink" href="#task-19-identifiability-constraints" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>gam.side()</code></td>
+<td><strong>THE KEY FUNCTION.</strong> Identifies which smooths need sum-to-zero constraints to resolve identifiability.</td>
+</tr>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>gam.setup()</code> (search for <code>C</code> matrix)</td>
+<td>How constraints are absorbed into the basis</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct()</code> (search for <code>$C</code>)</td>
+<td>Constraint matrix on each smooth</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> <code>gam.side()</code> works by checking whether any smooth's column space overlaps with the intercept or another smooth's column space. When overlap is detected, it imposes a sum-to-zero constraint: <code>1' X_s β_s = 0</code>. This is absorbed into the basis via QR decomposition, reducing the column count by 1. The constraint matrix <code>C</code> is stored on the smooth object and used to undo the absorption for prediction.</p>
+<p><strong>Key detail:</strong> The order of constraint application matters. <code>gam.side()</code> processes smooths in a specific order. If constraints are applied in a different order, the basis differs and results won't match R.</p>
+<h4 id="task-110-design-matrix-assembly">Task 1.10 - Design Matrix Assembly<a class="headerlink" href="#task-110-design-matrix-assembly" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>gam.setup()</code></td>
+<td><strong>THE MASTER ASSEMBLY FUNCTION.</strong> Constructs all smooth bases, applies constraints, assembles full X, builds penalty list.</td>
+</tr>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>gam()</code> (first ~100 lines)</td>
+<td>Orchestration: formula parsing → gam.setup → fitting</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> <code>gam.setup()</code> returns a list with <code>$X</code> (full model matrix), <code>$S</code> (list of penalty matrices), <code>$off</code> (column offsets per smooth in X), <code>$sp</code> (initial smoothing parameters), and constraint info. This is the Phase 1 output in our architecture.</p>
+<hr />
+<h3 id="phase-2-fitting">Phase 2: Fitting<a class="headerlink" href="#phase-2-fitting" title="Permanent link">&para;</a></h3>
+<h4 id="task-23-pirls-inner-loop">Task 2.3 - PIRLS Inner Loop<a class="headerlink" href="#task-23-pirls-inner-loop" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/gam.fit3.r</code></td>
+<td><code>gam.fit3()</code></td>
+<td><strong>THE INNER LOOP.</strong> PIRLS for standard families. ~500 lines.</td>
+</tr>
+<tr>
+<td><code>R/gam.fit3.r</code></td>
+<td><code>gam.fit5()</code></td>
+<td>PIRLS for extended families (not needed for v1.0)</td>
+</tr>
+<tr>
+<td><code>src/gdi.c</code></td>
+<td><code>gdi1()</code>, <code>gdi2()</code></td>
+<td>C implementations of the PIRLS numerics (XtWX, etc.)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key details:</strong>
+- Search for <code>step.half</code> in <code>gam.fit3()</code> to find the step-halving logic. It's ~30 lines. The halving limit is 100 for the inner PIRLS loop; the outer Newton uses <code>maxHalf = 30</code>.
+- Convergence criterion: <code>abs(pdev - old.pdev) &lt; control$epsilon * (abs(scale) + abs(pdev))</code> where <code>control$epsilon</code> defaults to <code>1e-7</code>. Note this uses penalized deviance and a multiplicative tolerance scaled by the dispersion parameter.
+- Working weights: computed as <code>w * mu.eta.val^2 / variance</code> where <code>w</code> is prior weights, <code>mu.eta.val</code> is dμ/dη, and <code>variance</code> is V(μ). This is <code>W</code> in our notation.
+- Working response: <code>z &lt;- (eta - offset) + (y - mu) / mu.eta.val</code>. Note the offset handling.
+- Initialization: <code>eval(family$initialize)</code> sets <code>mustart</code>. Then <code>eta &lt;- family$linkfun(mustart)</code>.</p>
+<h4 id="task-24-reml-criterion">Task 2.4 - REML Criterion<a class="headerlink" href="#task-24-reml-criterion" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/fast-REML.r</code></td>
+<td><code>Sl.initial.repara()</code></td>
+<td>Reparameterizes penalties for stable REML computation</td>
+</tr>
+<tr>
+<td><code>R/fast-REML.r</code></td>
+<td><code>Sl.addS()</code></td>
+<td>Adds penalties together with smoothing parameter weighting</td>
+</tr>
+<tr>
+<td><code>R/fast-REML.r</code></td>
+<td><code>fast.REML.fit()</code></td>
+<td>Newton optimizer for REML (ALSO contains the criterion computation)</td>
+</tr>
+<tr>
+<td><code>src/gdi.c</code></td>
+<td><code>gdi1()</code>, <code>gdi2()</code></td>
+<td>C implementations of REML derivatives (gradient and Hessian of V w.r.t. log λ)</td>
+</tr>
+<tr>
+<td><code>R/gam.fit3.r</code></td>
+<td><code>gam.fit3()</code> (search for <code>reml</code> or <code>ldetS</code>)</td>
+<td>Where REML is evaluated during fitting</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key details:</strong>
+- The REML criterion in mgcv is: <code>V = deviance + log|XtWX + S_λ| - log|S_λ*|</code> where <code>S_λ*</code> is the penalty projected onto its range. The <code>ldetS</code> (log determinant of S_λ) computation is subtle - it only includes the non-zero eigenvalues.
+- <code>gdi1()</code>/<code>gdi2()</code> in C compute the derivatives of V w.r.t. <code>log(sp)</code> analytically. This is what we replace with <code>jax.grad</code>. But reading the analytical derivatives helps validate our AD output.
+- <code>Sl.initial.repara()</code> reparameterizes the problem so each penalty has a nice form. This is an optimization for the Newton step - we may or may not need it.</p>
+<h4 id="task-25-newton-outer-optimizer">Task 2.5 - Newton Outer Optimizer<a class="headerlink" href="#task-25-newton-outer-optimizer" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/fast-REML.r</code></td>
+<td><code>fast.REML.fit()</code></td>
+<td>The outer Newton loop. Search for <code>while</code> to find the iteration.</td>
+</tr>
+<tr>
+<td><code>R/gam.fit3.r</code></td>
+<td><code>gam.fit3()</code> (search for <code>while</code>)</td>
+<td>The outer-outer loop that alternates between PIRLS and λ updates</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> mgcv's outer iteration in <code>gam.fit3</code> is NOT a clean Newton loop on REML. It interleaves PIRLS convergence checks with smoothing parameter updates. The exact interleaving matters for convergence on difficult models. Read the <code>while</code> loop structure in <code>gam.fit3</code> carefully - it has PIRLS inner iterations nested inside λ update outer iterations, with a specific convergence protocol.</p>
+<hr />
+<h3 id="phase-3-post-estimation">Phase 3: Post-Estimation<a class="headerlink" href="#phase-3-post-estimation" title="Permanent link">&para;</a></h3>
+<h4 id="task-31-prediction">Task 3.1 - Prediction<a class="headerlink" href="#task-31-prediction" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>predict.gam()</code></td>
+<td>Prediction from fitted GAM</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>Predict.matrix.*()</code></td>
+<td>Per-smooth-type prediction matrix construction</td>
+</tr>
+<tr>
+<td><code>R/smooth.r</code></td>
+<td><code>PredictMat()</code></td>
+<td>Dispatches to the right <code>Predict.matrix</code> method</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> <code>predict.gam()</code> with <code>type="lpmatrix"</code> returns the full prediction matrix (our <code>X_p</code>). This is invaluable for debugging: if <code>X_p</code> matches, any prediction difference is in the coefficients, not the basis construction.</p>
+<h4 id="task-32-summary-and-edf">Task 3.2 - Summary and EDF<a class="headerlink" href="#task-32-summary-and-edf" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>summary.gam()</code></td>
+<td>Summary output including smooth significance tests</td>
+</tr>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>pen.edf()</code></td>
+<td>EDF computation from hat matrix trace</td>
+</tr>
+<tr>
+<td><code>R/mgcv.r</code></td>
+<td><code>testStat()</code></td>
+<td>Wood's (2013) test statistic for smooth significance</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> EDF is computed as <code>trace(F)</code> where <code>F = X (XtWX + S_λ)^{-1} XtW</code>. Per-smooth EDF is the trace of the corresponding diagonal block. mgcv computes this from the Bayesian covariance: <code>edf = rowSums(Vp * crossprod(X))</code> (which is <code>diag(Vp @ X.T @ X)</code> but computed without forming the full product).</p>
+<h4 id="task-33-plotting">Task 3.3 - Plotting<a class="headerlink" href="#task-33-plotting" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>R file</th>
+<th>Function</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R/plots.r</code></td>
+<td><code>plot.gam()</code></td>
+<td>The main plotting function</td>
+</tr>
+<tr>
+<td><code>R/plots.r</code></td>
+<td><code>plot.mgcv.smooth()</code></td>
+<td>Per-smooth-type plotting</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key detail:</strong> mgcv generates plot data by constructing a prediction grid, getting predictions ± SE, and plotting. For 1D smooths: 100 evenly-spaced points in the covariate range (<code>n=100</code>). For 2D: 40×40 grid (<code>n2=40</code>). The SE bands are ±2*SE (not ±1.96).</p>
+<hr />
+<h2 id="accessing-the-source">Accessing the Source<a class="headerlink" href="#accessing-the-source" title="Permanent link">&para;</a></h2>
+<p>The mgcv source is cloned locally (see Setup above). Agents should read files directly from <code>$MGCV_SOURCE</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Discover the clone location</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$MGCV_SOURCE</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Read a specific R file</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nv">$MGCV_SOURCE</span>/R/smooth.r
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># Read a C source file</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="nv">$MGCV_SOURCE</span>/src/tprs.c
+</code></pre></div>
+<p>For large files like <code>smooth.r</code> (~8000 lines), search for the specific function name rather than reading the entire file.</p>
+<p><strong>Pinning a version:</strong> The <code>master</code> branch tracks the latest CRAN release. To pin to a specific version for reproducibility, checkout a tagged release:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">cd</span><span class="w"> </span><span class="nv">$MGCV_SOURCE</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>git<span class="w"> </span>checkout<span class="w"> </span><span class="m">1</span>.9-1
+</code></pre></div></p>
+<p>The CRAN mirror is GPL-2 (Simon Wood). Attribution is required if redistributing; reading for reference is fine.</p>
+<hr />
+<h2 id="quick-lookup-im-debugging-x-where-do-i-look">Quick Lookup: "I'm Debugging X, Where Do I Look?"<a class="headerlink" href="#quick-lookup-im-debugging-x-where-do-i-look" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>R file</th>
+<th>Function</th>
+<th>Search for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Basis matrix doesn't match R</td>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct.*.smooth.spec()</code></td>
+<td>The specific basis type</td>
+</tr>
+<tr>
+<td>Penalty matrix doesn't match</td>
+<td><code>R/smooth.r</code></td>
+<td>Same constructor</td>
+<td><code>$S</code></td>
+</tr>
+<tr>
+<td>Knots don't match</td>
+<td><code>R/smooth.r</code> or <code>src/tprs.c</code></td>
+<td><code>place.knots()</code> or <code>tprs_setup()</code></td>
+<td>Knot selection algorithm</td>
+</tr>
+<tr>
+<td>Coefficients don't match</td>
+<td><code>R/gam.fit3.r</code></td>
+<td><code>gam.fit3()</code></td>
+<td><code>coef</code></td>
+</tr>
+<tr>
+<td>Deviance doesn't match</td>
+<td>base R <code>stats</code> package</td>
+<td><code>*$dev.resids</code></td>
+<td>Per-family deviance</td>
+</tr>
+<tr>
+<td>REML score doesn't match</td>
+<td><code>R/fast-REML.r</code></td>
+<td><code>fast.REML.fit()</code></td>
+<td><code>reml</code></td>
+</tr>
+<tr>
+<td>EDF doesn't match</td>
+<td><code>R/mgcv.r</code></td>
+<td><code>pen.edf()</code></td>
+<td>EDF trace computation</td>
+</tr>
+<tr>
+<td>Smoothing params don't match</td>
+<td><code>R/fast-REML.r</code></td>
+<td><code>fast.REML.fit()</code></td>
+<td><code>sp</code></td>
+</tr>
+<tr>
+<td>Prediction doesn't match</td>
+<td><code>R/mgcv.r</code></td>
+<td><code>predict.gam()</code></td>
+<td>Use <code>type="lpmatrix"</code> to isolate</td>
+</tr>
+<tr>
+<td>Step-halving behavior differs</td>
+<td><code>R/gam.fit3.r</code></td>
+<td><code>gam.fit3()</code></td>
+<td><code>step.half</code></td>
+</tr>
+<tr>
+<td>Constraint/identifiability issue</td>
+<td><code>R/mgcv.r</code></td>
+<td><code>gam.side()</code></td>
+<td>Constraint detection logic</td>
+</tr>
+<tr>
+<td>Factor-by doesn't match</td>
+<td><code>R/smooth.r</code></td>
+<td><code>smooth.construct()</code></td>
+<td><code>by.var</code>, <code>by.level</code></td>
+</tr>
+<tr>
+<td>Summary p-values don't match</td>
+<td><code>R/mgcv.r</code></td>
+<td><code>summary.gam()</code></td>
+<td><code>testStat</code></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

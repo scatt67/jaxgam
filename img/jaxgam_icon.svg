@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 160" width="400" height="160">
+  <defs>
+    <linearGradient id="bandGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5B8DEF" stop-opacity="0.25"/>
+      <stop offset="50%" stop-color="#5B8DEF" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#5B8DEF" stop-opacity="0.25"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="160" rx="16" fill="#0D1117"/>
+
+  <!-- Confidence interval band (empirical Bayes posterior) -->
+  <path d="M 30,105 C 60,100 80,60 110,45 C 140,30 160,35 190,55 C 220,75 240,100 270,95 C 300,90 320,50 350,40
+           L 350,70 C 320,80 300,120 270,125 C 240,130 220,105 190,85 C 160,65 140,60 110,75 C 80,90 60,130 30,135 Z"
+        fill="url(#bandGrad)"/>
+
+  <!-- Smooth curve (fitted GAM) -->
+  <path d="M 30,120 C 60,115 80,75 110,60 C 140,45 160,48 190,70 C 220,90 240,112 270,110 C 300,105 320,65 350,55"
+        fill="none" stroke="#5B8DEF" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Data scatter points -->
+  <circle cx="40" cy="118" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="55" cy="108" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="70" cy="95" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="85" cy="72" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="100" cy="68" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="115" cy="55" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="130" cy="50" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="145" cy="52" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="160" cy="58" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="175" cy="62" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="195" cy="78" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="210" cy="88" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="225" cy="98" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="240" cy="108" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="255" cy="112" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="275" cy="105" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="290" cy="98" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="305" cy="82" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="320" cy="68" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+  <circle cx="340" cy="58" r="2.5" fill="#8BB4F0" opacity="0.5"/>
+
+  <!-- Penalty knot markers (small ticks on x-axis region) -->
+  <line x1="70" y1="138" x2="70" y2="142" stroke="#5B8DEF" stroke-width="1" opacity="0.3"/>
+  <line x1="110" y1="138" x2="110" y2="142" stroke="#5B8DEF" stroke-width="1" opacity="0.3"/>
+  <line x1="150" y1="138" x2="150" y2="142" stroke="#5B8DEF" stroke-width="1" opacity="0.3"/>
+  <line x1="190" y1="138" x2="190" y2="142" stroke="#5B8DEF" stroke-width="1" opacity="0.3"/>
+  <line x1="230" y1="138" x2="230" y2="142" stroke="#5B8DEF" stroke-width="1" opacity="0.3"/>
+  <line x1="270" y1="138" x2="270" y2="142" stroke="#5B8DEF" stroke-width="1" opacity="0.3"/>
+  <line x1="310" y1="138" x2="310" y2="142" stroke="#5B8DEF" stroke-width="1" opacity="0.3"/>
+
+  <!-- "jaxgam" text - clean sans-serif -->
+  <text x="30" y="30" font-family="'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="22" font-weight="700" fill="#E6EDF3" letter-spacing="1">
+    jaxgam
+  </text>
+
+  <!-- Tagline -->
+  <text x="142" y="30" font-family="'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="12" font-weight="400" fill="#8B949E" letter-spacing="0.5">
+    generalized additive models in jax
+  </text>
+</svg>
