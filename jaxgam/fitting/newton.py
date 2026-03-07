@@ -759,17 +759,11 @@ class NewtonOptimizer:
             else:
                 not_moved = 0
 
-            # Break conditions (R line 1832).
-            # Return STUCK (not FAILED) when the score hasn't moved
-            # significantly: R's fast.REML.fit still checks convergence
-            # after step.failed (lines 1843-1875). STUCK allows the
-            # main loop to treat 3 consecutive stalls as convergence,
-            # matching R's behavior on flat REML surfaces (tensor
-            # products, near-optimal lambda).
+            # Break conditions (R line 1832: step.failed <- TRUE)
             if k == _MAX_HALVINGS_GAUSSIAN or not_moved > 3:
-                return log_lambda_new, pirls_new, score_new, _StepOutcome.STUCK
+                return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
             if bool(jnp.allclose(log_lambda, log_lambda + step)):
-                return log_lambda_new, pirls_new, score_new, _StepOutcome.STUCK
+                return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
 
             step = step / 2
             k += 1
