@@ -9,11 +9,11 @@ from jaxgam.families.registry import family_registry, get_family
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 
 __all__ = [
-    "family_registry",
     "Binomial",
     "ExponentialFamily",
     "Gamma",
     "Gaussian",
     "Poisson",
+    "family_registry",
     "get_family",
 ]

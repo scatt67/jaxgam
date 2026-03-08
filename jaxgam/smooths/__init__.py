@@ -18,7 +18,7 @@ from jaxgam.smooths.cubic import (
     CubicShrinkageSmooth,
     CyclicCubicSmooth,
 )
-from jaxgam.smooths.registry import smooth_registry, get_smooth_class
+from jaxgam.smooths.registry import get_smooth_class, smooth_registry
 from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 from jaxgam.smooths.tprs import TPRSShrinkageSmooth, TPRSSmooth
 
@@ -29,7 +29,6 @@ __all__ = [
     "CyclicCubicSmooth",
     "FactorBySmooth",
     "NumericBySmooth",
-    "smooth_registry",
     "Smooth",
     "TPRSShrinkageSmooth",
     "TPRSSmooth",
@@ -39,4 +38,5 @@ __all__ = [
     "get_smooth_class",
     "is_factor",
     "resolve_by_variable",
+    "smooth_registry",
 ]

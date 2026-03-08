@@ -58,9 +58,7 @@ class TestGetInstance:
         b = registry.get_instance("alpha")
         assert a is not b
 
-    def test_cached_returns_same_object(
-        self, cached_registry: Registry[Dummy]
-    ) -> None:
+    def test_cached_returns_same_object(self, cached_registry: Registry[Dummy]) -> None:
         a = cached_registry.get_instance("alpha")
         b = cached_registry.get_instance("alpha")
         assert a is b
@@ -116,15 +114,11 @@ class TestRegister:
         assert registry.get_class("gamma") is DummyC
         assert "GAMMA" in registry
 
-    def test_register_duplicate_builtin_raises(
-        self, registry: Registry[Dummy]
-    ) -> None:
+    def test_register_duplicate_builtin_raises(self, registry: Registry[Dummy]) -> None:
         with pytest.raises(ValueError, match="already registered"):
             registry.register("alpha", DummyC)
 
-    def test_register_duplicate_custom_raises(
-        self, registry: Registry[Dummy]
-    ) -> None:
+    def test_register_duplicate_custom_raises(self, registry: Registry[Dummy]) -> None:
         registry.register("gamma", DummyC)
         with pytest.raises(ValueError, match="already registered"):
             registry.register("gamma", DummyC)
@@ -143,17 +137,13 @@ class TestRegister:
         instance = registry.get_instance("gamma")
         assert isinstance(instance, DummyC)
 
-    def test_register_cached_instance(
-        self, cached_registry: Registry[Dummy]
-    ) -> None:
+    def test_register_cached_instance(self, cached_registry: Registry[Dummy]) -> None:
         cached_registry.register("gamma", DummyC)
         a = cached_registry.get_instance("gamma")
         b = cached_registry.get_instance("gamma")
         assert a is b
 
-    def test_builtins_unchanged_after_register(
-        self, registry: Registry[Dummy]
-    ) -> None:
+    def test_builtins_unchanged_after_register(self, registry: Registry[Dummy]) -> None:
         registry.register("gamma", DummyC)
         assert registry.get_class("alpha") is DummyA
         assert registry.get_class("beta") is DummyB
