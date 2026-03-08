@@ -305,7 +305,7 @@ def cho_factor(
     I_p = jnp.eye(p)
     trace_H = jnp.trace(H)
 
-    eps_small = jnp.maximum(1e-12 * trace_H / p, 1e-10)
+    eps_small = jnp.maximum(1e-12 * trace_H / p, 1e-14)
     eps_large = jnp.maximum(1e-6 * trace_H / p, 1e-10)
 
     L_small = jnp.linalg.cholesky(H + eps_small * I_p)

@@ -100,7 +100,7 @@ class TestChoFactor:
         _, jitter = cho_factor(pd_matrix)
         p = pd_matrix.shape[0]
         trace_H = jnp.trace(pd_matrix)
-        eps_small = jnp.maximum(1e-12 * trace_H / p, 1e-10)
+        eps_small = jnp.maximum(1e-12 * trace_H / p, 1e-14)
         np.testing.assert_allclose(float(jitter), float(eps_small))
 
     def test_large_jitter_near_singular(
@@ -110,7 +110,7 @@ class TestChoFactor:
         _, jitter = cho_factor(near_singular_matrix)
         p = near_singular_matrix.shape[0]
         trace_H = jnp.trace(near_singular_matrix)
-        eps_small = float(jnp.maximum(1e-12 * trace_H / p, 1e-10))
+        eps_small = float(jnp.maximum(1e-12 * trace_H / p, 1e-14))
         # Jitter should be larger than eps_small
         assert float(jitter) > eps_small
 

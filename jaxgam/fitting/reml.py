@@ -54,7 +54,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jsla
 
-from jaxgam.jax_utils import block_log_det_S, build_S_lambda
+from jaxgam.jax_utils import block_log_det_S, build_S_lambda, cho_factor
 
 if TYPE_CHECKING:
     from jaxgam.families.base import ExponentialFamily
@@ -170,7 +170,7 @@ def _criterion_core(
     d = jnp.sqrt(jnp.maximum(jnp.diag(H), jnp.finfo(H.dtype).tiny))
     d_inv = 1.0 / d
     H_scaled = H * (d_inv[:, None] * d_inv[None, :])
-    L = jnp.linalg.cholesky(H_scaled)
+    L, _ = cho_factor(H_scaled)
     log_det_H = 2.0 * jnp.sum(jnp.log(jnp.diag(L))) + 2.0 * jnp.sum(jnp.log(d))
 
     log_det_S = block_log_det_S(
