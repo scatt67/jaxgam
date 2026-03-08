@@ -84,6 +84,7 @@ jobs:
 
   gate:
     if: always()
+    needs: [lint, test-python, test-full]
     runs-on: ubuntu-latest
     steps:
       - run: |
