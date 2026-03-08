@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-import scipy.linalg as sla
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.registry import get_family
@@ -26,6 +25,7 @@ from jaxgam.formula.design import ModelSetup, SmoothInfo
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.terms import FormulaSpec
 from jaxgam.jax_utils import to_numpy
+from jaxgam.post_estimation import compute_post_estimation
 from jaxgam.smooths.by_variable import is_factor
 
 if TYPE_CHECKING:
@@ -331,67 +331,34 @@ class GAM:
         """
         pr = result.pirls_result
 
-        # Phase 2→3: transfer to NumPy
-        coefficients = to_numpy(pr.coefficients)
+        # Compute derived quantities via post_estimation module
+        post = compute_post_estimation(result, setup, family_obj, fd)
+
+        # Phase 2→3: transfer remaining arrays to NumPy
         mu = to_numpy(pr.mu)
         eta = to_numpy(pr.eta)
         deviance = float(to_numpy(pr.deviance))
-        L = to_numpy(pr.L)
-        XtWX = to_numpy(pr.XtWX)
-        scale = float(to_numpy(result.scale))
         smoothing_params = to_numpy(result.smoothing_params)
-        edf_total = float(to_numpy(result.edf))
-
-        X_np = setup.X
-        y_np = setup.y
-        wt_np = setup.weights
-
-        # Compute H^{-1} via Cholesky solve (matches R's chol2inv).
-        # O(p^3) but p is typically small (< 200 for GAMs).
-        p = L.shape[0]
-        Z = sla.solve_triangular(L, np.eye(p), lower=True)
-        H_inv = Z.T @ Z
-
-        # Per-smooth EDF via hat matrix F = H^{-1} @ XtWX
-        # (invariant under repara — cyclic trace with block-diagonal D)
-        F = H_inv @ XtWX
-        per_smooth_edf = _compute_per_smooth_edf(F, setup.smooth_info)
-        # edf1 = 2*edf - trace(F^2): alternative EDF for significance testing
-        # (R's gam.fit3.post.proc, mgcv.r line 966)
-        per_smooth_edf1 = _compute_per_smooth_edf1(F, setup.smooth_info)
-
-        # Back-transform from Sl.setup reparameterized space
-        if fd.repara_D is not None:
-            D = to_numpy(fd.repara_D)
-            coefficients = D @ coefficients
-            H_inv = D @ H_inv @ D.T
-
-        # Bayesian covariance
-        phi = 1.0 if family_obj.scale_known else scale
-        Vp = phi * H_inv
-
-        # Null deviance
-        null_deviance = _compute_null_deviance(y_np, wt_np, family_obj)
 
         # Store all fitted attributes (trailing underscore convention)
-        self.coefficients_ = coefficients
+        self.coefficients_ = post.coefficients
         self.fitted_values_ = mu
         self.linear_predictor_ = eta
         self.family_ = family_obj
-        self.Vp_ = Vp
+        self.Vp_ = post.Vp
         # Placeholder for frequentist covariance (not yet implemented).
         self.Ve_ = None
-        self.scale_ = scale
-        self.edf_ = per_smooth_edf
-        self.edf1_ = per_smooth_edf1
-        self.edf_total_ = edf_total
+        self.scale_ = post.scale
+        self.edf_ = post.edf
+        self.edf1_ = post.edf1
+        self.edf_total_ = post.edf_total
         self.smoothing_params_ = smoothing_params
         self.deviance_ = deviance
-        self.null_deviance_ = null_deviance
+        self.null_deviance_ = post.null_deviance
         self.n_ = setup.n_obs
         self.converged_ = result.converged
         self.n_iter_ = result.n_iter
-        self.X_ = X_np
+        self.X_ = setup.X
         self.offset_ = setup.offset
         self.coef_map_ = setup.coef_map
         self.smooth_info_ = setup.smooth_info
@@ -400,8 +367,8 @@ class GAM:
         # Currently always "jax"; reserved for future backend dispatch.
         self.execution_path_ = "jax"
         self.lambda_strategy_ = lambda_strategy
-        self.y_ = y_np
-        self.weights_ = wt_np
+        self.y_ = setup.y
+        self.weights_ = setup.weights
         self.score_ = float(to_numpy(result.score))
         self._training_data = _extract_training_data(spec, data)
 
