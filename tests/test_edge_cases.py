@@ -56,10 +56,10 @@ class TestNearSeparation:
         data = pd.DataFrame({"x": x, "y": y})
         model = GAM("y ~ s(x, k=10, bs='cr')", family="binomial").fit(data)
 
-        assert np.all(np.isfinite(model.coefficients_))
-        assert np.all(np.isfinite(model.fitted_values_))
-        assert np.isfinite(model.deviance_)
-        assert np.isfinite(model.scale_)
+        assert np.all(np.isfinite(model.coefficients))
+        assert np.all(np.isfinite(model.fitted_values))
+        assert np.isfinite(model.deviance)
+        assert np.isfinite(model.scale)
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +86,10 @@ class TestAllZeroPoisson:
 
         model = GAM("y ~ s(x, k=10, bs='cr')", family="poisson").fit(data)
 
-        assert np.all(np.isfinite(model.coefficients_))
-        assert np.all(np.isfinite(model.fitted_values_))
-        assert np.all(model.fitted_values_ >= 0)
-        assert np.isfinite(model.deviance_)
+        assert np.all(np.isfinite(model.coefficients))
+        assert np.all(np.isfinite(model.fitted_values))
+        assert np.all(model.fitted_values >= 0)
+        assert np.isfinite(model.deviance)
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +229,9 @@ class TestFactorByOneLevel:
 
         model = GAM("y ~ s(x, by=fac, k=10, bs='cr')", family="gaussian").fit(data)
 
-        assert np.all(np.isfinite(model.coefficients_))
-        assert np.all(np.isfinite(model.fitted_values_))
-        assert model.converged_
+        assert np.all(np.isfinite(model.coefficients))
+        assert np.all(np.isfinite(model.fitted_values))
+        assert model.converged
 
 
 # ---------------------------------------------------------------------------
@@ -283,10 +283,10 @@ class TestVeryLargeK:
 
         model = GAM("y ~ s(x, k=500, bs='cr')").fit(data)
 
-        assert np.all(np.isfinite(model.coefficients_))
-        assert np.all(np.isfinite(model.fitted_values_))
-        assert np.isfinite(model.deviance_)
-        assert model.coefficients_.shape[0] > 400  # intercept + ~499 basis functions
+        assert np.all(np.isfinite(model.coefficients))
+        assert np.all(np.isfinite(model.fitted_values))
+        assert np.isfinite(model.deviance)
+        assert model.coefficients.shape[0] > 400  # intercept + ~499 basis functions
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +312,9 @@ class TestLambdaAtBoundary:
         sp = [np.exp(20.0)]
         model = GAM("y ~ s(x, k=10, bs='cr')", sp=sp).fit(data)
 
-        assert np.all(np.isfinite(model.coefficients_))
-        assert np.all(np.isfinite(model.fitted_values_))
-        assert np.isfinite(model.deviance_)
+        assert np.all(np.isfinite(model.coefficients))
+        assert np.all(np.isfinite(model.fitted_values))
+        assert np.isfinite(model.deviance)
 
     def test_very_small_lambda(self):
         """Very small lambda (minimal smoothing): model fits with finite results."""
@@ -328,6 +328,6 @@ class TestLambdaAtBoundary:
         sp = [np.exp(-20.0)]
         model = GAM("y ~ s(x, k=10, bs='cr')", sp=sp).fit(data)
 
-        assert np.all(np.isfinite(model.coefficients_))
-        assert np.all(np.isfinite(model.fitted_values_))
-        assert np.isfinite(model.deviance_)
+        assert np.all(np.isfinite(model.coefficients))
+        assert np.all(np.isfinite(model.fitted_values))
+        assert np.isfinite(model.deviance)

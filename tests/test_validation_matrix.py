@@ -308,7 +308,7 @@ class TestValidationMatrix:
         smooth_key, family_name, model, r_result = cell
         tol = _r_tol(smooth_key, family_name)
         np.testing.assert_allclose(
-            model.deviance_,
+            model.deviance,
             r_result["deviance"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -319,7 +319,7 @@ class TestValidationMatrix:
         smooth_key, family_name, model, r_result = cell
         tol = _fitted_tol(smooth_key, family_name)
         np.testing.assert_allclose(
-            model.fitted_values_,
+            model.fitted_values,
             r_result["fitted_values"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -330,7 +330,7 @@ class TestValidationMatrix:
         """Compare total EDF sum (our architecture may group differently)."""
         smooth_key, family_name, model, r_result = cell
         tol = _fitted_tol(smooth_key, family_name)  # EDF sensitive to sp differences
-        py_edf_total = float(np.sum(model.edf_))
+        py_edf_total = float(np.sum(model.edf))
         r_edf_total = float(np.sum(r_result["edf"]))
         np.testing.assert_allclose(
             py_edf_total,
@@ -344,7 +344,7 @@ class TestValidationMatrix:
         smooth_key, family_name, model, r_result = cell
         tol = _r_tol(smooth_key, family_name)
         np.testing.assert_allclose(
-            model.scale_,
+            model.scale,
             r_result["scale"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -364,7 +364,7 @@ class TestValidationMatrix:
             # Compare fitted values as proxy for coefficient equivalence
             ftol = _fitted_tol(smooth_key, family_name)
             np.testing.assert_allclose(
-                model.fitted_values_,
+                model.fitted_values,
                 r_result["fitted_values"],
                 rtol=ftol.rtol,
                 atol=ftol.atol,
@@ -372,7 +372,7 @@ class TestValidationMatrix:
             )
         else:
             np.testing.assert_allclose(
-                model.coefficients_,
+                model.coefficients,
                 r_result["coefficients"],
                 rtol=tol.rtol,
                 atol=tol.atol,
@@ -385,7 +385,7 @@ class TestValidationMatrix:
         pred = model.predict()
         np.testing.assert_allclose(
             pred,
-            model.fitted_values_,
+            model.fitted_values,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg=f"[{smooth_key}-{family_name}] self-prediction roundtrip",
@@ -422,57 +422,57 @@ class TestHardGateInvariants:
     def test_convergence(self, fitted_model):
         """Model converges for all cells."""
         smooth_key, family_name, model = fitted_model
-        assert model.converged_, f"[{smooth_key}-{family_name}] model did not converge"
+        assert model.converged, f"[{smooth_key}-{family_name}] model did not converge"
 
     def test_deviance_non_negative(self, fitted_model):
         """Deviance >= 0 (§18.1 invariant 6)."""
         smooth_key, family_name, model = fitted_model
-        assert model.deviance_ >= 0, (
-            f"[{smooth_key}-{family_name}] negative deviance: {model.deviance_}"
+        assert model.deviance >= 0, (
+            f"[{smooth_key}-{family_name}] negative deviance: {model.deviance}"
         )
 
     def test_no_nan_in_converged(self, fitted_model):
         """Converged beta produces finite eta, mu (§18.1 invariant 7)."""
         smooth_key, family_name, model = fitted_model
-        assert np.all(np.isfinite(model.coefficients_)), (
+        assert np.all(np.isfinite(model.coefficients)), (
             f"[{smooth_key}-{family_name}] NaN/Inf in coefficients"
         )
-        assert np.all(np.isfinite(model.fitted_values_)), (
+        assert np.all(np.isfinite(model.fitted_values)), (
             f"[{smooth_key}-{family_name}] NaN/Inf in fitted values"
         )
-        assert np.all(np.isfinite(model.linear_predictor_)), (
+        assert np.all(np.isfinite(model.linear_predictor)), (
             f"[{smooth_key}-{family_name}] NaN/Inf in linear predictor"
         )
-        assert np.isfinite(model.scale_), (
+        assert np.isfinite(model.scale), (
             f"[{smooth_key}-{family_name}] non-finite scale"
         )
-        assert np.isfinite(model.deviance_), (
+        assert np.isfinite(model.deviance), (
             f"[{smooth_key}-{family_name}] non-finite deviance"
         )
 
     def test_edf_bounds(self, fitted_model):
         """EDF in [0, p] per term, total in [0, n] (§18.1 invariant 5)."""
         smooth_key, family_name, model = fitted_model
-        p = model.X_.shape[1]
-        n = model.n_
+        p = model.X.shape[1]
+        n = model.n
 
         # Per-smooth EDF should be positive
-        assert np.all(model.edf_ > 0), (
-            f"[{smooth_key}-{family_name}] non-positive per-smooth EDF: {model.edf_}"
+        assert np.all(model.edf > 0), (
+            f"[{smooth_key}-{family_name}] non-positive per-smooth EDF: {model.edf}"
         )
         # Total EDF bounded by p
-        assert model.edf_total_ <= p + MODERATE.atol, (
-            f"[{smooth_key}-{family_name}] total EDF {model.edf_total_} > p={p}"
+        assert model.edf_total <= p + MODERATE.atol, (
+            f"[{smooth_key}-{family_name}] total EDF {model.edf_total} > p={p}"
         )
         # Total EDF bounded by n
-        assert model.edf_total_ <= n + MODERATE.atol, (
-            f"[{smooth_key}-{family_name}] total EDF {model.edf_total_} > n={n}"
+        assert model.edf_total <= n + MODERATE.atol, (
+            f"[{smooth_key}-{family_name}] total EDF {model.edf_total} > n={n}"
         )
 
     def test_vp_symmetric_psd(self, fitted_model):
         """Vp is symmetric PSD (§18.1 invariant 2 applied to Bayesian cov)."""
         smooth_key, family_name, model = fitted_model
-        Vp = model.Vp_
+        Vp = model.Vp
 
         # Symmetry
         np.testing.assert_allclose(
@@ -492,9 +492,9 @@ class TestHardGateInvariants:
         """Penalty matrices S_j are symmetric PSD (§18.1 invariant 3)."""
         smooth_key, family_name, model = fitted_model
 
-        for j, si in enumerate(model.smooth_info_):
+        for j, si in enumerate(model.smooth_info):
             # Access penalties from the coef_map's smooth terms
-            for term in model.coef_map_.terms:
+            for term in model.coef_map.terms:
                 if term.label == si.label and term.term_type != "parametric":
                     smooth_obj = term.smooth
                     # Get penalty matrices from the smooth
@@ -520,12 +520,12 @@ class TestHardGateInvariants:
     def test_model_matrix_rank(self, fitted_model):
         """Rank(X) >= p - total_null_space_dim (§18.1 invariant 4)."""
         smooth_key, family_name, model = fitted_model
-        X = model.X_
+        X = model.X
 
         # Sum null space dimensions across all smooth terms
         total_null_dim = sum(
             si.n_penalties  # each penalty contributes null space
-            for si in model.smooth_info_
+            for si in model.smooth_info
         )
         # Rank check (numerical rank via SVD)
         rank = np.linalg.matrix_rank(X)

@@ -9,7 +9,7 @@ All examples assume:
 ```python
 import numpy as np
 import pandas as pd
-from jaxgam import GAM
+from jaxgam import GAM, GAMResults
 ```
 
 ## 1. Gaussian GAM
@@ -23,10 +23,10 @@ x = rng.uniform(0, 1, n)
 y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
 data = pd.DataFrame({"x": x, "y": y})
 
-model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-print(f"Converged: {model.converged_}")
-print(f"EDF: {model.edf_}")
-print(f"Scale: {model.scale_:.4f}")
+results = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+print(f"Converged: {results.converged}")
+print(f"EDF: {results.edf}")
+print(f"Scale: {results.scale:.4f}")
 ```
 
 The formula `"y ~ s(x, k=10, bs='cr')"` specifies:
@@ -51,7 +51,7 @@ prob = 1 / (1 + np.exp(-eta))
 y = rng.binomial(1, prob, n).astype(float)
 data = pd.DataFrame({"x": x, "y": y})
 
-model = GAM("y ~ s(x, k=10, bs='cr')", family="binomial").fit(data)
+results = GAM("y ~ s(x, k=10, bs='cr')", family="binomial").fit(data)
 ```
 
 ## 3. Poisson GAM
@@ -66,7 +66,7 @@ eta = np.sin(2 * np.pi * x) + 0.5
 y = rng.poisson(np.exp(eta)).astype(float)
 data = pd.DataFrame({"x": x, "y": y})
 
-model = GAM("y ~ s(x, k=10, bs='cr')", family="poisson").fit(data)
+results = GAM("y ~ s(x, k=10, bs='cr')", family="poisson").fit(data)
 ```
 
 ## 4. Gamma GAM
@@ -85,7 +85,7 @@ mu = np.exp(eta)
 y = rng.gamma(5.0, scale=mu / 5.0, size=n)
 data = pd.DataFrame({"x": x, "y": y})
 
-model = GAM("y ~ s(x, k=10, bs='cr')", family=Gamma(link="log")).fit(data)
+results = GAM("y ~ s(x, k=10, bs='cr')", family=Gamma(link="log")).fit(data)
 ```
 
 ## 5. Multiple smooths
@@ -100,8 +100,8 @@ x2 = rng.uniform(0, 1, n)
 y = np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(0, 0.3, n)
 data = pd.DataFrame({"x1": x1, "x2": x2, "y": y})
 
-model = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
-print(f"Per-smooth EDF: {model.edf_}")
+results = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
+print(f"Per-smooth EDF: {results.edf}")
 ```
 
 ## 6. Tensor product smooths
@@ -109,7 +109,7 @@ print(f"Per-smooth EDF: {model.edf_}")
 Model interactions between covariates with `te()`.
 
 ```python
-model = GAM("y ~ te(x1, x2, k=5)").fit(data)
+results = GAM("y ~ te(x1, x2, k=5)").fit(data)
 ```
 
 The scalar `k=5` creates a 5x5 = 25 basis function tensor product.
@@ -118,7 +118,7 @@ Each marginal uses cubic regression splines by default.
 Use `ti()` for tensor interaction terms (without main effects):
 
 ```python
-model = GAM("y ~ s(x1, k=8) + s(x2, k=8) + ti(x1, x2, k=5)").fit(data)
+results = GAM("y ~ s(x1, k=8) + s(x2, k=8) + ti(x1, x2, k=5)").fit(data)
 ```
 
 ## 7. Factor-by smooths
@@ -146,7 +146,7 @@ data = pd.DataFrame({
     "y": y,
 })
 
-model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
+results = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(data)
 ```
 
 The `+ fac` adds a parametric intercept shift per level, analogous to R.
@@ -162,17 +162,17 @@ dtype) so jaxgam recognizes it as a factor.
 
 ```python
 # Predictions on the training data
-mu_hat = model.predict()                          # response scale
-eta_hat = model.predict(pred_type="link")          # link scale
-mu_hat, se = model.predict(se_fit=True)           # with standard errors
+mu_hat = results.predict()                          # response scale
+eta_hat = results.predict(pred_type="link")          # link scale
+mu_hat, se = results.predict(se_fit=True)           # with standard errors
 ```
 
 ### New data
 
 ```python
 newdata = pd.DataFrame({"x": np.linspace(0, 1, 100)})
-predictions = model.predict(newdata)
-predictions, se = model.predict(newdata, se_fit=True)
+predictions = results.predict(newdata)
+predictions, se = results.predict(newdata, se_fit=True)
 ```
 
 ### Prediction matrix
@@ -180,8 +180,8 @@ predictions, se = model.predict(newdata, se_fit=True)
 For manual inference, get the constrained design matrix:
 
 ```python
-X_new = model.predict_matrix(newdata)
-# Manual prediction: eta = X_new @ model.coefficients_
+X_new = results.predict_matrix(newdata)
+# Manual prediction: eta = X_new @ results.coefficients
 ```
 
 ## 9. Summary
@@ -191,7 +191,7 @@ coefficient tests, smooth term significance tests (Wood 2013), and
 model-level statistics.
 
 ```python
-s = model.summary()
+s = results.summary()
 ```
 
 Output includes:
@@ -205,17 +205,17 @@ Output includes:
 `plot()` produces one panel per smooth term.
 
 ```python
-fig, axes = model.plot()
+fig, axes = results.plot()
 ```
 
 ### Options
 
 ```python
 # Select specific smooth terms (0-indexed)
-fig, axes = model.plot(select=[0])
+fig, axes = results.plot(select=[0])
 
 # Customize appearance
-fig, axes = model.plot(
+fig, axes = results.plot(
     rug=True,       # show data rug marks (default: True)
     se=True,        # show SE bands (default: True)
     shade=True,     # shaded bands vs dashed lines (default: True)
@@ -232,10 +232,10 @@ plots. Factor-by smooths produce one panel per level.
 
 ```python
 # REML (default, recommended)
-model = GAM("y ~ s(x)", method="REML").fit(data)
+results = GAM("y ~ s(x)", method="REML").fit(data)
 
 # Maximum likelihood
-model = GAM("y ~ s(x)", method="ML").fit(data)
+results = GAM("y ~ s(x)", method="ML").fit(data)
 ```
 
 ### Fixed smoothing parameters
@@ -244,7 +244,7 @@ Skip the Newton optimization and fit at user-supplied smoothing
 parameters:
 
 ```python
-model = GAM("y ~ s(x, k=10, bs='cr')", sp=[1.0]).fit(data)
+results = GAM("y ~ s(x, k=10, bs='cr')", sp=[1.0]).fit(data)
 ```
 
 The `sp` list must have one entry per penalty term in the model.
@@ -254,29 +254,42 @@ The `sp` list must have one entry per penalty term in the model.
 ```python
 weights = np.ones(n)
 offset = np.zeros(n)
-model = GAM("y ~ s(x)").fit(data, weights=weights, offset=offset)
+results = GAM("y ~ s(x)").fit(data, weights=weights, offset=offset)
 ```
 
-## 12. Fitted model attributes
+## 12. GAMResults attributes
 
-After calling `fit()`, the model exposes:
+`fit()` returns a `GAMResults` frozen dataclass. All attributes are
+read-only:
 
 | Attribute | Description |
 |---|---|
-| `coefficients_` | Coefficient vector (p,) |
-| `fitted_values_` | Fitted values on response scale (n,) |
-| `linear_predictor_` | Linear predictor eta (n,) |
-| `Vp_` | Bayesian covariance matrix (p, p) |
-| `edf_` | Per-smooth effective degrees of freedom |
-| `edf_total_` | Total effective degrees of freedom |
-| `scale_` | Estimated scale (dispersion) parameter |
-| `deviance_` | Model deviance |
-| `null_deviance_` | Null model deviance |
-| `smoothing_params_` | Estimated smoothing parameters |
-| `converged_` | Whether the optimizer converged |
-| `n_iter_` | Number of Newton iterations |
-| `X_` | Design matrix (n, p) |
-| `family_` | Family object used for fitting |
+| `coefficients` | Coefficient vector (p,) |
+| `fitted_values` | Fitted values on response scale (n,) |
+| `linear_predictor` | Linear predictor eta (n,) |
+| `Vp` | Bayesian covariance matrix (p, p) |
+| `edf` | Per-smooth effective degrees of freedom |
+| `edf1` | Alternative EDF for significance testing |
+| `edf_total` | Total effective degrees of freedom |
+| `scale` | Estimated scale (dispersion) parameter |
+| `deviance` | Model deviance |
+| `null_deviance` | Null model deviance |
+| `smoothing_params` | Estimated smoothing parameters |
+| `converged` | Whether the optimizer converged |
+| `n_iter` | Number of Newton iterations |
+| `score` | REML/ML value at convergence |
+| `X` | Design matrix (n, p) |
+| `y` | Response vector (n,) |
+| `weights` | Prior weights (n,) |
+| `family` | Family object used for fitting |
+| `formula` | Model formula string |
+| `method` | Smoothing parameter method ("REML" or "ML") |
+| `n` | Number of observations |
+
+!!! warning "Deprecated: accessing fitted attributes on GAM"
+    The old pattern `model.coefficients_` (with trailing underscore) on the
+    `GAM` instance still works but emits `DeprecationWarning` and will be
+    removed in v1.1. Use `results.coefficients` instead.
 
 ## Further reading
 

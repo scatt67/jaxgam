@@ -200,7 +200,7 @@ class TestComputePostEstimationIntegration:
 
     @pytest.fixture
     def fitted_gam(self):
-        """Fit a simple Gaussian GAM."""
+        """Fit a simple Gaussian GAM and return (model, results)."""
         import pandas as pd
 
         from jaxgam.api import GAM
@@ -211,50 +211,57 @@ class TestComputePostEstimationIntegration:
         y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
         data = pd.DataFrame({"x": x, "y": y})
         model = GAM("y ~ s(x)", family="gaussian")
-        model.fit(data)
-        return model
+        results = model.fit(data)
+        return model, results
 
     def test_coefficients_match(self, fitted_gam):
         """Coefficients from compute_post_estimation match GAM fitted attributes."""
+        _model, results = fitted_gam
         np.testing.assert_allclose(
-            fitted_gam.coefficients_,
-            fitted_gam.coefficients_,  # tautological, but verifies no crash
+            results.coefficients,
+            results.coefficients,  # tautological, but verifies no crash
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
 
     def test_edf_shape(self, fitted_gam):
         """EDF array has correct shape."""
-        assert fitted_gam.edf_.shape == (len(fitted_gam.smooth_info_),)
+        _model, results = fitted_gam
+        assert results.edf.shape == (len(results.smooth_info),)
 
     def test_edf1_shape(self, fitted_gam):
         """EDF1 array has correct shape."""
-        assert fitted_gam.edf1_.shape == (len(fitted_gam.smooth_info_),)
+        _model, results = fitted_gam
+        assert results.edf1.shape == (len(results.smooth_info),)
 
     def test_vp_symmetric(self, fitted_gam):
         """Vp is symmetric."""
+        _model, results = fitted_gam
         np.testing.assert_allclose(
-            fitted_gam.Vp_,
-            fitted_gam.Vp_.T,
+            results.Vp,
+            results.Vp.T,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
 
     def test_vp_psd(self, fitted_gam):
         """Vp is positive semi-definite."""
-        eigenvalues = np.linalg.eigvalsh(fitted_gam.Vp_)
+        _model, results = fitted_gam
+        eigenvalues = np.linalg.eigvalsh(results.Vp)
         assert np.all(eigenvalues >= -STRICT.atol)
 
     def test_null_deviance_positive(self, fitted_gam):
         """Null deviance is non-negative."""
-        assert fitted_gam.null_deviance_ >= 0.0
+        _model, results = fitted_gam
+        assert results.null_deviance >= 0.0
 
     def test_self_prediction_matches_fitted(self, fitted_gam):
         """Self-prediction still matches fitted values after refactor."""
-        pred = fitted_gam.predict()
+        _model, results = fitted_gam
+        pred = results.predict()
         np.testing.assert_allclose(
             pred,
-            fitted_gam.fitted_values_,
+            results.fitted_values,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
@@ -284,39 +291,40 @@ class TestComputePostEstimationIntegration:
 
         post = compute_post_estimation(result, setup, family_obj, fd)
 
+        _model, results = fitted_gam
         np.testing.assert_allclose(
             post.coefficients,
-            fitted_gam.coefficients_,
+            results.coefficients,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
         np.testing.assert_allclose(
             post.Vp,
-            fitted_gam.Vp_,
+            results.Vp,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
         np.testing.assert_allclose(
             post.edf,
-            fitted_gam.edf_,
+            results.edf,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
         np.testing.assert_allclose(
             post.edf1,
-            fitted_gam.edf1_,
+            results.edf1,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
         np.testing.assert_allclose(
             post.null_deviance,
-            fitted_gam.null_deviance_,
+            results.null_deviance,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
         np.testing.assert_allclose(
             post.scale,
-            fitted_gam.scale_,
+            results.scale,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )

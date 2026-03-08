@@ -60,7 +60,7 @@ class TestSelfConsistency:
             pytest.skip("No parametric terms")
 
         n_param = s.p_table.shape[0]
-        se_from_vp = np.sqrt(np.diag(model.Vp_)[:n_param])
+        se_from_vp = np.sqrt(np.diag(model.Vp)[:n_param])
         se_from_table = s.p_table[:, 1]
 
         np.testing.assert_allclose(
@@ -85,7 +85,7 @@ class TestSelfConsistency:
 
         np.testing.assert_allclose(
             total_edf_from_smooths,
-            model.edf_total_,
+            model.edf_total,
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
             err_msg="Per-smooth EDF + parametric doesn't match total EDF",

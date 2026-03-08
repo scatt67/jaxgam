@@ -2,10 +2,16 @@
 
 ## GAM
 
-The main entry point for fitting generalized additive models.
+Model specification and fit orchestration. `fit()` returns a `GAMResults`
+frozen dataclass containing all fitted state.
 
 ```python
-from jaxgam import GAM
+from jaxgam import GAM, GAMResults
+
+model = GAM("y ~ s(x)", family="gaussian")
+results = model.fit(data)
+results.predict(newdata)
+results.summary()
 ```
 
 ::: jaxgam.api.GAM
@@ -13,6 +19,21 @@ from jaxgam import GAM
       members:
         - __init__
         - fit
+
+---
+
+## GAMResults
+
+Immutable results object returned by `GAM.fit()`. All post-estimation
+methods (prediction, summary, plotting) live here.
+
+```python
+from jaxgam import GAMResults
+```
+
+::: jaxgam.results.GAMResults
+    options:
+      members:
         - predict
         - predict_matrix
         - summary
@@ -180,23 +201,50 @@ len(smooth_registry)           # 7
 
 ---
 
-## Fitted model attributes
+## GAMResults attributes
 
-After calling `fit()`, these attributes are available on the `GAM` instance:
+The `GAMResults` object returned by `fit()` exposes all fitted state as
+read-only attributes (frozen dataclass):
 
 | Attribute | Type | Description |
 |---|---|---|
-| `coefficients_` | `ndarray (p,)` | Coefficient vector |
-| `fitted_values_` | `ndarray (n,)` | Fitted values on response scale |
-| `linear_predictor_` | `ndarray (n,)` | Linear predictor |
-| `Vp_` | `ndarray (p, p)` | Bayesian covariance matrix |
-| `edf_` | `ndarray` | Per-smooth effective degrees of freedom |
-| `edf_total_` | `float` | Total effective degrees of freedom |
-| `scale_` | `float` | Estimated scale (dispersion) parameter |
-| `deviance_` | `float` | Model deviance |
-| `null_deviance_` | `float` | Null model deviance |
-| `smoothing_params_` | `ndarray` | Estimated smoothing parameters |
-| `converged_` | `bool` | Whether the optimizer converged |
-| `n_iter_` | `int` | Number of Newton iterations |
-| `X_` | `ndarray (n, p)` | Design matrix |
-| `family_` | `ExponentialFamily` | Family object used for fitting |
+| `coefficients` | `ndarray (p,)` | Coefficient vector |
+| `fitted_values` | `ndarray (n,)` | Fitted values on response scale |
+| `linear_predictor` | `ndarray (n,)` | Linear predictor |
+| `Vp` | `ndarray (p, p)` | Bayesian covariance matrix |
+| `edf` | `ndarray` | Per-smooth effective degrees of freedom |
+| `edf1` | `ndarray` | Alternative EDF for significance testing |
+| `edf_total` | `float` | Total effective degrees of freedom |
+| `scale` | `float` | Estimated scale (dispersion) parameter |
+| `deviance` | `float` | Model deviance |
+| `null_deviance` | `float` | Null model deviance |
+| `smoothing_params` | `ndarray` | Estimated smoothing parameters |
+| `converged` | `bool` | Whether the optimizer converged |
+| `n_iter` | `int` | Number of Newton iterations |
+| `score` | `float` | REML/ML value at convergence |
+| `X` | `ndarray (n, p)` | Design matrix |
+| `y` | `ndarray (n,)` | Response vector |
+| `weights` | `ndarray (n,)` | Prior weights |
+| `family` | `ExponentialFamily` | Family object used for fitting |
+| `formula` | `str` | Model formula |
+| `method` | `str` | Smoothing parameter method ("REML" or "ML") |
+| `n` | `int` | Number of observations |
+
+### Deprecated access via GAM
+
+The old pattern of accessing fitted attributes on the `GAM` instance with
+trailing underscores still works but emits `DeprecationWarning`:
+
+```python
+# Old (deprecated) — will be removed in v1.1
+model = GAM("y ~ s(x)")
+model.fit(data)
+model.coefficients_      # DeprecationWarning
+model.predict()          # DeprecationWarning
+
+# New (preferred)
+model = GAM("y ~ s(x)")
+results = model.fit(data)
+results.coefficients     # no warning
+results.predict()        # no warning
+```

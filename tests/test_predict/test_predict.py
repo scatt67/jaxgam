@@ -77,7 +77,7 @@ class TestSelfPrediction:
         pred = model.predict()
         np.testing.assert_allclose(
             pred,
-            model.fitted_values_,
+            model.fitted_values,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg="predict() != fitted_values_",
@@ -88,7 +88,7 @@ class TestSelfPrediction:
         pred = model.predict(pred_type="link")
         np.testing.assert_allclose(
             pred,
-            model.linear_predictor_,
+            model.linear_predictor,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg="predict(pred_type='link') != linear_predictor_",
@@ -97,10 +97,10 @@ class TestSelfPrediction:
     def test_predict_matrix_times_coefs_matches_eta(self, fitted_model):
         _, model, data = fitted_model
         X_p = model.predict_matrix(data)
-        eta_reconstructed = X_p @ model.coefficients_
+        eta_reconstructed = X_p @ model.coefficients
         np.testing.assert_allclose(
             eta_reconstructed,
-            model.linear_predictor_,
+            model.linear_predictor,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg="X_p @ coefs != linear_predictor_",
@@ -109,7 +109,7 @@ class TestSelfPrediction:
     def test_predict_matrix_shape(self, fitted_model):
         _, model, data = fitted_model
         X_p = model.predict_matrix(data)
-        assert X_p.shape == model.X_.shape
+        assert X_p.shape == model.X.shape
 
     def test_predict_matrix_matches_stored_X(self, fitted_model):
         """predict_matrix on training data should match stored X_."""
@@ -117,7 +117,7 @@ class TestSelfPrediction:
         X_p = model.predict_matrix(data)
         np.testing.assert_allclose(
             X_p,
-            model.X_,
+            model.X,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg="predict_matrix(train_data) != X_",
@@ -252,7 +252,7 @@ class TestMultiSmoothPrediction:
         pred = model.predict()
         np.testing.assert_allclose(
             pred,
-            model.fitted_values_,
+            model.fitted_values,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg="Two-smooth self-prediction roundtrip failed",
@@ -264,7 +264,7 @@ class TestMultiSmoothPrediction:
         model = GAM(formula).fit(data)
 
         X_p = model.predict_matrix(data)
-        assert X_p.shape == model.X_.shape
+        assert X_p.shape == model.X.shape
 
     def test_tensor_product_self_prediction(self, two_smooth_data):
         formula = "y ~ te(x1, x2, k=5)"
@@ -274,7 +274,7 @@ class TestMultiSmoothPrediction:
         pred = model.predict()
         np.testing.assert_allclose(
             pred,
-            model.fitted_values_,
+            model.fitted_values,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg="Tensor product self-prediction roundtrip failed",
@@ -288,7 +288,7 @@ class TestMultiSmoothPrediction:
         pred = model.predict()
         np.testing.assert_allclose(
             pred,
-            model.fitted_values_,
+            model.fitted_values,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg="Factor-by self-prediction roundtrip failed",
@@ -408,7 +408,7 @@ class TestEdgeCases:
         pred = model.predict()
         np.testing.assert_allclose(
             pred,
-            model.fitted_values_,
+            model.fitted_values,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
@@ -436,7 +436,7 @@ class TestEdgeCases:
         pred = model.predict()
         np.testing.assert_allclose(
             pred,
-            model.fitted_values_,
+            model.fitted_values,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
@@ -465,8 +465,8 @@ class TestEdgeCases:
         assert isinstance(result, tuple)
         assert len(result) == 2
         pred, se = result
-        assert pred.shape == model.fitted_values_.shape
-        assert se.shape == model.fitted_values_.shape
+        assert pred.shape == model.fitted_values.shape
+        assert se.shape == model.fitted_values.shape
         assert np.all(se >= 0), "SE must be non-negative"
 
     def test_invalid_type_raises(self):

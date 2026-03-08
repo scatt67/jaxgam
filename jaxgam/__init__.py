@@ -43,5 +43,6 @@ if not os.environ.get("JAXGAM_NO_COMPILATION_CACHE"):
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 
 from jaxgam.api import GAM  # noqa: E402
+from jaxgam.results import GAMResults  # noqa: E402
 
-__all__ = ["GAM"]
+__all__ = ["GAM", "GAMResults"]

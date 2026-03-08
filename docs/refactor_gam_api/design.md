@@ -364,7 +364,7 @@ def compute_post_estimation(
 ```
 jaxgam/
 ├── __init__.py              # Public API: GAM, GAMResults
-├── gam.py                   # GAM class (specification + fit orchestration)
+├── api.py                   # GAM class (specification + fit orchestration)
 ├── results.py               # GAMResults frozen dataclass + methods
 ├── post_estimation.py       # Derived-quantity computation (from _store_results)
 ├── jax_utils.py             # (unchanged)
@@ -378,8 +378,9 @@ jaxgam/
 ├── plot/                    # (unchanged)
 ```
 
-**Changes from current layout:**
-- `api.py` → split into `gam.py` + `results.py`
+**Changes from original layout:**
+- `api.py` slimmed to specification + orchestration (results/post-estimation extracted)
+- New `results.py` (GAMResults frozen dataclass)
 - New `post_estimation.py` (extracted from `_store_results`)
 - `__init__.py` exports both `GAM` and `GAMResults`
 
@@ -465,7 +466,7 @@ def predict(
 | **`GAMResults`** naming | Matches statsmodels; unambiguous |
 | **No trailing underscores on results** | Structural separation replaces naming convention |
 | **Backward-compat `__getattr__`** | Gradual migration; old code emits deprecation warnings |
-| **`api.py` → `gam.py` + `results.py`** | Each file has a single clear responsibility |
+| **`api.py` + `results.py` + `post_estimation.py`** | Each file has a single clear responsibility; rename to `gam.py` skipped to reduce churn |
 
 ---
 

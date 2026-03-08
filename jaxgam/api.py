@@ -3,13 +3,18 @@
 Provides the ``GAM`` class (sklearn-style API) that wires together:
 - Phase 1: ``parse_formula()`` → ``ModelSetup.build()``
 - Phase 2: ``FittingData.from_setup()`` → ``newton_optimize()`` / ``pirls_loop()``
-- Phase 3: Post-estimation → fitted attributes on ``GAM`` instance
+- Phase 3: ``GAMResults._from_fit()``
 
-Design doc reference: docs/design.md Section 10.1, 10.2
+``GAM.fit()`` returns a ``GAMResults`` frozen dataclass. For backward
+compatibility, fitted attributes (``model.coefficients_``) are forwarded
+to ``model.results_`` with deprecation warnings.
+
+Design doc reference: docs/refactor_gam_api/design.md §3.3, §3.5
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -21,12 +26,9 @@ from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import NewtonResult, newton_optimize
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import estimate_edf, estimate_scale
-from jaxgam.formula.design import ModelSetup, SmoothInfo
+from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
-from jaxgam.formula.terms import FormulaSpec
-from jaxgam.jax_utils import to_numpy
-from jaxgam.post_estimation import compute_post_estimation
-from jaxgam.smooths.by_variable import is_factor
+from jaxgam.results import GAMResults
 
 if TYPE_CHECKING:
     import jax
@@ -42,7 +44,11 @@ if TYPE_CHECKING:
 
 
 class GAM:
-    """Generalized Additive Model (sklearn-style API).
+    """Generalized Additive Model specification.
+
+    This class holds model specification parameters and orchestrates the
+    fit pipeline. Calling ``fit()`` returns a ``GAMResults`` frozen
+    dataclass containing all fitted state.
 
     Parameters
     ----------
@@ -62,40 +68,19 @@ class GAM:
         Additional arguments. Supported scope guards:
         ``backend``, ``optimizer``, ``select``, ``gamma``, ``knots``.
 
-    Attributes (set after ``fit()``)
-    --------------------------------
-    coefficients_ : np.ndarray
-        Fitted coefficient vector.
-    fitted_values_ : np.ndarray
-        Fitted values (response scale).
-    linear_predictor_ : np.ndarray
-        Linear predictor (link scale).
-    family_ : ExponentialFamily
-        Fitted family object.
-    Vp_ : np.ndarray
-        Bayesian posterior covariance of coefficients.
-    scale_ : float
-        Estimated or fixed scale parameter (phi).
-    edf_ : np.ndarray
-        Per-smooth effective degrees of freedom.
-    edf_total_ : float
-        Total effective degrees of freedom.
-    smoothing_params_ : np.ndarray
-        Estimated smoothing parameters (original scale).
-    deviance_ : float
-        Model deviance.
-    null_deviance_ : float
-        Null model deviance.
-    converged_ : bool
-        Whether the outer Newton loop converged.
-    n_iter_ : int
-        Number of outer Newton iterations.
-
     Examples
     --------
-    >>> model = GAM("y ~ s(x)", family="gaussian").fit(data)
-    >>> model.coefficients_
+    >>> model = GAM("y ~ s(x)", family="gaussian")
+    >>> results = model.fit(data)
+    >>> results.predict(newdata)
     array([...])
+
+    Backward-compatible usage (deprecated):
+
+    >>> model = GAM("y ~ s(x)").fit(data)  # returns GAMResults
+    >>> model.predict(newdata)  # works on GAMResults directly
+
+    Design doc reference: docs/refactor_gam_api/design.md §3.3
     """
 
     def __init__(
@@ -112,14 +97,13 @@ class GAM:
         self.method = method.upper()
         self.sp = sp
         self.device = kwargs.get("device")
-        self._fitted = False
 
     def fit(
         self,
         data: pd.DataFrame | dict,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
-    ) -> GAM:
+    ) -> GAMResults:
         """Fit the GAM to data.
 
         Parameters
@@ -133,8 +117,11 @@ class GAM:
 
         Returns
         -------
-        GAM
-            Self, for method chaining.
+        GAMResults
+            Frozen dataclass containing all fitted state. Also stored
+            as ``self.results_`` for backward compatibility.
+
+        Design doc reference: docs/refactor_gam_api/design.md §3.3, §9 #1
         """
         family_obj = get_family(self.family)
 
@@ -154,10 +141,44 @@ class GAM:
             result = newton_optimize(fd, self.method)
             lambda_strategy = f"newton_{self.method.lower()}"
 
-        # Phase 2→3: post-estimation
-        self._store_results(result, setup, spec, data, family_obj, fd, lambda_strategy)
-        self._fitted = True
-        return self
+        # Phase 2→3: construct GAMResults
+        results = GAMResults._from_fit(
+            result=result,
+            setup=setup,
+            spec=spec,
+            data=data,
+            family=family_obj,
+            fd=fd,
+            lambda_strategy=lambda_strategy,
+            formula=self.formula,
+            method=self.method,
+        )
+
+        self.results_ = results
+        return results
+
+    # ------------------------------------------------------------------
+    # Backward-compatible forwarding (deprecated)
+    # Design doc reference: docs/refactor_gam_api/design.md §3.5
+    # ------------------------------------------------------------------
+
+    def __getattr__(self, name: str) -> object:
+        """Forward fitted attribute access to results_ with deprecation."""
+        if name.endswith("_") and name != "results_":
+            stripped = name.rstrip("_")
+            if hasattr(self, "results_") and hasattr(
+                self.results_, stripped
+            ):
+                warnings.warn(
+                    f"Accessing '{name}' on GAM is deprecated. "
+                    f"Use 'results.{stripped}' instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                return getattr(self.results_, stripped)
+        raise AttributeError(
+            f"'{type(self).__name__}' has no attribute '{name}'"
+        )
 
     def predict(
         self,
@@ -166,90 +187,68 @@ class GAM:
         se_fit: bool = False,
         offset: np.ndarray | None = None,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        """Predict from a fitted GAM.
+        """Predict from a fitted GAM (deprecated).
 
-        Parameters
-        ----------
-        newdata : pandas.DataFrame or dict, optional
-            New data for prediction. If None, uses the training data.
-        pred_type : str
-            Type of prediction: ``'response'`` or ``'link'``.
-        se_fit : bool
-            Whether to return standard errors.
-        offset : array-like, optional
-            Offset for new data predictions.
-
-        Returns
-        -------
-        numpy.ndarray or tuple[numpy.ndarray, numpy.ndarray]
-            Predictions, or ``(predictions, standard_errors)`` if ``se_fit=True``.
+        .. deprecated::
+            Use ``results.predict()`` instead.
         """
-        self._check_fitted()
-
-        if pred_type not in ("response", "link"):
-            raise ValueError(
-                f"pred_type must be 'response' or 'link', got {pred_type!r}"
+        warnings.warn(
+            "Calling predict() on GAM is deprecated. "
+            "Use results.predict() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not hasattr(self, "results_"):
+            raise RuntimeError(
+                "This GAM instance is not fitted yet. "
+                "Call fit() first."
             )
+        return self.results_.predict(
+            newdata=newdata,
+            pred_type=pred_type,
+            se_fit=se_fit,
+            offset=offset,
+        )
 
-        if newdata is None:
-            # Self-prediction: use stored linear predictor
-            eta = self.linear_predictor_.copy()
-            X_p = self.X_ if se_fit else None
-        else:
-            X_p = self.setup_.build_predict_matrix(newdata)
-            eta = X_p @ self.coefficients_
-            if offset is not None:
-                eta = eta + np.asarray(offset, dtype=np.float64).ravel()
+    def predict_matrix(
+        self, newdata: pd.DataFrame | dict
+    ) -> np.ndarray:
+        """Build prediction matrix (deprecated).
 
-        pred = self.family_.link.linkinv(eta) if pred_type == "response" else eta
-
-        if se_fit:
-            if X_p is None:
-                X_p = self.X_
-            # se = sqrt(rowSums((X_p @ Vp) * X_p))
-            XVp = X_p @ self.Vp_
-            se = np.sqrt(np.sum(XVp * X_p, axis=1))
-            return pred, se
-
-        return pred
-
-    def predict_matrix(self, newdata: pd.DataFrame | dict) -> np.ndarray:
-        """Build constrained prediction matrix for new data.
-
-        Equivalent to R's ``predict.gam(type="lpmatrix")``.
-
-        Parameters
-        ----------
-        newdata : DataFrame or dict
-            New data for prediction.
-
-        Returns
-        -------
-        np.ndarray, shape ``(n_new, total_coefs)``
-            Constrained prediction matrix.
+        .. deprecated::
+            Use ``results.predict_matrix()`` instead.
         """
-        self._check_fitted()
-        return self.setup_.build_predict_matrix(newdata)
+        warnings.warn(
+            "Calling predict_matrix() on GAM is deprecated. "
+            "Use results.predict_matrix() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not hasattr(self, "results_"):
+            raise RuntimeError(
+                "This GAM instance is not fitted yet. "
+                "Call fit() first."
+            )
+        return self.results_.predict_matrix(newdata)
 
     def summary(self) -> GAMSummary:
-        """Print and return summary of a fitted GAM.
+        """Print and return summary (deprecated).
 
-        Computes parametric coefficient significance (z/t tests),
-        smooth term significance (Wood 2013 testStat), and model-level
-        statistics (R-squared, deviance explained, scale estimate).
-
-        Returns
-        -------
-        GAMSummary
-            Summary object with parametric and smooth term tables.
-            The summary is also printed to stdout.
+        .. deprecated::
+            Use ``results.summary()`` instead.
         """
-        from jaxgam.summary.summary import summary as _summary
-
-        self._check_fitted()
-        s = _summary(self)
-        print(s)  # noqa: T201
-        return s
+        warnings.warn(
+            "Calling summary() on GAM is deprecated. "
+            "Use results.summary() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not hasattr(self, "results_"):
+            raise RuntimeError(
+                "This GAM instance is not fitted yet. "
+                "Call fit() first."
+            )
+        return self.results_.summary()
 
     def plot(
         self,
@@ -260,42 +259,23 @@ class GAM:
         shade: bool = True,
         **kwargs,
     ) -> tuple[matplotlib.figure.Figure, np.ndarray]:
-        """Plot smooth components of a fitted GAM.
+        """Plot smooth components (deprecated).
 
-        Equivalent to R's ``plot.gam()``. Produces one panel per smooth
-        term (or per factor level for factor-by smooths) showing the
-        partial effect on the link scale, with optional SE bands and
-        rug marks.
-
-        Parameters
-        ----------
-        select : int, list, or None
-            Select specific smooth term(s) to plot (0-indexed). If None,
-            plots all smooth terms.
-        pages : int
-            Number of pages. 0 means automatic layout.
-        rug : bool
-            Show rug marks at data covariate values.
-        se : bool
-            Show standard error bands.
-        shade : bool
-            If True, use shaded SE bands; if False, use dashed lines.
-        **kwargs
-            Additional arguments passed to ``plot_gam()``. See
-            ``jaxgam.plot.plot_gam.plot_gam`` for full parameter list.
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            The figure.
-        axes : numpy.ndarray
-            Array of Axes objects.
+        .. deprecated::
+            Use ``results.plot()`` instead.
         """
-        self._check_fitted()
-        from jaxgam.plot import plot_gam
-
-        return plot_gam(
-            self,
+        warnings.warn(
+            "Calling plot() on GAM is deprecated. "
+            "Use results.plot() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not hasattr(self, "results_"):
+            raise RuntimeError(
+                "This GAM instance is not fitted yet. "
+                "Call fit() first."
+            )
+        return self.results_.plot(
             select=select,
             pages=pages,
             rug=rug,
@@ -303,74 +283,6 @@ class GAM:
             shade=shade,
             **kwargs,
         )
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _check_fitted(self) -> None:
-        """Raise if the model has not been fitted."""
-        if not self._fitted:
-            raise RuntimeError("This GAM instance is not fitted yet. Call fit() first.")
-
-    def _store_results(
-        self,
-        result: NewtonResult,
-        setup: ModelSetup,
-        spec: FormulaSpec,
-        data: pd.DataFrame | dict,
-        family_obj: ExponentialFamily,
-        fd: FittingData,
-        lambda_strategy: str,
-    ) -> None:
-        """Transfer Phase 2 output to fitted attributes.
-
-        Sets all ``*_`` attributes listed in the class docstring's
-        Attributes section (coefficients_, Vp_, edf_, etc.), plus
-        internal bookkeeping attributes used by predict/summary/plot.
-        """
-        pr = result.pirls_result
-
-        # Compute derived quantities via post_estimation module
-        post = compute_post_estimation(result, setup, family_obj, fd)
-
-        # Phase 2→3: transfer remaining arrays to NumPy
-        mu = to_numpy(pr.mu)
-        eta = to_numpy(pr.eta)
-        deviance = float(to_numpy(pr.deviance))
-        smoothing_params = to_numpy(result.smoothing_params)
-
-        # Store all fitted attributes (trailing underscore convention)
-        self.coefficients_ = post.coefficients
-        self.fitted_values_ = mu
-        self.linear_predictor_ = eta
-        self.family_ = family_obj
-        self.Vp_ = post.Vp
-        # Placeholder for frequentist covariance (not yet implemented).
-        self.Ve_ = None
-        self.scale_ = post.scale
-        self.edf_ = post.edf
-        self.edf1_ = post.edf1
-        self.edf_total_ = post.edf_total
-        self.smoothing_params_ = smoothing_params
-        self.deviance_ = deviance
-        self.null_deviance_ = post.null_deviance
-        self.n_ = setup.n_obs
-        self.converged_ = result.converged
-        self.n_iter_ = result.n_iter
-        self.X_ = setup.X
-        self.offset_ = setup.offset
-        self.coef_map_ = setup.coef_map
-        self.smooth_info_ = setup.smooth_info
-        self.term_names_ = setup.term_names
-        self.setup_ = setup
-        # Currently always "jax"; reserved for future backend dispatch.
-        self.execution_path_ = "jax"
-        self.lambda_strategy_ = lambda_strategy
-        self.y_ = setup.y
-        self.weights_ = setup.weights
-        self.score_ = float(to_numpy(result.score))
-        self._training_data = _extract_training_data(spec, data)
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +333,8 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
     device = kwargs.get("device")
     if device is not None and device not in ("cpu", "gpu"):
         raise ValueError(
-            f"device={device!r} is not recognized. Use 'cpu', 'gpu', or None."
+            f"device={device!r} is not recognized. "
+            "Use 'cpu', 'gpu', or None."
         )
 
     optimizer = kwargs.get("optimizer")
@@ -446,7 +359,8 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
 
     if kwargs.get("knots") is not None:
         raise NotImplementedError(
-            "User-specified knots are planned for v1.1. See docs/design.md Section 5.2."
+            "User-specified knots are planned for v1.1. "
+            "See docs/design.md Section 5.2."
         )
 
 
@@ -520,141 +434,3 @@ def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
         pirls_result=pirls_result,
         convergence_info="fixed sp",
     )
-
-
-def _compute_per_smooth_edf(
-    F: np.ndarray,
-    smooth_info: tuple[SmoothInfo, ...],
-) -> np.ndarray:
-    """Per-smooth effective degrees of freedom.
-
-    Parameters
-    ----------
-    F : np.ndarray, shape (p, p)
-        Hat-like matrix: ``H^{-1} @ XtWX``.
-    smooth_info : tuple[SmoothInfo, ...]
-        Per-smooth metadata with column ranges.
-
-    Returns
-    -------
-    np.ndarray, shape (n_smooths,)
-        Per-smooth EDF.
-    """
-    n_smooths = len(smooth_info)
-    edf = np.empty(n_smooths, dtype=np.float64)
-    for j, si in enumerate(smooth_info):
-        cols = slice(si.first_coef, si.last_coef)
-        edf[j] = np.trace(F[cols, cols])
-    return edf
-
-
-def _compute_per_smooth_edf1(
-    F: np.ndarray,
-    smooth_info: tuple[SmoothInfo, ...],
-) -> np.ndarray:
-    """Alternative per-smooth EDF for significance testing.
-
-    Computes ``edf1 = 2*edf - edf2`` where ``edf2 = trace(F^2)`` per
-    smooth block. This is R's ``edf1`` (mgcv gam.fit3.post.proc line 966):
-    ``edf1 <- 2*edf - rowSums(t(F)*F)``.
-
-    The per-smooth version sums per-coefficient ``edf1`` values over
-    each smooth's column range, matching R's
-    ``sum(object$edf1[start:stop])``.
-
-    Parameters
-    ----------
-    F : np.ndarray, shape (p, p)
-        Hat-like matrix: ``H^{-1} @ XtWX``.
-    smooth_info : tuple[SmoothInfo, ...]
-        Per-smooth metadata with column ranges.
-
-    Returns
-    -------
-    np.ndarray, shape (n_smooths,)
-        Alternative EDF (``edf1``) per smooth, for use as ``Ref.df``
-        in Wood (2013) significance tests.
-    """
-    # Per-coefficient: edf_i = F[i,i], edf2_i = sum(F[i,:] * F[:,i])
-    edf_per_coef = np.diag(F)
-    edf2_per_coef = np.sum(F.T * F, axis=0)  # rowSums(t(F)*F)
-    edf1_per_coef = 2.0 * edf_per_coef - edf2_per_coef
-
-    n_smooths = len(smooth_info)
-    edf1 = np.empty(n_smooths, dtype=np.float64)
-    for j, si in enumerate(smooth_info):
-        cols = slice(si.first_coef, si.last_coef)
-        edf1[j] = np.sum(edf1_per_coef[cols])
-    return edf1
-
-
-def _compute_null_deviance(
-    y: np.ndarray,
-    wt: np.ndarray,
-    family: ExponentialFamily,
-) -> float:
-    """Null model deviance.
-
-    Uses the weighted mean of y as the null model prediction.
-
-    Parameters
-    ----------
-    y : np.ndarray, shape (n,)
-        Response values.
-    wt : np.ndarray, shape (n,)
-        Prior weights.
-    family : ExponentialFamily
-        Family with ``dev_resids()`` method.
-
-    Returns
-    -------
-    float
-        Null model deviance.
-    """
-    mu_null = np.sum(wt * y) / np.sum(wt)
-    mu_null_arr = np.full_like(y, mu_null)
-    return float(family.dev_resids(y, mu_null_arr, wt))
-
-
-def _extract_training_data(
-    spec: FormulaSpec,
-    data: pd.DataFrame | dict,
-) -> dict[str, np.ndarray]:
-    """Extract raw training covariate data for plotting.
-
-    Stores all variables referenced in smooth terms (covariates and
-    by-variables) so that ``plot()`` can construct evaluation grids
-    and rug plots without re-accessing the original data.
-
-    Parameters
-    ----------
-    spec : FormulaSpec
-        Parsed formula specification.
-    data : DataFrame or dict
-        Training data.
-
-    Returns
-    -------
-    dict[str, np.ndarray]
-        Mapping from variable name to raw training data array.
-    """
-
-    training: dict[str, np.ndarray] = {}
-
-    # Collect all variable names from smooth terms
-    var_names: set[str] = set()
-    for st in spec.smooth_terms:
-        for v in st.variables:
-            var_names.add(v)
-        if st.by is not None:
-            var_names.add(st.by)
-
-    for name in var_names:
-        col = data[name]
-        # Preserve dtype: factors stay as-is, numerics become float64
-        if is_factor(col):
-            training[name] = np.asarray(col)
-        else:
-            training[name] = np.asarray(col, dtype=np.float64).ravel()
-
-    return training
