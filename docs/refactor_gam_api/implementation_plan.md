@@ -27,7 +27,7 @@ When this plan says "run the test suite," use `make test-local`. When running a 
 
 ---
 
-## Phase 1: Extract `PostEstimation` Module
+## Phase 1: Extract `PostEstimation` Module (DONE)
 
 **Goal:** Pull the derived-quantity computation out of `_store_results()` into a testable, standalone module.
 

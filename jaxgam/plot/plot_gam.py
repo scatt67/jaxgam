@@ -26,8 +26,23 @@ if TYPE_CHECKING:
     import matplotlib.axes
     import matplotlib.figure
 
-    from jaxgam.api import GAM
+    from jaxgam.results import FittedModel
     from jaxgam.smooths.constraints import TermBlock
+
+
+def _ga(model: object, name: str) -> object:
+    """Get attribute by protocol name, falling back to trailing-underscore.
+
+    During the migration period, plot needs to work with both
+    ``GAMResults`` (``model.coefficients``) and the old ``GAM``
+    (``model.coefficients_``). Tries the underscore variant first
+    (since legacy ``GAM`` has both ``family`` and ``family_`` with
+    different meanings), then falls back to the protocol name.
+    """
+    try:
+        return getattr(model, f"{name}_")
+    except AttributeError:
+        return getattr(model, name)
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +51,7 @@ if TYPE_CHECKING:
 
 
 def plot_gam(
-    model: GAM,
+    model: FittedModel,
     select: int | list[int] | None = None,
     pages: int = 0,  # noqa: ARG001
     rug: bool = True,
@@ -106,7 +121,9 @@ def plot_gam(
 
     from jaxgam.smooths.by_variable import FactorBySmooth
 
-    model._check_fitted()
+    # Legacy GAM guard — GAMResults is always fitted
+    if hasattr(model, "_check_fitted"):
+        model._check_fitted()
 
     # Validate grid/SE parameters
     if n_grid < 2:
@@ -117,7 +134,8 @@ def plot_gam(
         raise ValueError(f"se_mult must be non-negative, got {se_mult}")
 
     # Gather smooth terms (skip parametric)
-    smooth_terms = [t for t in model.coef_map_.terms if t.term_type == "smooth"]
+    coef_map = _ga(model, "coef_map")
+    smooth_terms = [t for t in coef_map.terms if t.term_type == "smooth"]
 
     if len(smooth_terms) == 0:
         raise ValueError("No smooth terms to plot (model is purely parametric).")
@@ -165,12 +183,17 @@ def plot_gam(
         axes_flat[j].set_visible(False)
 
     # Get stored training data for rug/grid range
-    if not hasattr(model, "_training_data") or model._training_data is None:
+    # GAMResults uses .training_data; legacy GAM uses ._training_data
+    training_data = getattr(
+        model,
+        "training_data",
+        getattr(model, "_training_data", None),
+    )
+    if training_data is None:
         raise RuntimeError(
             "Training data not stored on model. "
             "Cannot generate rug/grid without covariate ranges."
         )
-    training_data = model._training_data
 
     # Plot each panel
     for i, panel in enumerate(panels):
@@ -301,7 +324,7 @@ def _make_factor_by_panels(term: TermBlock) -> list[_PlotPanel]:
 
 
 def _plot_1d_core(
-    model: GAM,
+    model: FittedModel,
     term: TermBlock,
     pred_data: dict[str, np.ndarray],
     x_grid: np.ndarray,
@@ -354,13 +377,16 @@ def _plot_1d_core(
 
     # Get prediction matrix for this smooth
     X_raw = smooth.predict_matrix(pred_data)
-    X_s = model.coef_map_.transform_X(X_raw, term.label)
+    coef_map = _ga(model, "coef_map")
+    X_s = coef_map.transform_X(X_raw, term.label)
 
     # Get coefficients and Vp block for this term
+    coefficients = _ga(model, "coefficients")
+    Vp = _ga(model, "Vp")
     col_start = term.col_start
     col_end = col_start + term.n_coefs
-    beta_s = model.coefficients_[col_start:col_end]
-    Vp_block = model.Vp_[col_start:col_end, col_start:col_end]
+    beta_s = coefficients[col_start:col_end]
+    Vp_block = Vp[col_start:col_end, col_start:col_end]
 
     # Compute partial effect
     fit = X_s @ beta_s
@@ -404,7 +430,7 @@ def _plot_1d_core(
 
 
 def _plot_1d_smooth(
-    model: GAM,
+    model: FittedModel,
     term: TermBlock,
     ax: matplotlib.axes.Axes,
     training_data: dict[str, np.ndarray],
@@ -481,7 +507,7 @@ def _plot_1d_smooth(
 
 
 def _plot_factor_by_level(
-    model: GAM,
+    model: FittedModel,
     term: TermBlock,
     level: str,
     ax: matplotlib.axes.Axes,
@@ -574,7 +600,7 @@ def _plot_factor_by_level(
 
 
 def _plot_2d_smooth(
-    model: GAM,
+    model: FittedModel,
     term: TermBlock,
     ax: matplotlib.axes.Axes,
     training_data: dict[str, np.ndarray],
@@ -622,12 +648,14 @@ def _plot_2d_smooth(
 
     # Get prediction matrix for this smooth
     X_raw = smooth.predict_matrix(pred_data)
-    X_s = model.coef_map_.transform_X(X_raw, term.label)
+    coef_map = _ga(model, "coef_map")
+    X_s = coef_map.transform_X(X_raw, term.label)
 
     # Compute partial effect
+    coefficients = _ga(model, "coefficients")
     col_start = term.col_start
     col_end = col_start + term.n_coefs
-    beta_s = model.coefficients_[col_start:col_end]
+    beta_s = coefficients[col_start:col_end]
     fit = X_s @ beta_s
 
     # Reshape to grid: contourf(x, y, Z) expects Z.shape == (len(y), len(x))
@@ -659,12 +687,12 @@ def _plot_2d_smooth(
 # ---------------------------------------------------------------------------
 
 
-def _get_smooth_edf(model: GAM, term: TermBlock) -> float:
+def _get_smooth_edf(model: FittedModel, term: TermBlock) -> float:
     """Get the effective degrees of freedom for a smooth term.
 
     Parameters
     ----------
-    model : GAM
+    model : FittedModel
         Fitted model.
     term : TermBlock
         The term block.
@@ -679,12 +707,14 @@ def _get_smooth_edf(model: GAM, term: TermBlock) -> float:
     ValueError
         If the term label is not found in the model's smooth info.
     """
-    for j, si in enumerate(model.smooth_info_):
+    smooth_info = _ga(model, "smooth_info")
+    edf = _ga(model, "edf")
+    for j, si in enumerate(smooth_info):
         if si.label == term.label:
-            return float(model.edf_[j])
+            return float(edf[j])
     raise ValueError(
         f"Smooth term {term.label!r} not found in model smooth info. "
-        f"Available: {[si.label for si in model.smooth_info_]}"
+        f"Available: {[si.label for si in smooth_info]}"
     )
 
 
