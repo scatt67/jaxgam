@@ -10,19 +10,18 @@ from __future__ import annotations
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+from jaxgam.registry import Registry
 
-# Canonical name -> family class mapping
-_FAMILY_REGISTRY: dict[str, type[ExponentialFamily]] = {
-    "gaussian": Gaussian,
-    "binomial": Binomial,
-    "poisson": Poisson,
-    "gamma": Gamma,
-}
-
-# Cached instances for default-link families. Reusing the same object
-# ensures JAX's JIT cache (keyed by object identity) hits across fits
-# with the same family, avoiding costly recompilation of jax.hessian.
-_FAMILY_CACHE: dict[str, ExponentialFamily] = {}
+family_registry: Registry[ExponentialFamily] = Registry(
+    {
+        "gaussian": Gaussian,
+        "binomial": Binomial,
+        "poisson": Poisson,
+        "gamma": Gamma,
+    },
+    name="family",
+    cache_instances=True,
+)
 
 
 def get_family(name_or_instance: str | ExponentialFamily) -> ExponentialFamily:
@@ -63,15 +62,7 @@ def get_family(name_or_instance: str | ExponentialFamily) -> ExponentialFamily:
         return name_or_instance
 
     if isinstance(name_or_instance, str):
-        key = name_or_instance.lower()
-        if key not in _FAMILY_REGISTRY:
-            available = ", ".join(sorted(_FAMILY_REGISTRY.keys()))
-            raise KeyError(
-                f"Unknown family: {name_or_instance!r}. Available families: {available}"
-            )
-        if key not in _FAMILY_CACHE:
-            _FAMILY_CACHE[key] = _FAMILY_REGISTRY[key]()
-        return _FAMILY_CACHE[key]
+        return family_registry.get_instance(name_or_instance)
 
     raise TypeError(
         f"Expected a string or ExponentialFamily instance, "

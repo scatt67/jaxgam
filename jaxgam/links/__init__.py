@@ -11,15 +11,18 @@ from jaxgam.links.links import (
     ProbitLink,
     SqrtLink,
 )
+from jaxgam.links.registry import link_registry, get_link
 
 __all__ = [
     "CloglogLink",
     "IdentityLink",
     "InverseLink",
     "InverseSquaredLink",
+    "link_registry",
     "Link",
     "LogLink",
     "LogitLink",
     "ProbitLink",
     "SqrtLink",
+    "get_link",
 ]

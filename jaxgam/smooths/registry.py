@@ -10,6 +10,7 @@ Design doc reference: docs/design.md Section 5.1
 
 from __future__ import annotations
 
+from jaxgam.registry import Registry
 from jaxgam.smooths.base import Smooth
 from jaxgam.smooths.cubic import (
     CubicRegressionSmooth,
@@ -19,20 +20,24 @@ from jaxgam.smooths.cubic import (
 from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 from jaxgam.smooths.tprs import TPRSShrinkageSmooth, TPRSSmooth
 
-# Canonical basis type -> smooth class mapping
-_SMOOTH_REGISTRY: dict[str, type[Smooth]] = {
-    "tp": TPRSSmooth,
-    "ts": TPRSShrinkageSmooth,
-    "cr": CubicRegressionSmooth,
-    "cs": CubicShrinkageSmooth,
-    "cc": CyclicCubicSmooth,
-    "te": TensorProductSmooth,
-    "ti": TensorInteractionSmooth,
-}
+smooth_registry: Registry[Smooth] = Registry(
+    {
+        "tp": TPRSSmooth,
+        "ts": TPRSShrinkageSmooth,
+        "cr": CubicRegressionSmooth,
+        "cs": CubicShrinkageSmooth,
+        "cc": CyclicCubicSmooth,
+        "te": TensorProductSmooth,
+        "ti": TensorInteractionSmooth,
+    },
+    name="basis type",
+)
 
 
 def get_smooth_class(bs_name: str) -> type[Smooth]:
     """Look up and return a Smooth class by basis type name.
+
+    Thin wrapper around ``smooth_registry.get_class()`` for backward compatibility.
 
     Parameters
     ----------
@@ -55,8 +60,4 @@ def get_smooth_class(bs_name: str) -> type[Smooth]:
     >>> cls.__name__
     'TPRSSmooth'
     """
-    key = bs_name.lower()
-    if key not in _SMOOTH_REGISTRY:
-        available = ", ".join(sorted(_SMOOTH_REGISTRY.keys()))
-        raise KeyError(f"Unknown basis type: {bs_name!r}. Available: {available}")
-    return _SMOOTH_REGISTRY[key]
+    return smooth_registry.get_class(bs_name)

@@ -131,10 +131,12 @@ class Link(ABC):
         ValueError
             If the name is not in the registry.
         """
+        from jaxgam.links.registry import link_registry, get_link
+
         try:
-            return _LINK_REGISTRY[name]()
+            return get_link(name)
         except KeyError:
-            valid = ", ".join(sorted(_LINK_REGISTRY))
+            valid = ", ".join(link_registry.available)
             raise ValueError(
                 f"Unknown link function {name!r}. Valid options: {valid}"
             ) from None
@@ -318,16 +320,3 @@ class InverseSquaredLink(Link):
         """dμ/dη = -1/(2η^{3/2}) (since μ = 1/√η)."""
         xp = array_module(eta)
         return -0.5 / xp.maximum(eta, _EPS) ** 1.5
-
-
-# Maps canonical link names to their implementing classes.
-_LINK_REGISTRY: dict[str, type[Link]] = {
-    "identity": IdentityLink,
-    "log": LogLink,
-    "logit": LogitLink,
-    "inverse": InverseLink,
-    "probit": ProbitLink,
-    "cloglog": CloglogLink,
-    "sqrt": SqrtLink,
-    "inverse_squared": InverseSquaredLink,
-}

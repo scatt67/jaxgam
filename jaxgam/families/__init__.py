@@ -5,10 +5,11 @@ function for string-based family lookup.
 """
 
 from jaxgam.families.base import ExponentialFamily
-from jaxgam.families.registry import get_family
+from jaxgam.families.registry import family_registry, get_family
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 
 __all__ = [
+    "family_registry",
     "Binomial",
     "ExponentialFamily",
     "Gamma",
