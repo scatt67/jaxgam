@@ -109,6 +109,77 @@ Use `te()` for full tensor products and `ti()` for interaction-only terms
 
 ---
 
+## Custom registrations
+
+JaxGAM ships with built-in smooths, families, and links, but you can
+register your own at runtime. Custom entries extend the registry without
+modifying or removing built-in entries.
+
+### Registering a custom smooth
+
+Your class must subclass `jaxgam.smooths.Smooth`.
+
+```python
+from jaxgam.smooths import smooth_registry, Smooth
+
+class PSplineSmooth(Smooth):
+    ...  # implement setup(), basis(), penalty(), etc.
+
+smooth_registry.register("ps", PSplineSmooth)
+
+# Now usable in formulas:
+GAM("y ~ s(x, bs='ps')").fit(data)
+```
+
+### Registering a custom family
+
+Your class must subclass `jaxgam.families.ExponentialFamily`.
+
+```python
+from jaxgam.families import family_registry, ExponentialFamily
+
+class NegativeBinomial(ExponentialFamily):
+    ...  # implement variance(), deviance_resids(), initialize(), etc.
+
+family_registry.register("nb", NegativeBinomial)
+
+# Now usable by name:
+GAM("y ~ s(x)", family="nb").fit(data)
+```
+
+### Registering a custom link
+
+Your class must subclass `jaxgam.links.Link`.
+
+```python
+from jaxgam.links import link_registry, Link
+
+class CauchitLink(Link):
+    ...  # implement link(), inverse(), derivative()
+
+link_registry.register("cauchit", CauchitLink)
+```
+
+### Rules
+
+- Keys are **case-insensitive** — `"PS"` and `"ps"` are the same key.
+- You **cannot override** a built-in or previously registered key. Attempting
+  to do so raises `ValueError`.
+- Registrations are global and take effect immediately — any subsequent
+  `GAM` call will see the new entry.
+
+### Inspecting a registry
+
+```python
+from jaxgam.smooths import smooth_registry
+
+smooth_registry.available      # ('cc', 'cr', 'cs', 'te', 'ti', 'tp', 'ts')
+"tp" in smooth_registry        # True
+len(smooth_registry)           # 7
+```
+
+---
+
 ## Fitted model attributes
 
 After calling `fit()`, these attributes are available on the `GAM` instance:
