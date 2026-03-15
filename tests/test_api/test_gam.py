@@ -1,7 +1,7 @@
 """Tests for GAM class (sklearn-style API).
 
 Tests cover:
-- A. GAM class API (unfitted raises, fit returns GAMResults, deprecation)
+- A. GAM class API (fit returns GAMResults, attributes)
 - B. End-to-end fitting (Gaussian basic, all-finite, shapes, Vp PSD)
 - C. Hard-gate invariants (parametrized across 4 families)
 - D. R comparison (parametrized across 4 families, skip if R unavailable)
@@ -24,8 +24,6 @@ Design doc reference: Section 10.1, 10.2
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -46,38 +44,15 @@ from tests.tolerances import LOOSE, MODERATE, STRICT
 
 
 class TestGAMClass:
-    """Test GAM class interface before and after fitting."""
+    """Test GAM class interface."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    def test_unfitted_predict_raises(self):
-        model = GAM(self.FORMULA)
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.predict()
-
-    def test_unfitted_summary_raises(self):
-        model = GAM(self.FORMULA)
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.summary()
-
-    def test_unfitted_plot_raises(self):
-        model = GAM(self.FORMULA)
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.plot()
 
     def test_fit_returns_gam_results(self):
         data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA)
         result = model.fit(data)
         assert isinstance(result, GAMResults)
-
-    def test_fit_stores_results(self):
-        """fit() stores results_ on the GAM instance (design §9 #1)."""
-        data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA)
-        result = model.fit(data)
-        assert hasattr(model, "results_")
-        assert model.results_ is result
 
     def test_fitted_attributes_are_numpy(self):
         data = _generate_family_data("gaussian")
@@ -115,62 +90,6 @@ class TestGAMClass:
         results = GAM(self.FORMULA).fit(data)
         assert results.execution_path == "jax"
         assert results.lambda_strategy == "newton_reml"
-
-
-# ---------------------------------------------------------------------------
-# A2. TestDeprecationForwarding — backward compat (design §3.5)
-# ---------------------------------------------------------------------------
-
-
-class TestDeprecationForwarding:
-    """Test deprecated attribute/method forwarding on GAM."""
-
-    FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    def test_attribute_forwarding_emits_warning(self):
-        data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA)
-        model.fit(data)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            coef = model.coefficients_
-            assert len(w) == 1
-            assert issubclass(w[0].category, DeprecationWarning)
-            assert "coefficients" in str(w[0].message)
-        np.testing.assert_array_equal(
-            coef, model.results_.coefficients
-        )
-
-    def test_predict_forwarding_emits_warning(self):
-        data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA)
-        model.fit(data)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            model.predict()
-            assert any(
-                issubclass(wi.category, DeprecationWarning)
-                and "predict" in str(wi.message)
-                for wi in w
-            )
-
-    def test_summary_forwarding_emits_warning(self):
-        data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA)
-        model.fit(data)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            model.summary()
-            assert any(
-                issubclass(wi.category, DeprecationWarning)
-                and "summary" in str(wi.message)
-                for wi in w
-            )
-
-    def test_unfitted_attribute_raises(self):
-        model = GAM(self.FORMULA)
-        with pytest.raises(AttributeError):
-            model.coefficients_
 
 
 # ---------------------------------------------------------------------------
@@ -266,9 +185,7 @@ class TestHardGateInvariants:
     def test_edf_bounds(self, fitted_results):
         _, results = fitted_results
         p = results.X.shape[1]
-        assert np.all(results.edf > 0), (
-            f"EDF has non-positive entry: {results.edf}"
-        )
+        assert np.all(results.edf > 0), f"EDF has non-positive entry: {results.edf}"
         assert results.edf_total <= p + MODERATE.atol
 
     def test_vp_psd(self, fitted_results):
@@ -663,9 +580,7 @@ class TestEdgeCases:
         n = len(data)
         results_no_offset = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         offset = np.ones(n) * 0.5
-        results_with_offset = GAM("y ~ s(x, k=10, bs='cr')").fit(
-            data, offset=offset
-        )
+        results_with_offset = GAM("y ~ s(x, k=10, bs='cr')").fit(data, offset=offset)
         # Coefficients should differ
         assert not np.allclose(
             results_no_offset.coefficients,
@@ -676,9 +591,7 @@ class TestEdgeCases:
     def test_method_case_insensitive(self):
         """Method name is case-insensitive."""
         data = _generate_family_data("gaussian")
-        results = GAM(
-            "y ~ s(x, k=10, bs='cr')", method="reml"
-        ).fit(data)
+        results = GAM("y ~ s(x, k=10, bs='cr')", method="reml").fit(data)
         assert results.converged
 
     def test_chaining_api(self):
@@ -693,7 +606,5 @@ class TestEdgeCases:
         from jaxgam.families.standard import Gaussian
 
         data = _generate_family_data("gaussian")
-        results = GAM(
-            "y ~ s(x, k=10, bs='cr')", family=Gaussian()
-        ).fit(data)
+        results = GAM("y ~ s(x, k=10, bs='cr')", family=Gaussian()).fit(data)
         assert results.converged

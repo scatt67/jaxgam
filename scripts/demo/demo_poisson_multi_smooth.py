@@ -32,21 +32,21 @@ print(f"Data: n={n}, y range=[{y.min():.0f}, {y.max():.0f}], mean={y.mean():.2f}
 
 
 def fit_and_plot(formula, label, tag):
-    """Fit a GAM, print summary, save plot via model.plot()."""
+    """Fit a GAM, print summary, save plot via results.plot()."""
     print(f"\n{'=' * 60}")
     print(f"  {label}")
     print(f"  {formula}")
     print(f"{'=' * 60}")
 
     model = GAM(formula, family="poisson", method="REML")
-    model.fit(data)
+    results = model.fit(data)
 
-    print(f"Converged: {model.converged_} in {model.n_iter_} iterations")
-    print(f"Deviance:  {model.deviance_:.4f}")
-    print(f"EDF:       {model.edf_}")
-    model.summary()
+    print(f"Converged: {results.converged} in {results.n_iter} iterations")
+    print(f"Deviance:  {results.deviance:.4f}")
+    print(f"EDF:       {results.edf}")
+    results.summary()
 
-    fig, axes = model.plot(pages=1, shade=True, rug=True, se=True)
+    fig, axes = results.plot(pages=1, shade=True, rug=True, se=True)
     fig.suptitle(f"Poisson GAM: {formula}", fontsize=12, y=1.02)
     fig.tight_layout()
     fname = f"{OUT}/poisson_{tag}.png"
@@ -54,7 +54,7 @@ def fit_and_plot(formula, label, tag):
     print(f"Saved: {fname}")
     plt.close(fig)
 
-    return model
+    return results
 
 
 # ── Model 1: Additive multi-smooth ───────────────────────────────────

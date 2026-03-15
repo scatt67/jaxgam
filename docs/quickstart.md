@@ -286,11 +286,6 @@ read-only:
 | `method` | Smoothing parameter method ("REML" or "ML") |
 | `n` | Number of observations |
 
-!!! warning "Deprecated: accessing fitted attributes on GAM"
-    The old pattern `model.coefficients_` (with trailing underscore) on the
-    `GAM` instance still works but emits `DeprecationWarning` and will be
-    removed in v1.1. Use `results.coefficients` instead.
-
 ## Further reading
 
 - [Design document](design.md) -- architecture, algorithms, and

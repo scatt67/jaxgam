@@ -474,8 +474,3 @@ class TestEdgeCases:
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         with pytest.raises(ValueError, match="pred_type must be"):
             model.predict(pred_type="terms")
-
-    def test_unfitted_predict_matrix_raises(self):
-        model = GAM("y ~ s(x)")
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.predict_matrix({"x": np.array([1.0])})

@@ -123,9 +123,7 @@ class TestGAMResultsConstruction:
 
     def test_edf_shape(self, gam_results):
         """EDF array has one entry per smooth."""
-        assert gam_results.edf.shape == (
-            len(gam_results.smooth_info),
-        )
+        assert gam_results.edf.shape == (len(gam_results.smooth_info),)
 
     def test_n_matches_data(self, gam_results):
         """n matches the number of observations."""
@@ -199,13 +197,9 @@ class TestPredict:
         assert se.shape == gam_results.fitted_values.shape
         assert np.all(se >= 0)
 
-    def test_predict_se_with_new_data(
-        self, gam_results, fit_data
-    ):
+    def test_predict_se_with_new_data(self, gam_results, fit_data):
         """predict() with new data and se_fit=True."""
-        pred, se = gam_results.predict(
-            newdata=fit_data, se_fit=True
-        )
+        pred, se = gam_results.predict(newdata=fit_data, se_fit=True)
         assert pred.shape == (len(fit_data),)
         assert se.shape == (len(fit_data),)
         assert np.all(se >= 0)
@@ -285,52 +279,3 @@ class TestRepr:
         """repr includes deviance explained."""
         r = repr(gam_results)
         assert "deviance_explained=" in r
-
-
-# ---------------------------------------------------------------------------
-# Matches legacy GAM tests
-# ---------------------------------------------------------------------------
-
-
-class TestMatchesLegacyGAM:
-    """Verify GAMResults produces same outputs as legacy GAM."""
-
-    @pytest.fixture
-    def legacy_gam(self, fit_data):
-        """Fit a model using legacy GAM API."""
-        from jaxgam.api import GAM
-
-        model = GAM("y ~ s(x)", family="gaussian")
-        model.fit(fit_data)
-        return model
-
-    def test_coefficients_match(
-        self, gam_results, legacy_gam
-    ):
-        """Coefficients from GAMResults match legacy GAM."""
-        np.testing.assert_allclose(
-            gam_results.coefficients,
-            legacy_gam.coefficients_,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_vp_match(self, gam_results, legacy_gam):
-        """Vp from GAMResults matches legacy GAM."""
-        np.testing.assert_allclose(
-            gam_results.Vp,
-            legacy_gam.Vp_,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_predict_match(self, gam_results, legacy_gam):
-        """Predictions match between GAMResults and legacy GAM."""
-        pred_new = gam_results.predict()
-        pred_old = legacy_gam.predict()
-        np.testing.assert_allclose(
-            pred_new,
-            pred_old,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )

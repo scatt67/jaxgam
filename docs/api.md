@@ -230,21 +230,3 @@ read-only attributes (frozen dataclass):
 | `method` | `str` | Smoothing parameter method ("REML" or "ML") |
 | `n` | `int` | Number of observations |
 
-### Deprecated access via GAM
-
-The old pattern of accessing fitted attributes on the `GAM` instance with
-trailing underscores still works but emits `DeprecationWarning`:
-
-```python
-# Old (deprecated) — will be removed in v1.1
-model = GAM("y ~ s(x)")
-model.fit(data)
-model.coefficients_      # DeprecationWarning
-model.predict()          # DeprecationWarning
-
-# New (preferred)
-model = GAM("y ~ s(x)")
-results = model.fit(data)
-results.coefficients     # no warning
-results.predict()        # no warning
-```

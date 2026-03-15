@@ -271,11 +271,6 @@ class TestReturnValues:
 class TestEdgeCases:
     """Edge cases and error handling."""
 
-    def test_unfitted_raises(self):
-        model = GAM("y ~ s(x)")
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.plot()
-
     def test_select_out_of_range_raises(self):
         data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)

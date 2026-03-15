@@ -131,7 +131,7 @@ class Link(ABC):
         ValueError
             If the name is not in the registry.
         """
-        from jaxgam.links.registry import link_registry, get_link
+        from jaxgam.links.registry import get_link, link_registry
 
         try:
             return get_link(name)

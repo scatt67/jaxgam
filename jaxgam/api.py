@@ -5,16 +5,13 @@ Provides the ``GAM`` class (sklearn-style API) that wires together:
 - Phase 2: ``FittingData.from_setup()`` → ``newton_optimize()`` / ``pirls_loop()``
 - Phase 3: ``GAMResults._from_fit()``
 
-``GAM.fit()`` returns a ``GAMResults`` frozen dataclass. For backward
-compatibility, fitted attributes (``model.coefficients_``) are forwarded
-to ``model.results_`` with deprecation warnings.
+``GAM.fit()`` returns a ``GAMResults`` frozen dataclass.
 
-Design doc reference: docs/refactor_gam_api/design.md §3.3, §3.5
+Design doc reference: docs/refactor_gam_api/design.md §3.3
 """
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -32,10 +29,7 @@ from jaxgam.results import GAMResults
 
 if TYPE_CHECKING:
     import jax
-    import matplotlib.figure
     import pandas as pd
-
-    from jaxgam.summary.summary import GAMSummary
 
 
 # ---------------------------------------------------------------------------
@@ -75,11 +69,6 @@ class GAM:
     >>> results.predict(newdata)
     array([...])
 
-    Backward-compatible usage (deprecated):
-
-    >>> model = GAM("y ~ s(x)").fit(data)  # returns GAMResults
-    >>> model.predict(newdata)  # works on GAMResults directly
-
     Design doc reference: docs/refactor_gam_api/design.md §3.3
     """
 
@@ -118,10 +107,9 @@ class GAM:
         Returns
         -------
         GAMResults
-            Frozen dataclass containing all fitted state. Also stored
-            as ``self.results_`` for backward compatibility.
+            Frozen dataclass containing all fitted state.
 
-        Design doc reference: docs/refactor_gam_api/design.md §3.3, §9 #1
+        Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
         family_obj = get_family(self.family)
 
@@ -142,7 +130,7 @@ class GAM:
             lambda_strategy = f"newton_{self.method.lower()}"
 
         # Phase 2→3: construct GAMResults
-        results = GAMResults._from_fit(
+        return GAMResults._from_fit(
             result=result,
             setup=setup,
             spec=spec,
@@ -152,136 +140,6 @@ class GAM:
             lambda_strategy=lambda_strategy,
             formula=self.formula,
             method=self.method,
-        )
-
-        self.results_ = results
-        return results
-
-    # ------------------------------------------------------------------
-    # Backward-compatible forwarding (deprecated)
-    # Design doc reference: docs/refactor_gam_api/design.md §3.5
-    # ------------------------------------------------------------------
-
-    def __getattr__(self, name: str) -> object:
-        """Forward fitted attribute access to results_ with deprecation."""
-        if name.endswith("_") and name != "results_":
-            stripped = name.rstrip("_")
-            if hasattr(self, "results_") and hasattr(
-                self.results_, stripped
-            ):
-                warnings.warn(
-                    f"Accessing '{name}' on GAM is deprecated. "
-                    f"Use 'results.{stripped}' instead.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                return getattr(self.results_, stripped)
-        raise AttributeError(
-            f"'{type(self).__name__}' has no attribute '{name}'"
-        )
-
-    def predict(
-        self,
-        newdata: pd.DataFrame | dict | None = None,
-        pred_type: str = "response",
-        se_fit: bool = False,
-        offset: np.ndarray | None = None,
-    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        """Predict from a fitted GAM (deprecated).
-
-        .. deprecated::
-            Use ``results.predict()`` instead.
-        """
-        warnings.warn(
-            "Calling predict() on GAM is deprecated. "
-            "Use results.predict() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not hasattr(self, "results_"):
-            raise RuntimeError(
-                "This GAM instance is not fitted yet. "
-                "Call fit() first."
-            )
-        return self.results_.predict(
-            newdata=newdata,
-            pred_type=pred_type,
-            se_fit=se_fit,
-            offset=offset,
-        )
-
-    def predict_matrix(
-        self, newdata: pd.DataFrame | dict
-    ) -> np.ndarray:
-        """Build prediction matrix (deprecated).
-
-        .. deprecated::
-            Use ``results.predict_matrix()`` instead.
-        """
-        warnings.warn(
-            "Calling predict_matrix() on GAM is deprecated. "
-            "Use results.predict_matrix() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not hasattr(self, "results_"):
-            raise RuntimeError(
-                "This GAM instance is not fitted yet. "
-                "Call fit() first."
-            )
-        return self.results_.predict_matrix(newdata)
-
-    def summary(self) -> GAMSummary:
-        """Print and return summary (deprecated).
-
-        .. deprecated::
-            Use ``results.summary()`` instead.
-        """
-        warnings.warn(
-            "Calling summary() on GAM is deprecated. "
-            "Use results.summary() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not hasattr(self, "results_"):
-            raise RuntimeError(
-                "This GAM instance is not fitted yet. "
-                "Call fit() first."
-            )
-        return self.results_.summary()
-
-    def plot(
-        self,
-        select: int | list | None = None,
-        pages: int = 0,
-        rug: bool = True,
-        se: bool = True,
-        shade: bool = True,
-        **kwargs,
-    ) -> tuple[matplotlib.figure.Figure, np.ndarray]:
-        """Plot smooth components (deprecated).
-
-        .. deprecated::
-            Use ``results.plot()`` instead.
-        """
-        warnings.warn(
-            "Calling plot() on GAM is deprecated. "
-            "Use results.plot() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not hasattr(self, "results_"):
-            raise RuntimeError(
-                "This GAM instance is not fitted yet. "
-                "Call fit() first."
-            )
-        return self.results_.plot(
-            select=select,
-            pages=pages,
-            rug=rug,
-            se=se,
-            shade=shade,
-            **kwargs,
         )
 
 
@@ -333,8 +191,7 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
     device = kwargs.get("device")
     if device is not None and device not in ("cpu", "gpu"):
         raise ValueError(
-            f"device={device!r} is not recognized. "
-            "Use 'cpu', 'gpu', or None."
+            f"device={device!r} is not recognized. Use 'cpu', 'gpu', or None."
         )
 
     optimizer = kwargs.get("optimizer")
@@ -359,8 +216,7 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
 
     if kwargs.get("knots") is not None:
         raise NotImplementedError(
-            "User-specified knots are planned for v1.1. "
-            "See docs/design.md Section 5.2."
+            "User-specified knots are planned for v1.1. See docs/design.md Section 5.2."
         )
 
 

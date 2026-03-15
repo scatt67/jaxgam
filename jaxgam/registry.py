@@ -65,8 +65,7 @@ class Registry(Generic[T]):
         normalized = key.lower()
         if normalized in self._entries or normalized in self._custom_entries:
             raise ValueError(
-                f"Key {key!r} is already registered in the "
-                f"{self._name} registry."
+                f"Key {key!r} is already registered in the {self._name} registry."
             )
         self._custom_entries[normalized] = cls
 

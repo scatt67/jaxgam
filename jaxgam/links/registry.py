@@ -14,8 +14,8 @@ from jaxgam.links.links import (
     InverseLink,
     InverseSquaredLink,
     Link,
-    LogLink,
     LogitLink,
+    LogLink,
     ProbitLink,
     SqrtLink,
 )

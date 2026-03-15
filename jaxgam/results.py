@@ -1,9 +1,9 @@
 """GAMResults: frozen dataclass holding all fitted state.
 
 This module defines:
-- ``FittedModel`` protocol for summary/plot interop
 - ``GAMResults`` frozen dataclass with prediction, summary, and plot methods
 - ``_from_fit()`` classmethod for construction from raw fit output
+- Post-estimation helpers (EDF, covariance, null deviance)
 
 Design doc reference: docs/refactor_gam_api/design.md §3.4, §4.1, §7
 """
@@ -11,12 +11,12 @@ Design doc reference: docs/refactor_gam_api/design.md §3.4, §4.1, §7
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING
 
 import numpy as np
+import scipy.linalg as sla
 
 from jaxgam.jax_utils import to_numpy
-from jaxgam.post_estimation import compute_post_estimation
 
 if TYPE_CHECKING:
     import matplotlib.figure
@@ -29,48 +29,6 @@ if TYPE_CHECKING:
     from jaxgam.formula.terms import FormulaSpec
     from jaxgam.smooths.constraints import CoefficientMap
     from jaxgam.summary.summary import GAMSummary
-
-
-# ---------------------------------------------------------------------------
-# FittedModel protocol — structural typing for summary/plot interop
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class FittedModel(Protocol):
-    """Protocol capturing what summary() and plot() need.
-
-    Both ``GAM`` (with forwarding) and ``GAMResults`` satisfy this
-    protocol, enabling summary/plot to work with either during the
-    migration period.
-
-    Design doc reference: docs/refactor_gam_api/design.md §2 goal #6,
-    docs/refactor_gam_api/implementation_plan.md Step 2.2.
-    """
-
-    coefficients: np.ndarray
-    Vp: np.ndarray
-    scale: float
-    edf: np.ndarray
-    edf1: np.ndarray
-    edf_total: float
-    family: ExponentialFamily
-    smooth_info: tuple[SmoothInfo, ...]
-    term_names: tuple[str, ...]
-    coef_map: CoefficientMap
-    X: np.ndarray
-    y: np.ndarray
-    weights: np.ndarray
-    n: int
-    fitted_values: np.ndarray
-    linear_predictor: np.ndarray
-    deviance: float
-    null_deviance: float
-    score: float
-    formula: str
-    method: str
-    training_data: dict[str, np.ndarray]
-    setup: ModelSetup
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +113,7 @@ class GAMResults:
     ) -> GAMResults:
         """Construct GAMResults from raw fit output.
 
-        Calls ``compute_post_estimation()`` for derived quantities,
+        Computes derived quantities (covariance, EDF, null deviance),
         extracts training data, and assembles all fields.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.4
@@ -184,8 +142,39 @@ class GAMResults:
         """
         pr = result.pirls_result
 
-        # Compute derived quantities via post_estimation module
-        post = compute_post_estimation(result, setup, family, fd)
+        # Phase 2→3: transfer to NumPy
+        coefficients = to_numpy(pr.coefficients)
+        L = to_numpy(pr.L)
+        XtWX = to_numpy(pr.XtWX)
+        scale = float(to_numpy(result.scale))
+        edf_total = float(to_numpy(result.edf))
+
+        # Compute H^{-1} via Cholesky solve (matches R's chol2inv).
+        # O(p^3) but p is typically small (< 200 for GAMs).
+        p = L.shape[0]
+        Z = sla.solve_triangular(L, np.eye(p), lower=True)
+        H_inv = Z.T @ Z
+
+        # Per-smooth EDF via hat matrix F = H^{-1} @ XtWX
+        # (invariant under repara -- cyclic trace with block-diagonal D)
+        F = H_inv @ XtWX
+        per_smooth_edf = _compute_per_smooth_edf(F, setup.smooth_info)
+        # edf1 = 2*edf - trace(F^2): alternative EDF for significance testing
+        # (R's gam.fit3.post.proc, mgcv.r line 966)
+        per_smooth_edf1 = _compute_per_smooth_edf1(F, setup.smooth_info)
+
+        # Back-transform from Sl.setup reparameterized space
+        if fd.repara_D is not None:
+            D = to_numpy(fd.repara_D)
+            coefficients = D @ coefficients
+            H_inv = D @ H_inv @ D.T
+
+        # Bayesian covariance
+        phi = 1.0 if family.scale_known else scale
+        Vp = phi * H_inv
+
+        # Null deviance
+        null_deviance = _compute_null_deviance(setup.y, setup.weights, family)
 
         # Phase 2→3: transfer remaining arrays to NumPy
         mu = to_numpy(pr.mu)
@@ -197,16 +186,16 @@ class GAMResults:
         training_data = _extract_training_data(spec, data)
 
         return cls(
-            coefficients=post.coefficients,
+            coefficients=coefficients,
             fitted_values=mu,
             linear_predictor=eta,
-            Vp=post.Vp,
-            scale=post.scale,
-            edf=post.edf,
-            edf1=post.edf1,
-            edf_total=post.edf_total,
+            Vp=Vp,
+            scale=scale,
+            edf=per_smooth_edf,
+            edf1=per_smooth_edf1,
+            edf_total=edf_total,
             deviance=deviance,
-            null_deviance=post.null_deviance,
+            null_deviance=null_deviance,
             smoothing_params=smoothing_params,
             converged=result.converged,
             n_iter=result.n_iter,
@@ -260,8 +249,7 @@ class GAMResults:
         """
         if pred_type not in ("response", "link"):
             raise ValueError(
-                f"pred_type must be 'response' or 'link', "
-                f"got {pred_type!r}"
+                f"pred_type must be 'response' or 'link', got {pred_type!r}"
             )
 
         if newdata is None:
@@ -272,15 +260,9 @@ class GAMResults:
             X_p = self.setup.build_predict_matrix(newdata)
             eta = X_p @ self.coefficients
             if offset is not None:
-                eta = eta + np.asarray(
-                    offset, dtype=np.float64
-                ).ravel()
+                eta = eta + np.asarray(offset, dtype=np.float64).ravel()
 
-        pred = (
-            self.family.link.linkinv(eta)
-            if pred_type == "response"
-            else eta
-        )
+        pred = self.family.link.linkinv(eta) if pred_type == "response" else eta
 
         if se_fit:
             if X_p is None:
@@ -292,9 +274,7 @@ class GAMResults:
 
         return pred
 
-    def predict_matrix(
-        self, newdata: pd.DataFrame | dict
-    ) -> np.ndarray:
+    def predict_matrix(self, newdata: pd.DataFrame | dict) -> np.ndarray:
         """Build constrained prediction matrix for new data.
 
         Equivalent to R's ``predict.gam(type="lpmatrix")``.
@@ -408,7 +388,106 @@ class GAMResults:
 
 
 # ---------------------------------------------------------------------------
-# Private helpers
+# Post-estimation helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_per_smooth_edf(
+    F: np.ndarray,
+    smooth_info: tuple[SmoothInfo, ...],
+) -> np.ndarray:
+    """Per-smooth effective degrees of freedom.
+
+    Parameters
+    ----------
+    F : np.ndarray, shape (p, p)
+        Hat-like matrix: ``H^{-1} @ XtWX``.
+    smooth_info : tuple[SmoothInfo, ...]
+        Per-smooth metadata with column ranges.
+
+    Returns
+    -------
+    np.ndarray, shape (n_smooths,)
+        Per-smooth EDF.
+    """
+    n_smooths = len(smooth_info)
+    edf = np.empty(n_smooths, dtype=np.float64)
+    for j, si in enumerate(smooth_info):
+        cols = slice(si.first_coef, si.last_coef)
+        edf[j] = np.trace(F[cols, cols])
+    return edf
+
+
+def _compute_per_smooth_edf1(
+    F: np.ndarray,
+    smooth_info: tuple[SmoothInfo, ...],
+) -> np.ndarray:
+    """Alternative per-smooth EDF for significance testing.
+
+    Computes ``edf1 = 2*edf - edf2`` where ``edf2 = trace(F^2)`` per
+    smooth block. This is R's ``edf1`` (mgcv gam.fit3.post.proc line 966):
+    ``edf1 <- 2*edf - rowSums(t(F)*F)``.
+
+    The per-smooth version sums per-coefficient ``edf1`` values over
+    each smooth's column range, matching R's
+    ``sum(object$edf1[start:stop])``.
+
+    Parameters
+    ----------
+    F : np.ndarray, shape (p, p)
+        Hat-like matrix: ``H^{-1} @ XtWX``.
+    smooth_info : tuple[SmoothInfo, ...]
+        Per-smooth metadata with column ranges.
+
+    Returns
+    -------
+    np.ndarray, shape (n_smooths,)
+        Alternative EDF (``edf1``) per smooth, for use as ``Ref.df``
+        in Wood (2013) significance tests.
+    """
+    # Per-coefficient: edf_i = F[i,i], edf2_i = sum(F[i,:] * F[:,i])
+    edf_per_coef = np.diag(F)
+    edf2_per_coef = np.sum(F.T * F, axis=0)  # rowSums(t(F)*F)
+    edf1_per_coef = 2.0 * edf_per_coef - edf2_per_coef
+
+    n_smooths = len(smooth_info)
+    edf1 = np.empty(n_smooths, dtype=np.float64)
+    for j, si in enumerate(smooth_info):
+        cols = slice(si.first_coef, si.last_coef)
+        edf1[j] = np.sum(edf1_per_coef[cols])
+    return edf1
+
+
+def _compute_null_deviance(
+    y: np.ndarray,
+    wt: np.ndarray,
+    family: ExponentialFamily,
+) -> float:
+    """Null model deviance.
+
+    Uses the weighted mean of y as the null model prediction.
+
+    Parameters
+    ----------
+    y : np.ndarray, shape (n,)
+        Response values.
+    wt : np.ndarray, shape (n,)
+        Prior weights.
+    family : ExponentialFamily
+        Family with ``dev_resids()`` method.
+
+    Returns
+    -------
+    float
+        Null model deviance.
+    """
+    mu_null = np.sum(wt * y) / np.sum(wt)
+    mu_null_arr = np.full_like(y, mu_null)
+    return float(family.dev_resids(y, mu_null_arr, wt))
+
+
+# ---------------------------------------------------------------------------
+# Training data extraction
 # ---------------------------------------------------------------------------
 
 
