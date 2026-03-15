@@ -3,9 +3,11 @@
 Provides the ``GAM`` class (sklearn-style API) that wires together:
 - Phase 1: ``parse_formula()`` → ``ModelSetup.build()``
 - Phase 2: ``FittingData.from_setup()`` → ``newton_optimize()`` / ``pirls_loop()``
-- Phase 3: Post-estimation → fitted attributes on ``GAM`` instance
+- Phase 3: ``GAMResults._from_fit()``
 
-Design doc reference: docs/design.md Section 10.1, 10.2
+``GAM.fit()`` returns a ``GAMResults`` frozen dataclass.
+
+Design doc reference: docs/refactor_gam_api/design.md §3.3
 """
 
 from __future__ import annotations
@@ -13,7 +15,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-import scipy.linalg as sla
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.registry import get_family
@@ -22,18 +23,13 @@ from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import NewtonResult, newton_optimize
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import estimate_edf, estimate_scale
-from jaxgam.formula.design import ModelSetup, SmoothInfo
+from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
-from jaxgam.formula.terms import FormulaSpec
-from jaxgam.jax_utils import to_numpy
-from jaxgam.smooths.by_variable import is_factor
+from jaxgam.results import GAMResults
 
 if TYPE_CHECKING:
     import jax
-    import matplotlib.figure
     import pandas as pd
-
-    from jaxgam.summary.summary import GAMSummary
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +38,11 @@ if TYPE_CHECKING:
 
 
 class GAM:
-    """Generalized Additive Model (sklearn-style API).
+    """Generalized Additive Model specification.
+
+    This class holds model specification parameters and orchestrates the
+    fit pipeline. Calling ``fit()`` returns a ``GAMResults`` frozen
+    dataclass containing all fitted state.
 
     Parameters
     ----------
@@ -62,40 +62,14 @@ class GAM:
         Additional arguments. Supported scope guards:
         ``backend``, ``optimizer``, ``select``, ``gamma``, ``knots``.
 
-    Attributes (set after ``fit()``)
-    --------------------------------
-    coefficients_ : np.ndarray
-        Fitted coefficient vector.
-    fitted_values_ : np.ndarray
-        Fitted values (response scale).
-    linear_predictor_ : np.ndarray
-        Linear predictor (link scale).
-    family_ : ExponentialFamily
-        Fitted family object.
-    Vp_ : np.ndarray
-        Bayesian posterior covariance of coefficients.
-    scale_ : float
-        Estimated or fixed scale parameter (phi).
-    edf_ : np.ndarray
-        Per-smooth effective degrees of freedom.
-    edf_total_ : float
-        Total effective degrees of freedom.
-    smoothing_params_ : np.ndarray
-        Estimated smoothing parameters (original scale).
-    deviance_ : float
-        Model deviance.
-    null_deviance_ : float
-        Null model deviance.
-    converged_ : bool
-        Whether the outer Newton loop converged.
-    n_iter_ : int
-        Number of outer Newton iterations.
-
     Examples
     --------
-    >>> model = GAM("y ~ s(x)", family="gaussian").fit(data)
-    >>> model.coefficients_
+    >>> model = GAM("y ~ s(x)", family="gaussian")
+    >>> results = model.fit(data)
+    >>> results.predict(newdata)
     array([...])
+
+    Design doc reference: docs/refactor_gam_api/design.md §3.3
     """
 
     def __init__(
@@ -112,14 +86,13 @@ class GAM:
         self.method = method.upper()
         self.sp = sp
         self.device = kwargs.get("device")
-        self._fitted = False
 
     def fit(
         self,
         data: pd.DataFrame | dict,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
-    ) -> GAM:
+    ) -> GAMResults:
         """Fit the GAM to data.
 
         Parameters
@@ -133,8 +106,10 @@ class GAM:
 
         Returns
         -------
-        GAM
-            Self, for method chaining.
+        GAMResults
+            Frozen dataclass containing all fitted state.
+
+        Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
         family_obj = get_family(self.family)
 
@@ -154,256 +129,18 @@ class GAM:
             result = newton_optimize(fd, self.method)
             lambda_strategy = f"newton_{self.method.lower()}"
 
-        # Phase 2→3: post-estimation
-        self._store_results(result, setup, spec, data, family_obj, fd, lambda_strategy)
-        self._fitted = True
-        return self
-
-    def predict(
-        self,
-        newdata: pd.DataFrame | dict | None = None,
-        pred_type: str = "response",
-        se_fit: bool = False,
-        offset: np.ndarray | None = None,
-    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        """Predict from a fitted GAM.
-
-        Parameters
-        ----------
-        newdata : pandas.DataFrame or dict, optional
-            New data for prediction. If None, uses the training data.
-        pred_type : str
-            Type of prediction: ``'response'`` or ``'link'``.
-        se_fit : bool
-            Whether to return standard errors.
-        offset : array-like, optional
-            Offset for new data predictions.
-
-        Returns
-        -------
-        numpy.ndarray or tuple[numpy.ndarray, numpy.ndarray]
-            Predictions, or ``(predictions, standard_errors)`` if ``se_fit=True``.
-        """
-        self._check_fitted()
-
-        if pred_type not in ("response", "link"):
-            raise ValueError(
-                f"pred_type must be 'response' or 'link', got {pred_type!r}"
-            )
-
-        if newdata is None:
-            # Self-prediction: use stored linear predictor
-            eta = self.linear_predictor_.copy()
-            X_p = self.X_ if se_fit else None
-        else:
-            X_p = self.setup_.build_predict_matrix(newdata)
-            eta = X_p @ self.coefficients_
-            if offset is not None:
-                eta = eta + np.asarray(offset, dtype=np.float64).ravel()
-
-        pred = self.family_.link.linkinv(eta) if pred_type == "response" else eta
-
-        if se_fit:
-            if X_p is None:
-                X_p = self.X_
-            # se = sqrt(rowSums((X_p @ Vp) * X_p))
-            XVp = X_p @ self.Vp_
-            se = np.sqrt(np.sum(XVp * X_p, axis=1))
-            return pred, se
-
-        return pred
-
-    def predict_matrix(self, newdata: pd.DataFrame | dict) -> np.ndarray:
-        """Build constrained prediction matrix for new data.
-
-        Equivalent to R's ``predict.gam(type="lpmatrix")``.
-
-        Parameters
-        ----------
-        newdata : DataFrame or dict
-            New data for prediction.
-
-        Returns
-        -------
-        np.ndarray, shape ``(n_new, total_coefs)``
-            Constrained prediction matrix.
-        """
-        self._check_fitted()
-        return self.setup_.build_predict_matrix(newdata)
-
-    def summary(self) -> GAMSummary:
-        """Print and return summary of a fitted GAM.
-
-        Computes parametric coefficient significance (z/t tests),
-        smooth term significance (Wood 2013 testStat), and model-level
-        statistics (R-squared, deviance explained, scale estimate).
-
-        Returns
-        -------
-        GAMSummary
-            Summary object with parametric and smooth term tables.
-            The summary is also printed to stdout.
-        """
-        from jaxgam.summary.summary import summary as _summary
-
-        self._check_fitted()
-        s = _summary(self)
-        print(s)  # noqa: T201
-        return s
-
-    def plot(
-        self,
-        select: int | list | None = None,
-        pages: int = 0,
-        rug: bool = True,
-        se: bool = True,
-        shade: bool = True,
-        **kwargs,
-    ) -> tuple[matplotlib.figure.Figure, np.ndarray]:
-        """Plot smooth components of a fitted GAM.
-
-        Equivalent to R's ``plot.gam()``. Produces one panel per smooth
-        term (or per factor level for factor-by smooths) showing the
-        partial effect on the link scale, with optional SE bands and
-        rug marks.
-
-        Parameters
-        ----------
-        select : int, list, or None
-            Select specific smooth term(s) to plot (0-indexed). If None,
-            plots all smooth terms.
-        pages : int
-            Number of pages. 0 means automatic layout.
-        rug : bool
-            Show rug marks at data covariate values.
-        se : bool
-            Show standard error bands.
-        shade : bool
-            If True, use shaded SE bands; if False, use dashed lines.
-        **kwargs
-            Additional arguments passed to ``plot_gam()``. See
-            ``jaxgam.plot.plot_gam.plot_gam`` for full parameter list.
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            The figure.
-        axes : numpy.ndarray
-            Array of Axes objects.
-        """
-        self._check_fitted()
-        from jaxgam.plot import plot_gam
-
-        return plot_gam(
-            self,
-            select=select,
-            pages=pages,
-            rug=rug,
-            se=se,
-            shade=shade,
-            **kwargs,
+        # Phase 2→3: construct GAMResults
+        return GAMResults._from_fit(
+            result=result,
+            setup=setup,
+            spec=spec,
+            data=data,
+            family=family_obj,
+            fd=fd,
+            lambda_strategy=lambda_strategy,
+            formula=self.formula,
+            method=self.method,
         )
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _check_fitted(self) -> None:
-        """Raise if the model has not been fitted."""
-        if not self._fitted:
-            raise RuntimeError("This GAM instance is not fitted yet. Call fit() first.")
-
-    def _store_results(
-        self,
-        result: NewtonResult,
-        setup: ModelSetup,
-        spec: FormulaSpec,
-        data: pd.DataFrame | dict,
-        family_obj: ExponentialFamily,
-        fd: FittingData,
-        lambda_strategy: str,
-    ) -> None:
-        """Transfer Phase 2 output to fitted attributes.
-
-        Sets all ``*_`` attributes listed in the class docstring's
-        Attributes section (coefficients_, Vp_, edf_, etc.), plus
-        internal bookkeeping attributes used by predict/summary/plot.
-        """
-        pr = result.pirls_result
-
-        # Phase 2→3: transfer to NumPy
-        coefficients = to_numpy(pr.coefficients)
-        mu = to_numpy(pr.mu)
-        eta = to_numpy(pr.eta)
-        deviance = float(to_numpy(pr.deviance))
-        L = to_numpy(pr.L)
-        XtWX = to_numpy(pr.XtWX)
-        scale = float(to_numpy(result.scale))
-        smoothing_params = to_numpy(result.smoothing_params)
-        edf_total = float(to_numpy(result.edf))
-
-        X_np = setup.X
-        y_np = setup.y
-        wt_np = setup.weights
-
-        # Compute H^{-1} via Cholesky solve (matches R's chol2inv).
-        # O(p^3) but p is typically small (< 200 for GAMs).
-        p = L.shape[0]
-        Z = sla.solve_triangular(L, np.eye(p), lower=True)
-        H_inv = Z.T @ Z
-
-        # Per-smooth EDF via hat matrix F = H^{-1} @ XtWX
-        # (invariant under repara — cyclic trace with block-diagonal D)
-        F = H_inv @ XtWX
-        per_smooth_edf = _compute_per_smooth_edf(F, setup.smooth_info)
-        # edf1 = 2*edf - trace(F^2): alternative EDF for significance testing
-        # (R's gam.fit3.post.proc, mgcv.r line 966)
-        per_smooth_edf1 = _compute_per_smooth_edf1(F, setup.smooth_info)
-
-        # Back-transform from Sl.setup reparameterized space
-        if fd.repara_D is not None:
-            D = to_numpy(fd.repara_D)
-            coefficients = D @ coefficients
-            H_inv = D @ H_inv @ D.T
-
-        # Bayesian covariance
-        phi = 1.0 if family_obj.scale_known else scale
-        Vp = phi * H_inv
-
-        # Null deviance
-        null_deviance = _compute_null_deviance(y_np, wt_np, family_obj)
-
-        # Store all fitted attributes (trailing underscore convention)
-        self.coefficients_ = coefficients
-        self.fitted_values_ = mu
-        self.linear_predictor_ = eta
-        self.family_ = family_obj
-        self.Vp_ = Vp
-        # Placeholder for frequentist covariance (not yet implemented).
-        self.Ve_ = None
-        self.scale_ = scale
-        self.edf_ = per_smooth_edf
-        self.edf1_ = per_smooth_edf1
-        self.edf_total_ = edf_total
-        self.smoothing_params_ = smoothing_params
-        self.deviance_ = deviance
-        self.null_deviance_ = null_deviance
-        self.n_ = setup.n_obs
-        self.converged_ = result.converged
-        self.n_iter_ = result.n_iter
-        self.X_ = X_np
-        self.offset_ = setup.offset
-        self.coef_map_ = setup.coef_map
-        self.smooth_info_ = setup.smooth_info
-        self.term_names_ = setup.term_names
-        self.setup_ = setup
-        # Currently always "jax"; reserved for future backend dispatch.
-        self.execution_path_ = "jax"
-        self.lambda_strategy_ = lambda_strategy
-        self.y_ = y_np
-        self.weights_ = wt_np
-        self.score_ = float(to_numpy(result.score))
-        self._training_data = _extract_training_data(spec, data)
 
 
 # ---------------------------------------------------------------------------
@@ -553,141 +290,3 @@ def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
         pirls_result=pirls_result,
         convergence_info="fixed sp",
     )
-
-
-def _compute_per_smooth_edf(
-    F: np.ndarray,
-    smooth_info: tuple[SmoothInfo, ...],
-) -> np.ndarray:
-    """Per-smooth effective degrees of freedom.
-
-    Parameters
-    ----------
-    F : np.ndarray, shape (p, p)
-        Hat-like matrix: ``H^{-1} @ XtWX``.
-    smooth_info : tuple[SmoothInfo, ...]
-        Per-smooth metadata with column ranges.
-
-    Returns
-    -------
-    np.ndarray, shape (n_smooths,)
-        Per-smooth EDF.
-    """
-    n_smooths = len(smooth_info)
-    edf = np.empty(n_smooths, dtype=np.float64)
-    for j, si in enumerate(smooth_info):
-        cols = slice(si.first_coef, si.last_coef)
-        edf[j] = np.trace(F[cols, cols])
-    return edf
-
-
-def _compute_per_smooth_edf1(
-    F: np.ndarray,
-    smooth_info: tuple[SmoothInfo, ...],
-) -> np.ndarray:
-    """Alternative per-smooth EDF for significance testing.
-
-    Computes ``edf1 = 2*edf - edf2`` where ``edf2 = trace(F^2)`` per
-    smooth block. This is R's ``edf1`` (mgcv gam.fit3.post.proc line 966):
-    ``edf1 <- 2*edf - rowSums(t(F)*F)``.
-
-    The per-smooth version sums per-coefficient ``edf1`` values over
-    each smooth's column range, matching R's
-    ``sum(object$edf1[start:stop])``.
-
-    Parameters
-    ----------
-    F : np.ndarray, shape (p, p)
-        Hat-like matrix: ``H^{-1} @ XtWX``.
-    smooth_info : tuple[SmoothInfo, ...]
-        Per-smooth metadata with column ranges.
-
-    Returns
-    -------
-    np.ndarray, shape (n_smooths,)
-        Alternative EDF (``edf1``) per smooth, for use as ``Ref.df``
-        in Wood (2013) significance tests.
-    """
-    # Per-coefficient: edf_i = F[i,i], edf2_i = sum(F[i,:] * F[:,i])
-    edf_per_coef = np.diag(F)
-    edf2_per_coef = np.sum(F.T * F, axis=0)  # rowSums(t(F)*F)
-    edf1_per_coef = 2.0 * edf_per_coef - edf2_per_coef
-
-    n_smooths = len(smooth_info)
-    edf1 = np.empty(n_smooths, dtype=np.float64)
-    for j, si in enumerate(smooth_info):
-        cols = slice(si.first_coef, si.last_coef)
-        edf1[j] = np.sum(edf1_per_coef[cols])
-    return edf1
-
-
-def _compute_null_deviance(
-    y: np.ndarray,
-    wt: np.ndarray,
-    family: ExponentialFamily,
-) -> float:
-    """Null model deviance.
-
-    Uses the weighted mean of y as the null model prediction.
-
-    Parameters
-    ----------
-    y : np.ndarray, shape (n,)
-        Response values.
-    wt : np.ndarray, shape (n,)
-        Prior weights.
-    family : ExponentialFamily
-        Family with ``dev_resids()`` method.
-
-    Returns
-    -------
-    float
-        Null model deviance.
-    """
-    mu_null = np.sum(wt * y) / np.sum(wt)
-    mu_null_arr = np.full_like(y, mu_null)
-    return float(family.dev_resids(y, mu_null_arr, wt))
-
-
-def _extract_training_data(
-    spec: FormulaSpec,
-    data: pd.DataFrame | dict,
-) -> dict[str, np.ndarray]:
-    """Extract raw training covariate data for plotting.
-
-    Stores all variables referenced in smooth terms (covariates and
-    by-variables) so that ``plot()`` can construct evaluation grids
-    and rug plots without re-accessing the original data.
-
-    Parameters
-    ----------
-    spec : FormulaSpec
-        Parsed formula specification.
-    data : DataFrame or dict
-        Training data.
-
-    Returns
-    -------
-    dict[str, np.ndarray]
-        Mapping from variable name to raw training data array.
-    """
-
-    training: dict[str, np.ndarray] = {}
-
-    # Collect all variable names from smooth terms
-    var_names: set[str] = set()
-    for st in spec.smooth_terms:
-        for v in st.variables:
-            var_names.add(v)
-        if st.by is not None:
-            var_names.add(st.by)
-
-    for name in var_names:
-        col = data[name]
-        # Preserve dtype: factors stay as-is, numerics become float64
-        if is_factor(col):
-            training[name] = np.asarray(col)
-        else:
-            training[name] = np.asarray(col, dtype=np.float64).ravel()
-
-    return training

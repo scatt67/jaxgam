@@ -93,6 +93,7 @@ flowchart LR
 graph TD
     subgraph "jaxgam/"
         API["api.py<br/>GAM class, fit orchestration"]
+        RES["results.py<br/>GAMResults frozen dataclass"]
 
         subgraph "Phase 1 modules"
             F["formula/<br/>parsing, terms"]
@@ -118,8 +119,9 @@ graph TD
     API --> FAM
     API --> LNK
     API --> FIT
-    API --> SUM
-    API --> PLT
+    API --> RES
+    RES --> SUM
+    RES --> PLT
 ```
 
 ## Project Structure
@@ -127,8 +129,9 @@ graph TD
 ```
 jaxgam/
 ├── jaxgam/                     # Library source
-│   ├── __init__.py             # Public API: GAM
+│   ├── __init__.py             # Public API: GAM, GAMResults
 │   ├── api.py                  # GAM class, fit orchestration
+│   ├── results.py              # GAMResults frozen dataclass + post-estimation
 │   ├── jax_utils.py            # JAX helpers (slogdet, pseudo-det)
 │   ├── formula/                # Phase 1: parsing
 │   │   ├── parser.py           # AST-based formula parser

@@ -21,7 +21,7 @@ import numpy as np
 from scipy import stats
 
 if TYPE_CHECKING:
-    from jaxgam.api import GAM
+    from jaxgam.results import GAMResults
 
 
 # ---------------------------------------------------------------------------
@@ -114,38 +114,31 @@ class GAMSummary:
 # ---------------------------------------------------------------------------
 
 
-def summary(gam: GAM) -> GAMSummary:
+def summary(gam: GAMResults) -> GAMSummary:
     """Compute summary statistics for a fitted GAM.
 
     Port of R's ``summary.gam()`` (mgcv.r lines 3858-4068).
 
     Parameters
     ----------
-    gam : GAM
-        A fitted GAM object.
+    gam : GAMResults
+        A fitted GAM results object.
 
     Returns
     -------
     GAMSummary
         Summary object with parametric and smooth term tables.
-
-    Raises
-    ------
-    RuntimeError
-        If the model is not fitted.
     """
-    gam._check_fitted()
-
-    family = gam.family_
+    family = gam.family
     est_disp = not family.scale_known
-    dispersion = gam.scale_
+    dispersion = gam.scale
 
     # Bayesian covariance matrix
-    covmat = gam.Vp_
+    covmat = gam.Vp
 
     # Parametric coefficients
     se = np.sqrt(np.diag(covmat))
-    residual_df = gam.n_ - gam.edf_total_
+    residual_df = gam.n - gam.edf_total
 
     # Total parametric columns: count from coef_map
     n_parametric = _count_parametric(gam)
@@ -155,9 +148,11 @@ def summary(gam: GAM) -> GAMSummary:
     p_test_name = "t value" if est_disp else "z value"
     p_pv_name = "Pr(>|t|)" if est_disp else "Pr(>|z|)"
 
+    coefficients = gam.coefficients
+
     if n_parametric > 0:
         ind = np.arange(n_parametric)
-        p_coeff = gam.coefficients_[ind]
+        p_coeff = coefficients[ind]
         p_se = se[ind]
         p_t = p_coeff / p_se
 
@@ -171,10 +166,11 @@ def summary(gam: GAM) -> GAMSummary:
         p_table = np.column_stack([p_coeff, p_se, p_t, p_pv])
 
         # Get parametric coefficient names from term_names
-        p_names = list(gam.term_names_[:n_parametric])
+        term_names = gam.term_names
+        p_names = list(term_names[:n_parametric])
 
     # Smooth terms
-    smooth_info = gam.smooth_info_
+    smooth_info = gam.smooth_info
     m = len(smooth_info)
 
     s_table = None
@@ -189,7 +185,8 @@ def summary(gam: GAM) -> GAMSummary:
         s_pv = np.zeros(m)
 
         # Use the stored model matrix X
-        X = gam.X_
+        X = gam.X
+        edf = gam.edf
 
         for i, si in enumerate(smooth_info):
             start = si.first_coef
@@ -197,12 +194,16 @@ def summary(gam: GAM) -> GAMSummary:
             n_coefs_i = stop - start
 
             V_i = covmat[start:stop, start:stop]
-            p_i = gam.coefficients_[start:stop]
-            edf_i = float(gam.edf_[i])
+            p_i = coefficients[start:stop]
+            edf_i = float(edf[i])
             # Use edf1 (= 2*edf - trace(F^2)) as reference df for the test,
             # matching R's summary.gam (mgcv.r line 4019/4027).
-            # edf1_ may be absent on models serialized before edf1 was added
-            edf1_i = float(gam.edf1_[i]) if hasattr(gam, "edf1_") else edf_i
+            # edf1 may be absent on models serialized before edf1 was added
+            try:
+                edf1_val = gam.edf1
+                edf1_i = float(edf1_val[i])
+            except AttributeError:
+                edf1_i = edf_i
 
             X_i = X[:, start:stop]
 
@@ -236,14 +237,17 @@ def summary(gam: GAM) -> GAMSummary:
     dev_explained = _compute_deviance_explained(gam)
 
     # REML/ML score
-    reml_score = getattr(gam, "score_", None)
+    try:
+        reml_score = gam.score
+    except AttributeError:
+        reml_score = None
 
     return GAMSummary(
         formula=gam.formula,
         family_name=family.family_name,
         link_name=type(family.link).__name__.replace("Link", "").lower(),
         method=gam.method,
-        n=gam.n_,
+        n=gam.n,
         p_table=p_table,
         p_names=p_names,
         p_test_name=p_test_name,
@@ -256,7 +260,7 @@ def summary(gam: GAM) -> GAMSummary:
         scale=dispersion,
         reml_score=reml_score,
         residual_df=residual_df,
-        edf_total=gam.edf_total_,
+        edf_total=gam.edf_total,
     )
 
 
@@ -582,27 +586,26 @@ def psum_chisq_davies(
 # ---------------------------------------------------------------------------
 
 
-def _count_parametric(gam: GAM) -> int:
+def _count_parametric(gam: GAMResults) -> int:
     """Count the number of parametric coefficient columns.
 
     Parameters
     ----------
-    gam : GAM
-        Fitted GAM object.
+    gam : GAMResults
+        Fitted model results.
 
     Returns
     -------
     int
         Number of parametric columns (intercept + linear + factor dummies).
     """
-    coef_map = gam.coef_map_
-    for term in coef_map.terms:
+    for term in gam.coef_map.terms:
         if term.term_type == "parametric":
             return term.n_coefs
     return 0
 
 
-def _compute_r_squared(gam: GAM, residual_df: float) -> float | None:
+def _compute_r_squared(gam: GAMResults, residual_df: float) -> float | None:
     """Compute adjusted R-squared.
 
     Matches R's formula in ``summary.gam`` (mgcv.r line 4056)::
@@ -612,8 +615,8 @@ def _compute_r_squared(gam: GAM, residual_df: float) -> float | None:
 
     Parameters
     ----------
-    gam : GAM
-        Fitted GAM object.
+    gam : GAMResults
+        Fitted model results.
     residual_df : float
         Residual degrees of freedom.
 
@@ -622,21 +625,20 @@ def _compute_r_squared(gam: GAM, residual_df: float) -> float | None:
     float or None
         Adjusted R-squared, or None if not applicable.
     """
-    n = gam.n_
+    n = gam.n
     if residual_df <= 0 or n <= 1:
         return None
 
-    y_vals = getattr(gam, "y_", None)
-    if y_vals is None:
-        return None
-
-    w = getattr(gam, "weights_", np.ones(n))
+    y_vals = gam.y
+    w = gam.weights
     sqrt_w = np.sqrt(w)
 
     mean_y = np.sum(w * y_vals) / np.sum(w)
 
+    fitted_values = gam.fitted_values
+
     # R uses: var() which divides by (n-1)
-    resid = sqrt_w * (y_vals - gam.fitted_values_)
+    resid = sqrt_w * (y_vals - fitted_values)
     null = sqrt_w * (y_vals - mean_y)
 
     var_resid = np.var(resid, ddof=1)
@@ -649,24 +651,25 @@ def _compute_r_squared(gam: GAM, residual_df: float) -> float | None:
     return float(r_sq)
 
 
-def _compute_deviance_explained(gam: GAM) -> float:
+def _compute_deviance_explained(gam: GAMResults) -> float:
     """Compute proportion of deviance explained.
 
     Formula: ``(null_deviance - deviance) / null_deviance``
 
     Parameters
     ----------
-    gam : GAM
-        Fitted GAM object.
+    gam : GAMResults
+        Fitted model results.
 
     Returns
     -------
     float
         Proportion of deviance explained.
     """
-    if gam.null_deviance_ == 0:
+    null_deviance = gam.null_deviance
+    if null_deviance == 0:
         return 0.0
-    return float((gam.null_deviance_ - gam.deviance_) / gam.null_deviance_)
+    return float((null_deviance - gam.deviance) / null_deviance)
 
 
 # ---------------------------------------------------------------------------

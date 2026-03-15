@@ -29,10 +29,10 @@ print("True DGP: y = 1 + 2*sin(2*pi*x1) + N(0,1)")
 print("x2 is pure noise — should be non-significant\n")
 
 # Fit with both smooths
-model = GAM("y ~ s(x1, k=10) + s(x2, k=10)", family="gaussian").fit(data)
+results = GAM("y ~ s(x1, k=10) + s(x2, k=10)", family="gaussian").fit(data)
 
 # Summary
-s = model.summary()
+s = results.summary()
 
 # Check p-values
 print("\n--- Verification ---")
@@ -62,7 +62,7 @@ except Exception as e:
     print(f"\n(R comparison skipped: {e})")
 
 # Plot
-fig, axes = model.plot(pages=1, shade=True, rug=True, se=True)
+fig, axes = results.plot(pages=1, shade=True, rug=True, se=True)
 fig.suptitle("y ~ s(x1) + s(x2)  [x2 is pure noise]", fontsize=13, y=1.02)
 fig.tight_layout()
 fig.savefig("scripts/demo/nonsig_smooth.png", dpi=150, bbox_inches="tight")

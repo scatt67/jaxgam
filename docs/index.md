@@ -38,17 +38,17 @@ x = rng.uniform(0, 1, 200)
 y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, 200)
 data = pd.DataFrame({"x": x, "y": y})
 
-# Fit a GAM
-model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+# Fit a GAM — fit() returns a GAMResults object
+results = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
 
 # Inspect results
-model.summary()
-fig, axes = model.plot()
+results.summary()
+fig, axes = results.plot()
 
 # Predict on new data
 newdata = pd.DataFrame({"x": np.linspace(0, 1, 100)})
-predictions = model.predict(newdata)
-predictions, se = model.predict(newdata, se_fit=True)
+predictions = results.predict(newdata)
+predictions, se = results.predict(newdata, se_fit=True)
 ```
 
 See the [Quickstart](quickstart.md) for a full tutorial covering

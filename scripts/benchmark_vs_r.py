@@ -203,7 +203,7 @@ def time_r_fit(
     r_code = f"""
     tm <- system.time({{
         mod <- gam({r_formula}, data=bench_data, family={r_family},
-            method="fREML", discrete=FALSE{ctrl})
+            method="REML"{ctrl})
     }})
     elapsed_ms <- tm["elapsed"] * 1000
 
@@ -240,10 +240,9 @@ def time_py_fit(
     """Time jaxgam GAM fitting and return (ms, n_iter)."""
     model = GAM(py_formula, family=family, method="REML")
     t0 = time.perf_counter()
-    model.fit(data)
+    results = model.fit(data)
     elapsed_ms = (time.perf_counter() - t0) * 1000
-    n_iter = getattr(model, "n_iter_", -1)
-    return elapsed_ms, n_iter
+    return elapsed_ms, results.n_iter
 
 
 # ---------------------------------------------------------------------------

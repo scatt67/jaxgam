@@ -271,11 +271,6 @@ class TestReturnValues:
 class TestEdgeCases:
     """Edge cases and error handling."""
 
-    def test_unfitted_raises(self):
-        model = GAM("y ~ s(x)")
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.plot()
-
     def test_select_out_of_range_raises(self):
         data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
@@ -326,9 +321,9 @@ class TestEdgeCases:
         assert "c" in titles
 
     def test_training_data_stored(self):
-        """Verify that _training_data is stored after fitting."""
+        """Verify that training_data is stored after fitting."""
         data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        assert hasattr(model, "_training_data")
-        assert "x" in model._training_data
-        assert len(model._training_data["x"]) == len(data)
+        results = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+        assert hasattr(results, "training_data")
+        assert "x" in results.training_data
+        assert len(results.training_data["x"]) == len(data)

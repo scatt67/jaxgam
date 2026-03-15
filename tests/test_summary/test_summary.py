@@ -60,7 +60,7 @@ class TestSelfConsistency:
             pytest.skip("No parametric terms")
 
         n_param = s.p_table.shape[0]
-        se_from_vp = np.sqrt(np.diag(model.Vp_)[:n_param])
+        se_from_vp = np.sqrt(np.diag(model.Vp)[:n_param])
         se_from_table = s.p_table[:, 1]
 
         np.testing.assert_allclose(
@@ -85,7 +85,7 @@ class TestSelfConsistency:
 
         np.testing.assert_allclose(
             total_edf_from_smooths,
-            model.edf_total_,
+            model.edf_total,
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
             err_msg="Per-smooth EDF + parametric doesn't match total EDF",
@@ -410,7 +410,7 @@ class TestSmokeTests:
         assert isinstance(s, GAMSummary)
 
     def test_summary_method_returns_gam_summary(self, capsys):
-        """GAM.summary() should print and return GAMSummary."""
+        """GAMResults.summary() should print and return GAMSummary."""
         data = _generate_family_data("gaussian", n=200)
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         s = model.summary()
@@ -452,12 +452,6 @@ class TestSmokeTests:
 
 class TestEdgeCases:
     """Edge case tests for summary."""
-
-    def test_unfitted_model_raises(self):
-        """summary() on unfitted model should raise RuntimeError."""
-        model = GAM("y ~ s(x)")
-        with pytest.raises(RuntimeError, match="not fitted"):
-            model.summary()
 
     def test_known_scale_uses_z_test(self):
         """Binomial/Poisson should use z-test, not t-test."""

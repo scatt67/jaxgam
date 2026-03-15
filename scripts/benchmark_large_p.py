@@ -137,10 +137,9 @@ def time_py_fit(k, data, family):
     formula = f"y ~ s(x, k={k}, bs='cr')"
     model = GAM(formula, family=family, method="REML")
     t0 = time.perf_counter()
-    model.fit(data)
+    results = model.fit(data)
     elapsed_ms = (time.perf_counter() - t0) * 1000
-    n_iter = getattr(model, "n_iter_", -1)
-    return elapsed_ms, n_iter
+    return elapsed_ms, results.n_iter
 
 
 # ---------------------------------------------------------------------------

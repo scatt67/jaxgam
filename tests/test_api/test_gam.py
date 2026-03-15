@@ -1,7 +1,7 @@
 """Tests for GAM class (sklearn-style API).
 
 Tests cover:
-- A. GAM class API (unfitted raises, fit returns self, attribute types, stubs)
+- A. GAM class API (fit returns GAMResults, attributes)
 - B. End-to-end fitting (Gaussian basic, all-finite, shapes, Vp PSD)
 - C. Hard-gate invariants (parametrized across 4 families)
 - D. R comparison (parametrized across 4 families, skip if R unavailable)
@@ -29,6 +29,7 @@ import pandas as pd
 import pytest
 
 from jaxgam.api import GAM
+from jaxgam.results import GAMResults
 from tests.helpers import (
     SEED,
     _generate_family_data,
@@ -43,67 +44,52 @@ from tests.tolerances import LOOSE, MODERATE, STRICT
 
 
 class TestGAMClass:
-    """Test GAM class interface before and after fitting."""
+    """Test GAM class interface."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
-    def test_unfitted_predict_raises(self):
-        model = GAM(self.FORMULA)
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.predict()
-
-    def test_unfitted_summary_raises(self):
-        model = GAM(self.FORMULA)
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.summary()
-
-    def test_unfitted_plot_raises(self):
-        model = GAM(self.FORMULA)
-        with pytest.raises(RuntimeError, match="not fitted yet"):
-            model.plot()
-
-    def test_fit_returns_self(self):
+    def test_fit_returns_gam_results(self):
         data = _generate_family_data("gaussian")
         model = GAM(self.FORMULA)
         result = model.fit(data)
-        assert result is model
+        assert isinstance(result, GAMResults)
 
     def test_fitted_attributes_are_numpy(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA).fit(data)
-        assert isinstance(model.coefficients_, np.ndarray)
-        assert isinstance(model.fitted_values_, np.ndarray)
-        assert isinstance(model.Vp_, np.ndarray)
-        assert isinstance(model.edf_, np.ndarray)
-        assert isinstance(model.X_, np.ndarray)
-        assert isinstance(model.smoothing_params_, np.ndarray)
+        results = GAM(self.FORMULA).fit(data)
+        assert isinstance(results.coefficients, np.ndarray)
+        assert isinstance(results.fitted_values, np.ndarray)
+        assert isinstance(results.Vp, np.ndarray)
+        assert isinstance(results.edf, np.ndarray)
+        assert isinstance(results.X, np.ndarray)
+        assert isinstance(results.smoothing_params, np.ndarray)
 
     def test_summary_and_plot_work(self):
         import matplotlib
 
         matplotlib.use("Agg")
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA).fit(data)
-        # summary() is now implemented (Task 3.2)
-        s = model.summary()
+        results = GAM(self.FORMULA).fit(data)
+        s = results.summary()
         assert s is not None
-        # plot() is now implemented (Task 3.3)
-        fig, _axes = model.plot()
+        fig, _axes = results.plot()
         assert fig is not None
         import matplotlib.pyplot as plt
 
         plt.close("all")
 
-    def test_ve_is_none(self):
+    def test_ve_omitted(self):
+        """Ve is omitted entirely (design §9 #4)."""
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA).fit(data)
-        assert model.Ve_ is None
+        results = GAM(self.FORMULA).fit(data)
+        assert not hasattr(results, "Ve")
+        assert not hasattr(results, "Ve_")
 
     def test_routing_fields(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA).fit(data)
-        assert model.execution_path_ == "jax"
-        assert model.lambda_strategy_ == "newton_reml"
+        results = GAM(self.FORMULA).fit(data)
+        assert results.execution_path == "jax"
+        assert results.lambda_strategy == "newton_reml"
 
 
 # ---------------------------------------------------------------------------
@@ -118,40 +104,40 @@ class TestEndToEnd:
 
     def test_gaussian_basic(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA).fit(data)
-        assert model.converged_
-        assert model.n_ == 200
+        results = GAM(self.FORMULA).fit(data)
+        assert results.converged
+        assert results.n == 200
 
     def test_all_fields_finite(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA).fit(data)
-        assert np.all(np.isfinite(model.coefficients_))
-        assert np.all(np.isfinite(model.fitted_values_))
-        assert np.all(np.isfinite(model.linear_predictor_))
-        assert np.all(np.isfinite(model.Vp_))
-        assert np.all(np.isfinite(model.edf_))
-        assert np.isfinite(model.scale_)
-        assert np.isfinite(model.deviance_)
-        assert np.isfinite(model.null_deviance_)
-        assert np.isfinite(model.edf_total_)
+        results = GAM(self.FORMULA).fit(data)
+        assert np.all(np.isfinite(results.coefficients))
+        assert np.all(np.isfinite(results.fitted_values))
+        assert np.all(np.isfinite(results.linear_predictor))
+        assert np.all(np.isfinite(results.Vp))
+        assert np.all(np.isfinite(results.edf))
+        assert np.isfinite(results.scale)
+        assert np.isfinite(results.deviance)
+        assert np.isfinite(results.null_deviance)
+        assert np.isfinite(results.edf_total)
 
     def test_shapes(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA).fit(data)
-        n = model.n_
-        p = model.X_.shape[1]
-        n_smooths = len(model.smooth_info_)
-        assert model.coefficients_.shape == (p,)
-        assert model.fitted_values_.shape == (n,)
-        assert model.linear_predictor_.shape == (n,)
-        assert model.Vp_.shape == (p, p)
-        assert model.edf_.shape == (n_smooths,)
-        assert model.X_.shape == (n, p)
+        results = GAM(self.FORMULA).fit(data)
+        n = results.n
+        p = results.X.shape[1]
+        n_smooths = len(results.smooth_info)
+        assert results.coefficients.shape == (p,)
+        assert results.fitted_values.shape == (n,)
+        assert results.linear_predictor.shape == (n,)
+        assert results.Vp.shape == (p, p)
+        assert results.edf.shape == (n_smooths,)
+        assert results.X.shape == (n, p)
 
     def test_vp_symmetric_psd(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA).fit(data)
-        Vp = model.Vp_
+        results = GAM(self.FORMULA).fit(data)
+        Vp = results.Vp
         np.testing.assert_allclose(
             Vp,
             Vp.T,
@@ -178,33 +164,33 @@ class TestHardGateInvariants:
         params=["gaussian", "poisson", "binomial", "gamma"],
         ids=["gaussian", "poisson", "binomial", "gamma"],
     )
-    def fitted_model(self, request):
+    def fitted_results(self, request):
         family_name = request.param
         data = _generate_family_data(family_name)
-        model = GAM(self.FORMULA, family=family_name).fit(data)
-        return family_name, model
+        results = GAM(self.FORMULA, family=family_name).fit(data)
+        return family_name, results
 
-    def test_deviance_non_negative(self, fitted_model):
-        _, model = fitted_model
-        assert model.deviance_ >= 0
+    def test_deviance_non_negative(self, fitted_results):
+        _, results = fitted_results
+        assert results.deviance >= 0
 
-    def test_all_finite(self, fitted_model):
-        _, model = fitted_model
-        assert np.all(np.isfinite(model.coefficients_))
-        assert np.all(np.isfinite(model.fitted_values_))
-        assert np.all(np.isfinite(model.Vp_))
-        assert np.isfinite(model.scale_)
-        assert np.isfinite(model.deviance_)
+    def test_all_finite(self, fitted_results):
+        _, results = fitted_results
+        assert np.all(np.isfinite(results.coefficients))
+        assert np.all(np.isfinite(results.fitted_values))
+        assert np.all(np.isfinite(results.Vp))
+        assert np.isfinite(results.scale)
+        assert np.isfinite(results.deviance)
 
-    def test_edf_bounds(self, fitted_model):
-        _, model = fitted_model
-        p = model.X_.shape[1]
-        assert np.all(model.edf_ > 0), f"EDF has non-positive entry: {model.edf_}"
-        assert model.edf_total_ <= p + MODERATE.atol
+    def test_edf_bounds(self, fitted_results):
+        _, results = fitted_results
+        p = results.X.shape[1]
+        assert np.all(results.edf > 0), f"EDF has non-positive entry: {results.edf}"
+        assert results.edf_total <= p + MODERATE.atol
 
-    def test_vp_psd(self, fitted_model):
-        _, model = fitted_model
-        Vp = model.Vp_
+    def test_vp_psd(self, fitted_results):
+        _, results = fitted_results
+        Vp = results.Vp
         np.testing.assert_allclose(
             Vp,
             Vp.T,
@@ -216,9 +202,9 @@ class TestHardGateInvariants:
             f"Vp has negative eigenvalue: {eigvals.min()}"
         )
 
-    def test_convergence(self, fitted_model):
-        _, model = fitted_model
-        assert model.converged_
+    def test_convergence(self, fitted_results):
+        _, results = fitted_results
+        assert results.converged
 
 
 # ---------------------------------------------------------------------------
@@ -246,16 +232,16 @@ class TestFamilyVsR:
 
         family_name, family_r = request.param
         data = _generate_family_data(family_name)
-        model = GAM(self.FORMULA, family=family_name).fit(data)
+        results = GAM(self.FORMULA, family=family_name).fit(data)
         bridge = RBridge()
         r_result = bridge.fit_gam(self.FORMULA, data, family=family_r)
-        return family_name, model, r_result
+        return family_name, results, r_result
 
     def test_deviance_vs_r(self, family_fit):
-        family_name, model, r_result = family_fit
+        family_name, results, r_result = family_fit
         tol = r_tolerance(family_name)
         np.testing.assert_allclose(
-            model.deviance_,
+            results.deviance,
             r_result["deviance"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -263,10 +249,10 @@ class TestFamilyVsR:
         )
 
     def test_coefficients_vs_r(self, family_fit):
-        family_name, model, r_result = family_fit
+        family_name, results, r_result = family_fit
         tol = r_tolerance(family_name)
         np.testing.assert_allclose(
-            model.coefficients_,
+            results.coefficients,
             r_result["coefficients"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -274,10 +260,10 @@ class TestFamilyVsR:
         )
 
     def test_fitted_values_vs_r(self, family_fit):
-        family_name, model, r_result = family_fit
+        family_name, results, r_result = family_fit
         tol = r_tolerance(family_name)
         np.testing.assert_allclose(
-            model.fitted_values_,
+            results.fitted_values,
             r_result["fitted_values"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -285,10 +271,10 @@ class TestFamilyVsR:
         )
 
     def test_scale_vs_r(self, family_fit):
-        family_name, model, r_result = family_fit
+        family_name, results, r_result = family_fit
         tol = r_tolerance(family_name)
         np.testing.assert_allclose(
-            model.scale_,
+            results.scale,
             r_result["scale"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -296,10 +282,10 @@ class TestFamilyVsR:
         )
 
     def test_vp_vs_r(self, family_fit):
-        family_name, model, r_result = family_fit
+        family_name, results, r_result = family_fit
         tol = r_tolerance(family_name)
         np.testing.assert_allclose(
-            model.Vp_,
+            results.Vp,
             r_result["Vp"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -307,10 +293,10 @@ class TestFamilyVsR:
         )
 
     def test_per_smooth_edf_vs_r(self, family_fit):
-        family_name, model, r_result = family_fit
+        family_name, results, r_result = family_fit
         tol = r_tolerance(family_name)
         np.testing.assert_allclose(
-            model.edf_,
+            results.edf,
             r_result["edf"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -318,10 +304,10 @@ class TestFamilyVsR:
         )
 
     def test_null_deviance_vs_r(self, family_fit):
-        family_name, model, r_result = family_fit
+        family_name, results, r_result = family_fit
         tol = r_tolerance(family_name)
         np.testing.assert_allclose(
-            model.null_deviance_,
+            results.null_deviance,
             r_result["null_deviance"],
             rtol=tol.rtol,
             atol=tol.atol,
@@ -342,27 +328,27 @@ class TestMultiSmooth:
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        model = GAM(formula).fit(two_smooth_data)
+        results = GAM(formula).fit(two_smooth_data)
         bridge = RBridge()
         r_result = bridge.fit_gam(formula, two_smooth_data)
 
         np.testing.assert_allclose(
-            model.deviance_,
+            results.deviance,
             r_result["deviance"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
             err_msg="Two-smooth deviance differs from R",
         )
         np.testing.assert_allclose(
-            model.coefficients_,
+            results.coefficients,
             r_result["coefficients"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
             err_msg="Two-smooth coefficients differ from R",
         )
-        assert model.edf_.shape == (2,), "Expected 2 per-smooth EDF entries"
+        assert results.edf.shape == (2,), "Expected 2 per-smooth EDF entries"
         np.testing.assert_allclose(
-            model.edf_,
+            results.edf,
             r_result["edf"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
@@ -380,12 +366,12 @@ class TestMultiSmooth:
 
         py_formula = "y ~ te(x1, x2, k=5)"
         r_formula = "y ~ te(x1, x2, k=c(5,5))"
-        model = GAM(py_formula).fit(two_smooth_data)
+        results = GAM(py_formula).fit(two_smooth_data)
         bridge = RBridge()
         r_result = bridge.fit_gam(r_formula, two_smooth_data)
 
         np.testing.assert_allclose(
-            model.deviance_,
+            results.deviance,
             r_result["deviance"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
@@ -394,14 +380,14 @@ class TestMultiSmooth:
         # LOOSE: one penalty's sp converges on a flat REML landscape,
         # so small sp differences cascade to coefficients (~1e-3 rel).
         np.testing.assert_allclose(
-            model.coefficients_,
+            results.coefficients,
             r_result["coefficients"],
             rtol=LOOSE.rtol,
             atol=LOOSE.atol,
             err_msg="Tensor product coefficients differ from R",
         )
         np.testing.assert_allclose(
-            model.fitted_values_,
+            results.fitted_values,
             r_result["fitted_values"],
             rtol=LOOSE.rtol,
             atol=LOOSE.atol,
@@ -422,12 +408,12 @@ class TestFactorBy:
         from tests.r_bridge import RBridge
 
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        model = GAM(formula).fit(factor_by_data)
+        results = GAM(formula).fit(factor_by_data)
         bridge = RBridge()
         r_result = bridge.fit_gam(formula, factor_by_data)
 
         np.testing.assert_allclose(
-            model.deviance_,
+            results.deviance,
             r_result["deviance"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
@@ -436,14 +422,14 @@ class TestFactorBy:
         # LOOSE: one sp is at the lsp_max cap (exp(15) vs R's exp(18)),
         # causing minor coefficient/fitted value differences (~1e-3 rel).
         np.testing.assert_allclose(
-            model.coefficients_,
+            results.coefficients,
             r_result["coefficients"],
             rtol=LOOSE.rtol,
             atol=LOOSE.atol,
             err_msg="Factor-by coefficients differ from R",
         )
         np.testing.assert_allclose(
-            model.fitted_values_,
+            results.fitted_values,
             r_result["fitted_values"],
             rtol=LOOSE.rtol,
             atol=LOOSE.atol,
@@ -453,12 +439,12 @@ class TestFactorBy:
     def test_factor_by_edf_count(self, factor_by_data):
         """Factor-by smooth is stored as one combined SmoothInfo entry."""
         formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        model = GAM(formula).fit(factor_by_data)
+        results = GAM(formula).fit(factor_by_data)
         # Our architecture stores factor-by as a single combined SmoothInfo
         # with 3 penalties (one per level), not 3 separate smooths.
-        assert len(model.edf_) == 1, (
+        assert len(results.edf) == 1, (
             f"Expected 1 combined per-smooth EDF entry for factor-by, "
-            f"got {len(model.edf_)}"
+            f"got {len(results.edf)}"
         )
 
 
@@ -474,9 +460,9 @@ class TestMLOptimization:
 
     def test_ml_converges(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA, method="ML").fit(data)
-        assert model.converged_
-        assert model.lambda_strategy_ == "newton_ml"
+        results = GAM(self.FORMULA, method="ML").fit(data)
+        assert results.converged
+        assert results.lambda_strategy == "newton_ml"
 
     def test_ml_differs_from_reml(self):
         data = _generate_family_data("gaussian")
@@ -484,8 +470,8 @@ class TestMLOptimization:
         ml = GAM(self.FORMULA, method="ML").fit(data)
         # ML and REML should give different smoothing params
         assert not np.allclose(
-            reml.smoothing_params_,
-            ml.smoothing_params_,
+            reml.smoothing_params,
+            ml.smoothing_params,
             atol=MODERATE.atol,
         ), "ML and REML smoothing params should differ"
 
@@ -500,18 +486,18 @@ class TestFixedSP:
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
-    def test_fixed_sp_returns_gam(self):
+    def test_fixed_sp_attributes(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA, sp=[1.0]).fit(data)
-        assert isinstance(model.coefficients_, np.ndarray)
-        assert model.converged_
+        results = GAM(self.FORMULA, sp=[1.0]).fit(data)
+        assert isinstance(results.coefficients, np.ndarray)
+        assert results.converged
 
     def test_fixed_sp_lambda_matches(self):
         data = _generate_family_data("gaussian")
         sp = [2.5]
-        model = GAM(self.FORMULA, sp=sp).fit(data)
+        results = GAM(self.FORMULA, sp=sp).fit(data)
         np.testing.assert_allclose(
-            model.smoothing_params_,
+            results.smoothing_params,
             np.array(sp),
             rtol=STRICT.rtol,
             atol=STRICT.atol,
@@ -520,13 +506,13 @@ class TestFixedSP:
 
     def test_fixed_sp_lambda_strategy(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA, sp=[1.0]).fit(data)
-        assert model.lambda_strategy_ == "fixed"
+        results = GAM(self.FORMULA, sp=[1.0]).fit(data)
+        assert results.lambda_strategy == "fixed"
 
     def test_fixed_sp_n_iter_zero(self):
         data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA, sp=[1.0]).fit(data)
-        assert model.n_iter_ == 0
+        results = GAM(self.FORMULA, sp=[1.0]).fit(data)
+        assert results.n_iter == 0
 
 
 # ---------------------------------------------------------------------------
@@ -583,41 +569,42 @@ class TestEdgeCases:
         y = 2.0 * x1 - 1.0 * x2 + rng.normal(0, 0.3, n)
         data = pd.DataFrame({"x1": x1, "x2": x2, "y": y})
 
-        model = GAM("y ~ x1 + x2").fit(data)
-        assert model.edf_.shape == (0,)
-        assert model.smoothing_params_.shape == (0,)
-        assert model.converged_
+        results = GAM("y ~ x1 + x2").fit(data)
+        assert results.edf.shape == (0,)
+        assert results.smoothing_params.shape == (0,)
+        assert results.converged
 
     def test_offset_support(self):
         """Offset changes coefficients."""
         data = _generate_family_data("gaussian")
         n = len(data)
-        model_no_offset = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+        results_no_offset = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
         offset = np.ones(n) * 0.5
-        model_with_offset = GAM("y ~ s(x, k=10, bs='cr')").fit(data, offset=offset)
+        results_with_offset = GAM("y ~ s(x, k=10, bs='cr')").fit(data, offset=offset)
         # Coefficients should differ
         assert not np.allclose(
-            model_no_offset.coefficients_,
-            model_with_offset.coefficients_,
+            results_no_offset.coefficients,
+            results_with_offset.coefficients,
             atol=LOOSE.atol,
         ), "Offset should change coefficients"
 
     def test_method_case_insensitive(self):
         """Method name is case-insensitive."""
         data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')", method="reml").fit(data)
-        assert model.converged_
+        results = GAM("y ~ s(x, k=10, bs='cr')", method="reml").fit(data)
+        assert results.converged
 
     def test_chaining_api(self):
-        """GAM(...).fit(data) chaining works."""
+        """GAM(...).fit(data) chaining returns GAMResults."""
         data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        assert model.coefficients_.shape[0] > 0
+        results = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+        assert isinstance(results, GAMResults)
+        assert results.coefficients.shape[0] > 0
 
     def test_family_object_accepted(self):
         """ExponentialFamily object works as family parameter."""
         from jaxgam.families.standard import Gaussian
 
         data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')", family=Gaussian()).fit(data)
-        assert model.converged_
+        results = GAM("y ~ s(x, k=10, bs='cr')", family=Gaussian()).fit(data)
+        assert results.converged
