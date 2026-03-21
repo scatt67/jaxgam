@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxgam.families.base import ExponentialFamily
-from jaxgam.jax_utils import penalized_solve
+from jaxgam.jax_utils import penalized_cholesky, penalized_solve
 
 # Working weight bounds to prevent numerical overflow/underflow.
 # R's gam.fit3 uses similar implicit bounds via sqrt(W) clamping.
@@ -381,6 +381,14 @@ def pirls_loop(
 
     final = jax.lax.while_loop(_cond, _body, init_state)
 
+    # Recompute curvature at final mu for consistency (R's gam.fit3 §7.2).
+    W_final = family.working_weights(final.mu, wt)
+    W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
+    W_sqrt_final = jnp.sqrt(W_final)
+    WX_final = W_sqrt_final[:, None] * X
+    XtWX_final = WX_final.T @ WX_final
+    L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
+
     eta_final = X @ final.beta + offset
     dev_final = family.dev_resids(y, final.mu, wt)
     scale = jnp.where(
@@ -398,7 +406,7 @@ def pirls_loop(
         n_iter=final.i,
         converged=final.converged,
         scale=scale,
-        XtWX=final.XtWX,
-        L=final.L,
-        working_weights=final.W,
+        XtWX=XtWX_final,
+        L=L_final,
+        working_weights=W_final,
     )

@@ -352,6 +352,9 @@ def main() -> None:
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
 
+    global_band_mins = []
+    global_band_maxs = []
+
     for ax, r_key, title_suffix, subtitle in [
         (ax1, "r_gam", "R gam(REML)", "(no JIT cache; R single-threaded)"),
         (ax2, "r_bam", "R bam(fREML)", "(no JIT cache; R 8 threads)"),
@@ -378,6 +381,8 @@ def main() -> None:
                     valid_ns.append(n)
 
             if valid_ns:
+                global_band_mins.extend(mins)
+                global_band_maxs.extend(maxs)
                 color = colors[smooth_key]
                 ax.plot(
                     valid_ns,
@@ -413,6 +418,13 @@ def main() -> None:
             color="gray",
             va="bottom",
         )
+
+    # Set shared y-limits with 10% padding around all plotted data
+    if global_band_maxs:
+        y_max = max(global_band_maxs)
+        y_min = min(global_band_mins)
+        margin = (y_max - y_min) * 0.1
+        ax1.set_ylim(bottom=y_min - margin, top=y_max + margin)
 
     ax1.set_ylabel("Speedup (R / jaxgam)", fontsize=12)
 

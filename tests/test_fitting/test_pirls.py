@@ -24,12 +24,14 @@ from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import (
+    _W_MAX,
+    _W_MIN,
     PIRLSResult,
     _penalized_deviance,
     _pirls_step,
     pirls_loop,
 )
-from jaxgam.jax_utils import to_jax, to_numpy
+from jaxgam.jax_utils import penalized_cholesky, to_jax, to_numpy
 from tests.helpers import SEED, _generate_family_data, r_available
 from tests.tolerances import MODERATE, STRICT
 
@@ -398,6 +400,139 @@ class TestPIRLSStep:
         # For Gaussian with identity link, W should be all 1s (= wt)
         np.testing.assert_allclose(
             to_numpy(W), np.ones(n), rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+
+def _expected_curvature(X, mu, wt, S_lambda, family):
+    """Independently compute W, XtWX, L at a given mu."""
+    W = family.working_weights(mu, wt)
+    W = jnp.clip(W, _W_MIN, _W_MAX)
+    W_sqrt = jnp.sqrt(W)
+    WX = W_sqrt[:, None] * X
+    XtWX = WX.T @ WX
+    L, _ = penalized_cholesky(XtWX, S_lambda)
+    return W, XtWX, L
+
+
+class TestCurvatureConsistency:
+    """XtWX, L, and W must match the final accepted mu (issue #5)."""
+
+    def test_halved_step_curvature_matches_accepted_mu(self):
+        """When step-halving accepts a partial step, curvature must reflect
+        the accepted mu, not the rejected full-step candidate."""
+        X, y = _make_glm_data("binomial", n=200)
+        family = Binomial()
+        S_lambda_np = np.zeros((2, 2))
+        X_d, y_d, S_d = to_jax(X, y, S_lambda_np)
+        # Adversarial init forces step-halving
+        beta_init = to_jax(np.array([10.0, -20.0]))
+        result = pirls_loop(X_d, y_d, beta_init, S_d, family, max_iter=200)
+
+        W_exp, XtWX_exp, L_exp = _expected_curvature(
+            X_d, result.mu, jnp.ones(X.shape[0]), S_d, family
+        )
+
+        np.testing.assert_allclose(
+            to_numpy(result.working_weights),
+            to_numpy(W_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="W does not match accepted mu",
+        )
+        np.testing.assert_allclose(
+            to_numpy(result.XtWX),
+            to_numpy(XtWX_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="XtWX does not match accepted mu",
+        )
+        np.testing.assert_allclose(
+            to_numpy(result.L),
+            to_numpy(L_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="L does not match accepted mu",
+        )
+
+    @pytest.mark.parametrize(
+        ("family_name", "family"),
+        [
+            ("gaussian", Gaussian()),
+            ("binomial", Binomial()),
+            ("poisson", Poisson()),
+            ("gamma", Gamma()),
+        ],
+    )
+    def test_curvature_matches_final_mu(self, family_name, family):
+        """For all families, returned XtWX/L/W must be consistent with mu."""
+        X, y = _make_glm_data(family_name, p=6)
+        wt = np.ones(len(y))
+        S_lambda_np = np.eye(6)
+        X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(X, y, wt, family, S_lambda_np)
+        result = pirls_loop(X_d, y_d, beta_d, S_d, family)
+
+        W_exp, XtWX_exp, L_exp = _expected_curvature(X_d, result.mu, wt_d, S_d, family)
+
+        np.testing.assert_allclose(
+            to_numpy(result.working_weights),
+            to_numpy(W_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"{family_name}: W inconsistent with final mu",
+        )
+        np.testing.assert_allclose(
+            to_numpy(result.XtWX),
+            to_numpy(XtWX_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"{family_name}: XtWX inconsistent with final mu",
+        )
+        np.testing.assert_allclose(
+            to_numpy(result.L),
+            to_numpy(L_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=f"{family_name}: L inconsistent with final mu",
+        )
+
+    def test_all_halvings_fail_curvature_unchanged(self):
+        """When all halvings fail and beta is unchanged, curvature must
+        still reflect the (unchanged) mu, not the rejected candidate."""
+        # Use max_iter=1 with adversarial init on Binomial to make the
+        # single iteration's step-halving very likely to exhaust.
+        X, y = _make_glm_data("binomial", n=50, p=2)
+        family = Binomial()
+        S_lambda_np = np.zeros((2, 2))
+        X_d, y_d, S_d = to_jax(X, y, S_lambda_np)
+        # Extreme init: mu ≈ 0 or 1, huge deviance, hard to improve
+        beta_init = to_jax(np.array([100.0, -200.0]))
+        result = pirls_loop(X_d, y_d, beta_init, S_d, family, max_iter=1)
+
+        # Whether or not the step was accepted, curvature must match mu
+        W_exp, XtWX_exp, L_exp = _expected_curvature(
+            X_d, result.mu, jnp.ones(X.shape[0]), S_d, family
+        )
+
+        np.testing.assert_allclose(
+            to_numpy(result.working_weights),
+            to_numpy(W_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="W inconsistent after failed halvings",
+        )
+        np.testing.assert_allclose(
+            to_numpy(result.XtWX),
+            to_numpy(XtWX_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="XtWX inconsistent after failed halvings",
+        )
+        np.testing.assert_allclose(
+            to_numpy(result.L),
+            to_numpy(L_exp),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="L inconsistent after failed halvings",
         )
 
 
