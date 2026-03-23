@@ -10,11 +10,74 @@ Design doc reference: Section 6.1
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import numpy as np
 
 from jaxgam.jax_utils import array_module
 from jaxgam.links.links import Link
+
+# ---------------------------------------------------------------------------
+# Response domain constraints
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResponseSupport:
+    """Domain constraint for the response variable.
+
+    Declares the valid range for response values. The base class
+    ``ExponentialFamily.initialize()`` validates ``y`` against this
+    before dispatching to the family-specific ``_initialize_impl()``.
+
+    Inspired by ``torch.distributions.constraints`` but minimal:
+    just bounds checking, no transform registry.
+
+    Parameters
+    ----------
+    lower : float
+        Lower bound (default ``-inf``).
+    upper : float
+        Upper bound (default ``inf``).
+    lower_inclusive : bool
+        Whether the lower bound is inclusive (default True).
+    upper_inclusive : bool
+        Whether the upper bound is inclusive (default True).
+    """
+
+    lower: float = -np.inf
+    upper: float = np.inf
+    lower_inclusive: bool = True
+    upper_inclusive: bool = True
+
+    def check(self, y: np.ndarray) -> bool:
+        """Return True if all values of ``y`` are in the support."""
+        if self.lower_inclusive:
+            low_ok = np.all(y >= self.lower)
+        else:
+            low_ok = np.all(y > self.lower)
+        if self.upper_inclusive:
+            high_ok = np.all(y <= self.upper)
+        else:
+            high_ok = np.all(y < self.upper)
+        return bool(low_ok and high_ok)
+
+    def __str__(self) -> str:
+        lb = "[" if self.lower_inclusive else "("
+        ub = "]" if self.upper_inclusive else ")"
+        return f"{lb}{self.lower}, {self.upper}{ub}"
+
+
+# Pre-built singletons matching common distribution supports.
+REAL = ResponseSupport()
+NON_NEGATIVE = ResponseSupport(lower=0)
+POSITIVE = ResponseSupport(lower=0, lower_inclusive=False)
+UNIT_INTERVAL = ResponseSupport(lower=0, upper=1)
+
+
+# ---------------------------------------------------------------------------
+# ExponentialFamily base class
+# ---------------------------------------------------------------------------
 
 
 class ExponentialFamily(ABC):
@@ -25,7 +88,7 @@ class ExponentialFamily(ABC):
     - deviance_resids(y, mu, wt): per-observation deviance residuals
     - dev_resids(y, mu, wt): scalar total deviance
     - aic(y, mu, wt, scale): AIC contribution
-    - initialize(y, wt): starting mu values
+    - initialize(y, wt): starting mu values (validates response domain)
     - valid_mu(mu): boolean array of valid mu values
     - valid_eta(eta): boolean array of valid eta values
 
@@ -44,6 +107,7 @@ class ExponentialFamily(ABC):
     # n_theta: number of extra distribution parameters (for extended families).
     n_theta: int = 0
     scale_known: bool = False
+    response_support: ResponseSupport = REAL
 
     def __init__(self, link: str | Link | None = None) -> None:
         if link is None:
@@ -213,17 +277,47 @@ class ExponentialFamily(ABC):
         """
         ...
 
-    @abstractmethod
     def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:
-        """Compute starting mu values from the response.
+        """Validate response domain, then compute starting mu values.
 
-        Called before the first PIRLS iteration to obtain a reasonable
-        starting point.
+        Called before the first PIRLS iteration. Checks that ``y`` is
+        in the family's ``response_support`` before dispatching to the
+        family-specific ``_initialize_impl()``.
 
         Parameters
         ----------
         y : np.ndarray
             Response values.
+        wt : np.ndarray
+            Prior weights.
+
+        Returns
+        -------
+        np.ndarray
+            Starting mu values (same shape as y).
+
+        Raises
+        ------
+        ValueError
+            If any ``y`` values are outside the family's response support.
+        """
+        y_arr = np.asarray(y, dtype=float)
+        if not self.response_support.check(y_arr):
+            raise ValueError(
+                f"{self.family_name} family requires response values in "
+                f"{self.response_support}, got range "
+                f"[{np.min(y_arr):.4g}, {np.max(y_arr):.4g}]"
+            )
+        return self._initialize_impl(y_arr, wt)
+
+    @abstractmethod
+    def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:
+        """Family-specific initialization (called after validation).
+
+        Parameters
+        ----------
+        y : np.ndarray
+            Response values (already validated and cast to float64).
         wt : np.ndarray
             Prior weights.
 

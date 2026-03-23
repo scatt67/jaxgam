@@ -475,25 +475,37 @@ class ExtendedFamily(ExponentialFamily):
       custom_jvp on PIRLS, where theta must be a traced JAX value
     - Explicit-theta saturated loglik for the REML criterion AD trace
 
+    The theta interface uses arrays of shape (n_theta,) throughout,
+    so families with multiple extra parameters (e.g. scat with df + scale)
+    work without interface changes.
+
     The fitting code branches on `family.n_theta > 0` (compile-time check)
     to select the extended custom_jvp path. The abstractmethods here
     ensure any new extended family implements the required interface.
     """
 
     @abstractmethod
-    def get_theta(self, transformed: bool = False) -> float:
-        """Get theta. transformed=True returns exp(log_theta)."""
+    def get_theta(self, transformed: bool = False) -> np.ndarray:
+        """Extra parameter vector, shape (n_theta,).
+
+        Log-scale by default. transformed=True returns natural scale
+        (e.g. exp(log_theta) for positive parameters).
+        """
         ...
 
     @abstractmethod
-    def put_theta(self, log_theta: float) -> None:
-        """Set log(theta). Called by Newton after each accepted step."""
+    def put_theta(self, log_theta: np.ndarray) -> None:
+        """Set extra parameter vector (log-scale), shape (n_theta,).
+
+        Called by Newton after each accepted step.
+        """
         ...
 
     @abstractmethod
     def deviance_fn(self, y: np.ndarray, wt: np.ndarray):
-        """Return pure JAX function D(eta, log_theta) -> scalar.
+        """Return pure JAX function D(eta, log_theta_vec) -> scalar.
 
+        log_theta_vec has shape (n_theta,).
         Used by the custom_jvp for IFT theta terms and joint JVPs.
         Must capture (y, wt, link) in closure; theta is an explicit arg.
         """
@@ -501,8 +513,9 @@ class ExtendedFamily(ExponentialFamily):
 
     @abstractmethod
     def working_weights_fn(self, wt: np.ndarray):
-        """Return pure JAX function W(eta, log_theta) -> (n,) array.
+        """Return pure JAX function W(eta, log_theta_vec) -> (n,) array.
 
+        log_theta_vec has shape (n_theta,).
         Used by the custom_jvp for joint dW JVPs.
         Must capture (wt, link) in closure; theta is an explicit arg.
         """
@@ -510,11 +523,12 @@ class ExtendedFamily(ExponentialFamily):
 
     @abstractmethod
     def saturated_loglik_theta(
-        self, y: np.ndarray, wt: np.ndarray, scale: float, log_theta
+        self, y: np.ndarray, wt: np.ndarray, scale: float, log_theta: np.ndarray
     ):
         """Saturated log-likelihood with explicit theta for AD trace.
 
-        Called inside _diff_score where log_theta is a traced JAX value.
+        log_theta has shape (n_theta,).
+        Called inside _diff_score where log_theta is a traced JAX array.
         jax.grad differentiates through this w.r.t. log_theta.
         """
         ...
@@ -542,13 +556,13 @@ class NegativeBinomial(ExtendedFamily):
         # theta>0: fixed (n_theta=0)
         # theta<0: estimate (n_theta=1), start at -theta
         if theta is None or theta == 0:
-            self._log_theta = 0.0
+            self._log_theta = np.array([0.0])
             self.n_theta = 1
         elif theta > 0:
-            self._log_theta = float(np.log(theta))
+            self._log_theta = np.array([np.log(theta)])
             self.n_theta = 0
         else:
-            self._log_theta = float(np.log(-theta))
+            self._log_theta = np.array([np.log(-theta)])
             self.n_theta = 1
 
     @property
@@ -559,11 +573,11 @@ class NegativeBinomial(ExtendedFamily):
 
     def get_theta(self, transformed=False):
         if transformed:
-            return float(np.exp(self._log_theta))
+            return np.exp(self._log_theta)
         return self._log_theta
 
     def put_theta(self, log_theta):
-        self._log_theta = float(log_theta)
+        self._log_theta = np.asarray(log_theta, dtype=np.float64).reshape(self._log_theta.shape)
 ```
 
 ### 7.3 Standard Family Methods (Read Theta from self)
@@ -571,20 +585,24 @@ class NegativeBinomial(ExtendedFamily):
 Used by PIRLS (Phase 2 runtime) and post-estimation (Phase 3). These
 read `self._log_theta` which is fixed during a single PIRLS run.
 
+All standard family methods read `self._log_theta[0]` (scalar) from the
+stored vector. The `[0]` index extracts the single NB dispersion parameter.
+Future multi-theta families (e.g. scat) would index multiple elements.
+
 ```python
     def variance(self, mu):
         xp = array_module(mu)
-        theta = xp.exp(self._log_theta)
+        theta = xp.exp(self._log_theta[0])
         return mu + mu**2 / theta
 
     def dvar(self, mu):
-        theta = jnp.exp(self._log_theta)
+        theta = jnp.exp(self._log_theta[0])
         return 1.0 + 2.0 * mu / theta
 
     def deviance_resids(self, y, mu, wt):
         # R: efam.r lines 199-205
         xp = array_module(y)
-        theta = xp.exp(self._log_theta)
+        theta = xp.exp(self._log_theta[0])
         mu_safe = xp.maximum(mu, 1e-10)
         y_safe = xp.where(y > 0, y, 1.0)
         d = 2.0 * wt * (
@@ -596,7 +614,7 @@ read `self._log_theta` which is fixed during a single PIRLS run.
 
     def saturated_loglik(self, y, wt, scale):
         # R: efam.r lines 248-275 (forward pass only, no theta derivs)
-        theta = jnp.exp(self._log_theta)
+        theta = jnp.exp(self._log_theta[0])
         ylogy = jnp.where(y > 0, y * jnp.log(y), 0.0)
         term = (
             (y + theta) * jnp.log(y + theta) - ylogy
@@ -607,7 +625,7 @@ read `self._log_theta` which is fixed during a single PIRLS run.
 
     def aic(self, y, mu, wt, scale):
         # R: efam.r lines 239-246. Phase 3 only (NumPy).
-        theta = np.exp(self._log_theta)
+        theta = np.exp(self._log_theta[0])
         mu_safe = np.maximum(mu, 1e-10)
         term = (
             (y + theta) * np.log(mu_safe + theta) - y * np.log(mu_safe)
@@ -631,13 +649,15 @@ read `self._log_theta` which is fixed during a single PIRLS run.
 ### 7.4 Pure-Function Factories (Explicit Theta for AD)
 
 Used by the custom_jvp (Section 6) and by the criterion's `ls_sat` term.
-These return pure JAX functions that take `log_theta` as an explicit argument
-so it participates in the AD trace.
+These return pure JAX functions that take `log_theta` as an explicit array
+argument of shape `(n_theta,)` so it participates in the AD trace.
+NB indexes `log_theta[0]` for its single parameter.
 
 ```python
     def saturated_loglik_theta(self, y, wt, scale, log_theta):
-        """Saturated log-likelihood with explicit theta for AD trace."""
-        theta = jnp.exp(log_theta)
+        """Saturated log-likelihood with explicit theta for AD trace.
+        log_theta has shape (n_theta,) = (1,) for NB."""
+        theta = jnp.exp(log_theta[0])
         ylogy = jnp.where(y > 0, y * jnp.log(y), 0.0)
         term = (
             (y + theta) * jnp.log(y + theta) - ylogy
@@ -647,14 +667,15 @@ so it participates in the AD trace.
         return -jnp.sum(term * wt)
 
     def deviance_fn(self, y, wt):
-        """Return pure JAX function D(eta, log_theta) -> scalar.
+        """Return pure JAX function D(eta, log_theta_vec) -> scalar.
+        log_theta_vec has shape (n_theta,) = (1,) for NB.
 
         Used by the custom_jvp for IFT theta terms and joint JVPs.
         Captures (y, wt, link) in closure; theta is an explicit arg.
         """
         link_inv = self.link.inverse
         def _dev(eta, log_theta):
-            theta = jnp.exp(log_theta)
+            theta = jnp.exp(log_theta[0])
             mu = link_inv(eta)
             mu_safe = jnp.maximum(mu, 1e-10)
             y_safe = jnp.where(y > 0, y, 1.0)
@@ -665,7 +686,8 @@ so it participates in the AD trace.
         return _dev
 
     def working_weights_fn(self, wt):
-        """Return pure JAX function W(eta, log_theta) -> (n,) array.
+        """Return pure JAX function W(eta, log_theta_vec) -> (n,) array.
+        log_theta_vec has shape (n_theta,) = (1,) for NB.
 
         Used by the custom_jvp for joint dW JVPs.
         Captures (wt, link) in closure; theta is an explicit arg.
@@ -673,7 +695,7 @@ so it participates in the AD trace.
         link_inv = self.link.inverse
         link_deriv = self.link.derivative
         def _ww(eta, log_theta):
-            theta = jnp.exp(log_theta)
+            theta = jnp.exp(log_theta[0])
             mu = link_inv(eta)
             V = mu + mu**2 / theta
             g_prime = link_deriv(mu)
