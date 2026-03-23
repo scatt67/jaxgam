@@ -18,7 +18,13 @@ import jax.scipy.special as jsp
 import numpy as np
 from scipy.special import gammaln
 
-from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.base import (
+    NON_NEGATIVE,
+    POSITIVE,
+    REAL,
+    UNIT_INTERVAL,
+    ExponentialFamily,
+)
 from jaxgam.jax_utils import array_module
 from jaxgam.links.links import IdentityLink, InverseLink, Link, LogitLink, LogLink
 
@@ -38,6 +44,7 @@ class Gaussian(ExponentialFamily):
 
     family_name: str = "gaussian"  # type: ignore[assignment]
     scale_known: bool = False
+    response_support = REAL
 
     @property
     def default_link(self) -> Link:
@@ -93,9 +100,9 @@ class Gaussian(ExponentialFamily):
         n = np.sum(wt)
         return float(n * (np.log(2 * np.pi * scale) + 1) + 2)
 
-    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
+    def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu = y for Gaussian."""
-        return np.asarray(y, dtype=float).copy()
+        return y.copy()
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """All finite mu are valid for Gaussian."""
@@ -117,6 +124,7 @@ class Binomial(ExponentialFamily):
 
     family_name: str = "binomial"  # type: ignore[assignment]
     scale_known: bool = True
+    response_support = UNIT_INTERVAL
 
     @property
     def default_link(self) -> Link:
@@ -188,13 +196,13 @@ class Binomial(ExponentialFamily):
         ll = wt * (y * np.log(mu_safe) + (1.0 - y) * np.log(1.0 - mu_safe))
         return float(-2.0 * np.sum(ll))
 
-    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
+    def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu = (y + 0.5) / 2 for Binomial.
 
         This R convention maps y in {0, 1} to mu in (0.25, 0.75),
         ensuring the starting mu is safely away from the boundary.
         """
-        return (np.asarray(y, dtype=float) + 0.5) / 2.0
+        return (y + 0.5) / 2.0
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Binomial: 0 < mu < 1."""
@@ -216,6 +224,7 @@ class Poisson(ExponentialFamily):
 
     family_name: str = "poisson"  # type: ignore[assignment]
     scale_known: bool = True
+    response_support = NON_NEGATIVE
 
     @property
     def default_link(self) -> Link:
@@ -284,14 +293,13 @@ class Poisson(ExponentialFamily):
         ll = wt * (y * np.log(mu_safe) - mu_safe - gammaln(y + 1.0))
         return float(-2.0 * np.sum(ll))
 
-    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
+    def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu for Poisson: mu = y + 0.1 where y == 0.
 
         Following R's convention, this avoids log(0) in the first
         evaluation of the working quantities.
         """
-        y_arr = np.asarray(y, dtype=float)
-        return np.where(y_arr == 0, y_arr + 0.1, y_arr)
+        return np.where(y == 0, y + 0.1, y)
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Poisson: mu > 0."""
@@ -313,6 +321,7 @@ class Gamma(ExponentialFamily):
 
     family_name: str = "Gamma"  # type: ignore[assignment]
     scale_known: bool = False
+    response_support = POSITIVE
 
     @property
     def default_link(self) -> Link:
@@ -386,13 +395,12 @@ class Gamma(ExponentialFamily):
         )
         return float(-2.0 * np.sum(ll) + 2.0)
 
-    def initialize(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
+    def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu for Gamma: mu = y, clipped to positive values.
 
         Follows R's Gamma()$initialize which ensures mu > 0.
         """
-        y_arr = np.asarray(y, dtype=float)
-        return np.maximum(y_arr, np.finfo(float).eps)
+        return np.maximum(y, np.finfo(float).eps)
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Gamma: mu > 0."""

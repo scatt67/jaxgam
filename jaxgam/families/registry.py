@@ -9,6 +9,7 @@ Design doc reference: Section 6.1
 from __future__ import annotations
 
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.registry import Registry
 
@@ -18,6 +19,7 @@ family_registry: Registry[ExponentialFamily] = Registry(
         "binomial": Binomial,
         "poisson": Poisson,
         "gamma": Gamma,
+        "nb": NegativeBinomial,
     },
     name="family",
     cache_instances=True,
