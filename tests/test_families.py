@@ -10,6 +10,7 @@ Coverage:
 7. TestNoJaxImports — importing jaxgam.families doesn't trigger jax import
 8. TestExtendedFamilyContract — generic contract for all ExtendedFamily subclasses
 9. TestNBSpecific — NB-specific tests (constructor, alpha, Poisson limit)
+10. TestExtendedFamilyAD — finite-difference validation of AD through extended families
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from jaxgam.families import (
     get_family,
 )
 from jaxgam.links.links import LogLink
-from tests.tolerances import MODERATE, STRICT
+from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
 
@@ -1483,3 +1484,350 @@ class TestNBSpecific:
         assert "NegativeBinomial" in r
         assert "fixed" in r
         assert "LogLink" in r
+
+
+# ---------------------------------------------------------------------------
+# Test 10: ExtendedFamily AD finite-difference validation
+# ---------------------------------------------------------------------------
+
+
+def _central_fd_grad(f, x, eps=1e-5):
+    """Central finite-difference gradient of scalar-valued f at array x.
+
+    Parameters
+    ----------
+    f : callable
+        Scalar-valued function of a single JAX array argument.
+    x : jax.Array
+        Point at which to evaluate the gradient.
+    eps : float
+        Perturbation size for central differences.
+
+    Returns
+    -------
+    np.ndarray
+        Gradient estimate, same shape as x.
+    """
+    x_np = np.asarray(x, dtype=np.float64)
+    grad = np.zeros_like(x_np)
+    for i in range(x_np.size):
+        x_plus = x_np.copy()
+        x_minus = x_np.copy()
+        x_plus.flat[i] += eps
+        x_minus.flat[i] -= eps
+        grad.flat[i] = (float(f(jnp.array(x_plus))) - float(f(jnp.array(x_minus)))) / (
+            2 * eps
+        )
+    return grad
+
+
+class TestExtendedFamilyAD:
+    """Finite-difference validation of AD through extended family factories.
+
+    Parametrized by family instance and theta regime. Verifies jax.grad
+    output matches central finite differences to MODERATE tolerance.
+
+    PR 1's TestExtendedFamilyContract checks that AD produces *finite*
+    values. This class checks that the AD values are *numerically correct*
+    by comparing against central finite differences.
+    """
+
+    FD_EPS = 1e-5
+
+    @pytest.fixture(
+        params=[
+            (NegativeBinomial(theta=2), "moderate_theta"),
+            (NegativeBinomial(theta=0.01), "high_overdispersion"),
+            (NegativeBinomial(theta=10000), "near_poisson"),
+            # future: Tweedie(p=1.5), Beta(), ...
+        ],
+        ids=["nb_theta2", "nb_theta0.01", "nb_theta10000"],
+    )
+    def efamily_regime(self, request):
+        return request.param
+
+    @pytest.fixture
+    def efamily(self, efamily_regime):
+        return efamily_regime[0]
+
+    @pytest.fixture
+    def test_data(self, efamily):
+        return _extended_family_test_data(efamily)
+
+    # ------------------------------------------------------------------
+    # saturated_loglik_theta
+    # ------------------------------------------------------------------
+
+    def test_saturated_loglik_theta_grad(self, efamily, test_data) -> None:
+        """d(ls_sat)/d(log_theta) via AD matches central FD."""
+        y, _mu, wt = test_data
+        y, wt = jnp.array(y), jnp.array(wt)
+        log_theta = jnp.array(efamily.get_theta())
+
+        ad_grad = np.asarray(
+            jax.grad(efamily.saturated_loglik_theta, argnums=3)(y, wt, 1.0, log_theta)
+        )
+        # Larger eps to reduce cancellation error when |ls_sat| >> |gradient|
+        # (near-Poisson regime: ls_sat ~ 82000, gradient ~ 0.003).
+        fd_grad = _central_fd_grad(
+            lambda lt: efamily.saturated_loglik_theta(y, wt, 1.0, lt),
+            log_theta,
+            eps=1e-4,
+        )
+        np.testing.assert_allclose(
+            ad_grad,
+            fd_grad,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="saturated_loglik_theta: AD grad vs FD",
+        )
+
+    def test_saturated_loglik_theta_hessian(self, efamily, test_data) -> None:
+        """d^2(ls_sat)/d(log_theta)^2 via AD matches FD of gradient."""
+        y, _mu, wt = test_data
+        y, wt = jnp.array(y), jnp.array(wt)
+        log_theta = jnp.array(efamily.get_theta())
+
+        def ls_fn(lt):
+            return efamily.saturated_loglik_theta(y, wt, 1.0, lt)
+
+        ad_hess = np.asarray(jax.hessian(ls_fn)(log_theta))
+
+        # FD of gradient: Jacobian of grad = Hessian.
+        grad_fn = jax.grad(ls_fn)
+        n = log_theta.shape[0]
+        fd_hess = np.zeros((n, n))
+        eps = self.FD_EPS
+        for i in range(n):
+            e_i = np.zeros(n)
+            e_i[i] = eps
+            g_plus = np.asarray(grad_fn(log_theta + jnp.array(e_i)))
+            g_minus = np.asarray(grad_fn(log_theta - jnp.array(e_i)))
+            fd_hess[:, i] = (g_plus - g_minus) / (2 * eps)
+
+        # LOOSE tolerance: at large theta the gradient involves
+        # catastrophic cancellation (large log/digamma terms summing
+        # to a small residual), limiting FD precision for second
+        # derivatives regardless of step size.
+        np.testing.assert_allclose(
+            ad_hess,
+            fd_hess,
+            rtol=LOOSE.rtol,
+            atol=LOOSE.atol,
+            err_msg="saturated_loglik_theta: AD hessian vs FD",
+        )
+
+    # ------------------------------------------------------------------
+    # deviance_fn
+    # ------------------------------------------------------------------
+
+    def test_deviance_fn_grad_eta(self, efamily, test_data) -> None:
+        """dD/deta via AD matches central FD."""
+        y, mu, wt = test_data
+        y, mu, wt = jnp.array(y), jnp.array(mu), jnp.array(wt)
+        eta = efamily.link.link(mu)
+        log_theta = jnp.array(efamily.get_theta())
+
+        dev_fn = efamily.deviance_fn(y, wt)
+        ad_grad = np.asarray(jax.grad(dev_fn, argnums=0)(eta, log_theta))
+        fd_grad = _central_fd_grad(lambda e: dev_fn(e, log_theta), eta, eps=self.FD_EPS)
+        np.testing.assert_allclose(
+            ad_grad,
+            fd_grad,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="deviance_fn: dD/deta AD vs FD",
+        )
+
+    def test_deviance_fn_grad_theta(self, efamily, test_data) -> None:
+        """dD/d(log_theta) via AD matches central FD."""
+        y, mu, wt = test_data
+        y, mu, wt = jnp.array(y), jnp.array(mu), jnp.array(wt)
+        eta = efamily.link.link(mu)
+        log_theta = jnp.array(efamily.get_theta())
+
+        dev_fn = efamily.deviance_fn(y, wt)
+        ad_grad = np.asarray(jax.grad(dev_fn, argnums=1)(eta, log_theta))
+        fd_grad = _central_fd_grad(
+            lambda lt: dev_fn(eta, lt), log_theta, eps=self.FD_EPS
+        )
+        np.testing.assert_allclose(
+            ad_grad,
+            fd_grad,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="deviance_fn: dD/d(log_theta) AD vs FD",
+        )
+
+    def test_deviance_fn_mixed_derivative(self, efamily, test_data) -> None:
+        """d^2D/(deta d(log_theta)) via JVP matches FD of gradient."""
+        y, mu, wt = test_data
+        y, mu, wt = jnp.array(y), jnp.array(mu), jnp.array(wt)
+        eta = efamily.link.link(mu)
+        log_theta = jnp.array(efamily.get_theta())
+
+        dev_fn = efamily.deviance_fn(y, wt)
+        grad_D_eta = jax.grad(dev_fn, argnums=0)
+
+        # AD: JVP of dD/deta w.r.t. log_theta
+        _, mixed_ad = jax.jvp(
+            lambda lt: grad_D_eta(eta, lt),
+            (log_theta,),
+            (jnp.ones_like(log_theta),),
+        )
+
+        # FD: perturb log_theta, recompute dD/deta
+        eps = self.FD_EPS
+        g_plus = grad_D_eta(eta, log_theta + eps)
+        g_minus = grad_D_eta(eta, log_theta - eps)
+        mixed_fd = (g_plus - g_minus) / (2 * eps)
+
+        np.testing.assert_allclose(
+            mixed_ad,
+            mixed_fd,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="deviance_fn: mixed d2D/(deta dtheta) AD vs FD",
+        )
+
+    @pytest.mark.parametrize(
+        ("y_val", "mu_val"),
+        [
+            (0.0, 0.5),  # y=0 boundary
+            (1000.0, 500.0),  # large y
+            (1.0, 0.001),  # mu near zero
+            (1.0, 100.0),  # mu large
+        ],
+        ids=["y_zero", "y_large", "mu_small", "mu_large"],
+    )
+    def test_deviance_fn_grad_extreme(self, efamily, y_val, mu_val) -> None:
+        """AD gradients at extreme (y, mu) are finite and match FD."""
+        y = jnp.array([y_val])
+        mu = jnp.array([mu_val])
+        wt = jnp.ones(1)
+        eta = efamily.link.link(mu)
+        log_theta = jnp.array(efamily.get_theta())
+
+        dev_fn = efamily.deviance_fn(y, wt)
+
+        # Check finiteness
+        ad_eta = np.asarray(jax.grad(dev_fn, argnums=0)(eta, log_theta))
+        ad_theta = np.asarray(jax.grad(dev_fn, argnums=1)(eta, log_theta))
+        assert np.all(np.isfinite(ad_eta)), (
+            f"dD/deta not finite at y={y_val}, mu={mu_val}"
+        )
+        assert np.all(np.isfinite(ad_theta)), (
+            f"dD/d(log_theta) not finite at y={y_val}, mu={mu_val}"
+        )
+
+        # Check accuracy vs FD
+        fd_eta = _central_fd_grad(lambda e: dev_fn(e, log_theta), eta, eps=self.FD_EPS)
+        fd_theta = _central_fd_grad(
+            lambda lt: dev_fn(eta, lt), log_theta, eps=self.FD_EPS
+        )
+        np.testing.assert_allclose(
+            ad_eta,
+            fd_eta,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg=f"dD/deta vs FD at y={y_val}, mu={mu_val}",
+        )
+        np.testing.assert_allclose(
+            ad_theta,
+            fd_theta,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg=f"dD/d(log_theta) vs FD at y={y_val}, mu={mu_val}",
+        )
+
+    # ------------------------------------------------------------------
+    # working_weights_fn
+    # ------------------------------------------------------------------
+
+    def test_working_weights_fn_jvp_eta(self, efamily, test_data) -> None:
+        """JVP of W w.r.t. eta matches central FD."""
+        _y, mu, wt = test_data
+        mu, wt = jnp.array(mu), jnp.array(wt)
+        eta = efamily.link.link(mu)
+        log_theta = jnp.array(efamily.get_theta())
+
+        ww_fn = efamily.working_weights_fn(wt)
+        deta = jnp.ones_like(eta) * 0.01
+
+        # AD JVP (eta only)
+        _, jvp_ad = jax.jvp(
+            ww_fn,
+            (eta, log_theta),
+            (deta, jnp.zeros_like(log_theta)),
+        )
+
+        # FD JVP
+        eps = self.FD_EPS
+        jvp_fd = (
+            ww_fn(eta + eps * deta, log_theta) - ww_fn(eta - eps * deta, log_theta)
+        ) / (2 * eps)
+
+        np.testing.assert_allclose(
+            jvp_ad,
+            jvp_fd,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="working_weights_fn: JVP w.r.t. eta AD vs FD",
+        )
+
+    def test_working_weights_fn_jvp_theta(self, efamily, test_data) -> None:
+        """JVP of W w.r.t. log_theta matches central FD."""
+        _y, mu, wt = test_data
+        mu, wt = jnp.array(mu), jnp.array(wt)
+        eta = efamily.link.link(mu)
+        log_theta = jnp.array(efamily.get_theta())
+
+        ww_fn = efamily.working_weights_fn(wt)
+        dlt = jnp.ones_like(log_theta) * 0.01
+
+        # AD JVP (theta only)
+        _, jvp_ad = jax.jvp(
+            ww_fn,
+            (eta, log_theta),
+            (jnp.zeros_like(eta), dlt),
+        )
+
+        # FD JVP
+        eps = self.FD_EPS
+        jvp_fd = (
+            ww_fn(eta, log_theta + eps * dlt) - ww_fn(eta, log_theta - eps * dlt)
+        ) / (2 * eps)
+
+        np.testing.assert_allclose(
+            jvp_ad,
+            jvp_fd,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="working_weights_fn: JVP w.r.t. theta AD vs FD",
+        )
+
+    def test_working_weights_fn_jvp_joint_linearity(self, efamily, test_data) -> None:
+        """Joint JVP equals sum of individual JVPs (derivative linearity)."""
+        _y, mu, wt = test_data
+        mu, wt = jnp.array(mu), jnp.array(wt)
+        eta = efamily.link.link(mu)
+        log_theta = jnp.array(efamily.get_theta())
+
+        ww_fn = efamily.working_weights_fn(wt)
+        deta = jnp.ones_like(eta) * 0.01
+        dlt = jnp.ones_like(log_theta) * 0.01
+
+        # Joint
+        _, jvp_joint = jax.jvp(ww_fn, (eta, log_theta), (deta, dlt))
+
+        # Individual
+        _, jvp_eta = jax.jvp(ww_fn, (eta, log_theta), (deta, jnp.zeros_like(log_theta)))
+        _, jvp_theta = jax.jvp(ww_fn, (eta, log_theta), (jnp.zeros_like(eta), dlt))
+
+        np.testing.assert_allclose(
+            jvp_joint,
+            jvp_eta + jvp_theta,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="Joint JVP != sum of individual JVPs",
+        )
