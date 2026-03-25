@@ -140,9 +140,9 @@ def test_nb_initialize(self) -> None:
 ```
 
 **TestEdgeCases** -- add:
-- [ ] `deviance_resids` with y=0: no NaN, no Inf
-- [ ] `deviance_resids` with mu near zero: finite result
-- [ ] Poisson limit: as theta -> inf, `variance(mu)` -> `mu`
+- [x] `deviance_resids` with y=0: no NaN, no Inf
+- [x] `deviance_resids` with mu near zero: finite result
+- [x] Poisson limit: as theta -> inf, `variance(mu)` -> `mu`
 
 **TestRegistry** -- add:
 ```python
@@ -183,36 +183,36 @@ class TestExtendedFamilyContract:
 ```
 
 Tests in this class:
-- [ ] `isinstance(efamily, ExtendedFamily)` is True
-- [ ] `isinstance(efamily, ExponentialFamily)` is True (inheritance)
-- [ ] `n_theta >= 0`
-- [ ] `get_theta()` / `put_theta()` round-trip preserves value
-- [ ] `deviance_fn(y, wt)` returns a callable
-- [ ] `working_weights_fn(wt)` returns a callable
-- [ ] `deviance_fn` consistency: `dev_fn(eta, log_theta)` matches
+- [x] `isinstance(efamily, ExtendedFamily)` is True
+- [x] `isinstance(efamily, ExponentialFamily)` is True (inheritance)
+- [x] `n_theta >= 0`
+- [x] `get_theta()` / `put_theta()` round-trip preserves value
+- [x] `deviance_fn(y, wt)` returns a callable
+- [x] `working_weights_fn(wt)` returns a callable
+- [x] `deviance_fn` consistency: `dev_fn(eta, log_theta)` matches
       `dev_resids(y, mu, wt)` at stored theta (STRICT tolerance)
-- [ ] `working_weights_fn` consistency: `ww_fn(eta, log_theta)` matches
+- [x] `working_weights_fn` consistency: `ww_fn(eta, log_theta)` matches
       `working_weights(mu, wt)` at stored theta (STRICT tolerance)
-- [ ] `saturated_loglik_theta` consistency: matches `saturated_loglik` at
+- [x] `saturated_loglik_theta` consistency: matches `saturated_loglik` at
       stored theta (STRICT tolerance)
-- [ ] AD finite: `jax.grad(dev_fn, argnums=0)(eta, log_theta)` is finite
-- [ ] AD finite: `jax.grad(dev_fn, argnums=1)(eta, log_theta)` is finite
-- [ ] AD finite: mixed derivative `d²D/(dη dθ)` is finite (custom_jvp needs this)
-- [ ] AD finite: `jax.jvp(ww_fn, (eta, lt), (deta, dlt))` is finite
-- [ ] `saturated_loglik_theta` AD: `jax.grad(..., argnums=3)` is finite
+- [x] AD finite: `jax.grad(dev_fn, argnums=0)(eta, log_theta)` is finite
+- [x] AD finite: `jax.grad(dev_fn, argnums=1)(eta, log_theta)` is finite
+- [x] AD finite: mixed derivative `d²D/(dη dθ)` is finite (custom_jvp needs this)
+- [x] AD finite: `jax.jvp(ww_fn, (eta, lt), (deta, dlt))` is finite
+- [x] `saturated_loglik_theta` AD: `jax.grad(..., argnums=3)` is finite
 
 **New test class -- TestNBSpecific:**
 
 NB-only tests that don't generalize to other extended families.
 
-- [ ] Constructor: `NegativeBinomial()` -> n_theta=1, log_theta=0
-- [ ] Constructor: `NegativeBinomial(theta=2)` -> n_theta=0, log_theta=log(2)
-- [ ] Constructor: `NegativeBinomial(theta=-2)` -> n_theta=1, log_theta=log(2)
-- [ ] `alpha` property returns 1/theta
-- [ ] `scale_known` is True
-- [ ] `default_link` is LogLink
-- [ ] Poisson limit: as theta -> inf, `variance(mu)` -> `mu`
-- [ ] Poisson limit: as theta -> inf, `deviance_resids` -> Poisson deviance_resids
+- [x] Constructor: `NegativeBinomial()` -> n_theta=1, log_theta=0
+- [x] Constructor: `NegativeBinomial(theta=2)` -> n_theta=0, log_theta=log(2)
+- [x] Constructor: `NegativeBinomial(theta=-2)` -> n_theta=1, log_theta=log(2)
+- [x] `alpha` property returns 1/theta
+- [x] `scale_known` is True
+- [x] `default_link` is LogLink
+- [x] Poisson limit: as theta -> inf, `variance(mu)` -> `mu`
+- [x] Poisson limit: as theta -> inf, `deviance_resids` -> Poisson deviance_resids
 
 **New test class -- TestNBvsR** (R comparison for family methods):
 ```python
@@ -220,9 +220,9 @@ NB-only tests that don't generalize to other extended families.
 class TestNBvsR:
     """NB family methods vs R's nb() reference values."""
 ```
-- [ ] `dev_resids` matches R's `nb()$dev.resids(y, mu, wt, log(theta))`
-- [ ] `saturated_loglik` matches R's `nb()$ls(y, wt, log(theta), 1)$ls`
-- [ ] `aic` matches R's `nb()$aic(y, mu, log(theta), wt, 0)`
+- [x] `dev_resids` matches R's `nb()$dev.resids(y, mu, wt, log(theta))`
+- [x] `saturated_loglik` matches R's `nb()$ls(y, wt, log(theta), 1)$ls`
+- [x] `aic` matches R's `nb()$aic(y, mu, log(theta), wt, 0)`
 
 Use `_compute_r_dev_resids` pattern adapted for NB (extended family dev.resids
 takes a 4th `theta` argument).
@@ -269,24 +269,24 @@ class TestExtendedFamilyAD:
 ```
 
 **`saturated_loglik_theta` FD:**
-- [ ] `jax.grad(saturated_loglik_theta, argnums=3)` matches FD (MODERATE)
-- [ ] Second derivative via `jax.grad(jax.grad(...))` matches FD (MODERATE)
+- [x] `jax.grad(saturated_loglik_theta, argnums=3)` matches FD (MODERATE)
+- [x] Second derivative via `jax.grad(jax.grad(...))` matches FD (MODERATE)
 
 **`deviance_fn` FD:**
-- [ ] `jax.grad(dev_fn, argnums=0)` (dD/deta) matches FD (MODERATE)
-- [ ] `jax.grad(dev_fn, argnums=1)` (dD/d(log_theta)) matches FD (MODERATE)
-- [ ] Mixed derivative `d^2D/(d(eta) d(theta))` via JVP matches FD (MODERATE)
-- [ ] Test at y=0 (boundary), y=1000, mu=0.001, mu=100
+- [x] `jax.grad(dev_fn, argnums=0)` (dD/deta) matches FD (MODERATE)
+- [x] `jax.grad(dev_fn, argnums=1)` (dD/d(log_theta)) matches FD (MODERATE)
+- [x] Mixed derivative `d^2D/(d(eta) d(theta))` via JVP matches FD (MODERATE)
+- [x] Test at y=0 (boundary), y=1000, mu=0.001, mu=100
 
 **`working_weights_fn` FD:**
-- [ ] JVP w.r.t. eta matches FD (MODERATE)
-- [ ] JVP w.r.t. theta matches FD (MODERATE)
-- [ ] Joint JVP matches sum of individual JVPs
+- [x] JVP w.r.t. eta matches FD (MODERATE)
+- [x] JVP w.r.t. theta matches FD (MODERATE)
+- [x] Joint JVP matches sum of individual JVPs
 
 **Consistency checks:**
-- [ ] `deviance_fn(y,wt)(eta, log_theta)` == `family.dev_resids(y, mu, wt)`
+- [x] `deviance_fn(y,wt)(eta, log_theta)` == `family.dev_resids(y, mu, wt)`
       when `log_theta` matches `self._log_theta`
-- [ ] `working_weights_fn(wt)(eta, log_theta)` == `family.working_weights(mu, wt)`
+- [x] `working_weights_fn(wt)(eta, log_theta)` == `family.working_weights(mu, wt)`
       when `log_theta` matches
 
 ### Acceptance Criteria
