@@ -336,6 +336,90 @@ class TestExtendedCustomJVPHessian:
             err_msg="theta-theta Hessian: AD vs FD mismatch",
         )
 
+    def test_hessian_theta_lambda_matches_fd(self, nb_problem):
+        """d^2Score/d(log_theta)d(log_lambda) from AD matches FD of gradient."""
+        fd, params, beta_warm, data = nb_problem
+        kwargs = _build_diff_score_kwargs(fd, joint_theta=True)
+        n_lambda = fd.n_penalties
+
+        # AD Hessian cross-block
+        hess_fn = jax.hessian(_diff_score, argnums=0)
+        ad_hess = hess_fn(params, beta_warm, **kwargs)
+        ad_hess_tl = np.asarray(ad_hess[n_lambda, :n_lambda])
+
+        # FD: perturb each lambda, compute theta gradient at each perturbation
+        eps = 1e-4
+        log_theta_base = float(params[n_lambda])
+        fd_hess_tl = np.zeros(n_lambda)
+        for i in range(n_lambda):
+            log_lambda_p = params[:n_lambda].at[i].add(eps)
+            log_lambda_m = params[:n_lambda].at[i].add(-eps)
+
+            def _theta_grad(ll):
+                fam = NegativeBinomial()
+                fam._log_theta = np.array([log_theta_base])
+                fam.n_theta = 1
+                fam._max_y = int(np.max(data["y"].values))
+                fd_loc = _setup_fd(_FORMULA, data, fam)
+                kw = _build_diff_score_kwargs(fd_loc, joint_theta=True)
+                p = jnp.concatenate([ll, jnp.array([log_theta_base])])
+                g = jax.grad(_diff_score, argnums=0)(p, beta_warm, **kw)
+                return float(g[n_lambda])
+
+            fd_hess_tl[i] = (_theta_grad(log_lambda_p) - _theta_grad(log_lambda_m)) / (
+                2 * eps
+            )
+
+        np.testing.assert_allclose(
+            ad_hess_tl,
+            fd_hess_tl,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="theta-lambda Hessian: AD vs FD mismatch",
+        )
+
+    def test_hessian_lambda_lambda_matches_fd(self, nb_problem):
+        """d^2Score/d(log_lambda)^2 from AD matches FD of gradient."""
+        fd, params, beta_warm, data = nb_problem
+        kwargs = _build_diff_score_kwargs(fd, joint_theta=True)
+        n_lambda = fd.n_penalties
+
+        # AD Hessian lambda-lambda block
+        hess_fn = jax.hessian(_diff_score, argnums=0)
+        ad_hess = hess_fn(params, beta_warm, **kwargs)
+        ad_hess_ll = np.asarray(ad_hess[:n_lambda, :n_lambda])
+
+        # FD: perturb each lambda, compute lambda gradient
+        eps = 1e-4
+        log_theta_base = float(params[n_lambda])
+        fd_hess_ll = np.zeros((n_lambda, n_lambda))
+        for i in range(n_lambda):
+            log_lambda_p = params[:n_lambda].at[i].add(eps)
+            log_lambda_m = params[:n_lambda].at[i].add(-eps)
+
+            def _lambda_grad(ll):
+                fam = NegativeBinomial()
+                fam._log_theta = np.array([log_theta_base])
+                fam.n_theta = 1
+                fam._max_y = int(np.max(data["y"].values))
+                fd_loc = _setup_fd(_FORMULA, data, fam)
+                kw = _build_diff_score_kwargs(fd_loc, joint_theta=True)
+                p = jnp.concatenate([ll, jnp.array([log_theta_base])])
+                g = jax.grad(_diff_score, argnums=0)(p, beta_warm, **kw)
+                return np.asarray(g[:n_lambda])
+
+            fd_hess_ll[i, :] = (
+                _lambda_grad(log_lambda_p) - _lambda_grad(log_lambda_m)
+            ) / (2 * eps)
+
+        np.testing.assert_allclose(
+            ad_hess_ll,
+            fd_hess_ll,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="lambda-lambda Hessian: AD vs FD mismatch",
+        )
+
 
 class TestIFTDbetaDtheta:
     """Verify dbeta/d(log_theta) from the IFT in the custom_jvp."""
