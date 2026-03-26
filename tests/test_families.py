@@ -1261,7 +1261,11 @@ class TestExtendedFamilyContract:
     @pytest.fixture
     def test_data(self, efamily):
         """Family-appropriate (y, mu, wt) for the current efamily."""
-        return _extended_family_test_data(efamily)
+        y, mu, wt = _extended_family_test_data(efamily)
+        # Set _max_y for _lgamma_diff scan (normally done by NewtonOptimizer)
+        if hasattr(efamily, "_max_y"):
+            efamily._max_y = int(np.max(y))
+        return y, mu, wt
 
     def test_is_extended_and_exponential(self, efamily) -> None:
         assert isinstance(efamily, ExtendedFamily)
@@ -1552,7 +1556,10 @@ class TestExtendedFamilyAD:
 
     @pytest.fixture
     def test_data(self, efamily):
-        return _extended_family_test_data(efamily)
+        y, mu, wt = _extended_family_test_data(efamily)
+        if hasattr(efamily, "_max_y"):
+            efamily._max_y = int(np.max(y))
+        return y, mu, wt
 
     # ------------------------------------------------------------------
     # saturated_loglik_theta
