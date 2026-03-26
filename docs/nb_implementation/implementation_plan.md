@@ -314,14 +314,14 @@ class TestExtendedFamilyAD:
 
 Validate JVP outputs at a known point without running the full Newton loop.
 
-- [ ] Small NB problem (n=50, p=5, 1 smooth)
-- [ ] Run PIRLS to convergence at fixed theta
-- [ ] `_diff_score` gradient w.r.t. `[log_lambda, log_theta]`:
+- [x] Small NB problem (n=50, p=5, 1 smooth)
+- [x] Run PIRLS to convergence at fixed theta
+- [x] `_diff_score` gradient w.r.t. `[log_lambda, log_theta]`:
       theta component matches FD (perturb log_theta, re-run _diff_score)
-- [ ] lambda components unchanged when dtheta=0
-- [ ] Hessian: theta-theta, theta-lambda, lambda-lambda blocks match FD
-- [ ] `dbeta/d(log_theta)` from IFT: perturb theta, re-run PIRLS, compare
-- [ ] Standard families (n_theta=0): gradient unchanged (no regression)
+- [x] lambda components unchanged when dtheta=0
+- [x] Hessian: theta-theta, theta-lambda, lambda-lambda blocks match FD
+- [x] `dbeta/d(log_theta)` from IFT: perturb theta, re-run PIRLS, compare
+- [x] Standard families (n_theta=0): gradient unchanged (no regression)
 
 ### Acceptance Criteria
 
@@ -362,6 +362,36 @@ if `get_family("nb")` returns a proper instance and Newton detects `n_theta > 0`
 - [ ] `result.theta` is populated (estimated) or None (n_theta=0 fixed)
 - [ ] Hard-gate invariants: deviance >= 0, no NaN, EDF bounds
 - [ ] Standard family fits unchanged (run a Gaussian test, compare to pre-PR result)
+- [ ] Poisson limit (fixed): fit `NegativeBinomial(theta=1e4)` on Poisson-generated
+      data, compare deviance and coefficients against `Poisson()` fit (MODERATE)
+- [ ] Poisson limit (estimated): fit `NegativeBinomial()` on Poisson-generated data,
+      verify estimated theta is large (>50) and deviance/coefficients match `Poisson()`
+      fit (LOOSE — theta estimation adds noise)
+
+**Numerical edge cases:**
+
+- [ ] Zero-inflated data (60%+ zeros):
+      - `converged` is True
+      - `result.theta` > 0 and finite
+      - deviance >= 0, no NaN in coefficients or fitted values
+      - fitted mu for zero observations is small but positive
+- [ ] Extreme overdispersion (true theta=0.1):
+      - `converged` is True
+      - `result.theta` < 1 (correctly identifies high overdispersion)
+      - XtWX is not singular (no LinAlgError during fit)
+      - deviance >= 0, all coefficients finite
+- [ ] Large counts (max y > 500):
+      - `converged` is True, deviance finite
+      - `_lgamma_diff` scan produces finite saturated loglik and gradient
+      - `result.theta` > 0 and in reasonable range for the generating theta
+- [ ] Constant response (all y=5):
+      - fit completes without divergence (no infinite loop)
+      - `result.theta` is large but finite (Poisson limit)
+      - deviance is near zero (perfect fit at constant mean)
+- [ ] mu near machine epsilon (sparse predictor, log link):
+      - no NaN or Inf in deviance, working weights, or coefficients
+      - `_MU_EPS` guard prevents log(0) in deviance residuals
+      - `converged` is True or step-failed (not NaN crash)
 
 ### Acceptance Criteria
 
@@ -403,10 +433,10 @@ def _r_tol(smooth_key: str, family_name: str):
 This gives NB the full matrix treatment (7 smooth types x 1 family = 7 new
 cells) for both R comparison and hard-gate invariants.
 
-Add `test_theta_vs_r` to `TestValidationMatrix` (only runs for NB cells):
+Add `test_theta_vs_r` to `TestValidationMatrix` (only runs for Extended family cells):
 ```python
 def test_theta_vs_r(self, cell):
-    """Estimated theta matches R (NB only)."""
+    """Estimated theta matches R (Extended family only)."""
     smooth_key, family_name, model, r_result = cell
     if r_result.get("theta") is None:
         pytest.skip("Not an extended family")
