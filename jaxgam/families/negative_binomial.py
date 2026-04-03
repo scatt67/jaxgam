@@ -16,7 +16,8 @@ Key rewrites (going beyond R's mgcv ``nb()`` which uses raw arithmetic):
 
 - ``log((y+θ)/(mu+θ))`` → ``log1p((y-mu)/(mu+θ))``
 - ``(y+θ)*log(y+θ) - θ*log(θ)`` → ``y*log(y+θ) + θ*log1p(y/θ)``
-- ``lgamma(θ) - lgamma(θ+y)`` → ``-(lgamma(y) - betaln(θ, y))``
+- ``lgamma(θ) - lgamma(θ+y)`` → ``_lgamma_diff`` with recurrence-based
+  custom_jvp for stable first and second derivatives via AD
 
 These are exact algebraic identities (not approximations) and are
 unconditionally at least as accurate as the original formulas.
@@ -150,11 +151,12 @@ class NegativeBinomial(ExtendedFamily):
     ) -> float:
         """Saturated log-likelihood (R's family$ls).  Phase 2 only (JAX).
 
-        R: efam.r lines 248-275 (forward pass only, no theta derivs).
+              R: efam.r lines 248-275 (forward pass only, no theta derivs).
 
-        Rewritten for numerical stability at large theta:
-        - ``(y+θ)*log(y+θ) - θ*log(θ)`` → ``y*log(y+θ) + θ*log1p(y/θ)``
-        - ``lgamma(θ) - lgamma(θ+y)`` → ``-(lgamma(y) - betaln(θ, y))``
+              Rewritten for numerical stability at large theta:
+              - ``(y+θ)*log(y+θ) - θ*log(θ)`` → ``y*log(y+θ) + θ*log1p(y/θ)``
+              - ``lgamma(θ) - lgamma(θ+y)`` → ``_lgamma_diff`` with recurrence-based
+        custom_jvp for stable first and second derivatives via AD
         """
         theta = jnp.exp(self._log_theta[0])
         return _saturated_loglik_jax(y, wt, theta, self._max_y)
@@ -246,6 +248,20 @@ class NegativeBinomial(ExtendedFamily):
         Called inside ``_diff_score`` where ``log_theta`` is a traced
         JAX array.
         """
+        if self._max_y == 0 and hasattr(y, "__len__") and len(y) > 0:
+            # _max_y must be set from the data before calling this method.
+            # A value of 0 with non-empty y means _lgamma_diff scan will
+            # never execute, producing wrong results.
+            import warnings
+
+            y_max = int(jnp.max(y)) if hasattr(y, "shape") else int(max(y))
+            if y_max > 0:
+                warnings.warn(
+                    f"NegativeBinomial._max_y is 0 but max(y)={y_max}. "
+                    "Set family._max_y = int(max(y)) before calling "
+                    "saturated_loglik_theta (normally done by NewtonOptimizer).",
+                    stacklevel=2,
+                )
         theta = jnp.exp(log_theta[0])
         return _saturated_loglik_jax(y, wt, theta, self._max_y)
 
@@ -308,12 +324,6 @@ class NegativeBinomial(ExtendedFamily):
 
 
 # ------------------------------------------------------------------
-# Shared JAX helper for saturated loglik (avoids code duplication
-# between saturated_loglik and saturated_loglik_theta)
-# ------------------------------------------------------------------
-
-
-# ------------------------------------------------------------------
 # Stable lgamma difference with custom_jvp for AD
 # ------------------------------------------------------------------
 
@@ -366,8 +376,12 @@ def _lgamma_diff_jvp(max_y, primals, tangents):
         neg_psi_sum, _ = jax.lax.scan(
             _scan_body, jnp.zeros_like(y), jnp.arange(max_y, dtype=y.dtype)
         )
-        # d(primal)/d(theta) = -neg_psi_sum, chain with dtheta
-        # Also chain dy through d(primal)/d(y) = -digamma(theta+y)
+        # d(primal)/d(theta) = -neg_psi_sum, chain with dtheta.
+        # The dy branch uses standard -digamma(theta+y).  This is fine
+        # because y is integer count data and never differentiated in
+        # practice — the recurrence is only needed for the theta
+        # direction where digamma(theta) - digamma(theta+y) cancels
+        # at large theta.
         tangent_out = -neg_psi_sum * dtheta + (-jsp.digamma(theta + y)) * dy
 
     return primal_out, tangent_out
@@ -393,6 +407,11 @@ def _saturated_loglik_jax(y, wt, theta, max_y):
         _lgamma_diff(theta, y_safe, max_y),
         0.0,
     )
+    # Note: ``theta * log1p(y/theta)`` is optimized for the large-theta
+    # regime (near-Poisson limit) where the original
+    # ``(y+theta)*log(y+theta) - theta*log(theta)`` suffers cancellation.
+    # For very small theta (high overdispersion), ``y/theta`` can be large
+    # but ``log1p`` handles that correctly.
     term = (
         y * jnp.log(y_safe + theta)
         + theta * jnp.log1p(y / theta)

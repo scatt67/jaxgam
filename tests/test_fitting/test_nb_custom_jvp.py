@@ -593,22 +593,6 @@ class TestForwardPassTheta:
             err_msg="Forward and diff-score paths disagree on extended path",
         )
 
-    def test_forward_score_matches_diff_score(self, nb_problem):
-        """Forward pass score matches _diff_score."""
-        fd, params, beta_warm, _ = nb_problem
-        kwargs = _build_diff_score_kwargs(fd, joint_theta=True)
-
-        score_forward, _ = _fit_and_score_impl(params, beta_warm, **kwargs)
-        score_diff = _diff_score(params, beta_warm, **kwargs)
-
-        np.testing.assert_allclose(
-            float(score_forward),
-            float(score_diff),
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="Forward pass and _diff_score scores differ",
-        )
-
 
 class TestJITCompilation:
     """Phase 2 code must JIT-compile (AGENTS.md line 149).

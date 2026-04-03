@@ -303,7 +303,7 @@ def pirls_loop(
         _dev_fn = family.deviance_fn(y, wt)
         _grad_D_eta = jax.grad(_dev_fn, argnums=0)
 
-        def _compute_W_and_z(mu, eta):  # noqa: ARG001
+        def _compute_W_and_z(mu, eta):  # noqa: ARG001  mu unused: observed weights come from d²D/dη², not V(mu)
             """Observed weights and working response from d²D/dη²."""
             dD_deta = _grad_D_eta(eta, log_theta)
             _, d2D_deta2 = jax.jvp(
@@ -311,11 +311,16 @@ def pirls_loop(
                 (eta,),
                 (jnp.ones_like(eta),),
             )
+            # Observed weights: w = 0.5 * d²D/dη².  Unlike Fisher weights,
+            # d²D/dη² can be negative for extended families.  Clamp to
+            # _W_MIN so negative or near-zero values don't cause division
+            # instability in the working response z.
             w = d2D_deta2 * 0.5
-            z = (eta - offset) - dD_deta / jnp.maximum(d2D_deta2, 1e-100)
+            d2D_safe = jnp.where(d2D_deta2 > _W_MIN, d2D_deta2, _W_MIN)
+            z = (eta - offset) - dD_deta / d2D_safe
             return w, z
 
-        def _compute_dev(mu, eta):  # noqa: ARG001
+        def _compute_dev(mu, eta):  # noqa: ARG001  mu unused: deviance computed from eta via pure-function factory
             return _dev_fn(eta, log_theta)
     else:
 
