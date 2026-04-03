@@ -570,23 +570,27 @@ class TestForwardPassTheta:
         assert jnp.isfinite(score), f"Non-finite score: {score}"
         assert jnp.all(jnp.isfinite(pirls_result.coefficients))
 
-    def test_scores_match_between_paths(self, nb_problem):
-        """Score from extended path matches standard path (same theta)."""
+    def test_scores_consistent_forward_and_diff(self, nb_problem):
+        """Forward pass and _diff_score agree on the extended path.
+
+        The extended path uses observed weights (matching R's gam.fit4)
+        while the standard path uses Fisher weights (matching R's
+        gam.fit3), so their scores intentionally differ.  This test
+        verifies internal consistency of the extended path instead.
+        """
         fd, params, beta_warm, _ = nb_problem
-        n_lambda = fd.n_penalties
 
-        kwargs_ext = _build_diff_score_kwargs(fd, joint_theta=True)
-        score_ext = float(_diff_score(params, beta_warm, **kwargs_ext))
+        kwargs = _build_diff_score_kwargs(fd, joint_theta=True)
 
-        kwargs_std = _build_diff_score_kwargs(fd, joint_theta=False)
-        score_std = float(_diff_score(params[:n_lambda], beta_warm, **kwargs_std))
+        score_forward, _ = _fit_and_score_impl(params, beta_warm, **kwargs)
+        score_diff = _diff_score(params, beta_warm, **kwargs)
 
         np.testing.assert_allclose(
-            score_ext,
-            score_std,
+            float(score_forward),
+            float(score_diff),
             rtol=STRICT.rtol,
             atol=STRICT.atol,
-            err_msg="Extended and standard path scores differ",
+            err_msg="Forward and diff-score paths disagree on extended path",
         )
 
     def test_forward_score_matches_diff_score(self, nb_problem):

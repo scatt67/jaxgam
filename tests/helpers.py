@@ -115,6 +115,11 @@ def _generate_family_data(family_name: str, n: int | None = None) -> pd.DataFram
         eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
         mu = np.exp(eta)
         y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        eta = np.sin(2 * np.pi * x) + 0.5
+        mu = np.exp(eta)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
     else:
         raise ValueError(f"Unknown family: {family_name}")
 

@@ -1,10 +1,8 @@
-"""32-Cell Validation Matrix: systematic R comparison for all smooth x family combos.
+"""35-Cell Validation Matrix: systematic R comparison for all smooth x family combos.
 
 Tests cover every cell in the v1.0 surface (design.md §1.2):
-- 3 smooth types (tp, cr, te) x 4 families = 12 cells
-- 2 tensor types (te, ti) x 4 families = 8 cells
-- 3 factor-by types (tp_by, cr_by, te_by) x 4 families = 12 cells
-- Total ~32 (with overlap, ~28 unique)
+- 7 smooth configs (tp, cr, te, ti, tp_by, cr_by, te_by) x 5 families = 35 cells
+- Families: gaussian, binomial, poisson, gamma, nb
 
 Plus hard-gate invariants (§18.1) that must hold for all cells without R.
 
@@ -53,6 +51,11 @@ def _make_single_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
         eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
         mu = np.exp(eta)
         y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        eta = np.sin(2 * np.pi * x) + 1.0
+        mu = np.exp(eta)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
     else:
         raise ValueError(f"Unknown family: {family_name}")
 
@@ -78,6 +81,10 @@ def _make_two_smooth_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
     elif family_name == "gamma":
         mu = np.exp(eta * 0.3 + 1.0)
         y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
     else:
         raise ValueError(f"Unknown family: {family_name}")
 
@@ -108,6 +115,10 @@ def _make_factor_by_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
     elif family_name == "gamma":
         mu = np.exp(eta * 0.3 + 1.0)
         y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
     else:
         raise ValueError(f"Unknown family: {family_name}")
 
@@ -145,6 +156,10 @@ def _make_factor_by_2d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
     elif family_name == "gamma":
         mu = np.exp(eta * 0.3 + 1.0)
         y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
     else:
         raise ValueError(f"Unknown family: {family_name}")
 
@@ -210,7 +225,7 @@ SMOOTH_CONFIGS: dict[str, SmoothConfig] = {
     ),
 }
 
-FAMILIES = ["gaussian", "binomial", "poisson", "gamma"]
+FAMILIES = ["gaussian", "binomial", "poisson", "gamma", "nb"]
 
 
 # ---------------------------------------------------------------------------
@@ -244,8 +259,8 @@ def _r_tol(smooth_key: str, family_name: str):
 
 def _fitted_tol(smooth_key: str, family_name: str):
     """Tolerance for fitted value comparison, wider for flat REML surfaces."""
-    # Tensor factor-by with GLM: 6+ sp, very flat REML surface
-    if smooth_key in ("te_by",) and family_name in ("binomial", "poisson"):
+    # Tensor factor-by with GLM/NB: 6+ sp, very flat REML surface
+    if smooth_key in ("te_by",) and family_name in ("binomial", "poisson", "nb"):
         return LOOSE
     # Factor-by with binomial: multiple sp + binary response
     if smooth_key.endswith("_by") and family_name == "binomial":
@@ -391,6 +406,23 @@ class TestValidationMatrix:
             err_msg=f"[{smooth_key}-{family_name}] self-prediction roundtrip",
         )
 
+    def test_theta_vs_r(self, cell):
+        """Estimated theta matches R (extended family only)."""
+        smooth_key, family_name, model, r_result = cell
+        r_theta = r_result.get("theta")
+        if r_theta is None:
+            pytest.skip("Not an extended family")
+        # Access theta from family object (GAMResults.theta added in PR 6)
+        py_theta = float(model.family.get_theta(transformed=True)[0])
+        tol = _r_tol(smooth_key, family_name)
+        np.testing.assert_allclose(
+            py_theta,
+            r_theta,
+            rtol=tol.rtol,
+            atol=tol.atol,
+            err_msg=f"[{smooth_key}-{family_name}] theta",
+        )
+
 
 # ---------------------------------------------------------------------------
 # B. TestHardGateInvariants — structural invariants (no R required)
@@ -516,6 +548,14 @@ class TestHardGateInvariants:
                                 f"[{smooth_key}-{family_name}] "
                                 f"S[{j}][{k}] has negative eigenvalue: {eigs.min()}"
                             )
+
+    def test_theta_positive(self, fitted_model):
+        """Estimated theta > 0 for extended families."""
+        smooth_key, family_name, model = fitted_model
+        if not hasattr(model.family, "n_theta") or model.family.n_theta == 0:
+            pytest.skip("Not an extended family with estimated theta")
+        theta = float(model.family.get_theta(transformed=True)[0])
+        assert theta > 0, f"[{smooth_key}-{family_name}] non-positive theta: {theta}"
 
     def test_model_matrix_rank(self, fitted_model):
         """Rank(X) >= p - total_null_space_dim (§18.1 invariant 4)."""

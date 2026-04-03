@@ -47,6 +47,7 @@ class RBridge:
         "binomial": "binomial()",
         "poisson": "poisson()",
         "gamma": "Gamma()",
+        "nb": "nb()",
     }
 
     _ro: Any
@@ -167,6 +168,7 @@ class RBridge:
             "binomial": self._stats.binomial,
             "poisson": self._stats.poisson,
             "gamma": self._stats.Gamma,
+            "nb": self._mgcv.nb,
         }
         func = family_funcs.get(family)
         if func is None:
@@ -254,6 +256,16 @@ class RBridge:
         edf = np.array(r_summary.rx2("edf"), dtype=np.float64)
         null_deviance = float(np.array(r_model.rx2("null.deviance"))[0])
 
+        # Extract theta for extended families (e.g. NB)
+        theta = None
+        try:
+            family_obj = r_model.rx2("family")
+            get_theta = family_obj.rx2("getTheta")
+            if get_theta is not None:
+                theta = float(np.array(get_theta(True))[0])
+        except Exception:
+            pass
+
         return {
             "coefficients": coefficients,
             "fitted_values": fitted_values,
@@ -265,6 +277,7 @@ class RBridge:
             "reml_scale": reml_scale,
             "Vp": vp,
             "reml_score": reml_score,
+            "theta": theta,
         }
 
     def _fit_subprocess(
@@ -304,6 +317,10 @@ rs <- model$reml.scale
 if (!is.null(rs)) {{
     writeLines(format(rs, digits=15), "{tmpdir}/reml_scale.txt")
 }}
+fam <- model$family
+if (!is.null(fam$getTheta)) {{
+    writeLines(format(fam$getTheta(TRUE), digits=15), "{tmpdir}/theta.txt")
+}}
 """
             with open(script_path, "w") as f:
                 f.write(script)
@@ -338,6 +355,9 @@ if (!is.null(rs)) {{
                 else scale
             )
 
+            theta_path = os.path.join(tmpdir, "theta.txt")
+            theta = _read_scalar("theta.txt") if os.path.exists(theta_path) else None
+
             return {
                 "coefficients": _read_vec("coefficients.csv"),
                 "fitted_values": _read_vec("fitted_values.csv"),
@@ -349,6 +369,7 @@ if (!is.null(rs)) {{
                 "reml_scale": reml_scale,
                 "Vp": vp,
                 "reml_score": _read_scalar("reml_score.txt"),
+                "theta": theta,
             }
 
     # ------------------------------------------------------------------ #

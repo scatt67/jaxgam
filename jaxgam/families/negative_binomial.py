@@ -254,7 +254,10 @@ class NegativeBinomial(ExtendedFamily):
 
         ``log_theta_vec`` has shape ``(n_theta,)`` = ``(1,)`` for NB.
 
-        Used by the custom_jvp for IFT theta terms and joint JVPs.
+        Used by the custom_jvp for IFT theta terms and joint JVPs,
+        and by ``pirls_loop`` for penalized deviance when ``log_theta``
+        is passed as a dynamic argument.
+
         Captures ``(y, wt, link)`` in closure; theta is an explicit arg.
         """
         link_inv = self.link.inverse

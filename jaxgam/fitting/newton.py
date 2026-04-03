@@ -209,12 +209,25 @@ def _diff_score(
     if family.n_theta > 0 and joint_theta:
         # --- Extended family path: 3 primals (S_lambda, log_theta, beta) ---
         # Theta enters the IFT via d²D/(dη dθ) and the joint JVPs for
-        # deviance and working weights. See design.md Section 6.2.
+        # deviance and observed weights. See design.md Section 6.2.
+        #
+        # PIRLS uses observed weights ``w = 0.5 * d²D/dη²`` (matching
+        # R's gam.fit4), so the custom_jvp must differentiate through
+        # the same observed weight function for consistency.
         dev_fn = family.deviance_fn(y, wt)
-        ww_fn = family.working_weights_fn(wt)
+        _grad_D_eta = jax.grad(dev_fn, argnums=0)
+
+        def _obs_ww(eta_arg, lt_arg):
+            """Observed weight: ``0.5 * d²D/dη²``."""
+            _, d2D = jax.jvp(
+                lambda e: _grad_D_eta(e, lt_arg),
+                (eta_arg,),
+                (jnp.ones_like(eta_arg),),
+            )
+            return d2D * 0.5
 
         @jax.custom_jvp
-        def _pirls_out_ext(S_lam, lt, bw):  # noqa: ARG001
+        def _pirls_out_ext(S_lam, lt, bw):
             result = pirls_loop(
                 X,
                 y,
@@ -224,6 +237,7 @@ def _diff_score(
                 wt,
                 offset,
                 tol=pirls_tol,
+                log_theta=lt,
             )
             return result.coefficients, result.XtWX, result.deviance
 
@@ -240,12 +254,7 @@ def _diff_score(
             # weight (EDeta2), for the IFT solve. Since D = Σ d_i(η_i, θ)
             # is element-wise, the Hessian is diagonal and JVP with ones
             # gives the diagonal efficiently.
-            grad_D_eta = jax.grad(dev_fn, argnums=0)
-            _, d2D_deta2 = jax.jvp(
-                lambda e: grad_D_eta(e, lt),
-                (eta,),
-                (jnp.ones_like(eta),),
-            )  # diagonal of d²D/dη², shape (n,)
+            d2D_deta2 = _obs_ww(eta, lt) * 2.0  # undo the 0.5 factor
             H_obs = (X.T * d2D_deta2) @ X + 2 * S_lam
             L_obs, _ = cho_factor(H_obs)
 
@@ -254,15 +263,15 @@ def _diff_score(
             # d/dθ: (X' d²D/dη² X + 2S) dβ + X' d²D/(dη dθ) dθ = 0
             # d/drho: (X' d²D/dη² X + 2S) dβ + 2 dS β = 0
             _, d_grad_D = jax.jvp(
-                lambda lt_: grad_D_eta(eta, lt_), (lt,), (dlt,)
+                lambda lt_: _grad_D_eta(eta, lt_), (lt,), (dlt,)
             )  # d²D/(dη dθ) · dθ, shape (n,)
             rhs = 2 * dS @ beta + X.T @ d_grad_D
             dbeta = cho_solve((L_obs, True), -rhs)
             deta = X @ dbeta
 
-            # Joint JVPs over (eta, theta) for deviance and working weights
+            # Joint JVPs over (eta, theta) for deviance and observed weights
             _, ddev = jax.jvp(dev_fn, (eta, lt), (deta, dlt))
-            _, dW = jax.jvp(ww_fn, (eta, lt), (deta, dlt))
+            _, dW = jax.jvp(_obs_ww, (eta, lt), (deta, dlt))
             dXtWX = (X.T * dW) @ X
 
             return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
@@ -431,9 +440,8 @@ def _fit_and_score_impl(
     ``pirls_result`` is a registered JAX pytree.
 
     For extended families with ``joint_theta=True``, ``log_theta`` is
-    parsed from ``params`` and used for the saturated log-likelihood.
-    PIRLS itself reads theta from ``family._log_theta`` which must be
-    synced by the caller (``family.put_theta()``) before each call.
+    parsed from ``params`` and passed as a dynamic JAX argument to
+    both the saturated log-likelihood and ``pirls_loop``.
 
     Returns
     -------
@@ -450,6 +458,8 @@ def _fit_and_score_impl(
         n_theta = family.n_theta
         log_theta = params[idx : idx + n_theta]
         idx += n_theta
+    else:
+        log_theta = None
 
     phi = jnp.exp(params[idx]) if joint_scale else jnp.array(1.0)
 
@@ -469,6 +479,7 @@ def _fit_and_score_impl(
         wt,
         offset,
         tol=pirls_tol,
+        log_theta=log_theta,
     )
 
     core = _criterion_core(
@@ -1165,12 +1176,14 @@ class NewtonOptimizer:
         log_lambda = params[:n_lambda]
         grad_lambda = gradient[:n_lambda]
 
-        # Extract theta for extended families
+        # Extract theta for extended families and sync family state
+        # for Phase 3 post-estimation (predict, summary, plot).
         theta = None
         if self._joint_theta:
             n_theta = self._fd.family.n_theta
             log_theta = params[n_lambda : n_lambda + n_theta]
             theta = float(jnp.exp(log_theta[0]))
+            self._fd.family.put_theta(np.asarray(log_theta))
 
         return NewtonResult(
             log_lambda=log_lambda,
@@ -1339,14 +1352,6 @@ class NewtonOptimizer:
             params = params_new
             pirls_result = pirls_new
             score = score_new
-
-            # Sync theta in family object for next PIRLS run.
-            # PIRLS reads family._log_theta (baked in at JIT trace time),
-            # so put_theta ensures the family state matches params.
-            if self._joint_theta:
-                n_lam = fd.n_penalties
-                n_th = fd.family.n_theta
-                fd.family.put_theta(np.asarray(params[n_lam : n_lam + n_th]))
 
             criterion = self._make_criterion(pirls_result)
 
