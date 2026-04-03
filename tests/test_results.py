@@ -9,6 +9,7 @@ Tests cover:
 - summary() returns GAMSummary
 - Immutability (assigning to a frozen field raises)
 - __repr__() output
+- NB post-estimation: theta in results, summary, predict roundtrip
 
 Design doc reference: docs/refactor_gam_api/implementation_plan.md Phase 2
 """
@@ -19,6 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.registry import get_family
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.newton import newton_optimize
@@ -279,3 +281,177 @@ class TestRepr:
         """repr includes deviance explained."""
         r = repr(gam_results)
         assert "deviance_explained=" in r
+
+
+# ---------------------------------------------------------------------------
+# NB post-estimation tests (PR 6)
+# ---------------------------------------------------------------------------
+
+
+def _make_nb_data(n: int = 200, seed: int = SEED, true_theta: float = 2.0):
+    """Generate NB count data for post-estimation tests."""
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, 1, n)
+    eta = np.sin(2 * np.pi * x) + 0.5
+    mu = np.exp(eta)
+    y = rng.negative_binomial(
+        n=true_theta, p=true_theta / (mu + true_theta), size=n
+    ).astype(float)
+    return pd.DataFrame({"x": x, "y": y})
+
+
+def _fit_nb_gam(family_obj=None, formula="y ~ s(x, k=10, bs='cr')"):
+    """Fit NB GAM and return GAMResults via the full API pipeline."""
+    import copy
+
+    data = _make_nb_data()
+    if family_obj is None:
+        family_obj = NegativeBinomial()
+    family_obj = copy.copy(family_obj)
+
+    spec = parse_formula(formula)
+    setup = ModelSetup.build(spec, data, None, None)
+    fd = FittingData.from_setup(setup, family_obj, device=None)
+    result = newton_optimize(fd, "REML")
+
+    gam_result = GAMResults._from_fit(
+        result=result,
+        setup=setup,
+        spec=spec,
+        data=data,
+        family=family_obj,
+        fd=fd,
+        lambda_strategy="newton_reml",
+        formula=formula,
+        method="REML",
+    )
+    return gam_result, data
+
+
+class TestNBPostEstimation:
+    """NB post-estimation: theta in results, summary, predict roundtrip."""
+
+    @pytest.fixture(scope="class")
+    def nb_result(self):
+        """Fit NB model via _from_fit pipeline."""
+        return _fit_nb_gam()
+
+    def test_theta_populated(self, nb_result):
+        """result.theta is populated for estimated NB."""
+        gam_result, _ = nb_result
+        assert gam_result.theta is not None
+        assert isinstance(gam_result.theta, float)
+        assert gam_result.theta > 0
+
+    def test_theta_matches_family(self, nb_result):
+        """result.theta matches the family's stored theta."""
+        gam_result, _ = nb_result
+        family_theta = float(gam_result.family.get_theta(transformed=True)[0])
+        np.testing.assert_allclose(
+            gam_result.theta,
+            family_theta,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_predict_roundtrip(self, nb_result):
+        """predict(training_data) reproduces fitted_values."""
+        gam_result, data = nb_result
+        pred = gam_result.predict(newdata=data)
+        np.testing.assert_allclose(
+            pred,
+            gam_result.fitted_values,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="NB predict roundtrip failed",
+        )
+
+    def test_self_predict_roundtrip(self, nb_result):
+        """predict() with no newdata matches fitted_values."""
+        gam_result, _ = nb_result
+        pred = gam_result.predict()
+        np.testing.assert_allclose(
+            pred,
+            gam_result.fitted_values,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="NB self-predict roundtrip failed",
+        )
+
+    def test_summary_displays_theta(self, nb_result):
+        """Summary output includes theta."""
+        gam_result, _ = nb_result
+        from jaxgam.summary.summary import GAMSummary
+
+        s = gam_result.summary()
+        assert isinstance(s, GAMSummary)
+        assert s.theta is not None
+        assert s.theta == gam_result.theta
+        # Check formatted output contains "Theta:"
+        formatted = str(s)
+        assert "Theta:" in formatted
+
+    def test_repr_contains_theta(self, nb_result):
+        """repr includes theta for NB."""
+        gam_result, _ = nb_result
+        r = repr(gam_result)
+        assert "theta=" in r
+
+    def test_summary_family_name(self, nb_result):
+        """Summary shows 'nb' as family name."""
+        gam_result, _ = nb_result
+        s = gam_result.summary()
+        assert s.family_name == "nb"
+
+
+class TestStandardFamilyThetaNone:
+    """Standard families have theta=None in results and summary."""
+
+    def test_gaussian_theta_none(self, gam_results):
+        """Gaussian result.theta is None."""
+        assert gam_results.theta is None
+
+    def test_gaussian_repr_no_theta(self, gam_results):
+        """Gaussian repr does not include theta."""
+        r = repr(gam_results)
+        assert "theta=" not in r
+
+    def test_gaussian_summary_no_theta(self, gam_results):
+        """Gaussian summary does not show theta."""
+        s = gam_results.summary()
+        assert s.theta is None
+        formatted = str(s)
+        assert "Theta:" not in formatted
+
+
+class TestNBFixedThetaPostEstimation:
+    """Fixed-theta NB: theta=None in results (n_theta=0, not estimated)."""
+
+    @pytest.fixture(scope="class")
+    def fixed_nb_result(self):
+        """Fit NB(theta=2) fixed model."""
+        return _fit_nb_gam(family_obj=NegativeBinomial(theta=2))
+
+    def test_theta_is_none(self, fixed_nb_result):
+        """Fixed-theta NB has result.theta=None (theta not estimated)."""
+        gam_result, _ = fixed_nb_result
+        assert gam_result.theta is None
+
+    def test_predict_roundtrip(self, fixed_nb_result):
+        """predict() roundtrip works for fixed-theta NB."""
+        gam_result, _ = fixed_nb_result
+        pred = gam_result.predict()
+        np.testing.assert_allclose(
+            pred,
+            gam_result.fitted_values,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_summary_no_theta(self, fixed_nb_result):
+        """Fixed-theta NB summary does not show Theta line."""
+        gam_result, _ = fixed_nb_result
+        s = gam_result.summary()
+        assert s.theta is None
+        formatted = str(s)
+        assert "Theta:" not in formatted

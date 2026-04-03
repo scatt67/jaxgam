@@ -86,6 +86,9 @@ class GAMResults:
     weights: np.ndarray  # (n,) prior weights
     offset: np.ndarray | None
 
+    # -- Extended family parameters -----------------------------------------
+    theta: float | None  # NB dispersion (None for standard families)
+
     # -- Metadata -----------------------------------------------------------
     n: int
     execution_path: str
@@ -209,6 +212,7 @@ class GAMResults:
             y=setup.y,
             weights=setup.weights,
             offset=setup.offset,
+            theta=result.theta,
             n=setup.n_obs,
             execution_path="jax",
             lambda_strategy=lambda_strategy,
@@ -376,10 +380,14 @@ class GAMResults:
             if self.null_deviance > 0
             else float("nan")
         )
+        theta_line = ""
+        if self.theta is not None:
+            theta_line = f"  theta={self.theta:.4f},\n"
         return (
             f"GAMResults(\n"
             f"  formula='{self.formula}',\n"
             f"  family='{family_name}',\n"
+            f"{theta_line}"
             f"  converged={self.converged},\n"
             f"  deviance_explained={dev_explained:.4f},\n"
             f"  n={self.n}, edf_total={self.edf_total:.2f}\n"

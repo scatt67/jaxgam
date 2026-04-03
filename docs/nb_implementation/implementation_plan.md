@@ -534,10 +534,10 @@ Exception: `te_by-nb` uses rtol=5% (6+ sp + theta = flattest REML surface).
 
 ### Tests
 
-- [ ] `result.theta` matches estimated theta
-- [ ] Summary displays theta
-- [ ] `predict(result, newdata)` reproduces fitted values (roundtrip)
-- [ ] Standard families: `result.theta` is None
+- [x] `result.theta` matches estimated theta
+- [x] Summary displays theta
+- [x] `predict(result, newdata)` reproduces fitted values (roundtrip)
+- [x] Standard families: `result.theta` is None
 
 ### Acceptance Criteria
 
@@ -622,6 +622,8 @@ print(f"Estimated theta: {results.theta:.2f}")
 
 - Demo script produces PNG
 - Benchmark includes NB rows in CSV output
+- Benchmark plots in README include NB
+- Benchmark README section is updated with NB
 - Docs updated with NB examples and API reference
 - `R_SOURCE_MAP.md` has NB entries
 
