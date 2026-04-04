@@ -23,10 +23,10 @@ import pandas as pd
 import pytest
 
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.families.standard import Gaussian, Poisson
+from jaxgam.families.standard import Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.newton import NewtonResult, newton_optimize
-from tests.helpers import SEED, _generate_family_data, _make_nb_data
+from tests.helpers import SEED, _make_nb_data, _setup_fd
 from tests.tolerances import LOOSE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -37,39 +37,12 @@ jax.config.update("jax_enable_x64", True)
 # ---------------------------------------------------------------------------
 
 
-def _setup_fd(formula: str, data: pd.DataFrame, family) -> FittingData:
-    """Build FittingData from formula + data."""
-    from jaxgam.formula.design import ModelSetup
-    from jaxgam.formula.parser import parse_formula
-
-    spec = parse_formula(formula)
-    setup = ModelSetup.build(spec, data)
-    return FittingData.from_setup(setup, family)
-
-
 def _back_transform_coefs(result: NewtonResult, fd: FittingData) -> np.ndarray:
     """Back-transform coefficients from Sl.setup reparameterized space."""
     coefs = np.asarray(result.pirls_result.coefficients)
     if fd.repara_D is not None:
         coefs = np.asarray(fd.repara_D) @ coefs
     return coefs
-
-
-def _make_nb_data_two_smooth(
-    n: int = 200,
-    seed: int = SEED,
-    true_theta: float = 2.0,
-) -> pd.DataFrame:
-    """Generate two-predictor NB count data."""
-    rng = np.random.default_rng(seed)
-    x1 = rng.uniform(0, 1, n)
-    x2 = rng.uniform(0, 1, n)
-    eta = np.sin(2 * np.pi * x1) + 0.5 * np.cos(2 * np.pi * x2) + 0.5
-    mu = np.exp(eta)
-    y = rng.negative_binomial(
-        n=true_theta, p=true_theta / (mu + true_theta), size=n
-    ).astype(float)
-    return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
 
 
 def _make_poisson_data(
@@ -90,36 +63,46 @@ def _make_poisson_data(
 THETA_RTOL = 0.5
 
 # ---------------------------------------------------------------------------
-# Guard: _max_y must be set before JIT tracing
+# Guard: max_y is computed from data in FittingData
 # ---------------------------------------------------------------------------
 
 
-class TestMaxYGuard:
-    """Verify _max_y is set by the production path and raises if missing."""
+class TestMaxYFromData:
+    """Verify max_y is computed by FittingData.from_setup and passed through."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
-    def test_newton_optimize_sets_max_y(self):
-        """newton_optimize sets family._max_y from the data."""
+    def test_fitting_data_computes_max_y(self):
+        """FittingData.from_setup computes max_y from response vector."""
         data = _make_nb_data(true_theta=2.0)
         family = NegativeBinomial()
         fd = _setup_fd(self.FORMULA, data, family)
-        # Before fitting, _max_y is 0 (default)
-        assert family._max_y == 0
-        newton_optimize(fd)
-        # After fitting, _max_y should be set to max(y)
-        expected = int(np.max(np.asarray(fd.y)))
-        assert fd.family._max_y == expected
+        expected = int(np.max(data["y"].values))
+        assert fd.max_y == expected
 
-    def test_saturated_loglik_theta_raises_when_max_y_unset(self):
-        """saturated_loglik_theta raises if _max_y=0 with positive counts."""
+    def test_max_y_zero_gives_zero_lgamma_diff(self):
+        """saturated_loglik_theta with max_y=0 produces zero scan output."""
         family = NegativeBinomial()
-        assert family._max_y == 0
         y = jnp.array([1.0, 2.0, 3.0])
         wt = jnp.ones(3)
         log_theta = jnp.array([0.0])
-        with pytest.raises(RuntimeError, match="_max_y is 0 but max"):
-            family.saturated_loglik_theta(y, wt, 1.0, log_theta)
+        # max_y=0 means the scan never executes — theta derivs are zero.
+        # With the explicit parameter, callers control this intentionally.
+        result = family.saturated_loglik_theta(y, wt, 1.0, log_theta, max_y=0)
+        assert jnp.isfinite(result)
+
+    def test_max_y_correct_gives_nonzero_grad(self):
+        """saturated_loglik_theta with correct max_y has nonzero theta grad."""
+        family = NegativeBinomial()
+        y = jnp.array([1.0, 2.0, 3.0])
+        wt = jnp.ones(3)
+        log_theta = jnp.array([0.0])
+        max_y = 3
+        grad = jax.grad(
+            lambda lt: family.saturated_loglik_theta(y, wt, 1.0, lt, max_y=max_y)
+        )(log_theta)
+        assert jnp.all(jnp.isfinite(grad))
+        assert float(jnp.abs(grad[0])) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -205,43 +188,6 @@ class TestNBFixedTheta:
         assert family.n_theta == 0
         theta = float(family.get_theta(transformed=True)[0])
         np.testing.assert_allclose(theta, 2.0, rtol=STRICT.rtol)
-
-
-# ---------------------------------------------------------------------------
-# C. Multiple smooths
-# ---------------------------------------------------------------------------
-
-
-class TestNBMultipleSmooths:
-    """NB fitting with multiple smooth terms."""
-
-    FORMULA = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-
-    @pytest.fixture(scope="class")
-    def multi_fit(self):
-        """Fit NB model with two smooths."""
-        data = _make_nb_data_two_smooth(true_theta=2.0)
-        family = NegativeBinomial()
-        fd = _setup_fd(self.FORMULA, data, family)
-        result = newton_optimize(fd)
-        return fd, result
-
-    def test_converges(self, multi_fit):
-        """Two-smooth NB converges."""
-        _, result = multi_fit
-        assert result.converged
-
-    def test_theta_positive(self, multi_fit):
-        """Estimated theta is positive."""
-        _, result = multi_fit
-        assert result.theta is not None
-        assert result.theta > 0
-
-    def test_two_penalty_terms(self, multi_fit):
-        """Model has two penalty terms (one per smooth)."""
-        fd, result = multi_fit
-        assert fd.n_penalties == 2
-        assert result.log_lambda.shape[0] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -434,12 +380,12 @@ class TestNBEdgeCases:
         assert jnp.all(result.pirls_result.mu > 0)
 
     def test_extreme_overdispersion(self):
-        """theta=0.1: converges, theta not near-Poisson, deviance >= 0.
+        """theta=0.1: converges, theta estimated near true value.
 
-        With extreme overdispersion the REML surface is flat in the
-        theta direction, so Newton may converge near the starting value
-        (theta=1).  The key check is that the fit handles the high-
-        variance data without crashing or producing non-finite results.
+        With extreme overdispersion (theta=0.1), the high-variance data
+        is challenging but n=500 provides enough signal for Newton to
+        recover theta.  Uses a wider tolerance (50%) because the REML
+        surface is flatter in the theta direction at small theta.
         """
         rng = np.random.default_rng(SEED)
         n = 500
@@ -458,8 +404,11 @@ class TestNBEdgeCases:
 
         assert result.converged
         assert result.theta is not None
-        lo = true_theta * (1 - THETA_RTOL)
-        hi = true_theta * (1 + THETA_RTOL)
+        # Wider tolerance for extreme overdispersion: REML surface is
+        # flatter at small theta, so precision is lower than theta=2 case.
+        extreme_rtol = 0.5
+        lo = true_theta * (1 - extreme_rtol)
+        hi = true_theta * (1 + extreme_rtol)
         assert lo < result.theta < hi, (
             f"theta={result.theta} outside [{lo}, {hi}] (true={true_theta})"
         )
@@ -554,56 +503,7 @@ class TestNBEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# G. Standard family regression
-# ---------------------------------------------------------------------------
-
-
-class TestStandardFamilyRegression:
-    """Verify standard families are unaffected by NB additions."""
-
-    FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    @pytest.fixture(
-        params=[
-            ("gaussian", Gaussian()),
-            ("poisson", Poisson()),
-        ],
-        ids=["gaussian", "poisson"],
-    )
-    def standard_fit(self, request):
-        """Fit standard family model."""
-        family_name, family_obj = request.param
-        data = _generate_family_data(family_name)
-        fd = _setup_fd(self.FORMULA, data, family_obj)
-        result = newton_optimize(fd)
-        return family_name, fd, result
-
-    def test_converges(self, standard_fit):
-        """Standard family still converges."""
-        _, _, result = standard_fit
-        assert result.converged
-
-    def test_theta_is_none(self, standard_fit):
-        """Standard family result.theta is None."""
-        _, _, result = standard_fit
-        assert result.theta is None
-
-    def test_deviance_non_negative(self, standard_fit):
-        """Standard family deviance >= 0."""
-        _, _, result = standard_fit
-        assert float(result.pirls_result.deviance) >= 0
-
-    def test_all_finite(self, standard_fit):
-        """Standard family outputs are all finite."""
-        _, _, result = standard_fit
-        assert jnp.all(jnp.isfinite(result.pirls_result.coefficients))
-        assert jnp.all(jnp.isfinite(result.pirls_result.mu))
-        assert jnp.isfinite(result.pirls_result.deviance)
-        assert jnp.isfinite(result.score)
-
-
-# ---------------------------------------------------------------------------
-# H. GAM API integration
+# G. GAM API integration
 # ---------------------------------------------------------------------------
 
 

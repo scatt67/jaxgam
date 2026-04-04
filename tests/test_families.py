@@ -1262,9 +1262,6 @@ class TestExtendedFamilyContract:
     def test_data(self, efamily):
         """Family-appropriate (y, mu, wt) for the current efamily."""
         y, mu, wt = _extended_family_test_data(efamily)
-        # Set _max_y for _lgamma_diff scan (normally done by NewtonOptimizer)
-        if hasattr(efamily, "_max_y"):
-            efamily._max_y = int(np.max(y))
         return y, mu, wt
 
     def test_is_extended_and_exponential(self, efamily) -> None:
@@ -1347,9 +1344,12 @@ class TestExtendedFamilyContract:
         y, _mu, wt = test_data
         y, wt = jnp.array(y), jnp.array(wt)
         log_theta = jnp.array(efamily.get_theta())
+        max_y = int(np.max(np.asarray(y)))
 
-        ls_std = float(efamily.saturated_loglik(y, wt, 1.0))
-        ls_theta = float(efamily.saturated_loglik_theta(y, wt, 1.0, log_theta))
+        ls_std = float(efamily.saturated_loglik(y, wt, 1.0, max_y=max_y))
+        ls_theta = float(
+            efamily.saturated_loglik_theta(y, wt, 1.0, log_theta, max_y=max_y)
+        )
         np.testing.assert_allclose(
             ls_theta,
             ls_std,
@@ -1410,10 +1410,11 @@ class TestExtendedFamilyContract:
         y, _mu, wt = test_data
         y, wt = jnp.array(y), jnp.array(wt)
         log_theta = jnp.array(efamily.get_theta())
+        max_y = int(np.max(np.asarray(y)))
 
-        grad_ls = jax.grad(efamily.saturated_loglik_theta, argnums=3)(
-            y, wt, 1.0, log_theta
-        )
+        grad_ls = jax.grad(
+            lambda lt: efamily.saturated_loglik_theta(y, wt, 1.0, lt, max_y=max_y)
+        )(log_theta)
         assert jnp.all(jnp.isfinite(grad_ls)), "d(ls_sat)/d(log_theta) not finite"
 
 
@@ -1558,8 +1559,6 @@ class TestExtendedFamilyAD:
     @pytest.fixture
     def test_data(self, efamily):
         y, mu, wt = _extended_family_test_data(efamily)
-        if hasattr(efamily, "_max_y"):
-            efamily._max_y = int(np.max(y))
         return y, mu, wt
 
     # ------------------------------------------------------------------
@@ -1571,17 +1570,15 @@ class TestExtendedFamilyAD:
         y, _mu, wt = test_data
         y, wt = jnp.array(y), jnp.array(wt)
         log_theta = jnp.array(efamily.get_theta())
+        max_y = int(np.max(np.asarray(y)))
 
-        ad_grad = np.asarray(
-            jax.grad(efamily.saturated_loglik_theta, argnums=3)(y, wt, 1.0, log_theta)
-        )
+        def _ls(lt):
+            return efamily.saturated_loglik_theta(y, wt, 1.0, lt, max_y=max_y)
+
+        ad_grad = np.asarray(jax.grad(_ls)(log_theta))
         # Larger eps to reduce cancellation error when |ls_sat| >> |gradient|
         # (near-Poisson regime: ls_sat ~ 82000, gradient ~ 0.003).
-        fd_grad = _central_fd_grad(
-            lambda lt: efamily.saturated_loglik_theta(y, wt, 1.0, lt),
-            log_theta,
-            eps=1e-4,
-        )
+        fd_grad = _central_fd_grad(_ls, log_theta, eps=1e-4)
         np.testing.assert_allclose(
             ad_grad,
             fd_grad,
@@ -1595,9 +1592,10 @@ class TestExtendedFamilyAD:
         y, _mu, wt = test_data
         y, wt = jnp.array(y), jnp.array(wt)
         log_theta = jnp.array(efamily.get_theta())
+        max_y = int(np.max(np.asarray(y)))
 
         def ls_fn(lt):
-            return efamily.saturated_loglik_theta(y, wt, 1.0, lt)
+            return efamily.saturated_loglik_theta(y, wt, 1.0, lt, max_y=max_y)
 
         ad_hess = np.asarray(jax.hessian(ls_fn)(log_theta))
 

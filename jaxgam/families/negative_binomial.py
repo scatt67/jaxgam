@@ -69,7 +69,7 @@ class NegativeBinomial(ExtendedFamily):
     >>> fam = NegativeBinomial(theta=2, fixed=True) # fix theta = 2
     """
 
-    family_name: str = "nb"  # type: ignore[assignment]
+    family_name: str = "nb"
     scale_known: bool = True  # phi = 1 for NB
     response_support = NON_NEGATIVE
 
@@ -89,9 +89,6 @@ class NegativeBinomial(ExtendedFamily):
             )
         self._log_theta = np.array([np.log(theta)])
         self.n_theta: int = 0 if fixed else 1
-        # max(y) for the lax.scan in _lgamma_diff. Set from data before
-        # JIT compilation (e.g., in NewtonOptimizer.__init__).
-        self._max_y: int = 0
 
     @property
     def default_link(self) -> Link:
@@ -148,6 +145,8 @@ class NegativeBinomial(ExtendedFamily):
         y: np.ndarray,
         wt: np.ndarray,
         scale: float,  # noqa: ARG002
+        *,
+        max_y: int = 0,
     ) -> float:
         """Saturated log-likelihood (R's family$ls).  Phase 2 only (JAX).
 
@@ -159,7 +158,7 @@ class NegativeBinomial(ExtendedFamily):
           custom_jvp for stable first and second derivatives via AD
         """
         theta = jnp.exp(self._log_theta[0])
-        return _saturated_loglik_jax(y, wt, theta, self._max_y)
+        return _saturated_loglik_jax(y, wt, theta, max_y)
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -241,26 +240,23 @@ class NegativeBinomial(ExtendedFamily):
         wt: np.ndarray,
         scale: float,  # noqa: ARG002
         log_theta: np.ndarray,
+        *,
+        max_y: int = 0,
     ):
         """Saturated log-likelihood with explicit theta for AD trace.
 
         ``log_theta`` has shape ``(n_theta,)`` = ``(1,)`` for NB.
         Called inside ``_diff_score`` where ``log_theta`` is a traced
         JAX array.
+
+        Parameters
+        ----------
+        max_y : int
+            Maximum count in ``y``. Controls the ``lax.scan`` loop bound
+            in ``_lgamma_diff``. Must be a compile-time constant.
         """
-        if self._max_y == 0 and hasattr(y, "__len__") and len(y) > 0:
-            # _max_y must be set from the data before calling this method.
-            # A value of 0 with non-empty y means _lgamma_diff scan will
-            # never execute, producing zero theta derivatives silently.
-            y_max = int(jnp.max(y)) if hasattr(y, "shape") else int(max(y))
-            if y_max > 0:
-                raise RuntimeError(
-                    f"NegativeBinomial._max_y is 0 but max(y)={y_max}. "
-                    "Set family._max_y = int(max(y)) before calling "
-                    "saturated_loglik_theta (normally done by NewtonOptimizer)."
-                )
         theta = jnp.exp(log_theta[0])
-        return _saturated_loglik_jax(y, wt, theta, self._max_y)
+        return _saturated_loglik_jax(y, wt, theta, max_y)
 
     def deviance_fn(self, y: np.ndarray, wt: np.ndarray):
         """Return pure JAX function ``D(eta, log_theta_vec) -> scalar``.

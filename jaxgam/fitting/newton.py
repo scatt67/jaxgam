@@ -131,6 +131,7 @@ def _diff_score(
     multi_block_sp_indices: tuple[tuple[int, ...], ...],
     multi_block_ranks: tuple[int, ...],
     p: int,
+    max_y: int = 0,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
@@ -199,9 +200,9 @@ def _diff_score(
 
     # ---- Saturated log-likelihood ----
     if joint_theta:
-        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta)
+        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta, max_y=max_y)
     else:
-        ls_sat = family.saturated_loglik(y, wt, phi)
+        ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
     S_lambda = build_S_lambda(log_lambda, S_list, p)
 
@@ -363,6 +364,7 @@ _DIFF_STATIC = (
     "multi_block_sp_indices",
     "multi_block_ranks",
     "p",
+    "max_y",
 )
 
 # Module-level JIT'd gradient and Hessian — compiled ONCE per
@@ -432,6 +434,7 @@ def _fit_and_score_impl(
     multi_block_sp_indices: tuple[tuple[int, ...], ...],
     multi_block_ranks: tuple[int, ...],
     p: int,
+    max_y: int = 0,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
@@ -465,9 +468,9 @@ def _fit_and_score_impl(
 
     # Saturated log-likelihood
     if joint_theta:
-        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta)
+        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta, max_y=max_y)
     else:
-        ls_sat = family.saturated_loglik(y, wt, phi)
+        ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
     S_lambda = build_S_lambda(log_lambda, S_list, p)
     pirls_result = pirls_loop(
@@ -715,10 +718,8 @@ class NewtonOptimizer:
         # (gam.fit3.r line 1308). This produces more accurate PIRLS
         # solutions, which in turn gives more accurate AD gradients.
         self._pirls_tol = min(self._tol / 100.0, 1e-8)
-        # Set max_y on extended families for the _lgamma_diff scan length.
-        # Must be set before JIT tracing so it's a compile-time constant.
-        if fd.family.n_theta > 0:
-            fd.family._max_y = int(np.max(np.asarray(fd.y)))
+        # max_y is passed as a static arg for NB's _lgamma_diff scan.
+        # Computed by FittingData.from_setup() from the response vector.
 
         # Joint optimization: append log_theta when extended family has
         # estimated theta (n_theta > 0 and there are penalties to optimize).
@@ -755,6 +756,7 @@ class NewtonOptimizer:
             "multi_block_sp_indices": fd.multi_block_sp_indices,
             "multi_block_ranks": fd.multi_block_ranks,
             "p": fd.n_coef,
+            "max_y": fd.max_y,
         }
 
         # Build custom_jvp-based differentiable score for all families.

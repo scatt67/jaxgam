@@ -83,6 +83,26 @@ def make_smooth_spec(
 
 
 # ---------------------------------------------------------------------------
+# FittingData construction (used across test modules)
+# ---------------------------------------------------------------------------
+
+
+def _setup_fd(formula: str, data: pd.DataFrame, family):
+    """Build FittingData from formula + data.
+
+    Shared helper for tests that need a FittingData without going
+    through the full GAM API.
+    """
+    from jaxgam.fitting.data import FittingData
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
+
+    spec = parse_formula(formula)
+    setup = ModelSetup.build(spec, data)
+    return FittingData.from_setup(setup, family)
+
+
+# ---------------------------------------------------------------------------
 # Private data generators (used by conftest and test-local fixtures)
 # ---------------------------------------------------------------------------
 

@@ -119,7 +119,7 @@ class GAM:
         if hasattr(family_obj, "n_theta") and family_obj.n_theta > 0:
             import copy
 
-            family_obj = copy.copy(family_obj)
+            family_obj = copy.deepcopy(family_obj)
 
         # Phase 1: parse + build model setup
         spec = parse_formula(self.formula)

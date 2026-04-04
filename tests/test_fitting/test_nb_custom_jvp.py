@@ -31,7 +31,7 @@ from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import _diff_score, _fit_and_score_impl
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.jax_utils import build_S_lambda, cho_factor
-from tests.helpers import _make_nb_data
+from tests.helpers import _make_nb_data, _setup_fd
 from tests.tolerances import MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -40,16 +40,6 @@ _FORMULA = "y ~ s(x, bs='cr', k=8)"
 
 
 # ---- Helpers ----
-
-
-def _setup_fd(formula: str, data: pd.DataFrame, family):
-    """Build FittingData from formula + data."""
-    from jaxgam.formula.design import ModelSetup
-    from jaxgam.formula.parser import parse_formula
-
-    spec = parse_formula(formula)
-    setup = ModelSetup.build(spec, data)
-    return FittingData.from_setup(setup, family)
 
 
 def _build_diff_score_kwargs(fd: FittingData, joint_theta: bool):
@@ -75,6 +65,7 @@ def _build_diff_score_kwargs(fd: FittingData, joint_theta: bool):
         "multi_block_sp_indices": fd.multi_block_sp_indices,
         "multi_block_ranks": fd.multi_block_ranks,
         "p": fd.n_coef,
+        "max_y": fd.max_y,
     }
 
 
@@ -113,10 +104,10 @@ def _score_at_theta(log_theta_val, log_lambda, data, beta_warm):
     fam = NegativeBinomial()
     fam._log_theta = np.array([float(log_theta_val)])
     fam.n_theta = 1
-    fam._max_y = int(np.max(data["y"].values))
 
     fd = _setup_fd(_FORMULA, data, fam)
     kwargs = _build_diff_score_kwargs(fd, joint_theta=True)
+    kwargs["max_y"] = fd.max_y
     params = jnp.concatenate(
         [
             jnp.atleast_1d(jnp.asarray(log_lambda)),
@@ -135,8 +126,6 @@ def nb_problem():
     data = _make_nb_data(n=100, seed=42, true_theta=2.0)
     family = NegativeBinomial()  # estimate theta, start at 1
     fd = _setup_fd(_FORMULA, data, family)
-    # Set max_y for _lgamma_diff scan (normally done by NewtonOptimizer)
-    family._max_y = int(np.max(data["y"].values))
 
     pirls_result, log_lambda = _converge_pirls(fd)
     log_theta = jnp.asarray(family.get_theta(transformed=False))
@@ -306,7 +295,7 @@ class TestExtendedCustomJVPHessian:
             fam = NegativeBinomial()
             fam._log_theta = np.array([lt_val])
             fam.n_theta = 1
-            fam._max_y = int(np.max(data["y"].values))
+
             fd_local = _setup_fd(_FORMULA, data, fam)
             kw = _build_diff_score_kwargs(fd_local, joint_theta=True)
             p = jnp.concatenate([log_lambda, jnp.array([lt_val])])
@@ -348,7 +337,7 @@ class TestExtendedCustomJVPHessian:
                 fam = NegativeBinomial()
                 fam._log_theta = np.array([log_theta_base])
                 fam.n_theta = 1
-                fam._max_y = int(np.max(data["y"].values))
+
                 fd_loc = _setup_fd(_FORMULA, data, fam)
                 kw = _build_diff_score_kwargs(fd_loc, joint_theta=True)
                 p = jnp.concatenate([ll, jnp.array([log_theta_base])])
@@ -390,7 +379,7 @@ class TestExtendedCustomJVPHessian:
                 fam = NegativeBinomial()
                 fam._log_theta = np.array([log_theta_base])
                 fam.n_theta = 1
-                fam._max_y = int(np.max(data["y"].values))
+
                 fd_loc = _setup_fd(_FORMULA, data, fam)
                 kw = _build_diff_score_kwargs(fd_loc, joint_theta=True)
                 p = jnp.concatenate([ll, jnp.array([log_theta_base])])
@@ -629,6 +618,7 @@ class TestJITCompilation:
         """saturated_loglik_theta compiles under jax.jit."""
         fd, _, _, _ = nb_problem
         family = fd.family
+        max_y = fd.max_y
 
         @jax.jit
         def _fn(log_theta):
@@ -637,6 +627,7 @@ class TestJITCompilation:
                 fd.wt,
                 1.0,
                 log_theta,
+                max_y=max_y,
             )
 
         result = _fn(jnp.array([0.0]))
@@ -646,6 +637,7 @@ class TestJITCompilation:
         """jax.grad of saturated_loglik_theta compiles under jax.jit."""
         fd, _, _, _ = nb_problem
         family = fd.family
+        max_y = fd.max_y
 
         @jax.jit
         def _grad_fn(log_theta):
@@ -655,6 +647,7 @@ class TestJITCompilation:
                     fd.wt,
                     1.0,
                     lt,
+                    max_y=max_y,
                 )
             )(log_theta)
 

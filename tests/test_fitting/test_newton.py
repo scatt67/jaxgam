@@ -51,24 +51,16 @@ from jaxgam.fitting.newton import (
 )
 from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
 from jaxgam.jax_utils import to_jax
-from tests.helpers import SEED, _generate_family_data, r_available, r_tolerance
+from tests.helpers import (
+    SEED,
+    _generate_family_data,
+    _setup_fd,
+    r_available,
+    r_tolerance,
+)
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
-
-
-def _setup_fd(
-    formula: str,
-    data: pd.DataFrame,
-    family,
-):
-    """Build FittingData from formula + data."""
-    from jaxgam.formula.design import ModelSetup
-    from jaxgam.formula.parser import parse_formula
-
-    spec = parse_formula(formula)
-    setup = ModelSetup.build(spec, data)
-    return FittingData.from_setup(setup, family)
 
 
 def _back_transform_coefs(result, fd):
@@ -760,6 +752,7 @@ class TestDiagnostics:
             multi_block_proj_S=(),
             multi_block_S_local=(),
             repara_D=None,
+            max_y=0,
         )
         result = newton_optimize(fd)
 
@@ -804,6 +797,7 @@ class TestDiagnostics:
             multi_block_proj_S=fd_no_offset.multi_block_proj_S,
             multi_block_S_local=fd_no_offset.multi_block_S_local,
             repara_D=fd_no_offset.repara_D,
+            max_y=fd_no_offset.max_y,
         )
         result_offset = newton_optimize(fd_offset)
 
