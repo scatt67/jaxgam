@@ -48,7 +48,7 @@ string (`family="gaussian"`) when constructing a `GAM`, but the classes
 can be used directly for custom link functions.
 
 ```python
-from jaxgam.families import Gaussian, Binomial, Poisson, Gamma
+from jaxgam.families import Gaussian, Binomial, Poisson, Gamma, NegativeBinomial
 ```
 
 ### Gaussian
@@ -90,6 +90,52 @@ from jaxgam.families import Gaussian, Binomial, Poisson, Gamma
         - variance
         - deviance_resids
         - initialize
+
+### Negative Binomial (Extended Family)
+
+The Negative Binomial family models overdispersed count data. It is an
+**extended family** with an extra dispersion parameter theta that can be
+estimated alongside smoothing parameters, or fixed.
+
+- **Variance:** `mu + mu^2 / theta`
+- **As theta -> infinity:** NB approaches Poisson
+- **Theta parameterization:** `theta > 0` (R's "size" parameter); `alpha = 1/theta`
+
+```python
+from jaxgam.families import NegativeBinomial
+
+# Estimate theta (default, starting from 1)
+GAM("y ~ s(x)", family="nb").fit(data)
+GAM("y ~ s(x)", family=NegativeBinomial()).fit(data)
+
+# Estimate theta with a different starting value
+GAM("y ~ s(x)", family=NegativeBinomial(theta=3)).fit(data)
+
+# Fix theta at a known value
+GAM("y ~ s(x)", family=NegativeBinomial(theta=2, fixed=True)).fit(data)
+```
+
+Constructor parameters:
+- `theta` (float, default 1.0): dispersion parameter (must be positive)
+- `fixed` (bool, default False): if True, theta is held constant during fitting
+
+::: jaxgam.families.negative_binomial.NegativeBinomial
+    options:
+      members:
+        - __init__
+        - variance
+        - deviance_resids
+        - initialize
+        - get_theta
+        - put_theta
+
+### ExtendedFamily Base Class
+
+Base class for families with extra distributional parameters estimated
+via Newton optimization. `NegativeBinomial` inherits from this.
+Future extended families (Tweedie, Beta, etc.) will also subclass it.
+
+::: jaxgam.families.extended.ExtendedFamily
 
 ---
 
@@ -227,6 +273,7 @@ read-only attributes (frozen dataclass):
 | `weights` | `ndarray (n,)` | Prior weights |
 | `family` | `ExponentialFamily` | Family object used for fitting |
 | `formula` | `str` | Model formula |
+| `theta` | `float \| None` | Estimated theta for NB (None for standard families) |
 | `method` | `str` | Smoothing parameter method ("REML" or "ML") |
 | `n` | `int` | Number of observations |
 

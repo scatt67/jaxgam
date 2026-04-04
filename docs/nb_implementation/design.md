@@ -157,7 +157,7 @@ Newton REML/ML.
 **Decision: Port `nb()` (extended family).**
 
 1. Theta estimation is the key feature -- users rarely know theta a priori.
-2. `negbin()` (fixed theta) is trivial to add later as `NegativeBinomial(theta=5.0)`.
+2. `negbin()` (fixed theta) is trivial to add later as `NegativeBinomial(theta=5.0, fixed=True)`.
 3. NB establishes the extended family infrastructure for Tweedie, Beta, etc.
 
 **Key design choice: AD replaces hand-coded derivatives.**
@@ -550,20 +550,12 @@ class NegativeBinomial(ExtendedFamily):
     scale_known: bool = True   # phi = 1
     n_theta: int = 1           # overridden in __init__ based on theta arg
 
-    def __init__(self, theta=None, link=None):
+    def __init__(self, theta=1.0, *, fixed=False, link=None):
         super().__init__(link)
-        # theta=None or 0: estimate (n_theta=1), start at theta=1
-        # theta>0: fixed (n_theta=0)
-        # theta<0: estimate (n_theta=1), start at -theta
-        if theta is None or theta == 0:
-            self._log_theta = np.array([0.0])
-            self.n_theta = 1
-        elif theta > 0:
-            self._log_theta = np.array([np.log(theta)])
-            self.n_theta = 0
-        else:
-            self._log_theta = np.array([np.log(-theta)])
-            self.n_theta = 1
+        if theta <= 0:
+            raise ValueError(f"theta must be positive, got {theta}")
+        self._log_theta = np.array([np.log(theta)])
+        self.n_theta = 0 if fixed else 1
 
     @property
     def default_link(self) -> Link:

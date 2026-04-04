@@ -131,6 +131,10 @@ class FittingData:
     # Sl.setup reparameterization (R's fast-REML.r lines 68-429)
     repara_D: jax.Array | None
 
+    # Maximum integer count in y. Used by NB's _lgamma_diff scan as
+    # a compile-time loop bound. Computed from data in from_setup().
+    max_y: int
+
     @property
     def n_penalties(self) -> int:
         """Number of penalty matrices."""
@@ -232,6 +236,9 @@ class FittingData:
 
         block_meta = _build_block_metadata(penalty_arrays, setup.smooth_info, device)
 
+        # max(y) as a compile-time integer for NB's _lgamma_diff scan.
+        max_y = int(np.max(setup.y)) if len(setup.y) > 0 else 0
+
         return cls(
             X=X_jax,
             y=y_jax,
@@ -253,6 +260,7 @@ class FittingData:
             multi_block_proj_S=block_meta["multi_block_proj_S"],
             multi_block_S_local=block_meta["multi_block_S_local"],
             repara_D=repara_D_jax,
+            max_y=max_y,
         )
 
     @staticmethod

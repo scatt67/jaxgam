@@ -470,6 +470,7 @@ def reml_criterion_joint(
     multi_block_sp_indices: tuple[tuple[int, ...], ...],
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    max_y: int = 0,
 ) -> jax.Array:
     """REML criterion with joint ``(log_lambda, log_phi)`` optimization.
 
@@ -497,7 +498,7 @@ def reml_criterion_joint(
     """
     log_lambda = params[:n_lambda]
     phi = jnp.exp(params[n_lambda])
-    ls_sat = family.saturated_loglik(y, wt, phi)
+    ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
     core = _criterion_core(
         log_lambda,
         XtWX,
@@ -533,6 +534,7 @@ def ml_criterion_joint(
     multi_block_sp_indices: tuple[tuple[int, ...], ...],
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    max_y: int = 0,
 ) -> jax.Array:
     """ML criterion with joint ``(log_lambda, log_phi)`` optimization.
 
@@ -553,7 +555,7 @@ def ml_criterion_joint(
     """
     log_lambda = params[:n_lambda]
     phi = jnp.exp(params[n_lambda])
-    ls_sat = family.saturated_loglik(y, wt, phi)
+    ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
     return _criterion_core(
         log_lambda,
         XtWX,
@@ -591,7 +593,7 @@ _jit_ml_score = jax.jit(ml_criterion, static_argnames=_BLOCK_STATIC)
 _jit_ml_grad = jax.jit(jax.grad(ml_criterion), static_argnames=_BLOCK_STATIC)
 _jit_ml_hess = jax.jit(jax.hessian(ml_criterion), static_argnames=_BLOCK_STATIC)
 
-_JOINT_STATIC = (*_BLOCK_STATIC, "n_lambda", "family")
+_JOINT_STATIC = (*_BLOCK_STATIC, "n_lambda", "family", "max_y")
 _jit_reml_joint_score = jax.jit(reml_criterion_joint, static_argnames=_JOINT_STATIC)
 _jit_reml_joint_grad = jax.jit(
     jax.grad(reml_criterion_joint), static_argnames=_JOINT_STATIC
@@ -690,7 +692,9 @@ class _CriterionBase(ABC):
         self.edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
-        self._ls_sat = fd.family.saturated_loglik(fd.y, fd.wt, self.scale)
+        self._ls_sat = fd.family.saturated_loglik(
+            fd.y, fd.wt, self.scale, max_y=fd.max_y
+        )
         self._XtWX = pirls_result.XtWX
         self._beta = pirls_result.coefficients
         self._S_list = fd.S_list
@@ -862,6 +866,7 @@ class _JointCriterionBase(ABC):
         self._multi_block_sp_indices = fd.multi_block_sp_indices
         self._multi_block_ranks = fd.multi_block_ranks
         self._multi_block_proj_S = fd.multi_block_proj_S
+        self._max_y = fd.max_y
 
     def _kwargs(self) -> dict[str, Any]:
         """Build keyword arguments for the JIT'd joint criterion function."""
@@ -881,6 +886,7 @@ class _JointCriterionBase(ABC):
             "multi_block_sp_indices": self._multi_block_sp_indices,
             "multi_block_ranks": self._multi_block_ranks,
             "multi_block_proj_S": self._multi_block_proj_S,
+            "max_y": self._max_y,
         }
 
     @abstractmethod

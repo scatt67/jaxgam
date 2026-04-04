@@ -103,6 +103,7 @@ class GAMSummary:
     reml_score: float | None = None
     residual_df: float = 0.0
     edf_total: float = 0.0
+    theta: float | None = None
 
     def __str__(self) -> str:
         """Formatted summary string matching R's print.summary.gam."""
@@ -261,6 +262,7 @@ def summary(gam: GAMResults) -> GAMSummary:
         reml_score=reml_score,
         residual_df=residual_df,
         edf_total=gam.edf_total,
+        theta=gam.theta,
     )
 
 
@@ -695,6 +697,8 @@ def _format_summary(s: GAMSummary) -> str:
     # Family and link
     lines.append(f"Family: {s.family_name}")
     lines.append(f"Link function: {s.link_name}")
+    if s.theta is not None:
+        lines.append(f"Theta:  {s.theta:.3f}")
     lines.append("")
     lines.append("Formula:")
     lines.append(s.formula)

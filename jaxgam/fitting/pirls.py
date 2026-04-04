@@ -229,6 +229,7 @@ def pirls_loop(
     offset: jax.Array | None = None,
     max_iter: int = 100,
     tol: float = 1e-7,
+    log_theta: jax.Array | None = None,
 ) -> PIRLSResult:
     """Run the PIRLS inner loop to convergence.
 
@@ -262,6 +263,15 @@ def pirls_loop(
         Maximum PIRLS iterations.
     tol : float
         Convergence tolerance for both deviance and coefficient criteria.
+    log_theta : jax.Array, shape (n_theta,), optional
+        Extra distributional parameter for extended families (e.g.
+        log-theta for NB).  When provided for a family with
+        ``n_theta > 0``, working weights and deviance are computed
+        via the family's pure-function factories (``working_weights_fn``,
+        ``deviance_fn``) with ``log_theta`` as a **dynamic** JAX
+        argument.  This avoids baking theta into the JIT cache as a
+        static constant, so a single compiled kernel handles all
+        theta values without recompilation.
 
     Returns
     -------
@@ -277,6 +287,51 @@ def pirls_loop(
         wt = jnp.ones(n)
     if offset is None:
         offset = jnp.zeros(n)
+
+    # ---- Theta-aware compute functions ----
+    # Python ``if`` on ``family.n_theta`` is resolved at trace time
+    # (``family`` is a static JIT arg).  For extended families the
+    # pure-function factories take ``log_theta`` as a dynamic JAX
+    # vector of shape ``(n_theta,)`` — generic over NB (1), Tweedie (2), etc.
+    #
+    # Extended families use **observed** weights ``w = 0.5 * d²D/dη²``
+    # and observed working response ``z = η - (dD/dη)/(d²D/dη²)``
+    # matching R's ``gam.fit4`` (gam.fit4.r lines 367-370).  Standard
+    # families use Fisher weights via ``family.working_weights``,
+    # matching R's ``gam.fit3``.
+    if family.n_theta > 0 and log_theta is not None:
+        _dev_fn = family.deviance_fn(y, wt)
+        _grad_D_eta = jax.grad(_dev_fn, argnums=0)
+
+        def _compute_W_and_z(mu, eta):  # noqa: ARG001  mu unused: observed weights come from d²D/dη², not V(mu)
+            """Observed weights and working response from d²D/dη²."""
+            dD_deta = _grad_D_eta(eta, log_theta)
+            _, d2D_deta2 = jax.jvp(
+                lambda e: _grad_D_eta(e, log_theta),
+                (eta,),
+                (jnp.ones_like(eta),),
+            )
+            # Observed weights: w = 0.5 * d²D/dη².  Unlike Fisher weights,
+            # d²D/dη² can be negative for extended families.  Clamp to
+            # _W_MIN so negative or near-zero values don't cause division
+            # instability in the working response z.
+            w = d2D_deta2 * 0.5
+            d2D_safe = jnp.where(d2D_deta2 > _W_MIN, d2D_deta2, _W_MIN)
+            z = (eta - offset) - dD_deta / d2D_safe
+            return w, z
+
+        def _compute_dev(mu, eta):  # noqa: ARG001  mu unused: deviance computed from eta via pure-function factory
+            return _dev_fn(eta, log_theta)
+    else:
+
+        def _compute_W_and_z(mu, eta):
+            W = family.working_weights(mu, wt)
+            eta_no_offset = eta - offset
+            z = family.working_response(y, mu, eta_no_offset)
+            return W, z
+
+        def _compute_dev(mu, eta):  # noqa: ARG001
+            return family.dev_resids(y, mu, wt)
 
     # Initial mu from beta_init
     eta_init = X @ beta_init + offset
@@ -300,17 +355,24 @@ def pirls_loop(
         return (state.i < max_iter) & (~state.converged)
 
     def _body(state: _PIRLSState):
-        # One PIRLS step
-        beta_new, XtWX, L, W = _pirls_step(
-            X, y, wt, state.beta, state.mu, S_lambda, family
-        )
+        # ---- Working quantities ----
+        eta_cur = X @ state.beta + offset
+        W, z = _compute_W_and_z(state.mu, eta_cur)
+        W = jnp.clip(W, _W_MIN, _W_MAX)
 
-        # Step-halving on penalized deviance
+        W_sqrt = jnp.sqrt(W)
+        WX = W_sqrt[:, None] * X
+        XtWX = WX.T @ WX
+        XtWz = WX.T @ (W_sqrt * z)
+        beta_new, L, _ = penalized_solve(XtWX, S_lambda, XtWz)
+
+        # ---- Step-halving on penalized deviance ----
         is_first_iter = state.i == 0
 
         eta_new = X @ beta_new + offset
         mu_new = family.link.inverse(eta_new)
-        pen_dev_new = _penalized_deviance(beta_new, mu_new, y, wt, S_lambda, family)
+        dev_new = _compute_dev(mu_new, eta_new)
+        pen_dev_new = dev_new + beta_new @ S_lambda @ beta_new
 
         # First iteration: unconditionally accept
         first_ok = is_first_iter & jnp.isfinite(pen_dev_new)
@@ -337,7 +399,8 @@ def pirls_loop(
             bt = state.beta + step * (beta_new - state.beta)
             eta_t = X @ bt + offset
             mu_t = family.link.inverse(eta_t)
-            pd_t = _penalized_deviance(bt, mu_t, y, wt, S_lambda, family)
+            dev_t = _compute_dev(mu_t, eta_t)
+            pd_t = dev_t + bt @ S_lambda @ bt
 
             ok = jnp.isfinite(pd_t) & (
                 pd_t <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev)
@@ -382,15 +445,15 @@ def pirls_loop(
     final = jax.lax.while_loop(_cond, _body, init_state)
 
     # Recompute curvature at final mu for consistency (R's gam.fit3 §7.2).
-    W_final = family.working_weights(final.mu, wt)
+    eta_final = X @ final.beta + offset
+    W_final, _ = _compute_W_and_z(final.mu, eta_final)
     W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
     W_sqrt_final = jnp.sqrt(W_final)
     WX_final = W_sqrt_final[:, None] * X
     XtWX_final = WX_final.T @ WX_final
     L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
 
-    eta_final = X @ final.beta + offset
-    dev_final = family.dev_resids(y, final.mu, wt)
+    dev_final = _compute_dev(final.mu, eta_final)
     scale = jnp.where(
         family.scale_known,
         1.0,

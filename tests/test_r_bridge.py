@@ -58,6 +58,7 @@ class TestRBridgeFitGam:
             "reml_scale",
             "Vp",
             "reml_score",
+            "theta",
         }
         assert set(result.keys()) == expected_keys
 

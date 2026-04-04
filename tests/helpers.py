@@ -83,8 +83,47 @@ def make_smooth_spec(
 
 
 # ---------------------------------------------------------------------------
+# FittingData construction (used across test modules)
+# ---------------------------------------------------------------------------
+
+
+def _setup_fd(formula: str, data: pd.DataFrame, family):
+    """Build FittingData from formula + data.
+
+    Shared helper for tests that need a FittingData without going
+    through the full GAM API.
+    """
+    from jaxgam.fitting.data import FittingData
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
+
+    spec = parse_formula(formula)
+    setup = ModelSetup.build(spec, data)
+    return FittingData.from_setup(setup, family)
+
+
+# ---------------------------------------------------------------------------
 # Private data generators (used by conftest and test-local fixtures)
 # ---------------------------------------------------------------------------
+
+
+def _make_nb_data(
+    n: int = 200,
+    seed: int = SEED,
+    true_theta: float = 2.0,
+) -> pd.DataFrame:
+    """Generate single-predictor NB count data with known theta.
+
+    Used across NB test modules (fitting, custom_jvp, results).
+    """
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, 1, n)
+    eta = np.sin(2 * np.pi * x) + 0.5
+    mu = np.exp(eta)
+    y = rng.negative_binomial(
+        n=true_theta, p=true_theta / (mu + true_theta), size=n
+    ).astype(float)
+    return pd.DataFrame({"x": x, "y": y})
 
 
 def _generate_family_data(family_name: str, n: int | None = None) -> pd.DataFrame:
@@ -115,6 +154,11 @@ def _generate_family_data(family_name: str, n: int | None = None) -> pd.DataFram
         eta = 0.5 * np.sin(2 * np.pi * x) + 1.0
         mu = np.exp(eta)
         y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        eta = np.sin(2 * np.pi * x) + 0.5
+        mu = np.exp(eta)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
     else:
         raise ValueError(f"Unknown family: {family_name}")
 

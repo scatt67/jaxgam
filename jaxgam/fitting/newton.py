@@ -122,6 +122,7 @@ def _diff_score(
     family: ExponentialFamily,
     pirls_tol: float,
     is_reml: bool,
+    joint_theta: bool,
     joint_scale: bool,
     n_lambda: int,
     Mp: int,
@@ -130,6 +131,7 @@ def _diff_score(
     multi_block_sp_indices: tuple[tuple[int, ...], ...],
     multi_block_ranks: tuple[int, ...],
     p: int,
+    max_y: int = 0,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
@@ -137,13 +139,20 @@ def _diff_score(
     arguments (family, pirls_tol, is_reml, etc.) are compile-time constants
     that key the JIT cache. The ``custom_jvp`` on PIRLS is defined inside
     this function as a closure over X, y, wt, offset, family, pirls_tol
-    (all concrete or traced at trace time), keeping only S_lambda and
-    beta_warm as differentiable primals.
+    (all concrete or traced at trace time).
+
+    For standard families (``joint_theta=False``), 2 primals:
+    ``(S_lambda, beta_warm)``. For extended families with estimated theta
+    (``joint_theta=True``), 3 primals: ``(S_lambda, log_theta, beta_warm)``
+    where ``log_theta`` is a traced JAX value enabling ``jax.grad`` and
+    ``jax.hessian`` to capture all theta derivatives via the implicit
+    function theorem. See design.md Section 6.2-6.4.
 
     Parameters
     ----------
-    params : jax.Array, shape (m,) or (m+1,)
-        Log smoothing parameters, or ``[log_lambda, log_phi]`` for joint.
+    params : jax.Array, shape (m,), (m+n_theta,), (m+1,), or (m+n_theta+1,)
+        ``[log_lambda, <log_theta>, <log_phi>]``. Optional theta/phi
+        dimensions controlled by ``joint_theta`` and ``joint_scale``.
     beta_warm : jax.Array, shape (p,)
         Warm-start coefficients from previous PIRLS.
     X, y, wt, offset : jax.Array
@@ -158,6 +167,8 @@ def _diff_score(
         PIRLS convergence tolerance (static).
     is_reml : bool
         Whether to use REML vs ML criterion (static).
+    joint_theta : bool
+        Whether params includes log_theta for extended families (static).
     joint_scale : bool
         Whether params includes log_phi (static).
     n_lambda : int
@@ -176,64 +187,147 @@ def _diff_score(
         REML or ML criterion score.
     """
 
-    # ---- custom_jvp on PIRLS (closure over traced X, y, wt, offset) ----
-    @jax.custom_jvp
-    def _pirls_out(S_lambda, beta_warm_inner):
-        result = pirls_loop(
-            X,
-            y,
-            beta_warm_inner,
-            S_lambda,
-            family,
-            wt,
-            offset,
-            tol=pirls_tol,
-        )
-        return result.coefficients, result.XtWX, result.deviance
+    # ---- Parse params: [log_lambda, <log_theta>, <log_phi>] ----
+    idx = n_lambda
+    log_lambda = params[:idx]
 
-    @_pirls_out.defjvp
-    def _pirls_jvp(primals, tangents):
-        S_lambda, beta_warm_inner = primals
-        dS, _ = tangents
+    if joint_theta:
+        n_theta = family.n_theta  # concrete at trace time (family is static)
+        log_theta = params[idx : idx + n_theta]
+        idx += n_theta
 
-        beta, XtWX, dev = _pirls_out(S_lambda, beta_warm_inner)
+    phi = jnp.exp(params[idx]) if joint_scale else jnp.array(1.0)
 
-        # IFT: dβ = -H⁻¹(dS @ β)
-        H = XtWX + S_lambda
-        L, _ = cho_factor(H)
-        dbeta = cho_solve((L, True), -(dS @ beta))
-
-        # Chain: dη → dW → dXtWX
-        eta = X @ beta + offset
-        deta = X @ dbeta
-
-        def _eta_to_W(e):
-            return family.working_weights(family.link.inverse(e), wt)
-
-        _, dW = jax.jvp(_eta_to_W, (eta,), (deta,))
-        dXtWX = (X.T * dW) @ X
-
-        # Chain: dη → dμ → ddeviance
-        def _eta_to_dev(e):
-            return jnp.sum(family.dev_resids(y, family.link.inverse(e), wt))
-
-        _, ddev = jax.jvp(_eta_to_dev, (eta,), (deta,))
-
-        return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
-
-    # ---- End-to-end score ----
-    if joint_scale:
-        log_lambda = params[:n_lambda]
-        phi = jnp.exp(params[n_lambda])
-        ls_sat = family.saturated_loglik(y, wt, phi)
+    # ---- Saturated log-likelihood ----
+    if joint_theta:
+        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta, max_y=max_y)
     else:
-        log_lambda = params
-        phi = jnp.array(1.0)
-        ls_sat = family.saturated_loglik(y, wt, phi)
+        ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
     S_lambda = build_S_lambda(log_lambda, S_list, p)
-    beta, XtWX, dev = _pirls_out(S_lambda, beta_warm)
 
+    # ---- custom_jvp on PIRLS ----
+    if family.n_theta > 0 and joint_theta:
+        # --- Extended family path: 3 primals (S_lambda, log_theta, beta) ---
+        # Theta enters the IFT via d²D/(dη dθ) and the joint JVPs for
+        # deviance and observed weights. See design.md Section 6.2.
+        #
+        # PIRLS uses observed weights ``w = 0.5 * d²D/dη²`` (matching
+        # R's gam.fit4), so the custom_jvp must differentiate through
+        # the same observed weight function for consistency.
+        dev_fn = family.deviance_fn(y, wt)
+        _grad_D_eta = jax.grad(dev_fn, argnums=0)
+
+        def _obs_ww(eta_arg, lt_arg):
+            """Observed weight: ``0.5 * d²D/dη²``."""
+            _, d2D = jax.jvp(
+                lambda e: _grad_D_eta(e, lt_arg),
+                (eta_arg,),
+                (jnp.ones_like(eta_arg),),
+            )
+            return d2D * 0.5
+
+        @jax.custom_jvp
+        def _pirls_out_ext(S_lam, lt, bw):
+            result = pirls_loop(
+                X,
+                y,
+                bw,
+                S_lam,
+                family,
+                wt,
+                offset,
+                tol=pirls_tol,
+                log_theta=lt,
+            )
+            return result.coefficients, result.XtWX, result.deviance
+
+        @_pirls_out_ext.defjvp
+        def _pirls_jvp_ext(primals, tangents):
+            S_lam, lt, bw = primals
+            dS, dlt, _ = tangents
+
+            beta, XtWX, dev = _pirls_out_ext(S_lam, lt, bw)
+            eta = X @ beta + offset
+
+            # Observed Hessian for IFT (R's gam.fit4 line 562: w <- dd$Deta2*.5)
+            # R uses the observed d²D/dη² (Deta2), NOT the Fisher/expected
+            # weight (EDeta2), for the IFT solve. Since D = Σ d_i(η_i, θ)
+            # is element-wise, the Hessian is diagonal and JVP with ones
+            # gives the diagonal efficiently.
+            d2D_deta2 = _obs_ww(eta, lt) * 2.0  # undo the 0.5 factor
+            H_obs = (X.T * d2D_deta2) @ X + 2 * S_lam
+            L_obs, _ = cho_factor(H_obs)
+
+            # IFT: lambda + theta contributions (exact, no Fisher approx)
+            # Stationarity: X' dD/dη + 2S β = 0
+            # d/dθ: (X' d²D/dη² X + 2S) dβ + X' d²D/(dη dθ) dθ = 0
+            # d/drho: (X' d²D/dη² X + 2S) dβ + 2 dS β = 0
+            _, d_grad_D = jax.jvp(
+                lambda lt_: _grad_D_eta(eta, lt_), (lt,), (dlt,)
+            )  # d²D/(dη dθ) · dθ, shape (n,)
+            rhs = 2 * dS @ beta + X.T @ d_grad_D
+            dbeta = cho_solve((L_obs, True), -rhs)
+            deta = X @ dbeta
+
+            # Joint JVPs over (eta, theta) for deviance and observed weights
+            _, ddev = jax.jvp(dev_fn, (eta, lt), (deta, dlt))
+            _, dW = jax.jvp(_obs_ww, (eta, lt), (deta, dlt))
+            dXtWX = (X.T * dW) @ X
+
+            return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
+
+        beta, XtWX, dev = _pirls_out_ext(S_lambda, log_theta, beta_warm)
+
+    else:
+        # --- Standard family path: 2 primals (unchanged) ---
+        @jax.custom_jvp
+        def _pirls_out(S_lambda_inner, beta_warm_inner):
+            result = pirls_loop(
+                X,
+                y,
+                beta_warm_inner,
+                S_lambda_inner,
+                family,
+                wt,
+                offset,
+                tol=pirls_tol,
+            )
+            return result.coefficients, result.XtWX, result.deviance
+
+        @_pirls_out.defjvp
+        def _pirls_jvp(primals, tangents):
+            S_lambda_inner, beta_warm_inner = primals
+            dS, _ = tangents
+
+            beta, XtWX, dev = _pirls_out(S_lambda_inner, beta_warm_inner)
+
+            # IFT: dβ = -H⁻¹(dS @ β)
+            H = XtWX + S_lambda_inner
+            L, _ = cho_factor(H)
+            dbeta = cho_solve((L, True), -(dS @ beta))
+
+            # Chain: dη → dW → dXtWX
+            eta = X @ beta + offset
+            deta = X @ dbeta
+
+            def _eta_to_W(e):
+                return family.working_weights(family.link.inverse(e), wt)
+
+            _, dW = jax.jvp(_eta_to_W, (eta,), (deta,))
+            dXtWX = (X.T * dW) @ X
+
+            # Chain: dη → dμ → ddeviance
+            def _eta_to_dev(e):
+                return jnp.sum(family.dev_resids(y, family.link.inverse(e), wt))
+
+            _, ddev = jax.jvp(_eta_to_dev, (eta,), (deta,))
+
+            return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
+
+        beta, XtWX, dev = _pirls_out(S_lambda, beta_warm)
+
+    # ---- Criterion score ----
     core = _criterion_core(
         log_lambda,
         XtWX,
@@ -261,6 +355,7 @@ _DIFF_STATIC = (
     "family",
     "pirls_tol",
     "is_reml",
+    "joint_theta",
     "joint_scale",
     "n_lambda",
     "Mp",
@@ -269,6 +364,7 @@ _DIFF_STATIC = (
     "multi_block_sp_indices",
     "multi_block_ranks",
     "p",
+    "max_y",
 )
 
 # Module-level JIT'd gradient and Hessian — compiled ONCE per
@@ -329,6 +425,7 @@ def _fit_and_score_impl(
     family: ExponentialFamily,
     pirls_tol: float,
     is_reml: bool,
+    joint_theta: bool,
     joint_scale: bool,
     n_lambda: int,
     Mp: int,
@@ -337,12 +434,17 @@ def _fit_and_score_impl(
     multi_block_sp_indices: tuple[tuple[int, ...], ...],
     multi_block_ranks: tuple[int, ...],
     p: int,
+    max_y: int = 0,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
     Same signature as ``_diff_score`` but forward-pass only (no
     ``custom_jvp``). Returns ``(score, pirls_result)`` where
     ``pirls_result`` is a registered JAX pytree.
+
+    For extended families with ``joint_theta=True``, ``log_theta`` is
+    parsed from ``params`` and passed as a dynamic JAX argument to
+    both the saturated log-likelihood and ``pirls_loop``.
 
     Returns
     -------
@@ -351,14 +453,24 @@ def _fit_and_score_impl(
     pirls_result : PIRLSResult
         Converged PIRLS output.
     """
-    if joint_scale:
-        log_lambda = params[:n_lambda]
-        phi = jnp.exp(params[n_lambda])
-        ls_sat = family.saturated_loglik(y, wt, phi)
+    # Parse params: [log_lambda, <log_theta>, <log_phi>]
+    idx = n_lambda
+    log_lambda = params[:idx]
+
+    if joint_theta:
+        n_theta = family.n_theta
+        log_theta = params[idx : idx + n_theta]
+        idx += n_theta
     else:
-        log_lambda = params
-        phi = jnp.array(1.0)
-        ls_sat = family.saturated_loglik(y, wt, phi)
+        log_theta = None
+
+    phi = jnp.exp(params[idx]) if joint_scale else jnp.array(1.0)
+
+    # Saturated log-likelihood
+    if joint_theta:
+        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta, max_y=max_y)
+    else:
+        ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
     S_lambda = build_S_lambda(log_lambda, S_list, p)
     pirls_result = pirls_loop(
@@ -370,6 +482,7 @@ def _fit_and_score_impl(
         wt,
         offset,
         tol=pirls_tol,
+        log_theta=log_theta,
     )
 
     core = _criterion_core(
@@ -433,6 +546,9 @@ class NewtonResult:
         Final PIRLS output (coefficients, mu, etc.).
     convergence_info : str
         ``"full convergence"`` | ``"step failed"`` | ``"iteration limit"``
+    theta : float or None
+        Estimated theta for extended families (natural scale).
+        ``None`` for standard families or fixed-theta extended families.
     """
 
     log_lambda: jax.Array
@@ -445,6 +561,7 @@ class NewtonResult:
     scale: jax.Array
     pirls_result: PIRLSResult
     convergence_info: str
+    theta: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -601,6 +718,14 @@ class NewtonOptimizer:
         # (gam.fit3.r line 1308). This produces more accurate PIRLS
         # solutions, which in turn gives more accurate AD gradients.
         self._pirls_tol = min(self._tol / 100.0, 1e-8)
+        # max_y is passed as a static arg for NB's _lgamma_diff scan.
+        # Computed by FittingData.from_setup() from the response vector.
+
+        # Joint optimization: append log_theta when extended family has
+        # estimated theta (n_theta > 0 and there are penalties to optimize).
+        # Matches R's sp vector: [theta, log_lambda, <log_scale>].
+        self._joint_theta = fd.family.n_theta > 0 and fd.n_penalties > 0
+
         # Joint optimization: append log_phi to params when scale is unknown
         # (matches R's mgcv.r line 2033: lsp <- c(lsp, log.scale))
         self._joint_scale = not fd.family.scale_known and fd.n_penalties > 0
@@ -622,6 +747,7 @@ class NewtonOptimizer:
             "family": fd.family,
             "pirls_tol": self._pirls_tol,
             "is_reml": self._method == "REML",
+            "joint_theta": self._joint_theta,
             "joint_scale": self._joint_scale,
             "n_lambda": fd.n_penalties,
             "Mp": fd.total_penalty_null_dim,
@@ -630,6 +756,7 @@ class NewtonOptimizer:
             "multi_block_sp_indices": fd.multi_block_sp_indices,
             "multi_block_ranks": fd.multi_block_ranks,
             "p": fd.n_coef,
+            "max_y": fd.max_y,
         }
 
         # Build custom_jvp-based differentiable score for all families.
@@ -658,17 +785,17 @@ class NewtonOptimizer:
         (default ``40.0``), clamps to ``[-lsp_max, lsp_max]``.
 
         For joint optimization, only the log_lambda portion is clamped;
-        log_phi is left unclamped.
+        log_theta and log_phi are left unclamped.
         """
         if self._lsp_max is None:
             return params
         lsp_max = self._lsp_max
-        if self._joint_scale:
+        if self._joint_theta or self._joint_scale:
             n_lambda = self._fd.n_penalties
             log_lambda = params[:n_lambda]
-            log_phi = params[n_lambda:]
+            extra = params[n_lambda:]  # log_theta and/or log_phi
             log_lambda = jnp.clip(log_lambda, -lsp_max, lsp_max)
-            return jnp.concatenate([log_lambda, log_phi])
+            return jnp.concatenate([log_lambda, extra])
         return jnp.clip(params, -lsp_max, lsp_max)
 
     def _initial_beta(self) -> jax.Array:
@@ -929,11 +1056,14 @@ class NewtonOptimizer:
         the KKT conditions are satisfied and that component is zeroed.
         This prevents the optimizer from cycling at ``lsp_max`` when a
         smoothing parameter is on a flat REML surface.
+
+        Only log_lambda dimensions are bounded; log_theta and log_phi
+        are unconstrained.
         """
         if self._lsp_max is None:
             return grad
         lsp_max = self._lsp_max
-        if self._joint_scale:
+        if self._joint_theta or self._joint_scale:
             n_lambda = self._fd.n_penalties
             log_lambda = params[:n_lambda]
             at_upper = jnp.abs(log_lambda - lsp_max) < _BOUND_TOL
@@ -1044,15 +1174,18 @@ class NewtonOptimizer:
         else:
             info = "iteration limit"
 
-        if self._joint_scale:
-            # Extract log_lambda from joint params; keep Fletcher scale
-            # for post-estimation (Vp) matching R's model$scale.
-            # The REML-optimized phi is internal to the criterion only.
-            log_lambda = params[: self._fd.n_penalties]
-            grad_lambda = gradient[: self._fd.n_penalties]
-        else:
-            log_lambda = params
-            grad_lambda = gradient
+        n_lambda = self._fd.n_penalties
+        log_lambda = params[:n_lambda]
+        grad_lambda = gradient[:n_lambda]
+
+        # Extract theta for extended families and sync family state
+        # for Phase 3 post-estimation (predict, summary, plot).
+        theta = None
+        if self._joint_theta:
+            n_theta = self._fd.family.n_theta
+            log_theta = params[n_lambda : n_lambda + n_theta]
+            theta = float(jnp.exp(log_theta[0]))
+            self._fd.family.put_theta(np.asarray(log_theta))
 
         return NewtonResult(
             log_lambda=log_lambda,
@@ -1065,6 +1198,7 @@ class NewtonOptimizer:
             scale=criterion.scale,
             pirls_result=pirls_result,
             convergence_info=info,
+            theta=theta,
         )
 
     def run(self) -> NewtonResult:
@@ -1108,8 +1242,15 @@ class NewtonOptimizer:
                 n_iter=0,
             )
 
-        # -- Build initial params vector --
+        # -- Build initial params vector: [log_lambda, <log_theta>, <log_phi>] --
         log_lambda = fd.log_lambda_init.copy()
+        parts = [log_lambda]
+
+        if self._joint_theta:
+            # Append initial log_theta from family state
+            log_theta_init = jnp.asarray(fd.family.get_theta(transformed=False))
+            parts.append(log_theta_init)
+
         if self._joint_scale:
             # Run initial PIRLS to get Fletcher scale for log_phi init
             S_init = fd.S_lambda(log_lambda)
@@ -1126,9 +1267,9 @@ class NewtonOptimizer:
             edf_init = estimate_edf(pirls_init.XtWX, pirls_init.L)
             phi_init = fletcher_scale(fd.y, pirls_init.mu, fd.wt, fd.family, edf_init)
             log_phi_init = jnp.log(phi_init)
-            params = jnp.concatenate([log_lambda, log_phi_init[None]])
-        else:
-            params = log_lambda
+            parts.append(log_phi_init[None])
+
+        params = jnp.concatenate(parts) if len(parts) > 1 else log_lambda
 
         # -- Initial fit and score --
         pirls_result, score = self._fit_and_score(params, self._initial_beta())
@@ -1212,8 +1353,9 @@ class NewtonOptimizer:
             score_old = score
             params = params_new
             pirls_result = pirls_new
-            criterion = self._make_criterion(pirls_result)
             score = score_new
+
+            criterion = self._make_criterion(pirls_result)
 
             grad, hess, score_scale, converged = self._check_convergence(
                 criterion,

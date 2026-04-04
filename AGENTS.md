@@ -154,7 +154,7 @@ Do not implement any of the following. They are designed for but deferred:
 
 - Sparse-CPU execution path (CHOLMOD, scikit-sparse)
 - `bam()`, chunked processing, fREML, Fellner-Schall
-- Extended families (NB, Tweedie, Beta, SHASH, Cox PH, ordered categorical)
+- Extended families (Tweedie, Beta, SHASH, Cox PH, ordered categorical) — NB is implemented in v1.0
 - P-splines (`ps`, `cp`), B-splines (`bs`)
 - Random effects (`bs="re"`), factor-smooth interactions (`bs="fs"`)
 - Multi-GPU SPMD, Ray, distributed anything

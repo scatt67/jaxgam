@@ -90,8 +90,10 @@ all families, smooth types, and post-estimation tools.
 
 ### Families
 
-Gaussian, Binomial, Poisson, Gamma - each with its default link and
-REML/ML smoothing parameter selection.
+Gaussian, Binomial, Poisson, Gamma, and Negative Binomial - each with
+its default link and REML/ML smoothing parameter selection. The Negative
+Binomial is an extended family with an estimated dispersion parameter
+(theta).
 
 ### Smooth types
 
@@ -118,8 +120,8 @@ These are deliberate scope boundaries, not bugs:
 1. **No sparse solver.** Models with > ~5,000 basis functions will hit the
    dense memory ceiling. Factor-by with many levels or large tensor products
    are most affected.
-2. **Four families only.** Negative binomial, Tweedie, Beta, and other
-   extended families are not yet available.
+2. **Five families only.** Tweedie, Beta, and other extended families
+   beyond Negative Binomial are not yet available.
 3. **Dense design matrix must fit in memory.** Datasets with > ~10M rows
    require chunked processing, which is not implemented.
 4. **No random effects.** `bs="re"` (random effects) and `bs="fs"`
@@ -147,92 +149,115 @@ rather than an optimally configured one.
 
 ### Benchmark results
 
-Full benchmark comparing jaxgam (true cold, cold, warm) against R
+Full benchmark comparing jaxgam (cold, warm) against R
 `gam(REML)`. Iteration counts are included to show that both
 implementations converge in a similar number of outer Newton steps.
+The Negative Binomial (nb) is an extended family with an outer loop
+over the dispersion parameter theta, which adds overhead to both
+cold and warm fits.
 
-| smooth | family | n | true cold (ms) | cold (ms) | warm (ms) | R gam (ms) | cold/R | warm/R | py iter | R iter |
-|--------|--------|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| cr | gaussian | 500 | | 6 | 7 | 8 | 1.4x | 1.2x | 5 | 5 |
-| cr | gaussian | 2,000 | | 904 | 10 | 13 | 0.01x | 1.3x | 7 | 7 |
-| cr | gaussian | 10,000 | | 1,074 | 24 | 49 | 0.05x | 2.1x | 8 | 8 |
-| cr | gaussian | 100,000 | | 1,052 | 172 | 822 | 0.78x | 4.8x | 10 | 10 |
-| cr | gaussian | 500,000 | 2,675 | 1,004 | 1,042 | 3,456 | 3.4x | 3.3x | 11 | 11 |
-| cr | poisson | 500 | | 6 | 5 | 5 | 0.78x | 1.1x | 3 | 2 |
-| cr | poisson | 2,000 | | 936 | 7 | 12 | 0.01x | 1.6x | 3 | 4 |
-| cr | poisson | 10,000 | | 959 | 24 | 61 | 0.06x | 2.6x | 5 | 5 |
-| cr | poisson | 100,000 | | 1,095 | 171 | 933 | 0.85x | 5.5x | 6 | 7 |
-| cr | poisson | 500,000 | 2,584 | 1,184 | 1,212 | 4,566 | 3.9x | 3.8x | 7 | 8 |
-| cr | binomial | 500 | | 7 | 6 | 7 | 1.0x | 1.2x | 3 | 3 |
-| cr | binomial | 2,000 | | 1,001 | 12 | 13 | 0.01x | 1.1x | 5 | 4 |
-| cr | binomial | 10,000 | | 974 | 30 | 54 | 0.06x | 1.8x | 6 | 5 |
-| cr | binomial | 100,000 | | 1,143 | 214 | 705 | 0.62x | 3.3x | 7 | 6 |
-| cr | binomial | 500,000 | 3,297 | 1,537 | 1,675 | 4,499 | 2.9x | 2.7x | 9 | 8 |
-| cr | gamma | 500 | | 9 | 7 | 9 | 0.99x | 1.2x | 3 | 5 |
-| cr | gamma | 2,000 | | 1,248 | 10 | 18 | 0.01x | 1.7x | 3 | 6 |
-| cr | gamma | 10,000 | | 1,219 | 23 | 89 | 0.07x | 3.9x | 3 | 7 |
-| cr | gamma | 100,000 | | 1,380 | 191 | 1,289 | 0.93x | 6.7x | 5 | 9 |
-| cr | gamma | 500,000 | 3,587 | 1,309 | 1,439 | 5,974 | 4.6x | 4.2x | 6 | 10 |
-| two | gaussian | 500 | | 12 | 9 | 8 | 0.66x | 0.88x | 6 | 6 |
-| two | gaussian | 2,000 | | 1,205 | 17 | 19 | 0.02x | 1.1x | 8 | 8 |
-| two | gaussian | 10,000 | | 972 | 41 | 73 | 0.08x | 1.8x | 12 | 9 |
-| two | gaussian | 100,000 | | 1,226 | 280 | 945 | 0.77x | 3.4x | 11 | 11 |
-| two | gaussian | 500,000 | 4,608 | 1,716 | 1,789 | 4,929 | 2.9x | 2.8x | 12 | 12 |
-| two | poisson | 500 | | 16 | 11 | 14 | 0.86x | 1.2x | 8 | 8 |
-| two | poisson | 2,000 | | 939 | 16 | 18 | 0.02x | 1.2x | 6 | 5 |
-| two | poisson | 10,000 | | 944 | 40 | 93 | 0.10x | 2.3x | 6 | 7 |
-| two | poisson | 100,000 | | 1,206 | 326 | 1,200 | 0.99x | 3.7x | 7 | 8 |
-| two | poisson | 500,000 | 4,462 | 2,262 | 2,342 | 6,633 | 2.9x | 2.8x | 8 | 9 |
-| two | binomial | 500 | | 42 | 14 | 14 | 0.34x | 0.97x | 9 | 9 |
-| two | binomial | 2,000 | | 1,076 | 12 | 18 | 0.02x | 1.6x | 3 | 5 |
-| two | binomial | 10,000 | | 1,049 | 41 | 88 | 0.08x | 2.1x | 5 | 6 |
-| two | binomial | 100,000 | | 1,317 | 362 | 1,135 | 0.86x | 3.1x | 7 | 7 |
-| two | binomial | 500,000 | 4,215 | 2,438 | 2,576 | 5,909 | 2.4x | 2.3x | 8 | 8 |
-| two | gamma | 500 | | 14 | 9 | 18 | 1.3x | 2.0x | 4 | 6 |
-| two | gamma | 2,000 | | 1,353 | 19 | 34 | 0.03x | 1.8x | 6 | 8 |
-| two | gamma | 10,000 | | 1,256 | 39 | 221 | 0.18x | 5.7x | 4 | 9 |
-| two | gamma | 100,000 | | 1,613 | 365 | 1,832 | 1.1x | 5.0x | 6 | 10 |
-| two | gamma | 500,000 | 4,800 | 2,586 | 2,579 | 8,907 | 3.4x | 3.5x | 7 | 11 |
-| te | gaussian | 500 | | 25 | 21 | 16 | 0.63x | 0.76x | 14 | 10 |
-| te | gaussian | 2,000 | | 1,274 | 22 | 35 | 0.03x | 1.6x | 8 | 9 |
-| te | gaussian | 10,000 | | 1,430 | 53 | 545 | 0.38x | 10.3x | 10 | 10 |
-| te | gaussian | 100,000 | | 1,697 | 601 | 3,539 | 2.1x | 5.9x | 14 | 11 |
-| te | gaussian | 500,000 | 6,752 | 3,586 | 3,614 | 39,606 | 11.0x | 11.0x | 12 | 13 |
-| te | poisson | 500 | | 21 | 15 | 16 | 0.75x | 1.1x | 8 | 6 |
-| te | poisson | 2,000 | | 1,130 | 18 | 27 | 0.02x | 1.5x | 5 | 5 |
-| te | poisson | 10,000 | | 1,124 | 62 | 141 | 0.13x | 2.3x | 6 | 7 |
-| te | poisson | 100,000 | | 1,690 | 681 | 2,123 | 1.3x | 3.1x | 8 | 8 |
-| te | poisson | 500,000 | 7,211 | 4,257 | 4,314 | 15,918 | 3.7x | 3.7x | 8 | 9 |
-| te | binomial | 500 | | 38 | 30 | 14 | 0.37x | 0.46x | 14 | 6 |
-| te | binomial | 2,000 | | 1,224 | 20 | 28 | 0.02x | 1.4x | 5 | 5 |
-| te | binomial | 10,000 | | 1,216 | 55 | 100 | 0.08x | 1.8x | 5 | 5 |
-| te | binomial | 100,000 | | 1,753 | 633 | 2,283 | 1.3x | 3.6x | 7 | 8 |
-| te | binomial | 500,000 | 7,057 | 4,501 | 4,582 | 11,775 | 2.6x | 2.6x | 8 | 9 |
-| te | gamma | 500 | | 21 | 17 | 16 | 0.76x | 0.97x | 6 | 6 |
-| te | gamma | 2,000 | | 1,504 | 31 | 39 | 0.03x | 1.3x | 8 | 7 |
-| te | gamma | 10,000 | | 1,488 | 66 | 642 | 0.43x | 9.8x | 5 | 9 |
-| te | gamma | 100,000 | | 2,121 | 754 | 4,213 | 2.0x | 5.6x | 7 | 10 |
-| te | gamma | 500,000 | 8,141 | 4,632 | 4,701 | 52,347 | 11.3x | 11.1x | 7 | 11 |
-| cr_by | gaussian | 500 | | 33 | 27 | 18 | 0.55x | 0.67x | 14 | 10 |
-| cr_by | gaussian | 2,000 | | 1,099 | 32 | 32 | 0.03x | 1.0x | 13 | 8 |
-| cr_by | gaussian | 10,000 | | 1,082 | 41 | 104 | 0.10x | 2.6x | 7 | 7 |
-| cr_by | gaussian | 100,000 | | 1,572 | 560 | 1,598 | 1.0x | 2.9x | 9 | 9 |
-| cr_by | gaussian | 500,000 | 7,604 | 3,636 | 3,732 | 8,894 | 2.4x | 2.4x | 10 | 10 |
-| cr_by | poisson | 500 | | 26 | 24 | 21 | 0.81x | 0.89x | 8 | 8 |
-| cr_by | poisson | 2,000 | | 1,026 | 30 | 41 | 0.04x | 1.4x | 7 | 7 |
-| cr_by | poisson | 10,000 | | 1,305 | 60 | 130 | 0.10x | 2.2x | 5 | 5 |
-| cr_by | poisson | 100,000 | | 1,611 | 731 | 1,857 | 1.2x | 2.5x | 6 | 6 |
-| cr_by | poisson | 500,000 | 6,682 | 4,516 | 4,528 | 9,947 | 2.2x | 2.2x | 6 | 7 |
-| cr_by | binomial | 500 | | 48 | 25 | 19 | 0.40x | 0.77x | 8 | 8 |
-| cr_by | binomial | 2,000 | | 1,247 | 33 | 41 | 0.03x | 1.3x | 8 | 7 |
-| cr_by | binomial | 10,000 | | 1,126 | 63 | 126 | 0.11x | 2.0x | 5 | 5 |
-| cr_by | binomial | 100,000 | | 1,832 | 852 | 1,528 | 0.83x | 1.8x | 7 | 5 |
-| cr_by | binomial | 500,000 | 8,731 | 6,083 | 5,838 | 8,799 | 1.4x | 1.5x | 8 | 6 |
-| cr_by | gamma | 500 | | 18 | 15 | 16 | 0.88x | 1.0x | 4 | 5 |
-| cr_by | gamma | 2,000 | | 1,387 | 20 | 37 | 0.03x | 1.9x | 3 | 5 |
-| cr_by | gamma | 10,000 | | 1,368 | 74 | 209 | 0.15x | 2.8x | 5 | 6 |
-| cr_by | gamma | 100,000 | | 1,901 | 641 | 2,427 | 1.3x | 3.8x | 4 | 8 |
-| cr_by | gamma | 500,000 | 8,526 | 4,676 | 4,683 | 12,517 | 2.7x | 2.7x | 5 | 9 |
+| smooth | family | n | cold (ms) | warm (ms) | R gam (ms) | cold/R | warm/R | py iter | R iter |
+|--------|--------|---:|---:|---:|---:|---:|---:|---:|---:|
+| cr | gaussian | 500 | 5 | 6 | 7 | 1.3x | 1.2x | 5 | 5 |
+| cr | gaussian | 2,000 | 1,156 | 10 | 15 | 0.01x | 1.5x | 7 | 7 |
+| cr | gaussian | 10,000 | 1,038 | 25 | 55 | 0.05x | 2.2x | 8 | 8 |
+| cr | gaussian | 100,000 | 1,199 | 192 | 931 | 0.78x | 4.8x | 10 | 10 |
+| cr | gaussian | 500,000 | 1,081 | 1,226 | 4,228 | 3.9x | 3.4x | 11 | 11 |
+| cr | poisson | 500 | 12 | 6 | 9 | 0.78x | 1.6x | 3 | 2 |
+| cr | poisson | 2,000 | 1,048 | 10 | 15 | 0.01x | 1.5x | 3 | 4 |
+| cr | poisson | 10,000 | 1,032 | 29 | 68 | 0.07x | 2.3x | 5 | 5 |
+| cr | poisson | 100,000 | 1,230 | 203 | 1,070 | 0.87x | 5.3x | 6 | 7 |
+| cr | poisson | 500,000 | 1,249 | 1,519 | 5,102 | 4.1x | 3.4x | 7 | 8 |
+| cr | binomial | 500 | 8 | 7 | 7 | 0.93x | 1.0x | 3 | 3 |
+| cr | binomial | 2,000 | 1,399 | 14 | 12 | 0.01x | 0.86x | 5 | 4 |
+| cr | binomial | 10,000 | 1,075 | 43 | 67 | 0.06x | 1.6x | 6 | 5 |
+| cr | binomial | 100,000 | 1,281 | 274 | 865 | 0.68x | 3.2x | 7 | 6 |
+| cr | binomial | 500,000 | 1,653 | 1,953 | 5,342 | 3.2x | 2.7x | 9 | 8 |
+| cr | gamma | 500 | 11 | 9 | 12 | 1.1x | 1.4x | 3 | 5 |
+| cr | gamma | 2,000 | 1,302 | 12 | 18 | 0.01x | 1.5x | 3 | 6 |
+| cr | gamma | 10,000 | 1,303 | 30 | 88 | 0.07x | 2.9x | 3 | 7 |
+| cr | gamma | 100,000 | 1,527 | 228 | 1,311 | 0.86x | 5.8x | 5 | 9 |
+| cr | gamma | 500,000 | 1,387 | 1,648 | 6,702 | 4.8x | 4.1x | 6 | 10 |
+| cr | nb | 500 | 578 | 601 | 11 | 0.02x | 0.02x | 4 | 4 |
+| cr | nb | 2,000 | 1,859 | 546 | 17 | 0.01x | 0.03x | 3 | 3 |
+| cr | nb | 10,000 | 2,274 | 620 | 82 | 0.04x | 0.13x | 5 | 4 |
+| cr | nb | 100,000 | 2,405 | 2,047 | 1,281 | 0.53x | 0.63x | 6 | 6 |
+| cr | nb | 500,000 | 3,670 | 5,321 | 6,920 | 1.9x | 1.3x | 7 | 7 |
+| two | gaussian | 500 | 15 | 11 | 8 | 0.53x | 0.76x | 6 | 6 |
+| two | gaussian | 2,000 | 1,025 | 19 | 16 | 0.02x | 0.85x | 8 | 8 |
+| two | gaussian | 10,000 | 1,059 | 47 | 81 | 0.08x | 1.7x | 12 | 9 |
+| two | gaussian | 100,000 | 1,335 | 332 | 1,016 | 0.76x | 3.1x | 11 | 11 |
+| two | gaussian | 500,000 | 1,933 | 2,122 | 6,293 | 3.3x | 3.0x | 12 | 12 |
+| two | poisson | 500 | 17 | 12 | 14 | 0.85x | 1.1x | 8 | 8 |
+| two | poisson | 2,000 | 975 | 18 | 19 | 0.02x | 1.1x | 6 | 5 |
+| two | poisson | 10,000 | 973 | 47 | 109 | 0.11x | 2.3x | 6 | 7 |
+| two | poisson | 100,000 | 1,315 | 398 | 1,546 | 1.2x | 3.9x | 7 | 8 |
+| two | poisson | 500,000 | 2,410 | 2,851 | 7,801 | 3.2x | 2.7x | 8 | 9 |
+| two | binomial | 500 | 19 | 15 | 13 | 0.69x | 0.87x | 9 | 9 |
+| two | binomial | 2,000 | 1,077 | 14 | 20 | 0.02x | 1.5x | 3 | 5 |
+| two | binomial | 10,000 | 1,094 | 48 | 98 | 0.09x | 2.0x | 5 | 6 |
+| two | binomial | 100,000 | 1,846 | 439 | 1,155 | 0.63x | 2.6x | 7 | 7 |
+| two | binomial | 500,000 | 2,856 | 3,088 | 7,298 | 2.6x | 2.4x | 8 | 8 |
+| two | gamma | 500 | 19 | 11 | 19 | 1.0x | 1.8x | 4 | 6 |
+| two | gamma | 2,000 | 1,529 | 22 | 39 | 0.03x | 1.8x | 6 | 8 |
+| two | gamma | 10,000 | 1,528 | 48 | 248 | 0.16x | 5.2x | 4 | 9 |
+| two | gamma | 100,000 | 1,920 | 442 | 1,986 | 1.0x | 4.5x | 6 | 10 |
+| two | gamma | 500,000 | 3,010 | 3,141 | 10,411 | 3.5x | 3.3x | 7 | 11 |
+| two | nb | 500 | 733 | 582 | 12 | 0.02x | 0.02x | 4 | 4 |
+| two | nb | 2,000 | 1,912 | 570 | 28 | 0.01x | 0.05x | 6 | 6 |
+| two | nb | 10,000 | 2,032 | 648 | 121 | 0.06x | 0.19x | 5 | 5 |
+| two | nb | 100,000 | 3,011 | 2,761 | 1,801 | 0.60x | 0.65x | 7 | 7 |
+| two | nb | 500,000 | 8,455 | 9,735 | 10,291 | 1.2x | 1.1x | 8 | 8 |
+| te | gaussian | 500 | 31 | 19 | 14 | 0.45x | 0.75x | 14 | 10 |
+| te | gaussian | 2,000 | 1,550 | 23 | 39 | 0.03x | 1.7x | 8 | 9 |
+| te | gaussian | 10,000 | 1,422 | 60 | 693 | 0.49x | 11.6x | 10 | 10 |
+| te | gaussian | 100,000 | 2,292 | 840 | 4,311 | 1.9x | 5.1x | 14 | 11 |
+| te | gaussian | 500,000 | 4,296 | 4,267 | 55,747 | 13.0x | 13.1x | 12 | 13 |
+| te | poisson | 500 | 28 | 18 | 17 | 0.61x | 0.93x | 8 | 6 |
+| te | poisson | 2,000 | 1,359 | 24 | 35 | 0.03x | 1.4x | 5 | 5 |
+| te | poisson | 10,000 | 1,388 | 79 | 168 | 0.12x | 2.1x | 6 | 7 |
+| te | poisson | 100,000 | 2,287 | 940 | 2,718 | 1.2x | 2.9x | 8 | 8 |
+| te | poisson | 500,000 | 5,965 | 5,240 | 22,669 | 3.8x | 4.3x | 8 | 9 |
+| te | binomial | 500 | 52 | 38 | 17 | 0.33x | 0.45x | 14 | 6 |
+| te | binomial | 2,000 | 1,539 | 26 | 31 | 0.02x | 1.2x | 5 | 5 |
+| te | binomial | 10,000 | 1,517 | 74 | 116 | 0.08x | 1.6x | 5 | 5 |
+| te | binomial | 100,000 | 2,361 | 873 | 2,621 | 1.1x | 3.0x | 7 | 8 |
+| te | binomial | 500,000 | 5,811 | 5,487 | 15,104 | 2.6x | 2.8x | 8 | 9 |
+| te | gamma | 500 | 35 | 21 | 14 | 0.40x | 0.67x | 6 | 6 |
+| te | gamma | 2,000 | 1,861 | 47 | 40 | 0.02x | 0.86x | 8 | 7 |
+| te | gamma | 10,000 | 1,807 | 83 | 755 | 0.42x | 9.1x | 5 | 9 |
+| te | gamma | 100,000 | 2,754 | 1,022 | 4,976 | 1.8x | 4.9x | 7 | 10 |
+| te | gamma | 500,000 | 5,928 | 5,721 | 67,537 | 11.4x | 11.8x | 7 | 11 |
+| te | nb | 500 | 2,074 | 604 | 20 | 0.01x | 0.03x | 4 | 5 |
+| te | nb | 2,000 | 2,214 | 599 | 36 | 0.02x | 0.06x | 4 | 4 |
+| te | nb | 10,000 | 2,850 | 699 | 171 | 0.06x | 0.24x | 5 | 5 |
+| te | nb | 100,000 | 4,167 | 2,462 | 2,345 | 0.56x | 0.95x | 7 | 7 |
+| te | nb | 500,000 | 14,189 | 13,119 | 22,249 | 1.6x | 1.7x | 8 | 8 |
+| cr_by | gaussian | 500 | 49 | 32 | 23 | 0.47x | 0.73x | 14 | 10 |
+| cr_by | gaussian | 2,000 | 1,341 | 37 | 46 | 0.03x | 1.2x | 13 | 8 |
+| cr_by | gaussian | 10,000 | 1,297 | 49 | 137 | 0.11x | 2.8x | 7 | 7 |
+| cr_by | gaussian | 100,000 | 2,065 | 743 | 2,026 | 0.98x | 2.7x | 9 | 9 |
+| cr_by | gaussian | 500,000 | 5,123 | 4,363 | 13,640 | 2.7x | 3.1x | 10 | 10 |
+| cr_by | poisson | 500 | 52 | 24 | 24 | 0.46x | 0.99x | 8 | 8 |
+| cr_by | poisson | 2,000 | 1,561 | 42 | 47 | 0.03x | 1.1x | 7 | 7 |
+| cr_by | poisson | 10,000 | 1,318 | 71 | 154 | 0.12x | 2.2x | 5 | 5 |
+| cr_by | poisson | 100,000 | 2,130 | 1,012 | 2,408 | 1.1x | 2.4x | 6 | 6 |
+| cr_by | poisson | 500,000 | 5,334 | 5,546 | 14,780 | 2.8x | 2.7x | 6 | 7 |
+| cr_by | binomial | 500 | 41 | 29 | 23 | 0.56x | 0.79x | 8 | 8 |
+| cr_by | binomial | 2,000 | 1,370 | 41 | 46 | 0.03x | 1.1x | 8 | 7 |
+| cr_by | binomial | 10,000 | 1,331 | 87 | 146 | 0.11x | 1.7x | 5 | 5 |
+| cr_by | binomial | 100,000 | 2,324 | 1,222 | 1,837 | 0.79x | 1.5x | 7 | 5 |
+| cr_by | binomial | 500,000 | 7,059 | 7,172 | 12,379 | 1.8x | 1.7x | 8 | 6 |
+| cr_by | gamma | 500 | 27 | 16 | 18 | 0.68x | 1.1x | 4 | 5 |
+| cr_by | gamma | 2,000 | 1,644 | 23 | 40 | 0.02x | 1.8x | 3 | 5 |
+| cr_by | gamma | 10,000 | 1,655 | 85 | 239 | 0.14x | 2.8x | 5 | 6 |
+| cr_by | gamma | 100,000 | 2,361 | 865 | 3,010 | 1.3x | 3.5x | 4 | 8 |
+| cr_by | gamma | 500,000 | 5,642 | 5,623 | 17,426 | 3.1x | 3.1x | 5 | 9 |
+| cr_by | nb | 500 | 2,544 | 570 | 19 | 0.01x | 0.03x | 4 | 4 |
+| cr_by | nb | 2,000 | 2,110 | 618 | 53 | 0.03x | 0.09x | 6 | 6 |
+| cr_by | nb | 10,000 | 2,181 | 709 | 173 | 0.08x | 0.24x | 4 | 4 |
+| cr_by | nb | 100,000 | 4,051 | 3,589 | 2,599 | 0.64x | 0.72x | 5 | 5 |
+| cr_by | nb | 500,000 | 17,566 | 19,861 | 16,859 | 0.96x | 0.85x | 7 | 6 |
 
 ### Cold starts
 
@@ -266,7 +291,8 @@ compare against both R's `gam(REML)` (apples-to-apples) and `bam(fREML)`
   Bayes, whereas REML (empirical Bayes) is generally more robust than
   GCV and faster than full Bayes
 - You fit the same model structure repeatedly (bootstrap, CV,
-  simulation) - warm fits are 2-11x faster than R `gam(REML)`
+  simulation) - warm fits are 2-13x faster than R `gam(REML)` for
+  standard families (Gaussian, Poisson, Binomial, Gamma)
 - Your datasets are large (n > 100,000) - the XLA advantage grows
   with n
 
@@ -286,7 +312,7 @@ Disable it with `JAXGAM_NO_COMPILATION_CACHE=1`.
 ## Correctness
 
 jaxgam is validated against R's mgcv 1.9-3 across a 1,450-test suite.
-Every model configuration (4 families x 6 smooth types) is fitted in
+Every model configuration (5 families x 6 smooth types) is fitted in
 both jaxgam and R, then compared value-by-value:
 
 - **Coefficients, fitted values, deviance** - must match R at STRICT

@@ -121,11 +121,9 @@ class ExponentialFamily(ABC):
                 f"link must be a string, Link instance, or None; got {type(link)!r}"
             )
 
-    @property
-    @abstractmethod
-    def family_name(self) -> str:
-        """Short name for the family (e.g. 'gaussian', 'binomial')."""
-        ...
+    #: Short name for the family (e.g. 'gaussian', 'binomial').
+    #: Subclasses must set as a class variable.
+    family_name: str
 
     @property
     @abstractmethod
@@ -168,7 +166,9 @@ class ExponentialFamily(ABC):
         ...
 
     @abstractmethod
-    def saturated_loglik(self, y: np.ndarray, wt: np.ndarray, scale: float) -> float:
+    def saturated_loglik(
+        self, y: np.ndarray, wt: np.ndarray, scale: float, *, max_y: int = 0
+    ) -> float:
         """Saturated log-likelihood: log L(y; y, scale, wt).
 
         The log-likelihood of the saturated model (mu = y). Used in the
@@ -184,6 +184,10 @@ class ExponentialFamily(ABC):
             Prior weights.
         scale : float
             Dispersion parameter.
+        max_y : int
+            Maximum count in ``y``. Only used by extended families
+            (e.g. NB) where ``lax.scan`` needs a compile-time loop bound.
+            Standard families ignore this parameter.
 
         Returns
         -------

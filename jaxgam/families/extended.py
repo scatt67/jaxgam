@@ -123,6 +123,8 @@ class ExtendedFamily(ExponentialFamily):
         wt: np.ndarray,
         scale: float,
         log_theta: np.ndarray,
+        *,
+        max_y: int = 0,
     ):
         """Saturated log-likelihood with explicit theta for AD trace.
 
@@ -142,6 +144,9 @@ class ExtendedFamily(ExponentialFamily):
             Dispersion parameter.
         log_theta : np.ndarray, shape (n_theta,)
             Extra parameters on log scale (traced JAX value).
+        max_y : int
+            Maximum count in ``y``. Controls the ``lax.scan`` loop bound.
+            Must be a compile-time constant.
 
         Returns
         -------

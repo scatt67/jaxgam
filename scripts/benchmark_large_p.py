@@ -34,7 +34,7 @@ print = functools.partial(print, flush=True)
 
 BASIS_DIMS = [100, 200, 500]
 N_SIZES = [100_000]
-FAMILIES = ["gaussian", "poisson"]
+FAMILIES = ["gaussian", "poisson", "nb"]
 BAM_NTHREADS = 8
 
 # ---------------------------------------------------------------------------
@@ -47,6 +47,11 @@ def _make_response(eta, family, rng):
         return eta + rng.normal(0, 0.3, len(eta))
     elif family == "poisson":
         return rng.poisson(np.exp(eta)).astype(float)
+    elif family == "nb":
+        mu = np.exp(eta)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=len(eta))
+        return y.astype(float)
     else:
         raise ValueError(family)
 
@@ -55,7 +60,7 @@ def make_data(n, family, seed=42):
     rng = np.random.default_rng(seed)
     x = rng.uniform(0, 1, n)
     eta = np.sin(2 * np.pi * x)
-    if family == "poisson":
+    if family in ("poisson", "nb"):
         eta = eta + 0.5
     y = _make_response(eta, family, rng)
     return pd.DataFrame({"x": x, "y": y})
@@ -84,7 +89,7 @@ def time_r_fit(ro, k, data, family, method="gam", nthreads=1):
     """
     from rpy2.robjects import numpy2ri, pandas2ri
 
-    family_map = {"gaussian": "gaussian()", "poisson": "poisson()"}
+    family_map = {"gaussian": "gaussian()", "poisson": "poisson()", "nb": "nb()"}
     with ro.conversion.localconverter(
         ro.default_converter + pandas2ri.converter + numpy2ri.converter
     ):

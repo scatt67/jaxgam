@@ -113,6 +113,14 @@ class GAM:
         """
         family_obj = get_family(self.family)
 
+        # Extended families have mutable theta state that is synced by
+        # _build_result.put_theta after fitting.  Copy the instance so
+        # the registry singleton is never mutated.
+        if hasattr(family_obj, "n_theta") and family_obj.n_theta > 0:
+            import copy
+
+            family_obj = copy.deepcopy(family_obj)
+
         # Phase 1: parse + build model setup
         spec = parse_formula(self.formula)
         setup = ModelSetup.build(spec, data, weights, offset)

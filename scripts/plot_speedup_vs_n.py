@@ -37,7 +37,7 @@ print = functools.partial(print, flush=True)
 
 N_SIZES = [500, 5_000, 10_000, 20_000, 50_000, 100_000, 500_000]
 
-FAMILIES = ["gaussian", "poisson", "binomial", "gamma"]
+FAMILIES = ["gaussian", "poisson", "binomial", "gamma", "nb"]
 
 SMOOTH_CONFIGS: dict[str, dict] = {
     "cr": {
@@ -80,6 +80,11 @@ def _make_response(
     elif family == "gamma":
         mu = np.exp(eta)
         return rng.gamma(5.0, scale=mu / 5.0, size=len(eta))
+    elif family == "nb":
+        mu = np.exp(eta)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=len(eta))
+        return y.astype(float)
     else:
         raise ValueError(f"Unknown family: {family}")
 
@@ -94,6 +99,8 @@ def make_single_data(n: int, family: str, seed: int = 42) -> pd.DataFrame:
         eta = 0.5 * eta + 1.0
     elif family == "binomial":
         eta = 2 * eta
+    elif family == "nb":
+        eta = eta + 0.5
     y = _make_response(eta, family, rng)
     return pd.DataFrame({"x": x, "y": y})
 
@@ -109,6 +116,8 @@ def make_two_smooth_data(n: int, family: str, seed: int = 42) -> pd.DataFrame:
         eta = 0.5 * eta + 1.0
     elif family == "binomial":
         eta = 2 * eta
+    elif family == "nb":
+        eta = eta + 0.5
     y = _make_response(eta, family, rng)
     return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
 
@@ -133,6 +142,8 @@ def make_factor_by_data(n: int, family: str, seed: int = 42) -> pd.DataFrame:
         eta = 0.5 * eta + 1.0
     elif family == "binomial":
         eta = 2 * eta
+    elif family == "nb":
+        eta = eta + 0.5
     y = _make_response(eta, family, rng)
     return pd.DataFrame({"x": x, "y": y, "fac": pd.Categorical(fac)})
 
@@ -172,6 +183,7 @@ def time_r_fit(ro, r_formula, data, family, method="gam", nthreads=1):
         "binomial": "binomial()",
         "poisson": "poisson()",
         "gamma": "Gamma()",
+        "nb": "nb()",
     }
     with ro.conversion.localconverter(
         ro.default_converter + pandas2ri.converter + numpy2ri.converter

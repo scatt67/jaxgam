@@ -42,7 +42,7 @@ class Gaussian(ExponentialFamily):
         Link function. Default is identity.
     """
 
-    family_name: str = "gaussian"  # type: ignore[assignment]
+    family_name: str = "gaussian"
     scale_known: bool = False
     response_support = REAL
 
@@ -64,6 +64,8 @@ class Gaussian(ExponentialFamily):
         y: np.ndarray,  # noqa: ARG002
         wt: np.ndarray,
         scale: float,
+        *,
+        max_y: int = 0,  # noqa: ARG002
     ) -> float:
         """Saturated log-likelihood for Gaussian.  Phase 2 only (JAX).
 
@@ -122,7 +124,7 @@ class Binomial(ExponentialFamily):
         Link function. Default is logit.
     """
 
-    family_name: str = "binomial"  # type: ignore[assignment]
+    family_name: str = "binomial"
     scale_known: bool = True
     response_support = UNIT_INTERVAL
 
@@ -143,6 +145,8 @@ class Binomial(ExponentialFamily):
         y: np.ndarray,
         wt: np.ndarray,
         scale: float,  # noqa: ARG002
+        *,
+        max_y: int = 0,  # noqa: ARG002
     ) -> float:
         """Saturated log-likelihood for Binomial.  Phase 2 only (JAX).
 
@@ -222,7 +226,7 @@ class Poisson(ExponentialFamily):
         Link function. Default is log.
     """
 
-    family_name: str = "poisson"  # type: ignore[assignment]
+    family_name: str = "poisson"
     scale_known: bool = True
     response_support = NON_NEGATIVE
 
@@ -244,6 +248,8 @@ class Poisson(ExponentialFamily):
         y: np.ndarray,
         wt: np.ndarray,
         scale: float,  # noqa: ARG002
+        *,
+        max_y: int = 0,  # noqa: ARG002
     ) -> float:
         """Saturated log-likelihood for Poisson.  Phase 2 only (JAX).
 
@@ -319,7 +325,7 @@ class Gamma(ExponentialFamily):
         Link function. Default is inverse (1/mu).
     """
 
-    family_name: str = "Gamma"  # type: ignore[assignment]
+    family_name: str = "Gamma"
     scale_known: bool = False
     response_support = POSITIVE
 
@@ -335,7 +341,14 @@ class Gamma(ExponentialFamily):
         """V'(mu) = 2*mu for Gamma.  Phase 2 only (JAX)."""
         return 2.0 * mu
 
-    def saturated_loglik(self, y: np.ndarray, wt: np.ndarray, scale: float) -> float:
+    def saturated_loglik(
+        self,
+        y: np.ndarray,
+        wt: np.ndarray,
+        scale: float,
+        *,
+        max_y: int = 0,  # noqa: ARG002
+    ) -> float:
         """Saturated log-likelihood for Gamma.  Phase 2 only (JAX).
 
         R's fix.family.ls (gam.fit3.r line 2519):
