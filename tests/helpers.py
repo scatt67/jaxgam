@@ -87,6 +87,25 @@ def make_smooth_spec(
 # ---------------------------------------------------------------------------
 
 
+def _make_nb_data(
+    n: int = 200,
+    seed: int = SEED,
+    true_theta: float = 2.0,
+) -> pd.DataFrame:
+    """Generate single-predictor NB count data with known theta.
+
+    Used across NB test modules (fitting, custom_jvp, results).
+    """
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, 1, n)
+    eta = np.sin(2 * np.pi * x) + 0.5
+    mu = np.exp(eta)
+    y = rng.negative_binomial(
+        n=true_theta, p=true_theta / (mu + true_theta), size=n
+    ).astype(float)
+    return pd.DataFrame({"x": x, "y": y})
+
+
 def _generate_family_data(family_name: str, n: int | None = None) -> pd.DataFrame:
     """Generate single-predictor synthetic data for a given family.
 

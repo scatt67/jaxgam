@@ -31,6 +31,7 @@ from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import _diff_score, _fit_and_score_impl
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.jax_utils import build_S_lambda, cho_factor
+from tests.helpers import _make_nb_data
 from tests.tolerances import MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -49,18 +50,6 @@ def _setup_fd(formula: str, data: pd.DataFrame, family):
     spec = parse_formula(formula)
     setup = ModelSetup.build(spec, data)
     return FittingData.from_setup(setup, family)
-
-
-def _make_nb_data(n: int = 100, seed: int = 42, true_theta: float = 2.0):
-    """Generate NB count data with known theta."""
-    rng = np.random.default_rng(seed)
-    x = rng.uniform(0, 1, n)
-    eta = np.sin(2 * np.pi * x) + 0.5
-    mu = np.exp(eta)
-    y = rng.negative_binomial(
-        n=true_theta, p=true_theta / (mu + true_theta), size=n
-    ).astype(float)
-    return pd.DataFrame({"x": x, "y": y})
 
 
 def _build_diff_score_kwargs(fd: FittingData, joint_theta: bool):

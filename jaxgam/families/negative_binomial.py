@@ -151,12 +151,12 @@ class NegativeBinomial(ExtendedFamily):
     ) -> float:
         """Saturated log-likelihood (R's family$ls).  Phase 2 only (JAX).
 
-              R: efam.r lines 248-275 (forward pass only, no theta derivs).
+        R: efam.r lines 248-275 (forward pass only, no theta derivs).
 
-              Rewritten for numerical stability at large theta:
-              - ``(y+θ)*log(y+θ) - θ*log(θ)`` → ``y*log(y+θ) + θ*log1p(y/θ)``
-              - ``lgamma(θ) - lgamma(θ+y)`` → ``_lgamma_diff`` with recurrence-based
-        custom_jvp for stable first and second derivatives via AD
+        Rewritten for numerical stability at large theta:
+        - ``(y+θ)*log(y+θ) - θ*log(θ)`` → ``y*log(y+θ) + θ*log1p(y/θ)``
+        - ``lgamma(θ) - lgamma(θ+y)`` → ``_lgamma_diff`` with recurrence-based
+          custom_jvp for stable first and second derivatives via AD
         """
         theta = jnp.exp(self._log_theta[0])
         return _saturated_loglik_jax(y, wt, theta, self._max_y)
@@ -251,16 +251,13 @@ class NegativeBinomial(ExtendedFamily):
         if self._max_y == 0 and hasattr(y, "__len__") and len(y) > 0:
             # _max_y must be set from the data before calling this method.
             # A value of 0 with non-empty y means _lgamma_diff scan will
-            # never execute, producing wrong results.
-            import warnings
-
+            # never execute, producing zero theta derivatives silently.
             y_max = int(jnp.max(y)) if hasattr(y, "shape") else int(max(y))
             if y_max > 0:
-                warnings.warn(
+                raise RuntimeError(
                     f"NegativeBinomial._max_y is 0 but max(y)={y_max}. "
                     "Set family._max_y = int(max(y)) before calling "
-                    "saturated_loglik_theta (normally done by NewtonOptimizer).",
-                    stacklevel=2,
+                    "saturated_loglik_theta (normally done by NewtonOptimizer)."
                 )
         theta = jnp.exp(log_theta[0])
         return _saturated_loglik_jax(y, wt, theta, self._max_y)

@@ -27,7 +27,7 @@ from jaxgam.fitting.newton import newton_optimize
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.results import GAMResults
-from tests.helpers import SEED
+from tests.helpers import SEED, _make_nb_data
 from tests.tolerances import STRICT
 
 # ---------------------------------------------------------------------------
@@ -286,18 +286,6 @@ class TestRepr:
 # ---------------------------------------------------------------------------
 # NB post-estimation tests (PR 6)
 # ---------------------------------------------------------------------------
-
-
-def _make_nb_data(n: int = 200, seed: int = SEED, true_theta: float = 2.0):
-    """Generate NB count data for post-estimation tests."""
-    rng = np.random.default_rng(seed)
-    x = rng.uniform(0, 1, n)
-    eta = np.sin(2 * np.pi * x) + 0.5
-    mu = np.exp(eta)
-    y = rng.negative_binomial(
-        n=true_theta, p=true_theta / (mu + true_theta), size=n
-    ).astype(float)
-    return pd.DataFrame({"x": x, "y": y})
 
 
 def _fit_nb_gam(family_obj=None, formula="y ~ s(x, k=10, bs='cr')"):

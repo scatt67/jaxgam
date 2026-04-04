@@ -26,7 +26,7 @@ from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.newton import NewtonResult, newton_optimize
-from tests.helpers import SEED, _generate_family_data
+from tests.helpers import SEED, _generate_family_data, _make_nb_data
 from tests.tolerances import LOOSE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -53,22 +53,6 @@ def _back_transform_coefs(result: NewtonResult, fd: FittingData) -> np.ndarray:
     if fd.repara_D is not None:
         coefs = np.asarray(fd.repara_D) @ coefs
     return coefs
-
-
-def _make_nb_data(
-    n: int = 200,
-    seed: int = SEED,
-    true_theta: float = 2.0,
-) -> pd.DataFrame:
-    """Generate single-predictor NB count data with known theta."""
-    rng = np.random.default_rng(seed)
-    x = rng.uniform(0, 1, n)
-    eta = np.sin(2 * np.pi * x) + 0.5
-    mu = np.exp(eta)
-    y = rng.negative_binomial(
-        n=true_theta, p=true_theta / (mu + true_theta), size=n
-    ).astype(float)
-    return pd.DataFrame({"x": x, "y": y})
 
 
 def _make_nb_data_two_smooth(
@@ -101,6 +85,43 @@ def _make_poisson_data(
     return pd.DataFrame({"x": x, "y": y})
 
 
+# Relative tolerance for theta estimation bounds: estimated theta must be
+# within [true * (1 - THETA_RTOL), true * (1 + THETA_RTOL)].
+THETA_RTOL = 0.5
+
+# ---------------------------------------------------------------------------
+# Guard: _max_y must be set before JIT tracing
+# ---------------------------------------------------------------------------
+
+
+class TestMaxYGuard:
+    """Verify _max_y is set by the production path and raises if missing."""
+
+    FORMULA = "y ~ s(x, k=10, bs='cr')"
+
+    def test_newton_optimize_sets_max_y(self):
+        """newton_optimize sets family._max_y from the data."""
+        data = _make_nb_data(true_theta=2.0)
+        family = NegativeBinomial()
+        fd = _setup_fd(self.FORMULA, data, family)
+        # Before fitting, _max_y is 0 (default)
+        assert family._max_y == 0
+        newton_optimize(fd)
+        # After fitting, _max_y should be set to max(y)
+        expected = int(np.max(np.asarray(fd.y)))
+        assert fd.family._max_y == expected
+
+    def test_saturated_loglik_theta_raises_when_max_y_unset(self):
+        """saturated_loglik_theta raises if _max_y=0 with positive counts."""
+        family = NegativeBinomial()
+        assert family._max_y == 0
+        y = jnp.array([1.0, 2.0, 3.0])
+        wt = jnp.ones(3)
+        log_theta = jnp.array([0.0])
+        with pytest.raises(RuntimeError, match="_max_y is 0 but max"):
+            family.saturated_loglik_theta(y, wt, 1.0, log_theta)
+
+
 # ---------------------------------------------------------------------------
 # A. Simple end-to-end NB fit
 # ---------------------------------------------------------------------------
@@ -127,10 +148,12 @@ class TestNBSimpleFit:
         assert result.convergence_info == "full convergence"
 
     def test_theta_in_range(self, nb_fit):
-        """Estimated theta is in reasonable range around true theta=2."""
+        """Estimated theta is within THETA_RTOL of true theta=2."""
+        true_theta = 2.0
+        lo, hi = true_theta * (1 - THETA_RTOL), true_theta * (1 + THETA_RTOL)
         _, result = nb_fit
         assert result.theta is not None
-        assert 0.5 < result.theta < 10.0, f"theta={result.theta} outside [0.5, 10]"
+        assert lo < result.theta < hi, f"theta={result.theta} outside [{lo}, {hi}]"
 
     def test_deviance_finite(self, nb_fit):
         """Deviance is finite and non-negative."""
@@ -435,9 +458,10 @@ class TestNBEdgeCases:
 
         assert result.converged
         assert result.theta is not None
-        # Theta should stay moderate (not explode to Poisson limit)
-        assert result.theta < 10.0, (
-            f"theta={result.theta} should be < 10 for overdispersed data"
+        lo = true_theta * (1 - THETA_RTOL)
+        hi = true_theta * (1 + THETA_RTOL)
+        assert lo < result.theta < hi, (
+            f"theta={result.theta} outside [{lo}, {hi}] (true={true_theta})"
         )
         assert float(result.pirls_result.deviance) >= 0
         assert jnp.all(jnp.isfinite(result.pirls_result.coefficients))

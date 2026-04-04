@@ -303,9 +303,7 @@ The CRAN mirror is GPL-2 (Simon Wood). Attribution is required if redistributing
 - R uses `gam.fit4` (observed weights `w = 0.5 * d²D/dη²`) for extended families, not `gam.fit3` (Fisher weights). jaxgam mirrors this in `pirls_loop` when `log_theta` is provided.
 - `ift2()` in C computes `dβ/dθ` analytically. jaxgam gets this for free via the 3-primal `custom_jvp` on PIRLS.
 
----
-
-## Quick Lookup: "I'm Debugging X, Where Do I Look?"
+#### General Debugging
 
 | Problem | R file | Function | Search for |
 |---|---|---|---|
