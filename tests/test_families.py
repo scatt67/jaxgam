@@ -1249,8 +1249,8 @@ class TestExtendedFamilyContract:
     @pytest.fixture(
         params=[
             NegativeBinomial(),
-            NegativeBinomial(theta=2),
-            NegativeBinomial(theta=0.5),
+            NegativeBinomial(theta=2, fixed=True),
+            NegativeBinomial(theta=0.5, fixed=True),
             # future: Tweedie(p=1.5), Beta(), ...
         ],
         ids=["nb_estimated", "nb_fixed_2", "nb_fixed_0.5"],
@@ -1432,9 +1432,9 @@ class TestNBSpecific:
         np.testing.assert_allclose(fam.get_theta(), [0.0])
         np.testing.assert_allclose(fam.get_theta(transformed=True), [1.0])
 
-    def test_constructor_positive(self) -> None:
-        """NegativeBinomial(theta=2) -> fixed theta = 2."""
-        fam = NegativeBinomial(theta=2)
+    def test_constructor_fixed(self) -> None:
+        """NegativeBinomial(theta=2, fixed=True) -> fixed theta = 2."""
+        fam = NegativeBinomial(theta=2, fixed=True)
         assert fam.n_theta == 0
         np.testing.assert_allclose(
             fam.get_theta(transformed=True),
@@ -1443,9 +1443,9 @@ class TestNBSpecific:
             atol=STRICT.atol,
         )
 
-    def test_constructor_negative(self) -> None:
-        """NegativeBinomial(theta=-3) -> estimate, start at 3."""
-        fam = NegativeBinomial(theta=-3)
+    def test_constructor_estimated_with_start(self) -> None:
+        """NegativeBinomial(theta=3) -> estimate, start at 3."""
+        fam = NegativeBinomial(theta=3)
         assert fam.n_theta == 1
         np.testing.assert_allclose(
             fam.get_theta(transformed=True),
@@ -1454,11 +1454,12 @@ class TestNBSpecific:
             atol=STRICT.atol,
         )
 
-    def test_constructor_zero(self) -> None:
-        """NegativeBinomial(theta=0) -> same as None."""
-        fam = NegativeBinomial(theta=0)
-        assert fam.n_theta == 1
-        np.testing.assert_allclose(fam.get_theta(), [0.0])
+    def test_constructor_rejects_nonpositive(self) -> None:
+        """NegativeBinomial(theta<=0) raises ValueError."""
+        with pytest.raises(ValueError, match="theta must be positive"):
+            NegativeBinomial(theta=0)
+        with pytest.raises(ValueError, match="theta must be positive"):
+            NegativeBinomial(theta=-3)
 
     def test_alpha_property(self) -> None:
         fam = NegativeBinomial(theta=2)
@@ -1483,7 +1484,7 @@ class TestNBSpecific:
         np.testing.assert_array_equal(fam.valid_mu(mu), expected)
 
     def test_repr(self) -> None:
-        fam = NegativeBinomial(theta=2)
+        fam = NegativeBinomial(theta=2, fixed=True)
         r = repr(fam)
         assert "NegativeBinomial" in r
         assert "fixed" in r
@@ -1540,9 +1541,9 @@ class TestExtendedFamilyAD:
 
     @pytest.fixture(
         params=[
-            (NegativeBinomial(theta=2), "moderate_theta"),
-            (NegativeBinomial(theta=0.01), "high_overdispersion"),
-            (NegativeBinomial(theta=10000), "near_poisson"),
+            (NegativeBinomial(theta=2, fixed=True), "moderate_theta"),
+            (NegativeBinomial(theta=0.01, fixed=True), "high_overdispersion"),
+            (NegativeBinomial(theta=10000, fixed=True), "near_poisson"),
             # future: Tweedie(p=1.5), Beta(), ...
         ],
         ids=["nb_theta2", "nb_theta0.01", "nb_theta10000"],

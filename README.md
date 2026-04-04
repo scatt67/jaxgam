@@ -90,8 +90,10 @@ all families, smooth types, and post-estimation tools.
 
 ### Families
 
-Gaussian, Binomial, Poisson, Gamma - each with its default link and
-REML/ML smoothing parameter selection.
+Gaussian, Binomial, Poisson, Gamma, and Negative Binomial - each with
+its default link and REML/ML smoothing parameter selection. The Negative
+Binomial is an extended family with an estimated dispersion parameter
+(theta).
 
 ### Smooth types
 
@@ -118,8 +120,8 @@ These are deliberate scope boundaries, not bugs:
 1. **No sparse solver.** Models with > ~5,000 basis functions will hit the
    dense memory ceiling. Factor-by with many levels or large tensor products
    are most affected.
-2. **Four families only.** Negative binomial, Tweedie, Beta, and other
-   extended families are not yet available.
+2. **Five families only.** Tweedie, Beta, and other extended families
+   beyond Negative Binomial are not yet available.
 3. **Dense design matrix must fit in memory.** Datasets with > ~10M rows
    require chunked processing, which is not implemented.
 4. **No random effects.** `bs="re"` (random effects) and `bs="fs"`

@@ -161,7 +161,7 @@ class TestNBFixedTheta:
     def fixed_fit(self):
         """Fit NB model with fixed theta=2."""
         data = _make_nb_data(true_theta=2.0)
-        family = NegativeBinomial(theta=2)
+        family = NegativeBinomial(theta=2, fixed=True)
         fd = _setup_fd(self.FORMULA, data, family)
         result = newton_optimize(fd)
         return fd, result, family
@@ -237,7 +237,7 @@ class TestNBHardGateInvariants:
     @pytest.fixture(
         params=[
             NegativeBinomial(),
-            NegativeBinomial(theta=2),
+            NegativeBinomial(theta=2, fixed=True),
         ],
         ids=["nb_estimated", "nb_fixed"],
     )
@@ -317,7 +317,7 @@ class TestNBPoissonLimit:
         """
         data, pois_fd, pois_result = poisson_reference
 
-        nb_family = NegativeBinomial(theta=1e4)
+        nb_family = NegativeBinomial(theta=1e4, fixed=True)
         nb_fd = _setup_fd(self.FORMULA, data, nb_family)
         nb_result = newton_optimize(nb_fd)
 

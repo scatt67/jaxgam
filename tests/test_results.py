@@ -430,7 +430,7 @@ class TestNBFixedThetaPostEstimation:
     @pytest.fixture(scope="class")
     def fixed_nb_result(self):
         """Fit NB(theta=2) fixed model."""
-        return _fit_nb_gam(family_obj=NegativeBinomial(theta=2))
+        return _fit_nb_gam(family_obj=NegativeBinomial(theta=2, fixed=True))
 
     def test_theta_is_none(self, fixed_nb_result):
         """Fixed-theta NB has result.theta=None (theta not estimated)."""

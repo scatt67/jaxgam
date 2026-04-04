@@ -51,7 +51,7 @@ $MGCV_SOURCE/
 │   ├── bam.r             # bam() - NOT needed for v1.0
 │   ├── gamm.r            # gamm() - NOT needed for v1.0
 │   ├── plots.r           # plot.gam
-│   ├── efam.r            # Extended families - NOT needed for v1.0
+│   ├── efam.r            # Extended families (nb(), Tweedie, etc.)
 │   └── sparse.r          # Sparse matrix routines - NOT needed for v1.0
 ├── src/                  # C source files
 │   ├── tprs.c            # TPRS eigendecomposition (the real implementation)
@@ -288,6 +288,25 @@ The CRAN mirror is GPL-2 (Simon Wood). Attribution is required if redistributing
 
 ## Quick Lookup: "I'm Debugging X, Where Do I Look?"
 
+#### Negative Binomial (Extended Family)
+
+| R file | Function | What it does |
+|---|---|---|
+| `R/efam.r` | `nb()` lines 161-310 | NB extended family: deviance, Dd derivatives, ls (saturated loglik), aic, theta state |
+| `R/efam.r` | `estimate.theta()` lines 5-96 | Theta estimation via Fellner-Schall (not used by jaxgam; we use joint Newton) |
+| `R/gam.fit4.r` | `gam.fit4()` lines 240-548 | Extended PIRLS: observed weights from Dd, step-halving on penalized deviance |
+| `R/gam.fit4.r` | `dDeta()` lines 4-77 | Deviance derivative utility: d²D/dη², d²D/(dηdθ), etc. |
+| `src/gdi.c` | `ift2()` lines 1368-1462 | IFT for theta: dβ/dθ = -H⁻¹ X' d²D/(dηdθ) |
+
+**Key details:**
+- R's `nb()$Dd()` provides deviance derivatives up to 4th order w.r.t. mu plus mixed partials w.r.t. theta. jaxgam computes these via `jax.grad` through `deviance_fn`.
+- R uses `gam.fit4` (observed weights `w = 0.5 * d²D/dη²`) for extended families, not `gam.fit3` (Fisher weights). jaxgam mirrors this in `pirls_loop` when `log_theta` is provided.
+- `ift2()` in C computes `dβ/dθ` analytically. jaxgam gets this for free via the 3-primal `custom_jvp` on PIRLS.
+
+---
+
+## Quick Lookup: "I'm Debugging X, Where Do I Look?"
+
 | Problem | R file | Function | Search for |
 |---|---|---|---|
 | Basis matrix doesn't match R | `R/smooth.r` | `smooth.construct.*.smooth.spec()` | The specific basis type |
@@ -303,3 +322,6 @@ The CRAN mirror is GPL-2 (Simon Wood). Attribution is required if redistributing
 | Constraint/identifiability issue | `R/mgcv.r` | `gam.side()` | Constraint detection logic |
 | Factor-by doesn't match | `R/smooth.r` | `smooth.construct()` | `by.var`, `by.level` |
 | Summary p-values don't match | `R/mgcv.r` | `summary.gam()` | `testStat` |
+| NB theta doesn't match R | `R/efam.r` | `nb()` | `getTheta`, `Dd` |
+| NB deviance derivatives wrong | `R/gam.fit4.r` | `dDeta()` | `Deta`, `Deta2` |
+| NB observed weights wrong | `R/gam.fit4.r` | `gam.fit4()` | `w <- dd$Deta2*.5` |

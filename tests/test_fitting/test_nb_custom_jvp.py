@@ -540,7 +540,7 @@ class TestStandardFamilyRegression:
     def test_nb_fixed_theta_uses_standard_path(self):
         """NB with fixed theta (n_theta=0) uses standard 2-primal path."""
         data = _make_nb_data(n=80, seed=42, true_theta=2.0)
-        family = NegativeBinomial(theta=2.0)  # fixed, n_theta=0
+        family = NegativeBinomial(theta=2.0, fixed=True)  # n_theta=0
         assert family.n_theta == 0
 
         fd = _setup_fd(_FORMULA, data, family)

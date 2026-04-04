@@ -88,7 +88,34 @@ data = pd.DataFrame({"x": x, "y": y})
 results = GAM("y ~ s(x, k=10, bs='cr')", family=Gamma(link="log")).fit(data)
 ```
 
-## 5. Multiple smooths
+## 5. Negative Binomial GAM
+
+Count data with overdispersion (variance exceeds the mean). The
+dispersion parameter theta is estimated automatically.
+
+```python
+rng = np.random.default_rng(42)
+n = 300
+x = rng.uniform(0, 1, n)
+eta = np.sin(2 * np.pi * x) + 0.5
+mu = np.exp(eta)
+theta = 2.0
+y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
+data = pd.DataFrame({"x": x, "y": y})
+
+results = GAM("y ~ s(x, k=10, bs='cr')", family="nb").fit(data)
+print(f"Estimated theta: {results.theta:.2f}")
+```
+
+To fix theta instead of estimating it:
+
+```python
+from jaxgam.families import NegativeBinomial
+
+results = GAM("y ~ s(x)", family=NegativeBinomial(theta=2, fixed=True)).fit(data)
+```
+
+## 6. Multiple smooths
 
 Add multiple smooth terms with `+`.
 
@@ -104,7 +131,7 @@ results = GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(data)
 print(f"Per-smooth EDF: {results.edf}")
 ```
 
-## 6. Tensor product smooths
+## 7. Tensor product smooths
 
 Model interactions between covariates with `te()`.
 
@@ -121,7 +148,7 @@ Use `ti()` for tensor interaction terms (without main effects):
 results = GAM("y ~ s(x1, k=8) + s(x2, k=8) + ti(x1, x2, k=5)").fit(data)
 ```
 
-## 7. Factor-by smooths
+## 8. Factor-by smooths
 
 Fit a separate smooth curve for each level of a factor variable.
 
@@ -156,7 +183,7 @@ with its own smoothing parameter.
 **Important:** The factor column must be `pd.Categorical` (or string
 dtype) so jaxgam recognizes it as a factor.
 
-## 8. Prediction
+## 9. Prediction
 
 ### Self-prediction
 
@@ -184,7 +211,7 @@ X_new = results.predict_matrix(newdata)
 # Manual prediction: eta = X_new @ results.coefficients
 ```
 
-## 9. Summary
+## 10. Summary
 
 `summary()` prints and returns a summary object with parametric
 coefficient tests, smooth term significance tests (Wood 2013), and
@@ -200,7 +227,7 @@ Output includes:
   statistics, and p-values
 - R-squared, deviance explained, scale estimate
 
-## 10. Plotting
+## 11. Plotting
 
 `plot()` produces one panel per smooth term.
 
@@ -226,7 +253,7 @@ For 1D smooths, `plot()` shows the partial effect with shaded
 confidence bands. For 2D tensor products, it shows filled contour
 plots. Factor-by smooths produce one panel per level.
 
-## 11. Fitting options
+## 12. Fitting options
 
 ### Smoothing parameter method
 
@@ -257,7 +284,7 @@ offset = np.zeros(n)
 results = GAM("y ~ s(x)").fit(data, weights=weights, offset=offset)
 ```
 
-## 12. GAMResults attributes
+## 13. GAMResults attributes
 
 `fit()` returns a `GAMResults` frozen dataclass. All attributes are
 read-only:
@@ -283,6 +310,7 @@ read-only:
 | `weights` | Prior weights (n,) |
 | `family` | Family object used for fitting |
 | `formula` | Model formula string |
+| `theta` | Estimated theta for NB (None for standard families) |
 | `method` | Smoothing parameter method ("REML" or "ML") |
 | `n` | Number of observations |
 

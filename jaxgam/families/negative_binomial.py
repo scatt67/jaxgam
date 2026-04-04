@@ -49,23 +49,24 @@ class NegativeBinomial(ExtendedFamily):
 
     Parameters
     ----------
-    theta : float or None
-        Dispersion parameter. Interpretation follows R's ``nb()`` convention:
-
-        - ``None`` or ``0``: estimate theta (``n_theta = 1``), start at
-          ``theta = 1`` (i.e. ``log_theta = 0``).
-        - Positive: fix theta at this value (``n_theta = 0``).
-        - Negative: estimate theta (``n_theta = 1``), start at ``-theta``.
-
+    theta : float
+        Dispersion parameter (must be positive). When ``fixed=False``
+        (default), this is the starting value for estimation. When
+        ``fixed=True``, theta is held constant during fitting.
+        Default is ``1.0``.
+    fixed : bool
+        If ``False`` (default), theta is estimated during fitting
+        (``n_theta = 1``). If ``True``, theta is held constant
+        (``n_theta = 0``).
     link : str or Link or None
         Link function. Default is log. Supported: ``"log"``, ``"identity"``,
         ``"sqrt"``.
 
     Examples
     --------
-    >>> fam = NegativeBinomial()          # estimate theta, start at 1
-    >>> fam = NegativeBinomial(theta=2)   # fix theta = 2
-    >>> fam = NegativeBinomial(theta=-3)  # estimate theta, start at 3
+    >>> fam = NegativeBinomial()                    # estimate theta, start at 1
+    >>> fam = NegativeBinomial(theta=3)             # estimate theta, start at 3
+    >>> fam = NegativeBinomial(theta=2, fixed=True) # fix theta = 2
     """
 
     family_name: str = "nb"  # type: ignore[assignment]
@@ -74,21 +75,20 @@ class NegativeBinomial(ExtendedFamily):
 
     def __init__(
         self,
-        theta: float | None = None,
+        theta: float = 1.0,
+        *,
+        fixed: bool = False,
         link: str | Link | None = None,
     ) -> None:
         super().__init__(link)
-        # R's nb() convention: NULL/0 -> estimate from 1,
-        # >0 -> fixed, <0 -> estimate from -theta
-        if theta is None or theta == 0:
-            self._log_theta = np.array([0.0])  # log(1) = 0
-            self.n_theta: int = 1
-        elif theta > 0:
-            self._log_theta = np.array([np.log(theta)])
-            self.n_theta = 0
-        else:
-            self._log_theta = np.array([np.log(-theta)])
-            self.n_theta = 1
+        if theta <= 0:
+            raise ValueError(
+                f"theta must be positive, got {theta}. "
+                "Pass the desired value directly (e.g. theta=3) and use "
+                "fixed=True to hold it constant during fitting."
+            )
+        self._log_theta = np.array([np.log(theta)])
+        self.n_theta: int = 0 if fixed else 1
         # max(y) for the lax.scan in _lgamma_diff. Set from data before
         # JIT compilation (e.g., in NewtonOptimizer.__init__).
         self._max_y: int = 0

@@ -174,8 +174,8 @@ class TestExtendedFamilyContract:
 
     @pytest.fixture(params=[
         NegativeBinomial(),
-        NegativeBinomial(theta=2),
-        NegativeBinomial(theta=0.5),
+        NegativeBinomial(theta=2, fixed=True),
+        NegativeBinomial(theta=0.5, fixed=True),
         # future: Tweedie(p=1.5), Beta(), ...
     ])
     def efamily(self, request):
@@ -206,8 +206,8 @@ Tests in this class:
 NB-only tests that don't generalize to other extended families.
 
 - [x] Constructor: `NegativeBinomial()` -> n_theta=1, log_theta=0
-- [x] Constructor: `NegativeBinomial(theta=2)` -> n_theta=0, log_theta=log(2)
-- [x] Constructor: `NegativeBinomial(theta=-2)` -> n_theta=1, log_theta=log(2)
+- [x] Constructor: `NegativeBinomial(theta=2, fixed=True)` -> n_theta=0, log_theta=log(2)
+- [x] Constructor: `NegativeBinomial(theta=2)` -> n_theta=1, log_theta=log(2)
 - [x] `alpha` property returns 1/theta
 - [x] `scale_known` is True
 - [x] `default_link` is LogLink
@@ -259,9 +259,9 @@ class TestExtendedFamilyAD:
     """
 
     @pytest.fixture(params=[
-        (NegativeBinomial(theta=2), "moderate_theta"),
-        (NegativeBinomial(theta=0.01), "high_overdispersion"),
-        (NegativeBinomial(theta=10000), "near_poisson"),
+        (NegativeBinomial(theta=2, fixed=True), "moderate_theta"),
+        (NegativeBinomial(theta=0.01, fixed=True), "high_overdispersion"),
+        (NegativeBinomial(theta=10000, fixed=True), "near_poisson"),
         # future: Tweedie, Beta, ...
     ])
     def efamily_regime(self, request):
@@ -365,13 +365,13 @@ instance and Newton detects `n_theta > 0` automatically.
 
 - [x] Simple: `y ~ s(x)`, `NegativeBinomial()`, simulated NB data (true theta=2)
       Verify: convergence, theta in reasonable range, deviance finite
-- [x] Fixed theta: `NegativeBinomial(theta=2)` fits without theta estimation
+- [x] Fixed theta: `NegativeBinomial(theta=2, fixed=True)` fits without theta estimation
 - [x] Multiple smooths: `y ~ s(x1) + s(x2)` with NB
 - [x] Newton `converged` flag is True
 - [x] `result.theta` is populated (estimated) or None (n_theta=0 fixed)
 - [x] Hard-gate invariants: deviance >= 0, no NaN, EDF bounds
 - [x] Standard family fits unchanged (run a Gaussian test, compare to pre-PR result)
-- [x] Poisson limit (fixed): fit `NegativeBinomial(theta=1e4)` on Poisson-generated
+- [x] Poisson limit (fixed): fit `NegativeBinomial(theta=1e4, fixed=True)` on Poisson-generated
       data, compare deviance and coefficients against `Poisson()` fit (LOOSE —
       NB deviance formula has residual theta-dependent terms at finite theta)
 - [x] Poisson limit (estimated): fit `NegativeBinomial()` on Poisson-generated data,
@@ -496,7 +496,7 @@ including theta (added above: `test_theta_vs_r`, `test_theta_positive`).
 The 7 new NB cells cover all smooth types automatically.
 
 **NB edge cases** (covered in PR 4's `test_nb_fitting.py`):
-- [x] Fixed theta: `NegativeBinomial(theta=2)` — theta unchanged after fit
+- [x] Fixed theta: `NegativeBinomial(theta=2, fixed=True)` — theta unchanged after fit
 - [x] High overdispersion (true theta=0.1) — convergence
 - [x] Low overdispersion (Poisson limit) — near-Poisson behavior
 - [ ] ML method: add ML variant to validation matrix or as separate test
@@ -614,7 +614,7 @@ print(f"Estimated theta: {results.theta:.2f}")
 
 ### Tests
 
-- [ ] `demo_nb.py` runs without error: `uv run python scripts/demo/demo_nb.py`
+- [x] `demo_nb.py` runs without error: `uv run python scripts/demo/demo_nb.py`
 - [ ] Benchmark script runs with NB: `uv run python scripts/benchmark_vs_r.py`
   (just verify it doesn't crash — benchmark numbers are informational)
 
