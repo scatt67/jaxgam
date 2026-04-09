@@ -374,14 +374,16 @@ def _build_interaction_matrix(self, data):
 ### 5.4 Column Ordering
 
 The column ordering must match R's `model.matrix()` for R comparison tests.
-R's interaction ordering is: last variable varies fastest (rightmost term in
+R's interaction ordering is: first variable varies fastest (leftmost term in
 the interaction formula changes first).
 
-For `s(g1, g2, bs="re")` with g1 levels [a,b] and g2 levels [1,2,3]:
-- R columns: a:1, a:2, a:3, b:1, b:2, b:3
-- First variable (g1) varies slowest, last (g2) varies fastest
+For `s(g1, g2, bs="re")` with g1 levels [a,b] and g2 levels [x,y,z]:
+- R columns: a:x, b:x, a:y, b:y, a:z, b:z
+- First variable (g1) varies fastest, last (g2) varies slowest
 
-This is the natural order from the row-wise Kronecker approach above.
+Verified empirically against R 4.5.2 / mgcv 1.9-3 via `smoothCon(s(g1, g2,
+bs="re"), data)`. The row-wise Kronecker implementation uses the new term's
+index as the outer (slow) index to match this convention.
 
 ### 5.5 `build_design_matrix()` and `predict_matrix()`
 
