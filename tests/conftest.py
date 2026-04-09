@@ -195,6 +195,44 @@ def factor_by_data():
 
 
 @pytest.fixture
+def re_factor_data():
+    """Single-factor data for RE smooth tests."""
+    rng = np.random.default_rng(SEED)
+    n = 200
+    n_groups = 20
+    g = rng.choice([f"g{i}" for i in range(n_groups)], size=n)
+    return {
+        "g": pd.Series(pd.Categorical(g)),
+    }
+
+
+@pytest.fixture
+def re_two_factor_data():
+    """Two-factor data for RE interaction tests."""
+    rng = np.random.default_rng(SEED)
+    n = 200
+    g1 = rng.choice(["a", "b", "c"], size=n)
+    g2 = rng.choice(["x", "y"], size=n)
+    return {
+        "g1": pd.Series(pd.Categorical(g1)),
+        "g2": pd.Series(pd.Categorical(g2)),
+    }
+
+
+@pytest.fixture
+def re_numeric_factor_data():
+    """Numeric x factor data for random slope tests."""
+    rng = np.random.default_rng(SEED)
+    n = 200
+    x = rng.uniform(0, 1, n)
+    g = rng.choice([f"g{i}" for i in range(10)], size=n)
+    return {
+        "x": x,
+        "g": pd.Series(pd.Categorical(g)),
+    }
+
+
+@pytest.fixture
 def family_data(request):
     """Single-predictor family data.
 
