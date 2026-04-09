@@ -21,7 +21,7 @@ RUN R -e "install.packages('renv', repos='https://cloud.r-project.org')" \
 # ── Stage 3: Python deps via uv (cached unless pyproject.toml/uv.lock change) ──
 FROM r-deps AS py-deps
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.9.15 /uv /usr/local/bin/uv
 ENV UV_PYTHON_PREFERENCE=only-managed
 
 # rocker/r-ver installs R at /usr/local/lib/R (not /usr/lib/R).
