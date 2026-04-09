@@ -22,7 +22,7 @@ import pandas as pd
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
-from jaxgam.smooths.by_variable import get_factor_levels, is_factor
+from jaxgam.smooths.utils import get_col, get_factor_levels, is_factor
 
 
 class RandomEffectSmooth(Smooth):
@@ -71,7 +71,7 @@ class RandomEffectSmooth(Smooth):
         self._is_factor = {}
         self._levels = {}
         for var in variables:
-            col = _get_col(data, var)
+            col = get_col(data, var)
             if is_factor(col):
                 self._is_factor[var] = True
                 self._levels[var] = get_factor_levels(col)
@@ -117,14 +117,14 @@ class RandomEffectSmooth(Smooth):
             Interaction model matrix, shape ``(n, k)``.
         """
         variables = self.spec.variables
-        col0 = _get_col(data, variables[0])
+        col0 = get_col(data, variables[0])
         n = len(col0)
 
         # Start with column of ones
         result = np.ones((n, 1))
 
         for var in variables:
-            col = _get_col(data, var)
+            col = get_col(data, var)
             if self._is_factor[var]:
                 levels = self._levels[var]
                 term = self._encode_factor(col, levels)
@@ -242,21 +242,3 @@ class RandomEffectSmooth(Smooth):
             f"RandomEffectSmooth(variables=[{vars_str}], "
             f"n_coefs={self.n_coefs}, rank={self.rank})"
         )
-
-
-def _get_col(
-    data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame,
-    name: str,
-) -> pd.Series | npt.NDArray:
-    """Extract a column from data (dict or DataFrame)."""
-    if isinstance(data, pd.DataFrame):
-        if name not in data.columns:
-            raise KeyError(
-                f"Variable '{name}' not found in data. Available: {list(data.columns)}"
-            )
-        return data[name]
-    if name not in data:
-        raise KeyError(
-            f"Variable '{name}' not found in data. Available: {list(data.keys())}"
-        )
-    return data[name]
