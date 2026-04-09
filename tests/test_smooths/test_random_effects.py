@@ -420,6 +420,35 @@ class TestPrediction:
         assert X_pred.shape == (1, smooth.n_coefs)
         np.testing.assert_allclose(X_pred, 0.0, atol=STRICT.atol)
 
+    def test_unseen_level_in_one_variable_of_interaction(self) -> None:
+        """Unseen level in one var of a multi-var interaction zeros the row."""
+        rng = np.random.default_rng(SEED)
+        n = 100
+        g1 = rng.choice(["a", "b"], size=n)
+        g2 = rng.choice(["x", "y"], size=n)
+        train_data = {
+            "g1": pd.Series(pd.Categorical(g1)),
+            "g2": pd.Series(pd.Categorical(g2)),
+        }
+
+        spec = make_smooth_spec(["g1", "g2"], bs="re")
+        smooth = RandomEffectSmooth(spec)
+        smooth.setup(train_data)
+
+        # g1 known, g2 unseen -> entire row should be zero
+        new_data = {
+            "g1": pd.Series(pd.Categorical(["a", "b", "a"])),
+            "g2": pd.Series(pd.Categorical(["x", "unseen", "unseen"])),
+        }
+        X_pred = smooth.predict_matrix(new_data)
+
+        # Row 0: both known -> exactly one 1.0
+        assert X_pred[0].sum() == 1.0
+        # Row 1: g2 unseen -> all zeros
+        np.testing.assert_allclose(X_pred[1, :], 0.0, atol=STRICT.atol)
+        # Row 2: g2 unseen -> all zeros
+        np.testing.assert_allclose(X_pred[2, :], 0.0, atol=STRICT.atol)
+
 
 # ===========================================================================
 # 5. R basis comparison tests (skip if R unavailable)

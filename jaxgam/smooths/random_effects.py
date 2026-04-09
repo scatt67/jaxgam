@@ -238,6 +238,8 @@ class RandomEffectSmooth(Smooth):
 
     def __repr__(self) -> str:
         vars_str = ",".join(self.spec.variables)
+        if not self._is_setup:
+            return f"RandomEffectSmooth(variables=[{vars_str}], not set up)"
         return (
             f"RandomEffectSmooth(variables=[{vars_str}], "
             f"n_coefs={self.n_coefs}, rank={self.rank})"
