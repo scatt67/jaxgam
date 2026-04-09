@@ -521,7 +521,7 @@ def _extract_training_data(
     dict[str, np.ndarray]
         Mapping from variable name to raw training data array.
     """
-    from jaxgam.smooths.by_variable import is_factor
+    from jaxgam.smooths.utils import is_factor
 
     training: dict[str, np.ndarray] = {}
 

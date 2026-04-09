@@ -21,10 +21,10 @@ import pytest
 from jaxgam.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
-    is_factor,
     resolve_by_variable,
 )
 from jaxgam.smooths.tprs import TPRSSmooth
+from jaxgam.smooths.utils import is_factor
 from tests.helpers import make_smooth_spec
 from tests.tolerances import (
     MODERATE,

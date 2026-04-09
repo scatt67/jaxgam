@@ -24,12 +24,11 @@ from jaxgam.penalties.penalty import CompositePenalty, Penalty
 from jaxgam.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
-    get_factor_levels,
-    is_factor,
     resolve_by_variable,
 )
 from jaxgam.smooths.constraints import CoefficientMap
 from jaxgam.smooths.registry import get_smooth_class
+from jaxgam.smooths.utils import get_factor_levels, is_factor
 
 if TYPE_CHECKING:
     from jaxgam.smooths.base import Smooth

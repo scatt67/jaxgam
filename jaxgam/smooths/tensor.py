@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from functools import reduce
 
-import numba
 import numpy as np
 import numpy.typing as npt
 from scipy import linalg
@@ -24,42 +23,7 @@ from scipy import linalg
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-@numba.njit(numba.float64[:, :](numba.float64[:, :], numba.float64[:, :]))
-def _row_tensor(
-    A: npt.NDArray[np.floating], B: npt.NDArray[np.floating]
-) -> npt.NDArray[np.floating]:
-    """Row-wise Kronecker product of two matrices.
-
-    For each row i, computes ``A[i, :] ⊗ B[i, :]``.
-
-    Parameters
-    ----------
-    A : np.ndarray
-        Shape ``(n, ka)``.
-    B : np.ndarray
-        Shape ``(n, kb)``.
-
-    Returns
-    -------
-    np.ndarray
-        Shape ``(n, ka * kb)``.
-    """
-    n = A.shape[0]
-    ka = A.shape[1]
-    kb = B.shape[1]
-    result = np.empty((n, ka * kb))
-    for i in range(ka):
-        for j in range(n):
-            for k in range(kb):
-                result[j, i * kb + k] = A[j, i] * B[j, k]
-    return result
-
+from jaxgam.smooths.utils import row_tensor as _row_tensor
 
 # ---------------------------------------------------------------------------
 # TensorProductSmooth (te)
