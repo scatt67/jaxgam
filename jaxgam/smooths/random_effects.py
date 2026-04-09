@@ -22,7 +22,12 @@ import pandas as pd
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
-from jaxgam.smooths.utils import get_col, get_factor_levels, is_factor
+from jaxgam.smooths.utils import (
+    get_col,
+    get_factor_levels,
+    interaction_matrix,
+    is_factor,
+)
 
 
 class RandomEffectSmooth(Smooth):
@@ -117,32 +122,28 @@ class RandomEffectSmooth(Smooth):
             Interaction model matrix, shape ``(n, k)``.
         """
         variables = self.spec.variables
-        col0 = get_col(data, variables[0])
-        n = len(col0)
 
-        # Start with column of ones
-        result = np.ones((n, 1))
+        # Compute widths for each variable's encoding
+        n = len(get_col(data, variables[0]))
+        widths = np.empty(len(variables), dtype=np.int64)
+        for i, var in enumerate(variables):
+            if self._is_factor[var]:
+                widths[i] = len(self._levels[var])
+            else:
+                widths[i] = 1
 
-        for var in variables:
+        # Pre-allocate 3D array and fill each variable's encoding
+        max_k = int(widths.max())
+        encodings = np.zeros((len(variables), n, max_k), dtype=np.float64)
+        for i, var in enumerate(variables):
             col = get_col(data, var)
             if self._is_factor[var]:
-                levels = self._levels[var]
-                term = self._encode_factor(col, levels)
+                enc = self._encode_factor(col, self._levels[var])
+                encodings[i, :, : enc.shape[1]] = enc
             else:
-                term = np.asarray(col, dtype=float).reshape(n, 1)
+                encodings[i, :, 0] = np.asarray(col, dtype=float)
 
-            # Interaction: row-wise Kronecker product
-            # R's model.matrix() orders with earlier variables varying
-            # fastest, so the new term's index is the outer (slow) index.
-            n_old = result.shape[1]
-            n_new = term.shape[1]
-            new_result = np.empty((n, n_old * n_new))
-            for j in range(n_new):
-                for i in range(n_old):
-                    new_result[:, j * n_old + i] = result[:, i] * term[:, j]
-            result = new_result
-
-        return result
+        return interaction_matrix(encodings, widths)
 
     @staticmethod
     def _encode_factor(
