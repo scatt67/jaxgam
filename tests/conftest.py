@@ -233,6 +233,20 @@ def re_numeric_factor_data():
 
 
 @pytest.fixture
+def re_model_data():
+    """DataFrame with x, g, and y for RE integration tests."""
+    rng = np.random.default_rng(SEED)
+    n = 200
+    n_groups = 20
+    x = rng.uniform(0, 1, n)
+    g = rng.choice([f"g{i}" for i in range(n_groups)], size=n)
+    group_effects = rng.normal(0, 0.3, n_groups)
+    g_idx = np.array([int(gi[1:]) for gi in g])
+    y = np.sin(2 * np.pi * x) + group_effects[g_idx] + rng.normal(0, 0.5, n)
+    return pd.DataFrame({"x": x, "g": pd.Categorical(g), "y": y})
+
+
+@pytest.fixture
 def family_data(request):
     """Single-predictor family data.
 

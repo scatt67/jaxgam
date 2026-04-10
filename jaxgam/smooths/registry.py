@@ -17,6 +17,7 @@ from jaxgam.smooths.cubic import (
     CubicShrinkageSmooth,
     CyclicCubicSmooth,
 )
+from jaxgam.smooths.random_effects import RandomEffectSmooth
 from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 from jaxgam.smooths.tprs import TPRSShrinkageSmooth, TPRSSmooth
 
@@ -27,6 +28,7 @@ smooth_registry: Registry[Smooth] = Registry(
         "cr": CubicRegressionSmooth,
         "cs": CubicShrinkageSmooth,
         "cc": CyclicCubicSmooth,
+        "re": RandomEffectSmooth,
         "te": TensorProductSmooth,
         "ti": TensorInteractionSmooth,
     },
