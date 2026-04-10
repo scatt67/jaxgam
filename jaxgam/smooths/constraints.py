@@ -369,6 +369,11 @@ class CoefficientMap:
         # Apply sum-to-zero centering constraints
         if apply_centering:
             for i, sm in enumerate(smooths):
+                # Skip smooths that opt out of centering (e.g., bs="re")
+                base_smooth = getattr(sm, "base_smooth", sm)
+                if not getattr(base_smooth, "_has_centering_constraint", True):
+                    continue
+
                 if isinstance(sm, NumericBySmooth) and not getattr(
                     sm, "has_centering_constraint", True
                 ):
@@ -376,7 +381,6 @@ class CoefficientMap:
 
                 # ti() already absorbs marginal constraints during construction;
                 # applying centering again would incorrectly remove a column.
-                base_smooth = getattr(sm, "base_smooth", sm)
                 if isinstance(base_smooth, TensorInteractionSmooth):
                     continue
 

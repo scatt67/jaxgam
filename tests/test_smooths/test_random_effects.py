@@ -653,3 +653,109 @@ class TestRComparison:
         smooth, r_result, _data = self._setup_numeric_factor()
         assert smooth.rank == r_result["rank"]
         assert smooth.null_space_dim == r_result["null_space_dim"]
+
+
+# ===========================================================================
+# 6. Integration tests (registry + constraint pipeline)
+# ===========================================================================
+
+
+class TestRegistryIntegration:
+    """Tests that bs='re' is wired into the GAM pipeline."""
+
+    def test_registry_has_re(self) -> None:
+        """'re' is registered in the smooth registry."""
+        from jaxgam.smooths.registry import get_smooth_class
+
+        cls = get_smooth_class("re")
+        assert cls is RandomEffectSmooth
+
+    def test_model_setup_re_only(self, re_model_data) -> None:
+        """ModelSetup.build() succeeds with RE-only formula."""
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
+
+        spec = parse_formula("y ~ s(g, bs='re')")
+        setup = ModelSetup.build(spec, re_model_data)
+
+        n_groups = len(re_model_data["g"].cat.categories)
+        # Model matrix: intercept (1) + RE (n_groups)
+        assert setup.X.shape == (len(re_model_data), 1 + n_groups)
+        assert setup.coef_map.total_coefs == 1 + n_groups
+
+    def test_re_no_centering_applied(self, re_model_data) -> None:
+        """RE smooth has Z_centering = None (centering skipped)."""
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
+
+        spec = parse_formula("y ~ s(g, bs='re')")
+        setup = ModelSetup.build(spec, re_model_data)
+
+        re_term = setup.coef_map.get_term("s(g)")
+        assert re_term.Z_centering is None
+
+    def test_re_no_gam_side_deletion(self, re_model_data) -> None:
+        """RE smooth skipped by gam_side even when sharing a variable.
+
+        s(x) and s(x, g, bs='re') share variable x. gam_side would
+        normally constrain the higher-dim smooth, but RE's
+        side_constrain=False opts it out.
+        """
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
+
+        spec = parse_formula("y ~ s(x) + s(x, g, bs='re')")
+        setup = ModelSetup.build(spec, re_model_data)
+
+        re_term = setup.coef_map.get_term("s(x,g)")
+        assert re_term.del_index == ()
+
+    def test_re_n_coefs_no_centering_loss(self, re_model_data) -> None:
+        """RE smooth keeps all columns (no column lost to centering)."""
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
+
+        spec = parse_formula("y ~ s(g, bs='re')")
+        setup = ModelSetup.build(spec, re_model_data)
+
+        re_term = setup.coef_map.get_term("s(g)")
+        n_groups = len(re_model_data["g"].cat.categories)
+        assert re_term.n_coefs == re_term.n_coefs_raw
+        assert re_term.n_coefs == n_groups
+
+    def test_re_plus_standard_smooth(self, re_model_data) -> None:
+        """RE + standard smooth: both terms present with correct dimensions."""
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
+
+        spec = parse_formula("y ~ s(x) + s(g, bs='re')")
+        setup = ModelSetup.build(spec, re_model_data)
+
+        sx_term = setup.coef_map.get_term("s(x)")
+        re_term = setup.coef_map.get_term("s(g)")
+
+        assert sx_term.term_type == "smooth"
+        assert re_term.term_type == "smooth"
+
+        # RE keeps all columns, standard smooth gets centering
+        n_groups = len(re_model_data["g"].cat.categories)
+        assert re_term.n_coefs == n_groups
+        assert re_term.Z_centering is None
+        assert sx_term.Z_centering is not None
+
+        # Total columns: intercept + s(x) constrained + RE
+        expected_total = 1 + sx_term.n_coefs + re_term.n_coefs
+        assert setup.X.shape[1] == expected_total
+
+    def test_re_slope_model_setup(self, re_model_data) -> None:
+        """ModelSetup with s(x, g, bs='re') random slopes succeeds."""
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
+
+        spec = parse_formula("y ~ s(x, g, bs='re')")
+        setup = ModelSetup.build(spec, re_model_data)
+
+        re_term = setup.coef_map.get_term("s(x,g)")
+        n_groups = len(re_model_data["g"].cat.categories)
+        assert re_term.n_coefs == n_groups
+        assert re_term.Z_centering is None

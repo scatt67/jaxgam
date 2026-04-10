@@ -9,7 +9,7 @@ leaves the codebase green. Later PRs depend on earlier ones.
 
 ---
 
-## PR 1: `RandomEffectSmooth` class + unit tests
+## PR 1: `RandomEffectSmooth` class + unit tests (DONE)
 
 **Title:** `[phase1] smooths/re: add RandomEffectSmooth basis and penalty construction`
 
@@ -61,7 +61,7 @@ Existing tests unaffected.
 
 ---
 
-## PR 2: Registry + constraint pipeline integration
+## PR 2: Registry + constraint pipeline integration (DONE)
 
 **Title:** `[phase1] smooths/re: register bs="re" and skip centering constraints`
 
