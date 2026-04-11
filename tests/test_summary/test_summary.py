@@ -488,7 +488,51 @@ class TestEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# E. Davies algorithm unit tests
+# E. Random effect summary tests
+# ---------------------------------------------------------------------------
+
+
+class TestRandomEffectSummary:
+    """Tests that RE terms get the correct p-value test type in summary()."""
+
+    def test_smooth_info_is_random_flag(self, re_model_data) -> None:
+        """SmoothInfo.is_random is True for RE, False for standard smooth."""
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
+
+        spec = parse_formula("y ~ s(x) + s(g, bs='re')")
+        setup = ModelSetup.build(spec, re_model_data)
+
+        si_sx = setup.smooth_info[0]
+        si_re = setup.smooth_info[1]
+
+        assert si_sx.label == "s(x)"
+        assert si_re.label == "s(g)"
+        assert si_sx.is_random is False
+        assert si_re.is_random is True
+
+    def test_re_ref_df_is_integer(self, re_model_data) -> None:
+        """RE term's ref.df in summary is an integer (type_=1 rounds rank)."""
+        model = GAM("y ~ s(x) + s(g, bs='re')", family="gaussian").fit(re_model_data)
+        s = summary(model)
+
+        # s.s_table columns: edf, ref.df, statistic, p-value
+        # Row 0 = s(x), Row 1 = s(g)
+        ref_df_sx = s.s_table[0, 1]
+        ref_df_re = s.s_table[1, 1]
+
+        # RE ref.df should be a whole number (type_=1 rounds to integer)
+        assert ref_df_re == int(ref_df_re), (
+            f"RE ref.df should be integer, got {ref_df_re}"
+        )
+        # Standard smooth ref.df is typically fractional
+        assert ref_df_sx != int(ref_df_sx), (
+            f"Standard smooth ref.df expected fractional, got {ref_df_sx}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# F. Davies algorithm unit tests
 # ---------------------------------------------------------------------------
 
 

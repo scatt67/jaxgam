@@ -58,6 +58,9 @@ class SmoothInfo:
         Index of first penalty in the global penalty list.
     null_space_dim : int
         Null space dimension from the smooth object.
+    is_random : bool
+        True for random effect terms (``bs="re"``).  Controls the
+        p-value test type in ``summary()`` (``type_=1`` instead of 0).
     """
 
     label: str
@@ -69,6 +72,7 @@ class SmoothInfo:
     n_penalties: int
     first_penalty: int
     null_space_dim: int
+    is_random: bool = False
 
 
 @dataclass(frozen=True)
@@ -691,6 +695,8 @@ class ModelSetup:
             label = CoefficientMap.smooth_label(sm)
             term = coef_map.get_term(label)
             by_var: str | None = getattr(sm, "by_variable", None)
+            base = getattr(sm, "base_smooth", sm)
+            is_random = getattr(base, "_random", False)
 
             infos.append(
                 SmoothInfo(
@@ -705,6 +711,7 @@ class ModelSetup:
                         term.penalty_indices[0] if term.penalty_indices else 0
                     ),
                     null_space_dim=sm.null_space_dim,
+                    is_random=is_random,
                 )
             )
 

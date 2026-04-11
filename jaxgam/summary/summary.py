@@ -210,12 +210,16 @@ def summary(gam: GAMResults) -> GAMSummary:
 
             rdf = residual_df if est_disp else -1.0
 
+            # RE terms use type_=1 (integer rank rounding) for the
+            # significance test, matching R's summary.gam behaviour.
+            test_type = 1 if si.is_random else 0
+
             res = _test_stat(
                 p_i,
                 X_i,
                 V_i,
                 rank=min(n_coefs_i, edf1_i),
-                type_=0,
+                type_=test_type,
                 res_df=rdf,
             )
 
