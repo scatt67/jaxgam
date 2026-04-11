@@ -17,7 +17,7 @@ squares (PIRLS), Laplace-approximate REML (empirical bayes), and the full smooth
 construction pipeline - follow Wood's `mgcv` package, published methods, and his
 [*Generalized Additive Models: An Introduction with R*](https://www.routledge.com/Generalized-Additive-Models-An-Introduction-with-R-Second-Edition/Wood/p/book/9781498728331) textbook.
 
-Full attributiton is given to Simon Woods and the R `mgcv` package, `jaxgam` being a derivative work follows the same [license](LICENSE) as such.
+Full attribution is given to Simon Wood and the R `mgcv` package, `jaxgam` being a derivative work follows the same [license](LICENSE) as such.
 
 jaxgam uses [jax](https://github.com/google/jax) for JIT-compiled fitting
 with automatic differentiation through the PIRLS inner loop and Newton

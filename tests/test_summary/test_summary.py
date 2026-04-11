@@ -531,6 +531,78 @@ class TestRandomEffectSummary:
         )
 
 
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+class TestRandomEffectSummaryVsR:
+    """RE summary statistics compared to R's summary.gam().
+
+    type_=1 changes rank rounding, the test statistic, and the p-value.
+    This class verifies all three match R at MODERATE tolerance.
+    """
+
+    FORMULA = "y ~ s(x) + s(g, bs='re')"
+
+    @pytest.fixture
+    def re_summary_pair(self, re_model_data):
+        from tests.r_bridge import RBridge
+
+        model = GAM(self.FORMULA, family="gaussian").fit(re_model_data)
+        py_s = summary(model)
+        r_s = RBridge().summary_gam(self.FORMULA, re_model_data, family="gaussian")
+        return py_s, r_s
+
+    def test_re_ref_df_vs_r(self, re_summary_pair) -> None:
+        """RE term ref.df matches R (MODERATE)."""
+        py_s, r_s = re_summary_pair
+        # Row 1 = s(g) RE term, column 1 = Ref.df
+        np.testing.assert_allclose(
+            py_s.s_table[1, 1],
+            r_s["s_table"][1, 1],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="RE ref.df differs from R",
+        )
+
+    def test_re_test_stat_vs_r(self, re_summary_pair) -> None:
+        """RE term F statistic matches R (LOOSE).
+
+        LOOSE because the test statistic compounds small fitting
+        differences across the eigendecomposition in testStat.
+        """
+        py_s, r_s = re_summary_pair
+        # Row 1 = s(g), column 2 = F / Chi.sq
+        np.testing.assert_allclose(
+            py_s.s_table[1, 2],
+            r_s["s_table"][1, 2],
+            rtol=LOOSE.rtol,
+            atol=LOOSE.atol,
+            err_msg="RE test statistic differs from R",
+        )
+
+    def test_re_pvalue_vs_r(self, re_summary_pair) -> None:
+        """RE term p-value matches R (LOOSE)."""
+        py_s, r_s = re_summary_pair
+        # Row 1 = s(g), column 3 = p-value
+        np.testing.assert_allclose(
+            py_s.s_table[1, 3],
+            r_s["s_table"][1, 3],
+            rtol=LOOSE.rtol,
+            atol=LOOSE.atol,
+            err_msg="RE p-value differs from R",
+        )
+
+    def test_standard_smooth_stats_vs_r(self, re_summary_pair) -> None:
+        """Standard smooth s(x) stats still match R in mixed model."""
+        py_s, r_s = re_summary_pair
+        # Row 0 = s(x), all 4 columns: edf, ref.df, stat, p-value
+        np.testing.assert_allclose(
+            py_s.s_table[0, :],
+            r_s["s_table"][0, :],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="Standard smooth stats differ from R in mixed RE model",
+        )
+
+
 # ---------------------------------------------------------------------------
 # F. Davies algorithm unit tests
 # ---------------------------------------------------------------------------
