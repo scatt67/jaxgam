@@ -104,7 +104,7 @@ smoke test).
 
 ---
 
-## PR 3: `SmoothInfo.is_random` + summary p-value type
+## PR 3: `SmoothInfo.is_random` + summary p-value type (DONE)
 
 **Title:** `[phase3] summary: use integer-rank test for random effect terms`
 
@@ -146,7 +146,7 @@ has `_random=True`).
 
 ---
 
-## PR 4: Validation matrix — RE cells
+## PR 4: Validation matrix — RE cells (DONE)
 
 **Title:** `[testing] validation-matrix: add re, re_slope, re_mixed cells`
 

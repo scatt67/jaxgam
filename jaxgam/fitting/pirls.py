@@ -4,13 +4,17 @@ Given fixed smoothing parameters (encoded in ``S_lambda``), PIRLS finds
 the penalized maximum likelihood coefficients by iterating a weighted
 least-squares solve with step-halving on penalized deviance.
 
-Fisher scoring only (not full Newton).
+Standard exponential families use Fisher scoring (``gam.fit3``).
+Extended families (NB) use Newton scoring with observed weights
+(``gam.fit4``): ``w = 0.5 * d²D/dη²``.  After convergence, Fisher-
+weighted ``XtWX_fisher`` / ``L_fisher`` are computed for EDF and
+Bayesian covariance (matching R's ``gdi2``, ``gdi.c:2262-2294``).
 
 The loop is implemented with ``jax.lax.while_loop`` so the entire
 iteration compiles to a single fused XLA kernel when JIT-compiled.
 
 Design doc reference: Section 7.2
-R source reference: gam.fit3() lines 296-468
+R source reference: gam.fit3() lines 296-468, gam.fit4() lines 367-564
 """
 
 from __future__ import annotations
@@ -109,11 +113,23 @@ class PIRLSResult:
     scale : jax.Array
         Estimated scale parameter.
     XtWX : jax.Array, shape (p, p)
-        Final weighted cross-product matrix (needed for REML).
+        Final weighted cross-product matrix (Newton weights for extended
+        families, Fisher weights for standard families). Used for REML
+        criterion ``log|H|`` computation.
     L : jax.Array, shape (p, p)
-        Final Cholesky factor of penalized Hessian (needed for REML).
+        Final Cholesky factor of penalized Hessian (Newton/Fisher
+        weights, matching ``XtWX``). Used for REML criterion.
     working_weights : jax.Array, shape (n,)
-        Final working weights.
+        Final working weights (Newton for extended, Fisher for standard).
+    XtWX_fisher : jax.Array, shape (p, p)
+        Fisher-weighted cross-product matrix. For standard families this
+        equals ``XtWX``. For extended families this is recomputed with
+        Fisher weights after convergence (R's ``gdi2``, gdi.c:2262-2294).
+        Used for EDF and Bayesian covariance.
+    L_fisher : jax.Array, shape (p, p)
+        Cholesky factor of Fisher-weighted penalized Hessian. For
+        standard families this equals ``L``. Used for EDF and Bayesian
+        covariance.
     """
 
     coefficients: jax.Array
@@ -127,6 +143,8 @@ class PIRLSResult:
     XtWX: jax.Array
     L: jax.Array
     working_weights: jax.Array
+    XtWX_fisher: jax.Array
+    L_fisher: jax.Array
 
 
 # Register as JAX pytree so PIRLSResult can be returned from jax.jit
@@ -453,6 +471,23 @@ def pirls_loop(
     XtWX_final = WX_final.T @ WX_final
     L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
 
+    # For extended families: recompute XtWX and L using Fisher weights
+    # for EDF and Bayesian covariance.  R's gam.fit4 uses Newton weights
+    # for PIRLS but Fisher weights for EDF (gdi.c:2262-2294,
+    # gam.fit4.r:564: ``wf = pmax(0, dd$EDeta2 * .5)``).
+    # For standard families, Fisher = Newton, so just alias.
+    if family.n_theta > 0 and log_theta is not None:
+        _ww_fisher_fn = family.working_weights_fn(wt)
+        W_fisher = _ww_fisher_fn(eta_final, log_theta)
+        W_fisher = jnp.clip(W_fisher, _W_MIN, _W_MAX)
+        W_sqrt_fisher = jnp.sqrt(W_fisher)
+        WX_fisher = W_sqrt_fisher[:, None] * X
+        XtWX_fisher = WX_fisher.T @ WX_fisher
+        L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+    else:
+        XtWX_fisher = XtWX_final
+        L_fisher = L_final
+
     dev_final = _compute_dev(final.mu, eta_final)
     scale = jnp.where(
         family.scale_known,
@@ -472,4 +507,6 @@ def pirls_loop(
         XtWX=XtWX_final,
         L=L_final,
         working_weights=W_final,
+        XtWX_fisher=XtWX_fisher,
+        L_fisher=L_fisher,
     )
