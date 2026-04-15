@@ -1,7 +1,8 @@
-"""35-Cell Validation Matrix: systematic R comparison for all smooth x family combos.
+"""50-Cell Validation Matrix: systematic R comparison for all smooth x family combos.
 
 Tests cover every cell in the v1.0 surface (design.md §1.2):
-- 7 smooth configs (tp, cr, te, ti, tp_by, cr_by, te_by) x 5 families = 35 cells
+- 10 smooth configs (tp, cr, te, ti, tp_by, cr_by, te_by, re, re_slope, re_mixed)
+    x 5 families = 50 cells
 - Families: gaussian, binomial, poisson, gamma, nb
 
 Plus hard-gate invariants (§18.1) that must hold for all cells without R.
@@ -13,6 +14,8 @@ Tolerance rationale (from AGENTS.md §Common Pitfalls, MEMORY.md):
   TPRS: compare fitted values not raw coefficients (sign ambiguity).
   Factor-by EDF: our architecture stores 1 combined entry vs R's per-level;
     compare total EDF sum.
+  RE (re, re_slope): deterministic basis, single sp — direct coef comparison.
+  RE mixed (re_mixed): contains TPRS sign ambiguity — compare fitted values.
 """
 
 from __future__ import annotations
@@ -173,6 +176,51 @@ def _make_factor_by_2d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
     )
 
 
+def _make_re_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
+    """Random effects data: continuous x + factor g with group-level effects.
+
+    Matches the conftest.py re_model_data fixture structure (n=300, 20 groups).
+    """
+    rng = np.random.default_rng(seed)
+    n = 300
+    n_groups = 20
+    x = rng.uniform(0, 1, n)
+    g = rng.choice([f"g{i}" for i in range(n_groups)], size=n)
+
+    # True group effects
+    b_intercept = rng.normal(0, 1.0, n_groups)
+    group_idx = {f"g{i}": i for i in range(n_groups)}
+    group_effect = np.array([b_intercept[group_idx[gi]] for gi in g])
+
+    # Smooth + RE truth
+    eta = np.sin(2 * np.pi * x) + group_effect
+
+    if family_name == "gaussian":
+        y = eta + rng.normal(0, 0.5, n)
+    elif family_name == "binomial":
+        prob = 1.0 / (1.0 + np.exp(-eta))
+        y = rng.binomial(1, prob, n).astype(float)
+    elif family_name == "poisson":
+        y = rng.poisson(np.exp(eta * 0.5 + 0.5)).astype(float)
+    elif family_name == "gamma":
+        mu = np.exp(eta * 0.3 + 1.0)
+        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
+    else:
+        raise ValueError(f"Unknown family: {family_name}")
+
+    return pd.DataFrame(
+        {
+            "x": x,
+            "g": pd.Categorical(g),
+            "y": y,
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Smooth configuration registry
 # ---------------------------------------------------------------------------
@@ -184,7 +232,7 @@ class SmoothConfig:
 
     py_formula: str
     r_formula: str
-    data_type: str  # "single", "two_smooth", "factor_by", "factor_by_2d"
+    data_type: str  # "single", "two_smooth", "factor_by", "factor_by_2d", "re"
 
 
 SMOOTH_CONFIGS: dict[str, SmoothConfig] = {
@@ -223,6 +271,21 @@ SMOOTH_CONFIGS: dict[str, SmoothConfig] = {
         r_formula="y ~ te(x1, x2, by=fac, k=c(5,5)) + fac",
         data_type="factor_by_2d",
     ),
+    "re": SmoothConfig(
+        py_formula="y ~ s(g, bs='re')",
+        r_formula="y ~ s(g, bs='re')",
+        data_type="re",
+    ),
+    "re_slope": SmoothConfig(
+        py_formula="y ~ s(x, g, bs='re')",
+        r_formula="y ~ s(x, g, bs='re')",
+        data_type="re",
+    ),
+    "re_mixed": SmoothConfig(
+        py_formula="y ~ s(x, k=10, bs='tp') + s(g, bs='re')",
+        r_formula="y ~ s(x, k=10, bs='tp') + s(g, bs='re')",
+        data_type="re",
+    ),
 }
 
 FAMILIES = ["gaussian", "binomial", "poisson", "gamma", "nb"]
@@ -243,6 +306,8 @@ def _get_data(config: SmoothConfig, family: str) -> pd.DataFrame:
         return _make_factor_by_data(family)
     if config.data_type == "factor_by_2d":
         return _make_factor_by_2d_data(family)
+    if config.data_type == "re":
+        return _make_re_data(family)
     raise ValueError(f"Unknown data_type: {config.data_type}")
 
 
@@ -252,7 +317,13 @@ def _r_tol(smooth_key: str, family_name: str):
     Tensor products and factor-by always use LOOSE (flat REML surfaces,
     multiple sp). GLM families also use LOOSE (iterative PIRLS compounding).
     """
-    if family_name == "gaussian" and smooth_key in ("tp", "cr"):
+    if family_name == "gaussian" and smooth_key in (
+        "tp",
+        "cr",
+        "re",
+        "re_slope",
+        "re_mixed",
+    ):
         return MODERATE
     return LOOSE
 
@@ -278,7 +349,7 @@ def _compare_fitted_not_coefs(smooth_key: str) -> bool:
     Tensor products and factor-by: flat REML surfaces mean different sp can
     give different coefficients that produce equivalent fitted values.
     """
-    return smooth_key in ("tp", "tp_by", "te", "ti", "te_by", "cr_by")
+    return smooth_key in ("tp", "tp_by", "te", "ti", "te_by", "cr_by", "re_mixed")
 
 
 # ---------------------------------------------------------------------------
