@@ -415,11 +415,6 @@ class TestValidationMatrix:
     def test_edf_vs_r(self, cell):
         """Compare total EDF sum (our architecture may group differently)."""
         smooth_key, family_name, model, r_result = cell
-        # re_slope-nb: our Fisher-weight PIRLS yields 2.4% EDF diff vs R's
-        # Newton-weight PIRLS (gam.fit4).  All other metrics pass.
-        # Root cause & fix plan: scratch/edf_debug_notes.md
-        if smooth_key == "re_slope" and family_name == "nb":
-            pytest.skip("EDF requires Newton PIRLS for NB (scratch/edf_debug_notes.md)")
         tol = _fitted_tol(smooth_key, family_name)  # EDF sensitive to sp differences
         py_edf_total = float(np.sum(model.edf))
         r_edf_total = float(np.sum(r_result["edf"]))
@@ -569,7 +564,7 @@ class TestHardGateInvariants:
             f"[{smooth_key}-{family_name}] non-positive per-smooth EDF: {model.edf}"
         )
         # Total EDF bounded by p
-        assert model.edf_total <= p + MODERATE.atol, (
+        assert model.edf_total <= p, (
             f"[{smooth_key}-{family_name}] total EDF {model.edf_total} > p={p}"
         )
         # Total EDF bounded by n
@@ -592,7 +587,7 @@ class TestHardGateInvariants:
 
         # PSD: eigenvalues >= 0 (allow small negative from numerical noise)
         eigvals = np.linalg.eigvalsh(Vp)
-        assert np.all(eigvals >= -MODERATE.atol), (
+        assert np.all(eigvals >= 0.0), (
             f"[{smooth_key}-{family_name}] Vp has negative eigenvalue: {eigvals.min()}"
         )
 
