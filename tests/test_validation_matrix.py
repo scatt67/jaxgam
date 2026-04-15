@@ -25,10 +25,28 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 import pytest
+from jax import clear_caches
 
 from jaxgam.api import GAM
 from tests.helpers import SEED, r_available
 from tests.tolerances import LOOSE, MODERATE, STRICT
+
+# ---------------------------------------------------------------------------
+# JAX cache teardown
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_jax_caches():
+    """Clear JAX compilation caches after each test to prevent OOM.
+
+    Each GAM fit JIT-compiles functions with shapes specific to the model
+    (smooth type, basis size, family). Without clearing, the accumulated LLVM
+    artifacts exhaust memory on GH Actions runners (7 GB RAM).
+    """
+    yield
+    clear_caches()  # teardown
+
 
 # ---------------------------------------------------------------------------
 # Data generators
