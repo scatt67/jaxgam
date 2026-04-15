@@ -689,12 +689,16 @@ class _CriterionBase(ABC):
     """
 
     def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
-        self.edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
+        # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
+        # For standard families Fisher = Newton; for extended families
+        # (NB) the Fisher XtWX/L are recomputed post-convergence.
+        self.edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
         self._ls_sat = fd.family.saturated_loglik(
             fd.y, fd.wt, self.scale, max_y=fd.max_y
         )
+        # REML criterion log|H| uses Newton-weighted XtWX (observed info).
         self._XtWX = pirls_result.XtWX
         self._beta = pirls_result.coefficients
         self._S_list = fd.S_list
@@ -845,10 +849,12 @@ class _JointCriterionBase(ABC):
     """
 
     def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
-        self.edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
+        # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
+        self.edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
         # Fletcher scale used only as initial log_phi estimate
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
+        # REML criterion log|H| uses Newton-weighted XtWX (observed info).
         self._XtWX = pirls_result.XtWX
         self._beta = pirls_result.coefficients
         self._S_list = fd.S_list

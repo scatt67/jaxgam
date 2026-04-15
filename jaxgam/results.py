@@ -147,10 +147,15 @@ class GAMResults:
 
         # Phase 2→3: transfer to NumPy
         coefficients = to_numpy(pr.coefficients)
-        L = to_numpy(pr.L)
-        XtWX = to_numpy(pr.XtWX)
         scale = float(to_numpy(result.scale))
         edf_total = float(to_numpy(result.edf))
+
+        # Use Fisher-weighted quantities for EDF and Bayesian covariance.
+        # For standard families Fisher = Newton; for extended families (NB)
+        # these are recomputed post-convergence with expected weights
+        # (R's gdi2, gdi.c:2262-2294, gam.fit4.r:564).
+        L = to_numpy(pr.L_fisher)
+        XtWX = to_numpy(pr.XtWX_fisher)
 
         # Compute H^{-1} via Cholesky solve (matches R's chol2inv).
         # O(p^3) but p is typically small (< 200 for GAMs).
