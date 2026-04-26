@@ -1493,6 +1493,149 @@ class TestNBSpecific:
 
 
 # ---------------------------------------------------------------------------
+# Test 9b: JIT static-arg cache key (__hash__ / __eq__)
+# ---------------------------------------------------------------------------
+
+
+class TestFamilyStaticCacheKey:
+    """Family ``__hash__`` / ``__eq__`` are used as JIT static-arg cache keys.
+
+    Two instances that produce identical compiled code must compare equal
+    and hash equal; instances that would bake different values into the
+    trace must differ. Without this, ``copy.deepcopy`` (used in ``GAM.fit``
+    to protect mutable extended-family state) causes a JIT cache miss on
+    every fit.
+    """
+
+    def test_standard_family_singletons_equal(self) -> None:
+        a = Gaussian()
+        b = Gaussian()
+        assert a == b
+        assert hash(a) == hash(b)
+
+    def test_different_standard_families_not_equal(self) -> None:
+        assert Gaussian() != Poisson()
+        assert hash(Gaussian()) != hash(Poisson())
+
+    def test_estimated_nb_deepcopy_equal(self) -> None:
+        """Deep-copied estimated NB must hash-equal the original."""
+        import copy
+
+        fam = NegativeBinomial(theta=1.0)
+        fam_copy = copy.deepcopy(fam)
+        assert fam == fam_copy
+        assert hash(fam) == hash(fam_copy)
+
+    def test_estimated_nb_theta_value_does_not_affect_key(self) -> None:
+        """Estimated theta is a dynamic JAX argument — value must not key the trace."""
+        a = NegativeBinomial(theta=1.0)
+        b = NegativeBinomial(theta=5.0)
+        assert a == b
+        assert hash(a) == hash(b)
+
+    def test_fixed_nb_theta_value_keys_trace(self) -> None:
+        """Fixed theta is baked into the trace — different values must differ."""
+        a = NegativeBinomial(theta=2.0, fixed=True)
+        b = NegativeBinomial(theta=10.0, fixed=True)
+        assert a != b
+        assert hash(a) != hash(b)
+
+    def test_fixed_nb_same_theta_equal(self) -> None:
+        a = NegativeBinomial(theta=2.0, fixed=True)
+        b = NegativeBinomial(theta=2.0, fixed=True)
+        assert a == b
+        assert hash(a) == hash(b)
+
+    def test_fixed_vs_estimated_nb_not_equal(self) -> None:
+        """``n_theta`` selects different code paths in PIRLS."""
+        a = NegativeBinomial(theta=1.0, fixed=True)
+        b = NegativeBinomial(theta=1.0, fixed=False)
+        assert a != b
+        assert hash(a) != hash(b)
+
+    def test_different_links_not_equal(self) -> None:
+        """Link type changes the trace (different link.inverse / derivative)."""
+        from jaxgam.links.links import IdentityLink
+
+        a = NegativeBinomial(theta=1.0, link="log")
+        b = NegativeBinomial(theta=1.0, link=IdentityLink())
+        assert a != b
+        assert hash(a) != hash(b)
+
+    def test_parameterized_custom_link_uses_identity(self) -> None:
+        """Custom links default to identity-based cache key.
+
+        Two instances of the same parameterized custom link class must
+        not collide in the JIT cache, since they may bake different
+        constants into the trace. Built-in stateless links opt into
+        type-based keys via ``_stateless = True``.
+        """
+        from jaxgam.links.links import Link
+
+        class ScaledLogLink(Link):
+            def __init__(self, scale: float) -> None:
+                self.scale = scale
+
+            def link(self, mu):
+                return self.scale * jnp.log(jnp.maximum(mu, 1e-10))
+
+            def inverse(self, eta):
+                return jnp.exp(eta / self.scale)
+
+            def derivative(self, mu):
+                return self.scale / jnp.maximum(mu, 1e-10)
+
+        a = NegativeBinomial(theta=1.0, link=ScaledLogLink(1.0))
+        b = NegativeBinomial(theta=1.0, link=ScaledLogLink(2.0))
+        assert a != b
+        assert hash(a) != hash(b)
+
+    def test_stateless_builtin_links_share_key(self) -> None:
+        """Two ``LogLink`` instances must share a cache key (stateless)."""
+        from jaxgam.links.links import LogLink
+
+        a = NegativeBinomial(theta=1.0, link=LogLink())
+        b = NegativeBinomial(theta=1.0, link=LogLink())
+        assert a == b
+        assert hash(a) == hash(b)
+
+
+class TestNBJITCacheReuse:
+    """Repeated ``GAM.fit`` calls with NB must reuse JIT cache."""
+
+    def test_repeated_nb_fits_do_not_grow_jit_cache(self) -> None:
+        import pandas as pd
+
+        from jaxgam import GAM
+        from jaxgam.fitting import newton as newton_mod
+
+        rng = np.random.default_rng(0)
+        n = 200
+        x = rng.uniform(0, 1, n)
+        mu = np.exp(0.5 * np.sin(2 * np.pi * x) + 0.5)
+        y = rng.negative_binomial(2.0, 2.0 / (2.0 + mu)).astype(float)
+        data = pd.DataFrame({"x": x, "y": y})
+
+        # Warm up — first NB fit compiles.
+        GAM('y ~ s(x, k=8, bs="cr")', family="nb").fit(data)
+        size_after_warmup = newton_mod._jit_fit_and_score._cache_size()
+        grad_size_after_warmup = newton_mod._jit_diff_grad_hess._cache_size()
+
+        # Subsequent fits with the same shape/family must hit cache.
+        for _ in range(3):
+            GAM('y ~ s(x, k=8, bs="cr")', family="nb").fit(data)
+
+        assert newton_mod._jit_fit_and_score._cache_size() == size_after_warmup, (
+            "NB fit triggered _jit_fit_and_score recompile — likely a "
+            "static-arg identity mismatch (see family.__hash__)."
+        )
+        assert newton_mod._jit_diff_grad_hess._cache_size() == grad_size_after_warmup, (
+            "NB fit triggered _jit_diff_grad_hess recompile — likely a "
+            "static-arg identity mismatch (see family.__hash__)."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Test 10: ExtendedFamily AD finite-difference validation
 # ---------------------------------------------------------------------------
 

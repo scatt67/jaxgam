@@ -471,3 +471,32 @@ class ExponentialFamily(ABC):
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(link={type(self.link).__name__})"
+
+    def _static_cache_key(self) -> tuple:
+        """Tuple of structural properties that affect a JIT trace.
+
+        Two family instances that produce identical compiled code must
+        return equal tuples. Used by ``__hash__`` / ``__eq__`` so that
+        ``family`` can be a JAX ``static_argnames`` argument without
+        per-instance recompilation (e.g. after ``copy.deepcopy``).
+
+        Excludes any state that flows through as a dynamic JAX argument
+        (e.g. estimated theta on extended families). The link contributes
+        via ``link._cache_key()``, which is type-based for stateless
+        built-ins and identity-based for unknown/parameterized subclasses.
+        Subclasses extend this when additional state is baked into the trace.
+        """
+        return (
+            type(self),
+            self.link._cache_key(),
+            self.n_theta,
+            self.scale_known,
+        )
+
+    def __hash__(self) -> int:
+        return hash(self._static_cache_key())
+
+    def __eq__(self, other: object) -> bool:
+        if type(self) is not type(other):
+            return False
+        return self._static_cache_key() == other._static_cache_key()

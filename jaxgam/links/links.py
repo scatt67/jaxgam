@@ -42,7 +42,27 @@ class Link(ABC):
     The convenience methods ``linkinv`` (alias for ``inverse``) and
     ``mu_eta`` (derivative of inverse link) are provided on the base class
     but may be overridden for numerical stability.
+
+    Subclasses that hold no per-instance state should set ``_stateless = True``
+    so two instances of the same class share a JIT cache entry (via
+    ``ExponentialFamily.__hash__``). Parameterized custom links must leave
+    it ``False`` (the safe default) so distinct instances get distinct cache
+    keys, or override ``_cache_key`` to include their parameters.
     """
+
+    #: Whether the link has no per-instance state. Set ``True`` on stateless
+    #: built-in links; leave ``False`` on parameterized custom subclasses.
+    _stateless: bool = False
+
+    def _cache_key(self) -> object:
+        """Hashable key for JIT static-arg deduplication.
+
+        Stateless links return their class (so two instances share traces);
+        parameterized subclasses fall back to object identity (so distinct
+        instances do not silently share a compiled executable that bakes
+        in different constants).
+        """
+        return type(self) if self._stateless else id(self)
 
     @abstractmethod
     def link(self, mu: Array) -> Array:
@@ -145,6 +165,8 @@ class Link(ABC):
 class IdentityLink(Link):
     """Identity link: g(μ) = μ."""
 
+    _stateless = True
+
     def link(self, mu: Array) -> Array:
         xp = array_module(mu)
         return xp.asarray(mu, dtype=float)
@@ -165,6 +187,8 @@ class IdentityLink(Link):
 class LogLink(Link):
     """Log link: g(μ) = log(μ)."""
 
+    _stateless = True
+
     def link(self, mu: Array) -> Array:
         xp = array_module(mu)
         return xp.log(xp.maximum(mu, _EPS))
@@ -184,6 +208,8 @@ class LogLink(Link):
 
 class LogitLink(Link):
     """Logit link: g(μ) = log(μ/(1-μ))."""
+
+    _stateless = True
 
     def link(self, mu: Array) -> Array:
         xp = array_module(mu)
@@ -208,6 +234,8 @@ class LogitLink(Link):
 class InverseLink(Link):
     """Inverse (reciprocal) link: g(μ) = 1/μ."""
 
+    _stateless = True
+
     def link(self, mu: Array) -> Array:
         xp = array_module(mu)
         return 1.0 / xp.maximum(mu, _EPS)
@@ -226,6 +254,8 @@ class InverseLink(Link):
 
 class ProbitLink(Link):
     """Probit link: g(μ) = Φ⁻¹(μ)."""
+
+    _stateless = True
 
     def link(self, mu: Array) -> Array:
         xp = array_module(mu)
@@ -261,6 +291,8 @@ class ProbitLink(Link):
 class CloglogLink(Link):
     """Complementary log-log link: g(μ) = log(-log(1-μ))."""
 
+    _stateless = True
+
     def link(self, mu: Array) -> Array:
         xp = array_module(mu)
         mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
@@ -283,6 +315,8 @@ class CloglogLink(Link):
 class SqrtLink(Link):
     """Square root link: g(μ) = √μ."""
 
+    _stateless = True
+
     def link(self, mu: Array) -> Array:
         xp = array_module(mu)
         return xp.sqrt(xp.maximum(mu, _EPS))
@@ -303,6 +337,8 @@ class InverseSquaredLink(Link):
 
     Default link for Inverse Gaussian family.
     """
+
+    _stateless = True
 
     def link(self, mu: Array) -> Array:
         xp = array_module(mu)
