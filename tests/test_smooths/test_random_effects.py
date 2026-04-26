@@ -17,10 +17,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam.api import GAM
+from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.parser import parse_formula
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.random_effects import RandomEffectSmooth
+from jaxgam.smooths.registry import get_smooth_class
 from tests.helpers import SEED, make_smooth_spec, r_available
-from tests.tolerances import STRICT
+from tests.r_bridge import RBridge
+from tests.tolerances import MODERATE, STRICT
 
 # ===========================================================================
 # 1. Structural tests
@@ -466,8 +471,6 @@ class TestRComparison:
 
     def _setup_single_factor(self) -> tuple:
         """Shared setup: s(g, bs='re') with 20-level factor."""
-        from tests.r_bridge import RBridge
-
         rng = np.random.default_rng(SEED)
         n = 100
         n_groups = 20
@@ -485,8 +488,6 @@ class TestRComparison:
 
     def _setup_two_factor(self) -> tuple:
         """Shared setup: s(g1, g2, bs='re') with factor interaction."""
-        from tests.r_bridge import RBridge
-
         rng = np.random.default_rng(SEED)
         n = 100
         g1 = rng.choice(["a", "b", "c"], size=n)
@@ -514,8 +515,6 @@ class TestRComparison:
 
     def _setup_numeric_factor(self) -> tuple:
         """Shared setup: s(x, g, bs='re') with numeric x factor."""
-        from tests.r_bridge import RBridge
-
         rng = np.random.default_rng(SEED)
         n = 100
         x = rng.uniform(0, 1, n)
@@ -665,16 +664,11 @@ class TestRegistryIntegration:
 
     def test_registry_has_re(self) -> None:
         """'re' is registered in the smooth registry."""
-        from jaxgam.smooths.registry import get_smooth_class
-
         cls = get_smooth_class("re")
         assert cls is RandomEffectSmooth
 
     def test_model_setup_re_only(self, re_model_data) -> None:
         """ModelSetup.build() succeeds with RE-only formula."""
-        from jaxgam.formula.design import ModelSetup
-        from jaxgam.formula.parser import parse_formula
-
         spec = parse_formula("y ~ s(g, bs='re')")
         setup = ModelSetup.build(spec, re_model_data)
 
@@ -685,9 +679,6 @@ class TestRegistryIntegration:
 
     def test_re_no_centering_applied(self, re_model_data) -> None:
         """RE smooth has Z_centering = None (centering skipped)."""
-        from jaxgam.formula.design import ModelSetup
-        from jaxgam.formula.parser import parse_formula
-
         spec = parse_formula("y ~ s(g, bs='re')")
         setup = ModelSetup.build(spec, re_model_data)
 
@@ -701,9 +692,6 @@ class TestRegistryIntegration:
         normally constrain the higher-dim smooth, but RE's
         side_constrain=False opts it out.
         """
-        from jaxgam.formula.design import ModelSetup
-        from jaxgam.formula.parser import parse_formula
-
         spec = parse_formula("y ~ s(x) + s(x, g, bs='re')")
         setup = ModelSetup.build(spec, re_model_data)
 
@@ -712,9 +700,6 @@ class TestRegistryIntegration:
 
     def test_re_n_coefs_no_centering_loss(self, re_model_data) -> None:
         """RE smooth keeps all columns (no column lost to centering)."""
-        from jaxgam.formula.design import ModelSetup
-        from jaxgam.formula.parser import parse_formula
-
         spec = parse_formula("y ~ s(g, bs='re')")
         setup = ModelSetup.build(spec, re_model_data)
 
@@ -725,9 +710,6 @@ class TestRegistryIntegration:
 
     def test_re_plus_standard_smooth(self, re_model_data) -> None:
         """RE + standard smooth: both terms present with correct dimensions."""
-        from jaxgam.formula.design import ModelSetup
-        from jaxgam.formula.parser import parse_formula
-
         spec = parse_formula("y ~ s(x) + s(g, bs='re')")
         setup = ModelSetup.build(spec, re_model_data)
 
@@ -749,9 +731,6 @@ class TestRegistryIntegration:
 
     def test_re_slope_model_setup(self, re_model_data) -> None:
         """ModelSetup with s(x, g, bs='re') random slopes succeeds."""
-        from jaxgam.formula.design import ModelSetup
-        from jaxgam.formula.parser import parse_formula
-
         spec = parse_formula("y ~ s(x, g, bs='re')")
         setup = ModelSetup.build(spec, re_model_data)
 
@@ -759,3 +738,294 @@ class TestRegistryIntegration:
         n_groups = len(re_model_data["g"].cat.categories)
         assert re_term.n_coefs == n_groups
         assert re_term.Z_centering is None
+
+
+# ===========================================================================
+# 7. End-to-end prediction tests (full predict() pipeline)
+# ===========================================================================
+
+
+class TestEndToEndPrediction:
+    """Validate prediction through the full GAM pipeline with unseen levels.
+
+    PR 1 ensures unseen levels zero out at the smooth level. These tests
+    confirm the same behavior holds end-to-end through ``ModelSetup
+    .build_predict_matrix()`` and ``GAMResults.predict()`` — including
+    constraint transforms and column placement.
+    """
+
+    def _fit_model(self, data: pd.DataFrame, formula: str = "y ~ s(x) + s(g, bs='re')"):
+        return GAM(formula, family="gaussian").fit(data)
+
+    def test_predict_matrix_re_columns_zero_for_unseen(self, re_model_data) -> None:
+        """RE term columns are zero for unseen-level rows in the prediction matrix."""
+        model = self._fit_model(re_model_data)
+
+        levels = list(re_model_data["g"].cat.categories)
+        seen = levels[0]
+        new_data = pd.DataFrame(
+            {
+                "x": [0.5, 0.5, 0.5],
+                "g": pd.Categorical(
+                    [seen, "totally_unseen", "another_unseen"],
+                    categories=[*levels, "totally_unseen", "another_unseen"],
+                ),
+            }
+        )
+
+        X_pred = model.predict_matrix(new_data)
+        re_slice = model.setup.coef_map.term_slice("s(g)")
+        re_block = X_pred[:, re_slice]
+
+        # Row 0 (seen): exactly one 1.0 in the RE block
+        assert re_block[0].sum() == pytest.approx(1.0)
+        assert ((re_block[0] == 0.0) | (re_block[0] == 1.0)).all()
+
+        # Rows 1, 2 (unseen): all zeros
+        np.testing.assert_allclose(re_block[1], 0.0, atol=STRICT.atol)
+        np.testing.assert_allclose(re_block[2], 0.0, atol=STRICT.atol)
+
+    def test_predict_unseen_equals_smooth_only(self, re_model_data) -> None:
+        """Prediction with unseen level == prediction with RE coefficients zeroed."""
+        model = self._fit_model(re_model_data)
+
+        levels = list(re_model_data["g"].cat.categories)
+        # Unseen factor level for prediction
+        new_data = pd.DataFrame(
+            {
+                "x": [0.2, 0.5, 0.8],
+                "g": pd.Categorical(["new_a"] * 3, categories=[*levels, "new_a"]),
+            }
+        )
+
+        # Full prediction (RE columns are zero anyway, so RE coefs don't contribute)
+        pred = model.predict(new_data, pred_type="link")
+
+        # Manually compute prediction with RE coefficients forced to zero
+        X_pred = model.predict_matrix(new_data)
+        coefs = model.coefficients.copy()
+        re_slice = model.setup.coef_map.term_slice("s(g)")
+        coefs_no_re = coefs.copy()
+        coefs_no_re[re_slice] = 0.0
+        pred_no_re = X_pred @ coefs_no_re
+
+        # The two should match exactly: RE block is zero for unseen rows,
+        # so the RE coefficients contribute zero regardless of their value.
+        np.testing.assert_allclose(pred, pred_no_re, rtol=STRICT.rtol, atol=STRICT.atol)
+
+    def test_predict_single_unseen_level(self, re_model_data) -> None:
+        """Single-row prediction with unseen level: RE contribution is zero."""
+        model = self._fit_model(re_model_data)
+        levels = list(re_model_data["g"].cat.categories)
+
+        new_data = pd.DataFrame(
+            {
+                "x": [0.5],
+                "g": pd.Categorical(
+                    ["never_in_training"],
+                    categories=[*levels, "never_in_training"],
+                ),
+            }
+        )
+
+        X_pred = model.predict_matrix(new_data)
+        re_slice = model.setup.coef_map.term_slice("s(g)")
+        np.testing.assert_allclose(X_pred[0, re_slice], 0.0, atol=STRICT.atol)
+
+        # Full prediction is finite
+        pred = model.predict(new_data, pred_type="link")
+        assert pred.shape == (1,)
+        assert np.isfinite(pred[0])
+
+    def test_predict_seen_diff_equals_re_coefficient(self, re_model_data) -> None:
+        """At the same x, pred(seen g_j) - pred(unseen g) == RE coef for level j.
+
+        This pins down the prediction behavior exactly: for random
+        intercepts, the RE column for a seen level is 1, so the seen-row
+        prediction adds exactly that level's coefficient on top of the
+        parametric+smooth contribution. Unseen rows contribute zero.
+        """
+        model = self._fit_model(re_model_data)
+        levels = list(re_model_data["g"].cat.categories)
+        x_const = 0.5
+
+        # Two seen levels and one unseen level, all at the same x
+        seen_a, seen_b = levels[0], levels[1]
+        new_data = pd.DataFrame(
+            {
+                "x": [x_const, x_const, x_const],
+                "g": pd.Categorical(
+                    [seen_a, seen_b, "unseen_z"],
+                    categories=[*levels, "unseen_z"],
+                ),
+            }
+        )
+
+        pred = model.predict(new_data, pred_type="link")
+        re_slice = model.setup.coef_map.term_slice("s(g)")
+        re_coefs = model.coefficients[re_slice]
+
+        # The RE block has one column per training level in registration order
+        idx_a = levels.index(seen_a)
+        idx_b = levels.index(seen_b)
+
+        # pred(seen) - pred(unseen) equals that level's RE coefficient
+        np.testing.assert_allclose(
+            pred[0] - pred[2],
+            re_coefs[idx_a],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            pred[1] - pred[2],
+            re_coefs[idx_b],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_predict_missing_factor_column_raises(self, re_model_data) -> None:
+        """Predicting without the RE factor column raises an error naming the column."""
+        model = self._fit_model(re_model_data)
+
+        new_data = pd.DataFrame({"x": [0.5, 0.6]})  # missing "g"
+        with pytest.raises((KeyError, ValueError), match=r"['\"]?g['\"]?.*not found"):
+            model.predict(new_data)
+
+    def test_predict_mixed_seen_unseen(self, re_model_data) -> None:
+        """Mixed seen/unseen factor levels: seen rows nonzero, unseen rows zero."""
+        model = self._fit_model(re_model_data)
+        levels = list(re_model_data["g"].cat.categories)
+
+        new_data = pd.DataFrame(
+            {
+                "x": [0.3, 0.3, 0.3, 0.3],
+                "g": pd.Categorical(
+                    [levels[0], "unseen_x", levels[1], "unseen_y"],
+                    categories=[*levels, "unseen_x", "unseen_y"],
+                ),
+            }
+        )
+
+        X_pred = model.predict_matrix(new_data)
+        re_slice = model.setup.coef_map.term_slice("s(g)")
+
+        # Seen rows: one nonzero in RE block
+        assert X_pred[0, re_slice].sum() == pytest.approx(1.0)
+        assert X_pred[2, re_slice].sum() == pytest.approx(1.0)
+        # Unseen rows: all zeros in RE block
+        np.testing.assert_allclose(X_pred[1, re_slice], 0.0, atol=STRICT.atol)
+        np.testing.assert_allclose(X_pred[3, re_slice], 0.0, atol=STRICT.atol)
+
+    def test_predict_random_slope_unseen_level(self, re_model_data) -> None:
+        """Random slopes s(x, g, bs='re'): unseen level row contributes zero.
+
+        For a random-slope basis, column j holds ``x`` for rows where
+        ``g == level_j`` and zero elsewhere. So at the same x:
+            pred(seen g_j) - pred(unseen g) == x * RE_coef[j]
+        """
+        model = self._fit_model(re_model_data, formula="y ~ s(x, g, bs='re')")
+        levels = list(re_model_data["g"].cat.categories)
+        x_const = 0.4
+        seen = levels[0]
+
+        new_data = pd.DataFrame(
+            {
+                "x": [x_const, x_const],
+                "g": pd.Categorical(
+                    [seen, "unseen_slope"],
+                    categories=[*levels, "unseen_slope"],
+                ),
+            }
+        )
+
+        X_pred = model.predict_matrix(new_data)
+        re_slice = model.setup.coef_map.term_slice("s(x,g)")
+
+        # Row 0 (seen): RE block has x at position idx_seen, zero elsewhere
+        idx_seen = levels.index(seen)
+        re_row_seen = X_pred[0, re_slice]
+        assert re_row_seen[idx_seen] == pytest.approx(x_const)
+        mask = np.ones_like(re_row_seen, dtype=bool)
+        mask[idx_seen] = False
+        np.testing.assert_allclose(re_row_seen[mask], 0.0, atol=STRICT.atol)
+
+        # Row 1 (unseen): all zeros in RE block
+        np.testing.assert_allclose(X_pred[1, re_slice], 0.0, atol=STRICT.atol)
+
+        # Prediction difference equals x * coef[idx_seen]
+        pred = model.predict(new_data, pred_type="link")
+        re_coefs = model.coefficients[re_slice]
+        np.testing.assert_allclose(
+            pred[0] - pred[1],
+            x_const * re_coefs[idx_seen],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+
+@pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
+class TestEndToEndPredictionRComparison:
+    """End-to-end predictions match R's predict.gam() with unseen levels."""
+
+    def _fit_and_predict(
+        self,
+        train_data: pd.DataFrame,
+        new_data: pd.DataFrame,
+        formula: str = "y ~ s(x) + s(g, bs='re')",
+    ):
+        """Fit jaxgam + R, return (py_pred, r_pred)."""
+        model = GAM(formula, family="gaussian").fit(train_data)
+        py_pred = model.predict(new_data, pred_type="link")
+
+        bridge = RBridge()
+        r_result = bridge.predict_gam(
+            formula, train_data, new_data, family="gaussian", pred_type="link"
+        )
+        r_pred = r_result["predictions"]
+
+        return py_pred, r_pred
+
+    def test_predict_seen_levels_vs_r(self, re_model_data) -> None:
+        """Predictions for seen levels match R's predict.gam (MODERATE)."""
+        levels = list(re_model_data["g"].cat.categories)
+        new_data = pd.DataFrame(
+            {
+                "x": np.array([0.1, 0.4, 0.7, 0.3]),
+                "g": pd.Categorical(
+                    [levels[0], levels[1], levels[2], levels[0]],
+                    categories=levels,
+                ),
+            }
+        )
+        py_pred, r_pred = self._fit_and_predict(re_model_data, new_data)
+
+        np.testing.assert_allclose(
+            py_pred,
+            r_pred,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="Predictions for seen levels differ from R",
+        )
+
+    def test_predict_unseen_levels_vs_r(self, re_model_data) -> None:
+        """Predictions with unseen factor levels match R's predict.gam (MODERATE)."""
+        levels = list(re_model_data["g"].cat.categories)
+        # Mix of seen and unseen levels
+        new_data = pd.DataFrame(
+            {
+                "x": np.array([0.2, 0.5, 0.8, 0.5]),
+                "g": pd.Categorical(
+                    [levels[0], "newlevA", levels[1], "newlevB"],
+                    categories=[*levels, "newlevA", "newlevB"],
+                ),
+            }
+        )
+        py_pred, r_pred = self._fit_and_predict(re_model_data, new_data)
+
+        np.testing.assert_allclose(
+            py_pred,
+            r_pred,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="Predictions with unseen levels differ from R",
+        )
