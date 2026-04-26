@@ -1603,6 +1603,17 @@ class TestFamilyStaticCacheKey:
 class TestNBJITCacheReuse:
     """Repeated ``GAM.fit`` calls with NB must reuse JIT cache."""
 
+    @staticmethod
+    def _make_nb_theta_cache_data():
+        import pandas as pd
+
+        rng = np.random.default_rng(7)
+        n = 80
+        x = np.linspace(0.0, 1.0, n)
+        mu = np.exp(0.6 + 0.5 * np.sin(2 * np.pi * x))
+        y = rng.negative_binomial(2.0, 2.0 / (2.0 + mu)).astype(float)
+        return pd.DataFrame({"x": x, "y": y})
+
     def test_repeated_nb_fits_do_not_grow_jit_cache(self) -> None:
         import pandas as pd
 
@@ -1632,6 +1643,73 @@ class TestNBJITCacheReuse:
         assert newton_mod._jit_diff_grad_hess._cache_size() == grad_size_after_warmup, (
             "NB fit triggered _jit_diff_grad_hess recompile — likely a "
             "static-arg identity mismatch (see family.__hash__)."
+        )
+
+    def test_parametric_nb_theta_changes_are_dynamic_on_pirls_cache_hit(self) -> None:
+        from jaxgam import GAM
+        from jaxgam.fitting.pirls import pirls_loop
+
+        data = self._make_nb_theta_cache_data()
+
+        def fit(theta: float):
+            return GAM(
+                "y ~ x",
+                family=NegativeBinomial(theta=theta, fixed=False),
+            ).fit(data)
+
+        pirls_loop.clear_cache()
+        fresh_high = fit(10.0)
+
+        pirls_loop.clear_cache()
+        cached_low = fit(2.0)
+        cached_high = fit(10.0)
+
+        assert abs(float(cached_low.deviance - fresh_high.deviance)) > 1e-3
+        np.testing.assert_allclose(
+            cached_high.deviance,
+            fresh_high.deviance,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            cached_high.coefficients,
+            fresh_high.coefficients,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_fixed_sp_nb_theta_changes_are_dynamic_on_pirls_cache_hit(self) -> None:
+        from jaxgam import GAM
+        from jaxgam.fitting.pirls import pirls_loop
+
+        data = self._make_nb_theta_cache_data()
+
+        def fit(theta: float):
+            return GAM(
+                'y ~ s(x, k=8, bs="cr")',
+                family=NegativeBinomial(theta=theta, fixed=False),
+                sp=[1.0],
+            ).fit(data)
+
+        pirls_loop.clear_cache()
+        fresh_high = fit(10.0)
+
+        pirls_loop.clear_cache()
+        cached_low = fit(2.0)
+        cached_high = fit(10.0)
+
+        assert abs(float(cached_low.deviance - fresh_high.deviance)) > 1e-3
+        np.testing.assert_allclose(
+            cached_high.deviance,
+            fresh_high.deviance,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            cached_high.coefficients,
+            fresh_high.coefficients,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
         )
 
 

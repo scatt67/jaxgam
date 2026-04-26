@@ -237,7 +237,7 @@ def _penalized_deviance(
 
 
 @jax.jit(static_argnames=("family", "max_iter", "tol"))
-def pirls_loop(
+def _pirls_loop_jit(
     X: jax.Array,
     y: jax.Array,
     beta_init: jax.Array,
@@ -510,3 +510,44 @@ def pirls_loop(
         XtWX_fisher=XtWX_fisher,
         L_fisher=L_fisher,
     )
+
+
+def pirls_loop(
+    X: jax.Array,
+    y: jax.Array,
+    beta_init: jax.Array,
+    S_lambda: jax.Array,
+    family: ExponentialFamily,
+    wt: jax.Array | None = None,
+    offset: jax.Array | None = None,
+    max_iter: int = 100,
+    tol: float = 1e-7,
+    log_theta: jax.Array | None = None,
+) -> PIRLSResult:
+    """Run PIRLS, passing estimated-family theta as dynamic JAX data.
+
+    ``family`` is a JIT static argument, so any mutable family state read by
+    the jitted implementation is baked into the compiled executable. For
+    estimated extended families, default ``log_theta`` from the family state
+    here, before JIT dispatch, so theta participates in the cache as a
+    regular array argument instead of as static Python object state.
+    """
+    if family.n_theta > 0 and log_theta is None:
+        log_theta = jnp.asarray(family.get_theta(transformed=False))
+
+    return _pirls_loop_jit(
+        X,
+        y,
+        beta_init,
+        S_lambda,
+        family,
+        wt,
+        offset,
+        max_iter=max_iter,
+        tol=tol,
+        log_theta=log_theta,
+    )
+
+
+pirls_loop.clear_cache = _pirls_loop_jit.clear_cache  # type: ignore[attr-defined]
+pirls_loop._cache_size = _pirls_loop_jit._cache_size  # type: ignore[attr-defined]
