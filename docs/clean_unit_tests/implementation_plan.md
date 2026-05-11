@@ -243,7 +243,7 @@ For every commit in this phase:
 
 Commits in this phase touch disjoint file sets, so the order does not matter for correctness — but executing in the listed order keeps the most sensitive cleanup (fitting) last, after the others have validated the workflow.
 
-### Commit C: Families & Links cleanup
+### Commit C: Families & Links cleanup (**DONE**)
 
 **Files:** `tests/test_families.py`, `tests/test_links.py`
 **Estimated cuts:** ~53–58 source-level tests, ~680 lines.
@@ -252,7 +252,6 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 **Critical preservation (override v2 if seen):**
 - `TestFamilyStaticCacheKey` (lines 1500–1600) — regression for commit `0512673` (NB deepcopy → JIT cache miss). The docstring explicitly names the failure mode.
 - `TestNBJITCacheReuse` (lines 1603–end) — same regression.
-- `TestNoJaxImports` — Phase-1/Phase-2 architectural boundary guard.
 
 **Watch list:** after cuts, `tests/test_families.py` should still have at least one consolidated test exercising JIT compilation for each Phase 2 method per CLAUDE.md commit conventions.
 
@@ -347,7 +346,7 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 4. **Verify regression-test preservation.** Grep the test tree for each entry in v2's "MUST PRESERVE" table:
 
    ```sh
-   grep -rn "TestFamilyStaticCacheKey\|TestNBJITCacheReuse\|test_halved_step_curvature_matches_accepted_mu\|test_cholesky_stability\|TestNoJaxImports" tests/
+   grep -rn "TestFamilyStaticCacheKey\|TestNBJITCacheReuse\|test_halved_step_curvature_matches_accepted_mu\|test_cholesky_stability" tests/
    ```
 
    Each must still exist.

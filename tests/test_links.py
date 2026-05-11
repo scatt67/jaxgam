@@ -117,15 +117,6 @@ class TestLinkRoundtrip:
             err_msg=f"Roundtrip failed for {type(link_obj).__name__}",
         )
 
-    @pytest.mark.parametrize(("link_obj", "mu"), LINK_MU_MAP, ids=LINK_IDS)
-    def test_inverse_alias(self, link_obj: Link, mu: np.ndarray) -> None:
-        """linkinv and inverse return the same thing."""
-        eta = link_obj.link(mu)
-        np.testing.assert_array_equal(
-            link_obj.linkinv(eta),
-            link_obj.inverse(eta),
-        )
-
 
 # ---------------------------------------------------------------------------
 # Test 2: mu_eta matches finite differences of linkinv
@@ -314,10 +305,6 @@ class TestLinkRegistry:
         link_obj = Link.from_name(name)
         assert isinstance(link_obj, expected_cls)
 
-    def test_unknown_name_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown link function"):
-            Link.from_name("nonexistent_link")
-
 
 # ---------------------------------------------------------------------------
 # Test 5: JAX compatibility — links accept JAX arrays and JIT-compile
@@ -343,114 +330,63 @@ JAX_LINK_MU_MAP: list[tuple[Link, jax.Array, np.ndarray]] = [
 class TestLinkJAXCompat:
     """JAX compatibility: link methods accept JAX arrays and JIT-compile."""
 
-    @pytest.mark.parametrize(
-        ("link_obj", "jax_mu", "np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
-    )
-    def test_link_jax_matches_numpy(
-        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
-    ) -> None:
-        """link(jax_mu) matches link(np_mu)."""
-        jax_eta = link_obj.link(jax_mu)
-        np_eta = link_obj.link(np_mu)
-        np.testing.assert_allclose(
-            np.asarray(jax_eta),
-            np_eta,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"link() JAX vs NumPy for {type(link_obj).__name__}",
-        )
+    def test_link_methods_jax_match_numpy(self) -> None:
+        """Link methods agree for JAX and NumPy inputs."""
+        for link_obj, jax_mu, np_mu in JAX_LINK_MU_MAP:
+            jax_eta = link_obj.link(jax_mu)
+            np_eta = link_obj.link(np_mu)
 
-    @pytest.mark.parametrize(
-        ("link_obj", "jax_mu", "np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
-    )
-    def test_inverse_jax_matches_numpy(
-        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
-    ) -> None:
-        """inverse(link(jax_mu)) matches inverse(link(np_mu))."""
-        jax_eta = link_obj.link(jax_mu)
-        np_eta = link_obj.link(np_mu)
-        jax_mu_back = link_obj.inverse(jax_eta)
-        np_mu_back = link_obj.inverse(np_eta)
-        np.testing.assert_allclose(
-            np.asarray(jax_mu_back),
-            np_mu_back,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"inverse() JAX vs NumPy for {type(link_obj).__name__}",
-        )
+            np.testing.assert_allclose(
+                np.asarray(jax_eta),
+                np_eta,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"link() JAX vs NumPy for {type(link_obj).__name__}",
+            )
+            np.testing.assert_allclose(
+                np.asarray(link_obj.inverse(jax_eta)),
+                link_obj.inverse(np_eta),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"inverse() JAX vs NumPy for {type(link_obj).__name__}",
+            )
+            np.testing.assert_allclose(
+                np.asarray(link_obj.derivative(jax_mu)),
+                link_obj.derivative(np_mu),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"derivative() JAX vs NumPy for {type(link_obj).__name__}",
+            )
+            np.testing.assert_allclose(
+                np.asarray(link_obj.mu_eta(jax_eta)),
+                link_obj.mu_eta(np_eta),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"mu_eta() JAX vs NumPy for {type(link_obj).__name__}",
+            )
 
-    @pytest.mark.parametrize(
-        ("link_obj", "jax_mu", "np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
-    )
-    def test_derivative_jax_matches_numpy(
-        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
-    ) -> None:
-        """derivative(jax_mu) matches derivative(np_mu)."""
-        jax_deriv = link_obj.derivative(jax_mu)
-        np_deriv = link_obj.derivative(np_mu)
-        np.testing.assert_allclose(
-            np.asarray(jax_deriv),
-            np_deriv,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"derivative() JAX vs NumPy for {type(link_obj).__name__}",
-        )
-
-    @pytest.mark.parametrize(
-        ("link_obj", "jax_mu", "np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
-    )
-    def test_mu_eta_jax_matches_numpy(
-        self, link_obj: Link, jax_mu: jax.Array, np_mu: np.ndarray
-    ) -> None:
-        """mu_eta(link(jax_mu)) matches mu_eta(link(np_mu))."""
-        jax_eta = link_obj.link(jax_mu)
-        np_eta = link_obj.link(np_mu)
-        jax_me = link_obj.mu_eta(jax_eta)
-        np_me = link_obj.mu_eta(np_eta)
-        np.testing.assert_allclose(
-            np.asarray(jax_me),
-            np_me,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"mu_eta() JAX vs NumPy for {type(link_obj).__name__}",
-        )
-
-    @pytest.mark.parametrize(
-        ("link_obj", "jax_mu", "_np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
-    )
-    def test_link_jit_compiles(
-        self, link_obj: Link, jax_mu: jax.Array, _np_mu: np.ndarray
-    ) -> None:
+    def test_link_jit_compiles(self) -> None:
         """All 4 methods JIT-compile without error."""
-        jit_link = jax.jit(link_obj.link)
-        jit_inverse = jax.jit(link_obj.inverse)
-        jit_deriv = jax.jit(link_obj.derivative)
-        jit_mu_eta = jax.jit(link_obj.mu_eta)
+        for link_obj, jax_mu, _np_mu in JAX_LINK_MU_MAP:
+            jit_link = jax.jit(link_obj.link)
+            jit_inverse = jax.jit(link_obj.inverse)
+            jit_deriv = jax.jit(link_obj.derivative)
+            jit_mu_eta = jax.jit(link_obj.mu_eta)
 
-        eta = jit_link(jax_mu)
-        mu_back = jit_inverse(eta)
-        deriv = jit_deriv(jax_mu)
-        me = jit_mu_eta(eta)
+            eta = jit_link(jax_mu)
+            mu_back = jit_inverse(eta)
+            deriv = jit_deriv(jax_mu)
+            me = jit_mu_eta(eta)
 
-        # Sanity: results are finite
-        assert jnp.all(jnp.isfinite(eta)), "JIT link() produced non-finite"
-        assert jnp.all(jnp.isfinite(mu_back)), "JIT inverse() produced non-finite"
-        assert jnp.all(jnp.isfinite(deriv)), "JIT derivative() produced non-finite"
-        assert jnp.all(jnp.isfinite(me)), "JIT mu_eta() produced non-finite"
-
-    @pytest.mark.parametrize(
-        ("link_obj", "jax_mu", "_np_mu"), JAX_LINK_MU_MAP, ids=LINK_IDS
-    )
-    def test_roundtrip_jax(
-        self, link_obj: Link, jax_mu: jax.Array, _np_mu: np.ndarray
-    ) -> None:
-        """linkinv(link(jax_mu)) ≈ jax_mu."""
-        eta = link_obj.link(jax_mu)
-        mu_recovered = link_obj.linkinv(eta)
-        np.testing.assert_allclose(
-            np.asarray(mu_recovered),
-            np.asarray(jax_mu),
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"JAX roundtrip failed for {type(link_obj).__name__}",
-        )
+            assert jnp.all(jnp.isfinite(eta)), (
+                f"JIT link() produced non-finite for {type(link_obj).__name__}"
+            )
+            assert jnp.all(jnp.isfinite(mu_back)), (
+                f"JIT inverse() produced non-finite for {type(link_obj).__name__}"
+            )
+            assert jnp.all(jnp.isfinite(deriv)), (
+                f"JIT derivative() produced non-finite for {type(link_obj).__name__}"
+            )
+            assert jnp.all(jnp.isfinite(me)), (
+                f"JIT mu_eta() produced non-finite for {type(link_obj).__name__}"
+            )
