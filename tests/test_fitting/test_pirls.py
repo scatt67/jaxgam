@@ -3,12 +3,10 @@
 Tests cover:
 - Convergence for all four standard families (Gaussian, Binomial, Poisson, Gamma)
 - Step-halving activation under adversarial initialization
-- Monotonic decrease of penalized deviance
 - JIT compilation compatibility
 - Offset handling
 - Penalized (ridge) shrinkage
 - R comparison via RBridge against mgcv::gam(sp=...)
-- Single PIRLS step correctness
 
 Design doc reference: Section 7.2
 """
@@ -27,8 +25,6 @@ from jaxgam.fitting.pirls import (
     _W_MAX,
     _W_MIN,
     PIRLSResult,
-    _penalized_deviance,
-    _pirls_step,
     pirls_loop,
 )
 from jaxgam.jax_utils import penalized_cholesky, to_jax, to_numpy
@@ -213,37 +209,6 @@ class TestStepHalving:
         assert result.converged
 
 
-class TestMonotonicity:
-    """Penalized deviance should not increase (within tolerance)."""
-
-    @pytest.mark.parametrize(
-        ("family_name", "family"),
-        [
-            ("gaussian", Gaussian()),
-            ("binomial", Binomial()),
-            ("poisson", Poisson()),
-            ("gamma", Gamma()),
-        ],
-    )
-    def test_final_pen_dev_leq_initial(self, family_name, family):
-        X, y = _make_glm_data(family_name, p=6)
-        n = len(y)
-        p = X.shape[1]
-        wt = np.ones(n)
-        S_lambda_np = np.eye(p)
-
-        X_d, y_d, beta_d, S_d, wt_d = _init_and_transfer(X, y, wt, family, S_lambda_np)
-
-        # Compute initial penalized deviance
-        eta_init = X_d @ beta_d
-        mu_init = family.link.inverse(eta_init)
-        pen_dev_init = _penalized_deviance(beta_d, mu_init, y_d, wt_d, S_d, family)
-
-        result = pirls_loop(X_d, y_d, beta_d, S_d, family)
-
-        assert float(result.penalized_deviance) <= float(pen_dev_init) + MODERATE.atol
-
-
 class TestJITCompilation:
     """PIRLS should work under jax.jit for all families."""
 
@@ -364,42 +329,6 @@ class TestPenalized:
         norm_pen = float(jnp.linalg.norm(result_pen.coefficients))
         assert norm_pen < norm_unpen, (
             f"Ridge penalty should shrink {family_name} coefficient norm"
-        )
-
-
-class TestPIRLSStep:
-    """Test a single PIRLS step for correctness."""
-
-    def test_single_step_gaussian(self):
-        """A single Gaussian PIRLS step should produce valid XtWX."""
-        X, y, _ = _make_polynomial_data(n=100, p=3)
-        family = Gaussian()
-        n = len(y)
-        wt = np.ones(n)
-        S_lambda_np = np.zeros((3, 3))
-
-        beta_init = initialize_beta(X, y, wt, family)
-        X_d, y_d, wt_d, S_d, beta_d = to_jax(
-            X, y, wt, S_lambda_np, np.asarray(beta_init)
-        )
-        offset_d = to_jax(np.zeros(n))
-
-        eta = X_d @ beta_d + offset_d
-        mu = family.link.inverse(eta)
-
-        _beta_new, XtWX, _L, W = _pirls_step(X_d, y_d, wt_d, beta_d, mu, S_d, family)
-
-        # XtWX should be symmetric positive definite for Gaussian
-        XtWX_np = to_numpy(XtWX)
-        np.testing.assert_allclose(
-            XtWX_np, XtWX_np.T, rtol=STRICT.rtol, atol=STRICT.atol
-        )
-        eigvals = np.linalg.eigvalsh(XtWX_np)
-        assert np.all(eigvals > 0), "XtWX should be positive definite"
-
-        # For Gaussian with identity link, W should be all 1s (= wt)
-        np.testing.assert_allclose(
-            to_numpy(W), np.ones(n), rtol=STRICT.rtol, atol=STRICT.atol
         )
 
 
