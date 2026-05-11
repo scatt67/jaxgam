@@ -267,7 +267,7 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 
 **Pattern:** most cuts are per-basis (cr/cs/cc) duplicates that collapse to `@pytest.mark.parametrize('bs', ['cr','cs','cc'])`. Apply the parameterization rather than deleting the underlying checks.
 
-### Commit E: Penalties / Constraints / Linalg / Edge / Validation cleanup
+### Commit E: Penalties / Constraints / Linalg / Edge / Validation cleanup (**DONE**)
 
 **Files:** `tests/test_penalties.py`, `tests/test_constraints.py`, `tests/test_linalg.py`, `tests/test_edge_cases.py`, `tests/test_validation_matrix.py` (small sweep beyond Phase 1)
 **Estimated cuts:** ~44 source-level tests, ~400 lines.

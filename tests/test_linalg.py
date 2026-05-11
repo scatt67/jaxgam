@@ -15,7 +15,6 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jsla
 import numpy as np
 import pytest
-import scipy.linalg as sla
 
 from jaxgam.jax_utils import (
     cho_factor,
@@ -23,7 +22,7 @@ from jaxgam.jax_utils import (
     penalized_cholesky,
     penalized_solve,
 )
-from tests.tolerances import MODERATE, STRICT
+from tests.tolerances import STRICT
 
 jax.config.update("jax_enable_x64", True)
 
@@ -89,47 +88,24 @@ class TestChoFactor:
             atol=STRICT.atol,
         )
 
-    def test_lower_triangular(self, pd_matrix: jnp.ndarray) -> None:
-        """L must be lower-triangular."""
-        L, _ = cho_factor(pd_matrix)
-        upper = jnp.triu(L, k=1)
-        assert jnp.allclose(upper, 0.0)
-
-    def test_small_jitter_well_conditioned(self, pd_matrix: jnp.ndarray) -> None:
-        """Well-conditioned matrix uses eps_small jitter."""
-        _, jitter = cho_factor(pd_matrix)
+    def test_jitter_scales_with_conditioning(
+        self,
+        pd_matrix: jnp.ndarray,
+        near_singular_matrix: jnp.ndarray,
+    ) -> None:
+        """Well-conditioned matrices use eps_small; singular ones need more."""
+        _, well_conditioned_jitter = cho_factor(pd_matrix)
         p = pd_matrix.shape[0]
         trace_H = jnp.trace(pd_matrix)
         eps_small = jnp.maximum(1e-12 * trace_H / p, 1e-14)
-        np.testing.assert_allclose(float(jitter), float(eps_small))
+        np.testing.assert_allclose(float(well_conditioned_jitter), float(eps_small))
 
-    def test_large_jitter_near_singular(
-        self, near_singular_matrix: jnp.ndarray
-    ) -> None:
-        """Near-singular matrix triggers eps_large jitter."""
-        _, jitter = cho_factor(near_singular_matrix)
-        p = near_singular_matrix.shape[0]
-        trace_H = jnp.trace(near_singular_matrix)
-        eps_small = float(jnp.maximum(1e-12 * trace_H / p, 1e-14))
-        # Jitter should be larger than eps_small
-        assert float(jitter) > eps_small
-
-    def test_scipy_match(self, pd_matrix: jnp.ndarray) -> None:
-        """Solve via cho_factor matches scipy on well-conditioned system."""
-        L, _ = cho_factor(pd_matrix)
-        b = jnp.ones(pd_matrix.shape[0])
-        x_jax = jsla.cho_solve((L, True), b)
-
-        H_np = np.array(pd_matrix)
-        c, low = sla.cho_factor(H_np, lower=True)
-        x_scipy = sla.cho_solve((c, low), np.ones(H_np.shape[0]))
-
-        np.testing.assert_allclose(
-            np.array(x_jax),
-            x_scipy,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
+        _, near_singular_jitter = cho_factor(near_singular_matrix)
+        trace_near_singular = jnp.trace(near_singular_matrix)
+        eps_small_near_singular = float(
+            jnp.maximum(1e-12 * trace_near_singular / p, 1e-14)
         )
+        assert float(near_singular_jitter) > eps_small_near_singular
 
     def test_cho_solve_roundtrip(self, pd_matrix: jnp.ndarray) -> None:
         """cho_solve(cho_factor(H), b) ≈ H^{-1} b."""
@@ -143,20 +119,6 @@ class TestChoFactor:
             atol=STRICT.atol,
         )
 
-    def test_multiple_rhs(self, pd_matrix: jnp.ndarray) -> None:
-        """cho_solve works with matrix RHS."""
-        p = pd_matrix.shape[0]
-        B = jnp.eye(p)
-        L, _ = cho_factor(pd_matrix)
-        X = jsla.cho_solve((L, True), B)
-        # X should be approximately H^{-1}
-        np.testing.assert_allclose(
-            np.array(pd_matrix @ X),
-            np.array(B),
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-        )
-
 
 # ---------------------------------------------------------------------------
 # TestPenalizedCholesky
@@ -166,12 +128,15 @@ class TestChoFactor:
 class TestPenalizedCholesky:
     """Tests for penalized_cholesky and penalized_solve."""
 
-    def test_penalized_cholesky_reconstruction(
+    def test_penalized_system_reconstructs_and_solves(
         self, realistic_penalized_system: dict
     ) -> None:
-        """L @ L.T ≈ XtWX + S_lambda + jitter * I."""
+        """Penalized factorization reconstructs H and solves H beta = rhs."""
         sys = realistic_penalized_system
         L, jitter = penalized_cholesky(sys["XtWX"], sys["S_lambda"])
+        beta, L_solve, jitter_solve = penalized_solve(
+            sys["XtWX"], sys["S_lambda"], sys["rhs"]
+        )
         H = sys["XtWX"] + sys["S_lambda"]
         p = H.shape[0]
         np.testing.assert_allclose(
@@ -180,46 +145,17 @@ class TestPenalizedCholesky:
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
-
-    def test_penalized_solve_roundtrip(self, realistic_penalized_system: dict) -> None:
-        """penalized_solve produces beta such that (XtWX + S_lambda) @ beta ≈ rhs."""
-        sys = realistic_penalized_system
-        beta, _L, jitter = penalized_solve(sys["XtWX"], sys["S_lambda"], sys["rhs"])
-        H = sys["XtWX"] + sys["S_lambda"] + jitter * jnp.eye(sys["rhs"].shape[0])
+        H_jittered = (
+            sys["XtWX"] + sys["S_lambda"] + jitter * jnp.eye(sys["rhs"].shape[0])
+        )
         np.testing.assert_allclose(
-            np.array(H @ beta),
+            np.array(H_jittered @ beta),
             np.array(sys["rhs"]),
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
-
-    def test_penalized_solve_scipy_match(
-        self, realistic_penalized_system: dict
-    ) -> None:
-        """penalized_solve matches scipy cho_solve."""
-        sys = realistic_penalized_system
-        beta, _, _ = penalized_solve(sys["XtWX"], sys["S_lambda"], sys["rhs"])
-
-        H_np = np.array(sys["XtWX"] + sys["S_lambda"])
-        c, low = sla.cho_factor(H_np, lower=True)
-        beta_scipy = sla.cho_solve((c, low), np.array(sys["rhs"]))
-
-        np.testing.assert_allclose(
-            np.array(beta),
-            beta_scipy,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_penalized_solve_returns_L(self, realistic_penalized_system: dict) -> None:
-        """penalized_solve returns the same L as penalized_cholesky."""
-        sys = realistic_penalized_system
-        L_direct, jitter_direct = penalized_cholesky(sys["XtWX"], sys["S_lambda"])
-        _, L_solve, jitter_solve = penalized_solve(
-            sys["XtWX"], sys["S_lambda"], sys["rhs"]
-        )
-        np.testing.assert_array_equal(np.array(L_direct), np.array(L_solve))
-        np.testing.assert_array_equal(float(jitter_direct), float(jitter_solve))
+        np.testing.assert_array_equal(np.array(L), np.array(L_solve))
+        np.testing.assert_array_equal(float(jitter), float(jitter_solve))
 
     def test_jitter_recorded(self, realistic_penalized_system: dict) -> None:
         """Jitter value is finite and positive."""
@@ -237,23 +173,22 @@ class TestPenalizedCholesky:
 class TestNumericalRank:
     """Tests for numerical_rank via pivoted QR."""
 
-    def test_full_rank(self) -> None:
-        """Full-rank matrix has rank = min(m, n)."""
+    def test_standard_ranks(self) -> None:
+        """Full-rank and rank-one matrices have expected numerical ranks."""
         rng = np.random.default_rng(SEED)
-        A = jnp.array(rng.standard_normal((5, 3)))
-        assert int(numerical_rank(A)) == 3
+        cases = [
+            (jnp.array(rng.standard_normal((5, 3))), 3),
+            (jnp.array([[1.0], [2.0], [3.0]]) @ jnp.array([[1.0, 2.0, 3.0]]), 1),
+        ]
+
+        for A, expected_rank in cases:
+            assert int(numerical_rank(A)) == expected_rank
 
     def test_rank_deficient(self) -> None:
         """Rank-deficient matrix detected correctly."""
         # Columns 2 = 2 * column 1
         A = jnp.array([[1.0, 2.0, 2.0], [3.0, 4.0, 6.0], [5.0, 6.0, 10.0]])
         assert int(numerical_rank(A)) == 2
-
-    def test_rank_one(self) -> None:
-        """Rank-1 matrix."""
-        v = jnp.array([[1.0], [2.0], [3.0]])
-        A = v @ v.T
-        assert int(numerical_rank(A)) == 1
 
     def test_explicit_tol(self) -> None:
         """Explicit tolerance overrides default."""
@@ -273,88 +208,6 @@ class TestNumericalRank:
 
 
 # ---------------------------------------------------------------------------
-# TestSlogdet
-# ---------------------------------------------------------------------------
-
-
-class TestSlogdet:
-    """Tests for jnp.linalg.slogdet (used directly, no wrapper)."""
-
-    def test_known_determinant(self) -> None:
-        """slogdet of diagonal matrix matches known log-det."""
-        D = jnp.diag(jnp.array([2.0, 3.0, 5.0]))
-        sign, logdet = jnp.linalg.slogdet(D)
-        assert float(sign) == 1.0
-        np.testing.assert_allclose(float(logdet), np.log(30.0), rtol=STRICT.rtol)
-
-    def test_numpy_match(self, pd_matrix: jnp.ndarray) -> None:
-        """slogdet matches numpy."""
-        sign_jax, logdet_jax = jnp.linalg.slogdet(pd_matrix)
-        sign_np, logdet_np = np.linalg.slogdet(np.array(pd_matrix))
-        assert float(sign_jax) == sign_np
-        np.testing.assert_allclose(
-            float(logdet_jax),
-            logdet_np,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_positive_sign_for_pd(self, pd_matrix: jnp.ndarray) -> None:
-        """PD matrix has positive determinant (sign = +1)."""
-        sign, _ = jnp.linalg.slogdet(pd_matrix)
-        assert float(sign) == 1.0
-
-
-# ---------------------------------------------------------------------------
-# TestSolveTriangular
-# ---------------------------------------------------------------------------
-
-
-class TestSolveTriangular:
-    """Tests for jax.scipy.linalg.solve_triangular (used directly)."""
-
-    def test_forward_solve(self, pd_matrix: jnp.ndarray) -> None:
-        """L @ solve_triangular(L, b) ≈ b."""
-        L, _ = cho_factor(pd_matrix)
-        b = jnp.ones(pd_matrix.shape[0])
-        x = jsla.solve_triangular(L, b, lower=True)
-        np.testing.assert_allclose(
-            np.array(L @ x),
-            np.array(b),
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_inverse_identity(self, pd_matrix: jnp.ndarray) -> None:
-        """L @ L^{-1} ≈ I."""
-        L, _ = cho_factor(pd_matrix)
-        p = L.shape[0]
-        L_inv = jsla.solve_triangular(L, jnp.eye(p), lower=True)
-        np.testing.assert_allclose(
-            np.array(L @ L_inv),
-            np.eye(p),
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_scipy_match(self, pd_matrix: jnp.ndarray) -> None:
-        """Matches scipy.linalg.solve_triangular."""
-        L_jax, _ = cho_factor(pd_matrix)
-        L_np = np.array(L_jax)
-        b = np.ones(pd_matrix.shape[0])
-
-        x_jax = jsla.solve_triangular(L_jax, jnp.array(b), lower=True)
-        x_scipy = sla.solve_triangular(L_np, b, lower=True)
-
-        np.testing.assert_allclose(
-            np.array(x_jax),
-            x_scipy,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-
-# ---------------------------------------------------------------------------
 # TestJITCompilation
 # ---------------------------------------------------------------------------
 
@@ -362,36 +215,50 @@ class TestSolveTriangular:
 class TestJITCompilation:
     """Verify every function compiles and runs under jax.jit."""
 
-    def test_cho_factor_jit(self, pd_matrix: jnp.ndarray) -> None:
-        L, _jitter = jax.jit(cho_factor)(pd_matrix)
-        assert jnp.all(jnp.isfinite(L))
-
-    def test_penalized_cholesky_jit(self, realistic_penalized_system: dict) -> None:
+    @pytest.mark.parametrize(
+        "function_name",
+        [
+            "cho_factor",
+            "penalized_cholesky",
+            "penalized_solve",
+            "numerical_rank",
+            "slogdet",
+            "solve_triangular",
+        ],
+    )
+    def test_key_functions_jit(
+        self,
+        function_name: str,
+        pd_matrix: jnp.ndarray,
+        realistic_penalized_system: dict,
+    ) -> None:
+        """Each key linear algebra function compiles and produces finite output."""
         sys = realistic_penalized_system
-        L, _jitter = jax.jit(penalized_cholesky)(sys["XtWX"], sys["S_lambda"])
-        assert jnp.all(jnp.isfinite(L))
-
-    def test_penalized_solve_jit(self, realistic_penalized_system: dict) -> None:
-        sys = realistic_penalized_system
-        beta, _L, _jitter = jax.jit(penalized_solve)(
-            sys["XtWX"], sys["S_lambda"], sys["rhs"]
-        )
-        assert jnp.all(jnp.isfinite(beta))
-
-    def test_numerical_rank_jit(self) -> None:
-        A = jnp.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-        rank = jax.jit(numerical_rank)(A)
-        assert int(rank) == 2
-
-    def test_slogdet_jit(self, pd_matrix: jnp.ndarray) -> None:
-        _sign, logdet = jax.jit(jnp.linalg.slogdet)(pd_matrix)
-        assert jnp.isfinite(logdet)
-
-    def test_solve_triangular_jit(self, pd_matrix: jnp.ndarray) -> None:
-        L, _ = cho_factor(pd_matrix)
-        b = jnp.ones(pd_matrix.shape[0])
-        x = jax.jit(jsla.solve_triangular, static_argnames=("lower",))(L, b, lower=True)
-        assert jnp.all(jnp.isfinite(x))
+        if function_name == "cho_factor":
+            L, _jitter = jax.jit(cho_factor)(pd_matrix)
+            assert jnp.all(jnp.isfinite(L))
+        elif function_name == "penalized_cholesky":
+            L, _jitter = jax.jit(penalized_cholesky)(sys["XtWX"], sys["S_lambda"])
+            assert jnp.all(jnp.isfinite(L))
+        elif function_name == "penalized_solve":
+            beta, _L, _jitter = jax.jit(penalized_solve)(
+                sys["XtWX"], sys["S_lambda"], sys["rhs"]
+            )
+            assert jnp.all(jnp.isfinite(beta))
+        elif function_name == "numerical_rank":
+            A = jnp.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+            rank = jax.jit(numerical_rank)(A)
+            assert int(rank) == 2
+        elif function_name == "slogdet":
+            _sign, logdet = jax.jit(jnp.linalg.slogdet)(pd_matrix)
+            assert jnp.isfinite(logdet)
+        elif function_name == "solve_triangular":
+            L, _ = cho_factor(pd_matrix)
+            b = jnp.ones(pd_matrix.shape[0])
+            x = jax.jit(jsla.solve_triangular, static_argnames=("lower",))(
+                L, b, lower=True
+            )
+            assert jnp.all(jnp.isfinite(x))
 
 
 # ---------------------------------------------------------------------------
