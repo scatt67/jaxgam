@@ -2,14 +2,13 @@
 
 Tests cover:
 - GAMResults construction from mock data
-- predict() self-prediction matches fitted_values
 - predict() with new data
 - predict() with se_fit=True
 - predict_matrix() returns correct shape
 - summary() returns GAMSummary
 - Immutability (assigning to a frozen field raises)
 - __repr__() output
-- NB post-estimation: theta in results, summary, predict roundtrip
+- NB post-estimation: theta in results and summary
 
 Design doc reference: docs/refactor_gam_api/implementation_plan.md Phase 2
 """
@@ -164,16 +163,6 @@ class TestImmutability:
 class TestPredict:
     """Test GAMResults.predict()."""
 
-    def test_self_prediction_matches_fitted(self, gam_results):
-        """predict() with no newdata matches fitted_values."""
-        pred = gam_results.predict()
-        np.testing.assert_allclose(
-            pred,
-            gam_results.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
     def test_predict_with_new_data(self, gam_results, fit_data):
         """predict() with new data returns correct shape."""
         pred = gam_results.predict(newdata=fit_data)
@@ -317,7 +306,7 @@ def _fit_nb_gam(family_obj=None, formula="y ~ s(x, k=10, bs='cr')"):
 
 
 class TestNBPostEstimation:
-    """NB post-estimation: theta in results, summary, predict roundtrip."""
+    """NB post-estimation: theta in results and summary."""
 
     @pytest.fixture(scope="class")
     def nb_result(self):
@@ -340,30 +329,6 @@ class TestNBPostEstimation:
             family_theta,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
-        )
-
-    def test_predict_roundtrip(self, nb_result):
-        """predict(training_data) reproduces fitted_values."""
-        gam_result, data = nb_result
-        pred = gam_result.predict(newdata=data)
-        np.testing.assert_allclose(
-            pred,
-            gam_result.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="NB predict roundtrip failed",
-        )
-
-    def test_self_predict_roundtrip(self, nb_result):
-        """predict() with no newdata matches fitted_values."""
-        gam_result, _ = nb_result
-        pred = gam_result.predict()
-        np.testing.assert_allclose(
-            pred,
-            gam_result.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="NB self-predict roundtrip failed",
         )
 
     def test_summary_displays_theta(self, nb_result):
@@ -424,17 +389,6 @@ class TestNBFixedThetaPostEstimation:
         """Fixed-theta NB has result.theta=None (theta not estimated)."""
         gam_result, _ = fixed_nb_result
         assert gam_result.theta is None
-
-    def test_predict_roundtrip(self, fixed_nb_result):
-        """predict() roundtrip works for fixed-theta NB."""
-        gam_result, _ = fixed_nb_result
-        pred = gam_result.predict()
-        np.testing.assert_allclose(
-            pred,
-            gam_result.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
 
     def test_summary_no_theta(self, fixed_nb_result):
         """Fixed-theta NB summary does not show Theta line."""

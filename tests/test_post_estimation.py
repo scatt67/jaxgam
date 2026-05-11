@@ -217,31 +217,3 @@ class TestPostEstimationIntegration:
     def test_edf1_shape(self, results):
         """EDF1 array has correct shape."""
         assert results.edf1.shape == (len(results.smooth_info),)
-
-    def test_vp_symmetric(self, results):
-        """Vp is symmetric."""
-        np.testing.assert_allclose(
-            results.Vp,
-            results.Vp.T,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_vp_psd(self, results):
-        """Vp is positive semi-definite."""
-        eigenvalues = np.linalg.eigvalsh(results.Vp)
-        assert np.all(eigenvalues >= -STRICT.atol)
-
-    def test_null_deviance_positive(self, results):
-        """Null deviance is non-negative."""
-        assert results.null_deviance >= 0.0
-
-    def test_self_prediction_matches_fitted(self, results):
-        """Self-prediction still matches fitted values after refactor."""
-        pred = results.predict()
-        np.testing.assert_allclose(
-            pred,
-            results.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )

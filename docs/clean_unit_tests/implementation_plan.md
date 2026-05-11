@@ -168,7 +168,7 @@ Total: 50 × 2 = **100 collected tests**.
 
 ---
 
-## Phase 2 — R-Parity Ownership Sweep (Commit B)
+## Phase 2 — R-Parity Ownership Sweep (Commit B) (**DONE**)
 
 **Goal:** Assign each R-parity behavior to exactly one canonical file; delete the duplicates.
 

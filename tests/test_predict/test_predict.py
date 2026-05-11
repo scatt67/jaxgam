@@ -63,8 +63,8 @@ class TestSelfPrediction:
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
     @pytest.fixture(
-        params=["gaussian", "poisson", "binomial", "gamma"],
-        ids=["gaussian", "poisson", "binomial", "gamma"],
+        params=["gaussian", "poisson", "binomial", "gamma", "nb"],
+        ids=["gaussian", "poisson", "binomial", "gamma", "nb"],
     )
     def fitted_model(self, request):
         family_name = request.param

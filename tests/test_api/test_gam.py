@@ -2,22 +2,17 @@
 
 Tests cover:
 - A. GAM class API (fit returns GAMResults, attributes)
-- B. End-to-end fitting (Gaussian basic, all-finite, shapes, Vp PSD)
-- C. Hard-gate invariants (parametrized across 4 families)
-- D. R comparison (parametrized across 4 families, skip if R unavailable)
-- E. Multi-smooth R comparison (two smooths, tensor product)
-- F. Factor-by R comparison
-- G. ML optimization
-- H. Fixed smoothing parameters
-- I. Scope guards
-- J. Edge cases (purely parametric, offset)
+- B. End-to-end fitting shapes
+- C. Factor-by API metadata
+- D. ML optimization
+- E. Fixed smoothing parameters
+- F. Scope guards
+- G. Edge cases (purely parametric, offset)
 
-Tolerance rationale:
-  Gaussian REML: MODERATE (rtol=1e-4, atol=1e-6). GLM families: LOOSE
-  (rtol=1e-2, atol=1e-4). Smoothing parameters are NOT compared vs R
-  because the REML criterion is flat near the optimum — lambda can
-  differ by ~2% without affecting deviance, coefficients, or EDF
-  (AGENTS.md §Common Pitfalls #4).
+R-parity and hard-gate ownership:
+  Broad family x smooth R parity and final-result hard gates live in
+  tests/test_validation_matrix.py. This file owns public API orchestration,
+  routing, input validation, and fixed-sp behavior.
 
 Design doc reference: Section 10.1, 10.2
 """
@@ -33,8 +28,6 @@ from jaxgam.results import GAMResults
 from tests.helpers import (
     SEED,
     _generate_family_data,
-    r_available,
-    r_tolerance,
 )
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
@@ -102,25 +95,6 @@ class TestEndToEnd:
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
-    def test_gaussian_basic(self):
-        data = _generate_family_data("gaussian")
-        results = GAM(self.FORMULA).fit(data)
-        assert results.converged
-        assert results.n == 200
-
-    def test_all_fields_finite(self):
-        data = _generate_family_data("gaussian")
-        results = GAM(self.FORMULA).fit(data)
-        assert np.all(np.isfinite(results.coefficients))
-        assert np.all(np.isfinite(results.fitted_values))
-        assert np.all(np.isfinite(results.linear_predictor))
-        assert np.all(np.isfinite(results.Vp))
-        assert np.all(np.isfinite(results.edf))
-        assert np.isfinite(results.scale)
-        assert np.isfinite(results.deviance)
-        assert np.isfinite(results.null_deviance)
-        assert np.isfinite(results.edf_total)
-
     def test_shapes(self):
         data = _generate_family_data("gaussian")
         results = GAM(self.FORMULA).fit(data)
@@ -134,307 +108,14 @@ class TestEndToEnd:
         assert results.edf.shape == (n_smooths,)
         assert results.X.shape == (n, p)
 
-    def test_vp_symmetric_psd(self):
-        data = _generate_family_data("gaussian")
-        results = GAM(self.FORMULA).fit(data)
-        Vp = results.Vp
-        np.testing.assert_allclose(
-            Vp,
-            Vp.T,
-            atol=STRICT.atol,
-            err_msg="Vp not symmetric",
-        )
-        eigvals = np.linalg.eigvalsh(Vp)
-        assert np.all(eigvals >= -STRICT.rtol), (
-            f"Vp has negative eigenvalue: {eigvals.min()}"
-        )
-
 
 # ---------------------------------------------------------------------------
-# C. TestHardGateInvariants — parametrized across 4 families (no R)
+# C. TestFactorBy — factor-by API metadata
 # ---------------------------------------------------------------------------
 
 
-class TestHardGateInvariants:
-    """Hard-gate invariants that must hold for every family."""
-
-    FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    @pytest.fixture(
-        params=["gaussian", "poisson", "binomial", "gamma"],
-        ids=["gaussian", "poisson", "binomial", "gamma"],
-    )
-    def fitted_results(self, request):
-        family_name = request.param
-        data = _generate_family_data(family_name)
-        results = GAM(self.FORMULA, family=family_name).fit(data)
-        return family_name, results
-
-    def test_deviance_non_negative(self, fitted_results):
-        _, results = fitted_results
-        assert results.deviance >= 0
-
-    def test_all_finite(self, fitted_results):
-        _, results = fitted_results
-        assert np.all(np.isfinite(results.coefficients))
-        assert np.all(np.isfinite(results.fitted_values))
-        assert np.all(np.isfinite(results.Vp))
-        assert np.isfinite(results.scale)
-        assert np.isfinite(results.deviance)
-
-    def test_edf_bounds(self, fitted_results):
-        _, results = fitted_results
-        p = results.X.shape[1]
-        assert np.all(results.edf > 0), f"EDF has non-positive entry: {results.edf}"
-        assert results.edf_total <= p + MODERATE.atol
-
-    def test_vp_psd(self, fitted_results):
-        _, results = fitted_results
-        Vp = results.Vp
-        np.testing.assert_allclose(
-            Vp,
-            Vp.T,
-            atol=STRICT.atol,
-            err_msg="Vp not symmetric",
-        )
-        eigvals = np.linalg.eigvalsh(Vp)
-        assert np.all(eigvals >= -MODERATE.atol), (
-            f"Vp has negative eigenvalue: {eigvals.min()}"
-        )
-
-    def test_convergence(self, fitted_results):
-        _, results = fitted_results
-        assert results.converged
-
-
-# ---------------------------------------------------------------------------
-# D. TestFamilyVsR — parametrized R comparison (skip if R unavailable)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
-class TestFamilyVsR:
-    """R comparison across all four v1.0 families."""
-
-    FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    @pytest.fixture(
-        params=[
-            ("gaussian", "gaussian"),
-            ("poisson", "poisson"),
-            ("binomial", "binomial"),
-            ("gamma", "gamma"),
-        ],
-        ids=["gaussian", "poisson", "binomial", "gamma"],
-    )
-    def family_fit(self, request):
-        from tests.r_bridge import RBridge
-
-        family_name, family_r = request.param
-        data = _generate_family_data(family_name)
-        results = GAM(self.FORMULA, family=family_name).fit(data)
-        bridge = RBridge()
-        r_result = bridge.fit_gam(self.FORMULA, data, family=family_r)
-        return family_name, results, r_result
-
-    def test_deviance_vs_r(self, family_fit):
-        family_name, results, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            results.deviance,
-            r_result["deviance"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} deviance differs from R",
-        )
-
-    def test_coefficients_vs_r(self, family_fit):
-        family_name, results, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            results.coefficients,
-            r_result["coefficients"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} coefficients differ from R",
-        )
-
-    def test_fitted_values_vs_r(self, family_fit):
-        family_name, results, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            results.fitted_values,
-            r_result["fitted_values"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} fitted values differ from R",
-        )
-
-    def test_scale_vs_r(self, family_fit):
-        family_name, results, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            results.scale,
-            r_result["scale"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} scale differs from R",
-        )
-
-    def test_vp_vs_r(self, family_fit):
-        family_name, results, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            results.Vp,
-            r_result["Vp"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} Vp differs from R",
-        )
-
-    def test_per_smooth_edf_vs_r(self, family_fit):
-        family_name, results, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            results.edf,
-            r_result["edf"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} per-smooth EDF differs from R",
-        )
-
-    def test_null_deviance_vs_r(self, family_fit):
-        family_name, results, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            results.null_deviance,
-            r_result["null_deviance"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} null deviance differs from R",
-        )
-
-
-# ---------------------------------------------------------------------------
-# E. TestMultiSmooth — two smooths and tensor product (R required)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
-class TestMultiSmooth:
-    """Multi-smooth models compared to R."""
-
-    def test_two_smooths(self, two_smooth_data):
-        from tests.r_bridge import RBridge
-
-        formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        results = GAM(formula).fit(two_smooth_data)
-        bridge = RBridge()
-        r_result = bridge.fit_gam(formula, two_smooth_data)
-
-        np.testing.assert_allclose(
-            results.deviance,
-            r_result["deviance"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Two-smooth deviance differs from R",
-        )
-        np.testing.assert_allclose(
-            results.coefficients,
-            r_result["coefficients"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Two-smooth coefficients differ from R",
-        )
-        assert results.edf.shape == (2,), "Expected 2 per-smooth EDF entries"
-        np.testing.assert_allclose(
-            results.edf,
-            r_result["edf"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Two-smooth per-EDF differs from R",
-        )
-
-    def test_tensor_product(self, two_smooth_data):
-        """te(x1, x2, k=5): Python parser uses scalar k (not R's c(5,5)).
-
-        With the default basis fix (te defaults to cr, matching R),
-        we achieve MODERATE agreement on deviance, coefficients, and
-        fitted values.
-        """
-        from tests.r_bridge import RBridge
-
-        py_formula = "y ~ te(x1, x2, k=5)"
-        r_formula = "y ~ te(x1, x2, k=c(5,5))"
-        results = GAM(py_formula).fit(two_smooth_data)
-        bridge = RBridge()
-        r_result = bridge.fit_gam(r_formula, two_smooth_data)
-
-        np.testing.assert_allclose(
-            results.deviance,
-            r_result["deviance"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Tensor product deviance differs from R",
-        )
-        # LOOSE: one penalty's sp converges on a flat REML landscape,
-        # so small sp differences cascade to coefficients (~1e-3 rel).
-        np.testing.assert_allclose(
-            results.coefficients,
-            r_result["coefficients"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="Tensor product coefficients differ from R",
-        )
-        np.testing.assert_allclose(
-            results.fitted_values,
-            r_result["fitted_values"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="Tensor product fitted values differ from R",
-        )
-
-
-# ---------------------------------------------------------------------------
-# F. TestFactorBy — factor-by smooth (R required)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestFactorBy:
-    """Factor-by smooth comparisons with R."""
-
-    def test_factor_by_gaussian(self, factor_by_data):
-        from tests.r_bridge import RBridge
-
-        formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        results = GAM(formula).fit(factor_by_data)
-        bridge = RBridge()
-        r_result = bridge.fit_gam(formula, factor_by_data)
-
-        np.testing.assert_allclose(
-            results.deviance,
-            r_result["deviance"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Factor-by deviance differs from R",
-        )
-        # LOOSE: one sp is at the lsp_max cap (exp(15) vs R's exp(18)),
-        # causing minor coefficient/fitted value differences (~1e-3 rel).
-        np.testing.assert_allclose(
-            results.coefficients,
-            r_result["coefficients"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="Factor-by coefficients differ from R",
-        )
-        np.testing.assert_allclose(
-            results.fitted_values,
-            r_result["fitted_values"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="Factor-by fitted values differ from R",
-        )
+    """Factor-by smooth API behavior."""
 
     def test_factor_by_edf_count(self, factor_by_data):
         """Factor-by smooth is stored as one combined SmoothInfo entry."""
@@ -449,7 +130,7 @@ class TestFactorBy:
 
 
 # ---------------------------------------------------------------------------
-# G. TestMLOptimization — ML method
+# D. TestMLOptimization — ML method
 # ---------------------------------------------------------------------------
 
 
@@ -477,7 +158,7 @@ class TestMLOptimization:
 
 
 # ---------------------------------------------------------------------------
-# H. TestFixedSP — user-supplied smoothing parameters
+# E. TestFixedSP — user-supplied smoothing parameters
 # ---------------------------------------------------------------------------
 
 
@@ -516,7 +197,7 @@ class TestFixedSP:
 
 
 # ---------------------------------------------------------------------------
-# I. TestScopeGuards — v1.0 scope guards
+# F. TestScopeGuards — v1.0 scope guards
 # ---------------------------------------------------------------------------
 
 
@@ -553,7 +234,7 @@ class TestScopeGuards:
 
 
 # ---------------------------------------------------------------------------
-# J. TestEdgeCases
+# G. TestEdgeCases
 # ---------------------------------------------------------------------------
 
 
