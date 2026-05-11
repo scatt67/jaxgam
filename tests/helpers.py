@@ -12,6 +12,8 @@ Private API (used by conftest fixtures and complex test-local fixtures):
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 
@@ -56,6 +58,32 @@ def r_tolerance(family_name: str):
     if family_name == "gaussian":
         return MODERATE
     return LOOSE
+
+
+# ---------------------------------------------------------------------------
+# Assertion collection
+# ---------------------------------------------------------------------------
+
+
+class _AssertCollector:
+    """Collect assertion failures across related checks."""
+
+    def __init__(self) -> None:
+        self.failures: list[str] = []
+
+    def check(self, name: str, fn: Callable[[], None]) -> None:
+        """Run one assertion block and retain its failure message."""
+        try:
+            fn()
+        except AssertionError as exc:
+            self.failures.append(f"{name}: {exc}")
+
+    def raise_if_any(self, label: str) -> None:
+        """Raise one readable assertion if any collected check failed."""
+        if self.failures:
+            raise AssertionError(
+                f"{label} failed:\n  - " + "\n  - ".join(self.failures)
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -89,7 +89,7 @@ Record the four numbers (collected, source-level, coverage %, wall-clock) in thi
 
 ---
 
-## Phase 1 — Validation Matrix Consolidation (Commit A)
+## Phase 1 — Validation Matrix Consolidation (Commit A) (**DONE**)
 
 **Goal:** Reduce `tests/test_validation_matrix.py` from 15 methods/cell to 2 methods/cell. Saves ~650 collected tests — the single largest reduction in the suite.
 
