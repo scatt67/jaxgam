@@ -156,7 +156,7 @@ Do not implement any of the following. They are designed for but deferred:
 - `bam()`, chunked processing, fREML, Fellner-Schall
 - Extended families (Tweedie, Beta, SHASH, Cox PH, ordered categorical) — NB is implemented in v1.0
 - P-splines (`ps`, `cp`), B-splines (`bs`)
-- Random effects (`bs="re"`), factor-smooth interactions (`bs="fs"`)
+- Factor-smooth interactions (`bs="fs"`)
 - Multi-GPU SPMD, Ray, distributed anything
 - `gamm()`, PQL
 - Exotic smooths (soap film, MRF, adaptive, Duchon, GP)
