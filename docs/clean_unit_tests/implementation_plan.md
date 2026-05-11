@@ -70,7 +70,7 @@ Track all three after every commit:
 
 ---
 
-## Phase 0 — Pre-flight: Baseline Capture
+## Phase 0 — Pre-flight: Baseline Capture (**DONE**)
 
 **Goal:** Record current state so each subsequent commit can show measurable progress.
 
