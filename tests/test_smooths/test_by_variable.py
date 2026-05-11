@@ -72,55 +72,28 @@ class TestIsFactorDetection:
     """Tests for is_factor()."""
 
     def test_pandas_categorical_is_factor(self) -> None:
-        """pandas Categorical dtype is a factor."""
-        col = pd.Series(pd.Categorical(["a", "b", "c"]))
-        assert is_factor(col) is True
+        """pandas categorical dtypes are factors."""
+        assert is_factor(pd.Series(pd.Categorical(["a", "b", "c"]))) is True
+        assert (
+            is_factor(pd.Series(pd.Categorical(["a", "b", "c"], ordered=True))) is True
+        )
 
-    def test_pandas_ordered_categorical_is_factor(self) -> None:
-        """pandas ordered Categorical is a factor."""
-        col = pd.Series(pd.Categorical(["a", "b", "c"], ordered=True))
-        assert is_factor(col) is True
+    def test_pandas_string_like_is_factor(self) -> None:
+        """pandas string/object dtypes are factors."""
+        assert is_factor(pd.Series(["a", "b", "c"], dtype=object)) is True
+        assert is_factor(pd.Series(["a", "b", "c"])) is True
 
-    def test_pandas_object_dtype_is_factor(self) -> None:
-        """pandas object dtype (strings) is a factor."""
-        col = pd.Series(["a", "b", "c"], dtype=object)
-        assert is_factor(col) is True
+    def test_numpy_string_like_is_factor(self) -> None:
+        """numpy string/object arrays are factors."""
+        assert is_factor(np.array(["a", "b", "c"])) is True
+        assert is_factor(np.array(["a", "b", "c"], dtype=object)) is True
 
-    def test_pandas_string_dtype_is_factor(self) -> None:
-        """pandas string dtype is a factor."""
-        col = pd.Series(["a", "b", "c"])
-        # Default string columns may be object dtype
-        assert is_factor(col) is True
-
-    def test_integer_column_is_not_factor(self) -> None:
-        """Integer column is NOT a factor (must be explicit)."""
-        col = pd.Series([1, 2, 3], dtype=int)
-        assert is_factor(col) is False
-
-    def test_float_column_is_not_factor(self) -> None:
-        """Float column is NOT a factor."""
-        col = pd.Series([1.0, 2.0, 3.0], dtype=float)
-        assert is_factor(col) is False
-
-    def test_numpy_string_array_is_factor(self) -> None:
-        """Numpy string array is a factor."""
-        arr = np.array(["a", "b", "c"])
-        assert is_factor(arr) is True
-
-    def test_numpy_object_array_is_factor(self) -> None:
-        """Numpy object array is a factor."""
-        arr = np.array(["a", "b", "c"], dtype=object)
-        assert is_factor(arr) is True
-
-    def test_numpy_int_array_is_not_factor(self) -> None:
-        """Numpy integer array is NOT a factor."""
-        arr = np.array([1, 2, 3])
-        assert is_factor(arr) is False
-
-    def test_numpy_float_array_is_not_factor(self) -> None:
-        """Numpy float array is NOT a factor."""
-        arr = np.array([1.0, 2.0, 3.0])
-        assert is_factor(arr) is False
+    def test_numeric_is_not_factor(self) -> None:
+        """Numeric pandas and numpy columns are not factors."""
+        assert is_factor(pd.Series([1, 2, 3], dtype=int)) is False
+        assert is_factor(pd.Series([1.0, 2.0, 3.0], dtype=float)) is False
+        assert is_factor(np.array([1, 2, 3])) is False
+        assert is_factor(np.array([1.0, 2.0, 3.0])) is False
 
 
 # ===========================================================================
@@ -157,16 +130,6 @@ class TestFactorBySmoothStructure:
     ) -> None:
         """Total columns = n_levels x k_per_level."""
         assert factor_by.n_coefs == 3 * base_smooth.n_coefs
-
-    def test_k_per_level_matches_base(
-        self, factor_by: FactorBySmooth, base_smooth: TPRSSmooth
-    ) -> None:
-        """Per-level basis dimension matches base smooth."""
-        assert factor_by.k_per_level == base_smooth.n_coefs
-
-    def test_n_levels(self, factor_by: FactorBySmooth) -> None:
-        """Number of levels is correct."""
-        assert factor_by.n_levels == 3
 
     def test_design_matrix_shape(
         self, factor_by: FactorBySmooth, factor_data: pd.DataFrame
@@ -346,12 +309,6 @@ class TestNumericBySmoothStructure:
             by_variable="z",
         )
 
-    def test_n_coefs_same_as_base(
-        self, numeric_by: NumericBySmooth, base_smooth: TPRSSmooth
-    ) -> None:
-        """Numeric-by doesn't change the number of coefficients."""
-        assert numeric_by.n_coefs == base_smooth.n_coefs
-
     def test_design_matrix_shape(
         self, numeric_by: NumericBySmooth, factor_data: pd.DataFrame
     ) -> None:
@@ -414,11 +371,6 @@ class TestNumericBySmoothStructure:
             atol=STRICT.atol,
         )
 
-    def test_label(self, numeric_by: NumericBySmooth) -> None:
-        """Label includes by-variable name."""
-        assert "z" in numeric_by.label
-        assert "s(x)" in numeric_by.label
-
 
 # ===========================================================================
 # 4. resolve_by_variable tests
@@ -435,14 +387,6 @@ class TestResolveByVariable:
     @pytest.fixture
     def base_smooth(self, factor_data: pd.DataFrame) -> TPRSSmooth:
         return _setup_base_smooth(factor_data, k=10)
-
-    def test_no_by_returns_smooth_unchanged(
-        self, base_smooth: TPRSSmooth, factor_data: pd.DataFrame
-    ) -> None:
-        """No by-variable returns the base smooth."""
-        spec = make_smooth_spec(["x"], k=10, by=None)
-        result = resolve_by_variable(spec, factor_data, base_smooth)
-        assert result is base_smooth
 
     def test_factor_by_returns_factor_by_smooth(
         self, base_smooth: TPRSSmooth, factor_data: pd.DataFrame
@@ -512,9 +456,9 @@ class TestFactorByWithDifferentBases:
     def factor_data(self) -> pd.DataFrame:
         return _make_factor_data(n=200, n_levels=3)
 
-    @pytest.mark.parametrize("bs", ["tp", "ts"])
-    def test_tprs_variants(self, factor_data: pd.DataFrame, bs: str) -> None:
-        """Factor-by works with tp and ts basis types."""
+    @pytest.mark.parametrize("bs", ["tp", "ts", "cr", "cs", "cc"])
+    def test_basis_variants(self, factor_data: pd.DataFrame, bs: str) -> None:
+        """Factor-by works across supported basis types."""
         from jaxgam.smooths.registry import get_smooth_class
 
         spec = make_smooth_spec(["x"], bs=bs, k=10)
@@ -534,31 +478,6 @@ class TestFactorByWithDifferentBases:
         X = fbs.build_design_matrix(factor_data)
         assert X.shape == (200, 3 * smooth.n_coefs)
         penalties = fbs.build_penalty_matrices()
-        assert len(penalties) == 3
-
-    @pytest.mark.parametrize("bs", ["cr", "cs", "cc"])
-    def test_cubic_variants(self, factor_data: pd.DataFrame, bs: str) -> None:
-        """Factor-by works with cr, cs, cc basis types."""
-        from jaxgam.smooths.registry import get_smooth_class
-
-        spec = make_smooth_spec(["x"], bs=bs, k=10)
-        smooth_cls = get_smooth_class(bs)
-        smooth = smooth_cls(spec)
-        smooth.setup({"x": factor_data["x"].values})
-
-        by_spec = make_smooth_spec(["x"], bs=bs, k=10, by="fac")
-        levels = sorted(factor_data["fac"].cat.categories.tolist())
-        fbs = FactorBySmooth(
-            base_smooth=smooth,
-            spec=by_spec,
-            levels=levels,
-            by_variable="fac",
-        )
-
-        X = fbs.build_design_matrix(factor_data)
-        assert X.shape == (200, 3 * smooth.n_coefs)
-        penalties = fbs.build_penalty_matrices()
-        # cr and cc have 1 penalty, cs has 1 penalty too
         assert len(penalties) == 3
 
 

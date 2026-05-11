@@ -23,7 +23,7 @@ Reduce the jaxgam test suite from **2,151 collected tests / 30,020 lines** to ro
 
 1. Read the unit's "What to do" and "Files touched" sections.
 2. Make the code/test changes.
-3. Run the validation commands listed for that unit (`make test-local` and, where R is needed, `make test`).
+3. Run `make test-cov` for validation. This single command runs the full suite in Docker (with R 4.5.2 + mgcv 1.9-3) and enforces the ≥80% coverage gate — do **not** also run `make test` or `make test-local`, they are redundant and slow.
 4. Stop and surface the results to the user (file list, test count delta, coverage delta, validation output). The user reviews, commits, then triggers the next unit.
 
 If a unit's validation fails, fix the issue **in the same unit** before handing off — do not start the next unit on a broken tree. If the fix changes the scope of the unit, note that in the handoff so the user can adjust the commit message accordingly.
@@ -38,13 +38,13 @@ Per CLAUDE.md, this project uses `uv` for dependency management and `make` for t
 
 | Task | Command |
 |---|---|
-| Run tests locally (no R) | `make test-local` |
-| Full suite in Docker (with R 4.5.2 + mgcv 1.9-3) | `make test` |
+| **Validation (use this — only this)** | `make test-cov` |
 | Count collected tests | `uv run pytest --collect-only -q tests \| tail -1` |
 | Count source-level tests | `grep -rc "def test_" tests \| awk -F: '{s+=$2} END {print s}'` |
-| Coverage | `uv run pytest --cov=jaxgam tests/` |
 | Lint | `make lint` |
 | Pre-commit | `make pre-commit` |
+
+`make test-cov` runs the full suite in Docker (R 4.5.2 + mgcv 1.9-3) with coverage and the `--cov-fail-under=80` gate. It is a strict superset of `make test` and `make test-local` plus the coverage check, so the agent should run it instead of all three. `make test` and `make test-local` exist for human use and are not part of the agent validation loop.
 
 ---
 
@@ -79,9 +79,10 @@ Run on a clean checkout of the working branch (before any cleanup commits):
 ```sh
 uv run pytest --collect-only -q tests | tail -3
 grep -rc "def test_" tests | grep -v ":0$" | awk -F: '{s+=$2} END {print s}'
-uv run pytest --cov=jaxgam --cov-report=term tests/ 2>&1 | tail -20
-time make test-local 2>&1 | tail -5
+time make test-cov 2>&1 | tail -25
 ```
+
+`make test-cov` produces both the coverage report (use the totals line) and the wall-clock when wrapped in `time`.
 
 Record the four numbers (collected, source-level, coverage %, wall-clock) in this file (or a `BASELINE.md` next to it). Every subsequent unit references them.
 
@@ -154,8 +155,7 @@ Total: 50 × 2 = **100 collected tests**.
 
 ### Validation
 
-- `make test-local` passes.
-- `make test` (Docker, with R) passes.
+- `make test-cov` passes (full Docker suite + R + ≥80% coverage gate). Do not also run `make test` or `make test-local`.
 - `pytest --collect-only -q tests/test_validation_matrix.py` reports **100** tests (down from 750).
 - Coverage of `jaxgam/` does not drop.
 - Wall-clock for the file shorter (fewer R fits per cell).
@@ -215,7 +215,7 @@ Total: 50 × 2 = **100 collected tests**.
 
 ### Validation
 
-- `make test-local` and `make test` pass.
+- `make test-cov` passes. Do not also run `make test` or `make test-local`.
 - For each behavior in the ownership table, exactly one test file is responsible.
 
 ### Exit criteria
@@ -237,8 +237,8 @@ For every commit in this phase:
 - Continue on the same working branch (no new branches).
 - Use the cut lists in `scratch/audit_unit_tests_v2.md` as the work list.
 - **Do NOT cut anything in v2's "Regression Test Inventory — MUST PRESERVE" table.** Treat that table as a hard allow-list.
-- Run `make test-local` after the changes; run `make test` (Docker + R) if any cut touches R-bridge tests or numerical comparisons.
-- When handing off to the user, surface: (1) files touched, (2) test count before/after, (3) coverage delta, (4) validation output. The user uses this for the commit message.
+- Run `make test-cov` after the changes (single command — full Docker suite + R + coverage gate). Do not also run `make test` or `make test-local`.
+- When handing off to the user, surface: (1) files touched, (2) test count before/after, (3) coverage delta, (4) `make test-cov` output. The user uses this for the commit message.
 - **Do not run `git commit` or `git push`.**
 
 Commits in this phase touch disjoint file sets, so the order does not matter for correctness — but executing in the listed order keeps the most sensitive cleanup (fitting) last, after the others have validated the workflow.
@@ -255,7 +255,7 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 
 **Watch list:** after cuts, `tests/test_families.py` should still have at least one consolidated test exercising JIT compilation for each Phase 2 method per CLAUDE.md commit conventions.
 
-### Commit D: Smooths cleanup
+### Commit D: Smooths cleanup (**DONE**)
 
 **Files:** `tests/test_smooths/test_tprs.py`, `test_cubic.py`, `test_tensor.py`, `test_by_variable.py`, `test_random_effects.py`
 **Estimated cuts:** ~68 source-level tests, ~485 lines.
@@ -335,13 +335,13 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 
    For each file in the result, confirm it owns at least one unique behavior per Phase 2's ownership table. Delete any remaining duplicates.
 
-3. **Run coverage:**
+3. **Run validation:**
 
    ```sh
-   uv run pytest --cov=jaxgam --cov-report=term-missing tests/
+   make test-cov
    ```
 
-   Verify coverage ≥ 80% across modules. If any module dropped below, investigate which test was carrying it and either restore it or add a targeted replacement.
+   This runs the full Docker suite (with R 4.5.2 + mgcv 1.9-3) and enforces the ≥80% coverage gate. Do not also run `make test` or `make test-local`. If any module dropped below 80%, investigate which test was carrying it and either restore it or add a targeted replacement.
 
 4. **Verify regression-test preservation.** Grep the test tree for each entry in v2's "MUST PRESERVE" table:
 
@@ -420,6 +420,6 @@ Met when the user opens the single PR for this cleanup:
 - Coverage: ≥ 80% per module.
 - All regression tests in v2's "MUST PRESERVE" table still exist and pass.
 - All R-parity behaviors have exactly one canonical owning file (verified by grep).
-- `make test` (Docker, with R 4.5.2 + mgcv 1.9-3) passes on the final commit.
+- `make test-cov` (Docker, with R 4.5.2 + mgcv 1.9-3, coverage gate) passes on the final commit.
 - `CLAUDE.md` accurately reflects scope (no stale "RE not in v1.0" statement — fixed pre-Phase-0).
 - All nine units (Phase 0 baseline + Commits A–I) are present in the branch history as individual commits authored by the user.

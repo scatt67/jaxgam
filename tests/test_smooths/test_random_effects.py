@@ -20,7 +20,6 @@ import pytest
 from jaxgam.api import GAM
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
-from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.random_effects import RandomEffectSmooth
 from jaxgam.smooths.registry import get_smooth_class
 from tests.helpers import SEED, make_smooth_spec, r_available
@@ -34,25 +33,6 @@ from tests.tolerances import MODERATE, STRICT
 
 class TestStructural:
     """Structural properties of RandomEffectSmooth."""
-
-    def test_flags(self, re_factor_data) -> None:
-        """RE smooth has correct flags after setup."""
-        spec = make_smooth_spec(["g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup(re_factor_data)
-
-        assert smooth.side_constrain is False
-        assert smooth._noterp is True
-        assert smooth._random is True
-        assert smooth._has_centering_constraint is False
-
-    def test_null_space_dim_zero(self, re_factor_data) -> None:
-        """RE smooth has null_space_dim = 0."""
-        spec = make_smooth_spec(["g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup(re_factor_data)
-
-        assert smooth.null_space_dim == 0
 
     def test_rank_equals_n_coefs(self, re_factor_data) -> None:
         """RE smooth has rank = n_coefs (full rank)."""
@@ -90,26 +70,20 @@ class TestStructural:
         n_levels = len(pd.Categorical(re_factor_data["g"]).categories)
         assert smooth.n_coefs == n_levels
 
-    def test_setup_required_for_design_matrix(self) -> None:
-        """build_design_matrix before setup raises RuntimeError."""
+    @pytest.mark.parametrize(
+        ("method_name", "args"),
+        [
+            ("build_design_matrix", ({"g": pd.Series(pd.Categorical(["a", "b"]))},)),
+            ("build_penalty_matrices", ()),
+            ("predict_matrix", ({"g": pd.Series(pd.Categorical(["a", "b"]))},)),
+        ],
+    )
+    def test_setup_required(self, method_name: str, args: tuple) -> None:
+        """Matrix and penalty methods require setup."""
         spec = make_smooth_spec(["g"], bs="re")
         smooth = RandomEffectSmooth(spec)
         with pytest.raises(RuntimeError, match="setup"):
-            smooth.build_design_matrix({"g": pd.Series(pd.Categorical(["a", "b"]))})
-
-    def test_setup_required_for_penalty(self) -> None:
-        """build_penalty_matrices before setup raises RuntimeError."""
-        spec = make_smooth_spec(["g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        with pytest.raises(RuntimeError, match="setup"):
-            smooth.build_penalty_matrices()
-
-    def test_setup_required_for_predict(self) -> None:
-        """predict_matrix before setup raises RuntimeError."""
-        spec = make_smooth_spec(["g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        with pytest.raises(RuntimeError, match="setup"):
-            smooth.predict_matrix({"g": pd.Series(pd.Categorical(["a", "b"]))})
+            getattr(smooth, method_name)(*args)
 
 
 # ===========================================================================
@@ -119,17 +93,6 @@ class TestStructural:
 
 class TestPenalty:
     """Tests for RE penalty construction."""
-
-    def test_penalty_returns_list_of_penalty(self, re_factor_data) -> None:
-        """build_penalty_matrices returns list[Penalty] with one element."""
-        spec = make_smooth_spec(["g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup(re_factor_data)
-
-        penalties = smooth.build_penalty_matrices()
-        assert isinstance(penalties, list)
-        assert len(penalties) == 1
-        assert isinstance(penalties[0], Penalty)
 
     def test_penalty_symmetric(self, re_factor_data) -> None:
         """RE penalty S is symmetric."""
@@ -174,15 +137,6 @@ class TestPenalty:
         penalty = smooth.build_penalty_matrices()[0]
         assert penalty.rank == smooth.n_coefs
         assert penalty.null_space_dim == 0
-
-    def test_penalty_shape(self, re_factor_data) -> None:
-        """RE penalty has shape (n_coefs, n_coefs)."""
-        spec = make_smooth_spec(["g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup(re_factor_data)
-
-        S = smooth.build_penalty_matrices()[0].S
-        assert S.shape == (smooth.n_coefs, smooth.n_coefs)
 
 
 # ===========================================================================
@@ -271,35 +225,24 @@ class TestFactorHandling:
             mask[j] = False
             np.testing.assert_allclose(X[i, mask], 0.0, atol=STRICT.atol)
 
-    def test_numeric_only(self) -> None:
-        """Numeric-only produces single column = x values."""
+    @pytest.mark.parametrize("n_variables", [1, 2])
+    def test_numeric_terms(self, n_variables: int) -> None:
+        """Numeric-only terms produce one column with the product of inputs."""
         rng = np.random.default_rng(SEED)
-        x = rng.uniform(0, 1, 50)
-        data = {"x": x}
+        data = {f"x{i + 1}": rng.uniform(0, 1, 50) for i in range(n_variables)}
+        variables = list(data)
+        expected = np.prod(np.column_stack([data[var] for var in variables]), axis=1)
 
-        spec = make_smooth_spec(["x"], bs="re")
+        spec = make_smooth_spec(variables, bs="re")
         smooth = RandomEffectSmooth(spec)
         smooth.setup(data)
 
         X = smooth.build_design_matrix(data)
         assert smooth.n_coefs == 1
         assert X.shape == (50, 1)
-        np.testing.assert_allclose(X[:, 0], x, rtol=STRICT.rtol, atol=STRICT.atol)
-
-    def test_two_numeric_interaction(self) -> None:
-        """Two numerics produce single column = x1 * x2."""
-        rng = np.random.default_rng(SEED)
-        x1 = rng.uniform(0, 1, 50)
-        x2 = rng.uniform(0, 1, 50)
-        data = {"x1": x1, "x2": x2}
-
-        spec = make_smooth_spec(["x1", "x2"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup(data)
-
-        X = smooth.build_design_matrix(data)
-        assert smooth.n_coefs == 1
-        np.testing.assert_allclose(X[:, 0], x1 * x2, rtol=STRICT.rtol, atol=STRICT.atol)
+        np.testing.assert_allclose(
+            X[:, 0], expected, rtol=STRICT.rtol, atol=STRICT.atol
+        )
 
     def test_factor_with_many_levels(self) -> None:
         """Factor with many levels works correctly."""
@@ -327,38 +270,25 @@ class TestFactorHandling:
 class TestPrediction:
     """Tests for prediction matrix construction."""
 
-    def test_predict_reproduces_design_matrix(self, re_factor_data) -> None:
+    @pytest.mark.parametrize(
+        ("fixture_name", "variables"),
+        [
+            ("re_factor_data", ["g"]),
+            ("re_two_factor_data", ["g1", "g2"]),
+            ("re_numeric_factor_data", ["x", "g"]),
+        ],
+    )
+    def test_predict_reproduces_design_matrix(
+        self, request, fixture_name: str, variables: list[str]
+    ) -> None:
         """predict_matrix reproduces build_design_matrix on training data."""
-        spec = make_smooth_spec(["g"], bs="re")
+        data = request.getfixturevalue(fixture_name)
+        spec = make_smooth_spec(variables, bs="re")
         smooth = RandomEffectSmooth(spec)
-        smooth.setup(re_factor_data)
+        smooth.setup(data)
 
-        X_design = smooth.build_design_matrix(re_factor_data)
-        X_predict = smooth.predict_matrix(re_factor_data)
-        np.testing.assert_allclose(
-            X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
-        )
-
-    def test_predict_reproduces_two_factor(self, re_two_factor_data) -> None:
-        """predict_matrix reproduces build_design_matrix for two-factor RE."""
-        spec = make_smooth_spec(["g1", "g2"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup(re_two_factor_data)
-
-        X_design = smooth.build_design_matrix(re_two_factor_data)
-        X_predict = smooth.predict_matrix(re_two_factor_data)
-        np.testing.assert_allclose(
-            X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
-        )
-
-    def test_predict_reproduces_numeric_factor(self, re_numeric_factor_data) -> None:
-        """predict_matrix reproduces build_design_matrix for numeric x factor."""
-        spec = make_smooth_spec(["x", "g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup(re_numeric_factor_data)
-
-        X_design = smooth.build_design_matrix(re_numeric_factor_data)
-        X_predict = smooth.predict_matrix(re_numeric_factor_data)
+        X_design = smooth.build_design_matrix(data)
+        X_predict = smooth.predict_matrix(data)
         np.testing.assert_allclose(
             X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
         )
@@ -469,160 +399,67 @@ class TestRComparison:
     precision. All tests use STRICT tolerance.
     """
 
-    def _setup_single_factor(self) -> tuple:
-        """Shared setup: s(g, bs='re') with 20-level factor."""
+    @pytest.fixture(params=["single_factor", "two_factor", "numeric_factor"])
+    def r_case(self, request) -> tuple:
+        """Shared R/Python smooth setup across RE basis types."""
+        case = request.param
         rng = np.random.default_rng(SEED)
         n = 100
-        n_groups = 20
-        g = rng.choice([f"g{i}" for i in range(n_groups)], size=n)
-        data = pd.DataFrame({"g": pd.Categorical(g)})
 
-        bridge = RBridge()
-        r_result = bridge.smooth_construct("s(g, bs='re')", data)
-
-        spec = make_smooth_spec(["g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup({"g": pd.Series(pd.Categorical(g))})
-
-        return smooth, r_result, data
-
-    def _setup_two_factor(self) -> tuple:
-        """Shared setup: s(g1, g2, bs='re') with factor interaction."""
-        rng = np.random.default_rng(SEED)
-        n = 100
-        g1 = rng.choice(["a", "b", "c"], size=n)
-        g2 = rng.choice(["x", "y"], size=n)
-        data = pd.DataFrame(
-            {
-                "g1": pd.Categorical(g1),
-                "g2": pd.Categorical(g2),
-            }
-        )
-
-        bridge = RBridge()
-        r_result = bridge.smooth_construct("s(g1, g2, bs='re')", data)
-
-        spec = make_smooth_spec(["g1", "g2"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup(
-            {
+        if case == "single_factor":
+            n_groups = 20
+            g = rng.choice([f"g{i}" for i in range(n_groups)], size=n)
+            data = pd.DataFrame({"g": pd.Categorical(g)})
+            formula = "s(g, bs='re')"
+            spec = make_smooth_spec(["g"], bs="re")
+            setup_data = {"g": pd.Series(pd.Categorical(g))}
+            matrix_data = {"g": data["g"]}
+        elif case == "two_factor":
+            g1 = rng.choice(["a", "b", "c"], size=n)
+            g2 = rng.choice(["x", "y"], size=n)
+            data = pd.DataFrame(
+                {
+                    "g1": pd.Categorical(g1),
+                    "g2": pd.Categorical(g2),
+                }
+            )
+            formula = "s(g1, g2, bs='re')"
+            spec = make_smooth_spec(["g1", "g2"], bs="re")
+            setup_data = {
                 "g1": pd.Series(pd.Categorical(g1)),
                 "g2": pd.Series(pd.Categorical(g2)),
             }
-        )
-
-        return smooth, r_result, data
-
-    def _setup_numeric_factor(self) -> tuple:
-        """Shared setup: s(x, g, bs='re') with numeric x factor."""
-        rng = np.random.default_rng(SEED)
-        n = 100
-        x = rng.uniform(0, 1, n)
-        g = rng.choice([f"g{i}" for i in range(10)], size=n)
-        data = pd.DataFrame(
-            {
-                "x": x,
-                "g": pd.Categorical(g),
-            }
-        )
-
-        bridge = RBridge()
-        r_result = bridge.smooth_construct("s(x, g, bs='re')", data)
-
-        spec = make_smooth_spec(["x", "g"], bs="re")
-        smooth = RandomEffectSmooth(spec)
-        smooth.setup({"x": x, "g": pd.Series(pd.Categorical(g))})
-
-        return smooth, r_result, data
-
-    # --- Single factor ---
-
-    def test_single_factor_X_vs_r(self) -> None:
-        """s(g, bs='re') basis matrix X matches R (STRICT)."""
-        smooth, r_result, data = self._setup_single_factor()
-        X_py = smooth.build_design_matrix({"g": data["g"]})
-        X_r = r_result["X"]
-
-        np.testing.assert_allclose(
-            X_py,
-            X_r,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="RE single-factor X differs from R",
-        )
-
-    def test_single_factor_S_vs_r(self) -> None:
-        """s(g, bs='re') penalty matrix S matches R (STRICT)."""
-        smooth, r_result, _data = self._setup_single_factor()
-        S_py = smooth.build_penalty_matrices()[0].S
-        S_r = r_result["S"][0]
-
-        np.testing.assert_allclose(
-            S_py,
-            S_r,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="RE single-factor S differs from R",
-        )
-
-    def test_single_factor_rank_vs_r(self) -> None:
-        """s(g, bs='re') rank and null_space_dim match R."""
-        smooth, r_result, _data = self._setup_single_factor()
-        assert smooth.rank == r_result["rank"]
-        assert smooth.null_space_dim == r_result["null_space_dim"]
-
-    # --- Factor x factor ---
-
-    def test_two_factor_X_vs_r(self) -> None:
-        """s(g1, g2, bs='re') basis matrix X matches R (STRICT)."""
-        smooth, r_result, data = self._setup_two_factor()
-        X_py = smooth.build_design_matrix(
-            {
+            matrix_data = {
                 "g1": data["g1"],
                 "g2": data["g2"],
             }
-        )
-        X_r = r_result["X"]
-
-        np.testing.assert_allclose(
-            X_py,
-            X_r,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="RE two-factor X differs from R",
-        )
-
-    def test_two_factor_S_vs_r(self) -> None:
-        """s(g1, g2, bs='re') penalty matrix S matches R (STRICT)."""
-        smooth, r_result, _data = self._setup_two_factor()
-        S_py = smooth.build_penalty_matrices()[0].S
-        S_r = r_result["S"][0]
-
-        np.testing.assert_allclose(
-            S_py,
-            S_r,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="RE two-factor S differs from R",
-        )
-
-    def test_two_factor_rank_vs_r(self) -> None:
-        """s(g1, g2, bs='re') rank and null_space_dim match R."""
-        smooth, r_result, _data = self._setup_two_factor()
-        assert smooth.rank == r_result["rank"]
-        assert smooth.null_space_dim == r_result["null_space_dim"]
-
-    # --- Numeric x factor ---
-
-    def test_numeric_factor_X_vs_r(self) -> None:
-        """s(x, g, bs='re') basis matrix X matches R (STRICT)."""
-        smooth, r_result, data = self._setup_numeric_factor()
-        X_py = smooth.build_design_matrix(
-            {
+        else:
+            x = rng.uniform(0, 1, n)
+            g = rng.choice([f"g{i}" for i in range(10)], size=n)
+            data = pd.DataFrame(
+                {
+                    "x": x,
+                    "g": pd.Categorical(g),
+                }
+            )
+            formula = "s(x, g, bs='re')"
+            spec = make_smooth_spec(["x", "g"], bs="re")
+            setup_data = {"x": x, "g": pd.Series(pd.Categorical(g))}
+            matrix_data = {
                 "x": data["x"].values,
                 "g": data["g"],
             }
-        )
+
+        smooth = RandomEffectSmooth(spec)
+        smooth.setup(setup_data)
+
+        r_result = RBridge().smooth_construct(formula, data)
+        return case, smooth, r_result, matrix_data
+
+    def test_X_vs_r(self, r_case) -> None:
+        """RE basis matrix X matches R across factor/numeric cases."""
+        case, smooth, r_result, matrix_data = r_case
+        X_py = smooth.build_design_matrix(matrix_data)
         X_r = r_result["X"]
 
         np.testing.assert_allclose(
@@ -630,12 +467,12 @@ class TestRComparison:
             X_r,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
-            err_msg="RE numeric-factor X differs from R",
+            err_msg=f"RE {case} X differs from R",
         )
 
-    def test_numeric_factor_S_vs_r(self) -> None:
-        """s(x, g, bs='re') penalty matrix S matches R (STRICT)."""
-        smooth, r_result, _data = self._setup_numeric_factor()
+    def test_S_vs_r(self, r_case) -> None:
+        """RE penalty matrix S matches R across factor/numeric cases."""
+        case, smooth, r_result, _matrix_data = r_case
         S_py = smooth.build_penalty_matrices()[0].S
         S_r = r_result["S"][0]
 
@@ -644,12 +481,12 @@ class TestRComparison:
             S_r,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
-            err_msg="RE numeric-factor S differs from R",
+            err_msg=f"RE {case} S differs from R",
         )
 
-    def test_numeric_factor_rank_vs_r(self) -> None:
-        """s(x, g, bs='re') rank and null_space_dim match R."""
-        smooth, r_result, _data = self._setup_numeric_factor()
+    def test_rank_vs_r(self, r_case) -> None:
+        """RE rank and null_space_dim match R across cases."""
+        _case, smooth, r_result, _matrix_data = r_case
         assert smooth.rank == r_result["rank"]
         assert smooth.null_space_dim == r_result["null_space_dim"]
 
