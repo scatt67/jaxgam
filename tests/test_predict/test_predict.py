@@ -4,7 +4,7 @@ Tests cover:
 - A. Self-prediction roundtrip (STRICT)
 - B. New data prediction vs R (MODERATE / LOOSE)
 - C. SE computation vs R (MODERATE / LOOSE)
-- D. Multi-smooth and special smooth types
+- D. Multi-smooth and special smooth type new-data prediction
 - E. Edge cases (purely parametric, offset)
 
 Tolerance rationale:
@@ -22,6 +22,7 @@ import pytest
 from jaxgam.api import GAM
 from tests.helpers import (
     SEED,
+    _AssertCollector,
     _generate_family_data,
     r_available,
     r_tolerance,
@@ -72,56 +73,53 @@ class TestSelfPrediction:
         model = GAM(self.FORMULA, family=family_name).fit(data)
         return family_name, model, data
 
-    def test_predict_response_matches_fitted_values(self, fitted_model):
-        _, model, _ = fitted_model
-        pred = model.predict()
-        np.testing.assert_allclose(
-            pred,
-            model.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="predict() != fitted_values_",
-        )
-
-    def test_predict_link_matches_linear_predictor(self, fitted_model):
-        _, model, _ = fitted_model
-        pred = model.predict(pred_type="link")
-        np.testing.assert_allclose(
-            pred,
-            model.linear_predictor,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="predict(pred_type='link') != linear_predictor_",
-        )
-
-    def test_predict_matrix_times_coefs_matches_eta(self, fitted_model):
-        _, model, data = fitted_model
+    def test_self_prediction_roundtrip(self, fitted_model):
+        family_name, model, data = fitted_model
         X_p = model.predict_matrix(data)
-        eta_reconstructed = X_p @ model.coefficients
-        np.testing.assert_allclose(
-            eta_reconstructed,
-            model.linear_predictor,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="X_p @ coefs != linear_predictor_",
+
+        collector = _AssertCollector()
+        collector.check(
+            "response",
+            lambda: np.testing.assert_allclose(
+                model.predict(),
+                model.fitted_values,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg="predict() != fitted_values",
+            ),
+        )
+        collector.check(
+            "link",
+            lambda: np.testing.assert_allclose(
+                model.predict(pred_type="link"),
+                model.linear_predictor,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg="predict(pred_type='link') != linear_predictor",
+            ),
+        )
+        collector.check(
+            "matrix_times_coefficients",
+            lambda: np.testing.assert_allclose(
+                X_p @ model.coefficients,
+                model.linear_predictor,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg="X_p @ coefficients != linear_predictor",
+            ),
+        )
+        collector.check(
+            "stored_matrix",
+            lambda: np.testing.assert_allclose(
+                X_p,
+                model.X,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg="predict_matrix(train_data) != X",
+            ),
         )
 
-    def test_predict_matrix_shape(self, fitted_model):
-        _, model, data = fitted_model
-        X_p = model.predict_matrix(data)
-        assert X_p.shape == model.X.shape
-
-    def test_predict_matrix_matches_stored_X(self, fitted_model):
-        """predict_matrix on training data should match stored X_."""
-        _, model, data = fitted_model
-        X_p = model.predict_matrix(data)
-        np.testing.assert_allclose(
-            X_p,
-            model.X,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="predict_matrix(train_data) != X_",
-        )
+        collector.raise_if_any(f"{family_name} self-prediction")
 
 
 # ---------------------------------------------------------------------------
@@ -163,29 +161,33 @@ class TestNewDataVsR:
 
         return family_name, model, newdata, r_response, r_link
 
-    def test_response_vs_r(self, prediction_pair):
-        family_name, model, newdata, r_response, _ = prediction_pair
+    def test_predictions_vs_r(self, prediction_pair):
+        family_name, model, newdata, r_response, r_link = prediction_pair
         tol = r_tolerance(family_name)
-        pred = model.predict(newdata, pred_type="response")
-        np.testing.assert_allclose(
-            pred,
-            r_response["predictions"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} response prediction differs from R",
+
+        collector = _AssertCollector()
+        collector.check(
+            "response",
+            lambda: np.testing.assert_allclose(
+                model.predict(newdata, pred_type="response"),
+                r_response["predictions"],
+                rtol=tol.rtol,
+                atol=tol.atol,
+                err_msg=f"{family_name} response prediction differs from R",
+            ),
+        )
+        collector.check(
+            "link",
+            lambda: np.testing.assert_allclose(
+                model.predict(newdata, pred_type="link"),
+                r_link["predictions"],
+                rtol=tol.rtol,
+                atol=tol.atol,
+                err_msg=f"{family_name} link prediction differs from R",
+            ),
         )
 
-    def test_link_vs_r(self, prediction_pair):
-        family_name, model, newdata, _, r_link = prediction_pair
-        tol = r_tolerance(family_name)
-        pred = model.predict(newdata, pred_type="link")
-        np.testing.assert_allclose(
-            pred,
-            r_link["predictions"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} link prediction differs from R",
-        )
+        collector.raise_if_any(f"{family_name} new-data prediction")
 
 
 # ---------------------------------------------------------------------------
@@ -237,62 +239,8 @@ class TestSEVsR:
 
 
 # ---------------------------------------------------------------------------
-# D. Multi-smooth and special smooth types
+# D. Multi-smooth and special smooth type new-data prediction
 # ---------------------------------------------------------------------------
-
-
-class TestMultiSmoothPrediction:
-    """Prediction for multi-smooth models."""
-
-    def test_two_smooth_self_prediction(self, two_smooth_data):
-        formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        data = two_smooth_data
-        model = GAM(formula).fit(data)
-
-        pred = model.predict()
-        np.testing.assert_allclose(
-            pred,
-            model.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="Two-smooth self-prediction roundtrip failed",
-        )
-
-    def test_two_smooth_predict_matrix_shape(self, two_smooth_data):
-        formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        data = two_smooth_data
-        model = GAM(formula).fit(data)
-
-        X_p = model.predict_matrix(data)
-        assert X_p.shape == model.X.shape
-
-    def test_tensor_product_self_prediction(self, two_smooth_data):
-        formula = "y ~ te(x1, x2, k=5)"
-        data = two_smooth_data
-        model = GAM(formula).fit(data)
-
-        pred = model.predict()
-        np.testing.assert_allclose(
-            pred,
-            model.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="Tensor product self-prediction roundtrip failed",
-        )
-
-    def test_factor_by_self_prediction(self, factor_by_data):
-        formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        data = factor_by_data
-        model = GAM(formula).fit(data)
-
-        pred = model.predict()
-        np.testing.assert_allclose(
-            pred,
-            model.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="Factor-by self-prediction roundtrip failed",
-        )
 
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
@@ -316,6 +264,14 @@ class TestMultiSmoothVsR:
         model = GAM(formula).fit(train)
         bridge = RBridge()
         r_result = bridge.predict_gam(formula, train, newdata, pred_type="response")
+
+        np.testing.assert_allclose(
+            model.predict(),
+            model.fitted_values,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg="Factor-by self-prediction roundtrip failed",
+        )
 
         pred = model.predict(newdata, pred_type="response")
         np.testing.assert_allclose(

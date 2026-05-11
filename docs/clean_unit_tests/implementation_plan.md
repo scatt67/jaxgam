@@ -280,7 +280,7 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 
 **Watch list:** input-validation tests in `test_edge_cases.py` (k>n raises, NaN-in-response raises, etc.) should be dropped only if equivalent input validation exists at the GAM construction layer. Verify with a quick read of `jaxgam/api.py` before deleting.
 
-### Commit F: API / Results / Predict / Post-estimation cleanup
+### Commit F: API / Results / Predict / Post-estimation cleanup (**DONE**)
 
 **Files:** `tests/test_api/test_gam.py`, `tests/test_results.py`, `tests/test_post_estimation.py`, `tests/test_predict/test_predict.py`
 **Estimated cuts:** ~30 source-level tests, ~460 lines.

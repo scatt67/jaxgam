@@ -1,7 +1,7 @@
 """Tests for GAM class (sklearn-style API).
 
 Tests cover:
-- A. GAM class API (fit returns GAMResults, attributes)
+- A. GAM class API smoke checks
 - B. End-to-end fitting shapes
 - C. Factor-by API metadata
 - D. ML optimization
@@ -41,22 +41,6 @@ class TestGAMClass:
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
-    def test_fit_returns_gam_results(self):
-        data = _generate_family_data("gaussian")
-        model = GAM(self.FORMULA)
-        result = model.fit(data)
-        assert isinstance(result, GAMResults)
-
-    def test_fitted_attributes_are_numpy(self):
-        data = _generate_family_data("gaussian")
-        results = GAM(self.FORMULA).fit(data)
-        assert isinstance(results.coefficients, np.ndarray)
-        assert isinstance(results.fitted_values, np.ndarray)
-        assert isinstance(results.Vp, np.ndarray)
-        assert isinstance(results.edf, np.ndarray)
-        assert isinstance(results.X, np.ndarray)
-        assert isinstance(results.smoothing_params, np.ndarray)
-
     def test_summary_and_plot_work(self):
         import matplotlib
 
@@ -70,19 +54,6 @@ class TestGAMClass:
         import matplotlib.pyplot as plt
 
         plt.close("all")
-
-    def test_ve_omitted(self):
-        """Ve is omitted entirely (design §9 #4)."""
-        data = _generate_family_data("gaussian")
-        results = GAM(self.FORMULA).fit(data)
-        assert not hasattr(results, "Ve")
-        assert not hasattr(results, "Ve_")
-
-    def test_routing_fields(self):
-        data = _generate_family_data("gaussian")
-        results = GAM(self.FORMULA).fit(data)
-        assert results.execution_path == "jax"
-        assert results.lambda_strategy == "newton_reml"
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +78,8 @@ class TestEndToEnd:
         assert results.Vp.shape == (p, p)
         assert results.edf.shape == (n_smooths,)
         assert results.X.shape == (n, p)
+        assert results.execution_path == "jax"
+        assert results.lambda_strategy == "newton_reml"
 
 
 # ---------------------------------------------------------------------------

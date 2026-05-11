@@ -75,12 +75,6 @@ class TestComputePerSmoothEdf:
         edf = _compute_per_smooth_edf(F, smooth_info)
         np.testing.assert_allclose(edf, [1.3], rtol=STRICT.rtol, atol=STRICT.atol)
 
-    def test_empty_smooth_info(self):
-        """No smooths returns empty array."""
-        F = np.eye(3)
-        edf = _compute_per_smooth_edf(F, ())
-        assert edf.shape == (0,)
-
 
 # ---------------------------------------------------------------------------
 # Unit tests: _compute_per_smooth_edf1
@@ -132,12 +126,6 @@ class TestComputePerSmoothEdf1:
         edf1 = _compute_per_smooth_edf1(F, smooth_info)
         assert edf1[0] >= edf[0] - STRICT.atol
 
-    def test_empty_smooth_info(self):
-        """No smooths returns empty array."""
-        F = np.eye(3)
-        edf1 = _compute_per_smooth_edf1(F, ())
-        assert edf1.shape == (0,)
-
 
 # ---------------------------------------------------------------------------
 # Unit tests: _compute_null_deviance
@@ -175,17 +163,6 @@ class TestComputeNullDeviance:
         np.testing.assert_allclose(
             null_dev, expected, rtol=STRICT.rtol, atol=STRICT.atol
         )
-
-    def test_poisson_null_deviance(self):
-        """Poisson null deviance is non-negative."""
-        from jaxgam.families.registry import get_family
-
-        family = get_family("poisson")
-        rng = np.random.default_rng(SEED)
-        y = rng.poisson(3.0, size=50).astype(float)
-        wt = np.ones(50)
-        null_dev = _compute_null_deviance(y, wt, family)
-        assert null_dev >= 0.0
 
 
 # ---------------------------------------------------------------------------
