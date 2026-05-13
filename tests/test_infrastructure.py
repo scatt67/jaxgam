@@ -6,28 +6,6 @@ from tests.tolerances import LOOSE, MODERATE, STRICT
 
 
 class TestToleranceClasses:
-    def test_strict_values(self) -> None:
-        assert STRICT.rtol == 1e-10
-        assert STRICT.atol == 1e-12
-        assert STRICT.label == "strict"
-
-    def test_moderate_values(self) -> None:
-        assert MODERATE.rtol == 1e-4
-        assert MODERATE.atol == 1e-6
-        assert MODERATE.label == "moderate"
-
-    def test_loose_values(self) -> None:
-        assert LOOSE.rtol == 1e-2
-        assert LOOSE.atol == 1e-4
-        assert LOOSE.label == "loose"
-
-    def test_frozen(self) -> None:
-        """Tolerance instances should be immutable."""
-        import pytest
-
-        with pytest.raises(AttributeError):
-            STRICT.rtol = 0.1  # type: ignore[misc]
-
     def test_tolerance_ordering(self) -> None:
         """STRICT < MODERATE < LOOSE in permissiveness."""
         assert STRICT.rtol < MODERATE.rtol < LOOSE.rtol

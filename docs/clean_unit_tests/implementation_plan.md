@@ -293,7 +293,7 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 
 **Note:** Phase 2 (Commit B) already removed the hard-gate duplicates from `test_api/test_gam.py`. This commit handles the remaining metadata / repr / immutability boilerplate (`test_construction_succeeds`, `test_no_trailing_underscores`, `TestRepr::*`, etc.).
 
-### Commit G: Summary / Plot / Formula / Bridge / Registry / Infrastructure cleanup
+### Commit G: Summary / Plot / Formula / Bridge / Registry / Infrastructure cleanup (**DONE**)
 
 **Files:** `tests/test_summary/test_summary.py`, `tests/test_plot/test_plot.py`, `tests/test_formula/test_parser.py`, `tests/test_formula/test_design.py`, `tests/test_r_bridge.py`, `tests/test_registry.py`, `tests/test_infrastructure.py`
 **Estimated cuts:** ~39–51 source-level tests, ~435 lines.

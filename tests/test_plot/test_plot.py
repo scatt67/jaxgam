@@ -18,7 +18,6 @@ import pytest
 
 matplotlib.use("Agg")  # Non-interactive backend for testing
 
-import matplotlib.figure
 import matplotlib.pyplot as plt
 
 from jaxgam.api import GAM
@@ -50,52 +49,7 @@ def _close_figures():
 
 
 # ---------------------------------------------------------------------------
-# A. Smoke tests — plot() produces a figure for each smooth type
-# ---------------------------------------------------------------------------
-
-
-class TestSmokeTests:
-    """plot() runs without error for each major smooth type."""
-
-    @pytest.fixture(
-        params=["gaussian", "poisson", "binomial", "gamma"],
-        ids=["gaussian", "poisson", "binomial", "gamma"],
-    )
-    def single_smooth_model(self, request):
-        family_name = request.param
-        data = _generate_family_data(family_name, n=200)
-        model = GAM("y ~ s(x, k=10, bs='cr')", family=family_name).fit(data)
-        return model
-
-    def test_single_smooth_plot(self, single_smooth_model):
-        """Single smooth model plots without error."""
-        fig, axes = single_smooth_model.plot()
-        assert isinstance(fig, matplotlib.figure.Figure)
-        assert axes is not None
-
-    def test_multi_smooth_plot(self, two_smooth_data):
-        """Two-smooth model plots without error."""
-        formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        model = GAM(formula).fit(two_smooth_data)
-        fig, _axes = model.plot()
-        assert isinstance(fig, matplotlib.figure.Figure)
-
-    def test_tensor_product_plot(self):
-        """Tensor product model plots without error."""
-        data = _make_tensor_data()
-        model = GAM("y ~ te(x1, x2, k=5)").fit(data)
-        fig, _axes = model.plot()
-        assert isinstance(fig, matplotlib.figure.Figure)
-
-    def test_factor_by_plot(self, factor_by_data):
-        """Factor-by model plots without error."""
-        model = GAM("y ~ s(x, by=fac, k=10, bs='cr') + fac").fit(factor_by_data)
-        fig, _axes = model.plot()
-        assert isinstance(fig, matplotlib.figure.Figure)
-
-
-# ---------------------------------------------------------------------------
-# B. Panel count tests
+# A. Panel count tests
 # ---------------------------------------------------------------------------
 
 
@@ -132,7 +86,7 @@ class TestPanelCounts:
 
 
 # ---------------------------------------------------------------------------
-# C. Parameter tests
+# B. Parameter tests
 # ---------------------------------------------------------------------------
 
 
@@ -143,23 +97,16 @@ class TestParameters:
     def two_smooth_model(self, two_smooth_data):
         return GAM("y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')").fit(two_smooth_data)
 
-    def test_select_single(self, two_smooth_model):
-        """select=0 shows only first smooth."""
-        _fig, axes = two_smooth_model.plot(select=0)
+    @pytest.mark.parametrize(
+        ("select", "expected_visible"),
+        [(0, 1), ([1], 1), ([0, 1], 2)],
+        ids=["single", "list", "both"],
+    )
+    def test_select(self, two_smooth_model, select, expected_visible):
+        """select chooses the expected number of smooth panels."""
+        _fig, axes = two_smooth_model.plot(select=select)
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
-        assert len(visible_axes) == 1
-
-    def test_select_list(self, two_smooth_model):
-        """select=[1] shows only second smooth."""
-        _fig, axes = two_smooth_model.plot(select=[1])
-        visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
-        assert len(visible_axes) == 1
-
-    def test_select_both(self, two_smooth_model):
-        """select=[0, 1] shows both smooths."""
-        _fig, axes = two_smooth_model.plot(select=[0, 1])
-        visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
-        assert len(visible_axes) == 2
+        assert len(visible_axes) == expected_visible
 
     def test_pages_one(self, two_smooth_model):
         """pages=1 arranges all smooths on one page."""
@@ -167,93 +114,56 @@ class TestParameters:
         visible_axes = [ax for ax in axes.ravel() if ax.get_visible()]
         assert len(visible_axes) == 2
 
-    def test_se_false_no_bands(self):
-        """se=False produces no SE bands."""
+    @pytest.mark.parametrize(
+        ("se", "shade", "expected"),
+        [(False, True, "none"), (True, True, "shaded"), (True, False, "dashed")],
+        ids=["off", "shaded", "dashed"],
+    )
+    def test_se_display(self, se, shade, expected):
+        """SE display follows se/shade settings."""
         data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        _fig, axes = model.plot(se=False)
+        _fig, axes = model.plot(se=se, shade=shade)
         ax = axes.ravel()[0]
-        # With se=False, should have no fill_between collections
         poly_collections = [
             c for c in ax.collections if "PolyCollection" in type(c).__name__
         ]
-        assert len(poly_collections) == 0, "Expected no SE bands"
-        # Should have at least the smooth effect line
         lines = ax.get_lines()
-        assert len(lines) >= 1
 
-    def test_se_true_has_bands(self):
-        """se=True with shade produces fill_between."""
+        if expected == "none":
+            assert len(poly_collections) == 0, "Expected no SE bands"
+            assert len(lines) >= 1
+        elif expected == "shaded":
+            assert len(poly_collections) >= 1, "Expected shaded SE band"
+        else:
+            dashed = [ln for ln in lines if ln.get_linestyle() == "--"]
+            assert len(dashed) == 2, "Expected 2 dashed SE lines"
+
+    @pytest.mark.parametrize(
+        ("rug", "expected_line_count"),
+        [(True, 2), (False, 1)],
+        ids=["on", "off"],
+    )
+    def test_rug_display(self, rug, expected_line_count):
+        """rug toggles rug marks."""
         data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        _fig, axes = model.plot(se=True, shade=True)
-        ax = axes.ravel()[0]
-        # Should have a fill_between collection
-        # (FillBetweenPolyCollection in modern matplotlib)
-        poly_collections = [
-            c for c in ax.collections if "PolyCollection" in type(c).__name__
-        ]
-        assert len(poly_collections) >= 1, "Expected shaded SE band"
-
-    def test_shade_false_dashed_lines(self):
-        """shade=False produces dashed SE lines instead of shading."""
-        data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        _fig, axes = model.plot(se=True, shade=False)
+        _fig, axes = model.plot(rug=rug, se=False)
         ax = axes.ravel()[0]
         lines = ax.get_lines()
-        # Should have 3 lines: smooth effect + 2 SE boundary lines
-        # (plus possibly rug marks)
-        dashed = [ln for ln in lines if ln.get_linestyle() == "--"]
-        assert len(dashed) == 2, "Expected 2 dashed SE lines"
-
-    def test_rug_true(self):
-        """rug=True adds rug marks."""
-        data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        _fig, axes = model.plot(rug=True, se=False)
-        ax = axes.ravel()[0]
-        lines = ax.get_lines()
-        # Should have more than 1 line (smooth + rug)
-        assert len(lines) >= 2, "Expected rug marks"
-
-    def test_rug_false_no_rug(self):
-        """rug=False produces no rug marks."""
-        data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        _fig, axes = model.plot(rug=False, se=False)
-        ax = axes.ravel()[0]
-        lines = ax.get_lines()
-        # Should have only 1 line (the smooth effect, no rug)
-        assert len(lines) == 1, "Expected only the smooth effect line"
+        if rug:
+            assert len(lines) >= expected_line_count
+        else:
+            assert len(lines) == expected_line_count
 
 
 # ---------------------------------------------------------------------------
-# D. Return value tests
+# C. Return value tests
 # ---------------------------------------------------------------------------
 
 
 class TestReturnValues:
     """Test that plot returns the expected types."""
-
-    def test_returns_tuple(self):
-        data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        result = model.plot()
-        assert isinstance(result, tuple)
-        assert len(result) == 2
-
-    def test_fig_is_figure(self):
-        data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        fig, _axes = model.plot()
-        assert isinstance(fig, matplotlib.figure.Figure)
-
-    def test_axes_is_ndarray(self):
-        data = _generate_family_data("gaussian")
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        _fig, axes = model.plot()
-        assert isinstance(axes, np.ndarray)
 
     def test_multi_smooth_axes_shape(self, two_smooth_data):
         formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
@@ -264,7 +174,7 @@ class TestReturnValues:
 
 
 # ---------------------------------------------------------------------------
-# E. Edge cases
+# D. Edge cases
 # ---------------------------------------------------------------------------
 
 

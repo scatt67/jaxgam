@@ -147,14 +147,6 @@ class TestBasicAssembly:
         assert setup.X.shape == (N, 19)
         assert setup.coef_map.total_coefs == 19
 
-    def test_cubic_smooth(self, data) -> None:
-        """y ~ s(x, k=10, bs='cr'): cubic basis works."""
-        spec = parse_formula('y ~ s(x1, k=10, bs="cr")')
-        setup = ModelSetup.build(spec, data)
-
-        assert setup.X.shape[0] == N
-        assert setup.n_obs == N
-
     def test_no_intercept(self, data) -> None:
         """y ~ 0 + s(x1, k=10): no intercept column."""
         spec = parse_formula("y ~ 0 + s(x1, k=10)")
@@ -162,20 +154,6 @@ class TestBasicAssembly:
 
         assert setup.X.shape == (N, 9)
         assert "(Intercept)" not in setup.term_names
-
-    def test_fields_populated(self, data) -> None:
-        """ModelSetup fields are populated correctly."""
-        spec = parse_formula("y ~ s(x1, k=10)")
-        setup = ModelSetup.build(spec, data)
-
-        assert setup.n_obs == N
-        assert setup.y.shape == (N,)
-        assert setup.weights.shape == (N,)
-        np.testing.assert_allclose(
-            setup.weights, np.ones(N), rtol=STRICT.rtol, atol=STRICT.atol
-        )
-        assert setup.offset is None
-        assert len(setup.term_names) == setup.X.shape[1]
 
 
 # ===========================================================================

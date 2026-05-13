@@ -15,7 +15,7 @@ Covers:
 
 import pytest
 
-from jaxgam.formula import FormulaSpec, ParametricTerm, SmoothSpec, parse_formula
+from jaxgam.formula import FormulaSpec, SmoothSpec, parse_formula
 
 
 class TestBasicParsing:
@@ -50,11 +50,6 @@ class TestBasicParsing:
         assert result.parametric_terms[0].name == "x1"
         assert result.has_intercept is True
 
-    def test_response_extraction(self) -> None:
-        """Response variable is correctly extracted."""
-        result = parse_formula("response_var ~ s(x)")
-        assert result.response == "response_var"
-
     def test_whitespace_handling(self) -> None:
         """Extra whitespace around ~ is handled correctly."""
         result = parse_formula("  y  ~  s(x1)  ")
@@ -66,22 +61,15 @@ class TestBasicParsing:
 class TestMultipleSmooths:
     """Test 2: multiple smooth terms."""
 
-    def test_two_smooths(self) -> None:
-        """y ~ s(x1) + s(x2) produces two SmoothSpecs."""
-        result = parse_formula("y ~ s(x1) + s(x2)")
+    @pytest.mark.parametrize("n_smooths", [2, 3])
+    def test_multiple_smooths(self, n_smooths: int) -> None:
+        """Multiple smooth terms are parsed in order."""
+        terms = [f"s(x{i})" for i in range(1, n_smooths + 1)]
+        result = parse_formula("y ~ " + " + ".join(terms))
 
-        assert len(result.smooth_terms) == 2
-        assert result.smooth_terms[0].variables == ["x1"]
-        assert result.smooth_terms[1].variables == ["x2"]
-
-    def test_three_smooths(self) -> None:
-        """Three smooth terms parsed correctly."""
-        result = parse_formula("y ~ s(x1) + s(x2) + s(x3)")
-
-        assert len(result.smooth_terms) == 3
-        assert result.smooth_terms[0].variables == ["x1"]
-        assert result.smooth_terms[1].variables == ["x2"]
-        assert result.smooth_terms[2].variables == ["x3"]
+        assert len(result.smooth_terms) == n_smooths
+        for i, smooth in enumerate(result.smooth_terms, start=1):
+            assert smooth.variables == [f"x{i}"]
 
 
 class TestKwargs:
@@ -109,16 +97,6 @@ class TestKwargs:
         assert smooth.k == 20
         assert smooth.bs == "cr"
 
-    def test_default_k(self) -> None:
-        """Default k is -1 when not specified."""
-        result = parse_formula("y ~ s(x1)")
-        assert result.smooth_terms[0].k == -1
-
-    def test_default_bs(self) -> None:
-        """Default bs is 'tp' for s()."""
-        result = parse_formula("y ~ s(x1)")
-        assert result.smooth_terms[0].bs == "tp"
-
     def test_extra_kwargs(self) -> None:
         """Extra kwargs are captured in extra_args."""
         result = parse_formula('y ~ s(x1, m=2, xt="cs")')
@@ -144,26 +122,22 @@ class TestByVariable:
         smooth = result.smooth_terms[0]
         assert smooth.by == "fac"
 
-    def test_by_with_other_kwargs(self) -> None:
-        """by-variable works alongside k and bs."""
-        result = parse_formula('y ~ s(x1, k=15, bs="cr", by=group)')
-
-        smooth = result.smooth_terms[0]
-        assert smooth.by == "group"
-        assert smooth.k == 15
-        assert smooth.bs == "cr"
-
 
 class TestTensorProducts:
     """Test 5: tensor product smooths."""
 
-    def test_te_basic(self) -> None:
-        """te(x1, x2) produces SmoothSpec with two variables."""
-        result = parse_formula("y ~ te(x1, x2)")
+    @pytest.mark.parametrize(
+        ("formula", "variables"),
+        [("y ~ te(x1, x2)", ["x1", "x2"]), ("y ~ te(x1, x2, x3)", ["x1", "x2", "x3"])],
+        ids=["two_variables", "three_variables"],
+    )
+    def test_te_variables(self, formula: str, variables: list[str]) -> None:
+        """te() produces SmoothSpec with the supplied variables."""
+        result = parse_formula(formula)
 
         assert len(result.smooth_terms) == 1
         smooth = result.smooth_terms[0]
-        assert smooth.variables == ["x1", "x2"]
+        assert smooth.variables == variables
         assert smooth.smooth_type == "te"
         assert smooth.bs == "cr"
 
@@ -183,20 +157,6 @@ class TestTensorProducts:
         smooth = result.smooth_terms[0]
         assert smooth.variables == ["x1", "x2"]
         assert smooth.k == 10
-
-    def test_te_three_variables(self) -> None:
-        """te() with three variables."""
-        result = parse_formula("y ~ te(x1, x2, x3)")
-
-        smooth = result.smooth_terms[0]
-        assert smooth.variables == ["x1", "x2", "x3"]
-
-    def test_default_bs_tensor(self) -> None:
-        """Default bs is 'cr' for te() and ti(), matching R."""
-        result_te = parse_formula("y ~ te(x1, x2)")
-        assert result_te.smooth_terms[0].bs == "cr"
-        result_ti = parse_formula("y ~ ti(x1, x2)")
-        assert result_ti.smooth_terms[0].bs == "cr"
 
     def test_smooth_plus_interaction(self) -> None:
         """y ~ s(x1) + s(x2) + ti(x1, x2) parses all three terms."""
@@ -310,15 +270,6 @@ class TestComplexFormula:
         # Parametric: x3
         assert result.parametric_terms[0].name == "x3"
 
-    def test_complex_with_by_and_interaction(self) -> None:
-        """Formula with by-variable, interaction, and parametric."""
-        result = parse_formula("y ~ s(x1, by=fac) + s(x2) + ti(x1, x2) + x3")
-
-        assert len(result.smooth_terms) == 3
-        assert result.smooth_terms[0].by == "fac"
-        assert result.smooth_terms[2].smooth_type == "ti"
-        assert len(result.parametric_terms) == 1
-
 
 class TestErrorCases:
     """Test 9: malformed formulas raise informative errors."""
@@ -377,46 +328,3 @@ class TestErrorCases:
         """Subtraction of non-1 value raises ValueError."""
         with pytest.raises(ValueError, match="only supported as"):
             parse_formula("y ~ s(x1) - 2")
-
-
-class TestDataclassProperties:
-    """Additional tests for dataclass behavior."""
-
-    def test_smooth_spec_defaults(self) -> None:
-        """SmoothSpec has correct defaults."""
-        spec = SmoothSpec(variables=["x1"])
-        assert spec.bs == "tp"
-        assert spec.k == -1
-        assert spec.by is None
-        assert spec.smooth_type == "s"
-        assert spec.extra_args == {}
-
-    def test_smooth_spec_custom(self) -> None:
-        """SmoothSpec accepts custom values."""
-        spec = SmoothSpec(
-            variables=["x1", "x2"],
-            bs="cr",
-            k=20,
-            by="group",
-            smooth_type="te",
-            extra_args={"m": 2},
-        )
-        assert spec.variables == ["x1", "x2"]
-        assert spec.bs == "cr"
-        assert spec.k == 20
-        assert spec.by == "group"
-        assert spec.smooth_type == "te"
-        assert spec.extra_args == {"m": 2}
-
-    def test_parametric_term(self) -> None:
-        """ParametricTerm stores name correctly."""
-        term = ParametricTerm(name="x1")
-        assert term.name == "x1"
-
-    def test_formula_spec_defaults(self) -> None:
-        """FormulaSpec has correct defaults."""
-        spec = FormulaSpec(response="y")
-        assert spec.response == "y"
-        assert spec.smooth_terms == []
-        assert spec.parametric_terms == []
-        assert spec.has_intercept is True

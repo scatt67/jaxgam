@@ -342,72 +342,17 @@ class TestMultiSmoothSummaryVsR:
 
 
 class TestSmokeTests:
-    """Smoke tests: summary prints without error for all smooth types."""
+    """Smoke tests: summary prints without error for single-smooth models."""
 
-    def test_single_smooth_gaussian(self):
-        data = _generate_family_data("gaussian", n=200)
-        model = GAM("y ~ s(x, k=10, bs='cr')", family="gaussian").fit(data)
+    @pytest.mark.parametrize("family", ["gaussian", "binomial", "poisson", "gamma"])
+    def test_single_smooth_format(self, family):
+        data = _generate_family_data(family, n=200)
+        model = GAM("y ~ s(x, k=10, bs='cr')", family=family).fit(data)
         s = summary(model)
         text = str(s)
         assert "Parametric coefficients:" in text
-        assert "Approximate significance of smooth terms:" in text
-        assert "R-sq." in text
-        assert "Deviance explained" in text
-        assert "Scale est." in text
-
-    def test_single_smooth_binomial(self):
-        data = _generate_family_data("binomial", n=200)
-        model = GAM("y ~ s(x, k=10, bs='cr')", family="binomial").fit(data)
-        s = summary(model)
-        text = str(s)
-        assert "binomial" in text.lower()
-        assert "Chi.sq" in text or "z value" in text
-
-    def test_single_smooth_poisson(self):
-        data = _generate_family_data("poisson", n=200)
-        model = GAM("y ~ s(x, k=10, bs='cr')", family="poisson").fit(data)
-        s = summary(model)
-        text = str(s)
-        assert "poisson" in text.lower()
-
-    def test_single_smooth_gamma(self):
-        data = _generate_family_data("gamma", n=200)
-        model = GAM("y ~ s(x, k=10, bs='cr')", family="gamma").fit(data)
-        s = summary(model)
-        text = str(s)
-        assert "gamma" in text.lower()
-
-    def test_two_smooth(self, two_smooth_data):
-        data = two_smooth_data
-        formula = "y ~ s(x1, k=8, bs='cr') + s(x2, k=8, bs='cr')"
-        model = GAM(formula).fit(data)
-        s = summary(model)
-        assert s.s_table is not None
-        assert s.s_table.shape[0] == 2
-
-    def test_tensor_product(self, two_smooth_data):
-        data = two_smooth_data
-        formula = "y ~ te(x1, x2, k=5)"
-        model = GAM(formula).fit(data)
-        s = summary(model)
-        assert s.s_table is not None
-        assert s.s_table.shape[0] == 1
-
-    def test_factor_by(self, factor_by_data):
-        data = factor_by_data
-        formula = "y ~ s(x, by=fac, k=10, bs='cr') + fac"
-        model = GAM(formula).fit(data)
-        s = summary(model)
-        assert s.s_table is not None
-        # FactorBySmooth is treated as a single smooth term
-        assert s.s_table.shape[0] == 1
-
-    def test_summary_returns_gam_summary(self):
-        """summary() should return a GAMSummary instance."""
-        data = _generate_family_data("gaussian", n=200)
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        s = summary(model)
-        assert isinstance(s, GAMSummary)
+        if family != "gaussian":
+            assert family in text.lower()
 
     def test_summary_method_returns_gam_summary(self, capsys):
         """GAMResults.summary() should print and return GAMSummary."""
@@ -418,15 +363,6 @@ class TestSmokeTests:
 
         captured = capsys.readouterr()
         assert "Parametric coefficients:" in captured.out
-
-    def test_str_representation(self):
-        """str(GAMSummary) should return formatted summary."""
-        data = _generate_family_data("gaussian", n=200)
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        s = summary(model)
-        text = str(s)
-        assert isinstance(text, str)
-        assert len(text) > 100  # Not trivially empty
 
     def test_purely_parametric(self):
         """Summary should work for purely parametric models."""
@@ -470,21 +406,6 @@ class TestEdgeCases:
         assert s.p_test_name == "t value"
         assert s.p_pv_name == "Pr(>|t|)"
         assert s.s_test_name == "F"
-
-    def test_formula_stored(self):
-        """Formula should be stored in summary."""
-        data = _generate_family_data("gaussian", n=200)
-        formula = "y ~ s(x, k=10, bs='cr')"
-        model = GAM(formula).fit(data)
-        s = summary(model)
-        assert s.formula == formula
-
-    def test_n_correct(self):
-        """Number of observations should match data."""
-        data = _generate_family_data("gaussian", n=200)
-        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-        s = summary(model)
-        assert s.n == len(data)
 
 
 # ---------------------------------------------------------------------------
