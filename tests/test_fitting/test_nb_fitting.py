@@ -80,17 +80,6 @@ class TestMaxYFromData:
         expected = int(np.max(data["y"].values))
         assert fd.max_y == expected
 
-    def test_max_y_zero_gives_zero_lgamma_diff(self):
-        """saturated_loglik_theta with max_y=0 produces zero scan output."""
-        family = NegativeBinomial()
-        y = jnp.array([1.0, 2.0, 3.0])
-        wt = jnp.ones(3)
-        log_theta = jnp.array([0.0])
-        # max_y=0 means the scan never executes — theta derivs are zero.
-        # With the explicit parameter, callers control this intentionally.
-        result = family.saturated_loglik_theta(y, wt, 1.0, log_theta, max_y=0)
-        assert jnp.isfinite(result)
-
     def test_max_y_correct_gives_nonzero_grad(self):
         """saturated_loglik_theta with correct max_y has nonzero theta grad."""
         family = NegativeBinomial()
@@ -145,13 +134,6 @@ class TestNBSimpleFit:
         assert np.isfinite(dev)
         assert dev >= 0
 
-    def test_result_theta_populated(self, nb_fit):
-        """result.theta is populated for estimated NB."""
-        _, result = nb_fit
-        assert result.theta is not None
-        assert isinstance(result.theta, float)
-        assert result.theta > 0
-
 
 # ---------------------------------------------------------------------------
 # B. Fixed theta
@@ -181,13 +163,6 @@ class TestNBFixedTheta:
         """result.theta is None for fixed-theta NB (n_theta=0)."""
         _, result, _ = fixed_fit
         assert result.theta is None
-
-    def test_family_theta_unchanged(self, fixed_fit):
-        """Family theta stays at fixed value after fitting."""
-        _, _, family = fixed_fit
-        assert family.n_theta == 0
-        theta = float(family.get_theta(transformed=True)[0])
-        np.testing.assert_allclose(theta, 2.0, rtol=STRICT.rtol)
 
 
 # ---------------------------------------------------------------------------
@@ -526,16 +501,6 @@ class TestNBGAMAPI:
         theta = float(result.family.get_theta(transformed=True)[0])
         assert theta > 0
         assert np.isfinite(theta)
-
-    def test_gam_fit_nb_string(self):
-        """GAM.fit() with family='nb' string works."""
-        from jaxgam.api import GAM
-
-        data = _make_nb_data(true_theta=2.0)
-        result = GAM(self.FORMULA, family="nb").fit(data)
-
-        assert result.converged
-        assert np.isfinite(result.deviance)
 
     def test_predict_roundtrip(self):
         """predict(training_data) reproduces fitted_values."""

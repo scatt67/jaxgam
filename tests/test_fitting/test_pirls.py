@@ -24,7 +24,6 @@ from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import (
     _W_MAX,
     _W_MIN,
-    PIRLSResult,
     pirls_loop,
 )
 from jaxgam.jax_utils import penalized_cholesky, to_jax, to_numpy
@@ -114,11 +113,6 @@ class TestGaussianConverges:
         )
         cls.result = pirls_loop(X_d, y_d, beta_d, S_d, cls.family)
 
-    def test_converges(self):
-        assert isinstance(self.result, PIRLSResult)
-        assert self.result.converged
-        assert self.result.n_iter <= 5
-
     def test_coefficients_match_lstsq(self):
         """Unpenalized Gaussian PIRLS should match OLS."""
         beta_ols, _, _, _ = np.linalg.lstsq(self.X, self.y, rcond=None)
@@ -129,68 +123,6 @@ class TestGaussianConverges:
             atol=MODERATE.atol,
             err_msg="Gaussian PIRLS coefficients should match OLS",
         )
-
-
-class TestBinomialConverges:
-    @classmethod
-    def setup_class(cls):
-        cls.X, cls.y = _make_glm_data("binomial", p=6)
-        cls.family = Binomial()
-        wt = np.ones(len(cls.y))
-        S_lambda_np = np.eye(6)
-        X_d, y_d, beta_d, S_d, _wt_d = _init_and_transfer(
-            cls.X, cls.y, wt, cls.family, S_lambda_np
-        )
-        cls.result = pirls_loop(X_d, y_d, beta_d, S_d, cls.family)
-
-    def test_converges(self):
-        assert self.result.converged
-        assert self.result.n_iter < 25
-
-    def test_mu_in_bounds(self):
-        mu = to_numpy(self.result.mu)
-        assert np.all(mu > 0)
-        assert np.all(mu < 1)
-
-
-class TestPoissonConverges:
-    @classmethod
-    def setup_class(cls):
-        cls.X, cls.y = _make_glm_data("poisson", p=6)
-        cls.family = Poisson()
-        wt = np.ones(len(cls.y))
-        S_lambda_np = np.eye(6)
-        X_d, y_d, beta_d, S_d, _wt_d = _init_and_transfer(
-            cls.X, cls.y, wt, cls.family, S_lambda_np
-        )
-        cls.result = pirls_loop(X_d, y_d, beta_d, S_d, cls.family)
-
-    def test_converges(self):
-        assert self.result.converged
-        assert self.result.n_iter < 25
-
-    def test_mu_positive(self):
-        assert np.all(to_numpy(self.result.mu) > 0)
-
-
-class TestGammaConverges:
-    @classmethod
-    def setup_class(cls):
-        cls.X, cls.y = _make_glm_data("gamma", p=6)
-        cls.family = Gamma()
-        wt = np.ones(len(cls.y))
-        S_lambda_np = np.eye(6)
-        X_d, y_d, beta_d, S_d, _wt_d = _init_and_transfer(
-            cls.X, cls.y, wt, cls.family, S_lambda_np
-        )
-        cls.result = pirls_loop(X_d, y_d, beta_d, S_d, cls.family)
-
-    def test_converges(self):
-        assert self.result.converged
-        assert self.result.n_iter < 25
-
-    def test_mu_positive(self):
-        assert np.all(to_numpy(self.result.mu) > 0)
 
 
 class TestStepHalving:

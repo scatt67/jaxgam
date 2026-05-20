@@ -304,7 +304,7 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 - All 10 `TestErrorCases` parser tests.
 - `r_bridge.check_versions()` test (CLAUDE.md §Docker Test Environment — protects against silently running tests against the wrong mgcv version).
 
-### Commit H: Fitting cleanup
+### Commit H: Fitting cleanup (**DONE**)
 
 **Files:** `tests/test_fitting/test_newton.py`, `test_fitting_data.py`, `test_reml.py`, `test_pirls.py`, `test_nb_custom_jvp.py`, `test_nb_fitting.py`, `test_cholesky_stability.py`
 **Estimated cuts:** ~32–40 source-level tests, ~500 lines.

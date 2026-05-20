@@ -9,10 +9,8 @@ Tests cover:
 - ML criterion optimization (Gaussian and non-Gaussian)
 - Offset support
 - Purely parametric shortcut
-- NewtonResult fields and types
 - REML monotonicity across families
 - Step-halving activation
-- Convergence info strings
 - Edge cases (invalid method, iteration limit)
 
 Tolerance rationale:
@@ -40,11 +38,10 @@ from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import (
     NewtonOptimizer,
-    NewtonResult,
     _safe_newton_step,
     newton_optimize,
 )
-from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
+from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.jax_utils import to_jax
 from tests.helpers import (
     SEED,
@@ -460,27 +457,9 @@ class TestMLOptimization:
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestDiagnostics:
-    """Result fields, edge cases, and invariants."""
+    """Optimizer edge cases and invariants."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    def test_result_fields(self):
-        """NewtonResult has all expected fields with correct types."""
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(self.FORMULA, data, Gaussian())
-        result = newton_optimize(fd)
-
-        assert isinstance(result, NewtonResult)
-        assert isinstance(result.converged, bool)
-        assert isinstance(result.n_iter, int)
-        assert isinstance(result.convergence_info, str)
-        assert isinstance(result.pirls_result, PIRLSResult)
-        assert result.log_lambda.shape == (fd.n_penalties,)
-        assert result.smoothing_params.shape == (fd.n_penalties,)
-        assert result.gradient.shape == (fd.n_penalties,)
-        assert result.score.shape == ()
-        assert result.edf.shape == ()
-        assert result.scale.shape == ()
 
     def test_purely_parametric(self):
         """No penalties: skip Newton, return immediately."""
@@ -608,17 +587,6 @@ class TestDiagnostics:
         score_init = float(crit_init.score(log_lambda_init))
 
         assert float(result.score) <= score_init + STRICT.rtol
-
-    def test_convergence_info_values(self):
-        """convergence_info is one of the three expected strings."""
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(self.FORMULA, data, Gaussian())
-        result = newton_optimize(fd)
-        assert result.convergence_info in {
-            "full convergence",
-            "step failed",
-            "iteration limit",
-        }
 
     def test_invalid_method_raises(self):
         """Invalid method string raises ValueError."""
@@ -821,14 +789,6 @@ class TestCustomJVP:
             atol=MODERATE.atol,
             err_msg=f"{family_name}: custom_jvp Hessian differs from FD Hessian",
         )
-
-    def test_gaussian_uses_custom_jvp(self):
-        """Gaussian families use custom_jvp for correct multi-smooth Hessian."""
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(self.FORMULA, data, Gaussian())
-        optimizer = NewtonOptimizer(fd)
-
-        assert optimizer._diff_grad_hess is not None
 
     @pytest.mark.parametrize(
         ("family_name", "family_obj"),

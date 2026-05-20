@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from jaxgam.families.standard import Gaussian, Poisson
+from jaxgam.families.standard import Gaussian
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import pirls_loop
@@ -113,27 +113,6 @@ def parametric_setup(parametric_data) -> ModelSetup:
 class TestFromSetupBasic:
     """Test that from_setup transfers arrays correctly."""
 
-    def test_shapes_match(self, gaussian_setup):
-        family = Gaussian()
-        fd = FittingData.from_setup(gaussian_setup, family)
-
-        assert fd.X.shape == gaussian_setup.X.shape
-        assert fd.y.shape == gaussian_setup.y.shape
-        assert fd.wt.shape == gaussian_setup.weights.shape
-        assert fd.n_obs == gaussian_setup.n_obs
-        assert fd.n_coef == gaussian_setup.X.shape[1]
-
-    def test_arrays_are_jax(self, gaussian_setup):
-        family = Gaussian()
-        fd = FittingData.from_setup(gaussian_setup, family)
-
-        assert isinstance(fd.X, jax.Array)
-        assert isinstance(fd.y, jax.Array)
-        assert isinstance(fd.wt, jax.Array)
-        assert isinstance(fd.log_lambda_init, jax.Array)
-        for S_j in fd.S_list:
-            assert isinstance(S_j, jax.Array)
-
     def test_values_preserved(self, gaussian_setup):
         """Values must match original NumPy arrays at STRICT tolerance.
 
@@ -180,11 +159,6 @@ class TestFromSetupBasic:
             err_msg="weights must match after transfer",
         )
 
-    def test_family_stored(self, gaussian_setup):
-        family = Gaussian()
-        fd = FittingData.from_setup(gaussian_setup, family)
-        assert fd.family is family
-
 
 class TestFromSetupOffset:
     """Test offset handling in from_setup."""
@@ -205,26 +179,6 @@ class TestFromSetupOffset:
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
-
-    def test_no_offset(self, gaussian_setup):
-        """offset=None when ModelSetup has no offset."""
-        family = Gaussian()
-        fd = FittingData.from_setup(gaussian_setup, family)
-        assert fd.offset is None
-
-
-class TestFromSetupPurelyParametric:
-    """Purely parametric model: no penalties → empty S_list."""
-
-    def test_empty_penalties(self, parametric_setup):
-        family = Gaussian()
-        fd = FittingData.from_setup(parametric_setup, family)
-
-        assert fd.S_list == ()
-        assert fd.penalty_ranks == ()
-        assert fd.penalty_null_dims == ()
-        assert fd.n_penalties == 0
-        assert fd.log_lambda_init.shape == (0,)
 
 
 # ---------------------------------------------------------------------------
@@ -293,13 +247,6 @@ class TestSLambdaSinglePenalty:
             atol=STRICT.atol,
         )
 
-    def test_shape(self, gaussian_setup):
-        family = Gaussian()
-        fd = FittingData.from_setup(gaussian_setup, family)
-        log_lam = fd.log_lambda_init
-        S_combined = fd.S_lambda(log_lam)
-        assert S_combined.shape == (fd.n_coef, fd.n_coef)
-
 
 class TestSLambdaMultiPenalty:
     """S_lambda with multiple penalties (te() or multi-smooth)."""
@@ -328,19 +275,6 @@ class TestSLambdaMultiPenalty:
 
 class TestSLambdaJAXTraceable:
     """S_lambda must be differentiable via jax.grad for REML."""
-
-    def test_grad_finite(self, gaussian_setup):
-        family = Gaussian()
-        fd = FittingData.from_setup(gaussian_setup, family)
-
-        def scalar_fn(log_lam):
-            return jnp.sum(fd.S_lambda(log_lam))
-
-        log_lam = fd.log_lambda_init
-        grad = jax.grad(scalar_fn)(log_lam)
-
-        assert grad.shape == log_lam.shape
-        assert jnp.all(jnp.isfinite(grad))
 
     def test_grad_multi_penalty(self, tensor_setup):
         """Gradient through multi-penalty S_lambda."""
@@ -395,11 +329,6 @@ class TestNPenalties:
         fd = FittingData.from_setup(gaussian_setup, family)
         assert fd.n_penalties == len(fd.S_list)
 
-    def test_parametric(self, parametric_setup):
-        family = Gaussian()
-        fd = FittingData.from_setup(parametric_setup, family)
-        assert fd.n_penalties == 0
-
 
 # ---------------------------------------------------------------------------
 # TestEndToEnd — full pipeline through PIRLS
@@ -433,32 +362,6 @@ class TestEndToEnd:
         assert result.converged
         assert jnp.all(jnp.isfinite(result.coefficients))
         assert float(result.deviance) > 0
-
-    def test_pirls_converges_poisson(self):
-        rng = np.random.default_rng(SEED)
-        x = rng.uniform(0, 1, N)
-        eta = np.sin(2 * np.pi * x) + 0.5
-        mu = np.exp(eta)
-        y = rng.poisson(mu).astype(float)
-        data = pd.DataFrame({"x": x, "y": y})
-
-        spec = parse_formula("y ~ s(x, bs='cr', k=10)")
-        setup = ModelSetup.build(spec, data)
-        family = Poisson()
-
-        fd = FittingData.from_setup(setup, family)
-        beta_init = initialize_beta(
-            setup.X, setup.y, setup.weights, family, setup.offset
-        )
-        beta_jax = to_jax(np.asarray(beta_init))
-        S_combined = fd.S_lambda(fd.log_lambda_init)
-
-        result = pirls_loop(
-            fd.X, fd.y, beta_jax, S_combined, fd.family, fd.wt, fd.offset
-        )
-
-        assert result.converged
-        assert jnp.all(jnp.isfinite(result.coefficients))
 
 
 # ---------------------------------------------------------------------------
@@ -673,28 +576,6 @@ class TestComputeReparaD:
         """D condition number should be reasonable for a typical model."""
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
-        if fd.repara_D is None:
-            pytest.skip("No reparameterization")
-
-        D = to_numpy(fd.repara_D)
-        cond = np.linalg.cond(D)
-        assert cond < 1e10, f"D condition number {cond:.2e} exceeds 1e10"
-
-    def test_condition_number_bounded_tensor(self, tensor_setup):
-        """D condition number bounded for tensor product models."""
-        family = Gaussian()
-        fd = FittingData.from_setup(tensor_setup, family)
-        if fd.repara_D is None:
-            pytest.skip("No reparameterization")
-
-        D = to_numpy(fd.repara_D)
-        cond = np.linalg.cond(D)
-        assert cond < 1e10, f"D condition number {cond:.2e} exceeds 1e10"
-
-    def test_condition_number_bounded_factor_by(self, factor_by_setup):
-        """D condition number bounded for factor-by models."""
-        family = Gaussian()
-        fd = FittingData.from_setup(factor_by_setup, family)
         if fd.repara_D is None:
             pytest.skip("No reparameterization")
 

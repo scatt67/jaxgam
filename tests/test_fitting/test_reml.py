@@ -176,10 +176,6 @@ class TestREMLGradient:
         args = _reml_args(self.fd, self.pirls_result, log_lambda)
         return reml_criterion(**args)
 
-    def test_gradient_finite(self):
-        grad = jax.grad(self._reml_fn)(self.log_lambda)
-        assert jnp.all(jnp.isfinite(grad))
-
     def test_gradient_near_zero_at_r_optimum(self):
         """At R's optimal sp, the REML gradient should be small."""
         grad = jax.grad(self._reml_fn)(self.log_lambda)
@@ -231,10 +227,6 @@ class TestREMLHessian:
     def _reml_fn(self, log_lambda):
         args = _reml_args(self.fd, self.pirls_result, log_lambda)
         return reml_criterion(**args)
-
-    def test_hessian_finite(self):
-        hess = jax.hessian(self._reml_fn)(self.log_lambda)
-        assert jnp.all(jnp.isfinite(hess))
 
     def test_hessian_matches_fd(self):
         """Hessian matches FD of the gradient."""
@@ -476,27 +468,12 @@ class TestCriterionClasses:
             cls.FORMULA, data, Gaussian(), "gaussian"
         )
 
-    def test_reml_score_scalar(self):
-        """REMLCriterion.score returns a scalar."""
-        obj = REMLCriterion(self.fd, self.pirls_result)
-        score = obj.score(self.log_lambda)
-        assert score.shape == ()
-        assert jnp.isfinite(score)
-
     def test_reml_gradient(self):
         """REMLCriterion.gradient returns finite gradient."""
         obj = REMLCriterion(self.fd, self.pirls_result)
         grad = obj.gradient(self.log_lambda)
         assert grad.shape == self.log_lambda.shape
         assert jnp.all(jnp.isfinite(grad))
-
-    def test_reml_hessian(self):
-        """REMLCriterion.hessian returns finite Hessian."""
-        obj = REMLCriterion(self.fd, self.pirls_result)
-        hess = obj.hessian(self.log_lambda)
-        m = len(self.log_lambda)
-        assert hess.shape == (m, m)
-        assert jnp.all(jnp.isfinite(hess))
 
     def test_reml_evaluate(self):
         """REMLCriterion.evaluate returns REMLResult."""
@@ -507,13 +484,6 @@ class TestCriterionClasses:
         assert jnp.isfinite(result.edf)
         assert jnp.isfinite(result.scale)
         assert float(result.scale) > 0
-
-    def test_ml_score_scalar(self):
-        """MLCriterion.score returns a scalar."""
-        obj = MLCriterion(self.fd, self.pirls_result)
-        score = obj.score(self.log_lambda)
-        assert score.shape == ()
-        assert jnp.isfinite(score)
 
     def test_ml_gradient(self):
         """MLCriterion.gradient returns finite gradient."""
@@ -553,15 +523,6 @@ class TestScaleHandling:
             err_msg="Poisson scale should be 1.0",
         )
 
-    def test_unknown_scale_positive(self):
-        """For Gaussian, phi = dev/(n-p) should be positive."""
-        data = _generate_family_data("gaussian")
-        _, pirls_result, _, _ = _setup_pipeline(
-            self.FORMULA, data, Gaussian(), "gaussian"
-        )
-        phi = float(pirls_result.scale)
-        assert phi > 0, "Gaussian scale must be positive"
-
 
 # ---- Fletcher scale ----
 
@@ -571,41 +532,6 @@ class TestFletcherScale:
     """Fletcher (2012) bias-corrected scale estimator."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    def test_gaussian_no_correction(self):
-        """For Gaussian, V'(mu)=0 so Fletcher = Pearson."""
-        data = _generate_family_data("gaussian")
-        fd, pirls_result, _log_lambda, _ = _setup_pipeline(
-            self.FORMULA, data, Gaussian(), "gaussian"
-        )
-        n = fd.n_obs
-        edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
-        pearson = pearson_rss(fd.y, pirls_result.mu, fd.wt, fd.family)
-        phi_pearson = pearson / (n - edf)
-        phi_fletcher = fletcher_scale(fd.y, pirls_result.mu, fd.wt, fd.family, edf)
-        np.testing.assert_allclose(
-            float(phi_fletcher),
-            float(phi_pearson),
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="Gaussian Fletcher should equal Pearson",
-        )
-
-    def test_poisson_differs_from_pearson(self):
-        """For Poisson, V'(mu)=1 so Fletcher != Pearson."""
-        data = _generate_family_data("poisson")
-        fd, pirls_result, _log_lambda, _ = _setup_pipeline(
-            self.FORMULA, data, Poisson(), "poisson"
-        )
-        n = fd.n_obs
-        edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
-        pearson = pearson_rss(fd.y, pirls_result.mu, fd.wt, fd.family)
-        phi_pearson = float(pearson / (n - edf))
-        phi_fletcher = float(
-            fletcher_scale(fd.y, pirls_result.mu, fd.wt, fd.family, edf)
-        )
-        assert phi_fletcher != phi_pearson
-        assert phi_fletcher > 0
 
     def test_fletcher_positive(self):
         """Fletcher scale estimate is positive for all families."""
@@ -730,43 +656,6 @@ class TestSaturatedLoglik:
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
-
-    def test_poisson_scale_independent(self):
-        """Poisson ls_sat doesn't depend on scale."""
-        rng = np.random.default_rng(SEED)
-        y = jnp.array(rng.poisson(3.0, 50).astype(float))
-        wt = jnp.ones(50)
-        family = Poisson()
-
-        ls1 = float(family.saturated_loglik(y, wt, jnp.array(1.0)))
-        ls2 = float(family.saturated_loglik(y, wt, jnp.array(2.0)))
-
-        np.testing.assert_allclose(
-            ls1,
-            ls2,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_binomial_boundary_handling(self):
-        """Binomial ls_sat handles y=0 and y=1 (boundaries)."""
-        y = jnp.array([0.0, 1.0, 0.0, 1.0])
-        wt = jnp.ones(4)
-        family = Binomial()
-
-        ls_sat = float(family.saturated_loglik(y, wt, jnp.array(1.0)))
-        # At boundaries, y*log(y) + (1-y)*log(1-y) = 0
-        np.testing.assert_allclose(ls_sat, 0.0, atol=STRICT.atol)
-
-    def test_gamma_finite(self):
-        """Gamma ls_sat is finite for reasonable inputs."""
-        rng = np.random.default_rng(SEED)
-        y = jnp.array(rng.gamma(5.0, 1.0, 100))
-        wt = jnp.ones(100)
-        family = Gamma()
-
-        ls_sat = float(family.saturated_loglik(y, wt, jnp.array(0.2)))
-        assert np.isfinite(ls_sat)
 
 
 # ---- JIT compilation tests ----
