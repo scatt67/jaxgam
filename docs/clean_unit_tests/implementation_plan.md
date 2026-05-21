@@ -318,7 +318,7 @@ Commits in this phase touch disjoint file sets, so the order does not matter for
 
 ---
 
-## Phase 4 — Final Sweep (Commit I)
+## Phase 4 — Final Sweep (Commit I) (**DONE**)
 
 **Goal:** After phases 1–3, walk the suite once more and confirm ownership and coverage. This is the last commit before the user opens the PR.
 
