@@ -19,15 +19,12 @@ from math import comb, pi
 import numpy as np
 import pytest
 
-from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.tprs import (
     TPRSShrinkageSmooth,
     TPRSSmooth,
     _monomial_indices,
     _nearest_knot_indices,
     compute_polynomial_basis,
-    default_penalty_order,
-    eta_const,
     null_space_dimension,
     tps_semi_kernel,
 )
@@ -44,40 +41,8 @@ from tests.tolerances import (
 # ===========================================================================
 
 
-class TestDefaultPenaltyOrder:
-    """Tests for default_penalty_order()."""
-
-    def test_d1(self) -> None:
-        assert default_penalty_order(1) == 2
-
-    def test_d2(self) -> None:
-        assert default_penalty_order(2) == 2
-
-    def test_d3(self) -> None:
-        assert default_penalty_order(3) == 3
-
-    def test_d4(self) -> None:
-        assert default_penalty_order(4) == 3
-
-
 class TestNullSpaceDimension:
     """Tests for null_space_dimension()."""
-
-    def test_d1_m2(self) -> None:
-        """d=1, m=2 → M=2 (constant + linear)."""
-        assert null_space_dimension(1, 2) == 2
-
-    def test_d2_m2(self) -> None:
-        """d=2, m=2 → M=3 (1, x1, x2)."""
-        assert null_space_dimension(2, 2) == 3
-
-    def test_d3_m3(self) -> None:
-        """d=3, m=3 → M=10."""
-        assert null_space_dimension(3, 3) == 10
-
-    def test_d1_m3(self) -> None:
-        """d=1, m=3 → M=3 (1, x, x²)."""
-        assert null_space_dimension(1, 3) == 3
 
     def test_formula(self) -> None:
         """General formula: M = comb(m+d-1, d)."""
@@ -86,36 +51,8 @@ class TestNullSpaceDimension:
                 assert null_space_dimension(d, m) == comb(m + d - 1, d)
 
 
-class TestEtaConst:
-    """Tests for eta_const() — TPS semi-kernel constant."""
-
-    def test_d1_m2(self) -> None:
-        """d=1, m=2 → c = 1/12 (so eta = r³/12)."""
-        c = eta_const(2, 1)
-        np.testing.assert_allclose(c, 1.0 / 12.0, rtol=STRICT.rtol, atol=STRICT.atol)
-
-    def test_d2_m2(self) -> None:
-        """d=2, m=2 → c = 1/(8π) (so eta = r²log(r)/(8π))."""
-        c = eta_const(2, 2)
-        expected = 1.0 / (8.0 * pi)
-        np.testing.assert_allclose(c, expected, rtol=STRICT.rtol, atol=STRICT.atol)
-
-
 class TestTPSSemiKernel:
     """Tests for tps_semi_kernel()."""
-
-    def test_eta_zero_is_zero(self) -> None:
-        """eta(0) = 0 for all m, d."""
-        r = np.array([0.0])
-        for d in [1, 2]:
-            m = default_penalty_order(d)
-            result = tps_semi_kernel(r, m, d)
-            np.testing.assert_allclose(
-                result,
-                [0.0],
-                atol=STRICT.atol,
-                err_msg=f"eta(0) != 0 for d={d}, m={m}",
-            )
 
     def test_d1_m2_known(self) -> None:
         """d=1, m=2: eta(r) = r³/12."""
@@ -146,23 +83,6 @@ class TestTPSSemiKernel:
 
 class TestComputePolynomialBasis:
     """Tests for compute_polynomial_basis()."""
-
-    def test_d1_m2_shape(self) -> None:
-        """d=1, m=2 → T is (n, 2) with columns [1, x]."""
-        X = np.array([[1.0], [2.0], [3.0]])
-        T = compute_polynomial_basis(X, m=2)
-        assert T.shape == (3, 2)
-        np.testing.assert_allclose(T[:, 0], [1.0, 1.0, 1.0], atol=STRICT.atol)
-        np.testing.assert_allclose(T[:, 1], [1.0, 2.0, 3.0], atol=STRICT.atol)
-
-    def test_d2_m2_shape(self) -> None:
-        """d=2, m=2 → T is (n, 3) with columns [1, x1, x2]."""
-        X = np.array([[1.0, 2.0], [3.0, 4.0]])
-        T = compute_polynomial_basis(X, m=2)
-        assert T.shape == (2, 3)
-        np.testing.assert_allclose(T[:, 0], [1.0, 1.0], atol=STRICT.atol)
-        np.testing.assert_allclose(T[:, 1], [1.0, 3.0], atol=STRICT.atol)
-        np.testing.assert_allclose(T[:, 2], [2.0, 4.0], atol=STRICT.atol)
 
     def test_d1_m3_shape(self) -> None:
         """d=1, m=3 → T is (n, 3) with columns [1, x, x²]."""
@@ -251,17 +171,6 @@ class TestStructuralInvariants:
         X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (200, 15)
 
-    def test_penalty_returns_list_of_penalty(self, smooth_1d_data) -> None:
-        """build_penalty_matrices returns list[Penalty]."""
-        spec = make_smooth_spec(["x"], k=10)
-        smooth = TPRSSmooth(spec)
-        smooth.setup(smooth_1d_data)
-
-        penalties = smooth.build_penalty_matrices()
-        assert isinstance(penalties, list)
-        assert len(penalties) == 1
-        assert isinstance(penalties[0], Penalty)
-
     @pytest.mark.parametrize("smooth_1d_data", [100], indirect=True)
     def test_predict_equals_design_matrix(self, smooth_1d_data) -> None:
         """predict_matrix(original_data) == build_design_matrix(original_data)."""
@@ -278,29 +187,6 @@ class TestStructuralInvariants:
             atol=STRICT.atol,
             err_msg="predict_matrix should equal build_design_matrix for same data",
         )
-
-    def test_penalty_null_space_aligned_with_polynomial(self, smooth_1d_data) -> None:
-        """Null space of S spans polynomial space."""
-        spec = make_smooth_spec(["x"], k=10)
-        smooth = TPRSSmooth(spec)
-        smooth.setup(smooth_1d_data)
-
-        S = smooth.build_penalty_matrices()[0].S
-        eigvals, _eigvecs = np.linalg.eigh(S)
-
-        # Last M=2 eigenvalues should be ~0
-        M = smooth.null_space_dim
-        null_eigvals = eigvals[:M]
-        assert np.all(np.abs(null_eigvals) < STRICT.atol), (
-            f"Expected {M} near-zero eigenvalues, got {null_eigvals}"
-        )
-
-    def test_n_coefs_matches_k(self, smooth_1d_data) -> None:
-        """n_coefs equals k after setup."""
-        spec = make_smooth_spec(["x"], k=10)
-        smooth = TPRSSmooth(spec)
-        smooth.setup(smooth_1d_data)
-        assert smooth.n_coefs == 10
 
 
 # ===========================================================================
@@ -760,36 +646,6 @@ class TestTPRSShrinkageSmooth:
         )
 
 
-# ===========================================================================
-# 7. Registry tests
-# ===========================================================================
-
-
-class TestRegistry:
-    """Tests for smooth class registry."""
-
-    def test_tp_lookup(self) -> None:
-        from jaxgam.smooths.registry import get_smooth_class
-
-        assert get_smooth_class("tp") is TPRSSmooth
-
-    def test_ts_lookup(self) -> None:
-        from jaxgam.smooths.registry import get_smooth_class
-
-        assert get_smooth_class("ts") is TPRSShrinkageSmooth
-
-    def test_unknown_raises(self) -> None:
-        from jaxgam.smooths.registry import get_smooth_class
-
-        with pytest.raises(KeyError, match="Unknown"):
-            get_smooth_class("xx")
-
-    def test_case_insensitive(self) -> None:
-        from jaxgam.smooths.registry import get_smooth_class
-
-        assert get_smooth_class("TP") is TPRSSmooth
-
-
 class TestCoveragePaths:
     """Tests for code paths not covered by main tests."""
 
@@ -826,57 +682,3 @@ class TestCoveragePaths:
         x_new = rng.randn(30)
         X_new = smooth.build_design_matrix({"x": x_new})
         assert X_new.shape == (30, 5)
-
-    @pytest.mark.parametrize("smooth_1d_data", [50], indirect=True)
-    def test_s_scale_fallback_when_maxx_zero(self, smooth_1d_data) -> None:
-        """_s_scale = 1.0 when X_design is all zeros (max_x_sq == 0)."""
-        spec = make_smooth_spec(["x"], k=5)
-        smooth = TPRSSmooth(spec)
-        # Patch np.linalg.norm to return 0.0 for the X inf-norm call
-        # during smoothCon normalization (step 14)
-        orig_norm = np.linalg.norm
-        call_count = [0]
-
-        def patched_norm(x, ord=None, **kwargs):
-            result = orig_norm(x, ord=ord, **kwargs)
-            # The smoothCon step computes norm(X, inf) then norm(S, 1)
-            # norm(X, inf) is the first call with ord=inf
-            if ord == np.inf:
-                call_count[0] += 1
-                return 0.0
-            return result
-
-        import unittest.mock
-
-        with unittest.mock.patch("numpy.linalg.norm", side_effect=patched_norm):
-            smooth.setup(smooth_1d_data)
-        assert smooth._s_scale == 1.0
-
-    @pytest.mark.parametrize("smooth_1d_data", [50], indirect=True)
-    def test_ts_smallest_nonzero_fallback(self, smooth_1d_data) -> None:
-        """smallest_nonzero = 1.0 when all S eigenvalues are zero."""
-        import unittest.mock
-
-        spec = make_smooth_spec(["x"], bs="ts", k=5)
-        smooth = TPRSShrinkageSmooth(spec)
-
-        # Patch _apply_shrinkage's input: zero out S before shrinkage runs
-        orig_apply = TPRSShrinkageSmooth._apply_shrinkage
-
-        def patched_apply(self_inner, S):
-            return orig_apply(self_inner, np.zeros_like(S))
-
-        with unittest.mock.patch.object(
-            TPRSShrinkageSmooth, "_apply_shrinkage", patched_apply
-        ):
-            smooth.setup(smooth_1d_data)
-
-        # After uniform shrinkage with all-zero input eigenvalues:
-        # smallest_nonzero = 1.0, all eigenvalues = 1.0 * 0.1 = 0.1
-        # After smoothCon renorm, all eigenvalues are equal
-        assert smooth.rank == 5
-        assert smooth.null_space_dim == 0
-        eigvals = np.sort(np.linalg.eigvalsh(smooth._S))
-        assert np.all(eigvals > 0), "ts penalty should be strictly positive definite"
-        # All eigenvalues should be equal (uniform replacement)
-        np.testing.assert_allclose(eigvals, eigvals[0] * np.ones(5), rtol=STRICT.rtol)

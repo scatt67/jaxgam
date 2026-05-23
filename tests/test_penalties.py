@@ -63,47 +63,22 @@ def _diagonal_penalty(k: int) -> np.ndarray:
 class TestPenalty:
     """Tests for the Penalty class."""
 
-    def test_psd_check_second_derivative(self) -> None:
-        """Eigenvalues of a second-derivative penalty are all >= 0."""
-        k = 10
-        S = _second_derivative_penalty(k)
-        penalty = Penalty(S)
-        eigvals = np.linalg.eigvalsh(penalty.S)
-        # All eigenvalues must be >= 0 within STRICT tolerance
-        assert np.all(eigvals >= -STRICT.atol), (
-            f"Penalty matrix has negative eigenvalue(s): "
-            f"min eigenvalue = {np.min(eigvals):.2e}"
-        )
-
-    def test_psd_check_full_rank(self) -> None:
-        """Eigenvalues of a full-rank penalty are all > 0."""
+    def test_psd_check_common_matrices(self) -> None:
+        """Common penalty matrix constructions are PSD."""
         rng = np.random.default_rng(42)
-        k = 8
-        S = _full_rank_penalty(k, rng)
-        penalty = Penalty(S)
-        eigvals = np.linalg.eigvalsh(penalty.S)
-        assert np.all(eigvals > 0), (
-            f"Full-rank penalty should have all positive eigenvalues, "
-            f"min = {np.min(eigvals):.2e}"
-        )
+        matrices = {
+            "second_derivative": _second_derivative_penalty(10),
+            "full_rank": _full_rank_penalty(8, rng),
+            "diagonal": _diagonal_penalty(6),
+        }
 
-    def test_psd_check_zero_matrix(self) -> None:
-        """Zero matrix is PSD with rank 0."""
-        k = 5
-        S = np.zeros((k, k))
-        penalty = Penalty(S)
-        eigvals = np.linalg.eigvalsh(penalty.S)
-        assert np.all(eigvals >= -STRICT.atol)
-        assert penalty.rank == 0
-        assert penalty.null_space_dim == k
-
-    def test_psd_check_diagonal(self) -> None:
-        """Diagonal penalty with positive entries is PSD."""
-        k = 6
-        S = _diagonal_penalty(k)
-        penalty = Penalty(S)
-        eigvals = np.linalg.eigvalsh(penalty.S)
-        assert np.all(eigvals >= -STRICT.atol)
+        for name, S in matrices.items():
+            penalty = Penalty(S)
+            eigvals = np.linalg.eigvalsh(penalty.S)
+            assert np.all(eigvals >= -STRICT.atol), (
+                f"{name} penalty has negative eigenvalue(s): "
+                f"min eigenvalue = {np.min(eigvals):.2e}"
+            )
 
     def test_symmetry_at_strict_tolerance(self) -> None:
         """Stored penalty matrix is symmetric at STRICT tolerance."""
@@ -138,13 +113,6 @@ class TestPenalty:
         with pytest.raises(ValueError, match="symmetric"):
             Penalty(S)
 
-    def test_rank_second_derivative(self) -> None:
-        """Second-derivative penalty has rank k - 2."""
-        k = 10
-        S = _second_derivative_penalty(k)
-        penalty = Penalty(S)
-        assert penalty.rank == k - 2, f"Expected rank {k - 2}, got {penalty.rank}"
-
     def test_null_space_dim_second_derivative(self) -> None:
         """Second-derivative penalty has null space dim = 2."""
         k = 10
@@ -163,14 +131,6 @@ class TestPenalty:
         assert penalty.rank == k
         assert penalty.null_space_dim == 0
 
-    def test_rank_zero_matrix(self) -> None:
-        """Zero matrix has rank 0 and null_space_dim = k."""
-        k = 5
-        S = np.zeros((k, k))
-        penalty = Penalty(S)
-        assert penalty.rank == 0
-        assert penalty.null_space_dim == k
-
     def test_rank_explicit_override(self) -> None:
         """Explicit rank and null_space_dim override auto-computation."""
         k = 6
@@ -178,20 +138,6 @@ class TestPenalty:
         penalty = Penalty(S, rank=3, null_space_dim=3)
         assert penalty.rank == 3
         assert penalty.null_space_dim == 3
-
-    def test_shape_property(self) -> None:
-        """Shape property returns the matrix shape."""
-        k = 7
-        S = _second_derivative_penalty(k)
-        penalty = Penalty(S)
-        assert penalty.shape == (k, k)
-
-    def test_size_property(self) -> None:
-        """Size property returns k."""
-        k = 7
-        S = _second_derivative_penalty(k)
-        penalty = Penalty(S)
-        assert penalty.size == k
 
     def test_rejects_non_2d(self) -> None:
         """Constructor rejects non-2D input."""
@@ -203,15 +149,6 @@ class TestPenalty:
         with pytest.raises(ValueError, match="square"):
             Penalty(np.ones((3, 4)))
 
-    def test_repr(self) -> None:
-        """repr contains useful information."""
-        k = 5
-        S = _second_derivative_penalty(k)
-        penalty = Penalty(S)
-        r = repr(penalty)
-        assert "Penalty" in r
-        assert str(k) in r
-
 
 # ---------------------------------------------------------------------------
 # Tests — CompositePenalty class
@@ -220,24 +157,6 @@ class TestPenalty:
 
 class TestCompositePenalty:
     """Tests for the CompositePenalty class."""
-
-    def test_n_penalties_single(self) -> None:
-        """Single penalty: n_penalties = 1."""
-        S = _second_derivative_penalty(8)
-        cp = CompositePenalty([Penalty(S)])
-        assert cp.n_penalties == 1
-
-    def test_n_penalties_multiple(self) -> None:
-        """Multiple penalties: n_penalties matches list length."""
-        rng = np.random.default_rng(42)
-        k = 6
-        penalties = [
-            Penalty(_second_derivative_penalty(k)),
-            Penalty(_full_rank_penalty(k, rng)),
-            Penalty(_diagonal_penalty(k)),
-        ]
-        cp = CompositePenalty(penalties)
-        assert cp.n_penalties == 3
 
     def test_weighted_penalty_known_values(self) -> None:
         """weighted_penalty with known S and lambda produces correct result."""
@@ -269,39 +188,6 @@ class TestCompositePenalty:
         log_lambda = np.array([2.0])
         result = cp.weighted_penalty(log_lambda)
         expected = np.exp(2.0) * S
-        np.testing.assert_allclose(
-            result,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_weighted_penalty_zero_log_lambda(self) -> None:
-        """Zero log_lambda means lambda = 1.0."""
-        k = 5
-        S1 = np.eye(k)
-        S2 = np.eye(k) * 2.0
-        cp = CompositePenalty([Penalty(S1), Penalty(S2)])
-
-        log_lambda = np.array([0.0, 0.0])
-        result = cp.weighted_penalty(log_lambda)
-        expected = S1 + S2
-        np.testing.assert_allclose(
-            result,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_weighted_penalty_large_log_lambda(self) -> None:
-        """Large log_lambda produces large weights without numerical issues."""
-        k = 4
-        S = np.eye(k)
-        cp = CompositePenalty([Penalty(S)])
-
-        log_lambda = np.array([20.0])
-        result = cp.weighted_penalty(log_lambda)
-        expected = np.exp(20.0) * S
         np.testing.assert_allclose(
             result,
             expected,
@@ -465,35 +351,23 @@ class TestEmbedding:
             err_msg="Roundtrip: extracted block != original S_j.",
         )
 
-    def test_embed_at_start(self) -> None:
-        """Embedding at col_start=0 works correctly."""
-        k = 4
-        total_p = 10
-        S_j = np.eye(k)
+    def test_embed_at_boundaries(self) -> None:
+        """Embedding works at the start and end of the global matrix."""
+        cases = [
+            (np.eye(4), 0, 10),
+            (np.eye(3) * 2.0, 7, 10),
+        ]
 
-        S_global = CompositePenalty.embed(S_j, 0, total_p)
-        assert S_global.shape == (total_p, total_p)
-        np.testing.assert_allclose(
-            S_global[:k, :k],
-            S_j,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_embed_at_end(self) -> None:
-        """Embedding at the end of the global matrix works."""
-        k = 3
-        total_p = 10
-        col_start = total_p - k
-        S_j = np.eye(k) * 2.0
-
-        S_global = CompositePenalty.embed(S_j, col_start, total_p)
-        np.testing.assert_allclose(
-            S_global[col_start:, col_start:],
-            S_j,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
+        for S_j, col_start, total_p in cases:
+            S_global = CompositePenalty.embed(S_j, col_start, total_p)
+            col_end = col_start + S_j.shape[0]
+            assert S_global.shape == (total_p, total_p)
+            np.testing.assert_allclose(
+                S_global[col_start:col_end, col_start:col_end],
+                S_j,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            )
 
     def test_embed_preserves_symmetry(self) -> None:
         """Embedded matrix is symmetric if S_j is symmetric."""

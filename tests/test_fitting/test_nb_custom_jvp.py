@@ -7,10 +7,9 @@ families.
 Tests:
 - AD gradient w.r.t. log_theta matches FD (fresh families per perturbation)
 - AD lambda gradient from 3-primal path matches 2-primal standard path
-- Hessian finite and symmetric
-- Hessian theta-theta block matches FD of gradient
+- AD Hessian blocks match FD of gradient
 - dbeta/d(log_theta) via IFT matches FD PIRLS perturbation
-- Standard families (n_theta=0): gradient unchanged (no regression)
+- Fixed-theta NB (n_theta=0) uses the standard derivative path
 
 Design doc reference: Section 6.2-6.4
 """
@@ -20,12 +19,10 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pandas as pd
 import pytest
 from jax.scipy.linalg import cho_solve
 
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.families.standard import Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import _diff_score, _fit_and_score_impl
@@ -231,49 +228,9 @@ class TestExtendedCustomJVPGradient:
                 err_msg=f"lambda[{i}] gradient: AD vs FD mismatch",
             )
 
-    def test_gradient_all_finite(self, nb_problem):
-        """All gradient components are finite (no NaN/Inf)."""
-        fd, params, beta_warm, _ = nb_problem
-        kwargs = _build_diff_score_kwargs(fd, joint_theta=True)
-
-        grad_fn = jax.grad(_diff_score, argnums=0)
-        ad_grad = grad_fn(params, beta_warm, **kwargs)
-        assert jnp.all(jnp.isfinite(ad_grad)), f"Non-finite gradient: {ad_grad}"
-
 
 class TestExtendedCustomJVPHessian:
     """AD Hessian properties and FD validation."""
-
-    def test_hessian_all_finite(self, nb_problem):
-        """All Hessian entries are finite."""
-        fd, params, beta_warm, _ = nb_problem
-        kwargs = _build_diff_score_kwargs(fd, joint_theta=True)
-
-        hess_fn = jax.hessian(_diff_score, argnums=0)
-        ad_hess = hess_fn(params, beta_warm, **kwargs)
-        assert jnp.all(jnp.isfinite(ad_hess)), "Non-finite Hessian entries"
-
-    def test_hessian_approximately_symmetric(self, nb_problem):
-        """Hessian is approximately symmetric.
-
-        ``jax.hessian`` uses ``jacfwd(jacrev)``, which can produce
-        small asymmetry in the cross theta-lambda block because the
-        forward and reverse passes through the custom_jvp follow
-        slightly different numerical paths. The Newton optimizer
-        symmetrizes with ``(H + H.T) / 2``.
-        """
-        fd, params, beta_warm, _ = nb_problem
-        kwargs = _build_diff_score_kwargs(fd, joint_theta=True)
-
-        hess_fn = jax.hessian(_diff_score, argnums=0)
-        ad_hess = hess_fn(params, beta_warm, **kwargs)
-        np.testing.assert_allclose(
-            np.asarray(ad_hess),
-            np.asarray(ad_hess.T),
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Hessian not approximately symmetric",
-        )
 
     def test_hessian_theta_theta_matches_fd(self, nb_problem):
         """d^2Score/d(log_theta)^2 from AD Hessian matches FD of gradient."""
@@ -492,27 +449,6 @@ class TestIFTDbetaDtheta:
 
 class TestStandardFamilyRegression:
     """Standard families (n_theta=0) are unaffected by the theta extension."""
-
-    def test_poisson_gradient_unchanged(self):
-        """Poisson gradient with joint_theta=False is finite and correct shape."""
-        rng = np.random.default_rng(42)
-        n = 80
-        x = rng.uniform(0, 1, n)
-        eta = np.sin(2 * np.pi * x) + 0.5
-        y = rng.poisson(np.exp(eta)).astype(float)
-        data = pd.DataFrame({"x": x, "y": y})
-
-        family = Poisson()
-        fd = _setup_fd(_FORMULA, data, family)
-        _, log_lambda = _converge_pirls(fd)
-        pirls_result, _ = _converge_pirls(fd)
-        beta_warm = pirls_result.coefficients
-
-        kwargs = _build_diff_score_kwargs(fd, joint_theta=False)
-        grad = jax.grad(_diff_score, argnums=0)(log_lambda, beta_warm, **kwargs)
-
-        assert jnp.all(jnp.isfinite(grad)), "Poisson gradient not finite"
-        assert grad.shape == (fd.n_penalties,), "Wrong gradient shape"
 
     def test_nb_fixed_theta_uses_standard_path(self):
         """NB with fixed theta (n_theta=0) uses standard 2-primal path."""

@@ -1,5 +1,8 @@
 """Tests for robust Cholesky usage in AD / derivative paths.
 
+test_cholesky_stability.py is intentionally standalone; do not merge it
+into test_linalg.py because the file boundary aids issue-#6 traceability.
+
 Verifies that _criterion_core (reml.py) and _pirls_jvp (newton.py) use
 jitter-stabilized Cholesky factorization, producing finite results on
 nearly-singular penalized Hessian matrices.

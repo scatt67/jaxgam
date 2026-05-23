@@ -138,6 +138,8 @@ tests/
 - R comparison tests use `tests/r_bridge.py` to run the same model in R and compare results.
 - **important** R comparisons tests must be identical to R results with `STRICT`, or `MODERATE` tolerance.
 - jaxgam results (smooths, bases, coefficients, etc...) **must** be identical to the canonical R mgcv results.
+- Broad final-model R parity and hard-gate invariants live in `tests/test_validation_matrix.py`. Other R-bridge tests should own layer-specific behavior (for example optimizer internals, fixed-`sp` PIRLS numerics, prediction/SE, summary tables, smooth construction, or the RBridge implementation) rather than duplicate final `GAMResults` field checks.
+- When several related assertions share one expensive fixture or R fit, consolidate them with `tests.helpers._AssertCollector` so failures remain named without multiplying collected tests.
 - Hard-gate invariants (§18.1) are tested in every CI run and block the build on failure. These include: objective monotonicity, H symmetry/PSD, penalty PSD, rank conditions, EDF bounds, deviance non-negativity, no NaN in converged model.
 - All new modules must have > 80% test coverage.
 
@@ -156,7 +158,7 @@ Do not implement any of the following. They are designed for but deferred:
 - `bam()`, chunked processing, fREML, Fellner-Schall
 - Extended families (Tweedie, Beta, SHASH, Cox PH, ordered categorical) — NB is implemented in v1.0
 - P-splines (`ps`, `cp`), B-splines (`bs`)
-- Random effects (`bs="re"`), factor-smooth interactions (`bs="fs"`)
+- Factor-smooth interactions (`bs="fs"`)
 - Multi-GPU SPMD, Ray, distributed anything
 - `gamm()`, PQL
 - Exotic smooths (soap film, MRF, adaptive, Duchon, GP)

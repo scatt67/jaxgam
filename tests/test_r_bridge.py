@@ -30,13 +30,10 @@ def gaussian_data() -> pd.DataFrame:
 
 
 class TestRBridgeAvailability:
-    def test_available_returns_bool(self) -> None:
-        result = RBridge.available()
-        assert isinstance(result, bool)
-
-    def test_invalid_mode_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown mode"):
-            RBridge(mode="invalid")
+    @pytest.mark.skipif(not RBridge.available(), reason="R not available")
+    def test_check_versions_accepts_pinned_environment(self) -> None:
+        ok, reason = RBridge.check_versions()
+        assert ok, reason
 
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
@@ -168,17 +165,6 @@ class TestRBridgeSmoothComponents:
         assert "penalty_matrices" in result
         assert "coefficients" in result
 
-    def test_basis_matrix_dimensions(self, gaussian_data: pd.DataFrame) -> None:
-        bridge = RBridge()
-        result = bridge.get_smooth_components(
-            "y ~ s(x, k=10)", gaussian_data, family="gaussian"
-        )
-
-        assert len(result["basis_matrices"]) == 1  # one smooth
-        X_s = result["basis_matrices"][0]
-        assert X_s.shape[0] == len(gaussian_data)
-        assert X_s.shape[1] == 9  # k-1 due to identifiability constraint
-
     def test_penalty_matrix_psd(self, gaussian_data: pd.DataFrame) -> None:
         bridge = RBridge()
         result = bridge.get_smooth_components(
@@ -210,24 +196,6 @@ class TestRBridgeSmoothComponents:
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeSubprocessFallback:
-    def test_subprocess_mode_works(self, gaussian_data: pd.DataFrame) -> None:
-        """Subprocess mode should produce same structure as rpy2."""
-        bridge = RBridge(mode="subprocess")
-        assert bridge.mode == "subprocess"
-
-        result = bridge.fit_gam("y ~ s(x)", gaussian_data, family="gaussian")
-
-        assert "coefficients" in result
-        assert isinstance(result["coefficients"], np.ndarray)
-        assert result["deviance"] >= 0
-
-    def test_subprocess_invalid_family_raises(
-        self, gaussian_data: pd.DataFrame
-    ) -> None:
-        bridge = RBridge(mode="subprocess")
-        with pytest.raises(ValueError, match="Unknown family"):
-            bridge.fit_gam("y ~ s(x)", gaussian_data, family="tweedie")
-
     def test_subprocess_smooth_components(self, gaussian_data: pd.DataFrame) -> None:
         """Subprocess get_smooth_components should return basis/penalty."""
         bridge = RBridge(mode="subprocess")

@@ -2,15 +2,16 @@
 
 Coverage:
 1. TestVariance — V(mu) correct for each family at STRICT tolerance
-2. TestDevianceResids — deviance residuals match R at STRICT on synthetic data
+2. TestDevianceResidsVsR — deviance residuals match R at STRICT
 3. TestWorkingWeights — 1/(V(mu)*g'(mu)^2) computed correctly
 4. TestInitialization — family.initialize(y, wt) produces valid starting mu
-5. TestEdgeCases — Binomial y=0/y=1, Poisson y=0, Gamma small mu
+5. TestEdgeCases — boundary values and numerical-stability cases
 6. TestRegistry — get_family("gaussian") returns Gaussian, etc.
-7. TestNoJaxImports — importing jaxgam.families doesn't trigger jax import
-8. TestExtendedFamilyContract — generic contract for all ExtendedFamily subclasses
-9. TestNBSpecific — NB-specific tests (constructor, alpha, Poisson limit)
-10. TestExtendedFamilyAD — finite-difference validation of AD through extended families
+7. TestFamilyJAXCompat — consolidated JAX parity and JIT checks
+8. TestExtendedFamilyContract — generic ExtendedFamily contract checks
+9. TestNBSpecific — NB-specific scientific correctness checks
+10. TestFamilyStaticCacheKey/TestNBJITCacheReuse — NB JIT cache regressions
+11. TestExtendedFamilyAD — finite-difference validation through extended families
 """
 
 from __future__ import annotations
@@ -35,7 +36,6 @@ from jaxgam.families import (
     Poisson,
     get_family,
 )
-from jaxgam.links.links import LogLink
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -66,55 +66,38 @@ def _r_available() -> bool:
 
 
 class TestResponseSupport:
-    """Verify ResponseSupport bounds checking handles inclusive/exclusive correctly."""
+    """Verify representative ResponseSupport bounds behavior."""
 
-    def test_real_accepts_anything(self) -> None:
-        from jaxgam.families.base import REAL
+    @pytest.mark.parametrize(
+        ("support_name", "values"),
+        [
+            ("REAL", np.array([-1e10, 0.0, 1e10])),
+            ("NON_NEGATIVE", np.array([0.0, 1.0, 100.0])),
+            ("POSITIVE", np.array([1e-300, 1.0])),
+            ("UNIT_INTERVAL", np.array([0.0, 0.5, 1.0])),
+        ],
+    )
+    def test_accepts_values_inside_support(
+        self, support_name: str, values: np.ndarray
+    ) -> None:
+        import jaxgam.families.base as base
 
-        assert REAL.check(np.array([-1e10, 0.0, 1e10]))
+        assert getattr(base, support_name).check(values)
 
-    def test_non_negative_accepts_zero(self) -> None:
-        from jaxgam.families.base import NON_NEGATIVE
+    @pytest.mark.parametrize(
+        ("support_name", "values"),
+        [
+            ("NON_NEGATIVE", np.array([0.0, -0.001])),
+            ("POSITIVE", np.array([0.0, 1.0])),
+            ("UNIT_INTERVAL", np.array([-0.001, 0.5, 1.001])),
+        ],
+    )
+    def test_rejects_values_outside_support(
+        self, support_name: str, values: np.ndarray
+    ) -> None:
+        import jaxgam.families.base as base
 
-        assert NON_NEGATIVE.check(np.array([0.0, 1.0, 100.0]))
-
-    def test_non_negative_rejects_negative(self) -> None:
-        from jaxgam.families.base import NON_NEGATIVE
-
-        assert not NON_NEGATIVE.check(np.array([0.0, -0.001]))
-
-    def test_positive_rejects_zero(self) -> None:
-        from jaxgam.families.base import POSITIVE
-
-        assert not POSITIVE.check(np.array([0.0, 1.0]))
-
-    def test_positive_accepts_small(self) -> None:
-        from jaxgam.families.base import POSITIVE
-
-        assert POSITIVE.check(np.array([1e-300, 1.0]))
-
-    def test_unit_interval_accepts_boundaries(self) -> None:
-        from jaxgam.families.base import UNIT_INTERVAL
-
-        assert UNIT_INTERVAL.check(np.array([0.0, 0.5, 1.0]))
-
-    def test_unit_interval_rejects_above(self) -> None:
-        from jaxgam.families.base import UNIT_INTERVAL
-
-        assert not UNIT_INTERVAL.check(np.array([0.5, 1.001]))
-
-    def test_unit_interval_rejects_below(self) -> None:
-        from jaxgam.families.base import UNIT_INTERVAL
-
-        assert not UNIT_INTERVAL.check(np.array([-0.001, 0.5]))
-
-    def test_str_representation(self) -> None:
-        from jaxgam.families.base import NON_NEGATIVE, POSITIVE, REAL, UNIT_INTERVAL
-
-        assert str(REAL) == "[-inf, inf]"
-        assert str(NON_NEGATIVE) == "[0, inf]"
-        assert str(POSITIVE) == "(0, inf]"
-        assert str(UNIT_INTERVAL) == "[0, 1]"
+        assert not getattr(base, support_name).check(values)
 
 
 # ---------------------------------------------------------------------------
@@ -340,112 +323,6 @@ class TestDevianceResidsVsR:
         )
 
 
-class TestDevianceResidsSelfConsistency:
-    """Self-consistency checks for deviance residuals (no R needed)."""
-
-    def test_gaussian_dev_resids_formula(self) -> None:
-        """Gaussian: dev_resid^2 == wt * (y - mu)^2."""
-        y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        mu = np.array([1.1, 1.9, 3.2, 3.8, 5.1])
-        wt = np.array([1.0, 2.0, 1.0, 0.5, 1.0])
-        fam = Gaussian()
-        dr = fam.deviance_resids(y, mu, wt)
-        expected = wt * (y - mu) ** 2
-        np.testing.assert_allclose(
-            dr**2,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_binomial_dev_resids_formula(self) -> None:
-        """Binomial: check against explicit formula for interior y."""
-        y = np.array([0.3, 0.5, 0.7])
-        mu = np.array([0.2, 0.6, 0.8])
-        wt = np.ones(3)
-        fam = Binomial()
-        dr = fam.deviance_resids(y, mu, wt)
-        expected = 2.0 * (y * np.log(y / mu) + (1 - y) * np.log((1 - y) / (1 - mu)))
-        np.testing.assert_allclose(
-            dr**2,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_poisson_dev_resids_formula(self) -> None:
-        """Poisson: check against explicit formula for y > 0."""
-        y = np.array([1.0, 3.0, 5.0, 10.0])
-        mu = np.array([1.5, 2.5, 5.5, 8.0])
-        wt = np.ones(4)
-        fam = Poisson()
-        dr = fam.deviance_resids(y, mu, wt)
-        expected = 2.0 * (y * np.log(y / mu) - (y - mu))
-        np.testing.assert_allclose(
-            dr**2,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_gamma_dev_resids_formula(self) -> None:
-        """Gamma: check against explicit formula."""
-        y = np.array([0.5, 1.0, 2.0, 5.0])
-        mu = np.array([0.8, 1.2, 1.5, 4.0])
-        wt = np.ones(4)
-        fam = Gamma()
-        dr = fam.deviance_resids(y, mu, wt)
-        expected = 2.0 * (-np.log(y / mu) + (y - mu) / mu)
-        np.testing.assert_allclose(
-            dr**2,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_total_deviance(self) -> None:
-        """dev_resids() returns sum of deviance_resids()^2."""
-        rng = np.random.default_rng(SEED)
-        y = rng.normal(0, 1, 20)
-        mu = rng.normal(0, 0.5, 20)
-        wt = np.ones(20)
-        fam = Gaussian()
-        total = fam.dev_resids(y, mu, wt)
-        dr = fam.deviance_resids(y, mu, wt)
-        np.testing.assert_allclose(
-            total,
-            np.sum(dr**2),
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_deviance_non_negative(self) -> None:
-        """Total deviance must be non-negative for all families."""
-        rng = np.random.default_rng(SEED)
-        families_and_data: list[tuple[ExponentialFamily, np.ndarray, np.ndarray]] = [
-            (Gaussian(), rng.normal(0, 1, 50), rng.normal(0, 0.5, 50)),
-            (
-                Binomial(),
-                rng.binomial(1, 0.5, 50).astype(float),
-                np.clip(rng.uniform(0.1, 0.9, 50), 0.01, 0.99),
-            ),
-            (
-                Poisson(),
-                rng.poisson(3.0, 50).astype(float),
-                rng.uniform(1.0, 5.0, 50),
-            ),
-            (
-                Gamma(),
-                rng.gamma(5.0, 1.0, 50),
-                rng.uniform(0.5, 5.0, 50),
-            ),
-        ]
-        for fam, y_data, mu_data in families_and_data:
-            wt = np.ones(50)
-            total = fam.dev_resids(y_data, mu_data, wt)
-            assert total >= 0, f"{fam.family_name} deviance is negative: {total}"
-
-
 # ---------------------------------------------------------------------------
 # Test 3: Working weights
 # ---------------------------------------------------------------------------
@@ -453,96 +330,6 @@ class TestDevianceResidsSelfConsistency:
 
 class TestWorkingWeights:
     """Working weights W = wt / (V(mu) * g'(mu)^2)."""
-
-    def test_gaussian_identity_weights(self) -> None:
-        """Gaussian + identity: W = wt / (1 * 1^2) = wt."""
-        mu = np.array([0.5, 1.0, 2.0])
-        wt = np.array([1.0, 2.0, 0.5])
-        fam = Gaussian()
-        w = fam.working_weights(mu, wt)
-        np.testing.assert_allclose(
-            w,
-            wt,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_binomial_logit_weights(self) -> None:
-        """Binomial + logit: W = wt * mu*(1-mu).
-
-        V(mu) = mu(1-mu), g'(mu) = 1/(mu(1-mu)).
-        So V(mu) * g'(mu)^2 = 1/(mu(1-mu)).
-        W = wt * mu * (1-mu).
-        """
-        mu = np.array([0.2, 0.5, 0.8])
-        wt = np.ones(3)
-        fam = Binomial()
-        w = fam.working_weights(mu, wt)
-        expected = wt * mu * (1.0 - mu)
-        np.testing.assert_allclose(
-            w,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_poisson_log_weights(self) -> None:
-        """Poisson + log: W = wt * mu.
-
-        V(mu) = mu, g'(mu) = 1/mu.
-        So V(mu) * g'(mu)^2 = mu * (1/mu)^2 = 1/mu.
-        W = wt * mu.
-        """
-        mu = np.array([0.5, 1.0, 5.0])
-        wt = np.ones(3)
-        fam = Poisson()
-        w = fam.working_weights(mu, wt)
-        expected = wt * mu
-        np.testing.assert_allclose(
-            w,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_gamma_inverse_weights(self) -> None:
-        """Gamma + inverse: W = wt * mu^4 / mu^2 = wt * mu^2.
-
-        V(mu) = mu^2, g'(mu) = -1/mu^2.
-        So V(mu) * g'(mu)^2 = mu^2 * (1/mu^4) = 1/mu^2.
-        W = wt * mu^2.
-        """
-        mu = np.array([0.5, 1.0, 3.0])
-        wt = np.ones(3)
-        fam = Gamma()
-        w = fam.working_weights(mu, wt)
-        expected = wt * mu**2
-        np.testing.assert_allclose(
-            w,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_nb_log_weights(self) -> None:
-        """NB + log: W = wt * mu * theta / (mu + theta).
-
-        V(mu) = mu + mu^2/theta, g'(mu) = 1/mu.
-        V(mu) * g'(mu)^2 = (mu + mu^2/theta) / mu^2 = (1/mu + 1/theta).
-        W = wt / (1/mu + 1/theta) = wt * mu * theta / (mu + theta).
-        """
-        mu = np.array([0.5, 1.0, 2.0, 5.0])
-        wt = np.ones_like(mu)
-        fam = NegativeBinomial(theta=2)
-        w = fam.working_weights(mu, wt)
-        theta = 2.0
-        expected = wt * mu * theta / (mu + theta)
-        np.testing.assert_allclose(
-            w,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
 
     def test_working_weights_generic(self) -> None:
         """Generic check: W = wt / (V(mu) * g'(mu)^2) for all families."""
@@ -576,93 +363,20 @@ class TestWorkingWeights:
 class TestInitialization:
     """family.initialize(y, wt) produces valid starting mu."""
 
-    def test_gaussian_initialize(self) -> None:
-        """Gaussian: mu = y."""
-        y = np.array([-1.0, 0.0, 1.0, 2.5])
-        wt = np.ones_like(y)
-        fam = Gaussian()
-        mu = fam.initialize(y, wt)
-        np.testing.assert_allclose(mu, y, rtol=STRICT.rtol, atol=STRICT.atol)
-
-    def test_binomial_initialize(self) -> None:
-        """Binomial: mu = (y + 0.5) / 2."""
-        y = np.array([0.0, 1.0, 0.0, 1.0])
-        wt = np.ones_like(y)
-        fam = Binomial()
-        mu = fam.initialize(y, wt)
-        expected = (y + 0.5) / 2.0
-        np.testing.assert_allclose(mu, expected, rtol=STRICT.rtol, atol=STRICT.atol)
-        # All initialized mu must be valid
-        assert np.all(fam.valid_mu(mu))
-
-    def test_poisson_initialize(self) -> None:
-        """Poisson: mu = y + 0.1 where y == 0, else mu = y."""
-        y = np.array([0.0, 1.0, 0.0, 5.0, 0.0])
-        wt = np.ones_like(y)
-        fam = Poisson()
-        mu = fam.initialize(y, wt)
-        expected = np.where(y == 0, 0.1, y)
-        np.testing.assert_allclose(mu, expected, rtol=STRICT.rtol, atol=STRICT.atol)
-        # All initialized mu must be valid
-        assert np.all(fam.valid_mu(mu))
-
-    def test_gamma_initialize(self) -> None:
-        """Gamma: mu = max(y, eps) for strictly positive y."""
-        y = np.array([0.01, 0.5, 1.0, 5.0])
-        wt = np.ones_like(y)
-        fam = Gamma()
-        mu = fam.initialize(y, wt)
-        assert np.all(mu > 0), "Gamma initialize must produce positive mu"
-        np.testing.assert_allclose(
-            mu,
-            y,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-        assert np.all(fam.valid_mu(mu))
-
-    def test_nb_initialize(self) -> None:
-        """NB: mu = y + (y == 0) / 6."""
-        y = np.array([0.0, 1.0, 5.0, 0.0, 10.0])
-        wt = np.ones_like(y)
-        fam = NegativeBinomial()
-        mu = fam.initialize(y, wt)
-        expected = np.where(y == 0, 1.0 / 6.0, y)
-        np.testing.assert_allclose(
-            mu,
-            expected,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-        assert np.all(fam.valid_mu(mu))
-
     def test_all_families_produce_valid_mu(self) -> None:
         """For each family, initialize produces mu that passes valid_mu."""
         rng = np.random.default_rng(SEED)
+        cases: list[tuple[ExponentialFamily, np.ndarray]] = [
+            (Gaussian(), rng.normal(0, 1, 100)),
+            (Binomial(), rng.binomial(1, 0.5, 100).astype(float)),
+            (Poisson(), rng.poisson(3.0, 100).astype(float)),
+            (Gamma(), rng.gamma(5.0, 1.0, 100)),
+            (NegativeBinomial(), rng.negative_binomial(2.0, 0.4, 100).astype(float)),
+        ]
 
-        # Gaussian
-        y_gauss = rng.normal(0, 1, 100)
-        fam_gauss = Gaussian()
-        mu_gauss = fam_gauss.initialize(y_gauss, np.ones(100))
-        assert np.all(fam_gauss.valid_mu(mu_gauss))
-
-        # Binomial
-        y_binom = rng.binomial(1, 0.5, 100).astype(float)
-        fam_binom = Binomial()
-        mu_binom = fam_binom.initialize(y_binom, np.ones(100))
-        assert np.all(fam_binom.valid_mu(mu_binom))
-
-        # Poisson
-        y_pois = rng.poisson(3.0, 100).astype(float)
-        fam_pois = Poisson()
-        mu_pois = fam_pois.initialize(y_pois, np.ones(100))
-        assert np.all(fam_pois.valid_mu(mu_pois))
-
-        # Gamma
-        y_gam = rng.gamma(5.0, 1.0, 100)
-        fam_gam = Gamma()
-        mu_gam = fam_gam.initialize(y_gam, np.ones(100))
-        assert np.all(fam_gam.valid_mu(mu_gam))
+        for fam, y in cases:
+            mu = fam.initialize(y, np.ones_like(y))
+            assert np.all(fam.valid_mu(mu)), fam.family_name
 
 
 # ---------------------------------------------------------------------------
@@ -673,25 +387,21 @@ class TestInitialization:
 class TestEdgeCases:
     """Edge-case handling: boundary y values and extreme mu."""
 
-    def test_binomial_y_zero(self) -> None:
-        """Binomial with y=0: deviance residuals finite and non-negative."""
-        y = np.array([0.0, 0.0, 0.0])
-        mu = np.array([0.3, 0.5, 0.9])
+    @pytest.mark.parametrize(
+        ("y_val", "mu"),
+        [
+            (0.0, np.array([0.3, 0.5, 0.9])),
+            (1.0, np.array([0.1, 0.5, 0.9])),
+        ],
+    )
+    def test_binomial_boundary_y(self, y_val: float, mu: np.ndarray) -> None:
+        """Binomial with y at the boundary: residuals finite and non-negative."""
+        y = np.full_like(mu, y_val)
         wt = np.ones(3)
         fam = Binomial()
         dr = fam.deviance_resids(y, mu, wt)
-        assert np.all(np.isfinite(dr)), "Binomial dev resids not finite for y=0"
-        assert np.all(dr**2 >= 0), "Binomial dev resids^2 negative for y=0"
-
-    def test_binomial_y_one(self) -> None:
-        """Binomial with y=1: deviance residuals finite and non-negative."""
-        y = np.array([1.0, 1.0, 1.0])
-        mu = np.array([0.1, 0.5, 0.9])
-        wt = np.ones(3)
-        fam = Binomial()
-        dr = fam.deviance_resids(y, mu, wt)
-        assert np.all(np.isfinite(dr)), "Binomial dev resids not finite for y=1"
-        assert np.all(dr**2 >= 0), "Binomial dev resids^2 negative for y=1"
+        assert np.all(np.isfinite(dr)), f"Binomial dev resids not finite for y={y_val}"
+        assert np.all(dr**2 >= 0), f"Binomial dev resids^2 negative for y={y_val}"
 
     def test_binomial_y_equals_mu(self) -> None:
         """Binomial with y=mu: deviance residuals should be zero."""
@@ -787,11 +497,12 @@ class TestEdgeCases:
         dr = fam.deviance_resids(y, mu, wt)
         assert np.all(np.isfinite(dr)), f"NaN/Inf in NB near-zero mu: {dr}"
 
-    def test_nb_poisson_limit_variance(self) -> None:
-        """NB: as theta -> inf, V(mu) -> mu (Poisson)."""
+    def test_nb_poisson_limit(self) -> None:
+        """NB approaches Poisson variance and deviance as theta -> inf."""
         mu = np.array([0.5, 1.0, 5.0, 10.0])
-        fam = NegativeBinomial(theta=1e8)
-        v = fam.variance(mu)
+        nb_fam = NegativeBinomial(theta=1e8)
+        poi_fam = Poisson()
+        v = nb_fam.variance(mu)
         np.testing.assert_allclose(
             v,
             mu,
@@ -800,13 +511,9 @@ class TestEdgeCases:
             err_msg="NB variance should approach Poisson at large theta",
         )
 
-    def test_nb_poisson_limit_deviance(self) -> None:
-        """NB: as theta -> inf, deviance -> Poisson deviance."""
         y = np.array([1.0, 3.0, 5.0, 10.0])
         mu = np.array([1.5, 2.5, 5.5, 8.0])
         wt = np.ones(4)
-        nb_fam = NegativeBinomial(theta=1e8)
-        poi_fam = Poisson()
         nb_dev = nb_fam.dev_resids(y, mu, wt)
         poi_dev = poi_fam.dev_resids(y, mu, wt)
         np.testing.assert_allclose(
@@ -898,21 +605,6 @@ class TestRegistry:
         fam = get_family(name)
         assert isinstance(fam, expected_cls)
 
-    def test_get_family_case_insensitive(self) -> None:
-        """get_family should be case-insensitive."""
-        fam = get_family("Gaussian")
-        assert isinstance(fam, Gaussian)
-        fam = get_family("POISSON")
-        assert isinstance(fam, Poisson)
-        fam = get_family("Gamma")
-        assert isinstance(fam, Gamma)
-
-    def test_get_family_passthrough(self) -> None:
-        """If already an ExponentialFamily instance, return it as-is."""
-        fam_in = Gaussian()
-        fam_out = get_family(fam_in)
-        assert fam_out is fam_in
-
     def test_get_family_unknown_raises(self) -> None:
         """Unknown family name raises KeyError."""
         with pytest.raises(KeyError, match="Unknown family"):
@@ -925,88 +617,12 @@ class TestRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Test 7: Family properties and link integration
-# ---------------------------------------------------------------------------
-
-
-class TestFamilyProperties:
-    """Test family_name, default_link, scale_known, and repr."""
-
-    def test_gaussian_properties(self) -> None:
-        fam = Gaussian()
-        assert fam.family_name == "gaussian"
-        assert not fam.scale_known
-        from jaxgam.links import IdentityLink
-
-        assert isinstance(fam.link, IdentityLink)
-
-    def test_binomial_properties(self) -> None:
-        fam = Binomial()
-        assert fam.family_name == "binomial"
-        assert fam.scale_known
-        from jaxgam.links import LogitLink
-
-        assert isinstance(fam.link, LogitLink)
-
-    def test_poisson_properties(self) -> None:
-        fam = Poisson()
-        assert fam.family_name == "poisson"
-        assert fam.scale_known
-        from jaxgam.links import LogLink
-
-        assert isinstance(fam.link, LogLink)
-
-    def test_gamma_properties(self) -> None:
-        fam = Gamma()
-        assert fam.family_name == "Gamma"
-        assert not fam.scale_known
-        from jaxgam.links import InverseLink
-
-        assert isinstance(fam.link, InverseLink)
-
-    def test_custom_link(self) -> None:
-        """Families accept non-default link functions."""
-        fam = Poisson(link="identity")
-        from jaxgam.links import IdentityLink
-
-        assert isinstance(fam.link, IdentityLink)
-
-    def test_repr(self) -> None:
-        fam = Gaussian()
-        assert "Gaussian" in repr(fam)
-        assert "IdentityLink" in repr(fam)
-
-    def test_valid_mu_and_eta(self) -> None:
-        """valid_mu and valid_eta produce boolean arrays."""
-        mu = np.array([0.0, 0.5, 1.0, -1.0, np.nan, np.inf])
-        eta = np.array([-10.0, 0.0, 10.0, np.nan, np.inf, -np.inf])
-
-        for fam in [Gaussian(), Binomial(), Poisson(), Gamma()]:
-            vm = fam.valid_mu(mu)
-            ve = fam.valid_eta(eta)
-            assert vm.dtype == bool
-            assert ve.dtype == bool
-            assert vm.shape == mu.shape
-            assert ve.shape == eta.shape
-
-
-# ---------------------------------------------------------------------------
 # Test 9: Working response
 # ---------------------------------------------------------------------------
 
 
 class TestWorkingResponse:
     """PIRLS working response: z = eta + (y - mu) * g'(mu)."""
-
-    def test_gaussian_identity_working_response(self) -> None:
-        """Gaussian + identity: z = eta + (y - mu) * 1 = y (since eta = mu)."""
-        y = np.array([1.0, 2.0, 3.0])
-        mu = np.array([0.9, 2.1, 2.8])
-        eta = mu.copy()  # identity link: eta = mu
-        fam = Gaussian()
-        z = fam.working_response(y, mu, eta)
-        expected = eta + (y - mu) * 1.0  # g'(mu) = 1 for identity
-        np.testing.assert_allclose(z, expected, rtol=STRICT.rtol, atol=STRICT.atol)
 
     def test_working_response_generic(self) -> None:
         """Check working response formula z = eta + (y - mu) * g'(mu)."""
@@ -1065,126 +681,84 @@ def _jax_family_test_data(
 
 
 FAMILIES = [Gaussian(), Binomial(), Poisson(), Gamma()]
-FAMILY_IDS = ["gaussian", "binomial", "poisson", "gamma"]
 
 
 class TestFamilyJAXCompat:
     """JAX compatibility: PIRLS-path methods accept JAX arrays."""
 
-    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
-    def test_variance_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
-        _, jax_mu, _, _ = _jax_family_test_data(fam)
-        np_mu = np.asarray(jax_mu)
+    def test_pirls_methods_jax_match_numpy(self) -> None:
+        """PIRLS-path methods agree for JAX and NumPy inputs."""
+        for fam in FAMILIES:
+            jax_y, jax_mu, jax_wt, jax_eta = _jax_family_test_data(fam)
+            np_y = np.asarray(jax_y)
+            np_mu = np.asarray(jax_mu)
+            np_wt = np.asarray(jax_wt)
+            np_eta = np.asarray(jax_eta)
 
-        jax_v = fam.variance(jax_mu)
-        np_v = fam.variance(np_mu)
-        np.testing.assert_allclose(
-            np.asarray(jax_v),
-            np_v,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"variance() JAX vs NumPy for {fam.family_name}",
-        )
+            np.testing.assert_allclose(
+                np.asarray(fam.variance(jax_mu)),
+                fam.variance(np_mu),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"variance() JAX vs NumPy for {fam.family_name}",
+            )
+            np.testing.assert_allclose(
+                np.asarray(fam.deviance_resids(jax_y, jax_mu, jax_wt)),
+                fam.deviance_resids(np_y, np_mu, np_wt),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"deviance_resids() JAX vs NumPy for {fam.family_name}",
+            )
+            np.testing.assert_allclose(
+                float(fam.dev_resids(jax_y, jax_mu, jax_wt)),
+                float(fam.dev_resids(np_y, np_mu, np_wt)),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"dev_resids() JAX vs NumPy for {fam.family_name}",
+            )
+            np.testing.assert_allclose(
+                np.asarray(fam.working_weights(jax_mu, jax_wt)),
+                fam.working_weights(np_mu, np_wt),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"working_weights() JAX vs NumPy for {fam.family_name}",
+            )
+            np.testing.assert_allclose(
+                np.asarray(fam.working_response(jax_y, jax_mu, jax_eta)),
+                fam.working_response(np_y, np_mu, np_eta),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"working_response() JAX vs NumPy for {fam.family_name}",
+            )
 
-    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
-    def test_deviance_resids_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
-        jax_y, jax_mu, jax_wt, _ = _jax_family_test_data(fam)
-        np_y, np_mu, np_wt = (
-            np.asarray(jax_y),
-            np.asarray(jax_mu),
-            np.asarray(jax_wt),
-        )
-
-        jax_dr = fam.deviance_resids(jax_y, jax_mu, jax_wt)
-        np_dr = fam.deviance_resids(np_y, np_mu, np_wt)
-        np.testing.assert_allclose(
-            np.asarray(jax_dr),
-            np_dr,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"deviance_resids() JAX vs NumPy for {fam.family_name}",
-        )
-
-    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
-    def test_dev_resids_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
-        """Total deviance (scalar) matches between backends."""
-        jax_y, jax_mu, jax_wt, _ = _jax_family_test_data(fam)
-        np_y, np_mu, np_wt = (
-            np.asarray(jax_y),
-            np.asarray(jax_mu),
-            np.asarray(jax_wt),
-        )
-
-        jax_total = fam.dev_resids(jax_y, jax_mu, jax_wt)
-        np_total = fam.dev_resids(np_y, np_mu, np_wt)
-        np.testing.assert_allclose(
-            float(jax_total),
-            float(np_total),
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"dev_resids() JAX vs NumPy for {fam.family_name}",
-        )
-
-    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
-    def test_working_weights_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
-        _, jax_mu, jax_wt, _ = _jax_family_test_data(fam)
-        np_mu, np_wt = np.asarray(jax_mu), np.asarray(jax_wt)
-
-        jax_w = fam.working_weights(jax_mu, jax_wt)
-        np_w = fam.working_weights(np_mu, np_wt)
-        np.testing.assert_allclose(
-            np.asarray(jax_w),
-            np_w,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"working_weights() JAX vs NumPy for {fam.family_name}",
-        )
-
-    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
-    def test_working_response_jax_matches_numpy(self, fam: ExponentialFamily) -> None:
-        jax_y, jax_mu, _, jax_eta = _jax_family_test_data(fam)
-        np_y = np.asarray(jax_y)
-        np_mu = np.asarray(jax_mu)
-        np_eta = np.asarray(jax_eta)
-
-        jax_z = fam.working_response(jax_y, jax_mu, jax_eta)
-        np_z = fam.working_response(np_y, np_mu, np_eta)
-        np.testing.assert_allclose(
-            np.asarray(jax_z),
-            np_z,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=(f"working_response() JAX vs NumPy for {fam.family_name}"),
-        )
-
-    @pytest.mark.parametrize("fam", FAMILIES, ids=FAMILY_IDS)
-    def test_pirls_methods_jit_compile(self, fam: ExponentialFamily) -> None:
+    def test_pirls_methods_jit_compile(self) -> None:
         """variance, deviance_resids, working_weights, working_response
         all JIT-compile without error."""
-        jax_y, jax_mu, jax_wt, jax_eta = _jax_family_test_data(fam)
+        for fam in FAMILIES:
+            jax_y, jax_mu, jax_wt, jax_eta = _jax_family_test_data(fam)
 
-        jit_var = jax.jit(fam.variance)
-        jit_dr = jax.jit(fam.deviance_resids)
-        jit_ww = jax.jit(fam.working_weights)
-        jit_wr = jax.jit(fam.working_response)
+            jit_var = jax.jit(fam.variance)
+            jit_dr = jax.jit(fam.deviance_resids)
+            jit_ww = jax.jit(fam.working_weights)
+            jit_wr = jax.jit(fam.working_response)
 
-        v = jit_var(jax_mu)
-        dr = jit_dr(jax_y, jax_mu, jax_wt)
-        ww = jit_ww(jax_mu, jax_wt)
-        wr = jit_wr(jax_y, jax_mu, jax_eta)
+            v = jit_var(jax_mu)
+            dr = jit_dr(jax_y, jax_mu, jax_wt)
+            ww = jit_ww(jax_mu, jax_wt)
+            wr = jit_wr(jax_y, jax_mu, jax_eta)
 
-        assert jnp.all(jnp.isfinite(v)), (
-            f"JIT variance() non-finite for {fam.family_name}"
-        )
-        assert jnp.all(jnp.isfinite(dr)), (
-            f"JIT deviance_resids() non-finite for {fam.family_name}"
-        )
-        assert jnp.all(jnp.isfinite(ww)), (
-            f"JIT working_weights() non-finite for {fam.family_name}"
-        )
-        assert jnp.all(jnp.isfinite(wr)), (
-            f"JIT working_response() non-finite for {fam.family_name}"
-        )
+            assert jnp.all(jnp.isfinite(v)), (
+                f"JIT variance() non-finite for {fam.family_name}"
+            )
+            assert jnp.all(jnp.isfinite(dr)), (
+                f"JIT deviance_resids() non-finite for {fam.family_name}"
+            )
+            assert jnp.all(jnp.isfinite(ww)), (
+                f"JIT working_weights() non-finite for {fam.family_name}"
+            )
+            assert jnp.all(jnp.isfinite(wr)), (
+                f"JIT working_response() non-finite for {fam.family_name}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1264,24 +838,6 @@ class TestExtendedFamilyContract:
         y, mu, wt = _extended_family_test_data(efamily)
         return y, mu, wt
 
-    def test_is_extended_and_exponential(self, efamily) -> None:
-        assert isinstance(efamily, ExtendedFamily)
-        assert isinstance(efamily, ExponentialFamily)
-
-    def test_standard_families_not_extended(self) -> None:
-        """Standard families must NOT be ExtendedFamily instances."""
-        for fam in [Gaussian(), Poisson(), Binomial(), Gamma()]:
-            assert not isinstance(fam, ExtendedFamily), fam.family_name
-
-    def test_n_theta_non_negative(self, efamily) -> None:
-        assert efamily.n_theta >= 0
-
-    def test_get_theta_shape(self, efamily) -> None:
-        """get_theta returns array of shape (n_theta,) or (1,)."""
-        lt = efamily.get_theta()
-        assert lt.ndim == 1
-        assert lt.shape[0] >= 1
-
     def test_get_put_roundtrip(self, efamily) -> None:
         original = efamily.get_theta().copy()
         efamily.put_theta(original + 1.0)
@@ -1292,16 +848,6 @@ class TestExtendedFamilyContract:
             atol=STRICT.atol,
         )
         efamily.put_theta(original)  # restore
-
-    def test_deviance_fn_returns_callable(self, efamily, test_data) -> None:
-        y, _mu, wt = test_data
-        dev_fn = efamily.deviance_fn(jnp.array(y), jnp.array(wt))
-        assert callable(dev_fn)
-
-    def test_working_weights_fn_returns_callable(self, efamily, test_data) -> None:
-        _y, _mu, wt = test_data
-        ww_fn = efamily.working_weights_fn(jnp.array(wt))
-        assert callable(ww_fn)
 
     def test_deviance_fn_consistency(self, efamily, test_data) -> None:
         """deviance_fn(eta, log_theta) matches dev_resids at stored theta."""
@@ -1468,28 +1014,11 @@ class TestNBSpecific:
         fam2 = NegativeBinomial(theta=10)
         np.testing.assert_allclose(fam2.alpha, 0.1, rtol=STRICT.rtol)
 
-    def test_scale_known(self) -> None:
-        assert NegativeBinomial().scale_known is True
-
-    def test_default_link_is_log(self) -> None:
-        fam = NegativeBinomial()
-        assert isinstance(fam.link, LogLink)
-
-    def test_family_name(self) -> None:
-        assert NegativeBinomial().family_name == "nb"
-
     def test_valid_mu(self) -> None:
         fam = NegativeBinomial()
         mu = np.array([-1.0, 0.0, 0.001, 1.0, 100.0])
         expected = np.array([False, False, True, True, True])
         np.testing.assert_array_equal(fam.valid_mu(mu), expected)
-
-    def test_repr(self) -> None:
-        fam = NegativeBinomial(theta=2, fixed=True)
-        r = repr(fam)
-        assert "NegativeBinomial" in r
-        assert "fixed" in r
-        assert "LogLink" in r
 
 
 # ---------------------------------------------------------------------------

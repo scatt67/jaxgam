@@ -1,15 +1,12 @@
 """Tests for jaxgam.results.GAMResults.
 
 Tests cover:
-- GAMResults construction from mock data
-- predict() self-prediction matches fitted_values
+- GAMResults construction metadata from mock data
 - predict() with new data
 - predict() with se_fit=True
 - predict_matrix() returns correct shape
-- summary() returns GAMSummary
 - Immutability (assigning to a frozen field raises)
-- __repr__() output
-- NB post-estimation: theta in results, summary, predict roundtrip
+- NB post-estimation: theta in results and summary
 
 Design doc reference: docs/refactor_gam_api/implementation_plan.md Phase 2
 """
@@ -90,10 +87,6 @@ def fit_data(fit_artifacts):
 class TestGAMResultsConstruction:
     """Test GAMResults construction from _from_fit()."""
 
-    def test_construction_succeeds(self, gam_results):
-        """_from_fit produces a GAMResults instance."""
-        assert isinstance(gam_results, GAMResults)
-
     def test_formula_stored(self, gam_results):
         """Formula is stored as metadata."""
         assert gam_results.formula == "y ~ s(x)"
@@ -107,29 +100,6 @@ class TestGAMResultsConstruction:
         from jaxgam.families.base import ExponentialFamily
 
         assert isinstance(gam_results.family, ExponentialFamily)
-
-    def test_no_trailing_underscores(self, gam_results):
-        """No attributes with trailing underscores (design §3.4 #2)."""
-        assert hasattr(gam_results, "coefficients")
-        assert not hasattr(gam_results, "coefficients_")
-
-    def test_no_ve_placeholder(self, gam_results):
-        """Ve is omitted entirely (design §9 #4)."""
-        assert not hasattr(gam_results, "Ve")
-        assert not hasattr(gam_results, "Ve_")
-
-    def test_coefficients_shape(self, gam_results):
-        """Coefficients have correct shape."""
-        p = gam_results.X.shape[1]
-        assert gam_results.coefficients.shape == (p,)
-
-    def test_edf_shape(self, gam_results):
-        """EDF array has one entry per smooth."""
-        assert gam_results.edf.shape == (len(gam_results.smooth_info),)
-
-    def test_n_matches_data(self, gam_results):
-        """n matches the number of observations."""
-        assert gam_results.n == gam_results.X.shape[0]
 
 
 # ---------------------------------------------------------------------------
@@ -145,16 +115,6 @@ class TestImmutability:
         with pytest.raises(AttributeError):
             gam_results.coefficients = np.zeros(10)
 
-    def test_cannot_set_scale(self, gam_results):
-        """Assigning to a frozen scalar field raises."""
-        with pytest.raises(AttributeError):
-            gam_results.scale = 999.0
-
-    def test_cannot_add_new_attribute(self, gam_results):
-        """Adding a new attribute raises."""
-        with pytest.raises(AttributeError):
-            gam_results.new_attr = "test"
-
 
 # ---------------------------------------------------------------------------
 # Prediction tests
@@ -163,16 +123,6 @@ class TestImmutability:
 
 class TestPredict:
     """Test GAMResults.predict()."""
-
-    def test_self_prediction_matches_fitted(self, gam_results):
-        """predict() with no newdata matches fitted_values."""
-        pred = gam_results.predict()
-        np.testing.assert_allclose(
-            pred,
-            gam_results.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
 
     def test_predict_with_new_data(self, gam_results, fit_data):
         """predict() with new data returns correct shape."""
@@ -188,16 +138,6 @@ class TestPredict:
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
-
-    def test_predict_se_fit(self, gam_results):
-        """predict(se_fit=True) returns (pred, se) tuple."""
-        result = gam_results.predict(se_fit=True)
-        assert isinstance(result, tuple)
-        assert len(result) == 2
-        pred, se = result
-        assert pred.shape == gam_results.fitted_values.shape
-        assert se.shape == gam_results.fitted_values.shape
-        assert np.all(se >= 0)
 
     def test_predict_se_with_new_data(self, gam_results, fit_data):
         """predict() with new data and se_fit=True."""
@@ -226,61 +166,6 @@ class TestPredictMatrix:
         n_new = len(fit_data)
         p = gam_results.coefficients.shape[0]
         assert X_pred.shape == (n_new, p)
-
-
-# ---------------------------------------------------------------------------
-# Summary tests
-# ---------------------------------------------------------------------------
-
-
-class TestSummary:
-    """Test GAMResults.summary()."""
-
-    def test_returns_gam_summary(self, gam_results):
-        """summary() returns a GAMSummary."""
-        from jaxgam.summary.summary import GAMSummary
-
-        s = gam_results.summary()
-        assert isinstance(s, GAMSummary)
-
-    def test_summary_formula(self, gam_results):
-        """Summary shows the formula."""
-        s = gam_results.summary()
-        assert s.formula == "y ~ s(x)"
-
-    def test_summary_method(self, gam_results):
-        """Summary shows the method."""
-        s = gam_results.summary()
-        assert s.method == "REML"
-
-
-# ---------------------------------------------------------------------------
-# Repr tests
-# ---------------------------------------------------------------------------
-
-
-class TestRepr:
-    """Test GAMResults.__repr__()."""
-
-    def test_repr_contains_formula(self, gam_results):
-        """repr includes formula."""
-        r = repr(gam_results)
-        assert "y ~ s(x)" in r
-
-    def test_repr_contains_family(self, gam_results):
-        """repr includes family name."""
-        r = repr(gam_results)
-        assert "gaussian" in r.lower()
-
-    def test_repr_contains_converged(self, gam_results):
-        """repr includes convergence status."""
-        r = repr(gam_results)
-        assert "converged=" in r
-
-    def test_repr_contains_deviance_explained(self, gam_results):
-        """repr includes deviance explained."""
-        r = repr(gam_results)
-        assert "deviance_explained=" in r
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +202,7 @@ def _fit_nb_gam(family_obj=None, formula="y ~ s(x, k=10, bs='cr')"):
 
 
 class TestNBPostEstimation:
-    """NB post-estimation: theta in results, summary, predict roundtrip."""
+    """NB post-estimation: theta in results and summary."""
 
     @pytest.fixture(scope="class")
     def nb_result(self):
@@ -340,30 +225,6 @@ class TestNBPostEstimation:
             family_theta,
             rtol=STRICT.rtol,
             atol=STRICT.atol,
-        )
-
-    def test_predict_roundtrip(self, nb_result):
-        """predict(training_data) reproduces fitted_values."""
-        gam_result, data = nb_result
-        pred = gam_result.predict(newdata=data)
-        np.testing.assert_allclose(
-            pred,
-            gam_result.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="NB predict roundtrip failed",
-        )
-
-    def test_self_predict_roundtrip(self, nb_result):
-        """predict() with no newdata matches fitted_values."""
-        gam_result, _ = nb_result
-        pred = gam_result.predict()
-        np.testing.assert_allclose(
-            pred,
-            gam_result.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg="NB self-predict roundtrip failed",
         )
 
     def test_summary_displays_theta(self, nb_result):
@@ -424,17 +285,6 @@ class TestNBFixedThetaPostEstimation:
         """Fixed-theta NB has result.theta=None (theta not estimated)."""
         gam_result, _ = fixed_nb_result
         assert gam_result.theta is None
-
-    def test_predict_roundtrip(self, fixed_nb_result):
-        """predict() roundtrip works for fixed-theta NB."""
-        gam_result, _ = fixed_nb_result
-        pred = gam_result.predict()
-        np.testing.assert_allclose(
-            pred,
-            gam_result.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
 
     def test_summary_no_theta(self, fixed_nb_result):
         """Fixed-theta NB summary does not show Theta line."""

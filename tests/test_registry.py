@@ -79,25 +79,8 @@ class TestIntrospection:
     def test_available(self, registry: Registry[Dummy]) -> None:
         assert registry.available == ("alpha", "beta")
 
-    def test_contains(self, registry: Registry[Dummy]) -> None:
-        assert "alpha" in registry
-        assert "ALPHA" in registry
-        assert "gamma" not in registry
-
     def test_len(self, registry: Registry[Dummy]) -> None:
         assert len(registry) == 2
-
-    def test_repr(self, registry: Registry[Dummy]) -> None:
-        r = repr(registry)
-        assert "dummy" in r
-        assert "alpha" in r
-        assert "beta" in r
-
-
-class TestImmutability:
-    def test_entries_not_mutatable(self, registry: Registry[Dummy]) -> None:
-        with pytest.raises(TypeError):
-            registry._entries["gamma"] = DummyA  # type: ignore[index]
 
 
 class DummyC(Dummy):

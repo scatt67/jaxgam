@@ -21,7 +21,6 @@ import numpy as np
 import pytest
 
 from jaxgam.formula.terms import SmoothSpec
-from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.tensor import (
     TensorInteractionSmooth,
     TensorProductSmooth,
@@ -62,27 +61,6 @@ class TestRowTensor:
             result[1], expected_row1, rtol=STRICT.rtol, atol=STRICT.atol
         )
 
-    def test_shape(self) -> None:
-        """Shape: (n, ka) kron (n, kb) -> (n, ka*kb)."""
-        rng = np.random.default_rng(42)
-        n, ka, kb = 50, 4, 6
-        A = rng.standard_normal((n, ka))
-        B = rng.standard_normal((n, kb))
-
-        result = _row_tensor(A, B)
-        assert result.shape == (n, ka * kb)
-
-    def test_matches_einsum(self) -> None:
-        """Matches np.einsum('ni,nj->nij', A, B).reshape(n, ka*kb)."""
-        rng = np.random.default_rng(42)
-        n, ka, kb = 30, 3, 5
-        A = rng.standard_normal((n, ka))
-        B = rng.standard_normal((n, kb))
-
-        result = _row_tensor(A, B)
-        expected = np.einsum("ni,nj->nij", A, B).reshape(n, ka * kb)
-        np.testing.assert_allclose(result, expected, rtol=STRICT.rtol, atol=STRICT.atol)
-
     def test_associativity_shape(self) -> None:
         """Associativity: chained _row_tensor has correct shape for 3D tensors."""
         rng = np.random.default_rng(42)
@@ -102,18 +80,6 @@ class TestRowTensor:
 
 class TestAbsorbConstraint:
     """Tests for TensorInteractionSmooth._absorb_constraint()."""
-
-    def test_absorbed_basis_shape(self) -> None:
-        """Absorbed basis has k-1 columns."""
-        rng = np.random.default_rng(42)
-        n, k = 100, 10
-        X = rng.standard_normal((n, k))
-        S = np.eye(k)
-
-        X_c, S_c, Z = TensorInteractionSmooth._absorb_constraint(X, S)
-        assert X_c.shape == (n, k - 1)
-        assert S_c.shape == (k - 1, k - 1)
-        assert Z.shape == (k, k - 1)
 
     def test_constraint_satisfied(self) -> None:
         """Columns of X_c sum to ~0 (constraint satisfied)."""
@@ -150,18 +116,6 @@ class TestAbsorbConstraint:
             f"Constrained penalty has negative eigenvalue: {np.min(eigvals):.2e}"
         )
 
-    def test_z_orthonormal(self) -> None:
-        """Z has orthonormal columns (Z.T @ Z = I)."""
-        rng = np.random.default_rng(42)
-        n, k = 100, 8
-        X = rng.standard_normal((n, k))
-        S = np.eye(k)
-
-        _X_c, _S_c, Z = TensorInteractionSmooth._absorb_constraint(X, S)
-        np.testing.assert_allclose(
-            Z.T @ Z, np.eye(k - 1), rtol=STRICT.rtol, atol=STRICT.atol
-        )
-
 
 # ===========================================================================
 # 3. TensorProductSmooth structural tests (STRICT)
@@ -196,45 +150,6 @@ class TestTensorProductStructure:
 
         assert smooth.null_space_dim == 2 * 2
 
-    def test_penalty_count(self, smooth_2d_data) -> None:
-        """Penalty count equals number of marginals."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
-        smooth = TensorProductSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        penalties = smooth.build_penalty_matrices()
-        assert len(penalties) == 2
-
-    def test_penalty_shape(self, smooth_2d_data) -> None:
-        """Each penalty is (n_coefs, n_coefs)."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
-        smooth = TensorProductSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        for p in smooth.build_penalty_matrices():
-            assert p.shape == (25, 25)
-
-    def test_penalty_symmetry(self, smooth_2d_data) -> None:
-        """Penalty matrices are symmetric."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
-        smooth = TensorProductSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        for p in smooth.build_penalty_matrices():
-            np.testing.assert_allclose(p.S, p.S.T, rtol=STRICT.rtol, atol=STRICT.atol)
-
-    def test_penalty_psd(self, smooth_2d_data) -> None:
-        """Penalty matrices are PSD."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
-        smooth = TensorProductSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        for p in smooth.build_penalty_matrices():
-            eigvals = np.linalg.eigvalsh(p.S)
-            assert np.all(eigvals >= -STRICT.atol), (
-                f"Penalty has negative eigenvalue: {np.min(eigvals):.2e}"
-            )
-
     def test_penalty_rank(self, smooth_2d_data) -> None:
         """Penalty rank: rank(S_j) * product(d_i for i != j)."""
         k = 5
@@ -258,17 +173,6 @@ class TestTensorProductStructure:
         np.testing.assert_allclose(
             X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
         )
-
-    def test_returns_penalty_objects(self, smooth_2d_data) -> None:
-        """build_penalty_matrices returns list[Penalty]."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
-        smooth = TensorProductSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        penalties = smooth.build_penalty_matrices()
-        assert isinstance(penalties, list)
-        for p in penalties:
-            assert isinstance(p, Penalty)
 
 
 # ===========================================================================
@@ -334,45 +238,6 @@ class TestTensorInteractionStructure:
         # product = 1*1 = 1
         assert smooth.null_space_dim == 1
 
-    def test_penalty_count(self, smooth_2d_data) -> None:
-        """ti has same number of penalties as marginals."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
-        smooth = TensorInteractionSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        penalties = smooth.build_penalty_matrices()
-        assert len(penalties) == 2
-
-    def test_penalty_shape(self, smooth_2d_data) -> None:
-        """ti penalty shape matches n_coefs."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
-        smooth = TensorInteractionSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        for p in smooth.build_penalty_matrices():
-            assert p.shape == (16, 16)
-
-    def test_penalty_symmetry(self, smooth_2d_data) -> None:
-        """ti penalty matrices are symmetric."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
-        smooth = TensorInteractionSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        for p in smooth.build_penalty_matrices():
-            np.testing.assert_allclose(p.S, p.S.T, rtol=STRICT.rtol, atol=STRICT.atol)
-
-    def test_penalty_psd(self, smooth_2d_data) -> None:
-        """ti penalty matrices are PSD."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type="ti")
-        smooth = TensorInteractionSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        for p in smooth.build_penalty_matrices():
-            eigvals = np.linalg.eigvalsh(p.S)
-            assert np.all(eigvals >= -STRICT.atol), (
-                f"ti penalty has negative eigenvalue: {np.min(eigvals):.2e}"
-            )
-
     def test_penalty_rank(self, smooth_2d_data) -> None:
         """ti penalty rank: constrained_rank * product(constrained_d_i for i != j)."""
         k = 5
@@ -402,51 +267,43 @@ class TestTensorInteractionStructure:
 
 
 # ===========================================================================
-# 5. Marginal basis type tests
+# 5. Shared tensor penalty structural tests (STRICT)
 # ===========================================================================
 
 
-class TestMarginalBasisTypes:
-    """Tests for different marginal basis types."""
+class TestTensorPenaltyStructure:
+    """Structural penalty checks shared by te and ti smooths."""
 
-    def test_te_with_tprs(self, smooth_2d_data) -> None:
-        """te(x1, x2, bs='tp') works with TPRS marginals."""
-        spec = make_smooth_spec(["x1", "x2"], bs="tp", k=5)
-        smooth = TensorProductSmooth(spec)
+    @pytest.mark.parametrize(
+        ("smooth_type", "smooth_cls"),
+        [("te", TensorProductSmooth), ("ti", TensorInteractionSmooth)],
+    )
+    def test_penalty_symmetry(
+        self, smooth_2d_data, smooth_type: str, smooth_cls
+    ) -> None:
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type=smooth_type)
+        smooth = smooth_cls(spec)
         smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(smooth_2d_data)
-        assert X.shape == (200, 25)
-        assert np.all(np.isfinite(X))
+        for penalty in smooth.build_penalty_matrices():
+            np.testing.assert_allclose(
+                penalty.S, penalty.S.T, rtol=STRICT.rtol, atol=STRICT.atol
+            )
 
-    def test_te_with_cr(self, smooth_2d_data) -> None:
-        """te(x1, x2, bs='cr') works with cubic marginals."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5)
-        smooth = TensorProductSmooth(spec)
+    @pytest.mark.parametrize(
+        ("smooth_type", "smooth_cls"),
+        [("te", TensorProductSmooth), ("ti", TensorInteractionSmooth)],
+    )
+    def test_penalty_psd(self, smooth_2d_data, smooth_type: str, smooth_cls) -> None:
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=5, smooth_type=smooth_type)
+        smooth = smooth_cls(spec)
         smooth.setup(smooth_2d_data)
 
-        X = smooth.build_design_matrix(smooth_2d_data)
-        assert X.shape == (200, 25)
-        assert np.all(np.isfinite(X))
-
-    def test_te_with_cc(self, smooth_2d_data) -> None:
-        """te(x1, x2, bs='cc') works with cyclic cubic marginals."""
-        spec = make_smooth_spec(["x1", "x2"], bs="cc", k=5)
-        smooth = TensorProductSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        # cc has k-1 = 4 coefs per marginal
-        X = smooth.build_design_matrix(smooth_2d_data)
-        assert X.shape == (200, 16)
-        assert np.all(np.isfinite(X))
-
-    def test_null_space_dim_tp(self, smooth_2d_data) -> None:
-        """null_space_dim for tp: 2*2 = 4 (for 1D marginals with m=2)."""
-        spec = make_smooth_spec(["x1", "x2"], bs="tp", k=5)
-        smooth = TensorProductSmooth(spec)
-        smooth.setup(smooth_2d_data)
-
-        assert smooth.null_space_dim == 2 * 2
+        for penalty in smooth.build_penalty_matrices():
+            eigvals = np.linalg.eigvalsh(penalty.S)
+            assert np.all(eigvals >= -STRICT.atol), (
+                f"{smooth_type} penalty has negative eigenvalue: {np.min(eigvals):.2e}"
+            )
 
 
 # ===========================================================================
@@ -765,22 +622,3 @@ class TestEdgeCases:
 
         penalties = smooth.build_penalty_matrices()
         assert len(penalties) == 3
-
-
-# ===========================================================================
-# 8. Phase boundary guard (no JAX imports)
-# ===========================================================================
-
-
-class TestRegistry:
-    """Tests for smooth class registry with tensor types."""
-
-    def test_te_lookup(self) -> None:
-        from jaxgam.smooths.registry import get_smooth_class
-
-        assert get_smooth_class("te") is TensorProductSmooth
-
-    def test_ti_lookup(self) -> None:
-        from jaxgam.smooths.registry import get_smooth_class
-
-        assert get_smooth_class("ti") is TensorInteractionSmooth

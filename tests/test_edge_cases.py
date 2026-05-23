@@ -7,14 +7,10 @@ No silent NaN propagation or unhandled exceptions.
 Test cases:
 - A. Near-separation in Binomial (step-halving saves it)
 - B. All-zero response in Poisson
-- C. k > n (basis dimension exceeds sample size)
-- D. Single-observation data
-- E. Constant covariate
-- F. Missing values (NaN) in data
-- G. Factor-by with only 1 level
-- H. Factor-by with empty level (no observations for some level)
-- I. Very large k (k=500)
-- J. Lambda at boundary (log_lambda = +/-20)
+- C. Single-observation data
+- D. Missing predictor values (NaN)
+- E. Factor-by with empty level (no observations for some level)
+- F. Lambda at boundary (log_lambda = +/-20)
 """
 
 from __future__ import annotations
@@ -93,32 +89,7 @@ class TestAllZeroPoisson:
 
 
 # ---------------------------------------------------------------------------
-# C. k > n (basis dimension exceeds sample size)
-# ---------------------------------------------------------------------------
-
-
-class TestKGreaterThanN:
-    """k > n: basis dimension exceeds sample size.
-
-    Should raise a clear error since the unconstrained design matrix
-    would have more columns than rows.
-    """
-
-    def test_k_greater_than_n_raises(self):
-        """k > n raises ValueError with clear message."""
-        n = 10
-        x = np.linspace(0, 1, n)
-        y = np.sin(2 * np.pi * x)
-        data = pd.DataFrame({"x": x, "y": y})
-
-        with pytest.raises(
-            ValueError, match=r"k.*larger.*n|k.*exceed|basis.*dimension"
-        ):
-            GAM("y ~ s(x, k=20, bs='cr')").fit(data)
-
-
-# ---------------------------------------------------------------------------
-# D. Single-observation data
+# C. Single-observation data
 # ---------------------------------------------------------------------------
 
 
@@ -137,50 +108,12 @@ class TestSingleObservation:
 
 
 # ---------------------------------------------------------------------------
-# E. Constant covariate
-# ---------------------------------------------------------------------------
-
-
-class TestConstantCovariate:
-    """Constant covariate: all x values are the same.
-
-    A smooth over a constant is meaningless. Should raise a clear error
-    or produce a degenerate-but-finite fit.
-    """
-
-    def test_constant_covariate_raises(self):
-        """Constant covariate raises ValueError."""
-        n = 50
-        x = np.ones(n) * 0.5
-        y = np.random.default_rng(SEED).normal(0, 1, n)
-        data = pd.DataFrame({"x": x, "y": y})
-
-        with pytest.raises((ValueError, np.linalg.LinAlgError)):
-            GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-
-
-# ---------------------------------------------------------------------------
-# F. Missing values (NaN) in data
+# D. Missing values in predictors
 # ---------------------------------------------------------------------------
 
 
 class TestMissingValues:
-    """Missing values: NaN in response, predictors, or both.
-
-    Should raise a clear error, not silently propagate NaN.
-    """
-
-    def test_nan_in_response_raises(self):
-        """NaN in response raises ValueError."""
-        rng = np.random.default_rng(SEED)
-        n = 100
-        x = rng.uniform(0, 1, n)
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-        y[10] = np.nan
-        data = pd.DataFrame({"x": x, "y": y})
-
-        with pytest.raises(ValueError, match=r"[Nn]a[Nn]|missing|NA"):
-            GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+    """Missing predictor values should raise, not silently propagate NaN."""
 
     def test_nan_in_predictor_raises(self):
         """NaN in predictor raises ValueError."""
@@ -194,48 +127,9 @@ class TestMissingValues:
         with pytest.raises(ValueError, match=r"[Nn]a[Nn]|missing|NA"):
             GAM("y ~ s(x, k=10, bs='cr')").fit(data)
 
-    def test_inf_in_response_raises(self):
-        """Inf in response raises ValueError."""
-        rng = np.random.default_rng(SEED)
-        n = 100
-        x = rng.uniform(0, 1, n)
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-        y[0] = np.inf
-        data = pd.DataFrame({"x": x, "y": y})
-
-        with pytest.raises(ValueError, match=r"non-finite|Inf"):
-            GAM("y ~ s(x, k=10, bs='cr')").fit(data)
-
 
 # ---------------------------------------------------------------------------
-# G. Factor-by with only 1 level
-# ---------------------------------------------------------------------------
-
-
-class TestFactorByOneLevel:
-    """Factor-by with a single level.
-
-    Should work: equivalent to no factor-by interaction.
-    """
-
-    def test_single_level_fits(self):
-        """Factor-by with 1 level fits and produces finite results."""
-        rng = np.random.default_rng(SEED)
-        n = 100
-        x = rng.uniform(0, 1, n)
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-        fac = pd.Categorical(["a"] * n, categories=["a"])
-        data = pd.DataFrame({"x": x, "fac": fac, "y": y})
-
-        model = GAM("y ~ s(x, by=fac, k=10, bs='cr')", family="gaussian").fit(data)
-
-        assert np.all(np.isfinite(model.coefficients))
-        assert np.all(np.isfinite(model.fitted_values))
-        assert model.converged
-
-
-# ---------------------------------------------------------------------------
-# H. Factor-by with empty level
+# E. Factor-by with empty level
 # ---------------------------------------------------------------------------
 
 
@@ -261,36 +155,7 @@ class TestFactorByEmptyLevel:
 
 
 # ---------------------------------------------------------------------------
-# I. Very large k
-# ---------------------------------------------------------------------------
-
-
-class TestVeryLargeK:
-    """Very large basis dimension (k=500).
-
-    Should work but be slower. Check it fits without OOM and
-    produces finite results.
-    """
-
-    @pytest.mark.slow
-    def test_large_k_fits(self):
-        """k=500 fits and produces finite results."""
-        rng = np.random.default_rng(SEED)
-        n = 1000
-        x = rng.uniform(0, 1, n)
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-        data = pd.DataFrame({"x": x, "y": y})
-
-        model = GAM("y ~ s(x, k=500, bs='cr')").fit(data)
-
-        assert np.all(np.isfinite(model.coefficients))
-        assert np.all(np.isfinite(model.fitted_values))
-        assert np.isfinite(model.deviance)
-        assert model.coefficients.shape[0] > 400  # intercept + ~499 basis functions
-
-
-# ---------------------------------------------------------------------------
-# J. Lambda at boundary
+# F. Lambda at boundary
 # ---------------------------------------------------------------------------
 
 

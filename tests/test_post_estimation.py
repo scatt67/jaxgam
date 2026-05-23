@@ -75,12 +75,6 @@ class TestComputePerSmoothEdf:
         edf = _compute_per_smooth_edf(F, smooth_info)
         np.testing.assert_allclose(edf, [1.3], rtol=STRICT.rtol, atol=STRICT.atol)
 
-    def test_empty_smooth_info(self):
-        """No smooths returns empty array."""
-        F = np.eye(3)
-        edf = _compute_per_smooth_edf(F, ())
-        assert edf.shape == (0,)
-
 
 # ---------------------------------------------------------------------------
 # Unit tests: _compute_per_smooth_edf1
@@ -132,12 +126,6 @@ class TestComputePerSmoothEdf1:
         edf1 = _compute_per_smooth_edf1(F, smooth_info)
         assert edf1[0] >= edf[0] - STRICT.atol
 
-    def test_empty_smooth_info(self):
-        """No smooths returns empty array."""
-        F = np.eye(3)
-        edf1 = _compute_per_smooth_edf1(F, ())
-        assert edf1.shape == (0,)
-
 
 # ---------------------------------------------------------------------------
 # Unit tests: _compute_null_deviance
@@ -176,17 +164,6 @@ class TestComputeNullDeviance:
             null_dev, expected, rtol=STRICT.rtol, atol=STRICT.atol
         )
 
-    def test_poisson_null_deviance(self):
-        """Poisson null deviance is non-negative."""
-        from jaxgam.families.registry import get_family
-
-        family = get_family("poisson")
-        rng = np.random.default_rng(SEED)
-        y = rng.poisson(3.0, size=50).astype(float)
-        wt = np.ones(50)
-        null_dev = _compute_null_deviance(y, wt, family)
-        assert null_dev >= 0.0
-
 
 # ---------------------------------------------------------------------------
 # Integration tests: post-estimation via GAMResults
@@ -217,31 +194,3 @@ class TestPostEstimationIntegration:
     def test_edf1_shape(self, results):
         """EDF1 array has correct shape."""
         assert results.edf1.shape == (len(results.smooth_info),)
-
-    def test_vp_symmetric(self, results):
-        """Vp is symmetric."""
-        np.testing.assert_allclose(
-            results.Vp,
-            results.Vp.T,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-
-    def test_vp_psd(self, results):
-        """Vp is positive semi-definite."""
-        eigenvalues = np.linalg.eigvalsh(results.Vp)
-        assert np.all(eigenvalues >= -STRICT.atol)
-
-    def test_null_deviance_positive(self, results):
-        """Null deviance is non-negative."""
-        assert results.null_deviance >= 0.0
-
-    def test_self_prediction_matches_fitted(self, results):
-        """Self-prediction still matches fitted values after refactor."""
-        pred = results.predict()
-        np.testing.assert_allclose(
-            pred,
-            results.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )

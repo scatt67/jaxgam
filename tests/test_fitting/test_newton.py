@@ -2,31 +2,24 @@
 
 Tests cover:
 - Safe Newton step (eigenvalue handling, norm capping, floor)
-- Hard-gate invariants (deviance >= 0, all-finite, EDF bounds, H PSD)
-- Parametrized R comparison across all families (deviance, coefficients,
-  fitted values, scale, REML score, smoothing params, EDF)
-- Two-smooth Gaussian GAM (with full R comparison)
-- TPRS basis end-to-end
+- Optimizer Hessian PSD
+- Parametrized optimizer R comparison across all families (REML score,
+  smoothing params)
+- Multi-penalty optimizer checks for two-smooth, tensor, and factor-by models
 - ML criterion optimization (Gaussian and non-Gaussian)
 - Offset support
 - Purely parametric shortcut
-- NewtonResult fields and types
 - REML monotonicity across families
 - Step-halving activation
-- Convergence info strings
 - Edge cases (invalid method, iteration limit)
 
 Tolerance rationale:
-  Gaussian REML achieves MODERATE (rtol=1e-4, atol=1e-6) for all R
-  comparisons. The atol=1e-6 accommodates near-zero coefficients/fitted
-  values where absolute agreement is excellent (~1e-7) but tighter atol
-  would cause false failures from inflated relative error on small entries.
-  GLM families (Poisson, Binomial, Gamma) use LOOSE because Newton converges
-  to slightly different lambda (~1e-3, per AGENTS.md §Common Pitfalls #4),
-  which feeds a different PIRLS, and the differences compound through the
-  full pipeline. ML criterion has a different normalization convention from
-  R's (constant offset), so ML converges to a slightly different lambda
-  even for Gaussian — only deviance is compared (at LOOSE).
+  Gaussian REML achieves MODERATE (rtol=1e-4, atol=1e-6) for optimizer
+  comparisons. GLM smoothing parameters use LOOSE because the REML criterion
+  is flat near the optimum (AGENTS.md §Common Pitfalls #4). ML criterion has a
+  different normalization convention from R's (constant offset), so ML
+  converges to a slightly different lambda even for Gaussian; only the fit
+  deviance is compared there.
 
 Design doc reference: Section 8.2 (Outer Newton with Damped Hessian)
 R source reference: fast-REML.r lines 1740-1875
@@ -45,11 +38,10 @@ from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import (
     NewtonOptimizer,
-    NewtonResult,
     _safe_newton_step,
     newton_optimize,
 )
-from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
+from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.jax_utils import to_jax
 from tests.helpers import (
     SEED,
@@ -61,14 +53,6 @@ from tests.helpers import (
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
-
-
-def _back_transform_coefs(result, fd):
-    """Back-transform coefficients from Sl.setup reparameterized space."""
-    coefs = np.asarray(result.pirls_result.coefficients)
-    if fd.repara_D is not None:
-        coefs = np.asarray(fd.repara_D) @ coefs
-    return coefs
 
 
 # ---- A. Safe Newton step tests ----
@@ -140,13 +124,8 @@ class TestSafeNewtonStep:
 # ---- B. Hard-gate invariants ----
 
 
-@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestInvariants:
-    """Hard-gate invariants that must hold for every converged model.
-
-    Per AGENTS.md: deviance non-negativity, no NaN in converged model,
-    EDF bounds, H symmetry/PSD.
-    """
+    """Optimizer-specific invariants for every converged model."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
@@ -166,32 +145,6 @@ class TestInvariants:
         fd = _setup_fd(self.FORMULA, data, family_obj)
         result = newton_optimize(fd)
         return family_name, fd, result
-
-    def test_deviance_non_negative(self, converged_result):
-        """Deviance must be >= 0 for all families."""
-        _, _, result = converged_result
-        assert float(result.pirls_result.deviance) >= 0
-
-    def test_no_nan_in_converged(self, converged_result):
-        """All output arrays must be finite when converged."""
-        _, _, result = converged_result
-        assert result.converged
-        assert jnp.all(jnp.isfinite(result.pirls_result.coefficients))
-        assert jnp.all(jnp.isfinite(result.pirls_result.mu))
-        assert jnp.all(jnp.isfinite(result.pirls_result.eta))
-        assert jnp.isfinite(result.pirls_result.deviance)
-        assert jnp.isfinite(result.score)
-        assert jnp.all(jnp.isfinite(result.gradient))
-        assert jnp.isfinite(result.edf)
-        assert jnp.isfinite(result.scale)
-        assert jnp.all(jnp.isfinite(result.log_lambda))
-
-    def test_edf_bounds(self, converged_result):
-        """EDF must satisfy 0 < edf <= n_coef."""
-        _, fd, result = converged_result
-        edf = float(result.edf)
-        assert edf > 0, f"EDF {edf} must be positive"
-        assert edf <= fd.n_coef, f"EDF {edf} exceeds n_coef {fd.n_coef}"
 
     def test_hessian_symmetric_psd(self, converged_result):
         """Penalized Hessian XtWX + S_lambda must be symmetric PSD."""
@@ -213,12 +166,7 @@ class TestInvariants:
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestFamilyVsR:
-    """Comprehensive R comparison across all four families.
-
-    Gaussian uses MODERATE (single PIRLS iteration, no compounding).
-    GLM families use LOOSE (iterative PIRLS + Newton, differences
-    compound per AGENTS.md Pitfall #4).
-    """
+    """Optimizer-level R comparison across all four families."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
@@ -232,7 +180,7 @@ class TestFamilyVsR:
         ids=["gaussian", "poisson", "binomial", "gamma"],
     )
     def family_fit(self, request):
-        """Fit both jaxgam and R for a given family, return both results."""
+        """Fit both jaxgam and R for a given family, return optimizer outputs."""
         from tests.r_bridge import RBridge
 
         family_name, family_obj = request.param
@@ -244,60 +192,6 @@ class TestFamilyVsR:
         r_result = bridge.fit_gam(self.FORMULA, data, family=family_name)
 
         return family_name, fd, result, r_result
-
-    def test_converges(self, family_fit):
-        """All families converge."""
-        _, _, result, _ = family_fit
-        assert result.converged
-        assert result.convergence_info == "full convergence"
-
-    def test_deviance_vs_r(self, family_fit):
-        """Deviance matches R."""
-        family_name, _, result, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            float(result.pirls_result.deviance),
-            r_result["deviance"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} deviance differs from R",
-        )
-
-    def test_coefficients_vs_r(self, family_fit):
-        """Coefficients match R (back-transformed from Sl.setup space)."""
-        family_name, fd, result, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            _back_transform_coefs(result, fd),
-            r_result["coefficients"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} coefficients differ from R",
-        )
-
-    def test_fitted_values_vs_r(self, family_fit):
-        """Fitted values match R."""
-        family_name, _, result, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            np.asarray(result.pirls_result.mu),
-            r_result["fitted_values"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} fitted values differ from R",
-        )
-
-    def test_scale_vs_r(self, family_fit):
-        """Scale estimate matches R."""
-        family_name, _, result, r_result = family_fit
-        tol = r_tolerance(family_name)
-        np.testing.assert_allclose(
-            float(result.scale),
-            r_result["scale"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} scale differs from R",
-        )
 
     def test_reml_score_vs_r(self, family_fit):
         """REML criterion score matches R."""
@@ -329,44 +223,16 @@ class TestFamilyVsR:
             err_msg=f"{family_name} smoothing params differ from R",
         )
 
-    def test_edf_vs_r(self, family_fit):
-        """Total EDF matches R.
 
-        Our edf is trace(H^{-1} @ XtWX) (total including intercept).
-        R's summary(model)$edf is per-smooth. For a single-smooth model
-        with intercept, total EDF = sum(per-smooth EDF) + 1 (intercept).
-        """
-        family_name, _, result, r_result = family_fit
-        tol = r_tolerance(family_name)
-        r_total_edf = float(np.sum(r_result["edf"])) + 1.0
-        np.testing.assert_allclose(
-            float(result.edf),
-            r_total_edf,
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} total EDF differs from R",
-        )
-
-
-# ---- D. Two-smooth and TPRS tests ----
+# ---- D. Multi-penalty optimizer tests ----
 
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestMultiSmooth:
-    """Multi-smooth and alternative basis tests."""
+    """Multi-smooth optimizer checks against R smoothing parameters."""
 
     def test_two_smooths_vs_r(self):
-        """Two-smooth Gaussian model: full R comparison.
-
-        Multi-penalty models are where bugs most often surface (penalty
-        interaction, lambda landscape), so we compare coefficients,
-        fitted values, and smoothing params in addition to deviance.
-
-        All comparisons use MODERATE. Multi-smooth absolute agreement is
-        excellent (max abs diff ~3e-7) but near-zero coefficients/fitted
-        values require MODERATE's atol=1e-6 to avoid false failures from
-        inflated relative error on small entries.
-        """
+        """Two-smooth Gaussian model finds R-compatible smoothing params."""
         from tests.r_bridge import RBridge
 
         rng = np.random.default_rng(SEED)
@@ -387,27 +253,6 @@ class TestMultiSmooth:
         r_result = bridge.fit_gam(formula, data, family="gaussian")
 
         np.testing.assert_allclose(
-            float(result.pirls_result.deviance),
-            r_result["deviance"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Two-smooth deviance differs from R",
-        )
-        np.testing.assert_allclose(
-            _back_transform_coefs(result, fd),
-            r_result["coefficients"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Two-smooth coefficients differ from R",
-        )
-        np.testing.assert_allclose(
-            np.asarray(result.pirls_result.mu),
-            r_result["fitted_values"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Two-smooth fitted values differ from R",
-        )
-        np.testing.assert_allclose(
             np.asarray(result.smoothing_params),
             r_result["smoothing_params"],
             rtol=LOOSE.rtol,
@@ -416,20 +261,13 @@ class TestMultiSmooth:
         )
 
     def test_tensor_product_vs_r(self):
-        """Tensor product te(x1, x2, k=5): full R comparison.
+        """Tensor product te(x1, x2, k=5): multi-penalty optimizer behavior.
 
         Tensor products have a multi-penalty block where one penalty
         direction has a gently sloping REML surface. The lsp_max cap
         clips log(sp) at 15 while R converges at ~13.08 via its
         internal penalty reparameterization (Sl.setup). Both give
         an equivalent fit.
-
-        Deviance matches R at MODERATE. Coefficients and fitted values
-        use LOOSE because the sp difference on the gently sloping
-        surface causes small coefficient differences. Only uncapped
-        sp are compared (the capped sp corresponds to the gently
-        sloping direction where any value in a wide range gives an
-        equivalent fit).
         """
         from tests.r_bridge import RBridge
 
@@ -450,27 +288,6 @@ class TestMultiSmooth:
         bridge = RBridge()
         r_result = bridge.fit_gam(r_formula, data, family="gaussian")
 
-        np.testing.assert_allclose(
-            float(result.pirls_result.deviance),
-            r_result["deviance"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Tensor product deviance differs from R",
-        )
-        np.testing.assert_allclose(
-            _back_transform_coefs(result, fd),
-            r_result["coefficients"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="Tensor product coefficients differ from R",
-        )
-        np.testing.assert_allclose(
-            np.asarray(result.pirls_result.mu),
-            r_result["fitted_values"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="Tensor product fitted values differ from R",
-        )
         # All sp must be finite and positive
         sp_ours = np.asarray(result.smoothing_params)
         assert np.all(np.isfinite(sp_ours)), f"All sp must be finite, got {sp_ours}"
@@ -502,14 +319,11 @@ class TestMultiSmooth:
             )
 
     def test_factor_by_vs_r(self):
-        """Factor-by smooth: full R comparison.
+        """Factor-by smooth: multi-penalty optimizer behavior.
 
         With block-structured log|S+|, each factor level's penalty
         is a singleton block with exact derivatives. The optimizer
         converges quickly even when one level is heavily penalized.
-
-        Deviance, coefficients, and fitted values match R at MODERATE.
-        Smoothing parameters match at LOOSE.
         """
         from tests.r_bridge import RBridge
 
@@ -541,31 +355,6 @@ class TestMultiSmooth:
         bridge = RBridge()
         r_result = bridge.fit_gam(formula, data, family="gaussian")
 
-        np.testing.assert_allclose(
-            float(result.pirls_result.deviance),
-            r_result["deviance"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="Factor-by deviance differs from R",
-        )
-        # Factor-by has one level with a flat REML surface (linear
-        # signal → any large sp gives an equivalent fit). Different
-        # optimization trajectories land at different points on this
-        # flat surface, causing ~1% coefficient differences.
-        np.testing.assert_allclose(
-            _back_transform_coefs(result, fd),
-            r_result["coefficients"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="Factor-by coefficients differ from R",
-        )
-        np.testing.assert_allclose(
-            np.asarray(result.pirls_result.mu),
-            r_result["fitted_values"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="Factor-by fitted values differ from R",
-        )
         # All sp must be finite and positive
         sp_ours = np.asarray(result.smoothing_params)
         assert np.all(np.isfinite(sp_ours)), f"All sp must be finite, got {sp_ours}"
@@ -592,39 +381,6 @@ class TestMultiSmooth:
             assert np.all(sp_ours[poorly_determined] <= 1e20), (
                 f"Poorly-determined sp too large: {sp_ours[poorly_determined]}"
             )
-
-    def test_tprs_basis_vs_r(self):
-        """TPRS basis (bs='tp'): deviance and fitted values match R.
-
-        TPRS is mgcv's default basis and exercises the eigendecomposition
-        path end-to-end through Newton.
-        """
-        from tests.r_bridge import RBridge
-
-        formula = "y ~ s(x, k=10, bs='tp')"
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(formula, data, Gaussian())
-        result = newton_optimize(fd)
-
-        assert result.converged
-
-        bridge = RBridge()
-        r_result = bridge.fit_gam(formula, data, family="gaussian")
-
-        np.testing.assert_allclose(
-            float(result.pirls_result.deviance),
-            r_result["deviance"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="TPRS deviance differs from R",
-        )
-        np.testing.assert_allclose(
-            np.asarray(result.pirls_result.mu),
-            r_result["fitted_values"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-            err_msg="TPRS fitted values differ from R",
-        )
 
 
 # ---- E. ML criterion ----
@@ -701,27 +457,9 @@ class TestMLOptimization:
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestDiagnostics:
-    """Result fields, edge cases, and invariants."""
+    """Optimizer edge cases and invariants."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    def test_result_fields(self):
-        """NewtonResult has all expected fields with correct types."""
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(self.FORMULA, data, Gaussian())
-        result = newton_optimize(fd)
-
-        assert isinstance(result, NewtonResult)
-        assert isinstance(result.converged, bool)
-        assert isinstance(result.n_iter, int)
-        assert isinstance(result.convergence_info, str)
-        assert isinstance(result.pirls_result, PIRLSResult)
-        assert result.log_lambda.shape == (fd.n_penalties,)
-        assert result.smoothing_params.shape == (fd.n_penalties,)
-        assert result.gradient.shape == (fd.n_penalties,)
-        assert result.score.shape == ()
-        assert result.edf.shape == ()
-        assert result.scale.shape == ()
 
     def test_purely_parametric(self):
         """No penalties: skip Newton, return immediately."""
@@ -849,17 +587,6 @@ class TestDiagnostics:
         score_init = float(crit_init.score(log_lambda_init))
 
         assert float(result.score) <= score_init + STRICT.rtol
-
-    def test_convergence_info_values(self):
-        """convergence_info is one of the three expected strings."""
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(self.FORMULA, data, Gaussian())
-        result = newton_optimize(fd)
-        assert result.convergence_info in {
-            "full convergence",
-            "step failed",
-            "iteration limit",
-        }
 
     def test_invalid_method_raises(self):
         """Invalid method string raises ValueError."""
@@ -1062,14 +789,6 @@ class TestCustomJVP:
             atol=MODERATE.atol,
             err_msg=f"{family_name}: custom_jvp Hessian differs from FD Hessian",
         )
-
-    def test_gaussian_uses_custom_jvp(self):
-        """Gaussian families use custom_jvp for correct multi-smooth Hessian."""
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(self.FORMULA, data, Gaussian())
-        optimizer = NewtonOptimizer(fd)
-
-        assert optimizer._diff_grad_hess is not None
 
     @pytest.mark.parametrize(
         ("family_name", "family_obj"),

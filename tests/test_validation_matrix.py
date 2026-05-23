@@ -28,7 +28,7 @@ import pytest
 from jax import clear_caches
 
 from jaxgam.api import GAM
-from tests.helpers import SEED, r_available
+from tests.helpers import SEED, _AssertCollector, r_available
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 # ---------------------------------------------------------------------------
@@ -385,7 +385,7 @@ def _cell_id(val):
 
 
 # ---------------------------------------------------------------------------
-# A. TestValidationMatrix — R comparison (28 cells)
+# A. TestValidationMatrix — R comparison (50 cells)
 # ---------------------------------------------------------------------------
 
 
@@ -393,7 +393,7 @@ def _cell_id(val):
 class TestValidationMatrix:
     """Systematic R comparison across all smooth type x family cells."""
 
-    @pytest.fixture(params=CELL_IDS, ids=[_cell_id(c) for c in CELL_IDS])
+    @pytest.fixture(scope="class", params=CELL_IDS, ids=[_cell_id(c) for c in CELL_IDS])
     def cell(self, request):
         """Fit Python GAM and R GAM, return both for comparison."""
         from tests.r_bridge import RBridge
@@ -408,109 +408,106 @@ class TestValidationMatrix:
 
         return smooth_key, family_name, model, r_result
 
-    def test_deviance_vs_r(self, cell):
+    def test_matches_r(self, cell):
+        """Compare each validation-matrix cell against mgcv."""
         smooth_key, family_name, model, r_result = cell
-        tol = _r_tol(smooth_key, family_name)
-        np.testing.assert_allclose(
-            model.deviance,
-            r_result["deviance"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"[{smooth_key}-{family_name}] deviance",
-        )
+        cell_id = f"{smooth_key}-{family_name}"
+        collector = _AssertCollector()
 
-    def test_fitted_values_vs_r(self, cell):
-        smooth_key, family_name, model, r_result = cell
-        tol = _fitted_tol(smooth_key, family_name)
-        np.testing.assert_allclose(
-            model.fitted_values,
-            r_result["fitted_values"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"[{smooth_key}-{family_name}] fitted values",
-        )
+        def assert_deviance_vs_r() -> None:
+            tol = _r_tol(smooth_key, family_name)
+            np.testing.assert_allclose(
+                model.deviance,
+                r_result["deviance"],
+                rtol=tol.rtol,
+                atol=tol.atol,
+                err_msg=f"[{cell_id}] deviance",
+            )
 
-    def test_edf_vs_r(self, cell):
-        """Compare total EDF sum (our architecture may group differently)."""
-        smooth_key, family_name, model, r_result = cell
-        tol = _fitted_tol(smooth_key, family_name)  # EDF sensitive to sp differences
-        py_edf_total = float(np.sum(model.edf))
-        r_edf_total = float(np.sum(r_result["edf"]))
-        np.testing.assert_allclose(
-            py_edf_total,
-            r_edf_total,
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"[{smooth_key}-{family_name}] total EDF",
-        )
-
-    def test_scale_vs_r(self, cell):
-        smooth_key, family_name, model, r_result = cell
-        tol = _r_tol(smooth_key, family_name)
-        np.testing.assert_allclose(
-            model.scale,
-            r_result["scale"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"[{smooth_key}-{family_name}] scale",
-        )
-
-    def test_coefficients_vs_r(self, cell):
-        """Compare coefficients or fitted values depending on smooth type.
-
-        TPRS: eigenvector sign ambiguity → compare fitted values.
-        Tensor/factor-by: flat REML surfaces → compare fitted values.
-        CR single-smooth: direct coefficient comparison.
-        """
-        smooth_key, family_name, model, r_result = cell
-        tol = _r_tol(smooth_key, family_name)
-        if _compare_fitted_not_coefs(smooth_key):
-            # Compare fitted values as proxy for coefficient equivalence
-            ftol = _fitted_tol(smooth_key, family_name)
+        def assert_fitted_values_vs_r() -> None:
+            tol = _fitted_tol(smooth_key, family_name)
             np.testing.assert_allclose(
                 model.fitted_values,
                 r_result["fitted_values"],
-                rtol=ftol.rtol,
-                atol=ftol.atol,
-                err_msg=f"[{smooth_key}-{family_name}] fitted values (coef proxy)",
-            )
-        else:
-            np.testing.assert_allclose(
-                model.coefficients,
-                r_result["coefficients"],
                 rtol=tol.rtol,
                 atol=tol.atol,
-                err_msg=f"[{smooth_key}-{family_name}] coefficients",
+                err_msg=f"[{cell_id}] fitted values",
             )
 
-    def test_self_prediction_roundtrip(self, cell):
-        """predict() with no newdata reproduces fitted_values."""
-        smooth_key, family_name, model, _r_result = cell
-        pred = model.predict()
-        np.testing.assert_allclose(
-            pred,
-            model.fitted_values,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-            err_msg=f"[{smooth_key}-{family_name}] self-prediction roundtrip",
-        )
+        def assert_edf_vs_r() -> None:
+            tol = _fitted_tol(smooth_key, family_name)
+            py_edf_total = float(np.sum(model.edf))
+            r_edf_total = float(np.sum(r_result["edf"]))
+            np.testing.assert_allclose(
+                py_edf_total,
+                r_edf_total,
+                rtol=tol.rtol,
+                atol=tol.atol,
+                err_msg=f"[{cell_id}] total EDF",
+            )
 
-    def test_theta_vs_r(self, cell):
-        """Estimated theta matches R (extended family only)."""
-        smooth_key, family_name, model, r_result = cell
-        r_theta = r_result.get("theta")
-        if r_theta is None:
-            pytest.skip("Not an extended family")
-        # Access theta from family object (GAMResults.theta added in PR 6)
-        py_theta = float(model.family.get_theta(transformed=True)[0])
-        tol = _r_tol(smooth_key, family_name)
-        np.testing.assert_allclose(
-            py_theta,
-            r_theta,
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"[{smooth_key}-{family_name}] theta",
-        )
+        def assert_scale_vs_r() -> None:
+            tol = _r_tol(smooth_key, family_name)
+            np.testing.assert_allclose(
+                model.scale,
+                r_result["scale"],
+                rtol=tol.rtol,
+                atol=tol.atol,
+                err_msg=f"[{cell_id}] scale",
+            )
+
+        def assert_coefficients_vs_r() -> None:
+            tol = _r_tol(smooth_key, family_name)
+            if _compare_fitted_not_coefs(smooth_key):
+                ftol = _fitted_tol(smooth_key, family_name)
+                np.testing.assert_allclose(
+                    model.fitted_values,
+                    r_result["fitted_values"],
+                    rtol=ftol.rtol,
+                    atol=ftol.atol,
+                    err_msg=f"[{cell_id}] fitted values (coef proxy)",
+                )
+            else:
+                np.testing.assert_allclose(
+                    model.coefficients,
+                    r_result["coefficients"],
+                    rtol=tol.rtol,
+                    atol=tol.atol,
+                    err_msg=f"[{cell_id}] coefficients",
+                )
+
+        def assert_self_prediction_roundtrip() -> None:
+            pred = model.predict()
+            np.testing.assert_allclose(
+                pred,
+                model.fitted_values,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=f"[{cell_id}] self-prediction roundtrip",
+            )
+
+        def assert_theta_vs_r() -> None:
+            r_theta = r_result.get("theta")
+            if r_theta is None:
+                return
+            py_theta = float(model.family.get_theta(transformed=True)[0])
+            tol = _r_tol(smooth_key, family_name)
+            np.testing.assert_allclose(
+                py_theta,
+                r_theta,
+                rtol=tol.rtol,
+                atol=tol.atol,
+                err_msg=f"[{cell_id}] theta",
+            )
+
+        collector.check("deviance vs R", assert_deviance_vs_r)
+        collector.check("fitted values vs R", assert_fitted_values_vs_r)
+        collector.check("EDF vs R", assert_edf_vs_r)
+        collector.check("scale vs R", assert_scale_vs_r)
+        collector.check("coefficients vs R", assert_coefficients_vs_r)
+        collector.check("self prediction roundtrip", assert_self_prediction_roundtrip)
+        collector.check("theta vs R", assert_theta_vs_r)
+        collector.raise_if_any(cell_id)
 
 
 # ---------------------------------------------------------------------------
@@ -522,17 +519,18 @@ class TestHardGateInvariants:
     """Hard-gate invariants (design.md §18.1) for all smooth x family cells.
 
     These must hold regardless of R comparison and never be waived.
-    Seven invariants tested:
-    1. H = XtWX + S_lambda symmetric PSD
-    2. Penalty S_j symmetric PSD
-    3. Rank(X) >= p - null_space_dim
+    Eight invariants tested:
+    1. Model convergence
+    2. Deviance >= 0
+    3. Converged beta produces finite eta, mu (no NaN/Inf)
     4. EDF in [0, p] per term, total in [0, n]
-    5. Deviance >= 0
-    6. Converged beta produces finite eta, mu (no NaN/Inf)
-    7. Vp symmetric PSD
+    5. Vp symmetric PSD
+    6. Penalty S_j symmetric PSD
+    7. Estimated theta > 0 for extended families
+    8. Rank(X) >= p - null_space_dim
     """
 
-    @pytest.fixture(params=CELL_IDS, ids=[_cell_id(c) for c in CELL_IDS])
+    @pytest.fixture(scope="class", params=CELL_IDS, ids=[_cell_id(c) for c in CELL_IDS])
     def fitted_model(self, request):
         smooth_key, family_name = request.param
         config = SMOOTH_CONFIGS[smooth_key]
@@ -540,127 +538,101 @@ class TestHardGateInvariants:
         model = GAM(config.py_formula, family=family_name).fit(data)
         return smooth_key, family_name, model
 
-    def test_convergence(self, fitted_model):
-        """Model converges for all cells."""
+    def test_all_invariants(self, fitted_model):
+        """Check every hard-gate invariant for one matrix cell."""
         smooth_key, family_name, model = fitted_model
-        assert model.converged, f"[{smooth_key}-{family_name}] model did not converge"
+        cell_id = f"{smooth_key}-{family_name}"
+        collector = _AssertCollector()
 
-    def test_deviance_non_negative(self, fitted_model):
-        """Deviance >= 0 (§18.1 invariant 6)."""
-        smooth_key, family_name, model = fitted_model
-        assert model.deviance >= 0, (
-            f"[{smooth_key}-{family_name}] negative deviance: {model.deviance}"
-        )
+        def assert_convergence() -> None:
+            assert model.converged, f"[{cell_id}] model did not converge"
 
-    def test_no_nan_in_converged(self, fitted_model):
-        """Converged beta produces finite eta, mu (§18.1 invariant 7)."""
-        smooth_key, family_name, model = fitted_model
-        assert np.all(np.isfinite(model.coefficients)), (
-            f"[{smooth_key}-{family_name}] NaN/Inf in coefficients"
-        )
-        assert np.all(np.isfinite(model.fitted_values)), (
-            f"[{smooth_key}-{family_name}] NaN/Inf in fitted values"
-        )
-        assert np.all(np.isfinite(model.linear_predictor)), (
-            f"[{smooth_key}-{family_name}] NaN/Inf in linear predictor"
-        )
-        assert np.isfinite(model.scale), (
-            f"[{smooth_key}-{family_name}] non-finite scale"
-        )
-        assert np.isfinite(model.deviance), (
-            f"[{smooth_key}-{family_name}] non-finite deviance"
-        )
+        def assert_deviance_non_negative() -> None:
+            assert model.deviance >= 0, (
+                f"[{cell_id}] negative deviance: {model.deviance}"
+            )
 
-    def test_edf_bounds(self, fitted_model):
-        """EDF in [0, p] per term, total in [0, n] (§18.1 invariant 5)."""
-        smooth_key, family_name, model = fitted_model
-        p = model.X.shape[1]
-        n = model.n
+        def assert_no_nan_in_converged() -> None:
+            assert np.all(np.isfinite(model.coefficients)), (
+                f"[{cell_id}] NaN/Inf in coefficients"
+            )
+            assert np.all(np.isfinite(model.fitted_values)), (
+                f"[{cell_id}] NaN/Inf in fitted values"
+            )
+            assert np.all(np.isfinite(model.linear_predictor)), (
+                f"[{cell_id}] NaN/Inf in linear predictor"
+            )
+            assert np.isfinite(model.scale), f"[{cell_id}] non-finite scale"
+            assert np.isfinite(model.deviance), f"[{cell_id}] non-finite deviance"
 
-        # Per-smooth EDF should be positive
-        assert np.all(model.edf > 0), (
-            f"[{smooth_key}-{family_name}] non-positive per-smooth EDF: {model.edf}"
-        )
-        # Total EDF bounded by p
-        assert model.edf_total <= p, (
-            f"[{smooth_key}-{family_name}] total EDF {model.edf_total} > p={p}"
-        )
-        # Total EDF bounded by n
-        assert model.edf_total <= n + MODERATE.atol, (
-            f"[{smooth_key}-{family_name}] total EDF {model.edf_total} > n={n}"
-        )
+        def assert_edf_bounds() -> None:
+            p = model.X.shape[1]
+            n = model.n
 
-    def test_vp_symmetric_psd(self, fitted_model):
-        """Vp is symmetric PSD (§18.1 invariant 2 applied to Bayesian cov)."""
-        smooth_key, family_name, model = fitted_model
-        Vp = model.Vp
+            assert np.all(model.edf > 0), (
+                f"[{cell_id}] non-positive per-smooth EDF: {model.edf}"
+            )
+            assert model.edf_total <= p, (
+                f"[{cell_id}] total EDF {model.edf_total} > p={p}"
+            )
+            assert model.edf_total <= n + MODERATE.atol, (
+                f"[{cell_id}] total EDF {model.edf_total} > n={n}"
+            )
 
-        # Symmetry
-        np.testing.assert_allclose(
-            Vp,
-            Vp.T,
-            atol=STRICT.atol,
-            err_msg=f"[{smooth_key}-{family_name}] Vp not symmetric",
-        )
+        def assert_vp_symmetric_psd() -> None:
+            Vp = model.Vp
 
-        # PSD: eigenvalues >= 0 (allow small negative from numerical noise)
-        eigvals = np.linalg.eigvalsh(Vp)
-        assert np.all(eigvals >= 0.0), (
-            f"[{smooth_key}-{family_name}] Vp has negative eigenvalue: {eigvals.min()}"
-        )
+            np.testing.assert_allclose(
+                Vp,
+                Vp.T,
+                atol=STRICT.atol,
+                err_msg=f"[{cell_id}] Vp not symmetric",
+            )
+            eigvals = np.linalg.eigvalsh(Vp)
+            assert np.all(eigvals >= 0.0), (
+                f"[{cell_id}] Vp has negative eigenvalue: {eigvals.min()}"
+            )
 
-    def test_penalty_psd(self, fitted_model):
-        """Penalty matrices S_j are symmetric PSD (§18.1 invariant 3)."""
-        smooth_key, family_name, model = fitted_model
+        def assert_penalty_psd() -> None:
+            for j, si in enumerate(model.smooth_info):
+                for term in model.coef_map.terms:
+                    if term.label == si.label and term.term_type != "parametric":
+                        smooth_obj = term.smooth
+                        if hasattr(smooth_obj, "penalties") and smooth_obj.penalties:
+                            for k, S_j in enumerate(smooth_obj.penalties):
+                                np.testing.assert_allclose(
+                                    S_j,
+                                    S_j.T,
+                                    atol=STRICT.atol,
+                                    err_msg=f"[{cell_id}] S[{j}][{k}] not symmetric",
+                                )
+                                eigs = np.linalg.eigvalsh(S_j)
+                                assert np.all(eigs >= -STRICT.atol), (
+                                    f"[{cell_id}] S[{j}][{k}] has negative "
+                                    f"eigenvalue: {eigs.min()}"
+                                )
 
-        for j, si in enumerate(model.smooth_info):
-            # Access penalties from the coef_map's smooth terms
-            for term in model.coef_map.terms:
-                if term.label == si.label and term.term_type != "parametric":
-                    smooth_obj = term.smooth
-                    # Get penalty matrices from the smooth
-                    if hasattr(smooth_obj, "penalties") and smooth_obj.penalties:
-                        for k, S_j in enumerate(smooth_obj.penalties):
-                            # Symmetry
-                            np.testing.assert_allclose(
-                                S_j,
-                                S_j.T,
-                                atol=STRICT.atol,
-                                err_msg=(
-                                    f"[{smooth_key}-{family_name}] "
-                                    f"S[{j}][{k}] not symmetric"
-                                ),
-                            )
-                            # PSD
-                            eigs = np.linalg.eigvalsh(S_j)
-                            assert np.all(eigs >= -STRICT.atol), (
-                                f"[{smooth_key}-{family_name}] "
-                                f"S[{j}][{k}] has negative eigenvalue: {eigs.min()}"
-                            )
+        def assert_theta_positive() -> None:
+            if not hasattr(model.family, "n_theta") or model.family.n_theta == 0:
+                return
+            theta = float(model.family.get_theta(transformed=True)[0])
+            assert theta > 0, f"[{cell_id}] non-positive theta: {theta}"
 
-    def test_theta_positive(self, fitted_model):
-        """Estimated theta > 0 for extended families."""
-        smooth_key, family_name, model = fitted_model
-        if not hasattr(model.family, "n_theta") or model.family.n_theta == 0:
-            pytest.skip("Not an extended family with estimated theta")
-        theta = float(model.family.get_theta(transformed=True)[0])
-        assert theta > 0, f"[{smooth_key}-{family_name}] non-positive theta: {theta}"
+        def assert_model_matrix_rank() -> None:
+            X = model.X
+            total_null_dim = sum(si.n_penalties for si in model.smooth_info)
+            rank = np.linalg.matrix_rank(X)
+            assert rank >= min(X.shape) - total_null_dim, (
+                f"[{cell_id}] rank(X)={rank}, "
+                f"expected >= {min(X.shape) - total_null_dim}"
+            )
 
-    def test_model_matrix_rank(self, fitted_model):
-        """Rank(X) >= p - total_null_space_dim (§18.1 invariant 4)."""
-        smooth_key, family_name, model = fitted_model
-        X = model.X
-
-        # Sum null space dimensions across all smooth terms
-        total_null_dim = sum(
-            si.n_penalties  # each penalty contributes null space
-            for si in model.smooth_info
-        )
-        # Rank check (numerical rank via SVD)
-        rank = np.linalg.matrix_rank(X)
-        # Conservative: rank >= p - total_null_dim (p for full model with intercept)
-        # In practice rank should equal p for well-posed GAMs
-        assert rank >= min(X.shape) - total_null_dim, (
-            f"[{smooth_key}-{family_name}] rank(X)={rank}, "
-            f"expected >= {min(X.shape) - total_null_dim}"
-        )
+        collector.check("convergence", assert_convergence)
+        collector.check("deviance non-negative", assert_deviance_non_negative)
+        collector.check("finite converged values", assert_no_nan_in_converged)
+        collector.check("EDF bounds", assert_edf_bounds)
+        collector.check("Vp symmetric PSD", assert_vp_symmetric_psd)
+        collector.check("penalty PSD", assert_penalty_psd)
+        collector.check("theta positive", assert_theta_positive)
+        collector.check("model matrix rank", assert_model_matrix_rank)
+        collector.raise_if_any(cell_id)
