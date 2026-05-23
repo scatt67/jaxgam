@@ -1,8 +1,9 @@
 # Dense Random Effects (`bs="re"`) Implementation Design
 
-**Status:** Design Phase  
-**Date:** 2026-04-08  
-**Branch:** `add-dense-random-effects`
+- **Status:** Implemented
+- **Design Date:** 2026-04-08
+- **Completion Date:** 2026-05-23
+- **Branch:** `add-dense-random-effects`
 
 ---
 

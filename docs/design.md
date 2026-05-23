@@ -387,7 +387,7 @@ The tier plan above describes the *full library vision*. This section describes 
 |---|---|---|
 | **Execution paths** | Dense-GPU (JAX) + Dense-CPU (NumPy reference) | Zero exotic dependencies. `uv sync` works everywhere. No CHOLMOD, no Ray, no Dask. |
 | **Families** | Gaussian, Binomial, Poisson, Gamma | ~90% of applied GAM usage. All have closed-form working weights - no AD needed for inner loop. |
-| **Smooths** | TPRS (`tp`/`ts`), cubic regression (`cr`/`cs`/`cc`), tensor products (`te`/`ti`), factor-by (`s(x, by=fac)`) | The workhorses. Factor-by is an assembly pattern, not a new basis type - low marginal cost. |
+| **Smooths** | TPRS (`tp`/`ts`), cubic regression (`cr`/`cs`/`cc`), tensor products (`te`/`ti`), factor-by (`s(x, by=fac)`), dense random effects (`bs="re"`) | The workhorses. Factor-by is an assembly pattern, not a new basis type - low marginal cost. Dense random effects reuse the standard penalized smooth path. |
 | **Links** | identity, log, logit, inverse, probit, cloglog, sqrt | All standard links for the four families. |
 | **Methods** | REML, ML | Newton optimizer with exact Hessian. GCV/UBRE are trivial to add but lower priority. |
 | **Features** | `gam()`, `predict()`, `summary()`, `plot()` | Core API. No `bam()`, no `gamm()`, no `anova.gam`. |
@@ -405,7 +405,7 @@ The tier plan above describes the *full library vision*. This section describes 
 | **Extended families** (NB, Tweedie, Beta, SHASH, Cox PH) | Each needs stable forward-pass implementation and thorough finite-difference validation across extreme parameter regions. Tweedie additionally requires `custom_jvp` for its series evaluation. Manageable risk, but best done with a working v1.0 baseline. | v1.1 |
 | **fREML / Fellner-Schall** | Approximation-based optimizers. Need the exact Newton REML baseline to validate against. | v1.1 |
 | **P-splines** (`ps`/`cp`) | Lower priority than TPRS and cubic. Easy to add but increases test surface. | v1.1 |
-| **`bs="re"` / `bs="fs"`** | Random effects and factor-smooth interactions need Sparse-CPU for realistic cardinalities. | v1.1 |
+| **High-cardinality random effects / `bs="fs"`** | Dense `bs="re"` is supported for modest cardinality. Realistic high-cardinality random effects and factor-smooth interactions need Sparse-CPU. | v1.1 |
 | **Multi-GPU SPMD** (Section 16) | Entire distributed story - Ray bootstrap, SPMD sharding, SetupManifest, multi-host. | v1.2 |
 | **Out-of-core** (ChunkedJAXProvider) | Data-larger-than-memory. Requires IFT for REML, chunk streaming. | v1.2 |
 | **`gamm()` via PQL** | Notoriously tricky. Needs `lme4`-style mixed model machinery. | v1.2+ |
@@ -418,7 +418,7 @@ This list must appear in the README, not buried in a design doc:
 1. **Fit models with > ~5000 basis functions.** No sparse solver. Factor-by with many levels or large tensor products will hit the dense memory ceiling.
 2. **Fit negative binomial, Tweedie, or other count/continuous mixture models.** Only Gaussian, Binomial, Poisson, Gamma.
 3. **Fit models on datasets with > ~10M rows.** No chunked processing. Dense X must fit in memory.
-4. **Use random effects (`bs="re"`) or factor-smooth interactions (`bs="fs"`).** These need sparse linear algebra for realistic cardinalities.
+4. **Fit high-cardinality random effects or factor-smooth interactions (`bs="fs"`).** Dense `bs="re"` is supported for modest cardinality, but sparse linear algebra is needed for large random-effect designs.
 5. **Distribute fitting across multiple GPUs or hosts.** Single-device only.
 6. **Fit GAMMs with correlated random effects.** No `gamm()`.
 
