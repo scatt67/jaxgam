@@ -72,6 +72,7 @@ REML/ML smoothing parameter selection.
 | `te(x1, x2)` | Tensor product smooth |
 | `ti(x1, x2)` | Tensor interaction (no main effects) |
 | `s(x, by=fac)` | Factor-by smooth (separate curve per level) |
+| `s(g, bs='re')` | Dense random effect smooth |
 
 ### Post-estimation
 
@@ -95,7 +96,9 @@ These are deliberate scope boundaries, not bugs:
    extended families are not yet available.
 3. **Dense design matrix must fit in memory.** Datasets with > ~10M rows
    require chunked processing, which is not implemented.
-4. **No random effects.** `bs="re"` and `bs="fs"` require sparse linear algebra.
+4. **Dense random effects only.** `bs="re"` is supported for modest
+   cardinality. High-cardinality random effects and `bs="fs"` require
+   sparse linear algebra, which is not implemented.
 5. **Single device only.** No multi-GPU or distributed fitting.
 6. **No GAMM.** Correlated random effects (`gamm()`) are not supported.
 

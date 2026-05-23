@@ -161,6 +161,15 @@ $MGCV_SOURCE/
 
 **Key detail:** mgcv detects factor vs numeric `by` using `is.factor()`. Integers are NOT treated as factors. Character vectors are NOT automatically converted. Only explicit R factors trigger the factor-by path.
 
+#### Task 1.8a - Dense Random Effects (`bs="re"`)
+
+| R file | Function | What it does |
+|---|---|---|
+| `R/smooth.r` | `smooth.construct.re.smooth.spec()` | Maps to `jaxgam/smooths/random_effects.py`. Builds the dense `~v1:v2:... - 1` interaction model matrix, sets the full-rank identity penalty, and opts out of side constraints. |
+| `R/smooth.r` | `Predict.matrix.random.effect()` | Maps to `jaxgam/smooths/random_effects.py`. Rebuilds the interaction matrix for prediction and sets non-finite entries from unseen factor levels to zero. |
+
+**Key detail:** `k` is ignored for `bs="re"`; the basis dimension is the number of columns in `model.matrix(~v1:v2:... - 1)`. The full-rank penalty means no centering constraint is required.
+
 #### Task 1.9 - Identifiability Constraints
 
 | R file | Function | What it does |

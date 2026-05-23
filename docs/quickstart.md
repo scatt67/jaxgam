@@ -183,7 +183,52 @@ with its own smoothing parameter.
 **Important:** The factor column must be `pd.Categorical` (or string
 dtype) so jaxgam recognizes it as a factor.
 
-## 9. Prediction
+## 9. Dense random effects
+
+Use `bs='re'` for simple independent random effects represented as dense
+penalized smooths. This is appropriate for modest numbers of levels that
+fit comfortably in the dense model matrix.
+
+```python
+rng = np.random.default_rng(42)
+n = 300
+groups = [f"g{i}" for i in range(20)]
+g = rng.choice(groups, size=n)
+x = rng.uniform(0, 1, n)
+group_effect = rng.normal(0, 0.7, len(groups))
+effect_lookup = dict(zip(groups, group_effect, strict=True))
+y = (
+    np.sin(2 * np.pi * x)
+    + np.array([effect_lookup[level] for level in g])
+    + rng.normal(0, 0.25, n)
+)
+
+data = pd.DataFrame({
+    "x": x,
+    "g": pd.Categorical(g),
+    "y": y,
+})
+
+results = GAM("y ~ s(x, k=10, bs='cr') + s(g, bs='re')").fit(data)
+```
+
+`s(g, bs='re')` adds one penalized coefficient per group level. A
+random-slope term without a random intercept is:
+
+```python
+results = GAM("y ~ s(x, g, bs='re')").fit(data)
+```
+
+Use both terms when you want random intercepts and random slopes:
+
+```python
+results = GAM("y ~ s(g, bs='re') + s(x, g, bs='re')").fit(data)
+```
+
+When predicting with an unseen factor level, the random-effect
+contribution is set to zero, matching mgcv's `predict.gam()` behavior.
+
+## 10. Prediction
 
 ### Self-prediction
 
@@ -211,7 +256,7 @@ X_new = results.predict_matrix(newdata)
 # Manual prediction: eta = X_new @ results.coefficients
 ```
 
-## 10. Summary
+## 11. Summary
 
 `summary()` prints and returns a summary object with parametric
 coefficient tests, smooth term significance tests (Wood 2013), and
@@ -227,7 +272,7 @@ Output includes:
   statistics, and p-values
 - R-squared, deviance explained, scale estimate
 
-## 11. Plotting
+## 12. Plotting
 
 `plot()` produces one panel per smooth term.
 
@@ -253,7 +298,7 @@ For 1D smooths, `plot()` shows the partial effect with shaded
 confidence bands. For 2D tensor products, it shows filled contour
 plots. Factor-by smooths produce one panel per level.
 
-## 12. Fitting options
+## 13. Fitting options
 
 ### Smoothing parameter method
 
@@ -284,7 +329,7 @@ offset = np.zeros(n)
 results = GAM("y ~ s(x)").fit(data, weights=weights, offset=offset)
 ```
 
-## 13. GAMResults attributes
+## 14. GAMResults attributes
 
 `fit()` returns a `GAMResults` frozen dataclass. All attributes are
 read-only:
