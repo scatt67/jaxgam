@@ -1219,6 +1219,9 @@ class NewtonOptimizer:
         if fd.n_penalties == 0:
             log_lambda = jnp.zeros(0)
             S = fd.S_lambda(log_lambda)
+            log_theta = None
+            if fd.family.n_theta > 0:
+                log_theta = jnp.asarray(fd.family.get_theta(transformed=False))
             pirls_result = pirls_loop(
                 fd.X,
                 fd.y,
@@ -1228,6 +1231,7 @@ class NewtonOptimizer:
                 fd.wt,
                 fd.offset,
                 tol=self._pirls_tol,
+                log_theta=log_theta,
             )
             criterion = self._make_criterion(pirls_result)
             score = criterion.score(log_lambda)
@@ -1254,6 +1258,11 @@ class NewtonOptimizer:
         if self._joint_scale:
             # Run initial PIRLS to get Fletcher scale for log_phi init
             S_init = fd.S_lambda(log_lambda)
+            log_theta_init_for_pirls = None
+            if self._joint_theta:
+                log_theta_init_for_pirls = jnp.asarray(
+                    fd.family.get_theta(transformed=False)
+                )
             pirls_init = pirls_loop(
                 fd.X,
                 fd.y,
@@ -1263,6 +1272,7 @@ class NewtonOptimizer:
                 fd.wt,
                 fd.offset,
                 tol=self._pirls_tol,
+                log_theta=log_theta_init_for_pirls,
             )
             edf_init = estimate_edf(pirls_init.XtWX, pirls_init.L)
             phi_init = fletcher_scale(fd.y, pirls_init.mu, fd.wt, fd.family, edf_init)

@@ -266,6 +266,10 @@ def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
         np.asarray(fd.offset) if fd.offset is not None else None,
     )
 
+    log_theta = None
+    if fd.family.n_theta > 0:
+        log_theta = jnp.asarray(fd.family.get_theta(transformed=False))
+
     pirls_result = pirls_loop(
         fd.X,
         fd.y,
@@ -274,6 +278,7 @@ def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
         fd.family,
         wt=fd.wt,
         offset=fd.offset,
+        log_theta=log_theta,
     )
 
     # Compute EDF and scale

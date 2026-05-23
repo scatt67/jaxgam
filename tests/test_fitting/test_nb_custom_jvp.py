@@ -421,36 +421,35 @@ class TestIFTDbetaDtheta:
             fd.wt,
             offset,
             tol=1e-8,
+            log_theta=jnp.array([log_theta_base]),
         )
 
-        # Perturbed PIRLS: fresh families, tight tolerance for FD accuracy
+        # Perturbed PIRLS: theta varies via the dynamic ``log_theta`` argument
+        # — the production path used by ``_fit_and_score_impl`` for estimated
+        # NB. A single compiled trace handles all theta values.
         eps = 1e-5
-        fam_plus = NegativeBinomial()
-        fam_plus._log_theta = np.array([log_theta_base + eps])
-        fam_plus.n_theta = 1
         pirls_plus = pirls_loop(
             fd.X,
             fd.y,
             beta_warm,
             S_lambda,
-            fam_plus,
+            fd.family,
             fd.wt,
             offset,
             tol=1e-12,
+            log_theta=jnp.array([log_theta_base + eps]),
         )
 
-        fam_minus = NegativeBinomial()
-        fam_minus._log_theta = np.array([log_theta_base - eps])
-        fam_minus.n_theta = 1
         pirls_minus = pirls_loop(
             fd.X,
             fd.y,
             beta_warm,
             S_lambda,
-            fam_minus,
+            fd.family,
             fd.wt,
             offset,
             tol=1e-12,
+            log_theta=jnp.array([log_theta_base - eps]),
         )
 
         fd_dbeta = (

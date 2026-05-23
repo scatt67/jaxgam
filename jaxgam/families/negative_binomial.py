@@ -315,6 +315,18 @@ class NegativeBinomial(ExtendedFamily):
             f"link={type(self.link).__name__})"
         )
 
+    def _static_cache_key(self) -> tuple:
+        # When theta is estimated (n_theta == 1), it flows through PIRLS
+        # as a dynamic JAX argument and does not affect the trace, so the
+        # base cache key is sufficient. When theta is fixed (n_theta == 0),
+        # ``variance``/``dev_resids`` read ``self._log_theta`` directly
+        # inside the JIT trace, so theta becomes baked into the compiled
+        # executable and must be part of the cache key.
+        key = super()._static_cache_key()
+        if self.n_theta == 0:
+            key = (*key, float(self._log_theta[0]))
+        return key
+
 
 # ------------------------------------------------------------------
 # Stable lgamma difference with custom_jvp for AD
