@@ -105,7 +105,7 @@ mgcv ↔ JaxGAM mapping.
 Other in-scope items (apply to both pathways):
 - All five mgcv kernels: spherical, power exponential, Matérn ν=3/2,
   Matérn ν=5/2, Matérn ν=7/2 (selected via the `kernel="..."` kwarg —
-  see §1.6 for the full name list and aliases).
+  see §1.6 for the full name list).
 - Stationary vs non-stationary modes (selected via the `stationary=`
   bool kwarg).
 - Auto-selected `ρ` (Kammann–Wand default = max pairwise distance) and
@@ -272,14 +272,14 @@ instead.
 
 | Argument | Type | Default | Effect |
 |---|---|---|---|
-| `kernel` | str | `"matern_3_2"` | One of `"spherical"`, `"power_exponential"`, `"matern_3_2"`, `"matern_5_2"`, `"matern_7_2"`. Aliases also accepted: `"power"`, `"matern32"`, `"matern52"`, `"matern72"`. |
+| `kernel` | str | `"matern_3_2"` | One of `"spherical"`, `"power_exponential"`, `"matern_3_2"`, `"matern_5_2"`, `"matern_7_2"`. Case-insensitive; no aliases. |
 | `rho` | float > 0 | auto (max pairwise knot distance) | Kernel range. |
 | `power` | float in (0, 2] | `1.0` | Only used by `kernel="power_exponential"`. `2.0` ⇒ squared-exponential / Gaussian. |
 | `stationary` | bool | `False` | If True, drop the linear-trend null space; keep only the intercept. |
 | `xt` | dict | `{}` | `max_knots` (int, default 2000), `seed` (int, default 1). |
 
 Passing `m=...` to a GP smooth raises `ValueError` from
-`parse_gp_config`:
+`GaussianProcessSmooth.__init__`:
 
 > `mgcv-style \`m=\` is not supported for JaxGAM GP smooths. Use`
 > `\`kernel=\`, \`rho=\`, \`power=\`, and \`stationary=\` instead.`
@@ -289,43 +289,23 @@ mgcv's `m` only at the R-bridge boundary (see §11.2's
 `gp_config_to_mgcv_m` helper), so R-parity tests still drive mgcv
 through its native API end-to-end.
 
-**Internal config object.** `parse_gp_config(extra_args)` returns a
-frozen `GPConfig` dataclass that the smooth class stores as
-`self._config`. The resolved `ρ` (the actual value used at fit time,
-auto-derived or user-supplied) is stored separately as
-`self._resolved_rho` because it is frozen at setup and reused for all
-predictions.
-
-```python
-# jaxgam/smooths/gp_kernels.py
-
-from dataclasses import dataclass
-from enum import StrEnum
-
-
-class GPKernelName(StrEnum):
-    SPHERICAL = "spherical"
-    POWER_EXPONENTIAL = "power_exponential"
-    MATERN_3_2 = "matern_3_2"
-    MATERN_5_2 = "matern_5_2"
-    MATERN_7_2 = "matern_7_2"
-
-
-@dataclass(frozen=True)
-class GPConfig:
-    kernel: GPKernelName = GPKernelName.MATERN_3_2
-    stationary: bool = False
-    rho: float | None = None      # None ⇒ auto (max pairwise distance)
-    power: float = 1.0            # only consulted by power_exponential
-```
+**Where the kwargs live.** No intermediate config dataclass. The smooth
+class consumes `spec.extra_args` directly in `__init__`: the kernel
+string is resolved via `gp_kernel_registry.get_instance(...)` into
+`self._kernel`; the other three knobs become plain instance attributes
+(`self._rho`, `self._power`, `self._stationary`). The resolved `ρ` —
+the actual value used at fit time, auto-derived from data or
+user-supplied — is captured at setup time as `self._resolved_rho` and
+reused for all predictions.
 
 **Kernel evaluation is delegated to kernel classes.** Each kernel is a
 small class with `evaluate(e, *, power)` and `validate(power)`. The
 module-level `gp_kernel_registry` is an instance of the existing
 generic `jaxgam.registry.Registry[T]` (same abstraction used by
-`smooth_registry`, `family_registry`, `link_registry`), so we get
-case-insensitive lookups, runtime `register()` for user extension,
-and instance caching for free:
+`smooth_registry`, `family_registry`, `link_registry`), keyed by the
+canonical kernel name — no aliases, no parallel name tables. The
+registry handles case-insensitive lookup and runtime extension via
+`register()`:
 
 ```python
 # jaxgam/smooths/gp_kernels.py
@@ -382,23 +362,25 @@ gp_kernel_registry: Registry[GPKernel] = Registry(
     {
         "spherical":         SphericalKernel,
         "power_exponential": PowerExponentialKernel,
-        "power":             PowerExponentialKernel,
         "matern_3_2":        Matern32Kernel,
-        "matern32":          Matern32Kernel,
         "matern_5_2":        Matern52Kernel,
-        "matern52":          Matern52Kernel,
         "matern_7_2":        Matern72Kernel,
-        "matern72":          Matern72Kernel,
     },
     name="GP kernel",
-    cache_instances=True,
 )
 ```
 
 Lookups go through `gp_kernel_registry.get_instance(name)` — which
-returns a cached `GPKernel` instance, or raises `KeyError` with an
+returns a `GPKernel` instance, or raises `KeyError` with an
 "Available: ..." message if the name is unknown. No bespoke wrapper
 function is needed.
+
+**Why no aliases, no canonical-name attribute, no enum.** The registry's
+keys *are* the canonical names. There is exactly one accepted spelling
+per kernel; case-insensitive lookup (provided by `Registry` itself) is
+the only normalization. Any second table — an `_CANONICAL_FOR` alias
+map, a `canonical_name: ClassVar[str]` on each kernel, a `GPKernelName`
+StrEnum — would duplicate what the registry already encodes.
 
 **Why kernel *classes* not a switch.** Five branches would be borderline
 acceptable, but `PowerExponentialKernel.validate` (which enforces
@@ -407,12 +389,12 @@ acceptable, but `PowerExponentialKernel.validate` (which enforces
 `evaluate`. Adding a future kernel becomes "new class + new registry
 row" instead of "edit the switch and the validation block".
 
-**Why this registry, not direct imports.** `parse_gp_config` receives a
-*string* from the formula (e.g. `kernel="matern_3_2"`); it needs a
-runtime name → instance lookup. Reusing the existing `Registry[T]`
-generic also documents the public name surface (canonical names +
-aliases) in one place, gives us case-insensitive matching, and lets
-users register custom kernels at runtime via `register()` exactly the
+**Why this registry, not direct imports.** `GaussianProcessSmooth.__init__`
+receives a *string* from `spec.extra_args` (e.g. `kernel="matern_3_2"`);
+it needs a runtime name → instance lookup. Reusing the existing
+`Registry[T]` generic also documents the public name surface (canonical
+names) in one place, gives us case-insensitive matching, and lets users
+register custom kernels at runtime via `register()` exactly the
 same way they would for smooths or families.
 
 **Stationarity is not part of the kernel registry.** It controls the
@@ -921,8 +903,7 @@ class GaussianProcessSmooth(Smooth):
     `spec.extra_args`):
         kernel : str, default "matern_3_2"
             One of {"spherical", "power_exponential",
-            "matern_3_2", "matern_5_2", "matern_7_2"}. Aliases
-            {"power", "matern32", "matern52", "matern72"} also accepted.
+            "matern_3_2", "matern_5_2", "matern_7_2"}. Case-insensitive.
         rho : float, optional
             Kernel range (> 0). If omitted, defaults to the
             Kammann–Wand maximum pairwise knot distance.
@@ -942,7 +923,7 @@ class GaussianProcessSmooth(Smooth):
     mgcv exposes the same four knobs through a single signed numeric
     vector `m = c(sign·type, rho, power)`. JaxGAM intentionally does
     NOT accept `m=` — passing `m=` raises `ValueError` from
-    `parse_gp_config`. See §1.6 for the rationale and §6.4 for the
+    ``__init__``. See §1.6 for the rationale and §6.4 for the
     mgcv ↔ JaxGAM mapping table.
     """
 
@@ -951,14 +932,36 @@ class GaussianProcessSmooth(Smooth):
         # Standard centering and gam.side participate
         # (no _has_centering_constraint override, no side_constrain override)
 
+        # Resolve the GP-specific kwargs from spec.extra_args. The
+        # formula parser already ran ast.literal_eval on each value, so
+        # we just read what's there and look the kernel string up in
+        # gp_kernel_registry. No intermediate config dataclass.
+        if "m" in spec.extra_args:
+            raise ValueError(
+                "mgcv-style `m=` is not supported for JaxGAM GP smooths. "
+                "Use `kernel=`, `rho=`, `power=`, and `stationary=` instead. "
+                "See docs/gaussian_process/design.md §6.4 for the mapping."
+            )
+
+        kernel_name = spec.extra_args.get("kernel", "matern_3_2")
+        self._kernel: GPKernel = gp_kernel_registry.get_instance(kernel_name)
+
+        self._rho: float | None = spec.extra_args.get("rho")
+        if self._rho is not None and self._rho <= 0.0:
+            raise ValueError(
+                f"GP `rho` must be positive (or omitted for auto-selection); "
+                f"got {self._rho!r}."
+            )
+        self._power: float = spec.extra_args.get("power", 1.0)
+        self._stationary: bool = spec.extra_args.get("stationary", False)
+        self._kernel.validate(self._power)
+
         # Cached at setup
-        self._config: GPConfig | None = None       # parsed kwargs
         self._resolved_rho: float | None = None    # rho actually used (frozen at setup)
         self._shift: np.ndarray | None = None      # (d,)
         self._knt: np.ndarray | None = None        # (nk, d) — centered
         self._E_knot: np.ndarray | None = None     # (nk, nk) — knot-knot kernel matrix (un-truncated input to _slanczos); exposed for R-parity tests (Commit G)
         self._UZ: np.ndarray | None = None         # (nk, k)
-        self._stationary: bool = False             # mirrors self._config.stationary
         self._X: np.ndarray | None = None
         self._S: np.ndarray | None = None
 ```
@@ -967,32 +970,32 @@ class GaussianProcessSmooth(Smooth):
 
 ```python
 def setup(self, data: dict[str, np.ndarray]) -> None:
-    """Construct GP basis from training data."""
-    # 1. Parse explicit kernel kwargs (rejects mgcv-style `m=`).
-    config = parse_gp_config(self.spec.extra_args)
-    self._config = config
-    self._stationary = config.stationary
+    """Construct GP basis from training data.
 
-    # 2. Read xt (max_knots, seed)
+    Kernel/rho/power/stationary were already resolved in ``__init__`` —
+    this method handles the data-dependent half of construction (knots,
+    eigendecomp, design + penalty matrices).
+    """
+    # 1. Read xt (max_knots, seed)
     xt = self.spec.extra_args.get("xt", {})
     max_knots = xt.get("max_knots", xt.get("max.knots", 2000))
     seed = xt.get("seed", 1)
 
-    # 3. Stack covariates into (n, d) matrix
+    # 2. Stack covariates into (n, d) matrix
     variables = self.spec.variables
     d = len(variables)
     x = np.column_stack([np.asarray(data[v], dtype=float) for v in variables])
     n = x.shape[0]
 
-    # 4. Knot harvesting
+    # 3. Knot harvesting
     knt = self._harvest_knots(x, max_knots, seed)
     nk = knt.shape[0]
 
-    # 5. Resolve dimensions and validate cardinality BEFORE building E.
+    # 4. Resolve dimensions and validate cardinality BEFORE building E.
     #    nk < bs_dim would make k = bs_dim - null_space_dim larger than
     #    available knots and the eigendecomp would be ill-posed; also,
     #    a degenerate nk == 1 case would feed rho = max(distances) = 0
-    #    into _gp_E and trigger divide-by-zero. Catch both up front.
+    #    into self._gp_E and trigger divide-by-zero. Catch both up front.
     null_space_dim = 1 if self._stationary else d + 1
     bs_dim = self._default_bs_dim(self.spec.k, d, nk, null_space_dim)
     k = bs_dim - null_space_dim
@@ -1003,15 +1006,15 @@ def setup(self, data: dict[str, np.ndarray]) -> None:
             f"(nk={nk}, bs_dim={bs_dim})."
         )
 
-    # 6. Centre covariates and knots.
+    # 5. Centre covariates and knots.
     self._shift = x.mean(axis=0)
     x_c = x - self._shift
     knt_c = knt - self._shift
     self._knt = knt_c                                # store centered knots
 
-    # 7. Build E on centered knots; resolve rho if auto. _gp_E guards
-    #    against rho <= 0 (degenerate spatial extent).
-    E, rho_resolved = _gp_E(knt_c, knt_c, config)
+    # 6. Build E on centered knots; resolve rho if auto. self._gp_E
+    #    guards against rho <= 0 (degenerate spatial extent).
+    E, rho_resolved = self._gp_E(knt_c, knt_c)
     self._resolved_rho = rho_resolved
     self._E_knot = E                                  # cached for R-parity tests
 
@@ -1053,92 +1056,57 @@ def setup(self, data: dict[str, np.ndarray]) -> None:
     self._is_setup = True
 ```
 
-### 5.3 Kernel Evaluator and Config Parser
+### 5.3 Kernel Evaluator (Method) and Kernel Module
 
-Both live as **module-level functions** in `jaxgam/smooths/gp_kernels.py`
-(not methods on the smooth class), so kernel math can be unit-tested in
-isolation and the kernel module has no dependency on the smooth class.
+`jaxgam/smooths/gp_kernels.py` exposes only the kernel surface: the
+`GPKernel` ABC, the five concrete kernel classes, and
+`gp_kernel_registry`. There is no `GPConfig` dataclass and no
+`parse_gp_config` helper. The smooth class reads `spec.extra_args`
+directly in `__init__` (see §5.1) — the kernel lookup string becomes
+`self._kernel` (a kernel instance), and the other knobs become plain
+instance attributes (`self._rho`, `self._power`, `self._stationary`).
+
+Kernel evaluation lives on the smooth as `self._gp_E`, since it relies
+on the resolved kernel/rho/power state. Keeping it as a method means
+the smooth owns the rho-resolution policy (auto vs user-supplied vs
+re-used-at-predict) without threading a config object through.
 
 ```python
-# jaxgam/smooths/gp_kernels.py
-
-def parse_gp_config(extra_args: dict[str, object]) -> GPConfig:
-    """Build a GPConfig from a smooth spec's extra_args.
-
-    Rejects mgcv-style `m=` with a clear ValueError pointing at the
-    Python-native kwargs (see §1.6, §6.4).
-    """
-    if "m" in extra_args:
-        raise ValueError(
-            "mgcv-style `m=` is not supported for JaxGAM GP smooths. "
-            "Use `kernel=`, `rho=`, `power=`, and `stationary=` instead. "
-            "See docs/gaussian_process/design.md §6.4 for the mapping."
-        )
-
-    kernel_raw = str(extra_args.get("kernel", GPKernelName.MATERN_3_2.value))
-    # Normalize alias → canonical via the registry's case-insensitive
-    # lookup, then promote to the GPKernelName enum.
-    if kernel_raw.lower() not in gp_kernel_registry:
-        raise KeyError(  # registry-style message
-            f"Unknown GP kernel: {kernel_raw!r}. "
-            f"Available: {', '.join(gp_kernel_registry.available)}"
-        )
-    canonical = _CANONICAL_FOR.get(kernel_raw.lower(), kernel_raw.lower())
-    kernel = GPKernelName(canonical)
-
-    rho_raw = extra_args.get("rho", None)
-    rho = None if rho_raw is None else float(rho_raw)
-    if rho is not None and rho <= 0.0:
-        raise ValueError(
-            f"GP `rho` must be positive (or omitted for auto-selection); got {rho!r}."
-        )
-
-    power = float(extra_args.get("power", 1.0))
-    stationary = bool(extra_args.get("stationary", False))
-
-    return GPConfig(
-        kernel=kernel,
-        stationary=stationary,
-        rho=rho,
-        power=power,
-    )
-
+# Method on GaussianProcessSmooth (jaxgam/smooths/gaussian_process.py)
 
 def _gp_E(
+    self,
     x: np.ndarray,
     xk: np.ndarray,
-    config: GPConfig,
+    *,
     resolved_rho: float | None = None,
 ) -> tuple[np.ndarray, float]:
-    """Evaluate correlation kernel between rows of x and xk.
+    """Evaluate the correlation kernel between rows of x and xk.
 
     Parameters
     ----------
     x : (n, d) array
     xk : (nk, d) array
-    config : GPConfig
-        Parsed kernel configuration. `config.stationary` is *not* used
-        here; it controls the null space (`_gp_T`, §5.6) only.
     resolved_rho : float, optional
-        If provided, used directly — this is the path the smooth class
-        takes at prediction time to re-apply the training-time rho. If
-        None, falls back to `config.rho` (user-supplied), and finally
-        to the Kammann–Wand max-pairwise-distance default.
+        If provided, used directly — this is the path predict_matrix
+        takes to re-apply the training-time rho. If None, falls back
+        to ``self._rho`` (user-supplied), and finally to the
+        Kammann–Wand max-pairwise-distance default.
 
     Returns
     -------
     E : (n, nk) array
         Kernel-evaluated correlation matrix.
     rho_resolved : float
-        The rho actually used. Cached on the smooth at setup; passed
-        back as `resolved_rho` for prediction calls.
+        The rho actually used. At setup, this is cached on
+        ``self._resolved_rho`` for later prediction calls.
     """
     distances = _compute_distance_matrix(x, xk)
 
     if resolved_rho is not None:
         rho = float(resolved_rho)
-    elif config.rho is not None:
-        rho = float(config.rho)
+    elif self._rho is not None:
+        rho = float(self._rho)
     else:
         rho = float(distances.max())
 
@@ -1153,17 +1121,15 @@ def _gp_E(
             "identical) — check the data and the `max_knots` setting."
         )
 
-    kernel = gp_kernel_registry.get_instance(config.kernel.value)
-    kernel.validate(config.power)
-
-    E = kernel.evaluate(distances / rho, power=config.power)
+    E = self._kernel.evaluate(distances / rho, power=self._power)
     return E, rho
 ```
 
-`_CANONICAL_FOR` is a small alias-resolution table sitting next to the
-registry — it normalizes `"matern32"` → `"matern_3_2"` etc. so the
-`GPConfig` always holds a canonical `GPKernelName` enum value, while
-the `Registry` keeps accepting both spellings for `get_instance()`.
+The kernel string from `spec.extra_args["kernel"]` is whatever literal
+the formula parser produced via `ast.literal_eval`. `__init__` validates
+that string against `gp_kernel_registry` (which is case-insensitive)
+and stashes the resolved instance — no re-normalization of the string
+itself. The kernel module has no dependency on the smooth class.
 
 ### 5.4 Shared Kriging Infrastructure in `utils.py`
 
@@ -1375,31 +1341,27 @@ differences vanish in fitted values / deviance comparisons.
 
 ### 5.6 Design Matrix Construction
 
-Both helpers live as **module-level functions** in `gp_kernels.py`
-(parallel to `_gp_E`), so the smooth class just composes them with the
-training-time `_resolved_rho`:
+`_gp_T` is a method on the smooth — same rationale as `_gp_E` (§5.3):
+the null-space shape depends on `self._stationary`, which is already
+resolved in `__init__`. `_build_design` then composes the two methods
+with the training-time `self._resolved_rho`:
 
 ```python
-# jaxgam/smooths/gp_kernels.py
+# Methods on GaussianProcessSmooth (jaxgam/smooths/gaussian_process.py)
 
-def _gp_T(x_centered: np.ndarray, stationary: bool) -> np.ndarray:
+def _gp_T(self, x_centered: np.ndarray) -> np.ndarray:
     """Null-space basis: intercept (+ linear trend if non-stationary)."""
     n = x_centered.shape[0]
-    if stationary:
+    if self._stationary:
         return np.ones((n, 1))
     return np.column_stack([np.ones(n), x_centered])
 
 
-# jaxgam/smooths/gaussian_process.py
-
 def _build_design(self, x_centered: np.ndarray) -> np.ndarray:
     """Build [E(x, knt) @ UZ | T(x)] for centered x."""
-    E_xn, _ = _gp_E(
-        x_centered, self._knt, self._config,
-        resolved_rho=self._resolved_rho,
-    )
-    pen_block = E_xn @ self._UZ                          # (n, k)
-    null_block = _gp_T(x_centered, self._stationary)     # (n, M)
+    E_xn, _ = self._gp_E(x_centered, self._knt, resolved_rho=self._resolved_rho)
+    pen_block = E_xn @ self._UZ                  # (n, k)
+    null_block = self._gp_T(x_centered)          # (n, M)
     return np.hstack([pen_block, null_block])
 ```
 
@@ -1433,15 +1395,14 @@ def build_penalty_matrices(self):
 
 ### 5.9 Stationarity Decoding
 
-No bespoke helper is needed: `parse_gp_config` already pulls the
-`stationary` bool straight out of `extra_args` (default `False`) and
-the smooth class mirrors it onto `self._stationary` for the
-null-space builder (`_gp_T`, §5.6).
+No bespoke helper is needed: `__init__` already pulls the
+`stationary` bool straight out of `spec.extra_args` (default `False`)
+and stores it as `self._stationary` for the null-space builder
+(`_gp_T`, §5.6).
 
 ```python
-# inside parse_gp_config (excerpt — see §5.3 for the full body):
-stationary = bool(extra_args.get("stationary", False))
-return GPConfig(..., stationary=stationary, ...)
+# inside GaussianProcessSmooth.__init__ (excerpt — see §5.1 for full body):
+self._stationary = spec.extra_args.get("stationary", False)
 ```
 
 No `_decide_stationary` static method; no parsing of signed numbers.
@@ -1490,8 +1451,8 @@ GP exposes its kernel and runtime knobs through **Python literals**
 in the formula string. The supported keyword arguments are documented
 in §1.6; the parser is generic and has no GP-specific code — it just
 surfaces everything onto `SmoothSpec.extra_args`, and
-`parse_gp_config` (§5.3) materializes a `GPConfig` from those kwargs
-at smooth-setup time.
+`GaussianProcessSmooth.__init__` (§5.1) reads those kwargs directly
+when the smooth is constructed.
 
 ### 6.2 Supported Formula Patterns
 
@@ -1518,30 +1479,30 @@ s(x, bs="gp", xt={"max_knots": 500, "seed": 42})
 ```
 
 Each translates to a `SmoothSpec(variables=[...], bs="gp",
-extra_args={...})`. Aliases (`"power"`, `"matern32"`, `"matern52"`,
-`"matern72"`) are accepted by the registry and normalized to the
-canonical `GPKernelName` value inside `parse_gp_config`.
+extra_args={...})`. The five `kernel=` spellings listed in §1.6 are the
+only ones the registry knows (case-insensitive); there is no alias
+layer.
 
-### 6.3 `m=` Is Rejected at Setup
+### 6.3 `m=` Is Rejected at Smooth Construction
 
-`parse_gp_config` raises `ValueError` if `extra_args` contains an `m`
-key:
+`GaussianProcessSmooth.__init__` raises `ValueError` if `spec.extra_args`
+contains an `m` key:
 
 > mgcv-style `m=` is not supported for JaxGAM GP smooths. Use
 > `kernel=`, `rho=`, `power=`, and `stationary=` instead. See
 > docs/gaussian_process/design.md §6.4 for the mapping.
 
 This is a deliberate divergence from mgcv. The rejection lives in
-`parse_gp_config` (Phase 1 smooth setup), not the parser — the parser
-remains generic and has no GP knowledge. Pinning the rejection as a
-**positive parser test** (`m=` parses fine into `extra_args`) **plus**
-a **smooth-construct negative test** (`GaussianProcessSmooth(spec).setup(data)`
-raises on `extra_args["m"]`) is the contract Commit D / E exercise
-(§12.2).
+the smooth's `__init__` (Phase 1, before any data is touched) — the
+parser remains generic and has no GP knowledge. Pinning the rejection
+as a **positive parser test** (`m=` parses fine into `extra_args`)
+**plus** a **smooth-construct negative test**
+(`GaussianProcessSmooth(spec_with_m)` raises immediately) is the
+contract Commit D / E exercise (§12.2).
 
 R-style `c(...)` continues to fail at the parser layer via
 `ast.literal_eval` (`s(x, bs='gp', m=c(3, 0.5))` raises before ever
-reaching `parse_gp_config`). Commit E keeps this as a separate
+reaching `GaussianProcessSmooth`). Commit E keeps this as a separate
 negative parser test so a future R-syntax patch breaks it loudly.
 
 ### 6.4 mgcv ↔ JaxGAM Mapping (for reference)
@@ -1873,9 +1834,9 @@ algorithm. We cannot match knot selection bit-for-bit when subsampling.
 
 | File | Description |
 |---|---|
-| `jaxgam/smooths/gp_kernels.py` | `GPKernelName` enum, `GPConfig` dataclass, `GPKernel` ABC + five kernel classes, `gp_kernel_registry` (instance of `jaxgam.registry.Registry`), `_CANONICAL_FOR` alias table, `parse_gp_config`, `_gp_E`, `_gp_T`. |
+| `jaxgam/smooths/gp_kernels.py` | `GPKernel` ABC + five concrete kernel classes; `gp_kernel_registry` (instance of `jaxgam.registry.Registry`, five canonical-name entries, no aliases). No config dataclass, no parser, no evaluation helpers — those live on `GaussianProcessSmooth` (`__init__` resolves `spec.extra_args`, `_gp_E` and `_gp_T` are methods). |
 | `jaxgam/smooths/gaussian_process.py` | `GaussianProcessSmooth` class. Imports the kernel module above. |
-| `tests/test_smooths/test_gp_kernels.py` | Unit tests for the kernel module: closed-form kernel values, `parse_gp_config` (defaults + `m=` rejection + alias resolution + invalid kernel/rho/power), `_gp_T` shapes. Lives separately from `test_gaussian_process.py` so the kernel module can be tested without the smooth class. (Optional: fold into `test_gaussian_process.py` if file count is a concern — both placements are fine.) |
+| `tests/test_smooths/test_gp_kernels.py` | Unit tests for the kernel module only: closed-form kernel values for each of the five classes, `PowerExponentialKernel.validate` power bounds, and `gp_kernel_registry` contents. Anything that depends on `GaussianProcessSmooth` instance state (`__init__` kwarg resolution, `m=` rejection, `_gp_E`, `_gp_T`) lives in `test_gaussian_process.py`. |
 | `tests/test_smooths/test_gaussian_process.py` | Smooth-class structural tests + R smooth-construct comparison. |
 | `docs/gaussian_process/implementation_plan.md` | PR-by-PR breakdown |
 
@@ -1887,7 +1848,7 @@ algorithm. We cannot match knot selection bit-for-bit when subsampling.
 | `jaxgam/smooths/tprs.py` | Delete the relocated function bodies; replace with `from jaxgam.smooths.utils import …`; swap the inline knot-subsample block for a `_subsample_knots()` call. No behavioral change. |
 | `jaxgam/smooths/registry.py` | Add `"gp": GaussianProcessSmooth`. Registration alone enables both direct GP (`s(..., bs="gp")`) and GP tensor margins (`te(..., bs="gp")` / `ti(..., bs="gp")`) — the existing `TensorProductSmooth._create_marginals()` at `tensor.py:146` dispatches through `get_smooth_class(self.spec.bs)`, so no tensor-side code change is needed. |
 | `jaxgam/smooths/tensor.py` | **No code change.** GP tensor margins are intentionally supported via the existing dispatch loop. Do **not** add a `bs == "gp"` guard. |
-| `tests/r_bridge.py` | **Extend** `RBridge.smooth_construct()` to (a) accept `knots: dict[str, np.ndarray] \| None = None` and pass it into the R-side `smoothCon(..., knots=...)` call, and (b) extract GP-specific fields `knt` and `gp.defn` from the returned smooth object alongside the existing `Xu`/`UZ`/`shift` (which are TPRS-shaped — `Xu` is empty for GP). See §2.7. **Also add** a module-level helper `gp_config_to_mgcv_m(config: GPConfig, rho: float \| None = None) -> list[float]` that converts a `GPConfig` to mgcv's `m=c(...)` numeric vector (kernel→signed type, then rho, then power for `power_exponential`). Used by `test_validation_matrix.py` and `test_gaussian_process.py` to build the R-side formulas from the Python-side `GPConfig` so the two sides cannot drift. |
+| `tests/r_bridge.py` | **Extend** `RBridge.smooth_construct()` to (a) accept `knots: dict[str, np.ndarray] \| None = None` and pass it into the R-side `smoothCon(..., knots=...)` call, and (b) extract GP-specific fields `knt` and `gp.defn` from the returned smooth object alongside the existing `Xu`/`UZ`/`shift` (which are TPRS-shaped — `Xu` is empty for GP). See §2.7. **Also add** a module-level helper `gp_config_to_mgcv_m(spec: SmoothSpec, rho: float \| None = None) -> list[float]` that converts a GP `SmoothSpec` to mgcv's `m=c(...)` numeric vector (kernel→signed type, then rho, then power for `power_exponential`). Used by `test_validation_matrix.py` and `test_gaussian_process.py` to build the R-side formulas from the Python-side spec so the two sides cannot drift. |
 | `tests/test_validation_matrix.py` | Add GP smooth configs: direct (`gp`, `gp_2d`, `gp_mixed`) and tensor (`gp_te`, optionally `gp_ti`). Default-kernel cells write `s(...bs='gp')` on both sides verbatim; kernel-specific cells (if added) build the Python formula with `kernel=`/`rho=`/etc. and the R formula via `gp_config_to_mgcv_m`. |
 | `tests/conftest.py` | Add `gp_*` data fixtures (1D, 2D direct, 2D tensor — the tensor fixture can reuse the 2D-direct data). |
 
@@ -1906,7 +1867,7 @@ test changes numerical output, the move is wrong.
 
 | File | Reason |
 |---|---|
-| `jaxgam/formula/parser.py` | `extra_args` already accepts arbitrary Python literals (`kernel="..."`, `rho=0.5`, `power=2.0`, `stationary=True`, `xt={...}`). GP-specific validation (including the `m=` rejection) lives in `parse_gp_config`, not the parser. |
+| `jaxgam/formula/parser.py` | `extra_args` already accepts arbitrary Python literals (`kernel="..."`, `rho=0.5`, `power=2.0`, `stationary=True`, `xt={...}`). GP-specific validation (including the `m=` rejection) lives in `GaussianProcessSmooth.__init__`, not the parser. |
 | `jaxgam/registry.py` | Existing generic `Registry[T]` is reused for `gp_kernel_registry` — same abstraction as `smooth_registry`, `family_registry`, `link_registry`. |
 | `jaxgam/smooths/constraints.py` | Standard centering/gam.side suffice |
 | `jaxgam/smooths/base.py` | Base interface is sufficient |
@@ -1961,15 +1922,15 @@ respect:
 
 | Where | New collected tests | Pattern |
 |---|---|---|
-| `test_gp_kernels.py` — kernel math | ~3 (parametrized over 5 kernels + ρ resolution + per-kernel validation) | `@parametrize` over `kernel` name + `_AssertCollector` |
-| `test_gp_kernels.py` — `parse_gp_config` | ~2 (defaults + alias resolution; `m=` rejection + invalid kernel/rho/power) | `_AssertCollector` |
-| `test_gp_kernels.py` — `_gp_T` | ~1 (stationary vs non-stationary shapes) | `_AssertCollector` |
+| `test_gp_kernels.py` — kernel math | ~3 (parametrized over 5 kernels via `@parametrize`; one method, one validation method, one registry-contents method) | `@parametrize` over `kernel` class + `_AssertCollector` |
+| `test_gaussian_process.py` — `__init__` resolution | ~2 (defaults / kwarg resolution; `m=` rejection + invalid kernel/rho/power; ρ resolution paths) | `_AssertCollector` |
+| `test_gaussian_process.py` — `_gp_T` | ~1 (stationary vs non-stationary shapes) | `_AssertCollector` |
 | `test_gaussian_process.py` — setup invariants | ~2-3 (one consolidated per stationarity mode + one for dimensions) | `_AssertCollector` |
 | `test_gaussian_process.py` — knot selection | ~2 (subsample reproducibility + global-RNG-untouched) | direct |
 | `test_gaussian_process.py` — prediction edge cases | ~2 (training roundtrip + out-of-support) | direct |
 | `test_gaussian_process.py` — R smooth-construct | ~3 (one per: kernel-matrix STRICT, penalty STRICT, X via `X@X.T` STRICT) — kernel parameter is a `@parametrize` axis | `@parametrize` + `_AssertCollector` |
 | `test_validation_matrix.py` — GP cells | **30** (3 configs × 5 families × 2 methods/cell), or **40-50** if tensor `gp_te` / `gp_ti` included | matrix consolidation |
-| `test_formula/test_parser.py` — GP parsing | ~3 (positive cases for `kernel=`/`rho=`/`power=`/`stationary=`/`xt`; `c(...)` raises at parser layer; `m=...` parses fine — rejection is at setup time, tested in `test_gp_kernels.py`) | `_AssertCollector` |
+| `test_formula/test_parser.py` — GP parsing | ~3 (positive cases for `kernel=`/`rho=`/`power=`/`stationary=`/`xt`; `c(...)` raises at parser layer; `m=...` parses fine — rejection is at smooth-construction time, tested in `test_gaussian_process.py`) | `_AssertCollector` |
 | **Total** | **~50-65 new collected tests** | |
 
 If a draft pushes past ~70, that's a signal the consolidation
@@ -2168,31 +2129,32 @@ pattern of `test_tprs.py`, `test_cubic.py`, `test_random_effects.py`.
   override.
 - `predict_matrix` reproduces `build_design_matrix` on training data.
 - `_shift` matches `colMeans(x)` of training data.
-- `_config` is a populated `GPConfig` and `_resolved_rho` is positive.
+- `self._kernel` is the resolved `GPKernel` instance and
+  `self._resolved_rho` is positive.
 
 **Kernel evaluator tests (no R; in `test_gp_kernels.py`):**
-- All 5 kernels evaluated at known `(d, ρ)` match closed-form formulas
-  at STRICT tolerance. Parametrize over the kernel **name string**
-  (`"spherical"`, `"power_exponential"`, `"matern_3_2"`, `"matern_5_2"`,
-  `"matern_7_2"`).
+- All 5 kernels evaluated at known scaled distances match closed-form
+  formulas at STRICT tolerance. Parametrize over the kernel **class**
+  (`SphericalKernel`, `PowerExponentialKernel`, `Matern32Kernel`,
+  `Matern52Kernel`, `Matern72Kernel`).
 - Spherical kernel is exactly 0 for `e > 1`.
 - Power-exponential with `power=2.0` matches `exp(-(d/ρ)²)`.
-- `ρ` auto-defaults to `max(distance_matrix)` when `config.rho is None`.
+- `ρ` auto-defaults to `max(distance_matrix)` when `self._rho is None`
+  (tested via `_gp_E` on a smooth instance).
 - `ρ` user-supplied (positive float) is used verbatim.
-- Alias resolution: `"matern32"` and `"matern_3_2"` produce the same
-  kernel instance (registry caches by canonical key).
 - Unknown kernel name → `KeyError` from
-  `gp_kernel_registry.get_instance`.
+  `gp_kernel_registry.get_class` (raised from
+  `GaussianProcessSmooth.__init__`).
 - `PowerExponentialKernel.validate` rejects `power ≤ 0` and `power > 2`
   with a clear ValueError; other kernels ignore `power`.
 
-**`parse_gp_config` tests (no R; in `test_gp_kernels.py`):**
-- Defaults: empty `extra_args` → Matérn 3/2, `rho=None`, `power=1.0`,
-  `stationary=False`.
-- `m=` rejection: `parse_gp_config({"m": [3, 0.5]})` raises
-  `ValueError` whose message contains both "kernel=" and "rho=".
-- Alias normalization: `{"kernel": "matern32"}` →
-  `GPKernelName.MATERN_3_2`.
+**`GaussianProcessSmooth.__init__` resolution tests (no R; in
+`test_gaussian_process.py`):**
+- Defaults: empty `extra_args` → Matérn 3/2 instance on `self._kernel`,
+  `self._rho is None`, `self._power == 1.0`, `self._stationary is False`.
+- `m=` rejection: constructing the smooth with
+  `extra_args={"m": [3, 0.5]}` raises `ValueError` whose message
+  contains both "kernel=" and "rho=".
 - `rho <= 0` raises (auto requires omission/`None`, not 0).
 
 **Stationarity tests (no R):**
@@ -2244,7 +2206,7 @@ integration safe to land.
 
 The Python side always uses `kernel=`/`rho=`/`power=`/`stationary=`
 kwargs. The R-side formula is built via
-`gp_config_to_mgcv_m(config)` (§11.2), so both sides agree on the
+`gp_config_to_mgcv_m(spec)` (§11.2), so both sides agree on the
 underlying kernel without manual translation.
 
 *Direct GP:*
@@ -2254,7 +2216,7 @@ underlying kernel without manual translation.
   for raw X (eigenvector sign ambiguity may flip column signs) and at
   STRICT for `X @ X.T` (sign-invariant).
 - All 5 kernels: compare `E` matrix at STRICT for fixed knots and the
-  matching `GPConfig` ↔ `m=c(...)` pair.
+  matching `kernel=`/`m=c(...)` pair.
 - Stationary vs non-stationary: compare null-space columns.
 
 *Tensor GP margins:* one consolidated parametrized test that

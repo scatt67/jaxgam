@@ -34,9 +34,9 @@ omitted), `power=` (float, only used by `kernel="power_exponential"`),
 `jaxgam.registry.Registry[T]` for `gp_kernel_registry`, the same
 abstraction that powers `smooth_registry`, `family_registry`, and
 `link_registry`. Passing `m=` to a GP smooth raises `ValueError` from
-`parse_gp_config`. mgcv-side conversion happens **only** at the
-R-bridge boundary via `gp_config_to_mgcv_m(config)` (Commit F). See
-design §1.6, §5.3, §6.3, §6.4.
+`GaussianProcessSmooth.__init__`. mgcv-side conversion happens **only**
+at the R-bridge boundary via `gp_config_to_mgcv_m(spec)` (Commit F).
+See design §1.6, §5.1, §5.3, §6.3, §6.4.
 
 **Consolidation discipline (load-bearing — read before any test code):**
 This plan inherits the test-suite cleanup rules from
@@ -314,14 +314,14 @@ zero numerical change to TPRS.**
 
 ---
 
-## Commit C — GP Kernel Module: Config, Registry, Evaluator, Null-Space
+## Commit C — GP Kernel Module: Classes + Registry
 
-**Goal:** Implement the GP-specific math and config plumbing in a
-dedicated `gp_kernels.py` module: `GPKernelName` enum, `GPConfig`
-dataclass, `GPKernel` ABC + five kernel classes, `gp_kernel_registry`
-(reusing `jaxgam.registry.Registry`), `parse_gp_config` (which rejects
-`m=`), `_gp_E` (takes `GPConfig`), `_gp_T` (takes `stationary` bool).
-Cover with STRICT unit tests.
+**Goal:** Implement the GP correlation-kernel surface in a dedicated
+`gp_kernels.py` module: `GPKernel` ABC, five concrete kernel classes,
+and `gp_kernel_registry` keyed by canonical name. **Nothing else** —
+no config dataclass, no parser, no evaluation/null-space helpers.
+`GaussianProcessSmooth.__init__` (Commit D) owns resolution of
+`spec.extra_args` and the `_gp_E` / `_gp_T` methods.
 
 **Design reference:** §1.6, §3.3, §5.3, §3.5, §6.3 of the design doc.
 
@@ -329,10 +329,6 @@ Cover with STRICT unit tests.
 
 1. **Create `jaxgam/smooths/gp_kernels.py`** with (in this order):
    - Module docstring (Phase 1, NumPy only; design refs §1.6, §5.3).
-   - `class GPKernelName(StrEnum)` — five canonical kernel names per
-     design §1.6.
-   - `@dataclass(frozen=True) class GPConfig` — fields `kernel`,
-     `stationary`, `rho` (`float | None`), `power` (default `1.0`).
    - `class GPKernel(ABC)` with `evaluate(e, *, power)` (abstract) and
      `validate(power)` (no-op default).
    - Five concrete kernels: `SphericalKernel`,
@@ -340,27 +336,16 @@ Cover with STRICT unit tests.
      `Matern32Kernel`, `Matern52Kernel`, `Matern72Kernel`. Closed-form
      bodies per design §3.3 / §5.3.
    - `gp_kernel_registry: Registry[GPKernel] = Registry({...},
-     name="GP kernel", cache_instances=True)` — populated with both
-     canonical names and aliases per design §1.6. Imports
-     `Registry` from `jaxgam.registry`.
-   - `_CANONICAL_FOR` — small dict mapping each accepted name
-     (canonical and alias) to the canonical `GPKernelName.value`. Used
-     by `parse_gp_config` to normalize before promoting to the enum.
-   - `parse_gp_config(extra_args: dict) -> GPConfig` — design §5.3
-     body. **Must** raise `ValueError` if `"m"` in `extra_args`, with
-     a message naming the four replacement kwargs. Validates
-     `rho > 0` if supplied.
-   - `_gp_E(x, xk, config, resolved_rho=None) -> (E, rho)` — design
-     §5.3 body. Looks up the kernel via
-     `gp_kernel_registry.get_instance(config.kernel.value)`, calls
-     `kernel.validate(config.power)`, then
-     `kernel.evaluate(distances / rho, power=config.power)`.
-   - `_gp_T(x_centered, stationary: bool) -> np.ndarray` — design
-     §5.6 body.
+     name="GP kernel")` — five entries (one per kernel), keyed by the
+     canonical names from design §1.6. **No aliases.** The registry's
+     keys *are* the canonical spellings; case-insensitivity is the only
+     normalization (provided by `Registry` itself).
 
-   Reuse `_compute_distance_matrix` from `utils.py` (Commit B). The
-   module is **purely Phase 1** (NumPy only — do not import JAX). The
-   smooth-class wiring lives in Commit D.
+   The module is **purely Phase 1** (NumPy only — do not import JAX)
+   and has no dependency on the smooth class. The smooth-class wiring
+   (including the kernel/rho/power/stationary resolution from
+   `spec.extra_args`, the `m=` rejection, and the `_gp_E` / `_gp_T`
+   methods) lives in Commit D.
 
 2. **Create `jaxgam/smooths/gaussian_process.py`** as an empty stub
    plus module docstring referencing §5 of the design doc. The
@@ -369,117 +354,67 @@ Cover with STRICT unit tests.
    land an empty file, defer creation entirely to Commit D.
 
 3. **Create `tests/test_smooths/test_gp_kernels.py`** following the
-   consolidation discipline from `docs/clean_unit_tests/`. **Target:
-   ≤6 collected tests** for the entire kernel module:
+   consolidation discipline from `docs/clean_unit_tests/`. The kernel
+   module has no smooth-instance dependencies, so tests exercise the
+   kernel classes and registry directly:
 
    ```python
    class TestKernelMath:
-       @pytest.mark.parametrize("kernel_name,power,closed_form", [
-           ("spherical",         1.0, "spherical"),
-           ("power_exponential", 1.0, "exponential"),
-           ("power_exponential", 2.0, "squared_exp"),
-           ("matern_3_2",        1.0, "matern_3_2"),
-           ("matern_5_2",        1.0, "matern_5_2"),
-           ("matern_7_2",        1.0, "matern_7_2"),
+       @pytest.mark.parametrize("kernel_cls,power", [
+           (SphericalKernel,         1.0),
+           (PowerExponentialKernel,  1.0),
+           (PowerExponentialKernel,  2.0),
+           (Matern32Kernel,          1.0),
+           (Matern52Kernel,          1.0),
+           (Matern72Kernel,          1.0),
        ])
-       def test_kernel_matches_closed_form(self, kernel_name, power, closed_form):
+       def test_kernel_matches_closed_form(self, kernel_cls, power):
            """STRICT closed-form match for one kernel/power per case."""
-           config = GPConfig(
-               kernel=GPKernelName(kernel_name), rho=0.5, power=power
-           )
-           E, rho = _gp_E(x_fixed, xk_fixed, config)
-           collector = _AssertCollector()
-           collector.check("rho returned == config.rho", lambda: rho == 0.5)
-           collector.check("kernel values", lambda: ...)
-           if kernel_name == "spherical":
-               collector.check("zero past rho", lambda: ...)
-           if kernel_name == "power_exponential" and power == 2.0:
-               collector.check("squared-exp form", lambda: ...)
-           collector.raise_if_any(f"kernel {closed_form}")
+           kernel = kernel_cls()
+           e = np.array([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5])
+           result = kernel.evaluate(e, power=power)
+           ...  # collector + closed-form comparison
 
-       def test_rho_resolution(self):
-           """auto vs user-supplied vs resolved_rho passthrough."""
-           collector = _AssertCollector()
-           collector.check("auto rho = max(distance)", lambda: ...)
-           collector.check("user rho used verbatim", lambda: ...)
-           collector.check("resolved_rho overrides config.rho", lambda: ...)
-           collector.raise_if_any("rho resolution")
-
+   class TestPowerValidation:
        def test_power_validation(self):
-           collector = _AssertCollector()
-           collector.check("power=0 raises", lambda: ...)
-           collector.check("power=2.5 raises", lambda: ...)
-           collector.check("matern ignores power", lambda: ...)
-           collector.raise_if_any("power validation")
+           """PowerExponentialKernel.validate bounds; matern ignores power."""
+           ...
 
-
-   class TestParseGPConfig:
-       def test_defaults_and_aliases(self):
-           """Empty extra_args, alias normalization, kernel enum."""
-           collector = _AssertCollector()
-           collector.check("defaults: matern_3_2 / None rho / 1.0 / False",
-                           lambda: ...)
-           collector.check("alias matern32 → MATERN_3_2",
-                           lambda: ...)
-           collector.check("alias power → POWER_EXPONENTIAL",
-                           lambda: ...)
-           collector.check("case-insensitive: MATERN_3_2 → MATERN_3_2",
-                           lambda: ...)
-           collector.raise_if_any("parse_gp_config defaults")
-
-       def test_rejects_m_and_invalid_args(self):
-           """mgcv-style m= rejection + invalid rho/kernel."""
-           collector = _AssertCollector()
-           with pytest.raises(ValueError, match="kernel="):
-               parse_gp_config({"m": [3, 0.5]})
-           collector.check("rho <= 0 raises", lambda: ...)
-           collector.check("unknown kernel raises", lambda: ...)
-           collector.raise_if_any("parse_gp_config rejection")
-
-
-   class TestNullSpace:
-       def test_gpT_shapes(self):
-           collector = _AssertCollector()
-           collector.check("stationary shape (n, 1)", lambda: ...)
-           collector.check("non-stationary shape (n, d+1)", lambda: ...)
-           collector.check("stationary content == ones", lambda: ...)
-           collector.check("non-stationary first col == 1", lambda: ...)
-           collector.raise_if_any("_gp_T")
+   class TestRegistry:
+       def test_registry_contents(self):
+           """Five canonical-name entries, each resolving to the right class."""
+           ...
    ```
 
-   Coverage from design §12.2 is preserved (every closed-form check,
-   every validation error, both stationarity modes, `m=` rejection,
-   alias resolution) — collapses to **~6 collected tests** thanks to
-   `_AssertCollector` and one `@parametrize` axis. `pytest` will count
-   the parametrize axis as 6 cases, so depending on counting
-   convention you may see ~6 or ~11 lines.
+   `__init__`-time resolution (defaults / `m=` rejection / invalid rho
+   / unknown kernel) and `_gp_E` / `_gp_T` behavior are exercised in
+   `test_gaussian_process.py` (Commit D) — they require a smooth
+   instance, which this commit does not produce.
 
 ### Files touched
 
-- Add: `jaxgam/smooths/gp_kernels.py` (config, registry, evaluator,
-  null-space — full kernel module)
-- Add: `jaxgam/smooths/gaussian_process.py` (empty/stub — class is
-  Commit D; or defer creation to Commit D entirely)
-- Add: `tests/test_smooths/test_gp_kernels.py` (kernel-module tests)
+- Add: `jaxgam/smooths/gp_kernels.py` (kernels + registry only).
+- Add: `jaxgam/smooths/gaussian_process.py` (empty stub — class lands
+  in Commit D; or defer creation to Commit D entirely).
+- Add: `tests/test_smooths/test_gp_kernels.py` (kernel-class + registry
+  tests).
 
 ### Validation
 
 - `make test-cov` passes.
-- New tests collected count up by **~6-11** (consolidated via
-  `@parametrize` + `_AssertCollector`, not enumerated). If the count
-  exceeds ~14, you missed consolidation — fix before handoff.
-- Coverage of `jaxgam/smooths/gp_kernels.py` ≥ 80% (kernel classes,
-  registry, parser, evaluator all exercised by the new tests).
+- New tests collected count up by **~8** (one parametrize axis with 6
+  cases, plus the power-validation and registry-contents methods).
+- Coverage of `jaxgam/smooths/gp_kernels.py` ≥ 80% (kernel classes and
+  registry exercised by the new tests).
 
 ### Exit criteria
 
 - All 5 kernels match closed-form at STRICT (covered via the
-  `kernel_name` parametrize axis on `test_kernel_matches_closed_form`).
-- `ρ` auto-resolution + `resolved_rho` passthrough validated.
-- `parse_gp_config` rejects `m=`, normalizes aliases, validates
-  `rho > 0`, and rejects unknown kernel names.
+  `kernel_cls` parametrize axis on `test_kernel_matches_closed_form`).
 - `PowerExponentialKernel.validate` rejects `power ≤ 0` and `power > 2`;
   other kernels ignore `power`.
+- `gp_kernel_registry` has exactly the five canonical-name entries and
+  raises `KeyError` on unknown names.
 - Test count footprint ≤14 (consolidation discipline holds).
 - **Agent stops and hands off to user for commit.** Do not proceed to
   Commit D.
@@ -507,33 +442,48 @@ Commit H.
    ```python
    from jaxgam.smooths.base import Smooth
    from jaxgam.smooths.utils import (
+       _compute_distance_matrix,
        _slanczos,
        _get_unique_rows,
        _subsample_knots,
    )
-   from jaxgam.smooths.gp_kernels import (
-       GPConfig,
-       _gp_E,
-       _gp_T,
-       parse_gp_config,
-   )
+   from jaxgam.smooths.gp_kernels import GPKernel, gp_kernel_registry
    from jaxgam.formula.terms import SmoothSpec
    from jaxgam.penalties.penalty import Penalty
    ```
 
-   Implement methods per design §5.2 (`setup`), §5.5 (knot harvesting),
-   §5.6 (design matrix), §5.7 (`build_design_matrix` / `predict_matrix`),
+   Implement per design §5.1 (`__init__`), §5.2 (`setup`), §5.3
+   (`_gp_E` method), §5.5 (knot harvesting), §5.6 (`_gp_T` method +
+   `_build_design`), §5.7 (`build_design_matrix` / `predict_matrix`),
    §5.8 (`build_penalty_matrices`), §5.10 (default `bs.dim`). No
-   `_decide_stationary` method — `parse_gp_config` owns stationarity
-   decoding (design §5.9).
+   `_decide_stationary`, no `GPConfig`, no `parse_gp_config` — kwarg
+   resolution is inline in `__init__` per design §5.9.
 
-   - `setup()` starts with `config = parse_gp_config(self.spec.extra_args)`;
-     store on `self._config` and mirror `config.stationary` to
-     `self._stationary`. The `m=` rejection happens inside this call,
-     not in the smooth class itself.
-   - Call `_gp_E(knt_c, knt_c, config)` to build `E`. Capture the
-     returned `rho` as `self._resolved_rho`.
-   - `null_space_dim = 1` if `config.stationary`, else `d + 1`.
+   - **`__init__(self, spec)`** (design §5.1):
+     - Call `super().__init__(spec)`.
+     - Raise `ValueError` if `"m" in spec.extra_args` (mgcv-compat
+       rejection, the only GP-specific guard in `__init__`).
+     - `self._kernel = gp_kernel_registry.get_instance(
+       spec.extra_args.get("kernel", "matern_3_2"))` — raises
+       `KeyError` on unknown name via the registry.
+     - `self._rho = spec.extra_args.get("rho")`; raise if not None and
+       `<= 0.0`.
+     - `self._power = spec.extra_args.get("power", 1.0)`.
+     - `self._stationary = spec.extra_args.get("stationary", False)`.
+     - `self._kernel.validate(self._power)` — surfaces
+       `PowerExponentialKernel` bounds errors at construction time.
+   - **`_gp_E(self, x, xk, *, resolved_rho=None)`** (design §5.3): owns
+     the rho-resolution policy (`resolved_rho` > `self._rho` > auto via
+     `distances.max()`), guards against `rho <= 0`, and returns
+     `(E, rho_used)` from `self._kernel.evaluate(distances / rho,
+     power=self._power)`.
+   - **`_gp_T(self, x_centered)`** (design §5.6): returns
+     `np.ones((n, 1))` if `self._stationary`, else
+     `np.column_stack([np.ones(n), x_centered])`.
+   - **`setup()`** (design §5.2): data-only work — knot harvesting,
+     centering, `E, rho = self._gp_E(knt_c, knt_c)`, eigendecomp,
+     indefinite clip, design + penalty matrices.
+   - `null_space_dim = 1` if `self._stationary`, else `d + 1`.
    - `rank = bs_dim - null_space_dim`.
    - `n_coefs = bs_dim` (pre-centering; constraint absorption reduces
      by 1 downstream).
@@ -552,9 +502,9 @@ Commit H.
      of clipped entries, then set `eigvals = np.abs(eigvals)` before
      building `D`. **No fallback path, no flag** — this runs every
      time. Document in the class docstring.
-   - `_build_design(x_c)` calls `_gp_E(x_c, self._knt, self._config,
-     resolved_rho=self._resolved_rho)` (training-time rho is frozen)
-     and `_gp_T(x_c, self._stationary)`.
+   - `_build_design(x_c)` calls
+     `self._gp_E(x_c, self._knt, resolved_rho=self._resolved_rho)`
+     (training-time rho is frozen) and `self._gp_T(x_c)`.
 
 2. **Add structural tests** to
    `tests/test_smooths/test_gaussian_process.py`. **Consolidate via
@@ -577,7 +527,7 @@ Commit H.
            collector.check("side_constrain == True", lambda: ...)
            collector.check("no _random / no _has_centering_constraint", lambda: ...)
            collector.check("_shift == colMeans", lambda: ...)
-           collector.check("_config is a GPConfig", lambda: ...)
+           collector.check("self._kernel is a GPKernel", lambda: ...)
            collector.check("_resolved_rho > 0", lambda: ...)
            collector.check("penalty diagonal", lambda: ...)
            collector.check("predict_matrix == build_design_matrix", lambda: ...)
@@ -592,16 +542,13 @@ Commit H.
            collector.check("d > 3 raises", lambda: ...)
            collector.raise_if_any("dimension defaults")
 
-       def test_setup_rejects_m_argument(self):
-           """End-to-end smoke test that the parse_gp_config rejection
-           reaches users who try `m=` from a formula. The unit-level
-           test lives in test_gp_kernels.py; this one verifies the
-           integration."""
+       def test_init_rejects_m_argument(self):
+           """`m=` is rejected at construction time — before any data
+           touches setup()."""
            spec = SmoothSpec(variables=["x"], bs="gp",
                              extra_args={"m": [3, 0.5]})
-           smooth = GaussianProcessSmooth(spec)
            with pytest.raises(ValueError, match="kernel="):
-               smooth.setup(gp_1d_data)
+               GaussianProcessSmooth(spec)
    ```
 
 3. **Knot-selection tests** — one consolidated method:
@@ -844,8 +791,8 @@ are the fitting gate.
 **Goal:** Extend `RBridge.smooth_construct()` so Commit G's R-parity
 tests can (a) pass explicit knots into mgcv's `smoothCon()`, (b) read
 back the GP-specific fields `knt` and `gp.defn`, and (c) translate a
-Python-side `GPConfig` into mgcv's `m=c(...)` numeric vector via a
-new module-level helper `gp_config_to_mgcv_m`. This commit touches
+Python-side GP `SmoothSpec` into mgcv's `m=c(...)` numeric vector via
+a new module-level helper `gp_config_to_mgcv_m`. This commit touches
 **only `tests/r_bridge.py`** and a small direct unit test — it adds
 no GP-side production code and no GP-side tests yet.
 
@@ -947,40 +894,46 @@ without entangling it with the GP-side `TestGPVsR` class.
    gp_config_to_mgcv_m`):
 
    ```python
-   from jaxgam.smooths.gp_kernels import GPConfig, GPKernelName
+   from jaxgam.formula.terms import SmoothSpec
 
    _KERNEL_TO_MGCV_TYPE = {
-       GPKernelName.SPHERICAL:         1,
-       GPKernelName.POWER_EXPONENTIAL: 2,
-       GPKernelName.MATERN_3_2:        3,
-       GPKernelName.MATERN_5_2:        4,
-       GPKernelName.MATERN_7_2:        5,
+       "spherical":         1,
+       "power_exponential": 2,
+       "matern_3_2":        3,
+       "matern_5_2":        4,
+       "matern_7_2":        5,
    }
 
 
    def gp_config_to_mgcv_m(
-       config: GPConfig, rho: float | None = None
+       spec: SmoothSpec, rho: float | None = None
    ) -> list[float]:
-       """Translate a Python-side GPConfig to mgcv's signed `m` vector.
+       """Translate a GP ``SmoothSpec`` to mgcv's signed `m` vector.
 
-       Used by Commit G's smooth-construct R-parity tests and
-       Commit H's validation-matrix R formulas so the two sides
-       cannot drift.
+       Reads the same ``spec.extra_args`` that ``GaussianProcessSmooth.__init__``
+       consumes; used by Commit G's smooth-construct R-parity tests and
+       Commit H's validation-matrix R formulas so the two sides cannot
+       drift.
        """
-       type_id = _KERNEL_TO_MGCV_TYPE[config.kernel]
-       if config.stationary:
+       kernel = spec.extra_args.get("kernel", "matern_3_2")
+       stationary = spec.extra_args.get("stationary", False)
+       power = spec.extra_args.get("power", 1.0)
+       spec_rho = spec.extra_args.get("rho")
+
+       type_id = _KERNEL_TO_MGCV_TYPE[kernel]
+       if stationary:
            type_id = -type_id
 
        out: list[float] = [float(type_id)]
-       resolved_rho = rho if rho is not None else config.rho
+       resolved_rho = rho if rho is not None else spec_rho
        if resolved_rho is not None:
            out.append(float(resolved_rho))
 
-       if config.kernel == GPKernelName.POWER_EXPONENTIAL:
+       if kernel == "power_exponential":
            # Pad rho if absent so power lands at m[2].
            if len(out) == 1:
                out.append(-1.0)
-           out.append(float(config.power))
+           out.append(float(power))
 
        return out
    ```
@@ -989,37 +942,45 @@ without entangling it with the GP-side `TestGPVsR` class.
    `tests/test_r_bridge.py` (consolidated via `_AssertCollector` —
    no R needed):
    ```python
+   def _gp_spec(**extra_args) -> SmoothSpec:
+       """Helper: minimal GP SmoothSpec carrying just extra_args."""
+       return SmoothSpec(
+           variables=["x"], bs="gp", k=-1, by=None,
+           smooth_type="s", extra_args=extra_args,
+       )
+
+
    def test_gp_config_to_mgcv_m_table():
        """Round-trip every row of design §6.4's mgcv ↔ JaxGAM table."""
        collector = _AssertCollector()
        collector.check(
            "spherical+rho",
            lambda: gp_config_to_mgcv_m(
-               GPConfig(kernel=GPKernelName.SPHERICAL, rho=0.5)
+               _gp_spec(kernel="spherical", rho=0.5)
            ) == [1.0, 0.5]
        )
        collector.check(
            "stationary spherical",
            lambda: gp_config_to_mgcv_m(
-               GPConfig(kernel=GPKernelName.SPHERICAL, rho=0.5, stationary=True)
+               _gp_spec(kernel="spherical", rho=0.5, stationary=True)
            ) == [-1.0, 0.5]
        )
        collector.check(
            "squared-exp",
            lambda: gp_config_to_mgcv_m(
-               GPConfig(kernel=GPKernelName.POWER_EXPONENTIAL, rho=0.5, power=2.0)
+               _gp_spec(kernel="power_exponential", rho=0.5, power=2.0)
            ) == [2.0, 0.5, 2.0]
        )
        collector.check(
            "matern_5_2 default rho omitted",
            lambda: gp_config_to_mgcv_m(
-               GPConfig(kernel=GPKernelName.MATERN_5_2)
+               _gp_spec(kernel="matern_5_2")
            ) == [4.0]
        )
        collector.check(
-           "rho override beats config.rho",
+           "rho override beats spec.rho",
            lambda: gp_config_to_mgcv_m(
-               GPConfig(kernel=GPKernelName.MATERN_3_2, rho=0.5),
+               _gp_spec(kernel="matern_3_2", rho=0.5),
                rho=0.7,
            ) == [3.0, 0.7]
        )
@@ -1077,42 +1038,46 @@ before the RBridge insertion.
    `tests/test_smooths/test_gaussian_process.py`. **Apply consolidation
    + parametrize discipline** — one R fit per parametrize case, then
    `_AssertCollector` for all three quantities (E / S / X·Xᵀ). The
-   parametrize axis carries `GPConfig` values; the R-side formula is
-   built via the Commit-F `gp_config_to_mgcv_m` helper so the two
-   sides cannot drift:
+   parametrize axis carries GP-kwargs dicts (the same shape that lands
+   in `spec.extra_args`); the R-side formula is built via the Commit-F
+   `gp_config_to_mgcv_m` helper so the two sides cannot drift:
 
    ```python
-   from jaxgam.smooths.gp_kernels import GPConfig, GPKernelName
+   from jaxgam.formula.terms import SmoothSpec
    from tests.r_bridge import gp_config_to_mgcv_m
 
 
    @pytest.mark.skipif(not r_available(), reason="R+mgcv not available")
    class TestGPVsR:
-       @pytest.mark.parametrize("config,label", [
-           (GPConfig(kernel=GPKernelName.SPHERICAL,         rho=0.5),            "spherical"),
-           (GPConfig(kernel=GPKernelName.POWER_EXPONENTIAL, rho=0.5, power=1.0), "power_exp_k1"),
-           (GPConfig(kernel=GPKernelName.POWER_EXPONENTIAL, rho=0.5, power=2.0), "squared_exp"),
-           (GPConfig(kernel=GPKernelName.MATERN_3_2,        rho=0.5),            "matern_3_2"),
-           (GPConfig(kernel=GPKernelName.MATERN_5_2,        rho=0.5),            "matern_5_2"),
-           (GPConfig(kernel=GPKernelName.MATERN_7_2,        rho=0.5),            "matern_7_2"),
+       @pytest.mark.parametrize("gp_kwargs,label", [
+           ({"kernel": "spherical",         "rho": 0.5},               "spherical"),
+           ({"kernel": "power_exponential", "rho": 0.5, "power": 1.0}, "power_exp_k1"),
+           ({"kernel": "power_exponential", "rho": 0.5, "power": 2.0}, "squared_exp"),
+           ({"kernel": "matern_3_2",        "rho": 0.5},               "matern_3_2"),
+           ({"kernel": "matern_5_2",        "rho": 0.5},               "matern_5_2"),
+           ({"kernel": "matern_7_2",        "rho": 0.5},               "matern_7_2"),
        ])
-       def test_smooth_construct_matches_r(self, config, label, gp_explicit_knots_data):
+       def test_smooth_construct_matches_r(self, gp_kwargs, label, gp_explicit_knots_data):
            """One R fit per kernel; all 3 quantities via collector.
 
            Uses the Commit F bridge extensions (knots= argument; knt
            / gp_defn extraction) so R and Python operate on identical
            knot sets; uses gp_config_to_mgcv_m so the R-side `m=` is
-           generated from the same GPConfig that builds the Python
+           generated from the same SmoothSpec that builds the Python
            smooth.
            """
-           m_args = gp_config_to_mgcv_m(config)
+           spec = SmoothSpec(
+               variables=["x"], bs="gp", k=-1, by=None,
+               smooth_type="s", extra_args=gp_kwargs,
+           )
+           m_args = gp_config_to_mgcv_m(spec)
            r_formula = f"s(x, bs='gp', m=c({','.join(map(str, m_args))}))"
            r_result = r_bridge.smooth_construct(
                r_formula,
                gp_explicit_knots_data["data"],
                knots=gp_explicit_knots_data["knots"],
            )
-           py_smooth = _build_gp(config, gp_explicit_knots_data)
+           py_smooth = _build_gp(spec, gp_explicit_knots_data)
            # py_smooth diagonal is normalized to PSD via the §8.3 clip
            # at setup (Commit D); STRICT equality on the diagonal only
            # holds when R's spectrum is also non-negative.
@@ -1147,10 +1112,9 @@ before the RBridge insertion.
            collector.raise_if_any("null space vs R")
    ```
 
-   `_build_gp(config, …)` constructs the Python-side smooth from the
-   same `GPConfig` (via `extra_args={"kernel": config.kernel.value,
-   "rho": config.rho, "power": config.power, "stationary":
-   config.stationary}`). No mention of `m=` on the Python side.
+   `_build_gp(spec, …)` instantiates `GaussianProcessSmooth(spec)` and
+   runs `setup(data)` — kwargs flow straight from `spec.extra_args`
+   into `__init__`. No mention of `m=` on the Python side.
 
 2. **Document the eigenvector sign caveat** in the test docstring: raw
    `X` comparison would require MODERATE; we compare `X @ X.T` (sign-
@@ -1448,7 +1412,7 @@ catalog and API examples.
    - Brief description (low-rank kriging, Kammann-Wand reference).
    - Supported kernels by name string (`"spherical"`,
      `"power_exponential"`, `"matern_3_2"`, `"matern_5_2"`,
-     `"matern_7_2"`), with aliases.
+     `"matern_7_2"`). Case-insensitive; no aliases.
    - `xt` argument options.
    - Examples:
      - `gam("y ~ s(x, z, bs='gp', k=30)", data=df)` (defaults).
@@ -1640,15 +1604,16 @@ per-smooth files.
    with a negative test so any future R-syntax patch must touch the GP
    parser tests deliberately.
 
-   Note: the **`m=` rejection lives at the GP setup layer**
-   (`parse_gp_config` in `gp_kernels.py`), not at the parser. The
-   parser accepts `m=...` as an arbitrary `extra_args` entry; the
-   smooth class raises `ValueError` from `parse_gp_config` when it
-   reads that entry at setup. Commit E pins this layering with one
-   parser positive test (`m=[3, 0.5]` parses fine) plus integration
-   tests in Commit C (`test_gp_kernels.py`) and Commit D (smooth
-   setup) for the rejection itself. Do not collapse the rejection
-   into the parser — that would couple parser to GP semantics.
+   Note: the **`m=` rejection lives at the GP smooth-construction
+   layer** (`GaussianProcessSmooth.__init__` in
+   `gaussian_process.py`), not at the parser. The parser accepts
+   `m=...` as an arbitrary `extra_args` entry; the smooth class
+   raises `ValueError` from `__init__` when it reads that entry.
+   Commit E pins this layering with one parser positive test
+   (`m=[3, 0.5]` parses fine) plus an integration test in Commit D
+   (instantiating `GaussianProcessSmooth(spec_with_m)` raises). Do
+   not collapse the rejection into the parser — that would couple
+   parser to GP semantics.
 
    The **Python-native API** (`kernel=`, `rho=`, `power=`,
    `stationary=`) is documented in design §1.6 and §6.4. Any future
@@ -1703,13 +1668,18 @@ Commit B    Extract _slanczos + 3 helpers to utils.py         ── tprs.py, ut
         │   (TPRS tests must pass with identical output)
         │
 Phase 2 — GP implementation
-Commit C    GP kernel module (Config + registry + evaluator)  ── gp_kernels.py, test_gp_kernels.py
-            (GPConfig, GPKernelName, kernel classes,
-             gp_kernel_registry via jaxgam.registry.Registry,
-             parse_gp_config rejecting m=, _gp_E, _gp_T)
+Commit C    GP kernel module (classes + registry)             ── gp_kernels.py, test_gp_kernels.py
+            (GPKernel ABC + five kernel classes;
+             gp_kernel_registry via jaxgam.registry.Registry
+             keyed by canonical names only (no aliases).
+             No config dataclass, no parser, no helpers —
+             all that lives on GaussianProcessSmooth.)
 Commit D    GaussianProcessSmooth class + structural tests    ── gaussian_process.py, test_gaussian_process.py, conftest.py
-            (uses parse_gp_config; includes indefinite-
-             eigenvalue clip, design §8.3)
+            (__init__ resolves spec.extra_args via the
+             registry and stores self._kernel/_rho/_power/
+             _stationary; _gp_E and _gp_T are methods;
+             m= rejection in __init__; indefinite-eigenvalue
+             clip per design §8.3.)
 Commit E    Registry + univariate-margin invariant + parser   ── registry.py, test_gaussian_process.py, test_parser.py
             (NO tensor.py change — tensor GP enabled by
              registration alone via tensor.py:146 dispatch.
@@ -1720,10 +1690,10 @@ Commit E    Registry + univariate-margin invariant + parser   ── registry.py
 Phase 3 — R parity infrastructure + tests
 Commit F    RBridge GP enhancements + gp_config_to_mgcv_m     ── r_bridge.py, test_r_bridge.py
             (knots= argument, knt/gp.defn extraction,
-             GPConfig → mgcv-m helper; no GP-side code)
+             SmoothSpec → mgcv-m helper; no GP-side code)
 Commit G    Direct GP + tensor-margin R smooth-construct      ── test_gaussian_process.py
-            (parametrize over GPConfig; R formula built via
-             gp_config_to_mgcv_m so the two sides cannot drift)
+            (parametrize over GP kwargs dicts; R formula built
+             via gp_config_to_mgcv_m so the two sides cannot drift)
 Commit H    Validation matrix integration (20-25 cells)       ── test_validation_matrix.py
             (direct: gp, gp_2d, gp_mixed; tensor: gp_te,
              optionally gp_ti — all using default kernel,
@@ -1758,9 +1728,10 @@ Met when the user opens the single PR for this feature:
   and `s(x, bs="gp", kernel="spherical", stationary=True)` all
   parse, construct, fit, and predict via the public `gam()` API.
 - **`m=` is rejected.** Passing `m=...` to a GP smooth raises a
-  clear `ValueError` from `parse_gp_config` at setup time, naming
-  the four replacement kwargs. R-style `c(...)` is rejected one
-  layer earlier, at the parser, by `ast.literal_eval`.
+  clear `ValueError` from `GaussianProcessSmooth.__init__` at
+  construction time, naming the four replacement kwargs. R-style
+  `c(...)` is rejected one layer earlier, at the parser, by
+  `ast.literal_eval`.
 - **Tensor-margin GP** via the existing wrappers works:
   `te(x1, x2, bs="gp", k=5)` and `ti(x1, x2, bs="gp", k=5)` parse,
   construct, fit, and predict — through `TensorProductSmooth` /
@@ -1768,9 +1739,9 @@ Met when the user opens the single PR for this feature:
   per margin via the registry. **No code change in `tensor.py`.**
 - **Kernel registry** reuses the existing
   `jaxgam.registry.Registry[T]` generic (same abstraction used by
-  smooth, family, and link registries) — no bespoke wrapper. Both
-  canonical kernel names and aliases (`"power"`, `"matern32"`,
-  `"matern52"`, `"matern72"`) are accepted.
+  smooth, family, and link registries) — no bespoke wrapper. The
+  registry's keys are the canonical kernel names; lookups are
+  case-insensitive but there are no aliases.
 - **mgcv-side conversion** happens only at the R-bridge boundary
   via `tests/r_bridge.py:gp_config_to_mgcv_m`. No production code
   consumes mgcv's `m=` numeric encoding.
