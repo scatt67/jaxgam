@@ -243,7 +243,7 @@ This number must not change in Commit B (the refactor).
 
 ---
 
-## Commit B — Extract Shared Kriging Helpers to `utils.py`
+## Commit B — Extract Shared Kriging Helpers to `utils.py` (**DONE**)
 
 **Goal:** Move four reusable pieces from `tprs.py` to `utils.py` so GP
 can consume them without cross-smooth imports. **Mechanical refactor —
