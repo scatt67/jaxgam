@@ -196,7 +196,7 @@ subsequent handoff.
 
 ---
 
-## Commit A — Pre-flight: Baseline Capture
+## Commit A — Pre-flight: Baseline Capture (**DONE**)
 
 **Goal:** Record current state so each subsequent commit can show
 measurable progress and gate against regressions.
