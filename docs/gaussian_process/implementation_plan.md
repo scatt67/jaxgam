@@ -786,7 +786,7 @@ are the fitting gate.
 
 ---
 
-## Commit F — RBridge GP Enhancements + `gp_config_to_mgcv_m` Helper
+## Commit F — RBridge GP Enhancements + `gp_config_to_mgcv_m` Helper (**DONE**)
 
 **Goal:** Extend `RBridge.smooth_construct()` so Commit G's R-parity
 tests can (a) pass explicit knots into mgcv's `smoothCon()`, (b) read

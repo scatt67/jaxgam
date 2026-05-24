@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.r_bridge import RBridge
+from tests.helpers import _AssertCollector, make_smooth_spec
+from tests.r_bridge import RBridge, gp_config_to_mgcv_m
 from tests.tolerances import STRICT
 
 
@@ -192,6 +193,119 @@ class TestRBridgeSmoothComponents:
 
         assert len(result["basis_matrices"]) == 2
         assert len(result["penalty_matrices"]) == 2
+
+
+class TestGPConfigToMgcvM:
+    def test_gp_config_to_mgcv_m_table(self) -> None:
+        """Round-trip the GP kwargs to mgcv's numeric ``m=`` vector."""
+        collector = _AssertCollector()
+
+        def spherical_rho() -> None:
+            assert gp_config_to_mgcv_m(
+                make_smooth_spec(["x"], bs="gp", k=-1, kernel="spherical", rho=0.5)
+            ) == [1.0, 0.5]
+
+        def stationary_spherical() -> None:
+            assert gp_config_to_mgcv_m(
+                make_smooth_spec(
+                    ["x"],
+                    bs="gp",
+                    k=-1,
+                    kernel="spherical",
+                    rho=0.5,
+                    stationary=True,
+                )
+            ) == [-1.0, 0.5]
+
+        def squared_exp() -> None:
+            assert gp_config_to_mgcv_m(
+                make_smooth_spec(
+                    ["x"],
+                    bs="gp",
+                    k=-1,
+                    kernel="power_exponential",
+                    rho=0.5,
+                    power=2.0,
+                )
+            ) == [2.0, 0.5, 2.0]
+
+        def matern_5_2_default_rho_omitted() -> None:
+            assert gp_config_to_mgcv_m(
+                make_smooth_spec(["x"], bs="gp", k=-1, kernel="matern_5_2")
+            ) == [4.0]
+
+        def rho_override_beats_spec_rho() -> None:
+            assert gp_config_to_mgcv_m(
+                make_smooth_spec(
+                    ["x"],
+                    bs="gp",
+                    k=-1,
+                    kernel="matern_3_2",
+                    rho=0.5,
+                ),
+                rho=0.7,
+            ) == [3.0, 0.7]
+
+        collector.check("spherical+rho", spherical_rho)
+        collector.check("stationary spherical", stationary_spherical)
+        collector.check("squared-exp", squared_exp)
+        collector.check(
+            "matern_5_2 default rho omitted",
+            matern_5_2_default_rho_omitted,
+        )
+        collector.check("rho override beats spec.rho", rho_override_beats_spec_rho)
+        collector.raise_if_any("gp_config_to_mgcv_m mapping")
+
+
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+class TestRBridgeSmoothConstructGP:
+    def test_smooth_construct_gp_extracts_knt_and_defn(self) -> None:
+        """Bridge round-trips ``knt`` and ``gp.defn`` for a tiny GP smooth."""
+        try:
+            bridge = RBridge(mode="rpy2")
+        except Exception:
+            pytest.skip("rpy2 not available")
+
+        data = pd.DataFrame({"x": np.linspace(0.0, 1.0, 30)})
+        knots = {"x": np.linspace(0.05, 0.95, 8)}
+        # With non-stationary GP, k=9 gives rank 7, so 8 explicit knots
+        # exercise mgcv's truncated-eigen branch and produce diagonal S.
+        result = bridge.smooth_construct(
+            "s(x, bs='gp', k=9)",
+            data,
+            absorb_cons=False,
+            knots=knots,
+        )
+        collector = _AssertCollector()
+
+        def knt_shape() -> None:
+            assert result["knt"].shape == (8, 1)
+
+        def gp_defn_length() -> None:
+            assert result["gp_defn"].shape == (3,)
+
+        def gp_defn_default_kernel() -> None:
+            np.testing.assert_allclose(result["gp_defn"][0], 3.0)
+
+        def E_shape() -> None:
+            assert result["E"].shape == (8, 8)
+
+        def E_symmetric() -> None:
+            np.testing.assert_allclose(result["E"], result["E"].T)
+
+        def S_diagonal() -> None:
+            np.testing.assert_allclose(
+                result["S"][0],
+                np.diag(np.diag(result["S"][0])),
+            )
+
+        collector.check("knt shape", knt_shape)
+        collector.check("gp_defn length 3", gp_defn_length)
+        collector.check("gp_defn[0] == 3 (default Matérn 3/2)", gp_defn_default_kernel)
+        collector.check("E shape (nk, nk)", E_shape)
+        collector.check("E symmetric", E_symmetric)
+        collector.check("S diagonal", S_diagonal)
+        collector.raise_if_any("GP bridge round-trip")
 
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
