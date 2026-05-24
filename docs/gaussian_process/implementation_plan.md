@@ -314,7 +314,7 @@ zero numerical change to TPRS.**
 
 ---
 
-## Commit C — GP Kernel Module: Classes + Registry
+## Commit C — GP Kernel Module: Classes + Registry (**DONE**)
 
 **Goal:** Implement the GP correlation-kernel surface in a dedicated
 `gp_kernels.py` module: `GPKernel` ABC, five concrete kernel classes,
