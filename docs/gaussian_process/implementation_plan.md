@@ -1022,7 +1022,7 @@ without entangling it with the GP-side `TestGPVsR` class.
 
 ---
 
-## Commit G — R Smooth-Construct Comparison Tests
+## Commit G — R Smooth-Construct Comparison Tests (**DONE**)
 
 **Goal:** Validate GP basis, penalty, and design matrix against mgcv's
 output at STRICT tolerance (with explicit knots to control for

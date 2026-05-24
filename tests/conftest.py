@@ -265,12 +265,24 @@ def gp_2d_data():
 @pytest.fixture
 def gp_explicit_knots_data():
     """Small dataset with explicit knot positions for STRICT R comparison."""
-    rng = np.random.default_rng(SEED)
-    n = 100
+    knots = np.linspace(0.05, 0.95, 10)
+    x = np.tile(knots, 10)
     return {
-        "data": {"x": rng.uniform(0, 1, n)},
-        "knots": {"x": np.linspace(0.05, 0.95, 10)},
+        "data": pd.DataFrame({"x": x}),
+        "knots": {"x": knots},
     }
+
+
+@pytest.fixture
+def gp_te_2d_data() -> pd.DataFrame:
+    """Ordered bivariate data for GP tensor-margin R comparisons."""
+    n = 30
+    return pd.DataFrame(
+        {
+            "x1": np.linspace(0.05, 0.95, n),
+            "x2": np.linspace(0.15, 0.85, n),
+        }
+    )
 
 
 @pytest.fixture

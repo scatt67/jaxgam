@@ -693,6 +693,7 @@ for (i in seq_len(n_smooths)) {{
         X = np.array(result.rx2("X"), dtype=np.float64)
         rank_arr = np.array(result.rx2("rank"), dtype=np.float64).ravel()
         rank = int(rank_arr[0])
+        rank_vector = rank_arr.astype(int)
         nsd_arr = np.array(result.rx2("null_space_dim"), dtype=np.float64).ravel()
         null_space_dim = int(nsd_arr[0])
 
@@ -710,6 +711,7 @@ for (i in seq_len(n_smooths)) {{
             "X": X,
             "S": S_matrices,
             "rank": rank,
+            "rank_vector": rank_vector,
             "null_space_dim": null_space_dim,
             "Xu": Xu,
             "UZ": UZ,
@@ -798,8 +800,14 @@ if (!is.null(sm$shift)) {{
                 with open(os.path.join(tmpdir, name)) as fh:
                     return float(fh.read().strip())
 
+            def _read_vector(name: str) -> np.ndarray:
+                with open(os.path.join(tmpdir, name)) as fh:
+                    values = [float(line.strip()) for line in fh if line.strip()]
+                return np.array(values, dtype=np.float64)
+
             X = _read_matrix("X.csv")
-            rank = int(_read_scalar("rank.txt"))
+            rank_vector = _read_vector("rank.txt").astype(int)
+            rank = int(rank_vector[0])
             null_space_dim = int(_read_scalar("null_space_dim.txt"))
 
             n_S = int(_read_scalar("n_S.txt"))
@@ -822,6 +830,7 @@ if (!is.null(sm$shift)) {{
                 "X": X,
                 "S": S_matrices,
                 "rank": rank,
+                "rank_vector": rank_vector,
                 "null_space_dim": null_space_dim,
                 "Xu": Xu,
                 "UZ": UZ,
