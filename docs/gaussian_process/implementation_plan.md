@@ -620,7 +620,7 @@ Commit H.
 
 ---
 
-## Commit E — Registry Wire-Up + Univariate-Margin Invariant + Parser Tests
+## Commit E — Registry Wire-Up + Univariate-Margin Invariant + Parser Tests (**DONE**)
 
 **Goal:** Register `"gp"` in the smooth registry, prove that
 `GaussianProcessSmooth` works correctly as the **per-variable margin**

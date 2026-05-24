@@ -16,6 +16,7 @@ Covers:
 import pytest
 
 from jaxgam.formula import FormulaSpec, SmoothSpec, parse_formula
+from tests.helpers import _AssertCollector
 
 
 class TestBasicParsing:
@@ -169,6 +170,91 @@ class TestTensorProducts:
         assert result.smooth_terms[1].variables == ["x2"]
         assert result.smooth_terms[2].smooth_type == "ti"
         assert result.smooth_terms[2].variables == ["x1", "x2"]
+
+
+class TestGaussianProcessParsing:
+    """Gaussian process smooth parser surface."""
+
+    def test_gp_kwargs_parse(self) -> None:
+        """GP kwargs are Python literals carried through to SmoothSpec."""
+        collector = _AssertCollector()
+
+        def smooth_for(term: str) -> SmoothSpec:
+            result = parse_formula(f"y ~ {term}")
+            assert len(result.smooth_terms) == 1
+            return result.smooth_terms[0]
+
+        def default_gp() -> None:
+            smooth = smooth_for('s(x, bs="gp")')
+            assert smooth.variables == ["x"]
+            assert smooth.bs == "gp"
+            assert smooth.k == -1
+            assert smooth.smooth_type == "s"
+            assert smooth.extra_args == {}
+
+        def direct_multivariate_gp() -> None:
+            smooth = smooth_for('s(x, z, bs="gp", k=50)')
+            assert smooth.variables == ["x", "z"]
+            assert smooth.bs == "gp"
+            assert smooth.k == 50
+            assert smooth.smooth_type == "s"
+
+        def tensor_product_gp() -> None:
+            smooth = smooth_for('te(x1, x2, bs="gp", k=5)')
+            assert smooth.variables == ["x1", "x2"]
+            assert smooth.bs == "gp"
+            assert smooth.k == 5
+            assert smooth.smooth_type == "te"
+
+        def tensor_interaction_gp() -> None:
+            smooth = smooth_for('ti(x1, x2, bs="gp", k=5)')
+            assert smooth.variables == ["x1", "x2"]
+            assert smooth.bs == "gp"
+            assert smooth.k == 5
+            assert smooth.smooth_type == "ti"
+
+        def kernel_kwarg() -> None:
+            smooth = smooth_for('s(x, bs="gp", kernel="matern_3_2")')
+            assert smooth.extra_args["kernel"] == "matern_3_2"
+
+        def power_exponential_kwargs() -> None:
+            smooth = smooth_for(
+                's(x, bs="gp", kernel="power_exponential", rho=0.5, power=2.0)'
+            )
+            assert smooth.extra_args["kernel"] == "power_exponential"
+            assert smooth.extra_args["rho"] == 0.5
+            assert smooth.extra_args["power"] == 2.0
+
+        def stationary_kwarg() -> None:
+            smooth = smooth_for('s(x, bs="gp", stationary=True)')
+            assert smooth.extra_args["stationary"] is True
+
+        def xt_kwarg() -> None:
+            smooth = smooth_for('s(x, bs="gp", xt={"max_knots": 500, "seed": 42})')
+            assert smooth.extra_args["xt"] == {"max_knots": 500, "seed": 42}
+
+        def m_parses_but_is_not_interpreted() -> None:
+            smooth = smooth_for('s(x, bs="gp", m=[3, 0.5])')
+            assert smooth.extra_args["m"] == [3, 0.5]
+
+        collector.check('s(x, bs="gp")', default_gp)
+        collector.check('s(x, z, bs="gp", k=50)', direct_multivariate_gp)
+        collector.check('te(x1, x2, bs="gp", k=5)', tensor_product_gp)
+        collector.check('ti(x1, x2, bs="gp", k=5)', tensor_interaction_gp)
+        collector.check("kernel kwarg", kernel_kwarg)
+        collector.check("power-exponential kwargs", power_exponential_kwargs)
+        collector.check("stationary kwarg", stationary_kwarg)
+        collector.check("xt kwarg", xt_kwarg)
+        collector.check(
+            "m parses without GP semantics",
+            m_parses_but_is_not_interpreted,
+        )
+        collector.raise_if_any("gp parser kwargs")
+
+    def test_gp_r_style_call_rejected(self) -> None:
+        """R-style c(...) stays outside the current parser surface."""
+        with pytest.raises(ValueError, match="Cannot evaluate argument 'kernel'"):
+            parse_formula('y ~ s(x, bs="gp", kernel=c("matern_3_2"))')
 
 
 class TestMixedTerms:

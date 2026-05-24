@@ -14,6 +14,7 @@ from jaxgam.formula.terms import SmoothSpec
 from jaxgam.smooths import gaussian_process as gp_module
 from jaxgam.smooths.gaussian_process import GaussianProcessSmooth
 from jaxgam.smooths.gp_kernels import GPKernel
+from jaxgam.smooths.registry import get_smooth_class
 from tests.helpers import _AssertCollector
 
 
@@ -149,6 +150,77 @@ class TestSetupInvariants:
         spec = _make_spec(["x"], m=[3, 0.5])
         with pytest.raises(ValueError, match="kernel="):
             GaussianProcessSmooth(spec)
+
+
+class TestTensorMarginInvariant:
+    """Contract required by tensor GP margins."""
+
+    def test_works_as_tensor_margin(self, gp_1d_data: dict) -> None:
+        """Single-variable GP smooth satisfies tensor margin assumptions."""
+        spec = SmoothSpec(variables=["x"], bs="gp", k=5, smooth_type="s")
+        margin_cls = get_smooth_class(spec.bs)
+        margin = margin_cls(spec)
+        margin.setup(gp_1d_data)
+        X = margin.build_design_matrix(gp_1d_data)
+        penalties = margin.build_penalty_matrices()
+        collector = _AssertCollector()
+
+        def registry_dispatches_gp() -> None:
+            assert margin_cls is GaussianProcessSmooth
+
+        def setup_populated_s_scale() -> None:
+            assert margin._s_scale > 0
+
+        def design_matrix_has_bs_dim_cols() -> None:
+            assert X.shape[1] == margin.n_coefs
+
+        def one_penalty_per_margin() -> None:
+            assert len(penalties) == 1
+
+        def penalty_diagonal() -> None:
+            np.testing.assert_allclose(
+                penalties[0].S,
+                np.diag(np.diag(penalties[0].S)),
+            )
+
+        def noterp_is_false() -> None:
+            assert margin._noterp is False
+
+        def predict_matrix_roundtrip() -> None:
+            np.testing.assert_allclose(
+                margin.predict_matrix(gp_1d_data),
+                X,
+            )
+
+        collector.check(
+            "registry dispatches gp to GaussianProcessSmooth",
+            registry_dispatches_gp,
+        )
+        collector.check(
+            "setup populated _s_scale",
+            setup_populated_s_scale,
+        )
+        collector.check(
+            "design matrix has bs_dim cols",
+            design_matrix_has_bs_dim_cols,
+        )
+        collector.check(
+            "one penalty per margin",
+            one_penalty_per_margin,
+        )
+        collector.check(
+            "penalty diagonal",
+            penalty_diagonal,
+        )
+        collector.check(
+            "_noterp is False (so tensor SVD reparam runs)",
+            noterp_is_false,
+        )
+        collector.check(
+            "predict_matrix roundtrip",
+            predict_matrix_roundtrip,
+        )
+        collector.raise_if_any("univariate-margin invariants")
 
 
 class TestKnotSubsampling:
