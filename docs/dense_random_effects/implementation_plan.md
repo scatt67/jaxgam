@@ -228,7 +228,7 @@ end-to-end validation through the full `predict()` pipeline including
 
 ---
 
-## PR 6: Documentation + cleanup
+## PR 6: Documentation + cleanup (**CODEX REVIEW**)
 
 **Title:** `[docs] smooths/re: add dense random effects to documentation`
 

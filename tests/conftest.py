@@ -247,6 +247,41 @@ def re_model_data():
 
 
 @pytest.fixture
+def gp_1d_data():
+    """Univariate continuous data for GP smooth tests."""
+    rng = np.random.default_rng(SEED)
+    n = 200
+    return {"x": rng.uniform(0, 1, n)}
+
+
+@pytest.fixture
+def gp_2d_data():
+    """Bivariate continuous data for 2D GP tests."""
+    rng = np.random.default_rng(SEED)
+    n = 200
+    return {"x": rng.uniform(0, 1, n), "z": rng.uniform(0, 1, n)}
+
+
+@pytest.fixture
+def gp_explicit_knots_data():
+    """Small dataset with explicit knot positions for STRICT R comparison."""
+    rng = np.random.default_rng(SEED)
+    n = 100
+    return {
+        "data": {"x": rng.uniform(0, 1, n)},
+        "knots": {"x": np.linspace(0.05, 0.95, 10)},
+    }
+
+
+@pytest.fixture
+def large_gp_data():
+    """Univariate GP data with more unique rows than the default max_knots."""
+    rng = np.random.default_rng(SEED)
+    n = 2500
+    return {"x": rng.uniform(0, 1, n)}
+
+
+@pytest.fixture
 def family_data(request):
     """Single-predictor family data.
 

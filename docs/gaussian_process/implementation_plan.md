@@ -421,7 +421,7 @@ no config dataclass, no parser, no evaluation/null-space helpers.
 
 ---
 
-## Commit D — `GaussianProcessSmooth` Class + Structural Tests
+## Commit D — `GaussianProcessSmooth` Class + Structural Tests (**DONE**)
 
 **Goal:** Wire the `Smooth` subclass around the kernel evaluator from
 Commit C. Implement `setup`, `build_design_matrix`, `build_penalty_matrices`,
