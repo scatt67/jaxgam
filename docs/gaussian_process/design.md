@@ -2014,6 +2014,18 @@ Additional kernel-specific configs may be added incrementally:
 
 #### 12.1.2 New Data Generators
 
+These follow the **exact structure of the existing TPRS/RE generators**
+(`_make_single_data`, `_make_two_smooth_data`): compute a base `eta`,
+then run the same per-family transform block **inline**. There is **no**
+`_eta_to_response` helper — that block is pasted into each generator, the
+same way every current generator does it. (An earlier draft of this
+section showed a `_eta_to_response(...)` one-liner; no such helper exists
+in `test_validation_matrix.py`, and adding one would mean rewriting the
+existing generators. The implementation plan's Commit H step 2 is the
+authoritative spec.)
+
+Canonical example, fully inlined:
+
 ```python
 def _make_gp_1d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
     """1D GP data: smooth function of a single continuous predictor."""
@@ -2021,68 +2033,57 @@ def _make_gp_1d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
     n = 300
     x = rng.uniform(0, 1, n)
     eta = np.sin(3 * np.pi * x) * 0.8 + np.cos(2 * np.pi * x) * 0.4
-    return _eta_to_response(eta, family_name, rng, x_extra=None)
 
+    if family_name == "gaussian":
+        y = eta + rng.normal(0, 0.3, n)
+    elif family_name == "binomial":
+        prob = 1.0 / (1.0 + np.exp(-eta))
+        y = rng.binomial(1, prob, n).astype(float)
+    elif family_name == "poisson":
+        y = rng.poisson(np.exp(eta * 0.5 + 0.5)).astype(float)
+    elif family_name == "gamma":
+        mu = np.exp(eta * 0.3 + 1.0)
+        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
+    else:
+        raise ValueError(f"Unknown family: {family_name}")
 
-def _make_gp_2d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """2D GP data: smooth bivariate function (kriging-style)."""
-    rng = np.random.default_rng(seed)
-    n = 400
-    x = rng.uniform(0, 1, n)
-    z = rng.uniform(0, 1, n)
-    eta = np.sin(2 * np.pi * x) * np.cos(2 * np.pi * z) + 0.3 * (x + z)
-    return _eta_to_response(eta, family_name, rng, x_extra={"x": x, "z": z})
-
-
-def _make_gp_1d_par_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """1D GP + parametric on the *same* x: exercises gam.side dropping
-    the redundant linear-trend column from the GP null space."""
-    rng = np.random.default_rng(seed)
-    n = 300
-    x = rng.uniform(0, 1, n)
-    # Linear trend in x absorbed by the parametric term; smooth carries
-    # the curvature only. gam.side() must drop the GP's linear-trend
-    # null-space column to avoid singularity.
-    eta = 0.7 * x + np.sin(3 * np.pi * x) * 0.6
-    return _eta_to_response(eta, family_name, rng, x_extra={"x": x})
-
-
-def _make_gp_te_2d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
-    """Bivariate data for *tensor* GP (te / ti) tests.
-
-    Variable names `x1` / `x2` distinguish from the direct-GP
-    `gp_2d_data` (which uses `x` / `z`) so the same matrix row can
-    drive both pathways without column collisions in the validation-
-    matrix loop. The signal mixes a separable component (te can fit
-    perfectly) with a pure interaction component (only ti / te can
-    fit) so the test data is informative for both smooths.
-    """
-    rng = np.random.default_rng(seed)
-    n = 400
-    x1 = rng.uniform(0, 1, n)
-    x2 = rng.uniform(0, 1, n)
-    eta = (
-        np.sin(2 * np.pi * x1)
-        + np.cos(2 * np.pi * x2)
-        + 0.5 * np.sin(2 * np.pi * x1) * np.cos(2 * np.pi * x2)
-    )
-    return _eta_to_response(eta, family_name, rng, x_extra={"x1": x1, "x2": x2})
+    return pd.DataFrame({"x": x, "y": y})
 ```
 
-Helper `_eta_to_response` reuses the family→response mapping from
-existing RE data generators.
+The other three generators are structurally identical — they paste the
+**same per-family block** and differ only in `n`, the covariates, the
+base `eta`, and the returned columns:
+
+| Generator | `n` | Covariates | `eta` | Returns |
+|---|---|---|---|---|
+| `_make_gp_2d_data` | 400 | `x, z ~ U(0,1)` | `sin(2πx)·cos(2πz) + 0.3·(x+z)` | `{"x", "z", "y"}` |
+| `_make_gp_1d_par_data` | 300 | `x ~ U(0,1)` | `0.7·x + sin(3πx)·0.6` | `{"x", "y"}` |
+| `_make_gp_te_2d_data` | 400 | `x1, x2 ~ U(0,1)` | `sin(2πx1) + cos(2πx2) + 0.5·sin(2πx1)·cos(2πx2)` | `{"x1", "x2", "y"}` |
+
+- `_make_gp_1d_par_data` puts a **real linear trend** (`0.7·x`) in `eta`
+  so the parametric `x` term absorbs it and `gam.side()` has a genuine
+  redundant null-space column to drop.
+- `_make_gp_te_2d_data` uses `x1` / `x2` (distinct from the direct-GP
+  `x` / `z`) so direct and tensor cells never collide in the matrix
+  loop, and mixes a separable component (which `te` fits) with a pure
+  interaction (which `ti` / `te` fit) so both tensor smooths get signal.
 
 #### 12.1.3 Tolerance Rules
 
 ```python
-# In _r_tol(): GP follows the same rule as TPRS (single-sp direct GPs
-# get MODERATE on Gaussian). Tensor GPs inherit the existing
-# tensor MODERATE rule via "te" / "ti" handling — listing them
-# explicitly here is belt-and-braces.
+# In _r_tol(): direct GP is a single-λ smooth, so it joins tp/cr in the
+# gaussian-MODERATE list. Tensor GP (gp_te/gp_ti) is multi-λ and must
+# NOT be listed here — it follows te/ti, which fall through to LOOSE for
+# every family (there is no "tensor MODERATE" rule; the actual _r_tol
+# MODERATE list is tp/cr/re/re_slope/re_mixed only). gp_mixed also stays
+# LOOSE — its gam.side column drop roughens the surface.
 if family_name == "gaussian" and smooth_key in (
-    "tp", "cr", "re",
-    "gp", "gp_2d",           # direct GP
-    "gp_te", "gp_ti",        # tensor-margin GP
+    "tp", "cr", "re", "re_slope", "re_mixed",
+    "gp", "gp_2d",           # direct GP only (single λ)
 ):
     return MODERATE
 return LOOSE

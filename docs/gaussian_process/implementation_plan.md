@@ -1230,11 +1230,36 @@ the renumber.
 
 ### What to do
 
+**Pattern parity with TPRS — the whole point of this commit.** GP is a
+reduced-rank kriging construction, just like TPRS, so it enters the
+validation matrix through the *same four touch-points* TPRS uses and
+**adds zero new test methods**: (1) a `SmoothConfig` entry, (2) an
+inline data generator, (3) updates to the three tolerance functions,
+and (4) automatic inheritance of `TestValidationMatrix.test_matches_r`
+(7 R-comparison quantities) and `TestHardGateInvariants.test_all_invariants`
+(8 hard-gate invariants). Every tolerance decision below follows from
+one mapping:
+
+| GP config | TPRS analog | # smoothing params | `_r_tol` (gaussian) | compare fitted not coefs |
+|---|---|---|---|---|
+| `gp` | `tp` | 1 | MODERATE | yes |
+| `gp_2d` | `tp` (single λ) | 1 | MODERATE | yes |
+| `gp_mixed` | `tp` + parametric | 1 | LOOSE | yes |
+| `gp_te` | `te` | ≥2 | LOOSE | yes |
+| `gp_ti` | `ti` | ≥2 | LOOSE | yes |
+
+Direct GP (`gp`, `gp_2d`) is a single-λ smooth like `tp`/`cr`; tensor
+GP (`gp_te`, `gp_ti`) is a multi-λ smooth like `te`/`ti`. Do **not**
+invent a GP-specific testing shape — reuse the TPRS one verbatim.
+
 1. **Add 5 GP smooth configs** to `SMOOTH_CONFIGS` in
    `tests/test_validation_matrix.py` — **three direct GP** (`gp`,
    `gp_2d`, `gp_mixed`) and **two tensor GP** (`gp_te`, `gp_ti`).
-   Direct and tensor are mathematically distinct constructions
-   (design §1.3 table); neither is redundant.
+   The `SmoothConfig` shape (`py_formula`, `r_formula`, `data_type`)
+   is identical to the existing TPRS entries; the `gp_te` / `gp_ti`
+   R formulas spell out `k=c(5, 5)` exactly as the `te` / `ti` configs
+   already do. Direct and tensor are mathematically distinct
+   constructions (design §1.3 table); neither is redundant.
 
    `gp_mixed` uses `x + s(x, bs='gp')` — same variable on both sides
    so the parametric linear term collides with the GP's non-stationary
@@ -1291,38 +1316,130 @@ the renumber.
    the R-side `m=c(...)` literal — let the helper do it so a future
    refactor of the mgcv-side encoding only has to touch one place.
 
-2. **Add 4 data generators** per design §12.1.2:
-   - `_make_gp_1d_data(family_name)`
-   - `_make_gp_2d_data(family_name)` — uses `x` / `z`
-   - `_make_gp_1d_par_data(family_name)` — generates a single `x`
-     column (no separate `x_par`), with `eta = 0.7*x + sin(3πx)*0.6`
-     so the linear trend is real and `gam.side()` has something to
-     drop.
-   - `_make_gp_te_2d_data(family_name)` — uses `x1` / `x2` (distinct
-     column names from `gp_2d_data` so direct-vs-tensor cells don't
-     collide in the matrix), with a separable + interaction signal so
-     both `te` and `ti` have something to fit.
+2. **Add 4 data generators following the exact structure of the
+   existing TPRS/RE generators** (`_make_single_data`,
+   `_make_two_smooth_data` at `test_validation_matrix.py:56-112`). Each
+   is `def _make_..._data(family_name: str, seed: int = SEED) ->
+   pd.DataFrame`, computes a base `eta`, then runs the **same verbatim
+   per-family transform block** that `_make_two_smooth_data` uses.
 
-   Wire into `_get_data()`:
+   **Do not introduce an `_eta_to_response` helper.** Design §12.1.2
+   sketches the generators as one-liners calling a shared
+   `_eta_to_response(eta, family, rng, …)`, but **no such helper
+   exists** in `test_validation_matrix.py` — the established pattern
+   inlines the family branch in each generator. Adding the helper would
+   mean rewriting the existing TPRS/RE generators (a Hard Allow-List
+   regression risk) for zero behavioral gain. This step supersedes the
+   §12.1.2 sketch.
+
+   The shared per-family block, copied verbatim from
+   `_make_two_smooth_data` — paste it into all four generators:
+
    ```python
-   if config.data_type in ("gp_1d", "gp_2d", "gp_1d_par", "gp_te_2d"):
-       return {
-           "gp_1d":     _make_gp_1d_data,
-           "gp_2d":     _make_gp_2d_data,
-           "gp_1d_par": _make_gp_1d_par_data,
-           "gp_te_2d":  _make_gp_te_2d_data,
-       }[config.data_type](family)
+   if family_name == "gaussian":
+       y = eta + rng.normal(0, 0.3, n)
+   elif family_name == "binomial":
+       prob = 1.0 / (1.0 + np.exp(-eta))
+       y = rng.binomial(1, prob, n).astype(float)
+   elif family_name == "poisson":
+       y = rng.poisson(np.exp(eta * 0.5 + 0.5)).astype(float)
+   elif family_name == "gamma":
+       mu = np.exp(eta * 0.3 + 1.0)
+       y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+   elif family_name == "nb":
+       mu = np.exp(eta * 0.5 + 0.5)
+       theta = 2.0
+       y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
+   else:
+       raise ValueError(f"Unknown family: {family_name}")
    ```
 
-3. **Update tolerance rules** per design §12.1.3:
-   - In `_r_tol()`: add `"gp", "gp_2d", "gp_te", "gp_ti"` to the
-     Gaussian-MODERATE list (same as TPRS / `te`).
-   - In `_compare_fitted_not_coefs()`: add `"gp", "gp_2d",
-     "gp_mixed", "gp_te", "gp_ti"` to the list. Direct GP has
-     eigenvector sign ambiguity; tensor GP has the same plus tensor
-     SVD-reparameterization ambiguity (`_svd_reparameterize` is
-     orthogonal-equivalent across implementations). Both pathways
-     must compare fitted values, never raw coefficients.
+   The per-generator signal (`n`, covariates, `eta`, returned columns).
+   `n ≥ 300` everywhere, so no binomial-specific size bump is needed:
+
+   - `_make_gp_1d_data` — `n = 300`; `x ~ U(0, 1)`;
+     `eta = np.sin(3 * np.pi * x) * 0.8 + np.cos(2 * np.pi * x) * 0.4`;
+     returns `pd.DataFrame({"x": x, "y": y})`.
+   - `_make_gp_2d_data` — `n = 400`; `x, z ~ U(0, 1)`;
+     `eta = np.sin(2 * np.pi * x) * np.cos(2 * np.pi * z) + 0.3 * (x + z)`;
+     returns `pd.DataFrame({"x": x, "z": z, "y": y})`.
+   - `_make_gp_1d_par_data` — `n = 300`; `x ~ U(0, 1)`;
+     `eta = 0.7 * x + np.sin(3 * np.pi * x) * 0.6` (real linear trend so
+     `gam.side()` has a redundant column to drop); returns
+     `pd.DataFrame({"x": x, "y": y})`.
+   - `_make_gp_te_2d_data` — `n = 400`; `x1, x2 ~ U(0, 1)`;
+     `eta = np.sin(2 * np.pi * x1) + np.cos(2 * np.pi * x2)
+     + 0.5 * np.sin(2 * np.pi * x1) * np.cos(2 * np.pi * x2)`
+     (separable + interaction so both `te` and `ti` have signal);
+     returns `pd.DataFrame({"x1": x1, "x2": x2, "y": y})`. Distinct
+     column names from `gp_2d` (`x` / `z`) so the two pathways never
+     collide in the matrix loop.
+
+   Wire into `_get_data()` with **flat `if` statements** matching the
+   existing dispatch style (not a dict sub-dispatch), inserted before
+   the final `raise`:
+
+   ```python
+   if config.data_type == "gp_1d":
+       return _make_gp_1d_data(family)
+   if config.data_type == "gp_2d":
+       return _make_gp_2d_data(family)
+   if config.data_type == "gp_1d_par":
+       return _make_gp_1d_par_data(family)
+   if config.data_type == "gp_te_2d":
+       return _make_gp_te_2d_data(family)
+   ```
+
+3. **Update tolerance rules to mirror the TPRS / `te` / `ti` treatment
+   exactly** (per the mapping table above). Three functions, two of
+   them touched:
+
+   - **`_r_tol()`**: add **only** `"gp"` and `"gp_2d"` to the
+     Gaussian-MODERATE list — they are single-λ direct smooths, exactly
+     like `tp`/`cr`:
+
+     ```python
+     if family_name == "gaussian" and smooth_key in (
+         "tp", "cr", "re", "re_slope", "re_mixed",
+         "gp", "gp_2d",          # direct GP: single λ, like tp/cr
+     ):
+         return MODERATE
+     return LOOSE
+     ```
+
+     **Do NOT add `gp_te` / `gp_ti` / `gp_mixed` here** — they fall
+     through to LOOSE. Tensor GP is multi-λ and follows `te`/`ti`;
+     `gp_mixed` carries a `gam.side()` column drop that roughens the
+     surface.
+
+     > ⚠️ **This corrects design §12.1.3.** That section adds
+     > `gp_te`/`gp_ti` to the MODERATE branch and claims they "inherit
+     > the existing tensor MODERATE rule." **No such rule exists.** The
+     > actual `_r_tol` (`test_validation_matrix.py:338-346`) gives
+     > `te`/`ti` **LOOSE** for every family, including gaussian.
+     > Following §12.1.3 verbatim would make tensor GP *stricter* than
+     > tensor TPRS while it carries strictly *more* ambiguity
+     > (eigenvector sign + SVD-reparam + flat multi-λ surface) — a
+     > near-certain false failure. If §12.1.2/§12.1.3 are later
+     > reconciled, this is the resolution: tensor GP = LOOSE.
+
+   - **`_compare_fitted_not_coefs()`**: add all five GP keys. Direct GP
+     has eigenvector sign ambiguity; tensor GP adds SVD-reparam
+     ambiguity (`_svd_reparameterize` is orthogonal-equivalent across
+     implementations). Both must compare fitted values, never raw
+     coefficients — identical to why `tp`/`te`/`ti` are already listed:
+
+     ```python
+     return smooth_key in (
+         "tp", "tp_by", "te", "ti", "te_by", "cr_by", "re_mixed",
+         "gp", "gp_2d", "gp_mixed", "gp_te", "gp_ti",
+     )
+     ```
+
+   - **`_fitted_tol()`**: leave untouched for GP. Tensor GP is already
+     LOOSE via the `_r_tol` fall-through (the same way `te` is handled,
+     and `ti`'s explicit `_fitted_tol` entry is itself redundant), so
+     no GP-specific entry is needed.
 
 4. **`penalty_psd` is unconditionally safe** for direct GP: Commit
    D's always-on indefinite-eigenvalue clip (design §8.3) guarantees
@@ -1360,6 +1477,10 @@ the renumber.
 - `gp_te` / `gp_ti` exercise tensor GP through the existing
   wrappers (no tensor-side code change in this commit or any
   earlier one).
+- Tolerances match the TPRS pattern: direct GP (`gp`, `gp_2d`) is
+  MODERATE on gaussian like `tp`/`cr`; tensor GP (`gp_te`, `gp_ti`)
+  and `gp_mixed` are LOOSE like `te`/`ti`; all five compare fitted
+  values, not coefficients.
 - Coverage ≥ 80%.
 - **Agent stops and hands off to user for commit.** Do not proceed to
   Commit I (the conditional Commit H from the original plan has been
