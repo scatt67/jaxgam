@@ -1551,12 +1551,27 @@ This works correctly out of the box — no changes to `constraints.py`.
 ### 7.2 gam.side() Applies
 
 `side_constrain = True` (the default). For non-stationary GP, the linear
-trend in the null space (`T(x)`) can collide with:
-- A parametric `x` term in the same formula: `gam(y ~ x + s(x, bs="gp"))`.
-- The linear trend in another smooth.
+trend in the null space (`T(x)`) can collide with two things, which are
+handled differently:
 
-`gam.side()` will detect this via the existing pivoted-QR mechanism and
-drop the redundant columns. No GP-specific code needed.
+- **The linear trend in another smooth** sharing a variable (e.g.
+  `s(x) + te(x, z)`). This is the classic nesting case, already handled:
+  shared variable names keep `gam_side` past its early return, and the
+  existing pivoted-QR mechanism (`fix_dependence`) drops the redundant
+  columns. No code change needed.
+- **A parametric `x` term** in the same formula
+  (`gam(y ~ x + s(x, bs="gp"))`). This required a fix to `gam_side` in
+  `constraints.py`. Its original early return fired whenever every
+  smooth's variable names were unique — the situation for a lone
+  `s(x, bs="gp")` — so the parametric column was never compared against
+  the smooth's null-space columns, the redundant column was *not*
+  dropped, and the model matrix was left rank-deficient. `gam_side` now
+  also tests each smooth against the (non-constant) parametric model
+  matrix, detects the duplicated linear null-space column, and drops it.
+  The fix is **not GP-specific** — it equally resolves
+  `x + s(x, bs="tp")` and any other parametric-vs-smooth-null-space
+  collinearity (regression test:
+  `tests/test_constraints.py::TestGamSide::test_parametric_gp_null_space_duplicate_deleted`).
 
 For stationary GP (`m[1] < 0`), the null space is just the intercept,
 which is already absorbed by centering, so `gam.side()` will typically be

@@ -1,8 +1,8 @@
-"""50-Cell Validation Matrix: systematic R comparison for all smooth x family combos.
+"""75-Cell Validation Matrix: systematic R comparison for all smooth x family combos.
 
 Tests cover every cell in the v1.0 surface (design.md §1.2):
-- 10 smooth configs (tp, cr, te, ti, tp_by, cr_by, te_by, re, re_slope, re_mixed)
-    x 5 families = 50 cells
+- 15 smooth configs (tp, cr, te, ti, tp_by, cr_by, te_by, re, re_slope,
+  re_mixed, gp, gp_2d, gp_mixed, gp_te, gp_ti) x 5 families = 75 cells
 - Families: gaussian, binomial, poisson, gamma, nb
 
 Plus hard-gate invariants (§18.1) that must hold for all cells without R.
@@ -12,6 +12,7 @@ Tolerance rationale (from AGENTS.md §Common Pitfalls, MEMORY.md):
   GLM families: LOOSE (rtol=1e-2, atol=1e-4).
   Tensor products / factor-by: LOOSE for all (flat REML surfaces).
   TPRS: compare fitted values not raw coefficients (sign ambiguity).
+  GP: compare fitted values not raw coefficients (eigenvector/SVD ambiguity).
   Factor-by EDF: our architecture stores 1 combined entry vs R's per-level;
     compare total EDF sum.
   RE (re, re_slope): deterministic basis, single sp — direct coef comparison.
@@ -91,6 +92,124 @@ def _make_two_smooth_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
     x2 = rng.uniform(0, 1, n)
 
     eta = np.sin(2 * np.pi * x1) + 0.5 * x2
+
+    if family_name == "gaussian":
+        y = eta + rng.normal(0, 0.3, n)
+    elif family_name == "binomial":
+        prob = 1.0 / (1.0 + np.exp(-eta))
+        y = rng.binomial(1, prob, n).astype(float)
+    elif family_name == "poisson":
+        y = rng.poisson(np.exp(eta * 0.5 + 0.5)).astype(float)
+    elif family_name == "gamma":
+        mu = np.exp(eta * 0.3 + 1.0)
+        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
+    else:
+        raise ValueError(f"Unknown family: {family_name}")
+
+    return pd.DataFrame({"x1": x1, "x2": x2, "y": y})
+
+
+def _make_gp_1d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
+    """One-dimensional GP smooth data, parametrized by family."""
+    rng = np.random.default_rng(seed)
+    n = 300
+    x = rng.uniform(0, 1, n)
+
+    eta = np.sin(3 * np.pi * x) * 0.8 + np.cos(2 * np.pi * x) * 0.4
+
+    if family_name == "gaussian":
+        y = eta + rng.normal(0, 0.3, n)
+    elif family_name == "binomial":
+        prob = 1.0 / (1.0 + np.exp(-eta))
+        y = rng.binomial(1, prob, n).astype(float)
+    elif family_name == "poisson":
+        y = rng.poisson(np.exp(eta * 0.5 + 0.5)).astype(float)
+    elif family_name == "gamma":
+        mu = np.exp(eta * 0.3 + 1.0)
+        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
+    else:
+        raise ValueError(f"Unknown family: {family_name}")
+
+    return pd.DataFrame({"x": x, "y": y})
+
+
+def _make_gp_2d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
+    """Two-dimensional direct GP smooth data, parametrized by family."""
+    rng = np.random.default_rng(seed)
+    n = 400
+    x = rng.uniform(0, 1, n)
+    z = rng.uniform(0, 1, n)
+
+    eta = np.sin(2 * np.pi * x) * np.cos(2 * np.pi * z) + 0.3 * (x + z)
+
+    if family_name == "gaussian":
+        y = eta + rng.normal(0, 0.3, n)
+    elif family_name == "binomial":
+        prob = 1.0 / (1.0 + np.exp(-eta))
+        y = rng.binomial(1, prob, n).astype(float)
+    elif family_name == "poisson":
+        y = rng.poisson(np.exp(eta * 0.5 + 0.5)).astype(float)
+    elif family_name == "gamma":
+        mu = np.exp(eta * 0.3 + 1.0)
+        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
+    else:
+        raise ValueError(f"Unknown family: {family_name}")
+
+    return pd.DataFrame({"x": x, "z": z, "y": y})
+
+
+def _make_gp_1d_par_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
+    """One-dimensional GP plus parametric linear term data."""
+    rng = np.random.default_rng(seed)
+    n = 300
+    x = rng.uniform(0, 1, n)
+
+    eta = 0.7 * x + np.sin(3 * np.pi * x) * 0.6
+
+    if family_name == "gaussian":
+        y = eta + rng.normal(0, 0.3, n)
+    elif family_name == "binomial":
+        prob = 1.0 / (1.0 + np.exp(-eta))
+        y = rng.binomial(1, prob, n).astype(float)
+    elif family_name == "poisson":
+        y = rng.poisson(np.exp(eta * 0.5 + 0.5)).astype(float)
+    elif family_name == "gamma":
+        mu = np.exp(eta * 0.3 + 1.0)
+        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+    elif family_name == "nb":
+        mu = np.exp(eta * 0.5 + 0.5)
+        theta = 2.0
+        y = rng.negative_binomial(n=theta, p=theta / (mu + theta), size=n).astype(float)
+    else:
+        raise ValueError(f"Unknown family: {family_name}")
+
+    return pd.DataFrame({"x": x, "y": y})
+
+
+def _make_gp_te_2d_data(family_name: str, seed: int = SEED) -> pd.DataFrame:
+    """Two-dimensional tensor GP smooth data, parametrized by family."""
+    rng = np.random.default_rng(seed)
+    n = 400
+    x1 = rng.uniform(0, 1, n)
+    x2 = rng.uniform(0, 1, n)
+
+    eta = (
+        np.sin(2 * np.pi * x1)
+        + np.cos(2 * np.pi * x2)
+        + 0.5 * np.sin(2 * np.pi * x1) * np.cos(2 * np.pi * x2)
+    )
 
     if family_name == "gaussian":
         y = eta + rng.normal(0, 0.3, n)
@@ -250,7 +369,7 @@ class SmoothConfig:
 
     py_formula: str
     r_formula: str
-    data_type: str  # "single", "two_smooth", "factor_by", "factor_by_2d", "re"
+    data_type: str  # dispatched in _get_data
 
 
 SMOOTH_CONFIGS: dict[str, SmoothConfig] = {
@@ -304,6 +423,36 @@ SMOOTH_CONFIGS: dict[str, SmoothConfig] = {
         r_formula="y ~ s(x, k=10, bs='tp') + s(g, bs='re')",
         data_type="re",
     ),
+    "gp": SmoothConfig(
+        py_formula="y ~ s(x, bs='gp')",
+        r_formula="y ~ s(x, bs='gp')",
+        data_type="gp_1d",
+    ),
+    "gp_2d": SmoothConfig(
+        py_formula="y ~ s(x, z, bs='gp', k=30)",
+        r_formula="y ~ s(x, z, bs='gp', k=30)",
+        data_type="gp_2d",
+    ),
+    "gp_mixed": SmoothConfig(
+        py_formula="y ~ x + s(x, bs='gp')",
+        r_formula="y ~ x + s(x, bs='gp')",
+        data_type="gp_1d_par",
+    ),
+    "gp_te": SmoothConfig(
+        py_formula="y ~ te(x1, x2, bs='gp', k=5)",
+        r_formula="y ~ te(x1, x2, bs='gp', k=c(5, 5))",
+        data_type="gp_te_2d",
+    ),
+    "gp_ti": SmoothConfig(
+        py_formula=(
+            "y ~ s(x1, bs='gp', k=5) + s(x2, bs='gp', k=5) + ti(x1, x2, bs='gp', k=5)"
+        ),
+        r_formula=(
+            "y ~ s(x1, bs='gp', k=5) + s(x2, bs='gp', k=5) "
+            "+ ti(x1, x2, bs='gp', k=c(5, 5))"
+        ),
+        data_type="gp_te_2d",
+    ),
 }
 
 FAMILIES = ["gaussian", "binomial", "poisson", "gamma", "nb"]
@@ -326,6 +475,14 @@ def _get_data(config: SmoothConfig, family: str) -> pd.DataFrame:
         return _make_factor_by_2d_data(family)
     if config.data_type == "re":
         return _make_re_data(family)
+    if config.data_type == "gp_1d":
+        return _make_gp_1d_data(family)
+    if config.data_type == "gp_2d":
+        return _make_gp_2d_data(family)
+    if config.data_type == "gp_1d_par":
+        return _make_gp_1d_par_data(family)
+    if config.data_type == "gp_te_2d":
+        return _make_gp_te_2d_data(family)
     raise ValueError(f"Unknown data_type: {config.data_type}")
 
 
@@ -341,6 +498,8 @@ def _r_tol(smooth_key: str, family_name: str):
         "re",
         "re_slope",
         "re_mixed",
+        "gp",
+        "gp_2d",
     ):
         return MODERATE
     return LOOSE
@@ -367,7 +526,20 @@ def _compare_fitted_not_coefs(smooth_key: str) -> bool:
     Tensor products and factor-by: flat REML surfaces mean different sp can
     give different coefficients that produce equivalent fitted values.
     """
-    return smooth_key in ("tp", "tp_by", "te", "ti", "te_by", "cr_by", "re_mixed")
+    return smooth_key in (
+        "tp",
+        "tp_by",
+        "te",
+        "ti",
+        "te_by",
+        "cr_by",
+        "re_mixed",
+        "gp",
+        "gp_2d",
+        "gp_mixed",
+        "gp_te",
+        "gp_ti",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +557,7 @@ def _cell_id(val):
 
 
 # ---------------------------------------------------------------------------
-# A. TestValidationMatrix — R comparison (50 cells)
+# A. TestValidationMatrix — R comparison (75 cells)
 # ---------------------------------------------------------------------------
 
 
@@ -436,14 +608,24 @@ class TestValidationMatrix:
 
         def assert_edf_vs_r() -> None:
             tol = _fitted_tol(smooth_key, family_name)
-            py_edf_total = float(np.sum(model.edf))
-            r_edf_total = float(np.sum(r_result["edf"]))
+            if smooth_key == "gp_mixed":
+                # y ~ x + s(x, bs='gp') is intentionally rank-deficient:
+                # parametric x duplicates the GP linear null-space column.
+                # Smooth-block EDF allocation is pivot-dependent, so compare
+                # the allocation-invariant total model EDF for this cell.
+                py_edf_total = model.edf_total
+                r_edf_total = float(r_result["edf_total"])
+                edf_label = "total model EDF"
+            else:
+                py_edf_total = float(np.sum(model.edf))
+                r_edf_total = float(np.sum(r_result["edf"]))
+                edf_label = "total EDF"
             np.testing.assert_allclose(
                 py_edf_total,
                 r_edf_total,
                 rtol=tol.rtol,
                 atol=tol.atol,
-                err_msg=f"[{cell_id}] total EDF",
+                err_msg=f"[{cell_id}] {edf_label}",
             )
 
         def assert_scale_vs_r() -> None:

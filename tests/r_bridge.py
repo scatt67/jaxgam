@@ -294,6 +294,7 @@ class RBridge:
 
         r_summary = self._base.summary(r_model)
         edf = np.array(r_summary.rx2("edf"), dtype=np.float64)
+        edf_total = float(np.sum(np.array(r_model.rx2("edf"), dtype=np.float64)))
         null_deviance = float(np.array(r_model.rx2("null.deviance"))[0])
 
         # Extract theta for extended families (e.g. NB)
@@ -311,6 +312,7 @@ class RBridge:
             "fitted_values": fitted_values,
             "smoothing_params": smoothing_params,
             "edf": edf,
+            "edf_total": edf_total,
             "deviance": deviance,
             "null_deviance": null_deviance,
             "scale": scale,
@@ -348,6 +350,7 @@ write.csv(data.frame(v=as.numeric(coef(model))), "{tmpdir}/coefficients.csv", ro
 write.csv(data.frame(v=as.numeric(fitted(model))), "{tmpdir}/fitted_values.csv", row.names=FALSE)
 write.csv(data.frame(v=as.numeric(model$sp)), "{tmpdir}/smoothing_params.csv", row.names=FALSE)
 write.csv(data.frame(v=as.numeric(s$edf)), "{tmpdir}/edf.csv", row.names=FALSE)
+writeLines(format(sum(model$edf), digits=15), "{tmpdir}/edf_total.txt")
 writeLines(format(deviance(model), digits=15), "{tmpdir}/deviance.txt")
 writeLines(format(model$scale, digits=15), "{tmpdir}/scale.txt")
 write.csv(as.data.frame(model$Vp), "{tmpdir}/Vp.csv", row.names=FALSE)
@@ -403,6 +406,7 @@ if (!is.null(fam$getTheta)) {{
                 "fitted_values": _read_vec("fitted_values.csv"),
                 "smoothing_params": _read_vec("smoothing_params.csv"),
                 "edf": _read_vec("edf.csv"),
+                "edf_total": _read_scalar("edf_total.txt"),
                 "deviance": _read_scalar("deviance.txt"),
                 "null_deviance": _read_scalar("null_deviance.txt"),
                 "scale": scale,
@@ -508,6 +512,7 @@ write.csv(data.frame(v=as.numeric(coef(model))), "{tmpdir}/coefficients.csv", ro
 write.csv(data.frame(v=as.numeric(fitted(model))), "{tmpdir}/fitted_values.csv", row.names=FALSE)
 write.csv(data.frame(v=as.numeric(model$sp)), "{tmpdir}/smoothing_params.csv", row.names=FALSE)
 write.csv(data.frame(v=as.numeric(s$edf)), "{tmpdir}/edf.csv", row.names=FALSE)
+writeLines(format(sum(model$edf), digits=15), "{tmpdir}/edf_total.txt")
 writeLines(format(deviance(model), digits=15), "{tmpdir}/deviance.txt")
 writeLines(format(model$scale, digits=15), "{tmpdir}/scale.txt")
 write.csv(as.data.frame(model$Vp), "{tmpdir}/Vp.csv", row.names=FALSE)
@@ -587,6 +592,7 @@ for (i in seq_len(n_smooths)) {{
                 "fitted_values": _read_vec("fitted_values.csv"),
                 "smoothing_params": _read_vec("smoothing_params.csv"),
                 "edf": _read_vec("edf.csv"),
+                "edf_total": _read_scalar("edf_total.txt"),
                 "deviance": _read_scalar("deviance.txt"),
                 "null_deviance": _read_scalar("null_deviance.txt"),
                 "scale": scale,

@@ -50,6 +50,7 @@ class TestRBridgeFitGam:
             "fitted_values",
             "smoothing_params",
             "edf",
+            "edf_total",
             "deviance",
             "null_deviance",
             "scale",
@@ -70,6 +71,7 @@ class TestRBridgeFitGam:
         assert result["fitted_values"].dtype == np.float64
         assert isinstance(result["smoothing_params"], np.ndarray)
         assert isinstance(result["edf"], np.ndarray)
+        assert isinstance(result["edf_total"], float)
         assert isinstance(result["deviance"], float)
         assert isinstance(result["scale"], float)
         assert isinstance(result["Vp"], np.ndarray)
@@ -372,3 +374,4 @@ class TestRBridgeSubprocessFallback:
             r1["fitted_values"], r2["fitted_values"], rtol=STRICT.rtol
         )
         np.testing.assert_allclose(r1["deviance"], r2["deviance"], rtol=STRICT.rtol)
+        np.testing.assert_allclose(r1["edf_total"], r2["edf_total"], rtol=STRICT.rtol)

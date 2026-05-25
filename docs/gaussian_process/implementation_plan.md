@@ -1218,7 +1218,7 @@ before the RBridge insertion.
 
 ---
 
-## Commit H — Validation Matrix Integration
+## Commit H — Validation Matrix Integration (**DONE**)
 
 **Goal:** Add GP cells to `tests/test_validation_matrix.py` so GP is
 exercised against all 5 families (gaussian, binomial, poisson, gamma, nb)

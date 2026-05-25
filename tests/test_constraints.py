@@ -23,6 +23,7 @@ from jaxgam.smooths.by_variable import (
     NumericBySmooth,
 )
 from jaxgam.smooths.constraints import CoefficientMap, TermBlock
+from jaxgam.smooths.gaussian_process import GaussianProcessSmooth
 from jaxgam.smooths.tensor import TensorProductSmooth
 from jaxgam.smooths.tprs import TPRSSmooth
 
@@ -72,6 +73,18 @@ def _setup_tprs(var_name: str, data_values: np.ndarray, k: int = 10) -> TPRSSmoo
     """Create and setup a TPRS smooth with the given variable name."""
     spec = _make_spec([var_name], k=k)
     sm = TPRSSmooth(spec)
+    sm.setup({var_name: data_values})
+    return sm
+
+
+def _setup_gp(
+    var_name: str,
+    data_values: np.ndarray,
+    k: int = 10,
+) -> GaussianProcessSmooth:
+    """Create and setup a GP smooth with the given variable name."""
+    spec = _make_spec([var_name], bs="gp", k=k)
+    sm = GaussianProcessSmooth(spec)
     sm.setup({var_name: data_values})
     return sm
 
@@ -380,6 +393,28 @@ class TestGamSide:
         # Variable names differ: x1 vs x1fac, so no nesting detected
         assert del_indices[0] is None
         assert del_indices[1] is None
+
+    def test_parametric_gp_null_space_duplicate_deleted(self, constraint_2d_data):
+        """x + s(x, bs='gp') deletes the duplicate GP null-space column."""
+        x = constraint_2d_data["x1"].values
+        sm = _setup_gp("x1", x)
+        X, S = _get_X_S(sm, {"x1": x})
+        X_c, S_c, _ = CoefficientMap.apply_sum_to_zero(X, S)
+
+        X_param = np.column_stack([np.ones_like(x), x])
+        assert np.linalg.matrix_rank(np.column_stack([X_param, X_c])) < (
+            X_param.shape[1] + X_c.shape[1]
+        )
+
+        X_blocks = [X_c.copy()]
+        S_blocks = [[S_mat.copy() for S_mat in S_c]]
+        del_indices = CoefficientMap.gam_side([sm], X_blocks, S_blocks, X_param)
+
+        assert del_indices[0] is not None
+        assert len(del_indices[0]) == 1
+        assert np.linalg.matrix_rank(np.column_stack([X_param, X_blocks[0]])) == (
+            X_param.shape[1] + X_blocks[0].shape[1]
+        )
 
     def test_processing_order_low_to_high(self, constraint_2d_data):
         """Smooths are processed low->high dimension (1D before 2D)."""
