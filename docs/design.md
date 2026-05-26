@@ -2134,6 +2134,9 @@ def _is_factor(col):
 
 Each of the following must be fully implemented following the same `Smooth` interface:
 
+Gaussian process smooth implementation details are maintained in
+[`docs/gaussian_process/design.md`](gaussian_process/design.md).
+
 | Class | File | Key Details |
 |---|---|---|
 | `bs` (B-splines) | `bspline.py` | Standard B-spline basis, derivative-based penalty, variable order |

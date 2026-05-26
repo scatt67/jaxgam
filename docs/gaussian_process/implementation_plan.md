@@ -1520,7 +1520,7 @@ invent a GP-specific testing shape — reuse the TPRS one verbatim.
 
 ---
 
-## Commit I — Documentation Updates
+## Commit I — Documentation Updates (**CLAUDE REVIEW**)
 
 **Goal:** Update user-facing documentation so GP appears in the smooth
 catalog and API examples.

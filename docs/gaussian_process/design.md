@@ -1,6 +1,6 @@
 # Gaussian Process Smooth (`bs="gp"`) Implementation Design
 
-- **Status:** Proposed
+- **Status:** Implemented (completed 2026-05-25)
 - **Design Date:** 2026-05-23
 - **Target Branch:** `add-gaussian-process-smooth`
 

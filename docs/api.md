@@ -153,6 +153,9 @@ GAM("y ~ s(x1) + s(x2)")
 # Tensor product
 GAM("y ~ te(x1, x2, k=5)")
 
+# Gaussian process smooth
+GAM("y ~ s(x, z, bs='gp', k=30)")
+
 # Factor-by smooth
 GAM("y ~ s(x, by=fac, k=10) + fac")
 ```
@@ -161,9 +164,76 @@ GAM("y ~ s(x, by=fac, k=10) + fac")
 
 | Argument | Description | Default |
 |---|---|---|
-| `k` | Basis dimension (number of knots). `-1` means auto-select: resolves to `10` for 1D TPRS/cubic, `30` for 2D TPRS. | -1 (auto) |
-| `bs` | Basis type: `'tp'`, `'ts'`, `'cr'`, `'cs'`, `'cc'` | `'tp'` |
+| `k` | Basis dimension (number of knots). `-1` means auto-select: resolves to `10` for 1D TPRS/cubic, `30` for 2D TPRS. GP uses a different rule (see the Gaussian process section). | -1 (auto) |
+| `bs` | Basis type: `'tp'`, `'ts'`, `'cr'`, `'cs'`, `'cc'`, `'gp'`, `'re'` | `'tp'` |
 | `by` | Factor variable for factor-by smooths | None |
+
+### Smooth catalog
+
+| Formula syntax | Basis type |
+|---|---|
+| `s(x, bs='tp')` | Thin-plate regression spline (default) |
+| `s(x, bs='cr')` | Cubic regression spline |
+| `s(x, bs='cs')` | Cubic spline with shrinkage |
+| `s(x, bs='cc')` | Cyclic cubic spline |
+| `s(x, z, bs='gp')` | Low-rank Gaussian process smooth |
+| `s(g, bs='re')` | Dense random effect smooth |
+
+### Gaussian process smooths
+
+`bs='gp'` constructs a low-rank kriging smooth using the Kammann-Wand
+Gaussian process construction: a reduced-rank basis from the leading
+eigenvectors of a correlation matrix evaluated on predictor knots. It
+supports 1D, 2D, and 3D continuous predictors, and can also be used as a
+tensor-product margin via `te()` and `ti()`.
+
+With the default `k=-1`, the GP basis dimension auto-resolves to `12`
+(1D), `33` (2D), or `104` (3D); 4D and higher predictors require an
+explicit `k`.
+
+Supported `kernel` values are case-insensitive canonical names, with no
+aliases:
+
+| Kernel name | Description |
+|---|---|
+| `"spherical"` | Compactly supported spherical correlation |
+| `"power_exponential"` | Power-exponential correlation |
+| `"matern_3_2"` | Matérn 3/2 correlation (default) |
+| `"matern_5_2"` | Matérn 5/2 correlation |
+| `"matern_7_2"` | Matérn 7/2 correlation |
+
+GP smooths accept these Python-native keyword arguments inside `s()`:
+
+| Argument | Description | Default |
+|---|---|---|
+| `kernel` | One of the five kernel names above | `"matern_3_2"` |
+| `rho` | Positive range parameter; omit for the Kammann-Wand automatic range | auto |
+| `power` | Power for `kernel='power_exponential'`; must be in `(0, 2]` | `1.0` |
+| `stationary` | If True, use a stationary GP with no linear trend in the null space | `False` |
+| `xt` | Knot subsampling options: `{"max_knots": int, "seed": int}` | `{"max_knots": 2000, "seed": 1}` |
+
+```python
+from jaxgam import GAM
+
+# Defaults: Matérn 3/2, automatic rho, non-stationary null space
+results = GAM("y ~ s(x, z, bs='gp', k=30)").fit(df)
+
+# Power-exponential kernel with explicit range and squared-exponential power
+results = GAM(
+    "y ~ s(x, bs='gp', kernel='power_exponential', rho=0.5, power=2.0)"
+).fit(df)
+
+# Stationary spherical GP
+results = GAM(
+    "y ~ s(x, bs='gp', kernel='spherical', stationary=True)"
+).fit(df)
+```
+
+Implementation note: mgcv encodes these knobs as a single signed numeric
+vector `m`; JaxGAM intentionally exposes them as named kwargs. Passing
+`m=` raises `ValueError` - see §6.4 of
+[the GP design doc](gaussian_process/design.md) for the mgcv to JaxGAM
+mapping.
 
 ### Tensor product arguments
 
@@ -276,4 +346,3 @@ read-only attributes (frozen dataclass):
 | `theta` | `float \| None` | Estimated theta for NB (None for standard families) |
 | `method` | `str` | Smoothing parameter method ("REML" or "ML") |
 | `n` | `int` | Number of observations |
-
