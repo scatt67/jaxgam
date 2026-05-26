@@ -126,8 +126,10 @@ These are deliberate scope boundaries, not bugs:
    beyond Negative Binomial are not yet available.
 3. **Dense design matrix must fit in memory.** Datasets with > ~10M rows
    require chunked processing, which is not implemented.
-4. **No random effects.** `bs="re"` (random effects) and `bs="fs"`
-   (factor-smooth interactions) require sparse linear algebra.
+4. **No factor-smooth interactions.** `bs="fs"` requires sparse linear
+   algebra and is not implemented. Simple dense random effects
+   (`bs="re"`, including random slopes) *are* supported — see the
+   quickstart.
 5. **No GAMM.** Correlated random effects (`gamm()`) are not supported.
 
 See the [design document](docs/design.md) Section 1.2 for details on what
@@ -303,7 +305,8 @@ compare against both R's `gam(REML)` (apples-to-apples) and `bam(fREML)`
 - You need one-shot fits on small data (n < 100,000) and cold-start
   latency matters
 - You can use `bam(fREML)` for very large datasets, or features beyond
-  v1.0 scope (sparse solvers, extended families, random effects)
+  v1.0 scope (sparse solvers, Tweedie/Beta and other extended families,
+  factor-smooth interactions)
 
 In most cases you probably should just use the original `mgcv` in R it's very robust and efficient! If you are a pure python user, or your tech stack only supports python maybe jaxgam can be useful.
 

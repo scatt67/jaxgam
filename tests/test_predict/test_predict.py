@@ -219,23 +219,52 @@ class TestSEVsR:
 
         model = GAM(self.FORMULA, family=family_name).fit(train)
         bridge = RBridge()
-        r_result = bridge.predict_gam(
+        r_link = bridge.predict_gam(
             self.FORMULA, train, newdata, family=family_r, pred_type="link", se_fit=True
         )
+        r_response = bridge.predict_gam(
+            self.FORMULA,
+            train,
+            newdata,
+            family=family_r,
+            pred_type="response",
+            se_fit=True,
+        )
 
-        return family_name, model, newdata, r_result
+        return family_name, model, newdata, r_link, r_response
 
     def test_se_vs_r(self, se_pair):
-        family_name, model, newdata, r_result = se_pair
+        """SE on both scales matches R's predict.gam(se.fit=TRUE).
+
+        Link scale is sqrt(diag(X Vp X^T)); response scale applies the
+        delta-method transform se_link * |dmu/deta|. For non-identity links
+        (log, logit, inverse) the two differ substantially, so both are
+        checked against R.
+        """
+        family_name, model, newdata, r_link, r_response = se_pair
         tol = r_tolerance(family_name)
-        _, se = model.predict(newdata, pred_type="link", se_fit=True)
-        np.testing.assert_allclose(
-            se,
-            r_result["se"],
-            rtol=tol.rtol,
-            atol=tol.atol,
-            err_msg=f"{family_name} SE differs from R",
+        collector = _AssertCollector()
+        collector.check(
+            "link SE",
+            lambda: np.testing.assert_allclose(
+                model.predict(newdata, pred_type="link", se_fit=True)[1],
+                r_link["se"],
+                rtol=tol.rtol,
+                atol=tol.atol,
+                err_msg=f"{family_name} link-scale SE differs from R",
+            ),
         )
+        collector.check(
+            "response SE",
+            lambda: np.testing.assert_allclose(
+                model.predict(newdata, pred_type="response", se_fit=True)[1],
+                r_response["se"],
+                rtol=tol.rtol,
+                atol=tol.atol,
+                err_msg=f"{family_name} response-scale SE differs from R",
+            ),
+        )
+        collector.raise_if_any(f"{family_name} SE")
 
 
 # ---------------------------------------------------------------------------

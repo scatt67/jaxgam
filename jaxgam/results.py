@@ -276,9 +276,15 @@ class GAMResults:
         if se_fit:
             if X_p is None:
                 X_p = self.X
-            # se = sqrt(rowSums((X_p @ Vp) * X_p))
+            # Link-scale SE: se = sqrt(rowSums((X_p @ Vp) * X_p))
             XVp = X_p @ self.Vp
             se = np.sqrt(np.sum(XVp * X_p, axis=1))
+            if pred_type == "response":
+                # Delta method: transform link-scale SE to the response scale
+                # via the derivative of the inverse link, matching
+                # predict.gam(type="response", se.fit=TRUE):
+                #   se_response = se_link * |dμ/dη|
+                se = se * np.abs(np.asarray(self.family.link.mu_eta(eta)))
             return pred, se
 
         return pred

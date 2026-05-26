@@ -627,3 +627,70 @@ class TestEdgeCases:
         setup = ModelSetup.build(spec, data)
 
         assert setup.X.shape[0] == N
+
+    @pytest.mark.parametrize(
+        ("bad", "match"),
+        [
+            (np.array([2.0]), "expected shape"),  # wrong length: silent broadcast
+            (np.ones(N - 1), "expected shape"),
+            (np.where(np.arange(N) == 0, -1.0, 1.0), "non-negative"),
+            (np.where(np.arange(N) == 0, np.nan, 1.0), "non-finite"),
+        ],
+    )
+    def test_invalid_weights_raise(self, data, bad, match) -> None:
+        """Wrong-length, negative, or non-finite weights raise clearly."""
+        spec = parse_formula("y ~ s(x1, k=10)")
+        with pytest.raises(ValueError, match=match):
+            ModelSetup.build(spec, data, weights=bad)
+
+    def test_zero_weights_allowed(self, data) -> None:
+        """Zero weights are valid (drop observations), as in mgcv."""
+        spec = parse_formula("y ~ s(x1, k=10)")
+        w = np.ones(N)
+        w[0] = 0.0
+        setup = ModelSetup.build(spec, data, weights=w)
+        assert setup.weights[0] == 0.0
+
+    @pytest.mark.parametrize(
+        ("bad", "match"),
+        [
+            (np.array([0.5]), "expected shape"),  # wrong length: silent broadcast
+            (np.where(np.arange(N) == 3, np.nan, 0.0), "non-finite"),
+        ],
+    )
+    def test_invalid_offset_raises(self, data, bad, match) -> None:
+        """Wrong-length or non-finite offset raises clearly."""
+        spec = parse_formula("y ~ s(x1, k=10)")
+        with pytest.raises(ValueError, match=match):
+            ModelSetup.build(spec, data, offset=bad)
+
+    @pytest.mark.parametrize(
+        ("formula", "col", "value", "name"),
+        [
+            ("y ~ x2 + s(x1, k=10)", "x2", np.nan, "x2"),  # parametric covariate
+            ("y ~ s(x1, k=10)", "x1", np.inf, "x1"),  # smooth covariate
+        ],
+        ids=["parametric", "smooth"],
+    )
+    def test_nonfinite_covariate_raises(self, data, formula, col, value, name) -> None:
+        """Non-finite numeric covariate raises a clear error (not a LinAlgError)."""
+        data = data.copy()
+        data.loc[5, col] = value
+        spec = parse_formula(formula)
+        with pytest.raises(ValueError, match=rf"Covariate '{name}'.*non-finite"):
+            ModelSetup.build(spec, data)
+
+    def test_unseen_parametric_factor_level_raises(self, factor_data) -> None:
+        """Predicting an unseen parametric factor level raises like R."""
+        spec = parse_formula("y ~ fac + s(x1, k=10)")
+        setup = ModelSetup.build(spec, factor_data)
+        newdata = pd.DataFrame(
+            {
+                "x1": [0.5, 0.5],
+                "fac": pd.Categorical(
+                    ["lev0", "newlev"], categories=["lev0", "lev1", "lev2", "newlev"]
+                ),
+            }
+        )
+        with pytest.raises(ValueError, match=r"new level.*newlev"):
+            setup.build_predict_matrix(newdata)

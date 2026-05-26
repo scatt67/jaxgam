@@ -206,9 +206,16 @@ class ModelSetup:
             weights = np.ones(n_obs, dtype=np.float64)
         else:
             weights = np.asarray(weights, dtype=np.float64).ravel()
+            cls._validate_vector(weights, n_obs, "weights", non_negative=True)
 
         if offset is not None:
             offset = np.asarray(offset, dtype=np.float64).ravel()
+            cls._validate_vector(offset, n_obs, "offset")
+
+        # Validate covariate values (response is validated above; covariates
+        # are validated here so non-finite predictors raise a clear error
+        # rather than a downstream LinAlgError).
+        cls._validate_finite_covariates(formula_spec, original_data, data_dict)
 
         # 2b. Build parametric design matrix
         X_parametric, param_names = cls._build_parametric_matrix(
@@ -473,6 +480,66 @@ class ModelSetup:
                 )
 
     @staticmethod
+    def _validate_vector(
+        vec: npt.NDArray[np.floating],
+        n_obs: int,
+        name: str,
+        non_negative: bool = False,
+    ) -> None:
+        """Validate a per-observation vector (``weights`` or ``offset``).
+
+        Guards against silently-broadcast wrong-length inputs and
+        non-finite values, which otherwise surface as cryptic downstream
+        errors or NaN coefficients.
+        """
+        if vec.shape[0] != n_obs:
+            raise ValueError(
+                f"{name} has {vec.shape[0]} element(s) but data has "
+                f"{n_obs} observations; expected shape ({n_obs},)."
+            )
+        if not np.all(np.isfinite(vec)):
+            raise ValueError(f"{name} contains non-finite values (NaN or Inf).")
+        if non_negative and np.any(vec < 0):
+            raise ValueError(f"{name} must be non-negative.")
+
+    @staticmethod
+    def _validate_finite_covariates(
+        formula_spec: FormulaSpec,
+        original_data: dict[str, npt.NDArray] | pd.DataFrame,
+        data_dict: dict[str, npt.NDArray],
+    ) -> None:
+        """Check that numeric covariate columns contain no NaN/Inf.
+
+        Factor (categorical/string) columns are skipped — only numeric
+        predictors are checked. Mirrors the response-variable validation
+        so a non-finite predictor raises a clear error at setup time.
+        """
+        names: list[str] = [t.name for t in formula_spec.parametric_terms]
+        for spec in formula_spec.smooth_terms:
+            names.extend(spec.variables)
+            if spec.by is not None:
+                names.append(spec.by)
+
+        for name in dict.fromkeys(names):  # de-dup, preserve order
+            col = original_data[name]
+            if is_factor(col):
+                continue
+            values = np.asarray(data_dict[name], dtype=np.float64)
+            if not np.all(np.isfinite(values)):
+                n_nan = int(np.sum(np.isnan(values)))
+                n_inf = int(np.sum(np.isinf(values)))
+                parts = []
+                if n_nan:
+                    parts.append(f"{n_nan} NaN")
+                if n_inf:
+                    parts.append(f"{n_inf} Inf")
+                raise ValueError(
+                    f"Covariate '{name}' contains non-finite values "
+                    f"({', '.join(parts)}). Remove or impute missing values "
+                    f"before fitting."
+                )
+
+    @staticmethod
     def _extract_factor_info(
         parametric_terms: list[ParametricTerm] | tuple[ParametricTerm, ...],
         data: dict[str, npt.NDArray] | pd.DataFrame,
@@ -598,6 +665,27 @@ class ModelSetup:
                         f"Factor variable '{term.name}' has fewer than 2 levels "
                         f"({levels}). Cannot create dummy variables."
                     )
+                if factor_info is not None:
+                    # Prediction mode: reject new levels instead of silently
+                    # encoding them as the reference level (matches R's
+                    # predict.gam, which errors on factor has new levels).
+                    known = set(levels)
+                    observed = np.unique(np.asarray(col)).tolist()
+                    unseen = sorted(
+                        {
+                            v
+                            for v in observed
+                            if v not in known
+                            and not (isinstance(v, float) and np.isnan(v))
+                        },
+                        key=str,
+                    )
+                    if unseen:
+                        raise ValueError(
+                            f"Parametric factor '{term.name}' has new level(s) "
+                            f"{unseen} not seen during fitting. Predictions for "
+                            f"unseen levels of a parametric factor are undefined."
+                        )
                 drop_ref = has_intercept
                 dummy, level_names = ModelSetup._encode_factor(
                     col, levels, drop_reference=drop_ref
