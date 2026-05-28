@@ -59,7 +59,7 @@ all families, smooth types, and post-estimation tools.
 ### Families
 
 Gaussian, Binomial, Poisson, Gamma -- each with its default link and
-REML/ML smoothing parameter selection.
+REML smoothing parameter selection.
 
 ### Smooth types
 

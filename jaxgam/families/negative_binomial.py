@@ -228,7 +228,8 @@ class NegativeBinomial(ExtendedFamily):
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
         """All finite eta are valid for NB."""
-        return np.isfinite(eta)
+        xp = array_module(eta)
+        return xp.isfinite(eta)
 
     # ------------------------------------------------------------------
     # Pure-function factories (explicit theta for AD in custom_jvp)

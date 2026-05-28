@@ -108,11 +108,13 @@ class Gaussian(ExponentialFamily):
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """All finite mu are valid for Gaussian."""
-        return np.isfinite(mu)
+        xp = array_module(mu)
+        return xp.isfinite(mu)
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
         """All finite eta are valid for Gaussian."""
-        return np.isfinite(eta)
+        xp = array_module(eta)
+        return xp.isfinite(eta)
 
 
 class Binomial(ExponentialFamily):
@@ -214,7 +216,8 @@ class Binomial(ExponentialFamily):
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
         """All finite eta are valid for Binomial."""
-        return np.isfinite(eta)
+        xp = array_module(eta)
+        return xp.isfinite(eta)
 
 
 class Poisson(ExponentialFamily):
@@ -313,7 +316,8 @@ class Poisson(ExponentialFamily):
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
         """All finite eta are valid for Poisson."""
-        return np.isfinite(eta)
+        xp = array_module(eta)
+        return xp.isfinite(eta)
 
 
 class Gamma(ExponentialFamily):
@@ -421,4 +425,5 @@ class Gamma(ExponentialFamily):
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
         """All finite eta are valid for Gamma."""
-        return np.isfinite(eta)
+        xp = array_module(eta)
+        return xp.isfinite(eta)

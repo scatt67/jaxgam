@@ -52,7 +52,6 @@ def _build_diff_score_kwargs(fd: FittingData, joint_theta: bool):
         "multi_block_proj_S": fd.multi_block_proj_S,
         "family": fd.family,
         "pirls_tol": 1e-8,
-        "is_reml": True,
         "joint_theta": joint_theta,
         "joint_scale": False,
         "n_lambda": fd.n_penalties,

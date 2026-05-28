@@ -93,7 +93,7 @@ all families, smooth types, and post-estimation tools.
 ### Families
 
 Gaussian, Binomial, Poisson, Gamma, and Negative Binomial - each with
-its default link and REML/ML smoothing parameter selection. The Negative
+its default link and REML smoothing parameter selection. The Negative
 Binomial is an extended family with an estimated dispersion parameter
 (theta).
 

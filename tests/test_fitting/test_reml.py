@@ -1,16 +1,17 @@
-"""Tests for REML and ML criterion functions.
+"""Tests for the REML criterion functions.
 
 Tests cover:
 - REML score matching R's gcv.ubre for all four standard families
 - Gradient and Hessian via jax.grad / jax.hessian
 - Finite-difference verification of gradient and Hessian
-- ML criterion (differs from REML)
 - Pearson RSS properties
 - Multi-penalty models (two smooths)
 - Purely parametric model (no penalties)
-- REMLCriterion / MLCriterion class API
+- REMLCriterion class API
 - Scale handling (known phi=1 vs estimated phi)
 - Fletcher scale estimation
+
+(ML is not supported in v1.0; its criterion/classes were removed.)
 
 Design doc reference: Section 4.3, 4.4
 R source reference: gam.fit3.r lines 612-640 (general Laplace REML)
@@ -30,13 +31,11 @@ from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import (
-    MLCriterion,
     REMLCriterion,
     REMLResult,
     estimate_edf,
     estimate_scale,
     fletcher_scale,
-    ml_criterion,
     pearson_rss,
     reml_criterion,
 )
@@ -253,36 +252,6 @@ class TestREMLHessian:
 # ---- ML criterion ----
 
 
-@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
-class TestMLCriterion:
-    """ML criterion tests."""
-
-    FORMULA = "y ~ s(x, k=10, bs='cr')"
-
-    @classmethod
-    def setup_class(cls):
-        data = _generate_family_data("gaussian")
-        cls.fd, cls.pirls_result, cls.log_lambda, _ = _setup_pipeline(
-            cls.FORMULA, data, Gaussian(), "gaussian"
-        )
-
-    def test_ml_differs_from_reml(self):
-        """ML and REML produce different scores."""
-        args = _reml_args(self.fd, self.pirls_result, self.log_lambda)
-        reml_val = float(reml_criterion(**args))
-
-        ml_val = float(ml_criterion(**args))
-        assert reml_val != ml_val
-
-    def test_ml_gradient_finite(self):
-        def ml_fn(ll):
-            args = _reml_args(self.fd, self.pirls_result, ll)
-            return ml_criterion(**args)
-
-        grad = jax.grad(ml_fn)(self.log_lambda)
-        assert jnp.all(jnp.isfinite(grad))
-
-
 # ---- Pearson RSS ----
 
 
@@ -457,7 +426,7 @@ class TestPurelyParametric:
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 class TestCriterionClasses:
-    """REMLCriterion / MLCriterion class API."""
+    """REMLCriterion class API."""
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
@@ -484,20 +453,6 @@ class TestCriterionClasses:
         assert jnp.isfinite(result.edf)
         assert jnp.isfinite(result.scale)
         assert float(result.scale) > 0
-
-    def test_ml_gradient(self):
-        """MLCriterion.gradient returns finite gradient."""
-        obj = MLCriterion(self.fd, self.pirls_result)
-        grad = obj.gradient(self.log_lambda)
-        assert grad.shape == self.log_lambda.shape
-        assert jnp.all(jnp.isfinite(grad))
-
-    def test_ml_evaluate(self):
-        """MLCriterion.evaluate returns REMLResult."""
-        obj = MLCriterion(self.fd, self.pirls_result)
-        result = obj.evaluate(self.log_lambda)
-        assert isinstance(result, REMLResult)
-        assert jnp.isfinite(result.score)
 
 
 # ---- Scale handling ----
@@ -693,10 +648,3 @@ class TestJITCompilation:
         obj = REMLCriterion(self.fd, self.pirls_result)
         hess = jax.hessian(jax.jit(obj.score))(self.log_lambda)
         assert jnp.all(jnp.isfinite(hess))
-
-    def test_ml_score_jit(self):
-        """MLCriterion.score compiles under jax.jit."""
-        obj = MLCriterion(self.fd, self.pirls_result)
-        jit_score = jax.jit(obj.score)
-        score = jit_score(self.log_lambda)
-        assert jnp.isfinite(score)

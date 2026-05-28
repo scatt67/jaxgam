@@ -52,7 +52,8 @@ class GAM:
         Distribution family. One of ``'gaussian'``, ``'binomial'``,
         ``'poisson'``, ``'gamma'``, or an ``ExponentialFamily`` instance.
     method : str
-        Smoothing parameter estimation method: ``'REML'`` or ``'ML'``.
+        Smoothing parameter estimation method. Only ``'REML'`` is supported
+        in v1.0; ``'ML'`` raises ``NotImplementedError`` (see notes below).
     sp : np.ndarray or list, optional
         Fixed smoothing parameters. If provided, skips Newton optimization.
     device : str, optional
@@ -131,7 +132,7 @@ class GAM:
 
         # Phase 2: fit
         if self.sp is not None:
-            result = _fit_fixed_sp(fd, self.sp)
+            result = _fit_fixed_sp(fd, self.sp, self.method)
             lambda_strategy = "fixed"
         else:
             result = newton_optimize(fd, self.method)
@@ -183,10 +184,19 @@ def _resolve_device(device: str | None) -> jax.Device | None:
 def _check_scope_guards(method: str, kwargs: dict) -> None:
     """Validate v1.0 scope guards."""
     method_upper = method.upper()
-    if method_upper not in ("REML", "ML"):
+    if method_upper == "ML":
+        raise NotImplementedError(
+            "method='ML' is not supported. mgcv's ML criterion uses the "
+            "penalty range-space projection of log|X'WX+S| (the C routine "
+            "MLpenalty1 in gdi.c), which differs from REML's full-space "
+            "determinant. Only method='REML' is available; ML is deferred "
+            "until the range-space determinant is implemented. "
+            "See docs/design.md Section 4.4."
+        )
+    if method_upper != "REML":
         raise ValueError(
-            f"method must be 'REML' or 'ML', got {method!r}. "
-            "GCV/UBRE is planned for v1.1."
+            f"method must be 'REML', got {method!r}. "
+            "ML is not available (see above); GCV/UBRE is planned for v1.1."
         )
 
     backend = kwargs.get("backend")
@@ -219,7 +229,7 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
     if gamma != 1.0:
         raise NotImplementedError(
             f"gamma={gamma} is not supported in v1.0. "
-            "Only gamma=1.0 (standard REML/ML) is available."
+            "Only gamma=1.0 (standard REML) is available."
         )
 
     if kwargs.get("knots") is not None:
@@ -228,10 +238,17 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
         )
 
 
-def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
+def _fit_fixed_sp(
+    fd: FittingData, sp: np.ndarray | list, method: str = "REML"
+) -> NewtonResult:
     """Fit with user-supplied fixed smoothing parameters.
 
-    Runs a single PIRLS at the given lambda (no Newton optimization).
+    For standard families this runs a single PIRLS at the given lambda (no
+    Newton optimization). For extended families with an estimated dispersion
+    parameter (e.g. Negative Binomial theta), the smoothing parameters are
+    pinned but theta is still estimated via the outer optimizer — matching
+    mgcv, where fixing ``sp`` does not fix theta (``gam.fit4`` keeps family
+    parameters in the outer optimization).
 
     Parameters
     ----------
@@ -239,15 +256,21 @@ def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
         Phase 1→2 boundary data.
     sp : array-like
         Smoothing parameters on the original scale, shape ``(n_penalties,)``.
+        A scalar is accepted for single-penalty models.
+    method : str
+        ``"REML"`` — used only when theta is estimated. (ML is not
+        supported in v1.0; the public API rejects it before this point.)
 
     Returns
     -------
     NewtonResult
-        Result with ``n_iter=0``, ``convergence_info="fixed sp"``.
+        For standard families: ``n_iter=0``, ``convergence_info="fixed sp"``.
+        For estimated-theta families: the outer-optimizer result with theta
+        estimated at the fixed smoothing parameters.
     """
     import jax.numpy as jnp
 
-    sp_arr = np.asarray(sp, dtype=np.float64)
+    sp_arr = np.atleast_1d(np.asarray(sp, dtype=np.float64))
     if sp_arr.shape[0] != fd.n_penalties:
         raise ValueError(
             f"sp has {sp_arr.shape[0]} elements but model has "
@@ -255,6 +278,12 @@ def _fit_fixed_sp(fd: FittingData, sp: np.ndarray | list) -> NewtonResult:
         )
 
     log_lambda = jnp.log(jnp.array(sp_arr))
+
+    # Extended families estimate theta even with sp fixed: pin lambda, optimize
+    # theta (and scale) only.
+    if fd.family.n_theta > 0:
+        return newton_optimize(fd, method, log_lambda_init=log_lambda, pin_lambda=True)
+
     S_lam = fd.S_lambda(log_lambda)
 
     # Initialize beta and run PIRLS

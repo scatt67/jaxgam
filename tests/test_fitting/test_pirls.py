@@ -16,6 +16,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 import pytest
 
 from jaxgam.families.base import ExponentialFamily
@@ -27,8 +28,14 @@ from jaxgam.fitting.pirls import (
     pirls_loop,
 )
 from jaxgam.jax_utils import penalized_cholesky, to_jax, to_numpy
-from tests.helpers import SEED, _generate_family_data, r_available
-from tests.tolerances import MODERATE, STRICT
+from tests.helpers import (
+    SEED,
+    _AssertCollector,
+    _generate_family_data,
+    check_that,
+    r_available,
+)
+from tests.tolerances import LOOSE, MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
 
@@ -508,3 +515,109 @@ class TestVsR:
         fd, beta_jax, log_lambda, r_ref = self._setup("gamma", "gamma", Gamma())
         result = self._run_pirls(fd, beta_jax, log_lambda)
         self._check_vs_r(result, r_ref, "Gamma", fd)
+
+
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+class TestInverseLinkGammaValidDomain:
+    """Regression: inverse-link Gamma must stay in the valid domain (mu>0).
+
+    Bug: PIRLS step-halving only checked that the
+    penalized deviance was *finite*. ``Gamma.deviance_resids`` internally
+    clamps ``mu`` to a small positive floor, so a step into ``mu < 0`` (which
+    happens easily with the default inverse link, eta = 1/mu, when the
+    least-squares start or an IRLS step crosses eta <= 0) still produced a
+    finite penalized deviance and was accepted. The fit then diverged
+    (eta -> -inf, scale ~ 1e45, negative "fitted" values), yet was returned
+    with no error. R rejects such steps via ``!validmu(mu) || !valideta(eta)``
+    in ``gam.fit3``'s step-halving loop.
+
+    Fixed by (a) gating PIRLS step acceptance on ``family.valid_mu`` /
+    ``valid_eta`` and (b) a null-model fallback start in ``initialize_beta``
+    when the projected start leaves the valid domain. On data with a wide
+    dynamic range (which triggered the divergence), the inverse-link Gamma now
+    converges to a valid fit matching mgcv.
+
+    Lives in the PIRLS suite because the root cause and fix are in the
+    step-halving inner loop; the broad family x smooth parity matrix uses
+    benign data that does not exercise the eta<=0 boundary.
+    """
+
+    FORMULA = "y ~ s(x, k=10, bs='cr')"
+
+    @staticmethod
+    def _wide_range_gamma_data(n: int = 400) -> pd.DataFrame:
+        """Gamma data with a wide dynamic range that drove eta below zero."""
+        rng = np.random.default_rng(SEED)
+        x = rng.uniform(0, 1, n)
+        # mgcv gamSim f2: sharp peak -> mu spans ~2 orders of magnitude.
+        f2 = 0.2 * x**11 * (10 * (1 - x)) ** 6 + 10 * (10 * x) ** 3 * (1 - x) ** 10
+        mu = np.exp(f2 / 3.0)
+        y = rng.gamma(shape=2.0, scale=mu / 2.0)
+        return pd.DataFrame({"x": x, "y": y})
+
+    def test_pirls_stays_valid_and_matches_r(self):
+        from jaxgam.fitting.data import FittingData
+        from jaxgam.formula.design import ModelSetup
+        from jaxgam.formula.parser import parse_formula
+        from tests.r_bridge import RBridge
+
+        data = self._wide_range_gamma_data()
+
+        # Python pipeline with the DEFAULT inverse-link Gamma.
+        spec = parse_formula(self.FORMULA)
+        setup = ModelSetup.build(spec, data)
+        fd = FittingData.from_setup(setup, Gamma())
+        beta_init = initialize_beta(
+            np.asarray(fd.X), setup.y, setup.weights, Gamma(), setup.offset
+        )
+
+        # R reference: Gamma() defaults to the inverse link, matching jaxgam.
+        bridge = RBridge()
+        r_result = bridge.fit_gam(self.FORMULA, data, family="gamma")
+        log_lambda = jnp.log(jnp.array(r_result["smoothing_params"]))
+
+        result = pirls_loop(
+            fd.X,
+            fd.y,
+            to_jax(np.asarray(beta_init)),
+            fd.S_lambda(log_lambda),
+            fd.family,
+            fd.wt,
+            fd.offset,
+        )
+
+        mu = to_numpy(result.mu)
+        coefs = to_numpy(result.coefficients)
+        if fd.repara_D is not None:
+            coefs = to_numpy(fd.repara_D) @ coefs
+
+        collector = _AssertCollector()
+        collector.check(
+            "converged",
+            lambda: check_that(bool(result.converged), "PIRLS did not converge"),
+        )
+        collector.check(
+            "valid_domain",
+            lambda: check_that(
+                bool(np.all(mu > 0)), f"mu left valid domain: min={mu.min():.3e}"
+            ),
+        )
+        collector.check(
+            "deviance",
+            lambda: np.testing.assert_allclose(
+                float(result.deviance),
+                r_result["deviance"],
+                rtol=LOOSE.rtol,
+                atol=LOOSE.atol,
+            ),
+        )
+        collector.check(
+            "coefficients",
+            lambda: np.testing.assert_allclose(
+                coefs,
+                r_result["coefficients"],
+                rtol=LOOSE.rtol,
+                atol=LOOSE.atol,
+            ),
+        )
+        collector.raise_if_any("inverse-link Gamma vs R")

@@ -28,6 +28,17 @@ def initialize_beta(
     1. ``mu_init = family.initialize(y, wt)`` — family-specific start
     2. ``eta_init = link(mu_init)``
     3. ``beta_init = lstsq(X, eta_init - offset)``
+    4. If the resulting fitted ``mu``/``eta`` leave the family's valid domain,
+       fall back to the null model (constant ``eta = link(weighted mean(y))``).
+
+    The fallback matters for non-canonical-positivity links such as the
+    inverse-link Gamma: the per-observation target ``link(y) = 1/y`` is all
+    positive, but its least-squares projection onto ``col(X)`` can have
+    negative entries, giving ``mu = 1/eta < 0`` at the very first iteration.
+    PIRLS step-halving then has no valid point to retreat toward and the fit
+    diverges.  A constant target lies in ``col(X)`` whenever the model has an
+    intercept and is always in the valid domain — mirroring R's use of
+    ``null.coef`` as the valid step-halving anchor in ``gam.fit3``.
 
     Parameters
     ----------
@@ -51,6 +62,21 @@ def initialize_beta(
         offset = np.zeros(len(y))
 
     mu_init = family.initialize(y, wt)
-    eta_init = np.asarray(family.link.link(mu_init), dtype=np.float64)
-    beta_init, _, _, _ = np.linalg.lstsq(X, eta_init - offset, rcond=None)
+    eta_target = np.asarray(family.link.link(mu_init), dtype=np.float64)
+    beta_init, _, _, _ = np.linalg.lstsq(X, eta_target - offset, rcond=None)
+
+    # Validity guard: if the projected start leaves the family's domain,
+    # fall back to the null model (constant eta), which is always valid.
+    eta_fitted = X @ beta_init + offset
+    mu_fitted = np.asarray(family.link.inverse(eta_fitted))
+    valid = bool(np.all(family.valid_mu(mu_fitted))) and bool(
+        np.all(family.valid_eta(eta_fitted))
+    )
+    if not valid:
+        mu_bar = np.sum(wt * y) / np.sum(wt)
+        eta_const = np.full_like(
+            eta_target, float(family.link.link(np.asarray(mu_bar)))
+        )
+        beta_init, _, _, _ = np.linalg.lstsq(X, eta_const - offset, rcond=None)
+
     return jnp.asarray(beta_init)

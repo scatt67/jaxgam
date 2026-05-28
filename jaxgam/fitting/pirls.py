@@ -272,6 +272,19 @@ def _pirls_loop_jit(
         def _compute_dev(mu, eta):  # noqa: ARG001
             return family.dev_resids(y, mu, wt)
 
+    def _is_valid(mu, eta):
+        """Family domain check, matching R's gam.fit3 ``validmu``/``valideta``.
+
+        A trial step is rejected unless every ``mu`` and ``eta`` lies in the
+        family's valid domain.  Without this guard the inverse-link Gamma can
+        walk into ``mu <= 0`` territory: ``dev_resids`` internally clamps
+        ``mu`` to a small positive floor, so the penalized deviance still
+        looks finite and step-halving never rejects the invalid step, and the
+        fit diverges (eta -> -inf).  R rejects such steps via
+        ``!validmu(mu) || !valideta(eta)`` (gam.fit3.r step-halving loop).
+        """
+        return jnp.all(family.valid_mu(mu)) & jnp.all(family.valid_eta(eta))
+
     # Initial mu from beta_init
     eta_init = X @ beta_init + offset
     mu_init = family.link.inverse(eta_init)
@@ -313,11 +326,17 @@ def _pirls_loop_jit(
         dev_new = _compute_dev(mu_new, eta_new)
         pen_dev_new = dev_new + beta_new @ S_lambda @ beta_new
 
-        # First iteration: unconditionally accept
-        first_ok = is_first_iter & jnp.isfinite(pen_dev_new)
+        # A step is acceptable only if mu/eta stay in the family's valid
+        # domain (R's validmu/valideta), in addition to a finite, decreasing
+        # penalized deviance.
+        valid_new = _is_valid(mu_new, eta_new)
+
+        # First iteration: accept any finite, valid step
+        first_ok = is_first_iter & jnp.isfinite(pen_dev_new) & valid_new
         subsequent_ok = (
             (~is_first_iter)
             & jnp.isfinite(pen_dev_new)
+            & valid_new
             & (pen_dev_new <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev))
         )
         accepted = first_ok | subsequent_ok
@@ -341,11 +360,14 @@ def _pirls_loop_jit(
             dev_t = _compute_dev(mu_t, eta_t)
             pd_t = dev_t + bt @ S_lambda @ bt
 
-            ok = jnp.isfinite(pd_t) & (
-                pd_t <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev)
+            valid_t = _is_valid(mu_t, eta_t)
+            ok = (
+                jnp.isfinite(pd_t)
+                & valid_t
+                & (pd_t <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev))
             )
-            # On first iteration, accept any finite value
-            ok = ok | (is_first_iter & jnp.isfinite(pd_t))
+            # On first iteration, accept any finite, valid value
+            ok = ok | (is_first_iter & jnp.isfinite(pd_t) & valid_t)
 
             return _StepHalvingState(
                 k=sh.k + 1, beta_try=bt, pen_dev_try=pd_t, mu_try=mu_t, accepted=ok

@@ -1207,38 +1207,51 @@ class TestNBJITCacheReuse:
             atol=STRICT.atol,
         )
 
-    def test_fixed_sp_nb_theta_changes_are_dynamic_on_pirls_cache_hit(self) -> None:
+    def test_fixed_sp_nb_estimates_theta_init_independent(self) -> None:
+        """Fixed-`sp` NB estimates theta and is independent of the theta init.
+
+        A fixed ``sp`` with an *estimated*-theta NB family
+        (``fixed=False``) now optimizes theta — fixing the smoothing
+        parameters does not fix theta (mgcv ``gam.fit4`` semantics). The
+        converged fit is therefore independent of the theta *init*. Previously
+        fixed-``sp`` ran a single PIRLS at the init theta (a bug), which this
+        test originally documented by asserting that different inits gave
+        different results.
+
+        The dynamic-theta PIRLS cache is still exercised here: the second fit
+        starts from a different theta init on a warm cache and theta estimation
+        evaluates many thetas through one compiled kernel. The cache-size guard
+        proper lives in ``test_repeated_nb_fits_do_not_grow_jit_cache``.
+        """
         from jaxgam import GAM
         from jaxgam.fitting.pirls import pirls_loop
 
         data = self._make_nb_theta_cache_data()
 
-        def fit(theta: float):
+        def fit(theta_init: float):
             return GAM(
                 'y ~ s(x, k=8, bs="cr")',
-                family=NegativeBinomial(theta=theta, fixed=False),
+                family=NegativeBinomial(theta=theta_init, fixed=False),
                 sp=[1.0],
             ).fit(data)
 
         pirls_loop.clear_cache()
-        fresh_high = fit(10.0)
+        fit_high = fit(10.0)
+        fit_low = fit(2.0)  # different init, warm dynamic-theta cache
 
-        pirls_loop.clear_cache()
-        cached_low = fit(2.0)
-        cached_high = fit(10.0)
-
-        assert abs(float(cached_low.deviance - fresh_high.deviance)) > 1e-3
+        # Theta is estimated, so the converged fit is independent of the init
+        # (agreement is at optimizer-tolerance level, hence MODERATE).
         np.testing.assert_allclose(
-            cached_high.deviance,
-            fresh_high.deviance,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
+            fit_low.theta, fit_high.theta, rtol=MODERATE.rtol, atol=MODERATE.atol
         )
         np.testing.assert_allclose(
-            cached_high.coefficients,
-            fresh_high.coefficients,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
+            fit_low.deviance, fit_high.deviance, rtol=MODERATE.rtol, atol=MODERATE.atol
+        )
+        np.testing.assert_allclose(
+            fit_low.coefficients,
+            fit_high.coefficients,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
         )
 
 

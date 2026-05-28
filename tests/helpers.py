@@ -86,6 +86,17 @@ class _AssertCollector:
             )
 
 
+def check_that(condition: bool, message: str) -> None:
+    """Boolean assertion usable inside a lambda passed to ``_AssertCollector``.
+
+    Lambdas cannot contain ``assert`` statements, so non-numeric checks
+    (``converged``, ``mu > 0``, ``theta is not None``) raise ``AssertionError``
+    through this helper instead of ``np.testing.assert_`` (which ruff flags).
+    """
+    if not condition:
+        raise AssertionError(message)
+
+
 # ---------------------------------------------------------------------------
 # SmoothSpec factory
 # ---------------------------------------------------------------------------

@@ -46,7 +46,7 @@ class GAMSummary:
     link_name : str
         Link function name.
     method : str
-        Smoothing parameter estimation method (REML/ML).
+        Smoothing parameter estimation method (REML; only REML in v1.0).
     n : int
         Number of observations.
 
@@ -75,7 +75,7 @@ class GAMSummary:
     scale : float
         Estimated or fixed scale (dispersion) parameter.
     reml_score : float or None
-        REML/ML criterion value (sp.criterion in R).
+        REML criterion value (sp.criterion in R).
     residual_df : float
         Residual degrees of freedom.
     edf_total : float
@@ -241,7 +241,7 @@ def summary(gam: GAMResults) -> GAMSummary:
     r_sq = _compute_r_squared(gam, residual_df)
     dev_explained = _compute_deviance_explained(gam)
 
-    # REML/ML score
+    # REML score
     try:
         reml_score = gam.score
     except AttributeError:

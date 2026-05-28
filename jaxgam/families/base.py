@@ -172,7 +172,7 @@ class ExponentialFamily(ABC):
         """Saturated log-likelihood: log L(y; y, scale, wt).
 
         The log-likelihood of the saturated model (mu = y). Used in the
-        REML/ML criterion (R's ``family$ls``).
+        REML criterion (R's ``family$ls``).
 
         Backend-agnostic: accepts both NumPy and JAX arrays.
 

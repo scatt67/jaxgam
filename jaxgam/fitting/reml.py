@@ -1,8 +1,13 @@
-"""REML and ML criterion functions for smoothing parameter selection.
+"""REML criterion functions for smoothing parameter selection.
 
 Given fixed smoothing parameters lambda, PIRLS finds optimal coefficients beta*(lambda).
-The REML/ML criteria score how good a particular lambda is -- the Newton optimizer
+The REML criterion scores how good a particular lambda is -- the Newton optimizer
 (Task 2.5) minimizes this criterion to find optimal lambda.
+
+ML is not implemented in v1.0: mgcv's ML criterion uses the penalty
+*range-space* projection of ``log|X'WX+S|`` (``MLpenalty1`` in gdi.c), which
+differs from REML's full-space determinant. Only REML is supported; see
+``GAM`` / ``_check_scope_guards``.
 
 The key insight (Laplace approximation + PIRLS stationarity): at converged beta*,
 the derivative of the penalized deviance through beta is zero. So ``jax.grad``
@@ -22,7 +27,6 @@ R source reference: gam.fit3.r lines 612-640 (general Laplace REML)
 R's exact formula (with gamma=1)::
 
     REML = Dp/(2phi) - ls_sat + log|H|/2 - log|S+|/2 - Mp/2*log(2*pi*phi)
-    ML   = Dp/(2phi) - ls_sat + log|H|/2 - log|S+|/2
 
 Where:
     - Dp = dev + beta^T S_lambda beta  (penalized deviance)
@@ -69,7 +73,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class REMLResult:
-    """Result of REML/ML evaluation at given smoothing parameters.
+    """Result of REML evaluation at given smoothing parameters.
 
     Attributes
     ----------
@@ -116,7 +120,7 @@ def _criterion_core(
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
 ) -> jax.Array:
-    """Shared REML/ML computation. Pure JAX, differentiable.
+    """Shared REML criterion computation. Pure JAX, differentiable.
 
     Computes: Dp/(2*phi) - ls_sat + log|H|/2 - log|S+|/2
 
@@ -394,60 +398,6 @@ def reml_criterion(
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
 
-def ml_criterion(
-    log_lambda: jax.Array,
-    XtWX: jax.Array,
-    beta: jax.Array,
-    deviance: jax.Array,
-    ls_sat: jax.Array,
-    S_list: tuple[jax.Array, ...],
-    phi: jax.Array,
-    Mp: int,  # noqa: ARG001
-    singleton_sp_indices: tuple[int, ...],
-    singleton_ranks: tuple[int, ...],
-    singleton_eig_constants: jax.Array,
-    multi_block_sp_indices: tuple[tuple[int, ...], ...],
-    multi_block_ranks: tuple[int, ...],
-    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
-) -> jax.Array:
-    """ML criterion. Same as REML but without the -Mp/2*log(2*pi*phi) correction.
-
-    Formula::
-
-        ML = Dp/(2*phi) - ls_sat + log|H|/2 - log|S+|/2
-
-    Parameters
-    ----------
-    log_lambda : jax.Array, shape (m,)
-        Log smoothing parameters.
-    XtWX, beta, deviance, ls_sat, S_list, phi, Mp
-        See ``_criterion_core``.
-    singleton_sp_indices, singleton_ranks, singleton_eig_constants,
-    multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
-        Block-structured log|S+| metadata. See ``block_log_det_S``.
-
-    Returns
-    -------
-    jax.Array, scalar
-        ML score (lower is better).
-    """
-    return _criterion_core(
-        log_lambda,
-        XtWX,
-        beta,
-        deviance,
-        ls_sat,
-        S_list,
-        phi,
-        singleton_sp_indices,
-        singleton_ranks,
-        singleton_eig_constants,
-        multi_block_sp_indices,
-        multi_block_ranks,
-        multi_block_proj_S,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Joint criteria (log_lambda + log_phi co-optimized)
 # ---------------------------------------------------------------------------
@@ -517,62 +467,6 @@ def reml_criterion_joint(
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
 
-def ml_criterion_joint(
-    params: jax.Array,
-    XtWX: jax.Array,
-    beta: jax.Array,
-    deviance: jax.Array,
-    y: jax.Array,
-    wt: jax.Array,
-    S_list: tuple[jax.Array, ...],
-    Mp: int,  # noqa: ARG001
-    n_lambda: int,
-    family: ExponentialFamily,
-    singleton_sp_indices: tuple[int, ...],
-    singleton_ranks: tuple[int, ...],
-    singleton_eig_constants: jax.Array,
-    multi_block_sp_indices: tuple[tuple[int, ...], ...],
-    multi_block_ranks: tuple[int, ...],
-    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
-    max_y: int = 0,
-) -> jax.Array:
-    """ML criterion with joint ``(log_lambda, log_phi)`` optimization.
-
-    Parameters
-    ----------
-    params : jax.Array, shape (n_lambda + 1,)
-        ``[log_lambda_1, ..., log_lambda_m, log_phi]``.
-    XtWX, beta, deviance, y, wt, S_list, Mp, n_lambda, family
-        See ``reml_criterion_joint``.
-    singleton_sp_indices, singleton_ranks, singleton_eig_constants,
-    multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
-        Block-structured log|S+| metadata. See ``block_log_det_S``.
-
-    Returns
-    -------
-    jax.Array, scalar
-        ML score (lower is better).
-    """
-    log_lambda = params[:n_lambda]
-    phi = jnp.exp(params[n_lambda])
-    ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
-    return _criterion_core(
-        log_lambda,
-        XtWX,
-        beta,
-        deviance,
-        ls_sat,
-        S_list,
-        phi,
-        singleton_sp_indices,
-        singleton_ranks,
-        singleton_eig_constants,
-        multi_block_sp_indices,
-        multi_block_ranks,
-        multi_block_proj_S,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Pre-compiled JIT'd transforms for the Newton hot loop
 # ---------------------------------------------------------------------------
@@ -589,10 +483,6 @@ _jit_reml_score = jax.jit(reml_criterion, static_argnames=_BLOCK_STATIC)
 _jit_reml_grad = jax.jit(jax.grad(reml_criterion), static_argnames=_BLOCK_STATIC)
 _jit_reml_hess = jax.jit(jax.hessian(reml_criterion), static_argnames=_BLOCK_STATIC)
 
-_jit_ml_score = jax.jit(ml_criterion, static_argnames=_BLOCK_STATIC)
-_jit_ml_grad = jax.jit(jax.grad(ml_criterion), static_argnames=_BLOCK_STATIC)
-_jit_ml_hess = jax.jit(jax.hessian(ml_criterion), static_argnames=_BLOCK_STATIC)
-
 _JOINT_STATIC = (*_BLOCK_STATIC, "n_lambda", "family", "max_y")
 _jit_reml_joint_score = jax.jit(reml_criterion_joint, static_argnames=_JOINT_STATIC)
 _jit_reml_joint_grad = jax.jit(
@@ -600,16 +490,6 @@ _jit_reml_joint_grad = jax.jit(
 )
 _jit_reml_joint_hess = jax.jit(
     jax.hessian(reml_criterion_joint),
-    static_argnames=_JOINT_STATIC,
-)
-
-_jit_ml_joint_score = jax.jit(ml_criterion_joint, static_argnames=_JOINT_STATIC)
-_jit_ml_joint_grad = jax.jit(
-    jax.grad(ml_criterion_joint),
-    static_argnames=_JOINT_STATIC,
-)
-_jit_ml_joint_hess = jax.jit(
-    jax.hessian(ml_criterion_joint),
     static_argnames=_JOINT_STATIC,
 )
 
@@ -652,16 +532,8 @@ _jit_reml_grad_hess = jax.jit(
     _make_grad_hess(reml_criterion),
     static_argnames=_BLOCK_STATIC,
 )
-_jit_ml_grad_hess = jax.jit(
-    _make_grad_hess(ml_criterion),
-    static_argnames=_BLOCK_STATIC,
-)
 _jit_reml_joint_grad_hess = jax.jit(
     _make_grad_hess(reml_criterion_joint),
-    static_argnames=_JOINT_STATIC,
-)
-_jit_ml_joint_grad_hess = jax.jit(
-    _make_grad_hess(ml_criterion_joint),
     static_argnames=_JOINT_STATIC,
 )
 
@@ -672,7 +544,7 @@ _jit_ml_joint_grad_hess = jax.jit(
 
 
 class _CriterionBase(ABC):
-    """Base class for REML/ML criterion evaluation.
+    """Base class for REML criterion evaluation.
 
     Precomputes and caches constants from converged PIRLS at construction.
     Subclasses implement ``score()``, ``gradient()``, ``hessian()``,
@@ -790,39 +662,6 @@ class REMLCriterion(_CriterionBase):
         return _jit_reml_grad_hess(log_lambda, **self._kwargs())
 
 
-class MLCriterion(_CriterionBase):
-    """ML criterion for smoothing parameter optimization.
-
-    Same interface as ``REMLCriterion`` but uses the ML formula
-    (no ``-Mp/2*log(2*pi*phi)`` correction).
-
-    Uses pre-compiled module-level ``_jit_ml_*`` transforms.
-
-    Parameters
-    ----------
-    fd : FittingData
-        Phase 1->2 boundary container with model data and penalties.
-    pirls_result : PIRLSResult
-        Converged PIRLS output.
-    """
-
-    def score(self, log_lambda: jax.Array) -> jax.Array:
-        """ML score at given log_lambda."""
-        return _jit_ml_score(log_lambda, **self._kwargs())
-
-    def gradient(self, log_lambda: jax.Array) -> jax.Array:
-        """ML gradient via pre-compiled ``jax.grad``."""
-        return _jit_ml_grad(log_lambda, **self._kwargs())
-
-    def hessian(self, log_lambda: jax.Array) -> jax.Array:
-        """ML Hessian via pre-compiled ``jax.hessian``."""
-        return _jit_ml_hess(log_lambda, **self._kwargs())
-
-    def grad_hess(self, log_lambda: jax.Array) -> tuple[jax.Array, jax.Array]:
-        """Fused gradient + Hessian in a single XLA dispatch."""
-        return _jit_ml_grad_hess(log_lambda, **self._kwargs())
-
-
 # ---------------------------------------------------------------------------
 # Joint criterion classes (log_lambda + log_phi co-optimized)
 # ---------------------------------------------------------------------------
@@ -937,31 +776,3 @@ class JointREMLCriterion(_JointCriterionBase):
     def grad_hess(self, params: jax.Array) -> tuple[jax.Array, jax.Array]:
         """Fused gradient + Hessian in a single XLA dispatch."""
         return _jit_reml_joint_grad_hess(params, **self._kwargs())
-
-
-class JointMLCriterion(_JointCriterionBase):
-    """ML criterion with joint ``(log_lambda, log_phi)`` optimization.
-
-    Parameters
-    ----------
-    fd : FittingData
-        Phase 1->2 boundary container with model data and penalties.
-    pirls_result : PIRLSResult
-        Converged PIRLS output.
-    """
-
-    def score(self, params: jax.Array) -> jax.Array:
-        """ML score at given params = [log_lambda, log_phi]."""
-        return _jit_ml_joint_score(params, **self._kwargs())
-
-    def gradient(self, params: jax.Array) -> jax.Array:
-        """ML gradient w.r.t. params via ``jax.grad``."""
-        return _jit_ml_joint_grad(params, **self._kwargs())
-
-    def hessian(self, params: jax.Array) -> jax.Array:
-        """ML Hessian w.r.t. params via ``jax.hessian``."""
-        return _jit_ml_joint_hess(params, **self._kwargs())
-
-    def grad_hess(self, params: jax.Array) -> tuple[jax.Array, jax.Array]:
-        """Fused gradient + Hessian in a single XLA dispatch."""
-        return _jit_ml_joint_grad_hess(params, **self._kwargs())
