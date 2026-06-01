@@ -4,11 +4,20 @@ Given fixed smoothing parameters (encoded in ``S_lambda``), PIRLS finds
 the penalized maximum likelihood coefficients by iterating a weighted
 least-squares solve with step-halving on penalized deviance.
 
-Standard exponential families use Fisher scoring (``gam.fit3``).
-Extended families (NB) use Newton scoring with observed weights
-(``gam.fit4``): ``w = 0.5 * d²D/dη²``.  After convergence, Fisher-
-weighted ``XtWX_fisher`` / ``L_fisher`` are computed for EDF and
-Bayesian covariance (matching R's ``gdi2``, ``gdi.c:2262-2294``).
+Standard exponential families run the PIRLS solve with Fisher weights
+(``gam.fit3``); extended families (NB) use Newton scoring with observed
+weights (``gam.fit4``): ``w = 0.5 * d²D/dη²``. The converged coefficients
+are identical under either weighting (both find the penalized-MLE
+stationary point).
+
+The REML ``log|H|`` curvature ``XtWX`` follows mgcv's information split:
+observed (Newton) information for **non-canonical** links, Fisher
+(expected) for canonical links (``gam.fit3.r:118``, ``gdi.c:2481-2498``).
+After convergence, Fisher-weighted ``XtWX_fisher`` / ``L_fisher`` are
+always computed for EDF and Bayesian covariance (``gdi.c:2262-2294``).
+Canonical-ness is the static ``family.is_canonical`` property, so the
+choice is resolved at trace time and canonical fits are byte-identical
+to the pure-Fisher path.
 
 The loop is implemented with ``jax.lax.while_loop`` so the entire
 iteration compiles to a single fused XLA kernel when JIT-compiled.
@@ -155,6 +164,33 @@ jax.tree_util.register_pytree_node(
     lambda r: ([getattr(r, f) for f in _PIRLS_FIELDS], None),
     lambda _, children: PIRLSResult(**dict(zip(_PIRLS_FIELDS, children, strict=True))),
 )
+
+
+def _observed_weights(
+    family: ExponentialFamily,
+    X: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    beta: jax.Array,
+    offset: jax.Array,
+) -> jax.Array:
+    """Per-observation observed (Newton) information weight ``0.5 d²D/dη²``.
+
+    For an exponential-dispersion family the observed information per
+    observation equals half the second derivative of the unit deviance w.r.t.
+    eta. mgcv uses these (not Fisher) weights in the REML ``log|H|`` for
+    non-canonical links (gam.fit3.r:118, gdi.c:2481-2498). The total deviance
+    is separable across observations, so the eta-Hessian is diagonal and a
+    single JVP of ``grad(D)`` in the all-ones direction recovers the diagonal.
+    """
+    eta = X @ beta + offset
+
+    def _dev_sum(e: jax.Array) -> jax.Array:
+        return family.dev_resids(y, family.link.inverse(e), wt)
+
+    grad_D = jax.grad(_dev_sum)
+    _, d2 = jax.jvp(grad_D, (eta,), (jnp.ones_like(eta),))
+    return 0.5 * d2
 
 
 @jax.jit(static_argnames=("family", "max_iter", "tol"))
@@ -353,7 +389,7 @@ def _pirls_loop_jit(
             return (sh.k < _MAX_HALVINGS) & (~sh.accepted)
 
         def _sh_body(sh: _StepHalvingState):
-            step = 0.5 ** (sh.k + 2)  # 0.25, 0.125, ...
+            step = 0.5 ** (sh.k + 1)  # 0.5, 0.25, 0.125, ... (R halves from 1)
             bt = state.beta + step * (beta_new - state.beta)
             eta_t = X @ bt + offset
             mu_t = family.link.inverse(eta_t)
@@ -414,12 +450,16 @@ def _pirls_loop_jit(
     XtWX_final = WX_final.T @ WX_final
     L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
 
-    # For extended families: recompute XtWX and L using Fisher weights
-    # for EDF and Bayesian covariance.  R's gam.fit4 uses Newton weights
-    # for PIRLS but Fisher weights for EDF (gdi.c:2262-2294,
-    # gam.fit4.r:564: ``wf = pmax(0, dd$EDeta2 * .5)``).
-    # For standard families, Fisher = Newton, so just alias.
+    # Split of information matrices (R's gam.fit3/gam.fit4, gdi.c):
+    #   - REML log|H| uses OBSERVED (Newton) information for non-canonical
+    #     links (gdi.c:2481-2498); for canonical links observed == Fisher.
+    #   - EDF and Bayesian covariance always use FISHER information
+    #     (gdi.c:2262-2294).
+    # The converged beta is the same under either weighting (both find the
+    # penalized-MLE stationary point), so only the curvature matrices differ.
     if family.n_theta > 0 and log_theta is not None:
+        # Extended families (NB): PIRLS already used observed weights, so
+        # XtWX_final is observed; recompute Fisher for EDF/covariance.
         _ww_fisher_fn = family.working_weights_fn(wt)
         W_fisher = _ww_fisher_fn(eta_final, log_theta)
         W_fisher = jnp.clip(W_fisher, _W_MIN, _W_MAX)
@@ -427,7 +467,21 @@ def _pirls_loop_jit(
         WX_fisher = W_sqrt_fisher[:, None] * X
         XtWX_fisher = WX_fisher.T @ WX_fisher
         L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+    elif not family.is_canonical:
+        # Non-canonical standard family: the PIRLS solve above used Fisher
+        # weights (XtWX_final is Fisher) -> keep it for EDF/covariance, but
+        # rebuild XtWX_final from OBSERVED (Newton) weights for the REML log|H|,
+        # matching mgcv. Observed weight = 0.5 * d^2 D / d eta^2.
+        XtWX_fisher = XtWX_final
+        L_fisher = L_final
+        W_obs = jnp.clip(
+            _observed_weights(family, X, y, wt, final.beta, offset), _W_MIN, _W_MAX
+        )
+        WX_obs = jnp.sqrt(W_obs)[:, None] * X
+        XtWX_final = WX_obs.T @ WX_obs
+        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
     else:
+        # Canonical standard family: Fisher == Newton, just alias.
         XtWX_fisher = XtWX_final
         L_fisher = L_final
 

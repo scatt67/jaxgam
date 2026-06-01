@@ -55,7 +55,7 @@ Tasks are grouped into phases that correspond to the architecture (Setup → Fit
 - [x] **Task 5.5** - Benchmark script with cold/warm reporting (`scripts/benchmark_vs_r.py`)
 
 ### Current Stats
-- **Tests:** 1448 passing, 0 xfailed
+- **Tests:** full suite passing, no xfails.
 - **Phases 0-3 complete.** Phase 4.1 (Validation Matrix) complete. Phase 5 (Performance) complete.
 - **Performance:** 1.1-15.8x faster than R (JIT warm); ~275ms cold start with disk cache.
 - **Phase 4 complete.** All integration testing and hardening tasks done.
@@ -683,12 +683,10 @@ All Phase 2 tasks produce JIT-compatible JAX code.
 - **TestNewDataVsR** (8): response and link predictions vs R for all 4 families (MODERATE for Gaussian, LOOSE for GLM).
 - **TestSEVsR** (4): SE computation vs R's `predict.gam(se.fit=TRUE)`.
 - **TestMultiSmoothPrediction** (4): self-prediction for two-smooth, tensor, factor-by.
-- **TestMultiSmoothVsR** (3): new-data vs R. Two-smooth passes at MODERATE. Tensor product and factor-by xfailed due to fit-level smoothing parameter discrepancies (not prediction bugs - self-prediction roundtrip passes at STRICT).
+- **TestMultiSmoothVsR** (3): new-data vs R. Two-smooth passes at MODERATE; tensor product and factor-by pass at LOOSE.
 - **TestEdgeCases** (6): parametric-only, offset, newdata offset, se_fit tuple, invalid type, unfitted raises.
 
-**xfails (2):** Tensor product and factor-by new-data vs R fail because fit-level smoothing parameters diverge from R by orders of magnitude. This is a pre-existing fitting issue (test_gam.py only checks deviance for these smooth types, not coefficients). Self-prediction roundtrip at STRICT confirms prediction logic is correct.
-
-**Acceptance:** 943 tests pass, 2 xfailed. Self-prediction matches fitted values at STRICT. R comparison at MODERATE/LOOSE for new-data predictions.
+**Acceptance:** All TestMultiSmoothVsR cases pass (no xfails). Self-prediction matches fitted values at STRICT. R comparison at MODERATE (Gaussian) / LOOSE (GLM) for new-data predictions.
 
 **Prerequisites:** Task 2.6 (fitted model to predict from).
 

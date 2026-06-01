@@ -185,8 +185,17 @@ def summary(gam: GAMResults) -> GAMSummary:
         chi_sq = np.zeros(m)
         s_pv = np.zeros(m)
 
-        # Use the stored model matrix X
-        X = gam.X
+        # Wood (2013) testStat uses the Fisher-WEIGHTED design block: R uses
+        # ``object$R``, the QR R-factor of ``sqrt(W_fisher)*X`` built in
+        # ``gam.fit3.post.proc``. Using the unweighted ``gam.X`` gives the wrong
+        # statistic whenever ``W != I`` (every non-Gaussian family). The
+        # statistic is basis-invariant, so ``sqrt(W_fisher)*X[:,block]``
+        # reproduces R's ``object$R[,block]`` exactly. (Finding 3)
+        W_fisher = np.asarray(
+            gam.family.working_weights(gam.fitted_values, gam.weights),
+            dtype=np.float64,
+        )
+        Xw = np.sqrt(W_fisher)[:, None] * gam.X
         edf = gam.edf
 
         for i, si in enumerate(smooth_info):
@@ -206,22 +215,24 @@ def summary(gam: GAMResults) -> GAMSummary:
             except AttributeError:
                 edf1_i = edf_i
 
-            X_i = X[:, start:stop]
-
             rdf = residual_df if est_disp else -1.0
 
-            # RE terms use type_=1 (integer rank rounding) for the
-            # significance test, matching R's summary.gam behaviour.
-            test_type = 1 if si.is_random else 0
-
-            res = _test_stat(
-                p_i,
-                X_i,
-                V_i,
-                rank=min(n_coefs_i, edf1_i),
-                type_=test_type,
-                res_df=rdf,
-            )
+            # Random-effect smooths (null space dim 0) use R's reTest/recov
+            # path, not testStat — the reference distribution conditions on the
+            # random-effect covariance (Ve), giving a materially different
+            # p-value for weak-signal RE terms. (Finding 8)
+            if si.is_random and si.null_space_dim == 0:
+                res = _re_test(gam, si, Xw, W_fisher, est_disp, residual_df)
+            else:
+                X_i = Xw[:, start:stop]
+                res = _test_stat(
+                    p_i,
+                    X_i,
+                    V_i,
+                    rank=min(n_coefs_i, edf1_i),
+                    type_=0,
+                    res_df=rdf,
+                )
 
             ref_df[i] = res["rank"]
             chi_sq[i] = res["stat"]
@@ -450,6 +461,107 @@ def _test_stat(
         "pval": float(min(1.0, pval)),
         "rank": float(rank),
     }
+
+
+# ---------------------------------------------------------------------------
+# reTest -- random-effect smooth significance (Wood, mgcv.r recov + reTest)
+# ---------------------------------------------------------------------------
+
+
+def _mroot(A: np.ndarray) -> np.ndarray:
+    """Rank-truncated matrix square root ``B`` with ``B @ B.T == A``.
+
+    Port of R's ``mroot``: symmetric eigendecomposition, drop eigenvalues at or
+    below ``max(ev) * eps**0.8``, return ``V[:, keep] * sqrt(ev[keep])``.
+    """
+    A = 0.5 * (A + A.T)
+    ev, V = np.linalg.eigh(A)
+    if ev.size == 0 or np.max(ev) <= 0:
+        return np.zeros((A.shape[0], 0))
+    keep = ev > np.max(ev) * np.finfo(float).eps ** 0.8
+    return V[:, keep] * np.sqrt(ev[keep])[np.newaxis, :]
+
+
+def _re_test(
+    gam: GAMResults,
+    si,
+    Xw: np.ndarray,
+    W_fisher: np.ndarray,  # noqa: ARG001  kept for signature symmetry with _test_stat
+    est_disp: bool,
+    res_df: float,
+) -> dict[str, float]:
+    """Significance test for a random-effect smooth (``bs="re"``).
+
+    Port of R's ``reTest`` + ``recov`` (mgcv.r:3599-3755) for the single
+    random-effect case (the term under test is the only RE smooth, so
+    ``rind`` is empty). The reference distribution conditions on the
+    random-effect frequentist covariance ``Ve`` rather than the Bayesian ``Vp``
+    used by ``testStat``, which materially changes the p-value for weak RE
+    signals. Multi-RE models need ``recov``'s general branch (deferred).
+    """
+    smooth_info = gam.smooth_info
+    n_re = sum(1 for s in smooth_info if s.is_random and s.null_space_dim == 0)
+    if n_re > 1:
+        raise NotImplementedError(
+            "reTest for >1 random-effect smooth is planned for v1.1; see "
+            "recov()'s general (non-empty rind) branch, mgcv.r:3640-3711."
+        )
+
+    phi = gam.scale if not gam.family.scale_known else 1.0
+    sig2 = phi
+    p = gam.X.shape[1]
+
+    # b$R: R-factor of sqrt(W_fisher) X (== R's object$R), same column space
+    # as Vp / penalties / coefficients (all constrained model-matrix space).
+    R = np.linalg.qr(Xw, mode="r")
+
+    # recov (rind empty, m>0): total weighted penalty S1 = sum_k sp_k * S_k.
+    S1 = np.zeros((p, p))
+    for sp_k, pen in zip(
+        gam.smoothing_params, gam.setup.penalties.penalties, strict=True
+    ):
+        S1 = S1 + float(sp_k) * pen.S
+
+    ind = np.arange(si.first_coef, si.last_coef)
+    k = int(ind.shape[0])
+
+    # LRB = rbind(R, t(mroot(S1))); move smooth-m columns to the end; unpivoted
+    # QR; Rm is the trailing k x k block (unpenalized covariance root for m).
+    LRB = np.vstack([R, _mroot(S1).T])
+    ind_set = set(ind.tolist())
+    order = [j for j in range(p) if j not in ind_set] + ind.tolist()
+    R_full = np.linalg.qr(LRB[:, order], mode="r")
+    Rm = R_full[p - k :, p - k :]
+
+    # Frequentist covariance Ve = F @ Vp, with F = (Vp / phi) @ X'WX.
+    XtWX = Xw.T @ Xw
+    Vp = gam.Vp
+    F = (Vp / phi) @ XtWX
+    Ve = F @ Vp
+    Ve = 0.5 * (Ve + Ve.T)
+
+    B = _mroot(Ve[np.ix_(ind, ind)])
+    bhat = gam.coefficients[ind]
+    d = Rm @ bhat
+    stat = float(np.sum(d**2) / sig2)
+
+    M = Rm @ B  # crossprod(Rm %*% B) == M.T @ M
+    ev = np.linalg.eigvalsh((M.T @ M) / sig2)
+    ev = np.clip(ev, 0.0, None)
+    if ev.size and np.max(ev) > 0:
+        rank = int(np.sum(ev > np.max(ev) * np.finfo(float).eps ** 0.8))
+    else:
+        rank = 0
+
+    if est_disp:
+        kk = max(1, round(res_df))
+        lb = np.concatenate([ev, [-stat / kk]])
+        df = np.concatenate([np.ones(ev.size, dtype=int), [kk]])
+        pval = psum_chisq_davies(0.0, lb, df=df)
+    else:
+        pval = psum_chisq_davies(stat, ev)
+
+    return {"stat": stat, "pval": float(min(1.0, pval)), "rank": float(rank)}
 
 
 # ---------------------------------------------------------------------------

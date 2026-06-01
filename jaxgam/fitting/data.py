@@ -135,6 +135,14 @@ class FittingData:
     # a compile-time loop bound. Computed from data in from_setup().
     max_y: int
 
+    # Rank deficiency of the model matrix X: ``n_coef - rank(X)``. Nonzero only
+    # when the design is structurally rank-deficient (e.g. a parametric term
+    # sharing a smooth's null-space direction, ``y ~ x + s(x)``). Used as a
+    # static arg so the REML ``log|H|`` uses a generalized determinant over the
+    # identifiable subspace, matching R's rank-revealing fit. 0 => full rank
+    # (the Cholesky log-determinant path, unchanged).
+    rank_deficit: int = 0
+
     @property
     def n_penalties(self) -> int:
         """Number of penalty matrices."""
@@ -239,6 +247,12 @@ class FittingData:
         # max(y) as a compile-time integer for NB's _lgamma_diff scan.
         max_y = int(np.max(setup.y)) if len(setup.y) > 0 else 0
 
+        # Rank deficiency of the penalized Hessian that the penalty cannot
+        # regularize away — i.e. unpenalized confounding (e.g. a parametric
+        # term sharing a smooth's null-space direction). Penalized deficiencies
+        # (e.g. RE group dummies summing to the intercept) are NOT counted.
+        rank_deficit = cls._unpenalized_rank_deficit(penalty_arrays, X_np, n_coef)
+
         return cls(
             X=X_jax,
             y=y_jax,
@@ -261,6 +275,7 @@ class FittingData:
             multi_block_S_local=block_meta["multi_block_S_local"],
             repara_D=repara_D_jax,
             max_y=max_y,
+            rank_deficit=rank_deficit,
         )
 
     @staticmethod
@@ -329,6 +344,42 @@ class FittingData:
 
         def_sp = np.maximum(def_sp, np.finfo(float).tiny)
         return np.log(def_sp)
+
+    @staticmethod
+    def _unpenalized_rank_deficit(
+        penalty_arrays: list[np.ndarray],
+        X_np: np.ndarray,
+        n_coef: int,
+    ) -> int:
+        """Number of unidentifiable UNPENALIZED directions in the design.
+
+        Computes ``dim(null(X) ∩ null(S_total))`` — the rank deficiency of the
+        penalized Hessian ``XtWX + S_lambda`` that the penalty cannot regularize
+        away (e.g. a parametric term confounded with a smooth's unpenalized
+        null space, ``y ~ x + s(x)``). Penalized rank deficiencies (e.g. random
+        effects whose group dummies sum to the intercept) are NOT counted,
+        because the ridge penalty makes those directions identifiable in ``H``.
+        """
+        if n_coef == 0:
+            return 0
+        if not penalty_arrays:
+            # No penalty: the entire null space of X is unpenalized.
+            return int(n_coef - np.linalg.matrix_rank(X_np))
+        St = np.zeros((n_coef, n_coef))
+        for S_np in penalty_arrays:
+            norm_j = np.sqrt(np.sum(S_np * S_np))
+            if norm_j > 0:
+                St += S_np / norm_j
+        eigs, vecs = np.linalg.eigh(St)
+        threshold = np.max(eigs) * _EPS_TWO_THIRDS
+        Mp = int(np.sum(eigs <= threshold))
+        if Mp == 0:
+            return 0
+        # Project X onto null(S_total) (the unpenalized directions); any rank
+        # deficiency there cannot be regularized by the penalty.
+        N = vecs[:, :Mp]
+        rank_unpen = int(np.linalg.matrix_rank(X_np @ N))
+        return Mp - rank_unpen
 
     @staticmethod
     def _penalty_range_basis(

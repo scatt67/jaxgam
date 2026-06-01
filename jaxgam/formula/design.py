@@ -207,6 +207,15 @@ class ModelSetup:
         else:
             weights = np.asarray(weights, dtype=np.float64).ravel()
             cls._validate_vector(weights, n_obs, "weights", non_negative=True)
+            # Total weight mass must be positive: all-zero (or empty) weights
+            # leave the model with no information, producing a degenerate
+            # "converged" fit and a NaN null deviance. mgcv errors during
+            # smoothing-parameter setup; reject it up front with a clear message.
+            if np.sum(weights) <= 0:
+                raise ValueError(
+                    "weights sum to zero: at least one observation must have a "
+                    "positive prior weight."
+                )
 
         if offset is not None:
             offset = np.asarray(offset, dtype=np.float64).ravel()
@@ -589,13 +598,18 @@ class ModelSetup:
         level_names : list[str]
             Names for each dummy column.
         """
-        col_arr = np.asarray(col)
+        col_arr = np.asarray(col, dtype=object)
         n = len(col_arr)
         n_levels = len(levels)
+        na_mask = pd.isna(col_arr)
 
         dummy = np.zeros((n, n_levels), dtype=np.float64)
         for j, level in enumerate(levels):
             dummy[:, j] = (col_arr == level).astype(np.float64)
+        # An NA factor value yields an all-NaN row -> NaN prediction, matching
+        # R's predict.gam (NA in -> NA out), instead of crashing or silently
+        # encoding it as the reference level.
+        dummy[na_mask, :] = np.nan
 
         if drop_reference:
             dummy = dummy[:, 1:]
@@ -670,14 +684,15 @@ class ModelSetup:
                     # encoding them as the reference level (matches R's
                     # predict.gam, which errors on factor has new levels).
                     known = set(levels)
-                    observed = np.unique(np.asarray(col)).tolist()
+                    # Mask NaN BEFORE np.unique: np.unique on mixed str+NaN
+                    # raises TypeError (can't order float vs str). NaN factor
+                    # rows are not "new levels"; they predict NaN (see
+                    # _encode_factor), matching R's predict.gam NA handling.
+                    col_obj = np.asarray(col, dtype=object)
+                    na_mask = pd.isna(col_obj)
+                    observed = np.unique(col_obj[~na_mask]).tolist()
                     unseen = sorted(
-                        {
-                            v
-                            for v in observed
-                            if v not in known
-                            and not (isinstance(v, float) and np.isnan(v))
-                        },
+                        {v for v in observed if v not in known},
                         key=str,
                     )
                     if unseen:

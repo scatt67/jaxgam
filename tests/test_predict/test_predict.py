@@ -426,6 +426,32 @@ class TestEdgeCases:
             atol=STRICT.atol,
         )
 
+    def test_offset_drop_warns_on_newdata(self):
+        """Predicting new data without re-supplying a fit-time external offset
+        warns instead of silently dropping it (Finding 16)."""
+        data = _generate_family_data("gaussian")
+        n = len(data)
+        offset = np.ones(n) * 0.5
+        model = GAM("y ~ s(x, k=10, bs='cr')").fit(data, offset=offset)
+
+        newdata = _make_newdata("gaussian")
+        # No offset re-supplied: must warn (mgcv drops external offsets on
+        # new data, but jaxgam surfaces it rather than failing silently).
+        with pytest.warns(UserWarning, match="external offset"):
+            model.predict(newdata, pred_type="link")
+
+        # Re-supplying the offset suppresses the warning and adds it back.
+        import warnings
+
+        off_new = np.ones(len(newdata)) * 0.5
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with_off = model.predict(newdata, pred_type="link", offset=off_new)
+            without = model.predict(
+                newdata, pred_type="link", offset=np.zeros(len(newdata))
+            )
+        np.testing.assert_allclose(with_off - without, off_new, atol=STRICT.atol)
+
     def test_predict_with_newdata_offset(self):
         data = _generate_family_data("gaussian")
         model = GAM("y ~ s(x, k=10, bs='cr')").fit(data)

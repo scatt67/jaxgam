@@ -227,12 +227,17 @@ def _partitions(d: int, total: int) -> list[tuple[int, ...]]:
 def _default_k(d: int, M: int) -> int:
     """Default basis dimension k for dimension d.
 
-    R's defaults: M + {8, 27, 100}[d-1] for d in {1, 2, 3+}.
+    Matches R's mgcv ``smooth.construct.tp.smooth.spec`` (R/smooth.r:1316-1318)::
+
+        def.k <- c(8, 27, 100); dd <- min(dim, 3); k <- M + def.k[dd]
+
+    where ``M = null.space.dimension(d, m)``. Dropping the ``M`` term (as the
+    previous hardcoded ``{1: 10, 2: 30}`` did) is only coincidentally correct
+    for the default penalty order ``m=2`` (``M=2``); for ``m=1``/``m=3`` it
+    silently builds a different-sized basis than R.
     """
-    # R defaults (mgcv smooth.r, smooth.construct.tp.smooth.spec):
-    # d=1 → k=10, d=2 → k=30, d≥3 → M+100
-    defaults = {1: 10, 2: 30}
-    return defaults.get(d, M + 100)
+    def_k = (8, 27, 100)
+    return M + def_k[min(d, 3) - 1]
 
 
 @numba.njit(numba.float64[:, :](numba.float64[:, :]), cache=True)

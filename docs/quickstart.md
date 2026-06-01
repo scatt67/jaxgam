@@ -303,11 +303,11 @@ plots. Factor-by smooths produce one panel per level.
 ### Smoothing parameter method
 
 ```python
-# REML (default, recommended)
+# REML (default, and the only supported method in v1.0)
 results = GAM("y ~ s(x)", method="REML").fit(data)
 
-# Maximum likelihood
-results = GAM("y ~ s(x)", method="ML").fit(data)
+# Maximum likelihood (ML) is not yet available — method="ML" raises
+# NotImplementedError. See docs/design.md Section 4.4.
 ```
 
 ### Fixed smoothing parameters
@@ -349,14 +349,14 @@ read-only:
 | `smoothing_params` | Estimated smoothing parameters |
 | `converged` | Whether the optimizer converged |
 | `n_iter` | Number of Newton iterations |
-| `score` | REML/ML value at convergence |
+| `score` | REML value at convergence |
 | `X` | Design matrix (n, p) |
 | `y` | Response vector (n,) |
 | `weights` | Prior weights (n,) |
 | `family` | Family object used for fitting |
 | `formula` | Model formula string |
 | `theta` | Estimated theta for NB (None for standard families) |
-| `method` | Smoothing parameter method ("REML" or "ML") |
+| `method` | Smoothing parameter method (always "REML" in v1.0) |
 | `n` | Number of observations |
 
 ## Further reading

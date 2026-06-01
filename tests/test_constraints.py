@@ -394,27 +394,32 @@ class TestGamSide:
         assert del_indices[0] is None
         assert del_indices[1] is None
 
-    def test_parametric_gp_null_space_duplicate_deleted(self, constraint_2d_data):
-        """x + s(x, bs='gp') deletes the duplicate GP null-space column."""
+    def test_parametric_shared_variable_no_deletion(self, constraint_2d_data):
+        """A parametric term sharing a smooth's variable does NOT delete a
+        smooth column (matches R's gam.side, Finding 7).
+
+        For ``y ~ x + s(x)`` the single smooth's variable set is unique, so R
+        returns early and applies no side constraint — even though the smooth's
+        null space (TPRS/GP) contains the linear ``x`` direction. R keeps the
+        full (rank-deficient) basis; jaxgam's rank-revealing REML fit then
+        handles the deficiency. R only side-constrains a smooth against
+        lower-dimensional smooths plus the intercept, never against
+        non-intercept parametric columns.
+        """
         x = constraint_2d_data["x1"].values
-        sm = _setup_gp("x1", x)
-        X, S = _get_X_S(sm, {"x1": x})
-        X_c, S_c, _ = CoefficientMap.apply_sum_to_zero(X, S)
-
         X_param = np.column_stack([np.ones_like(x), x])
-        assert np.linalg.matrix_rank(np.column_stack([X_param, X_c])) < (
-            X_param.shape[1] + X_c.shape[1]
-        )
 
-        X_blocks = [X_c.copy()]
-        S_blocks = [[S_mat.copy() for S_mat in S_c]]
-        del_indices = CoefficientMap.gam_side([sm], X_blocks, S_blocks, X_param)
+        for setup_fn in (_setup_tprs, _setup_gp):
+            sm = setup_fn("x1", x)
+            X, S = _get_X_S(sm, {"x1": x})
+            X_c, S_c, _ = CoefficientMap.apply_sum_to_zero(X, S)
 
-        assert del_indices[0] is not None
-        assert len(del_indices[0]) == 1
-        assert np.linalg.matrix_rank(np.column_stack([X_param, X_blocks[0]])) == (
-            X_param.shape[1] + X_blocks[0].shape[1]
-        )
+            X_blocks = [X_c.copy()]
+            S_blocks = [[S_mat.copy() for S_mat in S_c]]
+            del_indices = CoefficientMap.gam_side([sm], X_blocks, S_blocks, X_param)
+
+            assert del_indices[0] is None
+            assert X_blocks[0].shape[1] == X_c.shape[1]
 
     def test_processing_order_low_to_high(self, constraint_2d_data):
         """Smooths are processed low->high dimension (1D before 2D)."""
@@ -923,3 +928,38 @@ class TestRComparison:
                 assert len(term.del_index) == 0, (
                     f"{term.label} has del_index but R has none"
                 )
+
+    def test_parametric_shared_variable_coef_count_matches_r(self, r_bridge):
+        """y ~ x + s(x): jaxgam keeps R's (rank-deficient) coef count AND
+        converges (Finding 7 + rank-revealing REML)."""
+        from jaxgam.api import GAM
+        from tests.helpers import _AssertCollector, check_that
+
+        rng = np.random.default_rng(SEED)
+        x = rng.uniform(0, 1, N)
+        y = 2.0 + 3.0 * x + np.sin(2 * np.pi * x) + rng.normal(0, 0.3, N)
+        df = pd.DataFrame({"x": x, "y": y})
+
+        # jaxgam must keep R's (rank-deficient) coefficient count and converge.
+        # The exact count depends on k/basis, so assert R-parity rather than a
+        # brittle hardcoded number; the key regression is that jaxgam no longer
+        # drops a column (would give n_py == n_r - 1) and still converges.
+        formulas = [
+            "y ~ x + s(x, k=10, bs='tp')",
+            "y ~ x + s(x, k=10, bs='gp')",
+            "y ~ x - 1 + s(x, k=10, bs='tp')",
+        ]
+        coll = _AssertCollector()
+        for formula in formulas:
+            r = r_bridge.fit_gam(formula, df, family="gaussian")
+            m = GAM(formula).fit(df)
+            n_py = len(np.asarray(m.coefficients))
+            n_r = len(np.asarray(r["coefficients"]))
+            coll.check(
+                formula,
+                lambda f=formula, n_py=n_py, n_r=n_r, mm=m: check_that(
+                    n_py == n_r and mm.converged,
+                    f"{f}: py {n_py}, R {n_r}, converged={mm.converged}",
+                ),
+            )
+        coll.raise_if_any("shared-variable coef parity")

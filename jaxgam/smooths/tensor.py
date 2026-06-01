@@ -132,12 +132,18 @@ class TensorProductSmooth(Smooth):
         list of (Smooth, np.ndarray, np.ndarray)
             Each tuple is (marginal_smooth, design_matrix, raw_penalty_matrix).
         """
+        # R te()/ti() default marginal k is 5^d per margin (R/smooth.r te():
+        # ``if (sum(is.na(k))||is.null(k)) k <- 5^d``). All jaxgam margins are
+        # 1-D (d=1) -> default k=5, NOT the univariate s() default of 10. An
+        # explicit user k (!= -1) is passed through unchanged to every margin,
+        # matching R's ``k <- rep(k, n.bases)``.
+        marginal_k = 5 if self.spec.k == -1 else self.spec.k
         marginals_info = []
         for var in self.spec.variables:
             marginal_spec = SmoothSpec(
                 variables=[var],
                 bs=self.spec.bs,
-                k=self.spec.k,
+                k=marginal_k,
                 smooth_type="s",
             )
             # Lazy import to break circular dependency: registry → tensor → registry

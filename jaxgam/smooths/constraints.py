@@ -707,14 +707,13 @@ class CoefficientMap:
             if dim_i > max_dim:
                 max_dim = dim_i
 
-        # Detect intercept in parametric matrix
+        # Detect intercept (constant direction) in the parametric matrix.
+        # Only the intercept/constant direction ever enters the dependence
+        # reference (R's gam.side, mgcv.r:594-604); non-intercept parametric
+        # columns are never used to side-constrain a smooth.
         intercept = False
-        has_nonconstant_parametric = False
         if X_parametric is not None and X_parametric.shape[1] > 0:
             col_sds = np.std(X_parametric, axis=0)
-            has_nonconstant_parametric = bool(
-                np.any(col_sds >= np.finfo(float).eps ** 0.75)
-            )
             if np.any(col_sds < np.finfo(float).eps ** 0.75):
                 intercept = True
             else:
@@ -724,9 +723,13 @@ class CoefficientMap:
                 if np.max(np.abs(ff - f)) < np.finfo(float).eps ** 0.75:
                     intercept = True
 
-        # Early return if smooths cannot nest and no parametric term can
-        # duplicate a smooth null-space column.
-        if len(v_names_all) == len(set(v_names_all)) and not has_nonconstant_parametric:
+        # Early return if no two smooths share a variable (smooths cannot
+        # nest), matching R's gam.side (mgcv.r:589-591). A parametric term
+        # sharing a smooth's variable (e.g. ``y ~ x + s(x)``) does NOT trigger
+        # a side constraint: R only side-constrains a smooth against
+        # lower-dimensional smooths plus the intercept, never non-intercept
+        # parametric columns (mgcv.r:644-646).
+        if len(v_names_all) == len(set(v_names_all)):
             return [None] * m
 
         # Build index: for each unique variable name, which smooths use it
@@ -755,23 +758,6 @@ class CoefficientMap:
 
             Xa_cache: dict[int, npt.NDArray[np.floating]] = {}
 
-        def _parametric_reference(
-            total_np_current: int,
-        ) -> npt.NDArray[np.floating] | None:
-            if X_parametric is None or X_parametric.shape[1] == 0:
-                return None
-            if not with_pen:
-                return X_parametric
-            return np.concatenate(
-                [
-                    X_parametric,
-                    np.zeros((total_np_current, X_parametric.shape[1])),
-                ],
-                axis=0,
-            )
-
-        X_parametric_ref = _parametric_reference(total_np)
-
         # Process smooths from low to high dimension
         del_indices: list[tuple[int, ...] | None] = [None] * m
 
@@ -781,11 +767,10 @@ class CoefficientMap:
                 if dim_i != d or not CoefficientMap._smooth_side_constrain(smooths[i]):
                     continue
 
-                # Collect X columns from lower-dimensional smooths
-                # sharing variables
-                if X_parametric_ref is not None:
-                    X1 = X_parametric_ref
-                elif with_pen:
+                # The dependence reference starts from the intercept/constant
+                # direction only (R's gam.side, mgcv.r:644-646); lower-D smooth
+                # columns sharing a variable are appended below.
+                if with_pen:
                     if intercept:
                         X1 = np.concatenate(
                             [
@@ -864,7 +849,6 @@ class CoefficientMap:
                             k_start += k_j
                         total_np = k_start
                         Xa_cache.clear()
-                        X_parametric_ref = _parametric_reference(total_np)
 
         return del_indices
 

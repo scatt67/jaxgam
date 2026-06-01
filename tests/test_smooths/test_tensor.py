@@ -174,6 +174,27 @@ class TestTensorProductStructure:
             X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
         )
 
+    def test_default_k_resolves_to_5(self, smooth_2d_data) -> None:
+        """Unspecified marginal k defaults to 5 per 1-D margin (R's 5^d).
+
+        Regression for Finding 2: ``te(x1, x2)`` with no k must build a
+        5x5 = 25-coef tensor (was 10x10 = 100). Explicit k is still honored.
+        """
+        # k=-1 means "unspecified" (the parser default), distinct from
+        # make_smooth_spec's own k=10 default.
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=-1, smooth_type="te")
+        smooth = TensorProductSmooth(spec)
+        smooth.setup(smooth_2d_data)
+        assert [m.n_coefs for m in smooth._marginals] == [5, 5]
+        assert smooth.n_coefs == 25
+
+        # Explicit k must still pass through unchanged.
+        spec7 = make_smooth_spec(["x1", "x2"], bs="cr", k=7, smooth_type="te")
+        smooth7 = TensorProductSmooth(spec7)
+        smooth7.setup(smooth_2d_data)
+        assert [m.n_coefs for m in smooth7._marginals] == [7, 7]
+        assert smooth7.n_coefs == 49
+
 
 # ===========================================================================
 # 4. TensorInteractionSmooth structural tests (STRICT)
@@ -191,6 +212,18 @@ class TestTensorInteractionStructure:
 
         X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (200, 16)
+
+    def test_default_k_resolves_to_5(self, smooth_2d_data) -> None:
+        """Unspecified ti() marginal k defaults to 5 per margin (Finding 2).
+
+        Each cr margin loses one column to the sum-to-zero constraint, so the
+        constrained marginals are 4 columns -> 4x4 = 16-coef interaction.
+        """
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=-1, smooth_type="ti")
+        smooth = TensorInteractionSmooth(spec)
+        smooth.setup(smooth_2d_data)
+        assert [m.n_coefs for m in smooth._marginals] == [5, 5]
+        assert smooth.n_coefs == 16
 
     def test_smaller_than_te(self, smooth_2d_data) -> None:
         """ti columns < te columns for same k."""

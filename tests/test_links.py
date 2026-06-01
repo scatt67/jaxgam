@@ -149,6 +149,32 @@ class TestMuEta:
         )
 
 
+class TestLogitDomainClamps:
+    """Finding 21: logit inverse/mu_eta clamp at extreme eta like R's C_logit_*."""
+
+    def test_logit_inverse_clamped_to_dbl_eps(self) -> None:
+        """linkinv never returns exactly 0 or 1; clamped to [eps, 1-eps]."""
+        from jaxgam.links.links import _DBL_EPS, LogitLink
+
+        link = LogitLink()
+        p = np.asarray(link.inverse(np.array([-50.0, -40.0, 40.0, 50.0])))
+        # Lower/upper tails saturate at the clamp, not 0/1.
+        assert np.all(p >= _DBL_EPS)
+        assert np.all(p <= 1.0 - _DBL_EPS)
+        assert p[0] == _DBL_EPS
+        assert p[-1] == 1.0 - _DBL_EPS
+
+    def test_logit_mu_eta_floored(self) -> None:
+        """mu_eta is floored at eps so it never returns exactly 0 (zero weight)."""
+        from jaxgam.links.links import _DBL_EPS, LogitLink
+
+        me = np.asarray(LogitLink().mu_eta(np.array([-50.0, 0.0, 50.0])))
+        assert np.all(me >= _DBL_EPS)
+        # The naive p*(1-p) would underflow to 0 at |eta|=50; here it is floored.
+        assert me[0] == _DBL_EPS
+        assert me[-1] == _DBL_EPS
+
+
 # ---------------------------------------------------------------------------
 # Test 3: R comparison — link values match R's make.link()
 # ---------------------------------------------------------------------------

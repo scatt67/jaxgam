@@ -119,6 +119,7 @@ def _criterion_core(
     multi_block_sp_indices: tuple[tuple[int, ...], ...],
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    rank_deficit: int = 0,
 ) -> jax.Array:
     """Shared REML criterion computation. Pure JAX, differentiable.
 
@@ -167,15 +168,28 @@ def _criterion_core(
     Dp = deviance + penalty
 
     H = XtWX + S_lambda
-    # Diagonal preconditioning: scale H to unit diagonal before logdet.
-    # This dramatically improves conditioning for binomial (where W
-    # varies from ~0 to 0.25) and prevents AD noise when jax.hessian
-    # differentiates through the factorization.
-    d = jnp.sqrt(jnp.maximum(jnp.diag(H), jnp.finfo(H.dtype).tiny))
-    d_inv = 1.0 / d
-    H_scaled = H * (d_inv[:, None] * d_inv[None, :])
-    L, _ = cho_factor(H_scaled)
-    log_det_H = 2.0 * jnp.sum(jnp.log(jnp.diag(L))) + 2.0 * jnp.sum(jnp.log(d))
+    if rank_deficit == 0:
+        # Diagonal preconditioning: scale H to unit diagonal before logdet.
+        # This dramatically improves conditioning for binomial (where W
+        # varies from ~0 to 0.25) and prevents AD noise when jax.hessian
+        # differentiates through the factorization.
+        d = jnp.sqrt(jnp.maximum(jnp.diag(H), jnp.finfo(H.dtype).tiny))
+        d_inv = 1.0 / d
+        H_scaled = H * (d_inv[:, None] * d_inv[None, :])
+        L, _ = cho_factor(H_scaled)
+        log_det_H = 2.0 * jnp.sum(jnp.log(jnp.diag(L))) + 2.0 * jnp.sum(jnp.log(d))
+    else:
+        # Structurally rank-deficient H (e.g. a parametric term confounded with
+        # a smooth's unpenalized null space). The Cholesky log-determinant is
+        # then jitter-dependent and gives a noisy log|H| gradient that breaks
+        # the REML Newton loop. Use the generalized log-determinant over the
+        # identifiable subspace instead: drop the ``rank_deficit`` smallest
+        # eigenvalues (the structural ~0 directions, constant across lambda),
+        # matching R's rank-revealing fit. ``rank_deficit`` is a static
+        # compile-time count, so the slice is smooth in lambda.
+        ev = jnp.sort(jnp.linalg.eigvalsh(H))[rank_deficit:]
+        ev = jnp.maximum(ev, jnp.finfo(H.dtype).tiny)
+        log_det_H = jnp.sum(jnp.log(ev))
 
     log_det_S = block_log_det_S(
         log_lambda,
@@ -355,6 +369,7 @@ def reml_criterion(
     multi_block_sp_indices: tuple[tuple[int, ...], ...],
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    rank_deficit: int = 0,
 ) -> jax.Array:
     """REML criterion matching R's Laplace REML (gam.fit3.r line 616).
 
@@ -394,6 +409,7 @@ def reml_criterion(
         multi_block_sp_indices,
         multi_block_ranks,
         multi_block_proj_S,
+        rank_deficit,
     )
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
@@ -421,6 +437,7 @@ def reml_criterion_joint(
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     max_y: int = 0,
+    rank_deficit: int = 0,
 ) -> jax.Array:
     """REML criterion with joint ``(log_lambda, log_phi)`` optimization.
 
@@ -463,6 +480,7 @@ def reml_criterion_joint(
         multi_block_sp_indices,
         multi_block_ranks,
         multi_block_proj_S,
+        rank_deficit,
     )
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
@@ -473,6 +491,7 @@ def reml_criterion_joint(
 
 _BLOCK_STATIC = (
     "Mp",
+    "rank_deficit",
     "singleton_sp_indices",
     "singleton_ranks",
     "multi_block_sp_indices",
@@ -575,6 +594,7 @@ class _CriterionBase(ABC):
         self._beta = pirls_result.coefficients
         self._S_list = fd.S_list
         self._Mp = fd.total_penalty_null_dim
+        self._rank_deficit = fd.rank_deficit
         # Block-structured log|S+| metadata
         self._singleton_sp_indices = fd.singleton_sp_indices
         self._singleton_ranks = fd.singleton_ranks
@@ -593,6 +613,7 @@ class _CriterionBase(ABC):
             "S_list": self._S_list,
             "phi": self.scale,
             "Mp": self._Mp,
+            "rank_deficit": self._rank_deficit,
             "singleton_sp_indices": self._singleton_sp_indices,
             "singleton_ranks": self._singleton_ranks,
             "singleton_eig_constants": self._singleton_eig_constants,
@@ -704,6 +725,7 @@ class _JointCriterionBase(ABC):
         self._family = fd.family
         self._n_lambda = fd.n_penalties
         self._Mp = fd.total_penalty_null_dim
+        self._rank_deficit = fd.rank_deficit
         # Block-structured log|S+| metadata
         self._singleton_sp_indices = fd.singleton_sp_indices
         self._singleton_ranks = fd.singleton_ranks
@@ -723,6 +745,7 @@ class _JointCriterionBase(ABC):
             "wt": self._wt,
             "S_list": self._S_list,
             "Mp": self._Mp,
+            "rank_deficit": self._rank_deficit,
             "n_lambda": self._n_lambda,
             "family": self._family,
             "singleton_sp_indices": self._singleton_sp_indices,

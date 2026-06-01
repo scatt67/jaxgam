@@ -129,6 +129,7 @@ def _diff_score(
     multi_block_ranks: tuple[int, ...],
     p: int,
     max_y: int = 0,
+    rank_deficit: int = 0,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
@@ -306,8 +307,21 @@ def _diff_score(
             eta = X @ beta + offset
             deta = X @ dbeta
 
-            def _eta_to_W(e):
-                return family.working_weights(family.link.inverse(e), wt)
+            if family.is_canonical:
+                # Canonical link: Fisher == observed; XtWX is the Fisher Hessian.
+                def _eta_to_W(e):
+                    return family.working_weights(family.link.inverse(e), wt)
+            else:
+                # Non-canonical: pirls returns the OBSERVED Hessian for the REML
+                # log|H|, so its derivative must use the observed weight
+                # 0.5 d²D/dη² to keep the REML gradient consistent (matches
+                # mgcv's Newton-weighted log|H|).
+                def _eta_to_W(e):
+                    def _dev_sum(ee):
+                        return family.dev_resids(y, family.link.inverse(ee), wt)
+
+                    _, d2 = jax.jvp(jax.grad(_dev_sum), (e,), (jnp.ones_like(e),))
+                    return 0.5 * d2
 
             _, dW = jax.jvp(_eta_to_W, (eta,), (deta,))
             dXtWX = (X.T * dW) @ X
@@ -337,6 +351,7 @@ def _diff_score(
         multi_block_sp_indices,
         multi_block_ranks,
         multi_block_proj_S,
+        rank_deficit,
     )
 
     # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
@@ -352,6 +367,7 @@ _DIFF_STATIC = (
     "joint_scale",
     "n_lambda",
     "Mp",
+    "rank_deficit",
     "singleton_sp_indices",
     "singleton_ranks",
     "multi_block_sp_indices",
@@ -427,6 +443,7 @@ def _fit_and_score_impl(
     multi_block_ranks: tuple[int, ...],
     p: int,
     max_y: int = 0,
+    rank_deficit: int = 0,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
@@ -491,6 +508,7 @@ def _fit_and_score_impl(
         multi_block_sp_indices,
         multi_block_ranks,
         multi_block_proj_S,
+        rank_deficit,
     )
 
     # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
@@ -752,6 +770,7 @@ class NewtonOptimizer:
             "joint_scale": self._joint_scale,
             "n_lambda": fd.n_penalties,
             "Mp": fd.total_penalty_null_dim,
+            "rank_deficit": fd.rank_deficit,
             "singleton_sp_indices": fd.singleton_sp_indices,
             "singleton_ranks": fd.singleton_ranks,
             "multi_block_sp_indices": fd.multi_block_sp_indices,
@@ -1307,7 +1326,8 @@ class NewtonOptimizer:
                 tol=self._pirls_tol,
                 log_theta=log_theta_init_for_pirls,
             )
-            edf_init = estimate_edf(pirls_init.XtWX, pirls_init.L)
+            # Fisher-weighted EDF (XtWX may be observed info for non-canonical).
+            edf_init = estimate_edf(pirls_init.XtWX_fisher, pirls_init.L_fisher)
             phi_init = fletcher_scale(fd.y, pirls_init.mu, fd.wt, fd.family, edf_init)
             log_phi_init = jnp.log(phi_init)
             parts.append(log_phi_init[None])

@@ -651,6 +651,16 @@ class TestEdgeCases:
         setup = ModelSetup.build(spec, data, weights=w)
         assert setup.weights[0] == 0.0
 
+    def test_all_zero_weights_raise(self, data) -> None:
+        """All-zero weights have no data to fit; reject up front (Finding 14).
+
+        Previously produced a degenerate 'converged' model with NaN null
+        deviance; mgcv errors during smoothing-parameter setup.
+        """
+        spec = parse_formula("y ~ s(x1, k=10)")
+        with pytest.raises(ValueError, match="sum to zero"):
+            ModelSetup.build(spec, data, weights=np.zeros(N))
+
     @pytest.mark.parametrize(
         ("bad", "match"),
         [
@@ -694,3 +704,19 @@ class TestEdgeCases:
         )
         with pytest.raises(ValueError, match=r"new level.*newlev"):
             setup.build_predict_matrix(newdata)
+
+    def test_na_parametric_factor_level_predicts_nan(self, factor_data) -> None:
+        """An NA parametric factor value -> NaN row, not a TypeError (Finding 15).
+
+        Matches R's predict.gam (NA in -> NA out). Previously ``np.unique`` on
+        mixed str+NaN raised ``TypeError``.
+        """
+        spec = parse_formula("y ~ fac + s(x1, k=10)")
+        setup = ModelSetup.build(spec, factor_data)
+        newdata = pd.DataFrame(
+            {"x1": [0.5, 0.5], "fac": np.array(["lev1", np.nan], dtype=object)}
+        )
+        X = setup.build_predict_matrix(newdata)  # must not raise
+        assert X.shape[0] == 2
+        assert np.isnan(X[1]).any()  # NA-factor row carries NaN
+        assert np.isfinite(X[0]).all()

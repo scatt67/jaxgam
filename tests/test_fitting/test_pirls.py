@@ -147,6 +147,112 @@ class TestStepHalving:
 
         assert result.converged
 
+    def test_gamma_step_halving_rescues_from_bad_init(self):
+        """Gamma + step-halving must converge from a poor start (Finding 19).
+
+        Step-halving now begins at 0.5 (then 0.25, ...). CLAUDE.md Pitfall 5:
+        Gamma PIRLS diverges without step-halving, so this exercises the path.
+        """
+        X, y = _make_glm_data("gamma", n=200)
+        family = Gamma()
+        S_lambda_np = np.zeros((2, 2))
+        X_d, y_d, S_d = to_jax(X, y, S_lambda_np)
+        beta_init = to_jax(np.array([3.0, 3.0]))
+        result = pirls_loop(X_d, y_d, beta_init, S_d, family, max_iter=200)
+        assert result.converged
+
+
+class TestNonCanonicalNewtonHessian:
+    """Finding 11: REML log|H| uses observed weights for non-canonical links."""
+
+    @staticmethod
+    def _gamma_log_data(n: int = 200):
+        rng = np.random.default_rng(SEED)
+        x = np.linspace(0.05, 0.95, n)
+        X = np.column_stack([np.ones(n), x])
+        mu = np.exp(0.3 * x + 1.0)
+        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+        return X, y
+
+    def test_is_canonical_property(self):
+        """is_canonical is True for default links, False for non-canonical."""
+        from jaxgam.links.links import LogLink
+
+        assert Gaussian().is_canonical
+        assert Poisson().is_canonical
+        assert Binomial().is_canonical
+        assert Gamma().is_canonical  # default inverse link
+        assert not Gamma(link=LogLink()).is_canonical
+
+    def test_canonical_link_xtwx_is_fisher_noop(self):
+        """Canonical Gamma (inverse): XtWX == XtWX_fisher exactly (STRICT no-op).
+
+        Proves the observed-weight branch never perturbs canonical-link fits.
+        """
+        X, y = self._gamma_log_data()
+        S_lambda_np = np.zeros((2, 2))
+        X_d, y_d, S_d = to_jax(X, y, S_lambda_np)
+        beta_init = to_jax(np.array([1.0, 0.0]))
+        result = pirls_loop(X_d, y_d, beta_init, S_d, Gamma(), max_iter=200)
+        np.testing.assert_allclose(
+            to_numpy(result.XtWX),
+            to_numpy(result.XtWX_fisher),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_noncanonical_link_xtwx_is_observed(self):
+        """Non-canonical Gamma(log): the criterion XtWX (observed) differs from
+        the Fisher XtWX used for EDF/covariance."""
+        from jaxgam.links.links import LogLink
+
+        X, y = self._gamma_log_data()
+        S_lambda_np = np.zeros((2, 2))
+        X_d, y_d, S_d = to_jax(X, y, S_lambda_np)
+        beta_init = to_jax(np.array([1.0, 0.0]))
+        fam = Gamma(link=LogLink())
+        result = pirls_loop(X_d, y_d, beta_init, S_d, fam, max_iter=200)
+        assert result.converged
+        # Observed and Fisher curvature must differ for a non-canonical link.
+        diff = np.max(np.abs(to_numpy(result.XtWX) - to_numpy(result.XtWX_fisher)))
+        assert diff > 1e-6
+
+    @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+    def test_gamma_log_free_reml_matches_r(self):
+        """Free-REML Gamma(log) score/edf now match R tightly (was LOOSE-only)."""
+        import pandas as pd
+
+        from jaxgam.api import GAM
+        from tests.r_bridge import RBridge
+
+        rng = np.random.default_rng(SEED)
+        n = 200
+        x = rng.uniform(0, 1, n)
+        mu = np.exp(0.5 * np.sin(2 * np.pi * x) + 1.0)
+        y = rng.gamma(5.0, scale=mu / 5.0, size=n)
+        df = pd.DataFrame({"x": x, "y": y})
+
+        from jaxgam.families.standard import Gamma as GammaFam
+        from jaxgam.links.links import LogLink
+
+        m = GAM("y ~ s(x, k=10, bs='cr')", family=GammaFam(link=LogLink())).fit(df)
+        r = RBridge().fit_gam("y ~ s(x, k=10, bs='cr')", df, family="gamma_log")
+        coll = _AssertCollector()
+        coll.check(
+            "reml score",
+            lambda: check_that(
+                abs(float(m.score) - r["reml_score"]) < 0.05,
+                f"score {float(m.score)} vs R {r['reml_score']}",
+            ),
+        )
+        coll.check(
+            "edf",
+            lambda: np.testing.assert_allclose(
+                m.edf_total, r["edf_total"], rtol=LOOSE.rtol, atol=LOOSE.atol
+            ),
+        )
+        coll.raise_if_any("gamma-log free REML")
+
 
 class TestJITCompilation:
     """PIRLS should work under jax.jit for all families."""

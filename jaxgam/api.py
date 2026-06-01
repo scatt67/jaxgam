@@ -310,8 +310,10 @@ def _fit_fixed_sp(
         log_theta=log_theta,
     )
 
-    # Compute EDF and scale
-    edf = estimate_edf(pirls_result.XtWX, pirls_result.L)
+    # Compute EDF and scale. EDF uses FISHER-weighted quantities (R's gdi2);
+    # for non-canonical links pirls_result.XtWX is the observed-information
+    # matrix used for the REML log|H|, so EDF must use the *_fisher fields.
+    edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
     scale = estimate_scale(
         fd.y,
         pirls_result.mu,

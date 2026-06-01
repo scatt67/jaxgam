@@ -45,6 +45,7 @@ class Gaussian(ExponentialFamily):
     family_name: str = "gaussian"
     scale_known: bool = False
     response_support = REAL
+    canonical_link_cls = IdentityLink
 
     @property
     def default_link(self) -> Link:
@@ -88,19 +89,25 @@ class Gaussian(ExponentialFamily):
 
     def aic(
         self,
-        y: np.ndarray,  # noqa: ARG002
-        mu: np.ndarray,  # noqa: ARG002
+        y: np.ndarray,
+        mu: np.ndarray,
         wt: np.ndarray,
-        scale: float,
+        scale: float,  # noqa: ARG002
     ) -> float:
         """AIC contribution for Gaussian family.  Phase 3 only (NumPy).
 
-        Matches R's gaussian()$aic which returns:
-            sum(wt) * (log(2*pi*scale) + 1) + 2
-        where the +2 accounts for the estimated scale parameter.
+        Matches R's ``gaussian()$aic``::
+
+            nobs * (log(2*pi*dev/nobs) + 1) + 2 - sum(log(wt))
+
+        where ``nobs = len(y)`` and ``dev = sum(wt*(y-mu)^2)``. The dispersion
+        is the deviance-based MLE ``dev/nobs`` (not the passed scale), and the
+        ``-sum(log wt)`` term accounts for non-unit prior weights.
         """
-        n = np.sum(wt)
-        return float(n * (np.log(2 * np.pi * scale) + 1) + 2)
+        nobs = len(y)
+        dev = float(np.sum(wt * (y - mu) ** 2))
+        sum_log_wt = float(np.sum(np.log(wt[wt > 0])))
+        return float(nobs * (np.log(2 * np.pi * dev / nobs) + 1.0) + 2.0 - sum_log_wt)
 
     def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu = y for Gaussian."""
@@ -129,6 +136,7 @@ class Binomial(ExponentialFamily):
     family_name: str = "binomial"
     scale_known: bool = True
     response_support = UNIT_INTERVAL
+    canonical_link_cls = LogitLink
 
     @property
     def default_link(self) -> Link:
@@ -152,8 +160,11 @@ class Binomial(ExponentialFamily):
     ) -> float:
         """Saturated log-likelihood for Binomial.  Phase 2 only (JAX).
 
-        R: -binomial()$aic(y, n, y, w, 0) / 2
-        = sum(wt * [y*log(y) + (1-y)*log(1-y)]) with boundary handling.
+        R: ``-binomial()$aic(y, n, y, w, 0) / 2`` which, at saturation mu=y,
+        equals ``sum(wt * [y*log(y) + (1-y)*log(1-y)]) + sum(lchoose(m, m*y))``.
+        The binomial-coefficient term ``lchoose`` is zero for Bernoulli (wt=1)
+        but a large nonzero constant for grouped/trial-count binomial (wt>1);
+        omitting it makes the reported REML score wrong by that constant.
         """
         y_safe = jnp.clip(y, _MU_EPS, 1.0 - _MU_EPS)
         interior = (y > 0) & (y < 1)
@@ -162,7 +173,15 @@ class Binomial(ExponentialFamily):
             y * jnp.log(y_safe) + (1.0 - y) * jnp.log(1.0 - y_safe),
             0.0,
         )
-        return jnp.sum(wt * ll)
+        # Binomial-coefficient term (R binomial()$aic via fix.family.ls):
+        # m = trial count = prior weight wt; k = successes = round(m*y);
+        # lchoose(m, k) = lgamma(m+1) - lgamma(k+1) - lgamma(m-k+1).
+        # For Bernoulli (wt=1) this is identically 0, preserving that case.
+        m = jnp.round(wt)
+        k = jnp.round(wt * y)
+        lchoose = jsp.gammaln(m + 1.0) - jsp.gammaln(k + 1.0) - jsp.gammaln(m - k + 1.0)
+        lchoose = jnp.where(wt > 0, lchoose, 0.0)
+        return jnp.sum(wt * ll) + jnp.sum(lchoose)
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -195,20 +214,27 @@ class Binomial(ExponentialFamily):
     ) -> float:
         """AIC contribution for Binomial family.  Phase 3 only (NumPy).
 
-        Matches R: -2 * sum(wt * dbinom(y, 1, mu, log=TRUE))
-        For Bernoulli trials: -2 * sum(wt * [y*log(mu) + (1-y)*log(1-mu)])
+        Matches R's ``binomial()$aic``:
+        ``-2 * sum((wt/m) * dbinom(round(m*y), round(m), mu, log=TRUE))``
+        with single-column trial count ``m = wt``. Expanding the binomial pmf
+        gives the ``lchoose(m, m*y)`` term (zero for Bernoulli, wt=1).
         """
         mu_safe = np.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
         ll = wt * (y * np.log(mu_safe) + (1.0 - y) * np.log(1.0 - mu_safe))
-        return float(-2.0 * np.sum(ll))
+        m = np.round(wt)
+        k = np.round(wt * y)
+        lchoose = gammaln(m + 1.0) - gammaln(k + 1.0) - gammaln(m - k + 1.0)
+        lchoose = np.where(wt > 0, lchoose, 0.0)
+        return float(-2.0 * (np.sum(ll) + np.sum(lchoose)))
 
-    def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
-        """Initialize mu = (y + 0.5) / 2 for Binomial.
+    def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:
+        """Initialize mu for Binomial: ``(wt*y + 0.5) / (wt + 1)``.
 
-        This R convention maps y in {0, 1} to mu in (0.25, 0.75),
-        ensuring the starting mu is safely away from the boundary.
+        Matches R's ``binomial()$initialize`` (prior-weight aware). For unit
+        weights this reduces to ``(y + 0.5)/2``, mapping y in {0, 1} to mu in
+        (0.25, 0.75), safely away from the boundary.
         """
-        return (y + 0.5) / 2.0
+        return (wt * y + 0.5) / (wt + 1.0)
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Binomial: 0 < mu < 1."""
@@ -232,6 +258,7 @@ class Poisson(ExponentialFamily):
     family_name: str = "poisson"
     scale_known: bool = True
     response_support = NON_NEGATIVE
+    canonical_link_cls = LogLink
 
     @property
     def default_link(self) -> Link:
@@ -303,12 +330,13 @@ class Poisson(ExponentialFamily):
         return float(-2.0 * np.sum(ll))
 
     def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
-        """Initialize mu for Poisson: mu = y + 0.1 where y == 0.
+        """Initialize mu for Poisson: ``mu = y + 0.1`` for ALL observations.
 
-        Following R's convention, this avoids log(0) in the first
+        Matches R's ``poisson()$initialize`` (``mustart <- y + 0.1``), which
+        bumps every observation, not only zeros, avoiding log(0) in the first
         evaluation of the working quantities.
         """
-        return np.where(y == 0, y + 0.1, y)
+        return y + 0.1
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Poisson: mu > 0."""
@@ -332,6 +360,7 @@ class Gamma(ExponentialFamily):
     family_name: str = "Gamma"
     scale_known: bool = False
     response_support = POSITIVE
+    canonical_link_cls = InverseLink
 
     @property
     def default_link(self) -> Link:
@@ -392,22 +421,31 @@ class Gamma(ExponentialFamily):
         y: np.ndarray,
         mu: np.ndarray,
         wt: np.ndarray,
-        scale: float,
+        scale: float,  # noqa: ARG002
     ) -> float:
         """AIC contribution for Gamma family.  Phase 3 only (NumPy).
 
-        Matches R's Gamma()$aic:
-            -2 * sum(wt * dgamma(y, shape=1/scale, scale=mu*scale, log=TRUE)) + 2
-        The +2 accounts for the estimated scale parameter.
+        Matches R's ``Gamma()$aic``::
+
+            disp = dev / sum(wt)
+            -2 * sum(wt * dgamma(y, 1/disp, scale=mu*disp, log=TRUE)) + 2
+
+        where ``dev = 2*sum(wt*(-log(y/mu) + (y-mu)/mu))``. R uses the
+        deviance-based dispersion ``dev/sum(wt)`` (not the passed scale); the
+        ``+2`` accounts for the estimated dispersion parameter.
         """
-        shape = 1.0 / scale
         y_safe = np.maximum(y, _MU_EPS)
         mu_safe = np.maximum(mu, _MU_EPS)
 
+        unit_dev = -np.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe
+        dev = 2.0 * float(np.sum(wt * unit_dev))
+        disp = dev / float(np.sum(wt))
+        shape = 1.0 / disp
+
         ll = wt * (
             (shape - 1.0) * np.log(y_safe)
-            - y_safe / (mu_safe * scale)
-            - shape * np.log(mu_safe * scale)
+            - y_safe / (mu_safe * disp)
+            - shape * np.log(mu_safe * disp)
             - gammaln(shape)
         )
         return float(-2.0 * np.sum(ll) + 2.0)
@@ -424,6 +462,15 @@ class Gamma(ExponentialFamily):
         return mu > 0
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
-        """All finite eta are valid for Gamma."""
+        """Valid eta for Gamma.
+
+        For the inverse link (Gamma's default) R's ``valideta`` is
+        ``is.finite(eta) & all(eta != 0)`` — eta==0 maps to mu=inf. Other
+        links only require finiteness. The ``isinstance`` check is on the
+        static link object (resolved at trace time), so this stays JAX-safe.
+        """
         xp = array_module(eta)
-        return xp.isfinite(eta)
+        finite = xp.isfinite(eta)
+        if isinstance(self.link, InverseLink):
+            return finite & (eta != 0)
+        return finite

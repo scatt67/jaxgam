@@ -10,6 +10,7 @@ Design doc reference: docs/refactor_gam_api/design.md §3.4, §4.1, §7
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -276,6 +277,19 @@ class GAMResults:
             eta = X_p @ self.coefficients
             if offset is not None:
                 eta = eta + np.asarray(offset, dtype=np.float64).ravel()
+            elif self.offset is not None and not np.allclose(self.offset, 0.0):
+                # The model was fit with an external offset, which mgcv's
+                # predict.gam does NOT recover for new data (only formula
+                # offset() terms are recovered). Surface the silent drop so
+                # exposure-offset workflows don't get badly wrong predictions.
+                warnings.warn(
+                    "This model was fit with an external offset, but no "
+                    "`offset=` was supplied to predict() on new data. The "
+                    "offset is omitted from the returned predictions (matching "
+                    "mgcv predict.gam for external offsets). Pass `offset=` to "
+                    "include it.",
+                    stacklevel=2,
+                )
 
         pred = self.family.link.linkinv(eta) if pred_type == "response" else eta
 

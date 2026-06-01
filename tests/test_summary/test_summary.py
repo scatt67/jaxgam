@@ -241,16 +241,17 @@ class TestSummaryVsR:
         )
 
     def test_smooth_test_stat_vs_r(self, summary_pair):
-        """Smooth F/Chi-sq statistics should match R at MODERATE.
+        """Smooth F/Chi-sq statistics should match R at MODERATE for ALL families.
 
-        Now uses Davies' exact method for the mixture chi-squared
-        distribution, matching R's psum.chisq.
+        Regression guard for Finding 3: the test statistic uses the Fisher-
+        WEIGHTED design block (R's object$R), so it now matches R to ~2e-7 even
+        for non-Gaussian families. The previous unweighted block was ~3% off —
+        which only passed under the LOOSE tier, masking the bug. MODERATE here
+        fails on the unweighted-block regression.
         """
         family_name, py_s, r_s, _ = summary_pair
         if py_s.s_table is None or r_s["s_table"] is None:
             pytest.skip("No smooth terms")
-
-        tol = r_tolerance(family_name)
 
         # Column 2 is F (for unknown-scale) or Chi.sq (for known-scale)
         py_stat = py_s.s_table[:, 2]
@@ -259,8 +260,8 @@ class TestSummaryVsR:
         np.testing.assert_allclose(
             py_stat,
             r_stat,
-            rtol=tol.rtol,
-            atol=tol.atol,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
             err_msg=f"{family_name} smooth test stat differs from R",
         )
 
@@ -484,23 +485,30 @@ class TestRandomEffectSummaryVsR:
         )
 
     def test_re_test_stat_vs_r(self, re_summary_pair) -> None:
-        """RE term F statistic matches R (LOOSE).
+        """RE term F statistic matches R at MODERATE (Finding 8).
 
-        LOOSE because the test statistic compounds small fitting
-        differences across the eigendecomposition in testStat.
+        The reTest/recov port routes RE terms (null space dim 0) through R's
+        random-effect-conditional reference distribution, matching R to ~2e-7.
+        MODERATE here fails on the old testStat(type_=1) path, which produced a
+        materially different statistic for weak-signal RE terms.
         """
         py_s, r_s = re_summary_pair
         # Row 1 = s(g), column 2 = F / Chi.sq
         np.testing.assert_allclose(
             py_s.s_table[1, 2],
             r_s["s_table"][1, 2],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
             err_msg="RE test statistic differs from R",
         )
 
     def test_re_pvalue_vs_r(self, re_summary_pair) -> None:
-        """RE term p-value matches R (LOOSE)."""
+        """RE term p-value matches R (LOOSE).
+
+        The statistic matches to MODERATE (see test_re_test_stat_vs_r); the
+        p-value stays at LOOSE because tiny p-values are relatively sensitive
+        to the last digits of the statistic.
+        """
         py_s, r_s = re_summary_pair
         # Row 1 = s(g), column 3 = p-value
         np.testing.assert_allclose(

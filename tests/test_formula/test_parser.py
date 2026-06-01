@@ -16,7 +16,7 @@ Covers:
 import pytest
 
 from jaxgam.formula import FormulaSpec, SmoothSpec, parse_formula
-from tests.helpers import _AssertCollector
+from tests.helpers import _AssertCollector, check_that
 
 
 class TestBasicParsing:
@@ -321,6 +321,36 @@ class TestNoIntercept:
         assert len(result.parametric_terms) == 1
         assert result.parametric_terms[0].name == "x1"
 
+    def test_intercept_token_order_last_wins(self) -> None:
+        """Intercept is last-token-wins, left-to-right, matching R terms().
+
+        Regression for Finding 1: ``+ 1`` after intercept removal re-adds the
+        intercept. These are exact R ``terms.formula`` outputs (analytic ground
+        truth, verified against R 4.5.2), so no tolerance is needed.
+        """
+        cases = {
+            "y ~ 0 + x + 1": True,
+            "y ~ x - 1 + 1": True,
+            "y ~ x + 0 + 1": True,
+            "y ~ -1 + x + 1": True,
+            "y ~ 1 + x - 1": False,
+            "y ~ x + 1 - 1": False,
+            "y ~ x - 1 + 1 - 1": False,
+            "y ~ 1 - 1 + x": False,
+            "y ~ x + 0": False,
+            "y ~ x": True,
+        }
+        collector = _AssertCollector()
+        for formula, expected in cases.items():
+            collector.check(
+                formula,
+                lambda f=formula, e=expected: check_that(
+                    parse_formula(f).has_intercept is e,
+                    f"{f}: has_intercept should be {e}",
+                ),
+            )
+        collector.raise_if_any("intercept token order")
+
 
 class TestComplexFormula:
     """Test 8: complex multi-term formulas."""
@@ -414,3 +444,36 @@ class TestErrorCases:
         """Subtraction of non-1 value raises ValueError."""
         with pytest.raises(ValueError, match="only supported as"):
             parse_formula("y ~ s(x1) - 2")
+
+
+class TestDeferredAndDuplicateArgs:
+    """Findings 4, 5, 13: deferred smooth kwargs and duplicate-term de-dup."""
+
+    def test_fx_true_raises_not_implemented(self) -> None:
+        """s(..., fx=True) is a deferred feature; raise rather than silently fit."""
+        with pytest.raises(NotImplementedError, match="fx=True"):
+            parse_formula("y ~ s(x1, fx=True)")
+
+    def test_fx_false_accepted_and_not_stored(self) -> None:
+        """fx=False is the default; accept it and do not leak it into extra_args."""
+        result = parse_formula("y ~ s(x1, fx=False)")
+        assert len(result.smooth_terms) == 1
+        assert "fx" not in result.smooth_terms[0].extra_args
+
+    def test_per_term_sp_raises_not_implemented(self) -> None:
+        """Per-term sp= inside s()/te()/ti() is deferred; raise NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="Per-term sp"):
+            parse_formula("y ~ s(x1, sp=0.1)")
+
+    def test_per_term_sp_none_accepted(self) -> None:
+        """sp=None is the R default; accept and do not store it."""
+        result = parse_formula("y ~ s(x1, sp=None)")
+        assert "sp" not in result.smooth_terms[0].extra_args
+
+    def test_duplicate_parametric_dedup(self) -> None:
+        """y ~ x + x collapses to a single parametric term (matches R)."""
+        result = parse_formula("y ~ x + x")
+        assert [t.name for t in result.parametric_terms] == ["x"]
+
+        ordered = parse_formula("y ~ x1 + x2 + x1")
+        assert [t.name for t in ordered.parametric_terms] == ["x1", "x2"]

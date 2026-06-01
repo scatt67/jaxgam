@@ -239,7 +239,7 @@ mapping.
 
 | Argument | Description | Default |
 |---|---|---|
-| `k` | Marginal basis dimension (scalar applied to all margins). `-1` means auto-select (resolves to `10` for the default `cr` marginals). | -1 (auto) |
+| `k` | Marginal basis dimension (scalar applied to all margins). `-1` means auto-select, which resolves to `5` per (1-D) margin, matching R mgcv's `te()`/`ti()` default of 5^d. | -1 (auto) |
 
 Use `te()` for full tensor products and `ti()` for interaction-only terms
 (excludes main effects).

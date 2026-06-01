@@ -1,6 +1,6 @@
 # JaxGAM: Design Document for a Python Port of R's mgcv
 
-**Version:** 1.18
+**Version:** 1.19
 **Date:** February 2026
 **Status:** Design Phase - Post-Seventeenth Review: Scope Freeze
 

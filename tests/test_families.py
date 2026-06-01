@@ -378,6 +378,145 @@ class TestInitialization:
             mu = fam.initialize(y, np.ones_like(y))
             assert np.all(fam.valid_mu(mu)), fam.family_name
 
+    def test_poisson_initialize_bumps_all(self) -> None:
+        """Poisson initialize is y + 0.1 for ALL obs (R poisson()$initialize)."""
+        y = np.array([0.0, 1.0, 5.0, 0.0, 3.0])
+        mu = Poisson().initialize(y, np.ones_like(y))
+        np.testing.assert_allclose(mu, y + 0.1, rtol=STRICT.rtol, atol=STRICT.atol)
+
+    def test_binomial_initialize_prior_weight_aware(self) -> None:
+        """Binomial initialize is (wt*y + 0.5)/(wt + 1) (R binomial()$initialize)."""
+        y = np.array([0.0, 0.4, 1.0, 0.7])
+        wt = np.array([5.0, 10.0, 2.0, 3.0])
+        mu = Binomial().initialize(y, wt)
+        np.testing.assert_allclose(
+            mu, (wt * y + 0.5) / (wt + 1.0), rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        # Unit weights reduce to the historical (y + 0.5)/2.
+        y01 = np.array([0.0, 1.0])
+        mu1 = Binomial().initialize(y01, np.ones_like(y01))
+        np.testing.assert_allclose(mu1, (y01 + 0.5) / 2.0)
+
+
+class TestSaturatedAndAicVsRFormula:
+    """Findings 10, 17, 18: saturated-loglik / aic match R's exact formulas.
+
+    These reproduce R's ``family$ls`` / ``family$aic`` arithmetic in Python at
+    STRICT tolerance — closed-form and deterministic, so they cannot go stale.
+    """
+
+    def test_binomial_saturated_loglik_includes_lchoose(self) -> None:
+        """Binomial ls adds lchoose(m, m*y); 0 for Bernoulli, nonzero grouped."""
+        from scipy.special import gammaln
+
+        # Grouped/trial-count binomial: wt are trial counts.
+        y = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+        wt = np.array([4.0, 8.0, 6.0, 8.0, 4.0])
+        got = float(Binomial().saturated_loglik(y, wt, 1.0))
+        # R: ls = sum(wt*[y log y + (1-y) log(1-y)]) + sum(lchoose(wt, wt*y)).
+        ysafe = np.clip(y, 1e-10, 1 - 1e-10)
+        interior = (y > 0) & (y < 1)
+        unit = np.where(interior, y * np.log(ysafe) + (1 - y) * np.log(1 - ysafe), 0.0)
+        base = np.sum(wt * unit)
+        m, k = np.round(wt), np.round(wt * y)
+        lchoose = np.sum(gammaln(m + 1) - gammaln(k + 1) - gammaln(m - k + 1))
+        np.testing.assert_allclose(
+            got, base + lchoose, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+        # Bernoulli (wt=1): the lchoose term is identically zero.
+        yb = np.array([0.0, 1.0, 0.0, 1.0])
+        wb = np.ones_like(yb)
+        got_b = float(Binomial().saturated_loglik(yb, wb, 1.0))
+        np.testing.assert_allclose(got_b, 0.0, atol=STRICT.atol)
+
+    def test_nb_aic_no_double_theta_log_theta(self) -> None:
+        """NB aic equals R nb()$aic (no duplicated -theta*log(theta)). Finding 17."""
+        from scipy.special import gammaln
+
+        def r_nb_aic(y, mu, theta, wt):
+            t = theta
+            term = (
+                (y + t) * np.log(mu + t)
+                - y * np.log(mu)
+                + gammaln(y + 1.0)
+                - t * np.log(t)
+                + gammaln(t)
+                - gammaln(t + y)
+            )
+            return 2.0 * np.sum(term * wt)
+
+        y = np.array([0.0, 1.0, 2.0, 3.0, 5.0, 8.0])
+        mu = np.array([0.5, 1.2, 1.8, 2.5, 4.0, 7.0])
+        wt = np.array([1.0, 2.0, 1.0, 0.5, 1.5, 1.0])
+        for theta in (0.4, 1.0, 3.0, 1000.0):
+            fam = NegativeBinomial(theta=theta, fixed=True)
+            got = fam.aic(y, mu, wt, 1.0)
+            want = r_nb_aic(y, mu, theta, wt)
+            np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-9)
+
+    def test_standard_aic_matches_r_family_aic(self) -> None:
+        """Gaussian/Poisson/Binomial/Gamma aic match R's family$aic. Finding 18."""
+        from scipy.special import gammaln
+
+        rng = np.random.default_rng(SEED)
+        n = 50
+        wt = rng.uniform(0.5, 3.0, n)
+
+        # Gaussian: nobs*(log(2*pi*dev/nobs)+1) + 2 - sum(log(wt)).
+        yg = rng.normal(0, 1, n)
+        mug = yg + rng.normal(0, 0.2, n)
+        devg = np.sum(wt * (yg - mug) ** 2)
+        want_g = n * (np.log(2 * np.pi * devg / n) + 1.0) + 2.0 - np.sum(np.log(wt))
+        np.testing.assert_allclose(Gaussian().aic(yg, mug, wt, 0.3), want_g, rtol=1e-10)
+
+        # Poisson: -2*sum(wt*dpois(y,mu,log)).
+        yp = rng.poisson(3.0, n).astype(float)
+        mup = np.maximum(yp + rng.normal(0, 0.1, n), 0.1)
+        want_p = -2.0 * np.sum(wt * (yp * np.log(mup) - mup - gammaln(yp + 1)))
+        np.testing.assert_allclose(Poisson().aic(yp, mup, wt, 1.0), want_p, rtol=1e-8)
+
+        # Gamma: disp = dev/sum(wt); -2*sum(wt*dgamma(...)) + 2.
+        yga = rng.gamma(5.0, 1.0, n)
+        muga = np.maximum(yga + rng.normal(0, 0.2, n), 0.1)
+        devga = 2.0 * np.sum(wt * (-np.log(yga / muga) + (yga - muga) / muga))
+        disp = devga / np.sum(wt)
+        shape = 1.0 / disp
+        want_ga = (
+            -2.0
+            * np.sum(
+                wt
+                * (
+                    (shape - 1) * np.log(yga)
+                    - yga / (muga * disp)
+                    - shape * np.log(muga * disp)
+                    - gammaln(shape)
+                )
+            )
+            + 2.0
+        )
+        np.testing.assert_allclose(Gamma().aic(yga, muga, wt, 0.2), want_ga, rtol=1e-8)
+
+
+class TestGammaValidEta:
+    """Finding 21: Gamma valid_eta rejects eta==0 for the inverse link."""
+
+    def test_inverse_link_rejects_zero_eta(self) -> None:
+        """Default Gamma (inverse link): eta==0 is invalid (R valideta)."""
+        fam = Gamma()  # default inverse link
+        eta = np.array([-1.0, 0.0, 1.0, np.inf])
+        valid = np.asarray(fam.valid_eta(eta))
+        np.testing.assert_array_equal(valid, np.array([True, False, True, False]))
+
+    def test_log_link_allows_zero_eta(self) -> None:
+        """Gamma with a log link only requires finiteness (eta==0 is fine)."""
+        from jaxgam.links.links import LogLink
+
+        fam = Gamma(link=LogLink())
+        eta = np.array([-1.0, 0.0, 1.0])
+        valid = np.asarray(fam.valid_eta(eta))
+        np.testing.assert_array_equal(valid, np.array([True, True, True]))
+
 
 # ---------------------------------------------------------------------------
 # Test 5: Edge cases

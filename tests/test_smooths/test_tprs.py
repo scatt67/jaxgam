@@ -495,6 +495,21 @@ class TestParameterized:
         smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 10  # default for d=1
 
+    @pytest.mark.parametrize(("m", "expected_k"), [(1, 9), (2, 10), (3, 11)])
+    def test_default_k_includes_M_term(
+        self, m: int, expected_k: int, smooth_1d_data
+    ) -> None:
+        """Default k = M + 8 for d=1, where M = null_space_dimension(d, m).
+
+        Regression for Finding 9: the previous hardcoded ``{1: 10}`` dropped the
+        ``M`` term, so it was only coincidentally right for the default m=2.
+        Verified against R: s(x, m=1)->k=9, m=2->10, m=3->11.
+        """
+        spec = make_smooth_spec(["x"], k=-1, m=m)
+        smooth = TPRSSmooth(spec)
+        smooth.setup(smooth_1d_data)
+        assert smooth.n_coefs == expected_k
+
 
 # ===========================================================================
 # 5. Edge cases
