@@ -161,7 +161,7 @@ Do not implement any of the following. They are designed for but deferred:
 - Factor-smooth interactions (`bs="fs"`)
 - Multi-GPU SPMD, Ray, distributed anything
 - `gamm()`, PQL
-- Exotic smooths (soap film, MRF, adaptive, Duchon, GP)
+- Exotic smooths (soap film, MRF, adaptive, Duchon)
 - GCV / UBRE smoothness selection (REML and ML only)
 
 If you encounter a code path that would require one of these, stub it with:

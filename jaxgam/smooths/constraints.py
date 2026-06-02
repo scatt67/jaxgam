@@ -677,7 +677,8 @@ class CoefficientMap:
         S_blocks : list[list[np.ndarray]]
             Penalty matrices for each smooth.
         X_parametric : np.ndarray or None
-            Parametric model matrix (for intercept detection).
+            Parametric model matrix, used for intercept detection and
+            parametric-vs-smooth dependence checks.
         tol : float
             Tolerance for dependence detection.
         with_pen : bool
@@ -706,14 +707,14 @@ class CoefficientMap:
             if dim_i > max_dim:
                 max_dim = dim_i
 
-        # Early return if all variable names unique (no nesting possible)
-        if len(v_names_all) == len(set(v_names_all)):
-            return [None] * m
-
         # Detect intercept in parametric matrix
         intercept = False
+        has_nonconstant_parametric = False
         if X_parametric is not None and X_parametric.shape[1] > 0:
             col_sds = np.std(X_parametric, axis=0)
+            has_nonconstant_parametric = bool(
+                np.any(col_sds >= np.finfo(float).eps ** 0.75)
+            )
             if np.any(col_sds < np.finfo(float).eps ** 0.75):
                 intercept = True
             else:
@@ -722,6 +723,11 @@ class CoefficientMap:
                 ff = Q_p @ (Q_p.T @ f)
                 if np.max(np.abs(ff - f)) < np.finfo(float).eps ** 0.75:
                     intercept = True
+
+        # Early return if smooths cannot nest and no parametric term can
+        # duplicate a smooth null-space column.
+        if len(v_names_all) == len(set(v_names_all)) and not has_nonconstant_parametric:
+            return [None] * m
 
         # Build index: for each unique variable name, which smooths use it
         unique_vars = list(dict.fromkeys(v_names_all))
@@ -736,6 +742,7 @@ class CoefficientMap:
 
         # Setup for augmented matrices if with_pen
         n_obs = X_blocks[0].shape[0] if X_blocks else 0
+        total_np = 0
 
         if with_pen:
             k_start = 0
@@ -748,6 +755,23 @@ class CoefficientMap:
 
             Xa_cache: dict[int, npt.NDArray[np.floating]] = {}
 
+        def _parametric_reference(
+            total_np_current: int,
+        ) -> npt.NDArray[np.floating] | None:
+            if X_parametric is None or X_parametric.shape[1] == 0:
+                return None
+            if not with_pen:
+                return X_parametric
+            return np.concatenate(
+                [
+                    X_parametric,
+                    np.zeros((total_np_current, X_parametric.shape[1])),
+                ],
+                axis=0,
+            )
+
+        X_parametric_ref = _parametric_reference(total_np)
+
         # Process smooths from low to high dimension
         del_indices: list[tuple[int, ...] | None] = [None] * m
 
@@ -759,7 +783,9 @@ class CoefficientMap:
 
                 # Collect X columns from lower-dimensional smooths
                 # sharing variables
-                if with_pen:
+                if X_parametric_ref is not None:
+                    X1 = X_parametric_ref
+                elif with_pen:
                     if intercept:
                         X1 = np.concatenate(
                             [
@@ -803,8 +829,7 @@ class CoefficientMap:
                             X1 = np.column_stack([X1, Xb]) if X1.shape[1] > 0 else Xb
 
                 # Check for dependence
-                n_intercept_cols = 1 if intercept else 0
-                if X1.shape[1] <= n_intercept_cols:
+                if X1.shape[1] == 0:
                     continue
 
                 if with_pen:
@@ -838,7 +863,8 @@ class CoefficientMap:
                             p_inds[j] = np.arange(k_start, k_start + k_j)
                             k_start += k_j
                         total_np = k_start
-                        Xa_cache.pop(i, None)
+                        Xa_cache.clear()
+                        X_parametric_ref = _parametric_reference(total_np)
 
         return del_indices
 

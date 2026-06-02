@@ -22,6 +22,12 @@ from scipy.special import gamma as gamma_func
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
+from jaxgam.smooths.utils import (
+    _compute_distance_matrix,
+    _get_unique_rows,
+    _slanczos,
+    _subsample_knots,
+)
 
 # ---------------------------------------------------------------------------
 # TPS semi-kernel helpers
@@ -229,219 +235,6 @@ def _default_k(d: int, M: int) -> int:
     return defaults.get(d, M + 100)
 
 
-def _compute_distance_matrix(
-    X1: npt.NDArray[np.floating],
-    X2: npt.NDArray[np.floating],
-) -> npt.NDArray[np.floating]:
-    """Compute pairwise Euclidean distance matrix.
-
-    Parameters
-    ----------
-    X1 : np.ndarray
-        Shape ``(n1, d)``.
-    X2 : np.ndarray
-        Shape ``(n2, d)``.
-
-    Returns
-    -------
-    np.ndarray
-        Distance matrix, shape ``(n1, n2)``.
-    """
-    # Use broadcasting for efficiency
-    diff = X1[:, np.newaxis, :] - X2[np.newaxis, :, :]
-    return np.sqrt(np.sum(diff**2, axis=2))
-
-
-def _get_unique_rows(
-    X: npt.NDArray[np.floating],
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp]]:
-    """Get unique rows and inverse mapping, sorted lexicographically.
-
-    Parameters
-    ----------
-    X : np.ndarray
-        Shape ``(n, d)``.
-
-    Returns
-    -------
-    Xu : np.ndarray
-        Unique rows, shape ``(n_unique, d)``, sorted lexicographically.
-    inverse : np.ndarray
-        Index array such that ``Xu[inverse] == X`` (up to float tolerance).
-    """
-    # Round to handle floating-point duplicates
-    # Use np.unique with axis=0 which sorts lexicographically
-    Xu, inverse = np.unique(X, axis=0, return_inverse=True)
-    return Xu, inverse
-
-
-@numba.njit(
-    numba.types.Tuple((numba.float64[:], numba.float64[:, :]))(
-        numba.float64[:, ::1], numba.int64, numba.float64
-    ),
-    cache=True,
-)
-def _slanczos_jit(  # pragma: no cover
-    A: npt.NDArray[np.floating], k: int, tol: float
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Numba-compiled Lanczos core; see _slanczos() for documentation."""
-    n = A.shape[0]
-
-    # --- Deterministic starting vector (R's LCG) ---
-    q0 = np.empty(n)
-    jran = 1
-    for i in range(n):
-        jran = (jran * 106 + 1283) % 6075
-        q0[i] = jran / 6075.0 - 0.5
-    q0 /= np.linalg.norm(q0)
-
-    # --- Lanczos iteration ---
-    Q = np.empty((n, n))
-    Q[:, 0] = q0
-    alpha = np.empty(n)
-    beta = np.empty(n)
-
-    # Convergence check frequency (matching R)
-    f_check = k // 2
-    if f_check < 10:
-        f_check = 10
-    kk = n // 10
-    if kk < 1:
-        kk = 1
-    if kk < f_check:
-        f_check = kk
-
-    j_final = n
-    n_pos = 0
-    n_neg = 0
-    converged = False
-    d = np.zeros(1)
-    v_tri = np.zeros((1, 1))
-
-    for j in range(n):
-        qj = np.ascontiguousarray(Q[:, j])
-        z = A @ qj
-        alpha[j] = qj @ z
-
-        if j == 0:
-            z -= alpha[0] * qj
-        else:
-            z -= alpha[j] * qj + beta[j - 1] * np.ascontiguousarray(Q[:, j - 1])
-            # Double reorthogonalization (CGS via BLAS gemv)
-            Qj = np.ascontiguousarray(Q[:, : j + 1])
-            for _pass in range(2):
-                z -= Qj @ (Qj.T @ z)
-
-        beta[j] = np.linalg.norm(z)
-
-        if j < n - 1:
-            Q[:, j + 1] = z / beta[j]
-
-        # --- Convergence check ---
-        if not ((j >= k and j % f_check == 0) or j == n - 1):
-            continue
-
-        # Build tridiagonal matrix and eigendecompose
-        size = j + 1
-        T_mat = np.zeros((size, size))
-        for idx in range(size):
-            T_mat[idx, idx] = alpha[idx]
-        for idx in range(j):
-            T_mat[idx, idx + 1] = beta[idx]
-            T_mat[idx + 1, idx] = beta[idx]
-        d, v_tri = np.linalg.eigh(T_mat)
-        # Reverse to descending order
-        d = d[::-1].copy()
-        v_tri = v_tri[:, ::-1].copy()
-
-        # Error bounds: |beta_j * last component of kth Ritz vector|
-        norm_Tj = max(abs(d[0]), abs(d[-1]))
-        max_err = norm_Tj * tol
-        err = np.abs(beta[j] * v_tri[-1, :])
-
-        # Biggest mode: greedily walk from both ends by magnitude
-        pos_idx = 0
-        ni = 0
-        ok = True
-        while pos_idx + ni < k:
-            if abs(d[pos_idx]) >= abs(d[j - ni]):
-                if err[pos_idx] > max_err:
-                    ok = False
-                    break
-                pos_idx += 1
-            else:
-                if err[ni] > max_err:
-                    ok = False
-                    break
-                ni += 1
-
-        if ok:
-            j_final = j + 1
-            n_pos = pos_idx
-            n_neg = ni
-            converged = True
-            break
-
-    if not converged:
-        j_final = n
-        pos_idx = 0
-        ni = 0
-        while pos_idx + ni < k:
-            if abs(d[pos_idx]) >= abs(d[n - 1 - ni]):
-                pos_idx += 1
-            else:
-                ni += 1
-        n_pos = pos_idx
-        n_neg = ni
-
-    # --- Build output eigenvalues and Ritz vectors ---
-    pos_idx = np.arange(n_pos)
-    neg_idx = np.arange(j_final - n_neg, j_final)
-    sel = np.concatenate((pos_idx, neg_idx))
-
-    D = d[sel]
-    Q_cont = np.ascontiguousarray(Q[:, :j_final])
-    U = Q_cont @ np.ascontiguousarray(v_tri[:, sel])
-
-    return D, U
-
-
-def _slanczos(
-    A: npt.NDArray[np.floating],
-    k: int,
-    tol: float | None = None,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
-    """Lanczos eigendecomposition matching R's mgcv Rlanczos (biggest mode).
-
-    Reimplements the Rlanczos function from mgcv/src/mat.c with minus=-1
-    (largest magnitude eigenvalues). Uses the same deterministic LCG
-    starting vector, double reorthogonalization, and convergence
-    criteria as R.
-
-    JIT-compiled via Numba for native performance.
-
-    Parameters
-    ----------
-    A : np.ndarray
-        Symmetric matrix, shape ``(n, n)``.
-    k : int
-        Number of eigenvalues/vectors to compute (largest magnitude).
-    tol : float, optional
-        Convergence tolerance. Default: ``np.finfo(float).eps ** 0.7``.
-
-    Returns
-    -------
-    D : np.ndarray
-        Eigenvalues, shape ``(k,)``. Positive eigenvalues first
-        (descending), then negative eigenvalues.
-    U : np.ndarray
-        Eigenvectors, shape ``(n, k)``.
-    """
-    if tol is None:
-        tol = np.finfo(float).eps ** 0.7
-    return _slanczos_jit(A, k, tol)
-
-
 @numba.njit(numba.float64[:, :](numba.float64[:, :]), cache=True)
 def _null_space_basis_r_jit(  # pragma: no cover
     TU: npt.NDArray[np.floating],
@@ -627,13 +420,7 @@ class TPRSSmooth(Smooth):
         # Subsample knots if too many unique values
         max_knots = self.spec.extra_args.get("max_knots", 2000)
         if n_unique > max_knots:
-            # np.random.RandomState is deprecated in favour of default_rng,
-            # but we use it intentionally to reproduce R's seed=1 knot
-            # subsampling exactly (mgcv tprs.c).
-            rng = np.random.RandomState(1)
-            idx = rng.choice(n_unique, max_knots, replace=False)
-            idx.sort()
-            Xu = Xu[idx]
+            Xu = _subsample_knots(Xu, max_knots, seed=1)
             n_unique = max_knots
             # Recompute inverse mapping for subsampled knots
             inverse = _nearest_knot_indices(X_centered, Xu)

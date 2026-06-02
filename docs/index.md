@@ -69,6 +69,7 @@ REML/ML smoothing parameter selection.
 | `s(x, bs='cr')` | Cubic regression spline |
 | `s(x, bs='cs')` | Cubic spline with shrinkage |
 | `s(x, bs='cc')` | Cyclic cubic spline |
+| `s(x, z, bs='gp')` | Low-rank Gaussian process smooth |
 | `te(x1, x2)` | Tensor product smooth |
 | `ti(x1, x2)` | Tensor interaction (no main effects) |
 | `s(x, by=fac)` | Factor-by smooth (separate curve per level) |

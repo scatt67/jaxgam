@@ -24,8 +24,48 @@ from typing import Any, ClassVar
 import numpy as np
 import pandas as pd
 
+from jaxgam.formula.terms import SmoothSpec
+
 _REQUIRED_R_VERSION = "4.5.2"
 _REQUIRED_MGCV_VERSION = "1.9.3"
+
+_KERNEL_TO_MGCV_TYPE = {
+    "spherical": 1,
+    "power_exponential": 2,
+    "matern_3_2": 3,
+    "matern_5_2": 4,
+    "matern_7_2": 5,
+}
+
+
+def gp_config_to_mgcv_m(spec: SmoothSpec, rho: float | None = None) -> list[float]:
+    """Translate a GP ``SmoothSpec`` to mgcv's signed ``m`` vector.
+
+    Reads the same ``spec.extra_args`` that ``GaussianProcessSmooth`` consumes.
+    R parity tests use this helper so Python-side GP kwargs and R-side ``m=``
+    formulas cannot drift.
+    """
+    kernel = spec.extra_args.get("kernel", "matern_3_2")
+    stationary = spec.extra_args.get("stationary", False)
+    power = spec.extra_args.get("power", 1.0)
+    spec_rho = spec.extra_args.get("rho")
+
+    type_id = _KERNEL_TO_MGCV_TYPE[kernel]
+    if stationary:
+        type_id = -type_id
+
+    out: list[float] = [float(type_id)]
+    resolved_rho = rho if rho is not None else spec_rho
+    if resolved_rho is not None:
+        out.append(float(resolved_rho))
+
+    if kernel == "power_exponential":
+        # Pad rho if absent so the power parameter lands at mgcv's m[3].
+        if len(out) == 1:
+            out.append(-1.0)
+        out.append(float(power))
+
+    return out
 
 
 class RBridgeError(Exception):
@@ -254,6 +294,7 @@ class RBridge:
 
         r_summary = self._base.summary(r_model)
         edf = np.array(r_summary.rx2("edf"), dtype=np.float64)
+        edf_total = float(np.sum(np.array(r_model.rx2("edf"), dtype=np.float64)))
         null_deviance = float(np.array(r_model.rx2("null.deviance"))[0])
 
         # Extract theta for extended families (e.g. NB)
@@ -271,6 +312,7 @@ class RBridge:
             "fitted_values": fitted_values,
             "smoothing_params": smoothing_params,
             "edf": edf,
+            "edf_total": edf_total,
             "deviance": deviance,
             "null_deviance": null_deviance,
             "scale": scale,
@@ -308,6 +350,7 @@ write.csv(data.frame(v=as.numeric(coef(model))), "{tmpdir}/coefficients.csv", ro
 write.csv(data.frame(v=as.numeric(fitted(model))), "{tmpdir}/fitted_values.csv", row.names=FALSE)
 write.csv(data.frame(v=as.numeric(model$sp)), "{tmpdir}/smoothing_params.csv", row.names=FALSE)
 write.csv(data.frame(v=as.numeric(s$edf)), "{tmpdir}/edf.csv", row.names=FALSE)
+writeLines(format(sum(model$edf), digits=15), "{tmpdir}/edf_total.txt")
 writeLines(format(deviance(model), digits=15), "{tmpdir}/deviance.txt")
 writeLines(format(model$scale, digits=15), "{tmpdir}/scale.txt")
 write.csv(as.data.frame(model$Vp), "{tmpdir}/Vp.csv", row.names=FALSE)
@@ -363,6 +406,7 @@ if (!is.null(fam$getTheta)) {{
                 "fitted_values": _read_vec("fitted_values.csv"),
                 "smoothing_params": _read_vec("smoothing_params.csv"),
                 "edf": _read_vec("edf.csv"),
+                "edf_total": _read_scalar("edf_total.txt"),
                 "deviance": _read_scalar("deviance.txt"),
                 "null_deviance": _read_scalar("null_deviance.txt"),
                 "scale": scale,
@@ -468,6 +512,7 @@ write.csv(data.frame(v=as.numeric(coef(model))), "{tmpdir}/coefficients.csv", ro
 write.csv(data.frame(v=as.numeric(fitted(model))), "{tmpdir}/fitted_values.csv", row.names=FALSE)
 write.csv(data.frame(v=as.numeric(model$sp)), "{tmpdir}/smoothing_params.csv", row.names=FALSE)
 write.csv(data.frame(v=as.numeric(s$edf)), "{tmpdir}/edf.csv", row.names=FALSE)
+writeLines(format(sum(model$edf), digits=15), "{tmpdir}/edf_total.txt")
 writeLines(format(deviance(model), digits=15), "{tmpdir}/deviance.txt")
 writeLines(format(model$scale, digits=15), "{tmpdir}/scale.txt")
 write.csv(as.data.frame(model$Vp), "{tmpdir}/Vp.csv", row.names=FALSE)
@@ -547,6 +592,7 @@ for (i in seq_len(n_smooths)) {{
                 "fitted_values": _read_vec("fitted_values.csv"),
                 "smoothing_params": _read_vec("smoothing_params.csv"),
                 "edf": _read_vec("edf.csv"),
+                "edf_total": _read_scalar("edf_total.txt"),
                 "deviance": _read_scalar("deviance.txt"),
                 "null_deviance": _read_scalar("null_deviance.txt"),
                 "scale": scale,
@@ -566,6 +612,7 @@ for (i in seq_len(n_smooths)) {{
         smooth_expr: str,
         data: pd.DataFrame,
         absorb_cons: bool = False,
+        knots: dict[str, np.ndarray] | None = None,
     ) -> dict[str, Any]:
         """Call R's smoothCon() and return smooth construction details.
 
@@ -577,15 +624,25 @@ for (i in seq_len(n_smooths)) {{
             Data frame containing the variables.
         absorb_cons : bool
             Whether to absorb identifiability constraints.
+        knots : dict[str, np.ndarray] or None
+            Optional named knot vectors for the rpy2 path. Used by GP
+            smooth-construction parity tests.
 
         Returns
         -------
         dict
-            Keys: X, S (list of penalty matrices), rank, null_space_dim,
-            Xu (knots), UZ (mapping matrix), shift (centring values).
+            Keys include X, S (list of penalty matrices), rank,
+            null_space_dim, Xu (knots), UZ (mapping matrix), and shift
+            (centring values). For GP smooths, knt is the centered knot
+            matrix, gp_defn is mgcv's ``c(sign*type, rho, power)`` vector,
+            and E is the knot-knot kernel matrix before truncation.
         """
         if self.mode == "rpy2":
-            return self._smooth_construct_rpy2(smooth_expr, data, absorb_cons)
+            return self._smooth_construct_rpy2(smooth_expr, data, absorb_cons, knots)
+        if knots is not None:
+            raise NotImplementedError(
+                "RBridge.smooth_construct(knots=...) is only supported in rpy2 mode."
+            )
         return self._smooth_construct_subprocess(smooth_expr, data, absorb_cons)
 
     def _smooth_construct_rpy2(
@@ -593,17 +650,21 @@ for (i in seq_len(n_smooths)) {{
         smooth_expr: str,
         data: pd.DataFrame,
         absorb_cons: bool,
+        knots: dict[str, np.ndarray] | None,
     ) -> dict[str, Any]:
         """Call smoothCon() via rpy2 and extract smooth construction details."""
+        from rpy2.robjects import FloatVector, ListVector
+
         ro = self._ro
         r_df = self._to_r_dataframe(data)
 
         # Python booleans → R boolean strings for embedded R code
         absorb_str = "TRUE" if absorb_cons else "FALSE"
+        knots_arg = ", knots=knots_input" if knots is not None else ""
         r_code = f"""
         library(mgcv)
         dat <- as.data.frame(dat_input)
-        sm <- smoothCon({smooth_expr}, data=dat, absorb.cons={absorb_str})[[1]]
+        sm <- smoothCon({smooth_expr}, data=dat{knots_arg}, absorb.cons={absorb_str})[[1]]
         list(
             X = sm$X,
             S = sm$S,
@@ -611,18 +672,34 @@ for (i in seq_len(n_smooths)) {{
             null_space_dim = sm$null.space.dim,
             Xu = if (!is.null(sm$Xu)) sm$Xu else matrix(0, 0, 0),
             UZ = if (!is.null(sm$UZ)) sm$UZ else matrix(0, 0, 0),
-            shift = if (!is.null(sm$shift)) sm$shift else numeric(0)
+            shift = if (!is.null(sm$shift)) sm$shift else numeric(0),
+            knt = if (!is.null(sm$knt)) sm$knt else matrix(0, 0, 0),
+            gp_defn = if (!is.null(sm$gp.defn)) sm$gp.defn else numeric(0),
+            # mgcv:::gpE is version-pinned by RBridge.check_versions().
+            E = if (!is.null(sm$knt))
+                    mgcv:::gpE(sm$knt, sm$knt, sm$gp.defn)
+                else matrix(0, 0, 0)
         )
         """
         ro.globalenv["dat_input"] = r_df
+        if knots is not None:
+            ro.globalenv["knots_input"] = ListVector(
+                {
+                    name: FloatVector(np.asarray(values, dtype=np.float64).ravel())
+                    for name, values in knots.items()
+                }
+            )
         try:
             result = ro.r(r_code)
         finally:
             del ro.globalenv["dat_input"]
+            if knots is not None:
+                del ro.globalenv["knots_input"]
 
         X = np.array(result.rx2("X"), dtype=np.float64)
         rank_arr = np.array(result.rx2("rank"), dtype=np.float64).ravel()
         rank = int(rank_arr[0])
+        rank_vector = rank_arr.astype(int)
         nsd_arr = np.array(result.rx2("null_space_dim"), dtype=np.float64).ravel()
         null_space_dim = int(nsd_arr[0])
 
@@ -632,15 +709,22 @@ for (i in seq_len(n_smooths)) {{
         Xu = np.array(result.rx2("Xu"), dtype=np.float64)
         UZ = np.array(result.rx2("UZ"), dtype=np.float64)
         shift = np.array(result.rx2("shift"), dtype=np.float64)
+        knt = np.array(result.rx2("knt"), dtype=np.float64)
+        gp_defn = np.array(result.rx2("gp_defn"), dtype=np.float64)
+        E = np.array(result.rx2("E"), dtype=np.float64)
 
         return {
             "X": X,
             "S": S_matrices,
             "rank": rank,
+            "rank_vector": rank_vector,
             "null_space_dim": null_space_dim,
             "Xu": Xu,
             "UZ": UZ,
             "shift": shift,
+            "knt": knt,
+            "gp_defn": gp_defn,
+            "E": E,
         }
 
     def _smooth_construct_subprocess(
@@ -722,8 +806,14 @@ if (!is.null(sm$shift)) {{
                 with open(os.path.join(tmpdir, name)) as fh:
                     return float(fh.read().strip())
 
+            def _read_vector(name: str) -> np.ndarray:
+                with open(os.path.join(tmpdir, name)) as fh:
+                    values = [float(line.strip()) for line in fh if line.strip()]
+                return np.array(values, dtype=np.float64)
+
             X = _read_matrix("X.csv")
-            rank = int(_read_scalar("rank.txt"))
+            rank_vector = _read_vector("rank.txt").astype(int)
+            rank = int(rank_vector[0])
             null_space_dim = int(_read_scalar("null_space_dim.txt"))
 
             n_S = int(_read_scalar("n_S.txt"))
@@ -746,6 +836,7 @@ if (!is.null(sm$shift)) {{
                 "X": X,
                 "S": S_matrices,
                 "rank": rank,
+                "rank_vector": rank_vector,
                 "null_space_dim": null_space_dim,
                 "Xu": Xu,
                 "UZ": UZ,
