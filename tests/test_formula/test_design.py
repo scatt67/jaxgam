@@ -949,7 +949,9 @@ class TestOrderedFactor:
         ref3 = np.array([[-0.70711, 0.40825], [0.0, -0.81650], [0.70711, 0.40825]])
         collector.check(
             "contr_poly_3_values",
-            lambda: np.testing.assert_allclose(c3, ref3, rtol=1e-4, atol=1e-5),
+            lambda: np.testing.assert_allclose(
+                c3, ref3, rtol=MODERATE.rtol, atol=MODERATE.atol
+            ),
         )
         collector.check(
             "suffixes",
@@ -969,7 +971,7 @@ class TestOrderedFactor:
                 (cols / np.linalg.norm(cols, axis=0)).T
                 @ (cols / np.linalg.norm(cols, axis=0)),
                 np.eye(4),
-                atol=1e-10,
+                atol=STRICT.atol,
             ),
         )
         collector.raise_if_any("contr.poly algebra")
@@ -1046,8 +1048,8 @@ class TestOrderedFactor:
             lambda: np.testing.assert_allclose(
                 setup.build_predict_matrix(df_ord)[:, 1:3],
                 py_param,
-                rtol=1e-12,
-                atol=1e-12,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
             ),
         )
         collector.raise_if_any("ordered-factor contr.poly parity (H2)")

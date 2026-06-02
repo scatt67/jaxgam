@@ -453,7 +453,7 @@ class TestSaturatedAndAicVsRFormula:
             fam = NegativeBinomial(theta=theta, fixed=True)
             got = fam.aic(y, mu, wt, 1.0)
             want = r_nb_aic(y, mu, theta, wt)
-            np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-9)
+            np.testing.assert_allclose(got, want, rtol=STRICT.rtol, atol=STRICT.atol)
 
     def test_standard_aic_matches_r_family_aic(self) -> None:
         """Gaussian/Poisson/Binomial/Gamma aic match R's family$aic. Finding 18."""
@@ -468,13 +468,23 @@ class TestSaturatedAndAicVsRFormula:
         mug = yg + rng.normal(0, 0.2, n)
         devg = np.sum(wt * (yg - mug) ** 2)
         want_g = n * (np.log(2 * np.pi * devg / n) + 1.0) + 2.0 - np.sum(np.log(wt))
-        np.testing.assert_allclose(Gaussian().aic(yg, mug, wt, 0.3), want_g, rtol=1e-10)
+        np.testing.assert_allclose(
+            Gaussian().aic(yg, mug, wt, 0.3),
+            want_g,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
 
         # Poisson: -2*sum(wt*dpois(y,mu,log)).
         yp = rng.poisson(3.0, n).astype(float)
         mup = np.maximum(yp + rng.normal(0, 0.1, n), 0.1)
         want_p = -2.0 * np.sum(wt * (yp * np.log(mup) - mup - gammaln(yp + 1)))
-        np.testing.assert_allclose(Poisson().aic(yp, mup, wt, 1.0), want_p, rtol=1e-8)
+        np.testing.assert_allclose(
+            Poisson().aic(yp, mup, wt, 1.0),
+            want_p,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
 
         # Gamma: disp = dev/sum(wt); -2*sum(wt*dgamma(...)) + 2.
         yga = rng.gamma(5.0, 1.0, n)
@@ -495,7 +505,12 @@ class TestSaturatedAndAicVsRFormula:
             )
             + 2.0
         )
-        np.testing.assert_allclose(Gamma().aic(yga, muga, wt, 0.2), want_ga, rtol=1e-8)
+        np.testing.assert_allclose(
+            Gamma().aic(yga, muga, wt, 0.2),
+            want_ga,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
 
     def test_poisson_aic_non_integer_y_is_inf(self) -> None:
         """Poisson aic is +Inf for non-integer y, matching R's discrete dpois.
@@ -515,7 +530,12 @@ class TestSaturatedAndAicVsRFormula:
         # Integer y: finite and equals the dpois formula (regression guard).
         y_int = np.array([0.0, 1.0, 2.0, 3.0])
         want = -2.0 * np.sum(wt * (y_int * np.log(mu) - mu - gammaln(y_int + 1.0)))
-        np.testing.assert_allclose(Poisson().aic(y_int, mu, wt, 1.0), want, rtol=1e-10)
+        np.testing.assert_allclose(
+            Poisson().aic(y_int, mu, wt, 1.0),
+            want,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
 
 
 class TestGammaValidEta:

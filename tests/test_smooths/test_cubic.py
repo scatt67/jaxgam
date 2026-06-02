@@ -613,7 +613,7 @@ class TestEdgeCases:
                 s3.setup(data)
             s4 = CyclicCubicSmooth(make_smooth_spec(["x"], bs="cc", k=4))
             s4.setup(data)
-            np.testing.assert_allclose(s3._X, s4._X, rtol=1e-12, atol=1e-12)
+            np.testing.assert_allclose(s3._X, s4._X, rtol=STRICT.rtol, atol=STRICT.atol)
 
         collector.check("cc_k3_matches_explicit_k4", _cc_k3_equals_k4)
 
