@@ -122,6 +122,46 @@ class TensorProductSmooth(Smooth):
 
         return X_new, S_new, XP
 
+    def _resolve_marginal_m(self, n_margins: int) -> list[int | None]:
+        """Resolve the per-marginal penalty order ``m`` from ``spec.extra_args``.
+
+        Mirrors R's ``te()``/``ti()`` (R/smooth.r:443,448): a scalar ``m`` is
+        replicated to every margin; a per-margin list/tuple (one int per margin)
+        is used as-is; negative orders are clamped to 0. ``None`` (``m`` absent)
+        leaves each marginal at its own default order, preserving the prior
+        default behaviour exactly. Only ``tp``/``ts`` margins consult ``m``;
+        ``cr``/``cs``/``cc`` ignore it, matching R.
+        """
+        raw_m = self.spec.extra_args.get("m")
+        if raw_m is None:
+            return [None] * n_margins
+        if isinstance(raw_m, (int, np.integer)):
+            return [max(int(raw_m), 0)] * n_margins
+        if isinstance(raw_m, (list, tuple)):
+            if len(raw_m) != n_margins:
+                raise ValueError(
+                    f"te()/ti() marginal order m has length {len(raw_m)} but the "
+                    f"smooth has {n_margins} marginal(s); supply a single integer "
+                    f"or one integer per marginal."
+                )
+            out: list[int | None] = []
+            for v in raw_m:
+                if v is None:
+                    out.append(None)
+                elif isinstance(v, (int, np.integer)):
+                    out.append(max(int(v), 0))
+                else:
+                    raise ValueError(
+                        "te()/ti() per-margin m entries must be integers; nested "
+                        "per-margin vectors (Duchon splines) are not supported in "
+                        "v1.0."
+                    )
+            return out
+        raise ValueError(
+            "te()/ti() argument m must be an integer or a list/tuple of integers "
+            "(one per marginal)."
+        )
+
     def _create_marginals(
         self, data: dict[str, npt.NDArray[np.floating]]
     ) -> list[tuple[Smooth, npt.NDArray[np.floating], npt.NDArray[np.floating]]]:
@@ -138,13 +178,20 @@ class TensorProductSmooth(Smooth):
         # explicit user k (!= -1) is passed through unchanged to every margin,
         # matching R's ``k <- rep(k, n.bases)``.
         marginal_k = 5 if self.spec.k == -1 else self.spec.k
+        # Thread the marginal penalty order m= into each marginal. R's te()/ti()
+        # replicate a scalar m to every margin and use a per-margin list as-is
+        # (R/smooth.r:443,448). m only changes tp/ts margins; cr/cs/cc ignore it,
+        # matching R, and m absent leaves each marginal at its own default order.
+        margin_m = self._resolve_marginal_m(len(self.spec.variables))
         marginals_info = []
-        for var in self.spec.variables:
+        for i, var in enumerate(self.spec.variables):
+            extra: dict = {} if margin_m[i] is None else {"m": margin_m[i]}
             marginal_spec = SmoothSpec(
                 variables=[var],
                 bs=self.spec.bs,
                 k=marginal_k,
                 smooth_type="s",
+                extra_args=extra,
             )
             # Lazy import to break circular dependency: registry → tensor → registry
             from jaxgam.smooths.registry import get_smooth_class

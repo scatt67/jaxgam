@@ -289,11 +289,14 @@ class ProbitLink(Link):
         return 1.0 / norm.pdf(self.link(mu))
 
     def mu_eta(self, eta: Array) -> Array:
+        # R's C_probit_mu_eta floors dμ/dη at eps so extreme |η| never yields
+        # exactly 0 (which would zero a row's working weight in PIRLS).
+        xp = array_module(eta)
         if is_jax_array(eta):
             from jax.scipy.stats import norm as jnorm
 
-            return jnorm.pdf(eta)
-        return norm.pdf(eta)
+            return xp.maximum(jnorm.pdf(eta), _DBL_EPS)
+        return xp.maximum(norm.pdf(eta), _DBL_EPS)
 
 
 class CloglogLink(Link):
@@ -316,8 +319,10 @@ class CloglogLink(Link):
         return 1.0 / ((1 - mu_clipped) * (-xp.log(1 - mu_clipped)))
 
     def mu_eta(self, eta: Array) -> Array:
+        # R's C_cloglog_mu_eta floors dμ/dη at eps so extreme η never yields
+        # exactly 0 (which would zero a row's working weight in PIRLS).
         xp = array_module(eta)
-        return xp.exp(eta - xp.exp(eta))
+        return xp.maximum(xp.exp(eta - xp.exp(eta)), _DBL_EPS)
 
 
 class SqrtLink(Link):

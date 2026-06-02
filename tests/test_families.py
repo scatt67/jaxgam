@@ -497,6 +497,26 @@ class TestSaturatedAndAicVsRFormula:
         )
         np.testing.assert_allclose(Gamma().aic(yga, muga, wt, 0.2), want_ga, rtol=1e-8)
 
+    def test_poisson_aic_non_integer_y_is_inf(self) -> None:
+        """Poisson aic is +Inf for non-integer y, matching R's discrete dpois.
+
+        Finding L2: R's ``dpois`` is 0 at non-integer y (with a warning), so
+        ``-2*sum(log(0))`` is ``+Inf``. The ``lgamma(y+1)`` continuation would
+        otherwise return a misleadingly finite value (~10.14 for the example).
+        Integer-y behavior is unchanged.
+        """
+        from scipy.special import gammaln
+
+        y_non = np.array([0.5, 1.5, 2.0, 3.7])
+        mu = np.array([1.0, 1.5, 2.0, 3.0])
+        wt = np.ones(4)
+        assert Poisson().aic(y_non, mu, wt, 1.0) == float("inf")
+
+        # Integer y: finite and equals the dpois formula (regression guard).
+        y_int = np.array([0.0, 1.0, 2.0, 3.0])
+        want = -2.0 * np.sum(wt * (y_int * np.log(mu) - mu - gammaln(y_int + 1.0)))
+        np.testing.assert_allclose(Poisson().aic(y_int, mu, wt, 1.0), want, rtol=1e-10)
+
 
 class TestGammaValidEta:
     """Finding 21: Gamma valid_eta rejects eta==0 for the inverse link."""

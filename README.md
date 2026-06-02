@@ -102,9 +102,12 @@ Binomial is an extended family with an estimated dispersion parameter
 | Formula syntax | Basis type |
 |---|---|
 | `s(x, bs='tp')` | Thin-plate regression spline (default) |
+| `s(x, bs='ts')` | Thin-plate spline with shrinkage |
 | `s(x, bs='cr')` | Cubic regression spline |
 | `s(x, bs='cs')` | Cubic spline with shrinkage |
 | `s(x, bs='cc')` | Cyclic cubic spline |
+| `s(x, z, bs='gp')` | Low-rank Gaussian process smooth |
+| `s(g, bs='re')` | Dense random effect smooth |
 | `te(x1, x2)` | Tensor product smooth |
 | `ti(x1, x2)` | Tensor interaction (no main effects) |
 | `s(x, by=fac)` | Factor-by smooth (separate curve per level) |
@@ -316,9 +319,10 @@ Disable it with `JAXGAM_NO_COMPILATION_CACHE=1`.
 
 ## Correctness
 
-jaxgam is validated against R's mgcv 1.9-3 across a 1,450-test suite.
-Every model configuration (5 families x 6 smooth types) is fitted in
-both jaxgam and R, then compared value-by-value:
+jaxgam is validated against R's mgcv 1.9-3 across an extensive R-parity test
+suite. Every model configuration in the validation matrix (5 families x the
+supported smooth configurations) is fitted in both jaxgam and R, then compared
+value-by-value:
 
 - **Coefficients, fitted values, deviance** - must match R at STRICT
   (rtol=1e-10) or MODERATE (rtol=1e-4) tolerance depending on the

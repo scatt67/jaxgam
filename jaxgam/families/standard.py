@@ -324,7 +324,14 @@ class Poisson(ExponentialFamily):
 
         Matches R: -2 * sum(wt * dpois(y, mu, log=TRUE))
         = -2 * sum(wt * (y*log(mu) - mu - lgamma(y+1)))
+
+        R's ``dpois`` is the *discrete* Poisson pmf: it is 0 at non-integer
+        ``y`` (with a warning), so ``log(0) = -Inf`` and the AIC is ``+Inf``.
+        The ``lgamma(y+1)`` continuation used below is finite for non-integer
+        ``y``, so guard explicitly to reproduce R's ``Inf``.
         """
+        if np.any(y != np.round(y)):
+            return float("inf")
         mu_safe = np.maximum(mu, _MU_EPS)
         ll = wt * (y * np.log(mu_safe) - mu_safe - gammaln(y + 1.0))
         return float(-2.0 * np.sum(ll))

@@ -174,6 +174,23 @@ class TestLogitDomainClamps:
         assert me[0] == _DBL_EPS
         assert me[-1] == _DBL_EPS
 
+    def test_probit_cloglog_mu_eta_floored(self) -> None:
+        """Probit/cloglog mu_eta floored at eps like R's C_probit/cloglog_mu_eta.
+
+        Finding L1: R's make.link floors mu.eta at .Machine$double.eps so a row's
+        working weight (∝ mu_eta²/V) never goes hard-zero under near-separation.
+        Unfloored, probit mu.eta(±40) and cloglog mu.eta(+30) underflow to 0.0.
+        """
+        from jaxgam.links.links import _DBL_EPS, CloglogLink, ProbitLink
+
+        probit = np.asarray(ProbitLink().mu_eta(np.array([-40.0, 0.0, 40.0])))
+        assert probit[0] == _DBL_EPS
+        assert probit[-1] == _DBL_EPS
+        assert probit[1] > _DBL_EPS  # interior unchanged (~0.3989)
+
+        cloglog = np.asarray(CloglogLink().mu_eta(np.array([30.0])))
+        assert cloglog[0] == _DBL_EPS
+
 
 # ---------------------------------------------------------------------------
 # Test 3: R comparison — link values match R's make.link()

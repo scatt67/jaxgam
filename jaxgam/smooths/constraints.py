@@ -21,6 +21,7 @@ R source reference: R/mgcv.r gam.side(), fixDependence(), augment.smX()
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -242,7 +243,9 @@ class CoefficientMap:
         return np.concatenate(beta_c_parts)
 
     def transform_X(
-        self, X_raw_block: npt.NDArray[np.floating], term_label: str
+        self,
+        X_raw_block: npt.NDArray[np.floating],
+        term_label: str | TermBlock,
     ) -> npt.NDArray[np.floating]:
         """Transform a raw design matrix block to constrained space.
 
@@ -250,15 +253,21 @@ class CoefficientMap:
         ----------
         X_raw_block : np.ndarray, shape ``(n, n_coefs_raw)``
             Raw design matrix block for one term.
-        term_label : str
-            Term label.
+        term_label : str or TermBlock
+            Term label, or the ``TermBlock`` directly. Passing the block avoids
+            the first-match label lookup, which is wrong when two smooths share
+            a label (e.g. ``s(x,k=6) + s(x,k=8)``).
 
         Returns
         -------
         np.ndarray
             Constrained design matrix block.
         """
-        term = self.get_term(term_label)
+        term = (
+            term_label
+            if isinstance(term_label, TermBlock)
+            else self.get_term(term_label)
+        )
 
         X = X_raw_block
         if term.Z_centering is not None:
@@ -271,7 +280,9 @@ class CoefficientMap:
         return X
 
     def transform_S(
-        self, S_raw: npt.NDArray[np.floating], term_label: str
+        self,
+        S_raw: npt.NDArray[np.floating],
+        term_label: str | TermBlock,
     ) -> npt.NDArray[np.floating]:
         """Transform a raw penalty matrix to constrained space.
 
@@ -279,15 +290,20 @@ class CoefficientMap:
         ----------
         S_raw : np.ndarray
             Raw penalty matrix.
-        term_label : str
-            Term label.
+        term_label : str or TermBlock
+            Term label, or the ``TermBlock`` directly (avoids first-match
+            label lookup for label-colliding smooths).
 
         Returns
         -------
         np.ndarray
             Constrained penalty matrix.
         """
-        term = self.get_term(term_label)
+        term = (
+            term_label
+            if isinstance(term_label, TermBlock)
+            else self.get_term(term_label)
+        )
 
         S = S_raw
         if term.Z_centering is not None:
@@ -731,6 +747,16 @@ class CoefficientMap:
         # parametric columns (mgcv.r:644-646).
         if len(v_names_all) == len(set(v_names_all)):
             return [None] * m
+
+        # Two 1-D smooths of the same variable are both kept but the higher-
+        # indexed one is side-constrained against the lower; mgcv warns here
+        # (gam.side, mgcv.r:624). Higher-dimensional overlaps (e.g. s(x)+te(x,z))
+        # are a normal ANOVA decomposition and do not warn.
+        if max_dim == 1:
+            warnings.warn(
+                "model has repeated 1-d smooths of same variable.",
+                stacklevel=2,
+            )
 
         # Build index: for each unique variable name, which smooths use it
         unique_vars = list(dict.fromkeys(v_names_all))

@@ -460,6 +460,52 @@ class TestDeferredAndDuplicateArgs:
         assert len(result.smooth_terms) == 1
         assert "fx" not in result.smooth_terms[0].extra_args
 
+    def test_r_spelled_booleans_normalized(self) -> None:
+        """Finding L3: R's TRUE/FALSE tokens are accepted in DSL kwargs.
+
+        A user porting an mgcv formula writes `s(x, fx=FALSE)` (the default,
+        equivalent to plain s(x)); R booleans parse as ast.Name and previously
+        hit the misleading "Cannot evaluate argument 'fx'" error before the fx
+        handler ran. fx=TRUE must still reach NotImplementedError, and bs=TRUE
+        the "must be a string" error.
+        """
+        collector = _AssertCollector()
+
+        def _fx_false_equals_plain() -> None:
+            plain = parse_formula("y ~ s(x1)").smooth_terms[0]
+            r_false = parse_formula("y ~ s(x1, fx=FALSE)")
+            sm = r_false.smooth_terms[0]
+            check_that(
+                len(r_false.smooth_terms) == 1
+                and sm.bs == plain.bs
+                and sm.variables == plain.variables
+                and "fx" not in sm.extra_args,
+                "s(x, fx=FALSE) must parse equivalently to plain s(x)",
+            )
+
+        collector.check("fx_FALSE_equals_plain", _fx_false_equals_plain)
+
+        def _fx_true_not_implemented() -> None:
+            with pytest.raises(NotImplementedError, match="fx=True"):
+                parse_formula("y ~ s(x1, fx=TRUE)")
+
+        collector.check("fx_TRUE_not_implemented", _fx_true_not_implemented)
+
+        def _bs_true_must_be_string() -> None:
+            with pytest.raises(ValueError, match="must be a string"):
+                parse_formula("y ~ s(x1, bs=TRUE)")
+
+        collector.check("bs_TRUE_must_be_string", _bs_true_must_be_string)
+        collector.raise_if_any("R-spelled boolean normalization (L3)")
+
+    def test_identical_smooths_dedup(self) -> None:
+        """Finding S3: identical s(x)+s(x) collapses to one smooth (R terms.formula);
+        a different-config repeat is kept."""
+        assert len(parse_formula("y ~ s(x)").smooth_terms) == 1
+        assert len(parse_formula("y ~ s(x) + s(x)").smooth_terms) == 1
+        # Different config (k differs) is NOT identical -> both kept.
+        assert len(parse_formula("y ~ s(x, k=6) + s(x, k=8)").smooth_terms) == 2
+
     def test_per_term_sp_raises_not_implemented(self) -> None:
         """Per-term sp= inside s()/te()/ti() is deferred; raise NotImplementedError."""
         with pytest.raises(NotImplementedError, match="Per-term sp"):

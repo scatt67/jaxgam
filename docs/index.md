@@ -58,14 +58,15 @@ all families, smooth types, and post-estimation tools.
 
 ### Families
 
-Gaussian, Binomial, Poisson, Gamma -- each with its default link and
-REML smoothing parameter selection.
+Gaussian, Binomial, Poisson, Gamma, and Negative Binomial -- each with its
+default link and REML smoothing parameter selection.
 
 ### Smooth types
 
 | Formula syntax | Basis type |
 |---|---|
 | `s(x, bs='tp')` | Thin-plate regression spline (default) |
+| `s(x, bs='ts')` | Thin-plate spline with shrinkage |
 | `s(x, bs='cr')` | Cubic regression spline |
 | `s(x, bs='cs')` | Cubic spline with shrinkage |
 | `s(x, bs='cc')` | Cyclic cubic spline |

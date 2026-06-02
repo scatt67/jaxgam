@@ -22,7 +22,7 @@ from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import NewtonResult, newton_optimize
 from jaxgam.fitting.pirls import pirls_loop
-from jaxgam.fitting.reml import estimate_edf, estimate_scale
+from jaxgam.fitting.reml import REMLCriterion
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.results import GAMResults
@@ -60,8 +60,10 @@ class GAM:
         Target device: ``'cpu'``, ``'gpu'``, or ``None`` (auto-detect).
         GPU requires ``jax[cuda12]`` (NVIDIA) or ``jax-metal`` (Apple).
     **kwargs
-        Additional arguments. Supported scope guards:
-        ``backend``, ``optimizer``, ``select``, ``gamma``, ``knots``.
+        Additional arguments. Only the scope-guard keys ``device``,
+        ``backend``, ``optimizer``, ``select``, ``gamma``, ``knots`` are
+        accepted; any other keyword raises ``TypeError`` rather than being
+        silently ignored (so typos like ``tol=`` or ``max_iter=`` are caught).
 
     Examples
     --------
@@ -181,8 +183,24 @@ def _resolve_device(device: str | None) -> jax.Device | None:
     raise ValueError(f"Unrecognized device: {device!r}")
 
 
+#: Keyword arguments accepted by ``GAM`` beyond the explicit positional params
+#: (formula, family, method, sp). Anything else is a typo (e.g. ``tol=``,
+#: ``max_iter=``) and must be rejected rather than silently ignored.
+_ACCEPTED_KWARGS = frozenset(
+    {"device", "backend", "optimizer", "select", "gamma", "knots"}
+)
+
+
 def _check_scope_guards(method: str, kwargs: dict) -> None:
     """Validate v1.0 scope guards."""
+    unknown = set(kwargs) - _ACCEPTED_KWARGS
+    if unknown:
+        raise TypeError(
+            f"GAM() got unexpected keyword argument(s) {sorted(unknown)}. "
+            f"Accepted arguments: formula, family, method, sp, "
+            f"{', '.join(sorted(_ACCEPTED_KWARGS))}."
+        )
+
     method_upper = method.upper()
     if method_upper == "ML":
         raise NotImplementedError(
@@ -277,11 +295,28 @@ def _fit_fixed_sp(
             f"{fd.n_penalties} penalty terms."
         )
 
+    # jaxgam treats fixed sp as natural-scale positive values and log-transforms
+    # them internally (unlike mgcv's "negative sp means estimate"). Validate
+    # eagerly here so sp<=0/non-finite raises a clear error naming the bad value,
+    # rather than the cryptic "array must not contain infs or NaNs" that log(-1)
+    # / log(0) trigger deep inside PIRLS.
+    if np.any(sp_arr <= 0.0) or not np.all(np.isfinite(sp_arr)):
+        bad = sp_arr[(sp_arr <= 0.0) | ~np.isfinite(sp_arr)]
+        raise ValueError(
+            f"sp must contain strictly positive, finite values (smoothing "
+            f"parameters are on the natural scale and are log-transformed "
+            f"internally); got invalid value(s) {bad.tolist()}."
+        )
+
     log_lambda = jnp.log(jnp.array(sp_arr))
 
-    # Extended families estimate theta even with sp fixed: pin lambda, optimize
-    # theta (and scale) only.
-    if fd.family.n_theta > 0:
+    # Families with an estimated dispersion parameter still co-optimize it with
+    # the smoothing parameters held fixed, matching mgcv (gam.outer keeps theta
+    # for extended families and appends log.scale as an extra "smoothing
+    # parameter" for unknown-scale families, mgcv.r:2025-2039). Route both
+    # through the pinned-Newton path so the reported REML score is evaluated at
+    # the jointly-optimal (theta, phi) and the real sp stay fixed.
+    if fd.family.n_theta > 0 or not fd.family.scale_known:
         return newton_optimize(fd, method, log_lambda_init=log_lambda, pin_lambda=True)
 
     S_lam = fd.S_lambda(log_lambda)
@@ -310,24 +345,24 @@ def _fit_fixed_sp(
         log_theta=log_theta,
     )
 
-    # Compute EDF and scale. EDF uses FISHER-weighted quantities (R's gdi2);
-    # for non-canonical links pirls_result.XtWX is the observed-information
-    # matrix used for the REML log|H|, so EDF must use the *_fisher fields.
-    edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
-    scale = estimate_scale(
-        fd.y,
-        pirls_result.mu,
-        fd.wt,
-        fd.family,
-        edf,
-    )
+    # Known-scale standard families (Poisson/Binomial): no free dispersion
+    # parameter, so the REML score is a single criterion evaluation at the fixed
+    # sp (mgcv's no.sps / gam2objective path, mgcv.r:1692-1716). Build the same
+    # REMLCriterion the estimated-sp path uses and evaluate it — rather than
+    # stubbing score=0.0 — so GAMResults.score is the real REML criterion (R's
+    # gcv.ubre). REMLCriterion recomputes EDF/scale internally with the Fisher
+    # weighting, identical to the values below.
+    criterion = REMLCriterion(fd, pirls_result)
+    edf = criterion.edf
+    scale = criterion.scale
+    score = criterion.score(log_lambda)
 
     return NewtonResult(
         log_lambda=log_lambda,
         smoothing_params=jnp.exp(log_lambda),
         converged=bool(pirls_result.converged),
         n_iter=0,
-        score=jnp.array(0.0),
+        score=score,
         gradient=jnp.zeros_like(log_lambda),
         edf=edf,
         scale=scale,

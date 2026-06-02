@@ -21,9 +21,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam import GAM
 from jaxgam.formula.design import ModelSetup, SmoothInfo
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import SEED, N, r_available
+from tests.helpers import SEED, N, _AssertCollector, check_that, r_available
 from tests.tolerances import MODERATE, STRICT, normalize_column_signs
 
 
@@ -203,20 +204,27 @@ class TestFactorBy:
     """Test by-variable smooth assembly."""
 
     def test_factor_by(self, factor_data) -> None:
-        """y ~ s(x1, by=fac, k=10): block-diagonal structure, correct n_coefs."""
+        """y ~ s(x1, by=fac, k=10): one SmoothInfo PER LEVEL (mgcv; Finding H1)."""
         spec = parse_formula("y ~ s(x1, by=fac, k=10)")
         setup = ModelSetup.build(spec, factor_data)
 
         assert setup.X.shape[0] == N
-        assert len(setup.smooth_info) == 1
+        # 3-level factor-by -> 3 per-level SmoothInfo (mgcv replicates per level).
+        assert len(setup.smooth_info) == 3
+        assert [si.label for si in setup.smooth_info] == [
+            "s(x1):faclev0",
+            "s(x1):faclev1",
+            "s(x1):faclev2",
+        ]
 
     def test_factor_by_with_main_effect(self, factor_data) -> None:
-        """y ~ s(x1) + s(x1, by=fac): main effect + factor-by coexist."""
+        """y ~ s(x1) + s(x1, by=fac): main effect (1) + per-level factor-by (3)."""
         spec = parse_formula("y ~ s(x1, k=10) + s(x1, by=fac, k=10)")
         setup = ModelSetup.build(spec, factor_data)
 
         assert setup.X.shape[0] == N
-        assert len(setup.smooth_info) == 2
+        # 1 main-effect SmoothInfo + 3 per-level factor-by SmoothInfos (H1).
+        assert len(setup.smooth_info) == 4
 
     def test_numeric_by(self, numeric_by_data) -> None:
         """y ~ s(x1, by=z, k=10): numeric-by works."""
@@ -492,18 +500,22 @@ class TestRComparison:
         formula = "y ~ s(x1, by=fac, k=10, bs='tp')"
 
         r_result = r_bridge.get_smooth_components(formula, data)
+        # R returns one basis block per factor level; jaxgam now emits one
+        # per-level SmoothInfo too (Finding H1), so compare per-level and total.
         r_ncols = [b.shape[1] for b in r_result["basis_matrices"]]
 
         spec = parse_formula(formula)
         setup = ModelSetup.build(spec, data)
 
-        r_total_smooth_cols = sum(r_ncols)
-        py_smooth_info = setup.smooth_info[0]
-        py_smooth_cols = py_smooth_info.last_coef - py_smooth_info.first_coef
+        py_ncols = [si.last_coef - si.first_coef for si in setup.smooth_info]
 
-        assert py_smooth_cols == r_total_smooth_cols, (
-            f"Factor-by smooth cols: Python {py_smooth_cols} != R {r_total_smooth_cols}"
+        assert len(py_ncols) == len(r_ncols), (
+            f"Factor-by level count: Python {len(py_ncols)} != R {len(r_ncols)}"
         )
+        assert sorted(py_ncols) == sorted(r_ncols), (
+            f"Per-level factor-by cols: Python {py_ncols} != R {r_ncols}"
+        )
+        assert sum(py_ncols) == sum(r_ncols)
 
     def test_penalty_structure(self, r_bridge, data) -> None:
         """Per-smooth penalty matrices match R at MODERATE."""
@@ -720,3 +732,524 @@ class TestEdgeCases:
         assert X.shape[0] == 2
         assert np.isnan(X[1]).any()  # NA-factor row carries NaN
         assert np.isfinite(X[0]).all()
+
+
+class TestIntegerCategorical:
+    """Finding S1: integer-valued pd.Categorical must not be demoted to numeric."""
+
+    def test_integer_categorical_matches_string_categorical(self) -> None:
+        """int-coded pd.Categorical == string-coded factor (re + parametric).
+
+        mgcv's ``is.factor()`` gate is agnostic to the level dtype, so int- and
+        string-coded factors are interchangeable. Before the fix
+        ``ModelSetup._to_dict`` did ``np.asarray`` on factor columns, demoting an
+        INTEGER pd.Categorical to a bare int64 array; downstream ``is_factor``
+        then returned False and ``s(g, bs="re")`` encoded g as a single numeric
+        covariate (string categoricals -> object arrays, so only int categories
+        were silently dropped).
+        """
+        rng = np.random.default_rng(SEED)
+        n = 120
+        codes = rng.integers(0, 4, size=n)
+        x = rng.uniform(0.0, 1.0, n)
+        group_effect = np.array([0.0, 1.5, -1.0, 0.5])
+        y = group_effect[codes] + 0.5 * x + rng.normal(scale=0.3, size=n)
+
+        df_int = pd.DataFrame({"y": y, "x": x, "g": pd.Categorical(codes)})
+        df_str = pd.DataFrame(
+            {"y": y, "x": x, "g": pd.Categorical([str(c) for c in codes])}
+        )
+
+        collector = _AssertCollector()
+
+        # Random effect s(g, bs="re") — the path the bug corrupted.
+        re_int = GAM('y ~ x + s(g, bs="re")').fit(df_int)
+        re_str = GAM('y ~ x + s(g, bs="re")').fit(df_str)
+        collector.check(
+            "re_xcols",
+            lambda: check_that(
+                re_int.X.shape[1] == re_str.X.shape[1],
+                f"RE X column count differs: int={re_int.X.shape[1]} "
+                f"str={re_str.X.shape[1]} (integer categorical demoted to numeric)",
+            ),
+        )
+        collector.check(
+            "re_deviance",
+            lambda: np.testing.assert_allclose(
+                float(re_int.deviance),
+                float(re_str.deviance),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        collector.check(
+            "re_edf",
+            lambda: np.testing.assert_allclose(
+                float(np.sum(np.asarray(re_int.edf))),
+                float(np.sum(np.asarray(re_str.edf))),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        collector.check(
+            "re_predict_roundtrip",
+            lambda: np.testing.assert_allclose(
+                np.asarray(re_int.predict(df_int)),
+                np.asarray(re_str.predict(df_str)),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+
+        # Parametric factor (already correct via original_data; guard it stays so).
+        par_int = GAM("y ~ g + x").fit(df_int)
+        par_str = GAM("y ~ g + x").fit(df_str)
+        collector.check(
+            "param_xcols",
+            lambda: check_that(
+                par_int.X.shape[1] == par_str.X.shape[1],
+                f"parametric X cols differ: int={par_int.X.shape[1]} "
+                f"str={par_str.X.shape[1]}",
+            ),
+        )
+
+        # A genuine numeric int column must NOT be promoted to a factor.
+        df_num = pd.DataFrame({"y": y, "xi": rng.integers(0, 50, n)})
+        num = GAM("y ~ s(xi, k=5)").fit(df_num)
+        collector.check(
+            "numeric_int_not_promoted",
+            lambda: check_that(
+                num.X.shape[1] == 5,
+                f"numeric int column promoted to factor: X cols={num.X.shape[1]}",
+            ),
+        )
+
+        collector.raise_if_any("integer-categorical vs string-categorical parity")
+
+
+def _two_factor_data() -> pd.DataFrame:
+    """Data with a 3-level factor f1, a 2-level factor f2, numeric x and y."""
+    rng = np.random.default_rng(SEED)
+    n = 120
+    lev1, lev2 = ["a", "b", "c"], ["p", "q"]
+    f1 = pd.Categorical(rng.choice(lev1, size=n), categories=lev1)
+    f2 = pd.Categorical(rng.choice(lev2, size=n), categories=lev2)
+    x = rng.uniform(0.0, 1.0, n)
+    eff1 = np.array([0.0, 1.0, -1.0])[f1.codes]
+    eff2 = np.array([0.0, 0.5])[f2.codes]
+    y = eff1 + eff2 + np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
+    return pd.DataFrame({"y": y, "f1": f1, "f2": f2, "x": x})
+
+
+class TestNoInterceptMultiFactor:
+    """Finding S2: no-intercept model with >=2 factors must be full-rank."""
+
+    def test_full_rank_parametric_block(self) -> None:
+        """y ~ 0 + f1 + f2 + s(x): first factor full-coded, rest treatment-coded.
+
+        R full-codes only the FIRST factor of a no-intercept formula and
+        treatment-codes the rest, keeping the parametric block full rank. The
+        bug (drop_ref = has_intercept) full-coded every factor, giving
+        [f1a,f1b,f1c,f2p,f2q] (rank 4 of 5). Correct: [f1a,f1b,f1c,f2q].
+        """
+        df = _two_factor_data()
+        collector = _AssertCollector()
+
+        x_param, names = ModelSetup._build_parametric_matrix(
+            parse_formula("y ~ 0 + f1 + f2 + s(x)").parametric_terms,
+            df,
+            False,
+            len(df),
+        )
+        collector.check(
+            "names",
+            lambda: check_that(
+                names == ["f1a", "f1b", "f1c", "f2q"],
+                f"parametric names {names} != R's ['f1a','f1b','f1c','f2q']",
+            ),
+        )
+        collector.check(
+            "full_rank",
+            lambda: check_that(
+                np.linalg.matrix_rank(x_param) == x_param.shape[1] == 4,
+                f"block rank {np.linalg.matrix_rank(x_param)} of {x_param.shape[1]}",
+            ),
+        )
+
+        # Single-factor no-intercept stays full-coded (must not regress).
+        _, names1 = ModelSetup._build_parametric_matrix(
+            parse_formula("y ~ 0 + f1 + s(x)").parametric_terms, df, False, len(df)
+        )
+        collector.check(
+            "single_factor_full_coded",
+            lambda: check_that(
+                names1 == ["f1a", "f1b", "f1c"],
+                f"single-factor names {names1} != ['f1a','f1b','f1c']",
+            ),
+        )
+
+        # With intercept stays treatment-coded (must not regress).
+        _, names2 = ModelSetup._build_parametric_matrix(
+            parse_formula("y ~ f1 + f2 + s(x)").parametric_terms, df, True, len(df)
+        )
+        collector.check(
+            "with_intercept_treatment_coded",
+            lambda: check_that(
+                names2 == ["(Intercept)", "f1b", "f1c", "f2q"],
+                f"with-intercept names {names2}",
+            ),
+        )
+        collector.raise_if_any("no-intercept multi-factor parametric coding")
+
+    @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+    def test_matches_r(self) -> None:
+        """R parity: y ~ 0 + f1 + f2 + s(x) is identifiable; coef count + fitted
+        values match mgcv. A rank-deficient block would give a different fit."""
+        from tests.r_bridge import RBridge
+
+        df = _two_factor_data()
+        formula = "y ~ 0 + f1 + f2 + s(x)"
+        r_fit = RBridge().fit_gam(formula, df, family="gaussian", method="REML")
+        model = GAM(formula, family="gaussian").fit(df)
+
+        collector = _AssertCollector()
+        collector.check(
+            "n_coef_match",
+            lambda: check_that(
+                len(model.coefficients) == len(r_fit["coefficients"]),
+                f"jaxgam {len(model.coefficients)} coefs vs R "
+                f"{len(r_fit['coefficients'])}",
+            ),
+        )
+        collector.check(
+            "fitted_values_match",
+            lambda: np.testing.assert_allclose(
+                model.fitted_values,
+                r_fit["fitted_values"],
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+            ),
+        )
+        collector.raise_if_any("no-intercept multi-factor R parity")
+
+
+class TestOrderedFactor:
+    """Finding H2: ordered factors must use R's contr.poly contrasts."""
+
+    def test_contr_poly_matches_r_algebra(self) -> None:
+        """_contr_poly reproduces stats::contr.poly (orthonormal, R suffixes).
+
+        No R needed: contr.poly is exact algebra. Pins names and the n=3
+        reference matrix, and asserts orthonormality (a strong guard against
+        any regression back to treatment 0/1 coding).
+        """
+        collector = _AssertCollector()
+        c3, sfx3 = ModelSetup._contr_poly(3)
+        # R: contr.poly(3) == [[-.7071,.4082],[0,-.8165],[.7071,.4082]]
+        ref3 = np.array([[-0.70711, 0.40825], [0.0, -0.81650], [0.70711, 0.40825]])
+        collector.check(
+            "contr_poly_3_values",
+            lambda: np.testing.assert_allclose(c3, ref3, rtol=1e-4, atol=1e-5),
+        )
+        collector.check(
+            "suffixes",
+            lambda: check_that(
+                sfx3 == [".L", ".Q"]
+                and ModelSetup._contr_poly(4)[1] == [".L", ".Q", ".C"]
+                and ModelSetup._contr_poly(5)[1] == [".L", ".Q", ".C", "^4"],
+                "contr.poly column-name suffixes do not match R",
+            ),
+        )
+        # Each contrast column has unit norm and is orthogonal to the others
+        # and to the constant (this is what distinguishes it from treatment).
+        cols = np.column_stack([np.ones(4), ModelSetup._contr_poly(4)[0]])
+        collector.check(
+            "orthonormal",
+            lambda: np.testing.assert_allclose(
+                (cols / np.linalg.norm(cols, axis=0)).T
+                @ (cols / np.linalg.norm(cols, axis=0)),
+                np.eye(4),
+                atol=1e-10,
+            ),
+        )
+        collector.raise_if_any("contr.poly algebra")
+
+    @pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
+    def test_ordered_factor_uses_contr_poly_vs_r(self, r_bridge) -> None:
+        """y ~ g(ordered) + s(x1): parametric block + names match R's contr.poly.
+
+        Before the fix ordered factors got treatment 0/1 dummies (names
+        gmid/ghi). R applies contr.poly by default (names g.L/g.Q). An unordered
+        control still treatment-codes. Prediction reproduces the contrasts from
+        stored metadata, independent of newdata dtype.
+        """
+        rng = np.random.default_rng(SEED)
+        x1 = rng.uniform(0, 1, N)
+        y = np.sin(2 * np.pi * x1) + rng.normal(0, 0.5, N)
+        lev = ["lo", "mid", "hi"]
+        codes = rng.integers(0, 3, N)
+        g_ord = pd.Categorical([lev[c] for c in codes], categories=lev, ordered=True)
+        g_unord = pd.Categorical([lev[c] for c in codes], categories=lev, ordered=False)
+        formula = "y ~ g + s(x1, k=10, bs='tp')"
+
+        collector = _AssertCollector()
+
+        df_ord = pd.DataFrame({"x1": x1, "y": y, "g": g_ord})
+        r_X = np.asarray(
+            r_bridge.get_smooth_components(formula, df_ord)["model_matrix"],
+            dtype=np.float64,
+        )
+        # R layout: (Intercept), g.L, g.Q, <smooth basis>.
+        r_param = r_X[:, 1:3]
+        setup = ModelSetup.build(parse_formula(formula), df_ord)
+        py_param = setup.X[:, 1:3]
+        py_names = [nm for nm in setup.term_names if nm.startswith("g")]
+
+        collector.check(
+            "ordered_names",
+            lambda: check_that(
+                py_names == ["g.L", "g.Q"], f"expected ['g.L','g.Q'], got {py_names}"
+            ),
+        )
+        collector.check(
+            "ordered_values_vs_r",
+            lambda: np.testing.assert_allclose(
+                py_param,
+                r_param,
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+                err_msg="ordered-factor block != R contr.poly",
+            ),
+        )
+
+        # Unordered control still treatment-codes (gmid/ghi indicators).
+        df_un = pd.DataFrame({"x1": x1, "y": y, "g": g_unord})
+        setup_u = ModelSetup.build(parse_formula(formula), df_un)
+        u_names = [nm for nm in setup_u.term_names if nm.startswith("g")]
+        collector.check(
+            "unordered_names",
+            lambda: check_that(
+                u_names == ["gmid", "ghi"], f"expected ['gmid','ghi'], got {u_names}"
+            ),
+        )
+        collector.check(
+            "unordered_is_indicator",
+            lambda: check_that(
+                set(np.unique(setup_u.X[:, 1:3])) <= {0.0, 1.0},
+                "unordered factor should be 0/1 indicators",
+            ),
+        )
+
+        # Prediction reproduces the contr.poly block (from stored metadata).
+        collector.check(
+            "predict_reproduces_contr_poly",
+            lambda: np.testing.assert_allclose(
+                setup.build_predict_matrix(df_ord)[:, 1:3],
+                py_param,
+                rtol=1e-12,
+                atol=1e-12,
+            ),
+        )
+        collector.raise_if_any("ordered-factor contr.poly parity (H2)")
+
+
+class TestAliasedParametricColumns:
+    """Finding H5: exactly-aliased parametric columns must be dropped (NA)."""
+
+    def test_aliased_column_dropped(self) -> None:
+        """y ~ x + z with z == x: block reduced to full rank, alias dropped,
+        surviving slope recovers the full effect, fitted == full-rank fit.
+
+        mgcv drops rank-deficient parametric columns via pivoted QR (keeping the
+        earlier of an aliased pair) and reports the dropped coefficient as NA.
+        Before the fix jaxgam kept both columns and split the slope ~0.49/0.49.
+        """
+        rng = np.random.default_rng(SEED)
+        n = 200
+        x = rng.standard_normal(n)
+        z = x.copy()
+        true_slope = 0.997
+        y = 2.0 + true_slope * x + 0.1 * rng.standard_normal(n)
+        df = pd.DataFrame({"y": y, "x": x, "z": z})
+
+        aliased = GAM("y ~ x + z").fit(df)
+        reference = GAM("y ~ x").fit(df[["y", "x"]])
+        c = _AssertCollector()
+
+        X = np.asarray(aliased.X)
+        c.check(
+            "full_rank",
+            lambda: check_that(
+                np.linalg.matrix_rank(X) == X.shape[1],
+                f"X {X.shape[1]} cols rank {np.linalg.matrix_rank(X)}; alias kept",
+            ),
+        )
+        active = set(aliased.term_names)
+        c.check(
+            "one_alias_survives",
+            lambda: check_that(
+                ("x" in active) ^ ("z" in active),
+                f"expected exactly one of x/z active, got {active}",
+            ),
+        )
+        c.check(
+            "alias_recorded_dropped",
+            lambda: check_that(
+                set(aliased.setup.dropped_param_names) == ({"x", "z"} - active),
+                f"dropped={aliased.setup.dropped_param_names} "
+                f"active={active & {'x', 'z'}}",
+            ),
+        )
+        name_to_coef = dict(zip(aliased.term_names, aliased.coefficients, strict=True))
+        surviving = "x" if "x" in active else "z"
+        c.check(
+            "coefs_finite",
+            lambda: check_that(
+                np.all(np.isfinite(aliased.coefficients)),
+                f"non-finite active coefs: {aliased.coefficients}",
+            ),
+        )
+        ref_map = dict(zip(reference.term_names, reference.coefficients, strict=True))
+        c.check(
+            "slope_matches_fullrank",
+            lambda: np.testing.assert_allclose(
+                name_to_coef[surviving],
+                ref_map["x"],
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        c.check(
+            "slope_recovers_full_effect",
+            lambda: check_that(
+                abs(name_to_coef[surviving] - true_slope) < 0.05,
+                f"surviving slope {name_to_coef[surviving]:.4f} looks split",
+            ),
+        )
+        c.check(
+            "fitted_match_fullrank",
+            lambda: np.testing.assert_allclose(
+                aliased.fitted_values,
+                reference.fitted_values,
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+            ),
+        )
+        c.check(
+            "predict_roundtrip",
+            lambda: np.testing.assert_allclose(
+                np.asarray(aliased.predict(df)),
+                aliased.fitted_values,
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+            ),
+        )
+        # summary presents the dropped column as an NA row (R parity).
+        s = aliased.summary()
+        c.check(
+            "summary_na_row",
+            lambda: check_that(
+                surviving == "x"
+                and "z" in s.p_names
+                and bool(np.isnan(s.p_table[s.p_names.index("z")]).all()),
+                f"dropped col not shown as NA row: names={s.p_names}",
+            ),
+        )
+        c.raise_if_any("aliased parametric column handling (H5)")
+
+    def test_correlated_but_independent_kept(self) -> None:
+        """A highly-but-imperfectly-correlated predictor must NOT be dropped."""
+        rng = np.random.default_rng(SEED)
+        n = 200
+        x = rng.standard_normal(n)
+        z = x + 1e-3 * rng.standard_normal(n)
+        y = 1.0 + 0.5 * x - 0.3 * z + 0.1 * rng.standard_normal(n)
+        df = pd.DataFrame({"y": y, "x": x, "z": z})
+        model = GAM("y ~ x + z").fit(df)
+        assert "x" in model.term_names
+        assert "z" in model.term_names
+        assert model.setup.dropped_param_names == ()
+        X = np.asarray(model.X)
+        assert np.linalg.matrix_rank(X) == X.shape[1]
+
+
+class TestRepeatedSmoothLabels:
+    """Finding S3: repeated smooth labels must not collide (positional lookup)."""
+
+    @staticmethod
+    def _pen_support(S: np.ndarray) -> tuple[int, int]:
+        nz = np.where(np.any(np.asarray(S) != 0.0, axis=0))[0]
+        assert nz.size > 0
+        return int(nz.min()), int(nz.max())
+
+    def test_repeated_labels_do_not_collide(self) -> None:
+        """s(x,k=6) + s(x,k=8): disjoint penalty/info structure + working predict.
+
+        Both smooths share the label 's(x)'. Before the fix, label-keyed lookups
+        embedded the second penalty on the first smooth's columns and predict()
+        crashed with a matmul size mismatch. mgcv keeps both (with a warning) and
+        side-constrains the higher-indexed one.
+        """
+        rng = np.random.default_rng(SEED)
+        x = np.sort(rng.uniform(0.0, 1.0, N))
+        data = {"x": x, "y": np.sin(2 * np.pi * x) + rng.normal(0, 0.2, N)}
+        spec = parse_formula('y ~ s(x, k=6, bs="cr") + s(x, k=8, bs="cr")')
+        assert len(spec.smooth_terms) == 2  # different config -> both kept
+
+        with pytest.warns(UserWarning, match="repeated 1-d smooths of same variable"):
+            setup = ModelSetup.build(spec, data)
+
+        blocks = [t for t in setup.coef_map.terms if t.term_type == "smooth"]
+        si0, si1 = setup.smooth_info
+        pens = setup.penalties.penalties
+        c = _AssertCollector()
+
+        c.check(
+            "smooth_info_disjoint",
+            lambda: check_that(
+                si0.last_coef <= si1.first_coef and si0.first_coef != si1.first_coef,
+                f"smooth_info overlap ({si0.first_coef},{si0.last_coef}) vs "
+                f"({si1.first_coef},{si1.last_coef})",
+            ),
+        )
+        c.check(
+            "info_matches_blocks",
+            lambda: check_that(
+                si0.first_coef == blocks[0].col_start
+                and si1.first_coef == blocks[1].col_start
+                and si0.first_penalty != si1.first_penalty,
+                "smooth_info offsets/penalties do not match term blocks",
+            ),
+        )
+
+        def _pen_in_block(i: int) -> None:
+            lo, hi = self._pen_support(pens[i].S)
+            b = blocks[i]
+            check_that(
+                b.col_start <= lo and hi < b.col_start + b.n_coefs,
+                f"penalty {i} support ({lo},{hi}) escapes block "
+                f"[{b.col_start},{b.col_start + b.n_coefs})",
+            )
+
+        c.check("penalty_0_in_block_0", lambda: _pen_in_block(0))
+        c.check("penalty_1_in_block_1", lambda: _pen_in_block(1))
+        c.check(
+            "predict_works",
+            lambda: check_that(
+                setup.build_predict_matrix({"x": np.linspace(0.05, 0.95, 23)}).shape
+                == (23, setup.coef_map.total_coefs),
+                "predict matrix wrong shape (label collision)",
+            ),
+        )
+        c.raise_if_any("repeated-smooth-label structure (S3)")
+
+    def test_identical_smooths_dedup_to_one(self) -> None:
+        """Identical s(x)+s(x) collapses to one smooth (R terms.formula)."""
+        spec = parse_formula("y ~ s(x) + s(x)")
+        assert len(spec.smooth_terms) == 1
+        rng = np.random.default_rng(SEED)
+        x = np.sort(rng.uniform(0.0, 1.0, N))
+        setup = ModelSetup.build(spec, {"x": x, "y": np.sin(2 * np.pi * x)})
+        blocks = [t for t in setup.coef_map.terms if t.term_type == "smooth"]
+        assert len(blocks) == 1
+        assert len(setup.smooth_info) == 1

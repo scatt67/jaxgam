@@ -169,7 +169,13 @@ class _TermCollector:
             )
 
         spec = _parse_smooth_call(func_name, node)
-        self.smooth_terms.append(spec)
+        # R's terms.formula collapses identical term labels, so `y ~ s(x) + s(x)`
+        # yields a single smooth (interpret.gam0, mgcv.r:302). SmoothSpec equality
+        # compares variables+bs+k+by+smooth_type+extra_args, matching that. A
+        # *different*-config repeat (s(x,k=6)+s(x,k=8)) is NOT identical and is
+        # kept, like mgcv (which warns but keeps both).
+        if spec not in self.smooth_terms:
+            self.smooth_terms.append(spec)
 
     def _visit_name(self, node: ast.Name) -> None:
         """Handle plain variable names as parametric terms (de-duplicated).
@@ -336,6 +342,19 @@ def _eval_kwarg_value(node: ast.expr, key: str, func_name: str) -> Any:
     Any
         The evaluated value.
     """
+    # Normalize R's literal tokens (TRUE/FALSE/NA), which parse as ast.Name and
+    # would otherwise fail ast.literal_eval with a misleading "Cannot evaluate
+    # argument" error. A user porting an mgcv formula naturally writes
+    # `s(x, fx=FALSE)` (the default, identical to plain s(x)); normalizing here
+    # lets the fx handler accept FALSE / raise NotImplementedError on TRUE, and
+    # sends bs=TRUE to the proper "must be a string" error.
+    if isinstance(node, ast.Name):
+        if node.id == "TRUE":
+            return True
+        if node.id == "FALSE":
+            return False
+        if node.id == "NA":
+            return None
     try:
         return ast.literal_eval(node)
     except (ValueError, TypeError):

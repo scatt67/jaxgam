@@ -170,6 +170,16 @@ def summary(gam: GAMResults) -> GAMSummary:
         term_names = gam.term_names
         p_names = list(term_names[:n_parametric])
 
+        # Aliased/rank-deficient parametric columns were dropped from the fit
+        # (pivoted-QR rank reduction); mgcv reports them as NA in the
+        # coefficient table. Present them as NA rows so they are not silently
+        # omitted (matches summary.gam / print.gam).
+        dropped = tuple(getattr(gam.setup, "dropped_param_names", ()))
+        if dropped:
+            na_rows = np.full((len(dropped), 4), np.nan)
+            p_table = np.vstack([p_table, na_rows])
+            p_names = p_names + list(dropped)
+
     # Smooth terms
     smooth_info = gam.smooth_info
     m = len(smooth_info)
@@ -492,21 +502,24 @@ def _re_test(
 ) -> dict[str, float]:
     """Significance test for a random-effect smooth (``bs="re"``).
 
-    Port of R's ``reTest`` + ``recov`` (mgcv.r:3599-3755) for the single
-    random-effect case (the term under test is the only RE smooth, so
-    ``rind`` is empty). The reference distribution conditions on the
-    random-effect frequentist covariance ``Ve`` rather than the Bayesian ``Vp``
-    used by ``testStat``, which materially changes the p-value for weak RE
-    signals. Multi-RE models need ``recov``'s general branch (deferred).
+    Port of R's ``reTest`` + ``recov`` (mgcv.r:3599-3755). The reference
+    distribution conditions on the random-effect frequentist covariance ``Ve``
+    rather than the Bayesian ``Vp`` used by ``testStat``, which materially
+    changes the p-value for weak RE signals. With one RE smooth this uses
+    recov's simple branch (``rind`` empty); with several, it dispatches to the
+    general branch (``_re_test_general``) that conditions on the OTHER REs.
     """
     smooth_info = gam.smooth_info
-    n_re = sum(1 for s in smooth_info if s.is_random and s.null_space_dim == 0)
-    if n_re > 1:
-        raise NotImplementedError(
-            "reTest for >1 random-effect smooth is planned for v1.1; see "
-            "recov()'s general (non-empty rind) branch, mgcv.r:3640-3711."
-        )
+    re_idx = [
+        j for j, s in enumerate(smooth_info) if s.is_random and s.null_space_dim == 0
+    ]
+    m = smooth_info.index(si)
+    rind_smooths = [j for j in re_idx if j != m]
+    if rind_smooths:
+        # Other RE smooths present -> recov's GENERAL branch (mgcv.r:3640-3711).
+        return _re_test_general(gam, si, rind_smooths, Xw, est_disp, res_df)
 
+    # Single RE under test -> recov's SIMPLE branch (rind empty).
     phi = gam.scale if not gam.family.scale_known else 1.0
     sig2 = phi
     p = gam.X.shape[1]
@@ -536,12 +549,30 @@ def _re_test(
     # Frequentist covariance Ve = F @ Vp, with F = (Vp / phi) @ X'WX.
     XtWX = Xw.T @ Xw
     Vp = gam.Vp
-    F = (Vp / phi) @ XtWX
-    Ve = F @ Vp
+    Ve = (Vp / phi) @ XtWX @ Vp
     Ve = 0.5 * (Ve + Ve.T)
 
-    B = _mroot(Ve[np.ix_(ind, ind)])
-    bhat = gam.coefficients[ind]
+    return _re_pvalue(
+        Rm, Ve[np.ix_(ind, ind)], gam.coefficients[ind], sig2, est_disp, res_df
+    )
+
+
+def _re_pvalue(
+    Rm: np.ndarray,
+    Ve_block: np.ndarray,
+    bhat: np.ndarray,
+    sig2: float,
+    est_disp: bool,
+    res_df: float,
+) -> dict[str, float]:
+    """Shared reTest tail (mgcv.r:3739-3755): statistic, reference rank, p-value.
+
+    Given the unpenalized covariance root ``Rm`` for the smooth under test, its
+    frequentist covariance block ``Ve_block`` and coefficients ``bhat``, forms
+    ``stat = ||Rm bhat||^2 / sig2`` and the weighted chi-square reference
+    distribution (Davies), with an F-mixture when the scale is estimated.
+    """
+    B = _mroot(Ve_block)
     d = Rm @ bhat
     stat = float(np.sum(d**2) / sig2)
 
@@ -562,6 +593,93 @@ def _re_test(
         pval = psum_chisq_davies(stat, ev)
 
     return {"stat": stat, "pval": float(min(1.0, pval)), "rank": float(rank)}
+
+
+def _re_test_general(
+    gam: GAMResults,
+    si,
+    rind_smooths: list[int],
+    Xw: np.ndarray,
+    est_disp: bool,
+    res_df: float,
+) -> dict[str, float]:
+    """recov general branch (mgcv.r:3640-3711) + reTest tail, for >1 RE smooth.
+
+    Conditions the smooth under test on the OTHER random effects by projecting
+    through ``L = chol(I + R2 S2^- R2')``, where ``S2`` is the total penalty of
+    the other REs and ``R2`` the corresponding columns of the QR R-factor of
+    ``sqrt(W_fisher) X``. Implemented in full coefficient space (penalties are
+    stored full-size and embedded), mathematically identical to R's split-space
+    recov but without the index packing.
+    """
+    eps = np.finfo(float).eps
+    phi = gam.scale if not gam.family.scale_known else 1.0
+    sig2 = phi
+    p = gam.X.shape[1]
+    smooth_info = gam.smooth_info
+    rind_set = set(rind_smooths)
+
+    R = np.linalg.qr(Xw, mode="r")  # (p, p)
+
+    # Random subspace = columns of the OTHER RE smooths; fixed = everything else
+    # (including the smooth under test).
+    rind = np.zeros(p, dtype=bool)
+    for j in rind_smooths:
+        rind[smooth_info[j].first_coef : smooth_info[j].last_coef] = True
+    rcols = np.where(rind)[0]
+    fcols = np.where(~rind)[0]
+    p1 = len(fcols)
+
+    # Total penalty of the fixed block (S1) and the other-RE block (S2).
+    pens = gam.setup.penalties.penalties
+    sp = gam.smoothing_params
+    s1_full = np.zeros((p, p))
+    s2_full = np.zeros((p, p))
+    for j, sj in enumerate(smooth_info):
+        for pk in range(sj.first_penalty, sj.first_penalty + sj.n_penalties):
+            contrib = float(sp[pk]) * pens[pk].S
+            if j in rind_set:
+                s2_full = s2_full + contrib
+            else:
+                s1_full = s1_full + contrib
+    S1 = s1_full[np.ix_(fcols, fcols)]
+    S2 = s2_full[np.ix_(rcols, rcols)]
+    R1 = R[:, fcols]  # (p, p1)
+    R2 = R[:, rcols]  # (p, p2)
+
+    # M2 with M2.T @ M2 == pinv(S2) (rank-truncated, mgcv.r:3685-3691).
+    sym = 0.5 * (S2 + S2.T)
+    ev2, vecs2 = np.linalg.eigh(sym)
+    tol2 = np.max(ev2) * eps**0.8 if ev2.size else 0.0
+    inv = np.where(ev2 > tol2, 1.0 / np.where(ev2 > tol2, ev2, 1.0), 0.0)
+    m2 = np.sqrt(inv)[:, None] * vecs2.T  # (p2, p2)
+
+    # L (upper) with L'L = I + R2 S2^- R2'  (mgcv.r:3694).
+    a = m2 @ R2.T  # (p2, p)
+    g = np.eye(p) + a.T @ a
+    g = 0.5 * (g + g.T)
+    L = np.linalg.cholesky(g).T
+
+    # Rm: trailing kxk of QR of [L R1; mroot(S1)'] with smooth-m's fixed columns
+    # moved to the end (mgcv.r:3698-3707).
+    cols_m = np.arange(si.first_coef, si.last_coef)
+    k = len(cols_m)
+    fpos = {int(c): i for i, c in enumerate(fcols)}
+    m_in_f = [fpos[int(c)] for c in cols_m]
+    m_set = set(m_in_f)
+    lrb = np.vstack([L @ R1, _mroot(S1).T])
+    order = [j for j in range(p1) if j not in m_set] + m_in_f
+    r_full = np.linalg.qr(lrb[:, order], mode="r")
+    Rm = r_full[p1 - k :, p1 - k :]
+
+    # Ve = crossprod(L R Vp) / sig2  (mgcv.r:3709).
+    lrvp = L @ R @ gam.Vp
+    Ve = lrvp.T @ lrvp / sig2
+    Ve = 0.5 * (Ve + Ve.T)
+
+    return _re_pvalue(
+        Rm, Ve[np.ix_(cols_m, cols_m)], gam.coefficients[cols_m], sig2, est_disp, res_df
+    )
 
 
 # ---------------------------------------------------------------------------

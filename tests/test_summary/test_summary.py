@@ -26,7 +26,10 @@ from jaxgam.api import GAM
 from jaxgam.summary.summary import GAMSummary, summary
 from tests.helpers import (
     SEED,
+    N,
+    _AssertCollector,
     _generate_family_data,
+    check_that,
     r_available,
     r_tolerance,
 )
@@ -766,3 +769,178 @@ class TestDaviesVsR:
             atol=MODERATE.atol,
             err_msg="F-like psum.chisq mismatch",
         )
+
+
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+class TestFactorByPerLevelSummary:
+    """Finding H1: factor-by summary/EDF must be per-level, matching mgcv."""
+
+    def test_factor_by_summary_is_per_level_vs_r(self) -> None:
+        """s(x, by=fac) reports one row per factor level (R replicates the
+        smooth per level: R/smooth.r:3969-3991, summary.gam:4010-4048).
+
+        Pre-fix jaxgam lumped all levels into a single 's(x,by=fac)' row with a
+        single EDF. Post-fix it emits 's(x):faca/b/c' rows with per-level EDF
+        summing to the same total.
+        """
+        from tests.r_bridge import RBridge
+
+        rng = np.random.default_rng(SEED)
+        n = N
+        x = rng.uniform(0.0, 1.0, n)
+        fac = pd.Categorical(rng.choice(["a", "b", "c"], size=n))
+        amp = np.array([{"a": 1.0, "b": 2.0, "c": 0.5}[str(f)] for f in fac])
+        base = np.array([{"a": 0.0, "b": 1.0, "c": -1.0}[str(f)] for f in fac])
+        y = np.sin(2.0 * np.pi * x) * amp + base + rng.normal(0.0, 0.3, n)
+        data = pd.DataFrame({"x": x, "fac": fac, "y": y})
+        formula = "y ~ s(x, by=fac, k=6, bs='cr') + fac"
+
+        model = GAM(formula, family="gaussian").fit(data)
+        py_s = summary(model)
+        r_s = RBridge().summary_gam(formula, data, family="gaussian")
+
+        c = _AssertCollector()
+        r_rows = 0 if r_s["s_table"] is None else int(r_s["s_table"].shape[0])
+        py_rows = 0 if py_s.s_table is None else int(py_s.s_table.shape[0])
+        c.check(
+            "row_count_matches_r",
+            lambda: check_that(
+                py_rows == r_rows == 3,
+                f"jaxgam s_table rows={py_rows}, R rows={r_rows} (want 3)",
+            ),
+        )
+        c.check(
+            "per_level_labels",
+            lambda: check_that(
+                list(py_s.s_names) == ["s(x):faca", "s(x):facb", "s(x):facc"],
+                f"s_names={list(py_s.s_names)}",
+            ),
+        )
+        c.check(
+            "edf_is_per_level",
+            lambda: check_that(
+                len(np.asarray(model.edf)) == 3 and len(model.smooth_info) == 3,
+                f"edf len={len(np.asarray(model.edf))}, "
+                f"smooth_info len={len(model.smooth_info)}",
+            ),
+        )
+        c.check(
+            "per_level_edf_vs_r",
+            lambda: np.testing.assert_allclose(
+                np.sort(np.asarray(py_s.s_table[:, 0], dtype=float)),
+                np.sort(np.asarray(r_s["edf"], dtype=float)),
+                rtol=LOOSE.rtol,
+                atol=LOOSE.atol,
+                err_msg="per-level factor-by EDF differs from R",
+            ),
+        )
+        c.check(
+            "total_edf_vs_r",
+            lambda: np.testing.assert_allclose(
+                float(np.sum(np.asarray(py_s.s_table[:, 0], dtype=float))),
+                float(np.sum(np.asarray(r_s["edf"], dtype=float))),
+                rtol=LOOSE.rtol,
+                atol=LOOSE.atol,
+            ),
+        )
+        c.raise_if_any("factor-by per-level summary vs R (H1)")
+
+
+class TestMultiRandomEffectSummary:
+    """Finding M1: summary() must support >=2 random-effect smooths."""
+
+    FORMULA = "y ~ s(g, bs='re') + s(h, bs='re')"
+
+    @staticmethod
+    def _two_re_data() -> pd.DataFrame:
+        rng = np.random.default_rng(SEED)
+        n = 200
+        ng, nh = 15, 12
+        x = rng.uniform(0, 1, n)
+        g = rng.choice([f"g{i}" for i in range(ng)], size=n)
+        h = rng.choice([f"h{i}" for i in range(nh)], size=n)
+        g_eff = rng.normal(0, 0.3, ng)
+        h_eff = rng.normal(0, 0.4, nh)
+        gi = np.array([int(s[1:]) for s in g])
+        hi = np.array([int(s[1:]) for s in h])
+        y = np.sin(2 * np.pi * x) + g_eff[gi] + h_eff[hi] + rng.normal(0, 0.5, n)
+        return pd.DataFrame(
+            {"x": x, "g": pd.Categorical(g), "h": pd.Categorical(h), "y": y}
+        )
+
+    def test_two_re_summary_no_longer_raises(self) -> None:
+        """summary() produces two finite RE rows for a 2x bs='re' model.
+
+        Before the fix, _re_test raised NotImplementedError for n_re>1 and the
+        whole summary aborted though the model fit. After the fix, recov's
+        general branch yields a per-RE row with finite edf/Ref.df/stat/p-value.
+        """
+        model = GAM(self.FORMULA, family="gaussian").fit(self._two_re_data())
+        s = summary(model)  # raised NotImplementedError pre-fix
+        c = _AssertCollector()
+        c.check("type", lambda: check_that(isinstance(s, GAMSummary), "not GAMSummary"))
+        c.check(
+            "two_rows",
+            lambda: check_that(
+                s.s_table is not None and s.s_table.shape[0] == 2,
+                f"expected 2 smooth rows, got "
+                f"{None if s.s_table is None else s.s_table.shape}",
+            ),
+        )
+        c.check(
+            "labels",
+            lambda: check_that(
+                list(s.s_names) == ["s(g)", "s(h)"], f"s_names={s.s_names}"
+            ),
+        )
+        c.check(
+            "finite_and_bounded",
+            lambda: check_that(
+                np.all(np.isfinite(s.s_table))
+                and 0.0 < s.s_table[0, 0] <= 15.0
+                and 0.0 < s.s_table[1, 0] <= 12.0
+                and np.all(s.s_table[:, 3] >= 0.0)
+                and np.all(s.s_table[:, 3] <= 1.0),
+                f"s_table out of range: {s.s_table}",
+            ),
+        )
+        c.raise_if_any("two-RE summary smoke (M1)")
+
+    @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+    def test_two_re_summary_matches_r(self) -> None:
+        """s_table for two bs='re' terms matches R's recov general branch."""
+        from tests.r_bridge import RBridge
+
+        data = self._two_re_data()
+        model = GAM(self.FORMULA, family="gaussian").fit(data)
+        py_tab = summary(model).s_table
+        r_tab = RBridge().summary_gam(self.FORMULA, data, family="gaussian")["s_table"]
+
+        c = _AssertCollector()
+        c.check(
+            "shape",
+            lambda: check_that(
+                py_tab is not None
+                and r_tab is not None
+                and py_tab.shape == r_tab.shape == (2, 4),
+                "s_table shapes differ",
+            ),
+        )
+        # edf / Ref.df / statistic at MODERATE; signal-sensitive p-value at LOOSE.
+        for col, name, tol in [
+            (0, "edf", MODERATE),
+            (1, "ref_df", MODERATE),
+            (2, "statistic", MODERATE),
+            (3, "pvalue", LOOSE),
+        ]:
+            c.check(
+                name,
+                lambda col=col, name=name, tol=tol: np.testing.assert_allclose(
+                    py_tab[:, col],
+                    r_tab[:, col],
+                    rtol=tol.rtol,
+                    atol=tol.atol,
+                    err_msg=f"RE {name} differs from R",
+                ),
+            )
+        c.raise_if_any("two-RE summary vs R (M1)")

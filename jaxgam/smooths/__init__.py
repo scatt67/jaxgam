@@ -17,6 +17,8 @@ from jaxgam.smooths.cubic import (
     CubicShrinkageSmooth,
     CyclicCubicSmooth,
 )
+from jaxgam.smooths.gaussian_process import GaussianProcessSmooth
+from jaxgam.smooths.random_effects import RandomEffectSmooth
 from jaxgam.smooths.registry import get_smooth_class, smooth_registry
 from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 from jaxgam.smooths.tprs import TPRSShrinkageSmooth, TPRSSmooth
@@ -28,7 +30,9 @@ __all__ = [
     "CubicShrinkageSmooth",
     "CyclicCubicSmooth",
     "FactorBySmooth",
+    "GaussianProcessSmooth",
     "NumericBySmooth",
+    "RandomEffectSmooth",
     "Smooth",
     "TPRSShrinkageSmooth",
     "TPRSSmooth",

@@ -22,11 +22,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam import GAM
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.newton import NewtonResult, newton_optimize
-from tests.helpers import SEED, _make_nb_data, _setup_fd
+from tests.helpers import (
+    SEED,
+    _AssertCollector,
+    _make_nb_data,
+    _setup_fd,
+    check_that,
+    r_available,
+)
 from tests.tolerances import LOOSE, STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -517,3 +525,65 @@ class TestNBGAMAPI:
             atol=STRICT.atol,
             err_msg="Predict roundtrip failed",
         )
+
+
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+class TestNBNonCanonicalLink:
+    """Finding H4: NB with a non-canonical link must match mgcv.
+
+    The observed-information XtWX feeding the REML log|H| used positive-clamped
+    weights, discarding the negative per-observation weights mgcv keeps
+    (gdi.c:2481-2498), and the inner PIRLS solve dropped those observations too.
+    For the canonical log link observed weights stay positive (no-op, so log
+    already matched); identity/sqrt go negative and diverged (identity Δdev~20.8).
+    The fix uses signed observed information in both the log|H| and the inner
+    Newton WLS (mgcv gam.fit4).
+    """
+
+    @staticmethod
+    def _nb_signal(n: int = 200, true_theta: float = 4.0) -> pd.DataFrame:
+        rng = np.random.default_rng(SEED)
+        x = np.sort(rng.uniform(0.0, 1.0, n))
+        mu = 3.0 + 2.0 * np.sin(2.0 * np.pi * x) ** 2  # in [3,5] -> identity valid
+        p = true_theta / (true_theta + mu)
+        y = rng.negative_binomial(true_theta, p).astype(float)
+        return pd.DataFrame({"x": x, "y": y})
+
+    def test_nb_noncanonical_link_matches_r(self) -> None:
+        """NB deviance/theta for log, identity and sqrt links all match mgcv."""
+        from tests.r_bridge import RBridge
+
+        df = self._nb_signal()
+        formula = "y ~ s(x, k=10, bs='cr')"
+        bridge = RBridge()
+        cases = {"log": "nb", "identity": "nb_identity", "sqrt": "nb_sqrt"}
+
+        coll = _AssertCollector()
+        for link, r_family in cases.items():
+            m = GAM(formula, family=NegativeBinomial(theta=1.0, link=link)).fit(df)
+            r = bridge.fit_gam(formula, df, family=r_family)
+            coll.check(
+                f"{link}: converged",
+                lambda m=m, link=link: check_that(
+                    m.converged, f"NB {link} did not converge"
+                ),
+            )
+            coll.check(
+                f"{link}: deviance vs R",
+                lambda m=m, r=r: np.testing.assert_allclose(
+                    float(m.deviance),
+                    r["deviance"],
+                    rtol=LOOSE.rtol,
+                    atol=LOOSE.atol,
+                ),
+            )
+            coll.check(
+                f"{link}: theta vs R",
+                lambda m=m, r=r, link=link: check_that(
+                    m.theta is not None
+                    and abs(float(m.theta) - float(r["theta"]))
+                    <= LOOSE.atol + LOOSE.rtol * abs(float(r["theta"])),
+                    f"theta jaxgam={m.theta} vs R={r['theta']} (link={link})",
+                ),
+            )
+        coll.raise_if_any("NB non-canonical link R parity (H4)")

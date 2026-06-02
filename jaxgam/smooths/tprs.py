@@ -138,8 +138,10 @@ def compute_polynomial_basis(
 ) -> npt.NDArray[np.floating]:
     """Compute the polynomial null space basis T.
 
-    Generates all monomials of total degree < m evaluated at the
-    data points X. The ordering matches R's convention.
+    Generates all monomials of total degree < m evaluated at the data
+    points X, column-ordered by R's ``gen_tps_poly_powers`` odometer
+    (mgcv/src/tprs.c): the first variable's power varies fastest. This is
+    NOT a total-degree grouping (see ``_monomial_indices``).
 
     Parameters
     ----------
@@ -179,11 +181,12 @@ def _fill_polynomial_basis(
     m: int,
     d: int,
 ) -> None:
-    """Fill polynomial basis for general d using recursive enumeration.
+    """Fill polynomial basis for general d using the R monomial odometer.
 
-    Fills T in-place with monomials x1^a1 * x2^a2 * ... * xd^ad
-    for all (a1, ..., ad) with a1 + ... + ad < m, ordered by
-    total degree then lexicographic order.
+    Fills T in-place with monomials x1^a1 * x2^a2 * ... * xd^ad for all
+    (a1, ..., ad) with a1 + ... + ad < m, column-ordered by R's
+    ``gen_tps_poly_powers`` odometer (first variable varies fastest;
+    see ``_monomial_indices``) — not by total degree.
     """
     n = X.shape[0]
     # Generate all multi-indices with total degree < m
@@ -197,31 +200,37 @@ def _fill_polynomial_basis(
 
 
 def _monomial_indices(d: int, max_degree: int) -> list[tuple[int, ...]]:
-    """Generate multi-indices for monomials of total degree < max_degree.
+    """Generate multi-indices for the polynomial null-space monomials.
 
-    Returns tuples (a1, ..., ad) ordered by total degree, then
-    lexicographically within each degree.
+    ``max_degree`` is the penalty order ``m``; there are ``comb(m+d-1, d)``
+    monomials of total degree ``< m`` in ``d`` variables. The ordering
+    reproduces R's ``gen_tps_poly_powers`` odometer (mgcv/src/tprs.c:100-130):
+    the FIRST variable's power increments fastest and carries up to higher
+    variables. This is NOT a total-degree grouping — e.g. for d=2, m=3 the
+    degree-2 ``(2,0)`` precedes the degree-1 ``(0,1)``. Matching R's order
+    exactly is required for raw X/S/UZ smoothCon parity at d>=2, m>=3.
     """
-    if d == 1:
-        return [(p,) for p in range(max_degree)]
-
-    indices: list[tuple[int, ...]] = []
-    for total in range(max_degree):
-        indices.extend(_partitions(d, total))
-    return indices
-
-
-def _partitions(d: int, total: int) -> list[tuple[int, ...]]:
-    """Generate all d-tuples of non-negative integers summing to total.
-
-    Ordered lexicographically (reverse of standard, matching R convention).
-    """
-    if d == 1:
-        return [(total,)]
-    result: list[tuple[int, ...]] = []
-    for first in range(total, -1, -1):
-        result.extend((first, *rest) for rest in _partitions(d - 1, total - first))
-    return result
+    m = max_degree
+    M = null_space_dimension(d, m)
+    index = [0] * d
+    out: list[tuple[int, ...]] = []
+    for _ in range(M):
+        out.append(tuple(index))
+        s = sum(index)
+        if s < m - 1:
+            index[0] += 1
+        else:
+            s -= index[0]
+            index[0] = 0
+            for j in range(1, d):
+                index[j] += 1
+                s += 1
+                if s == m:
+                    s -= index[j]
+                    index[j] = 0
+                else:
+                    break
+    return out
 
 
 def _default_k(d: int, M: int) -> int:

@@ -193,6 +193,22 @@ def _observed_weights(
     return 0.5 * d2
 
 
+def _signed_XtWX(w_signed: jax.Array, X: jax.Array) -> jax.Array:
+    """``X' diag(w) X`` with SIGNED weights for the observed-information log|H|.
+
+    Non-canonical links produce per-observation observed (Newton) weights that
+    can be negative; mgcv keeps them in the REML ``log|H|`` via a sign-aware
+    factorization (gdi.c:2481-2498). Only the magnitude is capped (to avoid
+    overflow); negatives are NOT floored to a positive value — that flooring is
+    exactly what corrupts ``log|H|`` for NB identity/sqrt links. ``H = XtWX + S``
+    stays positive-definite at a valid penalized optimum because the penalty
+    dominates the indefinite directions (the same signed observed Hessian is
+    already used by the Newton IFT in ``newton.py``).
+    """
+    w = jnp.clip(w_signed, -_W_MAX, _W_MAX)
+    return (w[:, None] * X).T @ X
+
+
 @jax.jit(static_argnames=("family", "max_iter", "tol"))
 def _pirls_loop_jit(
     X: jax.Array,
@@ -287,16 +303,30 @@ def _pirls_loop_jit(
                 (jnp.ones_like(eta),),
             )
             # Observed weights: w = 0.5 * d²D/dη².  Unlike Fisher weights,
-            # d²D/dη² can be negative for extended families.  Clamp to
-            # _W_MIN so negative or near-zero values don't cause division
-            # instability in the working response z.
+            # d²D/dη² can be NEGATIVE for non-canonical extended-family links;
+            # keep the sign (mgcv gam.fit4 / gdi.c). Only floor the *magnitude*
+            # of the working-response denominator so a near-zero curvature does
+            # not blow up z, without flipping a genuine negative to positive
+            # (that flip corrupts z for NB identity/sqrt).
             w = d2D_deta2 * 0.5
-            d2D_safe = jnp.where(d2D_deta2 > _W_MIN, d2D_deta2, _W_MIN)
+            d2D_safe = jnp.where(jnp.abs(d2D_deta2) > _W_MIN, d2D_deta2, _W_MIN)
             z = (eta - offset) - dD_deta / d2D_safe
             return w, z
 
         def _compute_dev(mu, eta):  # noqa: ARG001  mu unused: deviance computed from eta via pure-function factory
             return _dev_fn(eta, log_theta)
+
+        def _form_wls(W, z):
+            """Sign-aware (Newton) penalized WLS for extended families.
+
+            Observed weights can be negative for non-canonical links; mgcv keeps
+            them in the WLS (gam.fit4) rather than flooring to a positive value.
+            Build ``X' diag(W) X`` and ``X' diag(W) z`` directly (no ``sqrt(W)``)
+            with the magnitude capped; for canonical links (all W >= 0) this is
+            numerically identical to the sqrt form.
+            """
+            Wc = jnp.clip(W, -_W_MAX, _W_MAX)
+            return (Wc[:, None] * X).T @ X, X.T @ (Wc * z)
     else:
 
         def _compute_W_and_z(mu, eta):
@@ -307,6 +337,13 @@ def _pirls_loop_jit(
 
         def _compute_dev(mu, eta):  # noqa: ARG001
             return family.dev_resids(y, mu, wt)
+
+        def _form_wls(W, z):
+            """Fisher-scoring penalized WLS for standard families (positive W)."""
+            Wc = jnp.clip(W, _W_MIN, _W_MAX)
+            w_sqrt = jnp.sqrt(Wc)
+            wx = w_sqrt[:, None] * X
+            return wx.T @ wx, wx.T @ (w_sqrt * z)
 
     def _is_valid(mu, eta):
         """Family domain check, matching R's gam.fit3 ``validmu``/``valideta``.
@@ -346,12 +383,7 @@ def _pirls_loop_jit(
         # ---- Working quantities ----
         eta_cur = X @ state.beta + offset
         W, z = _compute_W_and_z(state.mu, eta_cur)
-        W = jnp.clip(W, _W_MIN, _W_MAX)
-
-        W_sqrt = jnp.sqrt(W)
-        WX = W_sqrt[:, None] * X
-        XtWX = WX.T @ WX
-        XtWz = WX.T @ (W_sqrt * z)
+        XtWX, XtWz = _form_wls(W, z)
         beta_new, L, _ = penalized_solve(XtWX, S_lambda, XtWz)
 
         # ---- Step-halving on penalized deviance ----
@@ -441,47 +473,44 @@ def _pirls_loop_jit(
 
     final = jax.lax.while_loop(_cond, _body, init_state)
 
-    # Recompute curvature at final mu for consistency (R's gam.fit3 §7.2).
+    # Recompute curvature at final mu (R's gam.fit3 §7.2). Split of information
+    # matrices (gdi.c): the REML log|H| uses OBSERVED (Newton) information for
+    # non-canonical links — INCLUDING its negative per-observation weights
+    # (gdi.c:2481-2498 is sign-aware) — while EDF/Bayesian covariance always use
+    # FISHER information (gdi.c:2262-2294). For canonical links observed ==
+    # Fisher. The converged beta is identical under either weighting.
     eta_final = X @ final.beta + offset
-    W_final, _ = _compute_W_and_z(final.mu, eta_final)
-    W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
-    W_sqrt_final = jnp.sqrt(W_final)
-    WX_final = W_sqrt_final[:, None] * X
-    XtWX_final = WX_final.T @ WX_final
-    L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
 
-    # Split of information matrices (R's gam.fit3/gam.fit4, gdi.c):
-    #   - REML log|H| uses OBSERVED (Newton) information for non-canonical
-    #     links (gdi.c:2481-2498); for canonical links observed == Fisher.
-    #   - EDF and Bayesian covariance always use FISHER information
-    #     (gdi.c:2262-2294).
-    # The converged beta is the same under either weighting (both find the
-    # penalized-MLE stationary point), so only the curvature matrices differ.
     if family.n_theta > 0 and log_theta is not None:
-        # Extended families (NB): PIRLS already used observed weights, so
-        # XtWX_final is observed; recompute Fisher for EDF/covariance.
+        # Extended families (NB): observed (signed) weights for the REML log|H|.
+        W_final, _ = _compute_W_and_z(final.mu, eta_final)  # 0.5 d²D/dη², signed
+        XtWX_final = _signed_XtWX(W_final, X)
+        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
+        # Fisher (nonnegative) for EDF and Bayesian covariance.
         _ww_fisher_fn = family.working_weights_fn(wt)
-        W_fisher = _ww_fisher_fn(eta_final, log_theta)
-        W_fisher = jnp.clip(W_fisher, _W_MIN, _W_MAX)
-        W_sqrt_fisher = jnp.sqrt(W_fisher)
-        WX_fisher = W_sqrt_fisher[:, None] * X
+        W_fisher = jnp.clip(_ww_fisher_fn(eta_final, log_theta), _W_MIN, _W_MAX)
+        WX_fisher = jnp.sqrt(W_fisher)[:, None] * X
         XtWX_fisher = WX_fisher.T @ WX_fisher
         L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
     elif not family.is_canonical:
-        # Non-canonical standard family: the PIRLS solve above used Fisher
-        # weights (XtWX_final is Fisher) -> keep it for EDF/covariance, but
-        # rebuild XtWX_final from OBSERVED (Newton) weights for the REML log|H|,
-        # matching mgcv. Observed weight = 0.5 * d^2 D / d eta^2.
-        XtWX_fisher = XtWX_final
-        L_fisher = L_final
-        W_obs = jnp.clip(
-            _observed_weights(family, X, y, wt, final.beta, offset), _W_MIN, _W_MAX
-        )
-        WX_obs = jnp.sqrt(W_obs)[:, None] * X
-        XtWX_final = WX_obs.T @ WX_obs
+        # Non-canonical standard family: the PIRLS solve used Fisher weights
+        # (nonnegative) -> keep for EDF/covariance; rebuild the REML-log|H| XtWX
+        # from OBSERVED (Newton) weights, preserving their sign (matching mgcv).
+        W_final, _ = _compute_W_and_z(final.mu, eta_final)  # Fisher for standard
+        W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
+        WX_fisher = jnp.sqrt(W_final)[:, None] * X
+        XtWX_fisher = WX_fisher.T @ WX_fisher
+        L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+        W_obs = _observed_weights(family, X, y, wt, final.beta, offset)  # signed
+        XtWX_final = _signed_XtWX(W_obs, X)
         L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
     else:
-        # Canonical standard family: Fisher == Newton, just alias.
+        # Canonical standard family: Fisher == Newton (weights nonnegative).
+        W_final, _ = _compute_W_and_z(final.mu, eta_final)
+        W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
+        WX_final = jnp.sqrt(W_final)[:, None] * X
+        XtWX_final = WX_final.T @ WX_final
+        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
         XtWX_fisher = XtWX_final
         L_fisher = L_final
 
