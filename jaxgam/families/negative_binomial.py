@@ -203,12 +203,14 @@ class NegativeBinomial(ExtendedFamily):
         """
         theta = float(np.exp(self._log_theta[0]))
         mu_safe = np.maximum(mu, _MU_EPS)
+        # ``y*log(mu+theta) + theta*log1p(mu/theta)`` already equals R's
+        # ``(y+Theta)*log(mu+Theta) - Theta*log(Theta)`` (efam.r:239-246), so
+        # the ``-theta*log(theta)`` term must NOT be subtracted a second time.
         term = (
             y * np.log(mu_safe + theta)
             + theta * np.log1p(mu_safe / theta)
             - y * np.log(mu_safe)
             + gammaln(y + 1.0)
-            - theta * np.log(theta)
             + gammaln(theta)
             - gammaln(theta + y)
         )
@@ -228,7 +230,8 @@ class NegativeBinomial(ExtendedFamily):
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
         """All finite eta are valid for NB."""
-        return np.isfinite(eta)
+        xp = array_module(eta)
+        return xp.isfinite(eta)
 
     # ------------------------------------------------------------------
     # Pure-function factories (explicit theta for AD in custom_jvp)

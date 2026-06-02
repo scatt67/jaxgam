@@ -93,7 +93,7 @@ all families, smooth types, and post-estimation tools.
 ### Families
 
 Gaussian, Binomial, Poisson, Gamma, and Negative Binomial - each with
-its default link and REML/ML smoothing parameter selection. The Negative
+its default link and REML smoothing parameter selection. The Negative
 Binomial is an extended family with an estimated dispersion parameter
 (theta).
 
@@ -102,9 +102,12 @@ Binomial is an extended family with an estimated dispersion parameter
 | Formula syntax | Basis type |
 |---|---|
 | `s(x, bs='tp')` | Thin-plate regression spline (default) |
+| `s(x, bs='ts')` | Thin-plate spline with shrinkage |
 | `s(x, bs='cr')` | Cubic regression spline |
 | `s(x, bs='cs')` | Cubic spline with shrinkage |
 | `s(x, bs='cc')` | Cyclic cubic spline |
+| `s(x, z, bs='gp')` | Low-rank Gaussian process smooth |
+| `s(g, bs='re')` | Dense random effect smooth |
 | `te(x1, x2)` | Tensor product smooth |
 | `ti(x1, x2)` | Tensor interaction (no main effects) |
 | `s(x, by=fac)` | Factor-by smooth (separate curve per level) |
@@ -126,8 +129,10 @@ These are deliberate scope boundaries, not bugs:
    beyond Negative Binomial are not yet available.
 3. **Dense design matrix must fit in memory.** Datasets with > ~10M rows
    require chunked processing, which is not implemented.
-4. **No random effects.** `bs="re"` (random effects) and `bs="fs"`
-   (factor-smooth interactions) require sparse linear algebra.
+4. **No factor-smooth interactions.** `bs="fs"` requires sparse linear
+   algebra and is not implemented. Simple dense random effects
+   (`bs="re"`, including random slopes) *are* supported — see the
+   quickstart.
 5. **No GAMM.** Correlated random effects (`gamm()`) are not supported.
 
 See the [design document](docs/design.md) Section 1.2 for details on what
@@ -303,7 +308,8 @@ compare against both R's `gam(REML)` (apples-to-apples) and `bam(fREML)`
 - You need one-shot fits on small data (n < 100,000) and cold-start
   latency matters
 - You can use `bam(fREML)` for very large datasets, or features beyond
-  v1.0 scope (sparse solvers, extended families, random effects)
+  v1.0 scope (sparse solvers, Tweedie/Beta and other extended families,
+  factor-smooth interactions)
 
 In most cases you probably should just use the original `mgcv` in R it's very robust and efficient! If you are a pure python user, or your tech stack only supports python maybe jaxgam can be useful.
 
@@ -313,9 +319,10 @@ Disable it with `JAXGAM_NO_COMPILATION_CACHE=1`.
 
 ## Correctness
 
-jaxgam is validated against R's mgcv 1.9-3 across a 1,450-test suite.
-Every model configuration (5 families x 6 smooth types) is fitted in
-both jaxgam and R, then compared value-by-value:
+jaxgam is validated against R's mgcv 1.9-3 across an extensive R-parity test
+suite. Every model configuration in the validation matrix (5 families x the
+supported smooth configurations) is fitted in both jaxgam and R, then compared
+value-by-value:
 
 - **Coefficients, fitted values, deviance** - must match R at STRICT
   (rtol=1e-10) or MODERATE (rtol=1e-4) tolerance depending on the

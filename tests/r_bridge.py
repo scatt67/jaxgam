@@ -208,7 +208,14 @@ class RBridge:
             "binomial": self._stats.binomial,
             "poisson": self._stats.poisson,
             "gamma": self._stats.Gamma,
+            # Non-canonical Gamma link (rpy2 path only) for testing the
+            # observed-information REML log|H| (Finding 11).
+            "gamma_log": lambda: self._stats.Gamma(link="log"),
             "nb": self._mgcv.nb,
+            # Non-canonical NB links (rpy2 path only) for testing the signed
+            # observed-information REML log|H| (Finding H4).
+            "nb_identity": lambda: self._mgcv.nb(link="identity"),
+            "nb_sqrt": lambda: self._mgcv.nb(link="sqrt"),
         }
         func = family_funcs.get(family)
         if func is None:

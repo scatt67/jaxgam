@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+from scipy import linalg
 
 from jaxgam.formula.terms import FormulaSpec, ParametricTerm, SmoothSpec
 from jaxgam.penalties.penalty import CompositePenalty, Penalty
@@ -28,7 +29,7 @@ from jaxgam.smooths.by_variable import (
 )
 from jaxgam.smooths.constraints import CoefficientMap
 from jaxgam.smooths.registry import get_smooth_class
-from jaxgam.smooths.utils import get_factor_levels, is_factor
+from jaxgam.smooths.utils import get_factor_levels, is_factor, is_ordered_factor
 
 if TYPE_CHECKING:
     from jaxgam.smooths.base import Smooth
@@ -107,10 +108,21 @@ class ModelSetup:
     factor_info : dict[str, list]
         Mapping from factor variable name to ordered levels,
         captured at training time for prediction-time encoding.
+    ordered_factors : frozenset[str]
+        Names of parametric factor terms that are *ordered* categoricals
+        (encoded with ``contr.poly`` contrasts). Captured at training time so
+        prediction reproduces the contrasts independent of the newdata dtype.
     has_intercept : bool
         Whether the model includes an intercept.
     parametric_terms : tuple[ParametricTerm, ...]
         Parametric terms from the formula specification.
+    parametric_keep_cols : tuple[int, ...]
+        Column indices of the *full* parametric block retained after dropping
+        aliased/rank-deficient columns (pivoted-QR rank reduction). Empty means
+        no reduction was needed; used at predict time to reproduce the drop.
+    dropped_param_names : tuple[str, ...]
+        Names of parametric columns dropped as aliased (reported NA in
+        ``summary()``), matching mgcv's rank-deficient handling.
     """
 
     X: npt.NDArray[np.floating]
@@ -123,8 +135,11 @@ class ModelSetup:
     smooth_info: tuple[SmoothInfo, ...]
     term_names: tuple[str, ...]
     factor_info: dict[str, list]
+    ordered_factors: frozenset[str]
     has_intercept: bool
     parametric_terms: tuple[ParametricTerm, ...]
+    parametric_keep_cols: tuple[int, ...] = ()
+    dropped_param_names: tuple[str, ...] = ()
 
     # ------------------------------------------------------------------
     # Factory
@@ -201,21 +216,54 @@ class ModelSetup:
         # Validate all variables exist
         cls._validate_variables(formula_spec, data_dict)
 
+        # Validate all referenced variables share the response's length, so a
+        # short/long covariate raises a clear, variable-named error rather than
+        # a cryptic np.column_stack dimension mismatch downstream.
+        ref_names: list[str] = [t.name for t in formula_spec.parametric_terms]
+        for spec in formula_spec.smooth_terms:
+            ref_names.extend(spec.variables)
+            if spec.by is not None:
+                ref_names.append(spec.by)
+        cls._validate_equal_lengths(ref_names, data_dict, n_obs, formula_spec.response)
+
         # Default weights and offset
         if weights is None:
             weights = np.ones(n_obs, dtype=np.float64)
         else:
             weights = np.asarray(weights, dtype=np.float64).ravel()
+            cls._validate_vector(weights, n_obs, "weights", non_negative=True)
+            # Total weight mass must be positive: all-zero (or empty) weights
+            # leave the model with no information, producing a degenerate
+            # "converged" fit and a NaN null deviance. mgcv errors during
+            # smoothing-parameter setup; reject it up front with a clear message.
+            if np.sum(weights) <= 0:
+                raise ValueError(
+                    "weights sum to zero: at least one observation must have a "
+                    "positive prior weight."
+                )
 
         if offset is not None:
             offset = np.asarray(offset, dtype=np.float64).ravel()
+            cls._validate_vector(offset, n_obs, "offset")
 
-        # 2b. Build parametric design matrix
+        # Validate covariate values (response is validated above; covariates
+        # are validated here so non-finite predictors raise a clear error
+        # rather than a downstream LinAlgError).
+        cls._validate_finite_covariates(formula_spec, original_data, data_dict)
+
+        # 2b. Build parametric design matrix, then drop any exactly-aliased
+        # (rank-deficient) parametric columns so the coefficient table is
+        # identifiable and matches mgcv (which reports dropped columns as NA).
         X_parametric, param_names = cls._build_parametric_matrix(
             formula_spec.parametric_terms,
             original_data,
             formula_spec.has_intercept,
             n_obs,
+        )
+        X_parametric, param_names, dropped_param_names, parametric_keep_cols = (
+            cls._drop_aliased_parametric_columns(
+                X_parametric, param_names, formula_spec.has_intercept
+            )
         )
         n_parametric = X_parametric.shape[1]
 
@@ -245,14 +293,16 @@ class ModelSetup:
                 f"coefficient map total ({coef_map.total_coefs})"
             )
 
-        # 2f. Embed penalties
+        # 2f. Embed penalties. Look the smooth's columns up POSITIONALLY (the
+        # i-th smooth term block), never by label — two smooths can share a
+        # label (s(x,k=6) + s(x,k=8)) and a label lookup would embed the second
+        # smooth's penalty on the first smooth's columns.
         total_p = coef_map.total_coefs
         embedded_penalties: list[Penalty] = []
+        smooth_blocks = [t for t in coef_map.terms if t.term_type == "smooth"]
 
-        for i, sm in enumerate(smooths):
-            term_label = CoefficientMap.smooth_label(sm)
-            term_block = coef_map.get_term(term_label)
-            col_start = term_block.col_start
+        for i, _sm in enumerate(smooths):
+            col_start = smooth_blocks[i].col_start
 
             for S_j in S_constrained[i]:
                 S_global = CompositePenalty.embed(S_j, col_start, total_p)
@@ -279,6 +329,11 @@ class ModelSetup:
         factor_info = cls._extract_factor_info(
             formula_spec.parametric_terms, original_data
         )
+        ordered_factors = frozenset(
+            t.name
+            for t in formula_spec.parametric_terms
+            if t.name in factor_info and is_ordered_factor(original_data[t.name])
+        )
 
         # 2h. Return frozen ModelSetup
         return cls(
@@ -292,8 +347,11 @@ class ModelSetup:
             smooth_info=tuple(smooth_infos),
             term_names=term_names,
             factor_info=factor_info,
+            ordered_factors=ordered_factors,
             has_intercept=formula_spec.has_intercept,
             parametric_terms=tuple(formula_spec.parametric_terms),
+            parametric_keep_cols=tuple(parametric_keep_cols),
+            dropped_param_names=tuple(dropped_param_names),
         )
 
     # ------------------------------------------------------------------
@@ -380,16 +438,34 @@ class ModelSetup:
 
         # Determine n_obs from first available variable
         first_key = next(iter(data_dict))
-        n_new = len(data_dict[first_key])
+        n_new = len(np.asarray(data_dict[first_key]).ravel())
 
-        # Build parametric columns (prediction mode: use stored factor_info)
+        # Validate that every referenced, present newdata column shares one
+        # length (named error rather than a cryptic column_stack mismatch).
+        pred_names: list[str] = [t.name for t in self.parametric_terms]
+        for si in self.smooth_info:
+            pred_names.extend(si.variables)
+            if si.by_variable is not None:
+                pred_names.append(si.by_variable)
+        self._validate_equal_lengths(
+            pred_names, data_dict, n_new, first_key, context="in newdata"
+        )
+
+        # Build parametric columns (prediction mode: use stored factor_info
+        # and orderedness so ordered-factor contr.poly contrasts are reproduced
+        # regardless of the newdata dtype).
         X_parametric, _ = self._build_parametric_matrix(
             self.parametric_terms,
             newdata,
             self.has_intercept,
             n_new,
             factor_info=self.factor_info,
+            ordered_factors=self.ordered_factors,
         )
+        # Reproduce the training-time aliased-column drop so the prediction
+        # matrix has the same reduced column set as the fitted model.
+        if self.dropped_param_names:
+            X_parametric = X_parametric[:, list(self.parametric_keep_cols)]
 
         # Build smooth columns
         blocks: list[npt.NDArray[np.floating]] = [X_parametric]
@@ -400,8 +476,10 @@ class ModelSetup:
                 continue
             # Get raw prediction matrix from the smooth
             X_raw = term.smooth.predict_matrix(data_dict)
-            # Apply constraint transform (centering + gam_side)
-            X_c = coef_map.transform_X(X_raw, term.label)
+            # Apply constraint transform (centering + gam_side). Pass the
+            # TermBlock object, not term.label, so label-colliding smooths use
+            # their own Z_centering/del_index (a label lookup returns the first).
+            X_c = coef_map.transform_X(X_raw, term)
             blocks.append(X_c)
 
         X_p = np.column_stack(blocks) if len(blocks) > 1 else blocks[0]
@@ -436,7 +514,15 @@ class ModelSetup:
             result = {}
             for col in data.columns:
                 if is_factor(data[col]):
-                    result[col] = np.asarray(data[col])
+                    # Keep factor columns as a (categorical-preserving) Series so
+                    # downstream is_factor()/get_factor_levels() in smooth
+                    # construction still recognize them. np.asarray() demotes an
+                    # INTEGER pd.Categorical to a bare int64 array, losing factor
+                    # identity (string categoricals -> object arrays, so only
+                    # integer categories were silently dropped, corrupting
+                    # s(g, bs='re')). reset_index keeps positional alignment for
+                    # the boolean masks (col == level) used in factor encoding.
+                    result[col] = data[col].reset_index(drop=True)
                 else:
                     result[col] = np.asarray(data[col], dtype=np.float64)
             return result
@@ -473,6 +559,92 @@ class ModelSetup:
                 )
 
     @staticmethod
+    def _validate_vector(
+        vec: npt.NDArray[np.floating],
+        n_obs: int,
+        name: str,
+        non_negative: bool = False,
+    ) -> None:
+        """Validate a per-observation vector (``weights`` or ``offset``).
+
+        Guards against silently-broadcast wrong-length inputs and
+        non-finite values, which otherwise surface as cryptic downstream
+        errors or NaN coefficients.
+        """
+        if vec.shape[0] != n_obs:
+            raise ValueError(
+                f"{name} has {vec.shape[0]} element(s) but data has "
+                f"{n_obs} observations; expected shape ({n_obs},)."
+            )
+        if not np.all(np.isfinite(vec)):
+            raise ValueError(f"{name} contains non-finite values (NaN or Inf).")
+        if non_negative and np.any(vec < 0):
+            raise ValueError(f"{name} must be non-negative.")
+
+    @staticmethod
+    def _validate_equal_lengths(
+        names: list[str],
+        data_dict: dict[str, npt.NDArray],
+        expected: int,
+        ref_name: str,
+        context: str = "",
+    ) -> None:
+        """Check that each referenced, present variable has the expected length.
+
+        Raises a clear ValueError naming the offending variable and the expected
+        length, rather than letting a downstream ``np.column_stack`` fail with a
+        cryptic dimension-mismatch message that names neither.
+        """
+        where = f" {context}" if context else ""
+        for name in dict.fromkeys(names):
+            if name not in data_dict:
+                continue
+            m = len(np.asarray(data_dict[name]).ravel())
+            if m != expected:
+                raise ValueError(
+                    f"Variable '{name}'{where} has {m} element(s) but "
+                    f"'{ref_name}' has {expected}; all variables must share "
+                    f"one length."
+                )
+
+    @staticmethod
+    def _validate_finite_covariates(
+        formula_spec: FormulaSpec,
+        original_data: dict[str, npt.NDArray] | pd.DataFrame,
+        data_dict: dict[str, npt.NDArray],
+    ) -> None:
+        """Check that numeric covariate columns contain no NaN/Inf.
+
+        Factor (categorical/string) columns are skipped — only numeric
+        predictors are checked. Mirrors the response-variable validation
+        so a non-finite predictor raises a clear error at setup time.
+        """
+        names: list[str] = [t.name for t in formula_spec.parametric_terms]
+        for spec in formula_spec.smooth_terms:
+            names.extend(spec.variables)
+            if spec.by is not None:
+                names.append(spec.by)
+
+        for name in dict.fromkeys(names):  # de-dup, preserve order
+            col = original_data[name]
+            if is_factor(col):
+                continue
+            values = np.asarray(data_dict[name], dtype=np.float64)
+            if not np.all(np.isfinite(values)):
+                n_nan = int(np.sum(np.isnan(values)))
+                n_inf = int(np.sum(np.isinf(values)))
+                parts = []
+                if n_nan:
+                    parts.append(f"{n_nan} NaN")
+                if n_inf:
+                    parts.append(f"{n_inf} Inf")
+                raise ValueError(
+                    f"Covariate '{name}' contains non-finite values "
+                    f"({', '.join(parts)}). Remove or impute missing values "
+                    f"before fitting."
+                )
+
+    @staticmethod
     def _extract_factor_info(
         parametric_terms: list[ParametricTerm] | tuple[ParametricTerm, ...],
         data: dict[str, npt.NDArray] | pd.DataFrame,
@@ -499,12 +671,35 @@ class ModelSetup:
         return factor_info
 
     @staticmethod
+    def _contr_poly(n_levels: int) -> tuple[npt.NDArray[np.floating], list[str]]:
+        """Orthogonal-polynomial contrasts, matching R's ``stats::contr.poly``.
+
+        Returns an ``(n_levels, n_levels - 1)`` contrast matrix (the constant
+        column dropped) and the R column-name suffixes (``.L``, ``.Q``, ``.C``,
+        ``^4``, ...). This is R's default contrast for *ordered* factors.
+        """
+        n = n_levels
+        scores = np.arange(1, n + 1, dtype=np.float64)
+        y = scores - scores.mean()
+        vander = np.vander(y, n, increasing=True)  # columns y^0 .. y^(n-1)
+        q, r = np.linalg.qr(vander)
+        raw = q * np.diag(r)  # == R's qr.qy(QR, diag(diag(R)))
+        norms = np.sqrt((raw**2).sum(axis=0))
+        z = raw / norms
+        contrasts = z[:, 1:]  # drop the constant column
+        suffixes = [f"^{i}" for i in range(n)]
+        for pos in range(1, min(4, n)):
+            suffixes[pos] = [".L", ".Q", ".C"][pos - 1]
+        return contrasts, suffixes[1:]
+
+    @staticmethod
     def _encode_factor(
         col: npt.NDArray | pd.Series,
         levels: list,
         drop_reference: bool,
+        ordered: bool = False,
     ) -> tuple[npt.NDArray[np.floating], list[str]]:
-        """Create dummy indicator matrix for a factor column.
+        """Create the contrast matrix for a factor column.
 
         Parameters
         ----------
@@ -513,22 +708,41 @@ class ModelSetup:
         levels : list
             Ordered factor levels.
         drop_reference : bool
-            If True, drop the first (reference) level column.
+            If True, drop the first (reference) level column (treatment coding).
+        ordered : bool
+            If True (and ``drop_reference``), use R's ``contr.poly`` orthogonal
+            polynomial contrasts instead of treatment indicators, matching R's
+            default for ordered factors.
 
         Returns
         -------
         dummy_matrix : np.ndarray
             Shape ``(n, n_levels)`` or ``(n, n_levels - 1)``.
         level_names : list[str]
-            Names for each dummy column.
+            Names for each contrast column.
         """
-        col_arr = np.asarray(col)
+        col_arr = np.asarray(col, dtype=object)
         n = len(col_arr)
         n_levels = len(levels)
+        na_mask = pd.isna(col_arr)
+
+        if ordered and drop_reference and n_levels >= 2:
+            # Ordered factor with a reference dropped -> R's contr.poly.
+            contrasts, suffixes = ModelSetup._contr_poly(n_levels)
+            level_index = {lev: i for i, lev in enumerate(levels)}
+            codes = np.array([level_index.get(v, -1) for v in col_arr], dtype=np.intp)
+            dummy = np.full((n, n_levels - 1), np.nan, dtype=np.float64)
+            valid = (codes >= 0) & ~na_mask
+            dummy[valid] = contrasts[codes[valid]]
+            return dummy, suffixes
 
         dummy = np.zeros((n, n_levels), dtype=np.float64)
         for j, level in enumerate(levels):
             dummy[:, j] = (col_arr == level).astype(np.float64)
+        # An NA factor value yields an all-NaN row -> NaN prediction, matching
+        # R's predict.gam (NA in -> NA out), instead of crashing or silently
+        # encoding it as the reference level.
+        dummy[na_mask, :] = np.nan
 
         if drop_reference:
             dummy = dummy[:, 1:]
@@ -545,6 +759,7 @@ class ModelSetup:
         has_intercept: bool,
         n_obs: int,
         factor_info: dict[str, list] | None = None,
+        ordered_factors: frozenset[str] | None = None,
     ) -> tuple[npt.NDArray[np.floating], list[str]]:
         """Build the parametric portion of the model matrix.
 
@@ -580,17 +795,25 @@ class ModelSetup:
             blocks.append(np.ones((n_obs, 1), dtype=np.float64))
             names.append("(Intercept)")
 
+        # In a no-intercept model R full-codes the FIRST factor (it absorbs the
+        # missing intercept) and treatment-codes subsequent factors, keeping the
+        # parametric block full rank. Track whether a factor has been full-coded.
+        seen_factor = False
+
         for term in parametric_terms:
             col = data[term.name]
 
             if factor_info is not None:
-                # Prediction mode: use stored factor levels
+                # Prediction mode: use stored factor levels + orderedness, so
+                # encoding is reproduced independent of the newdata dtype.
                 is_fac = term.name in factor_info
                 levels = factor_info.get(term.name)
+                ordered = ordered_factors is not None and term.name in ordered_factors
             else:
                 # Training mode: auto-detect
                 is_fac = is_factor(col)
                 levels = get_factor_levels(col) if is_fac else None
+                ordered = is_fac and is_ordered_factor(col)
 
             if is_fac:
                 if factor_info is None and len(levels) < 2:
@@ -598,9 +821,36 @@ class ModelSetup:
                         f"Factor variable '{term.name}' has fewer than 2 levels "
                         f"({levels}). Cannot create dummy variables."
                     )
-                drop_ref = has_intercept
+                if factor_info is not None:
+                    # Prediction mode: reject new levels instead of silently
+                    # encoding them as the reference level (matches R's
+                    # predict.gam, which errors on factor has new levels).
+                    known = set(levels)
+                    # Mask NaN BEFORE np.unique: np.unique on mixed str+NaN
+                    # raises TypeError (can't order float vs str). NaN factor
+                    # rows are not "new levels"; they predict NaN (see
+                    # _encode_factor), matching R's predict.gam NA handling.
+                    col_obj = np.asarray(col, dtype=object)
+                    na_mask = pd.isna(col_obj)
+                    observed = np.unique(col_obj[~na_mask]).tolist()
+                    unseen = sorted(
+                        {v for v in observed if v not in known},
+                        key=str,
+                    )
+                    if unseen:
+                        raise ValueError(
+                            f"Parametric factor '{term.name}' has new level(s) "
+                            f"{unseen} not seen during fitting. Predictions for "
+                            f"unseen levels of a parametric factor are undefined."
+                        )
+                # Treatment-code with an intercept; with no intercept, full-code
+                # only the first factor and treatment-code the rest (matches base
+                # R model.matrix used by mgcv's gam.setup). Numeric terms never
+                # consume the "first factor" slot.
+                drop_ref = has_intercept or seen_factor
+                seen_factor = True
                 dummy, level_names = ModelSetup._encode_factor(
-                    col, levels, drop_reference=drop_ref
+                    col, levels, drop_reference=drop_ref, ordered=ordered
                 )
                 blocks.append(dummy)
                 names.extend(f"{term.name}{lev}" for lev in level_names)
@@ -615,6 +865,52 @@ class ModelSetup:
             X_parametric = np.empty((n_obs, 0), dtype=np.float64)
 
         return X_parametric, names
+
+    @staticmethod
+    def _drop_aliased_parametric_columns(
+        X_parametric: npt.NDArray[np.floating],
+        param_names: list[str],
+        has_intercept: bool,
+    ) -> tuple[npt.NDArray[np.floating], list[str], list[str], list[int]]:
+        """Drop exactly-aliased (rank-deficient) parametric columns.
+
+        Mirrors mgcv, which builds the full parametric ``model.matrix`` then
+        drops rank-deficient columns in the estimator via a pivoted QR with the
+        ``Rrank`` tolerance (``eps**0.9``), reporting the dropped coefficients as
+        NA (R/mgcv.r:4-16, 863-919). LAPACK column pivoting keeps the earlier
+        column of an aliased pair and drops the later one. The intercept is never
+        dropped.
+
+        Returns
+        -------
+        X_reduced, names_reduced, dropped_names, keep_cols
+            ``keep_cols`` are indices into the original full block.
+        """
+        ncol = X_parametric.shape[1]
+        if ncol <= 1:
+            return X_parametric, param_names, [], list(range(ncol))
+
+        _, r, piv = linalg.qr(X_parametric, pivoting=True, mode="economic")
+        rdiag = np.abs(np.diag(r))
+        tol = rdiag[0] * np.finfo(float).eps ** 0.9 if rdiag.size else 0.0
+        rank = int(np.sum(rdiag > tol))
+        if rank >= ncol:
+            return X_parametric, param_names, [], list(range(ncol))
+
+        dropped = {int(p) for p in piv[rank:]}
+        # Never drop the intercept (column 0 of a with-intercept block): if it
+        # pivoted out, retain it and drop the next-pivoted dependent column.
+        if has_intercept and 0 in dropped:
+            dropped.discard(0)
+            for p in piv[:rank][::-1]:
+                if int(p) != 0:
+                    dropped.add(int(p))
+                    break
+
+        keep_cols = sorted(set(range(ncol)) - dropped)
+        dropped_names = [param_names[i] for i in sorted(dropped)]
+        names_reduced = [param_names[i] for i in keep_cols]
+        return X_parametric[:, keep_cols], names_reduced, dropped_names, keep_cols
 
     @staticmethod
     def _build_smooth_components(
@@ -691,29 +987,65 @@ class ModelSetup:
         list[SmoothInfo]
         """
         infos: list[SmoothInfo] = []
-        for sm in smooths:
-            label = CoefficientMap.smooth_label(sm)
-            term = coef_map.get_term(label)
+        # Pair each smooth with its term block POSITIONALLY (the i-th smooth
+        # term block), never by label: two smooths can share a label and a label
+        # lookup returns the first match, corrupting every other smooth's offsets.
+        smooth_blocks = [t for t in coef_map.terms if t.term_type == "smooth"]
+        for sm, term in zip(smooths, smooth_blocks, strict=True):
             by_var: str | None = getattr(sm, "by_variable", None)
             base = getattr(sm, "base_smooth", sm)
             is_random = getattr(base, "_random", False)
 
-            infos.append(
-                SmoothInfo(
-                    label=label,
-                    term_type=sm.spec.smooth_type,
-                    variables=tuple(sm.spec.variables),
-                    by_variable=by_var,
-                    first_coef=term.col_start,
-                    last_coef=term.col_start + term.n_coefs,
-                    n_penalties=len(term.penalty_indices),
-                    first_penalty=(
-                        term.penalty_indices[0] if term.penalty_indices else 0
-                    ),
-                    null_space_dim=sm.null_space_dim,
-                    is_random=is_random,
+            if isinstance(sm, FactorBySmooth):
+                # mgcv replicates a factor-by smooth once PER LEVEL (one
+                # object$smooth entry with its own label, sp, and EDF per level;
+                # R/smooth.r:3969-3991). Mirror that here so EDF/summary are
+                # per-level. The fit/penalty grouping stays per-smooth (Phase 2
+                # iterates coef_map.terms, not smooth_info — see fitting/data.py).
+                n_levels = sm.n_levels
+                if (
+                    term.n_coefs % n_levels != 0
+                    or len(term.penalty_indices) % n_levels != 0
+                ):
+                    raise RuntimeError(
+                        "factor-by block is not evenly divisible by n_levels; "
+                        "per-level SmoothInfo cannot be derived."
+                    )
+                per_level_coefs = term.n_coefs // n_levels
+                n_base_pen = len(term.penalty_indices) // n_levels
+                for level_idx in range(n_levels):
+                    start = term.col_start + level_idx * per_level_coefs
+                    infos.append(
+                        SmoothInfo(
+                            label=sm.labels[level_idx],
+                            term_type=sm.spec.smooth_type,
+                            variables=tuple(sm.spec.variables),
+                            by_variable=by_var,
+                            first_coef=start,
+                            last_coef=start + per_level_coefs,
+                            n_penalties=n_base_pen,
+                            first_penalty=term.penalty_indices[level_idx * n_base_pen],
+                            null_space_dim=base.null_space_dim,
+                            is_random=is_random,
+                        )
+                    )
+            else:
+                infos.append(
+                    SmoothInfo(
+                        label=CoefficientMap.smooth_label(sm),
+                        term_type=sm.spec.smooth_type,
+                        variables=tuple(sm.spec.variables),
+                        by_variable=by_var,
+                        first_coef=term.col_start,
+                        last_coef=term.col_start + term.n_coefs,
+                        n_penalties=len(term.penalty_indices),
+                        first_penalty=(
+                            term.penalty_indices[0] if term.penalty_indices else 0
+                        ),
+                        null_space_dim=sm.null_space_dim,
+                        is_random=is_random,
+                    )
                 )
-            )
 
         return infos
 
@@ -741,9 +1073,11 @@ class ModelSetup:
         """
         names: list[str] = list(param_names)
 
-        for sm in smooths:
+        # Positional pairing (not label lookup) so label-colliding smooths get
+        # the correct per-smooth column counts.
+        smooth_blocks = [t for t in coef_map.terms if t.term_type == "smooth"]
+        for sm, term in zip(smooths, smooth_blocks, strict=True):
             label = CoefficientMap.smooth_label(sm)
-            term = coef_map.get_term(label)
             names.extend(f"{label}.{j + 1}" for j in range(term.n_coefs))
 
         return tuple(names)

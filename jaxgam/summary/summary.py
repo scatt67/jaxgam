@@ -46,7 +46,7 @@ class GAMSummary:
     link_name : str
         Link function name.
     method : str
-        Smoothing parameter estimation method (REML/ML).
+        Smoothing parameter estimation method (REML; only REML in v1.0).
     n : int
         Number of observations.
 
@@ -75,7 +75,7 @@ class GAMSummary:
     scale : float
         Estimated or fixed scale (dispersion) parameter.
     reml_score : float or None
-        REML/ML criterion value (sp.criterion in R).
+        REML criterion value (sp.criterion in R).
     residual_df : float
         Residual degrees of freedom.
     edf_total : float
@@ -170,6 +170,16 @@ def summary(gam: GAMResults) -> GAMSummary:
         term_names = gam.term_names
         p_names = list(term_names[:n_parametric])
 
+        # Aliased/rank-deficient parametric columns were dropped from the fit
+        # (pivoted-QR rank reduction); mgcv reports them as NA in the
+        # coefficient table. Present them as NA rows so they are not silently
+        # omitted (matches summary.gam / print.gam).
+        dropped = tuple(getattr(gam.setup, "dropped_param_names", ()))
+        if dropped:
+            na_rows = np.full((len(dropped), 4), np.nan)
+            p_table = np.vstack([p_table, na_rows])
+            p_names = p_names + list(dropped)
+
     # Smooth terms
     smooth_info = gam.smooth_info
     m = len(smooth_info)
@@ -185,8 +195,17 @@ def summary(gam: GAMResults) -> GAMSummary:
         chi_sq = np.zeros(m)
         s_pv = np.zeros(m)
 
-        # Use the stored model matrix X
-        X = gam.X
+        # Wood (2013) testStat uses the Fisher-WEIGHTED design block: R uses
+        # ``object$R``, the QR R-factor of ``sqrt(W_fisher)*X`` built in
+        # ``gam.fit3.post.proc``. Using the unweighted ``gam.X`` gives the wrong
+        # statistic whenever ``W != I`` (every non-Gaussian family). The
+        # statistic is basis-invariant, so ``sqrt(W_fisher)*X[:,block]``
+        # reproduces R's ``object$R[,block]`` exactly. (Finding 3)
+        W_fisher = np.asarray(
+            gam.family.working_weights(gam.fitted_values, gam.weights),
+            dtype=np.float64,
+        )
+        Xw = np.sqrt(W_fisher)[:, None] * gam.X
         edf = gam.edf
 
         for i, si in enumerate(smooth_info):
@@ -206,22 +225,24 @@ def summary(gam: GAMResults) -> GAMSummary:
             except AttributeError:
                 edf1_i = edf_i
 
-            X_i = X[:, start:stop]
-
             rdf = residual_df if est_disp else -1.0
 
-            # RE terms use type_=1 (integer rank rounding) for the
-            # significance test, matching R's summary.gam behaviour.
-            test_type = 1 if si.is_random else 0
-
-            res = _test_stat(
-                p_i,
-                X_i,
-                V_i,
-                rank=min(n_coefs_i, edf1_i),
-                type_=test_type,
-                res_df=rdf,
-            )
+            # Random-effect smooths (null space dim 0) use R's reTest/recov
+            # path, not testStat — the reference distribution conditions on the
+            # random-effect covariance (Ve), giving a materially different
+            # p-value for weak-signal RE terms. (Finding 8)
+            if si.is_random and si.null_space_dim == 0:
+                res = _re_test(gam, si, Xw, W_fisher, est_disp, residual_df)
+            else:
+                X_i = Xw[:, start:stop]
+                res = _test_stat(
+                    p_i,
+                    X_i,
+                    V_i,
+                    rank=min(n_coefs_i, edf1_i),
+                    type_=0,
+                    res_df=rdf,
+                )
 
             ref_df[i] = res["rank"]
             chi_sq[i] = res["stat"]
@@ -241,7 +262,7 @@ def summary(gam: GAMResults) -> GAMSummary:
     r_sq = _compute_r_squared(gam, residual_df)
     dev_explained = _compute_deviance_explained(gam)
 
-    # REML/ML score
+    # REML score
     try:
         reml_score = gam.score
     except AttributeError:
@@ -450,6 +471,215 @@ def _test_stat(
         "pval": float(min(1.0, pval)),
         "rank": float(rank),
     }
+
+
+# ---------------------------------------------------------------------------
+# reTest -- random-effect smooth significance (Wood, mgcv.r recov + reTest)
+# ---------------------------------------------------------------------------
+
+
+def _mroot(A: np.ndarray) -> np.ndarray:
+    """Rank-truncated matrix square root ``B`` with ``B @ B.T == A``.
+
+    Port of R's ``mroot``: symmetric eigendecomposition, drop eigenvalues at or
+    below ``max(ev) * eps**0.8``, return ``V[:, keep] * sqrt(ev[keep])``.
+    """
+    A = 0.5 * (A + A.T)
+    ev, V = np.linalg.eigh(A)
+    if ev.size == 0 or np.max(ev) <= 0:
+        return np.zeros((A.shape[0], 0))
+    keep = ev > np.max(ev) * np.finfo(float).eps ** 0.8
+    return V[:, keep] * np.sqrt(ev[keep])[np.newaxis, :]
+
+
+def _re_test(
+    gam: GAMResults,
+    si,
+    Xw: np.ndarray,
+    W_fisher: np.ndarray,  # noqa: ARG001  kept for signature symmetry with _test_stat
+    est_disp: bool,
+    res_df: float,
+) -> dict[str, float]:
+    """Significance test for a random-effect smooth (``bs="re"``).
+
+    Port of R's ``reTest`` + ``recov`` (mgcv.r:3599-3755). The reference
+    distribution conditions on the random-effect frequentist covariance ``Ve``
+    rather than the Bayesian ``Vp`` used by ``testStat``, which materially
+    changes the p-value for weak RE signals. With one RE smooth this uses
+    recov's simple branch (``rind`` empty); with several, it dispatches to the
+    general branch (``_re_test_general``) that conditions on the OTHER REs.
+    """
+    smooth_info = gam.smooth_info
+    re_idx = [
+        j for j, s in enumerate(smooth_info) if s.is_random and s.null_space_dim == 0
+    ]
+    m = smooth_info.index(si)
+    rind_smooths = [j for j in re_idx if j != m]
+    if rind_smooths:
+        # Other RE smooths present -> recov's GENERAL branch (mgcv.r:3640-3711).
+        return _re_test_general(gam, si, rind_smooths, Xw, est_disp, res_df)
+
+    # Single RE under test -> recov's SIMPLE branch (rind empty).
+    phi = gam.scale if not gam.family.scale_known else 1.0
+    sig2 = phi
+    p = gam.X.shape[1]
+
+    # b$R: R-factor of sqrt(W_fisher) X (== R's object$R), same column space
+    # as Vp / penalties / coefficients (all constrained model-matrix space).
+    R = np.linalg.qr(Xw, mode="r")
+
+    # recov (rind empty, m>0): total weighted penalty S1 = sum_k sp_k * S_k.
+    S1 = np.zeros((p, p))
+    for sp_k, pen in zip(
+        gam.smoothing_params, gam.setup.penalties.penalties, strict=True
+    ):
+        S1 = S1 + float(sp_k) * pen.S
+
+    ind = np.arange(si.first_coef, si.last_coef)
+    k = int(ind.shape[0])
+
+    # LRB = rbind(R, t(mroot(S1))); move smooth-m columns to the end; unpivoted
+    # QR; Rm is the trailing k x k block (unpenalized covariance root for m).
+    LRB = np.vstack([R, _mroot(S1).T])
+    ind_set = set(ind.tolist())
+    order = [j for j in range(p) if j not in ind_set] + ind.tolist()
+    R_full = np.linalg.qr(LRB[:, order], mode="r")
+    Rm = R_full[p - k :, p - k :]
+
+    # Frequentist covariance Ve = F @ Vp, with F = (Vp / phi) @ X'WX.
+    XtWX = Xw.T @ Xw
+    Vp = gam.Vp
+    Ve = (Vp / phi) @ XtWX @ Vp
+    Ve = 0.5 * (Ve + Ve.T)
+
+    return _re_pvalue(
+        Rm, Ve[np.ix_(ind, ind)], gam.coefficients[ind], sig2, est_disp, res_df
+    )
+
+
+def _re_pvalue(
+    Rm: np.ndarray,
+    Ve_block: np.ndarray,
+    bhat: np.ndarray,
+    sig2: float,
+    est_disp: bool,
+    res_df: float,
+) -> dict[str, float]:
+    """Shared reTest tail (mgcv.r:3739-3755): statistic, reference rank, p-value.
+
+    Given the unpenalized covariance root ``Rm`` for the smooth under test, its
+    frequentist covariance block ``Ve_block`` and coefficients ``bhat``, forms
+    ``stat = ||Rm bhat||^2 / sig2`` and the weighted chi-square reference
+    distribution (Davies), with an F-mixture when the scale is estimated.
+    """
+    B = _mroot(Ve_block)
+    d = Rm @ bhat
+    stat = float(np.sum(d**2) / sig2)
+
+    M = Rm @ B  # crossprod(Rm %*% B) == M.T @ M
+    ev = np.linalg.eigvalsh((M.T @ M) / sig2)
+    ev = np.clip(ev, 0.0, None)
+    if ev.size and np.max(ev) > 0:
+        rank = int(np.sum(ev > np.max(ev) * np.finfo(float).eps ** 0.8))
+    else:
+        rank = 0
+
+    if est_disp:
+        kk = max(1, round(res_df))
+        lb = np.concatenate([ev, [-stat / kk]])
+        df = np.concatenate([np.ones(ev.size, dtype=int), [kk]])
+        pval = psum_chisq_davies(0.0, lb, df=df)
+    else:
+        pval = psum_chisq_davies(stat, ev)
+
+    return {"stat": stat, "pval": float(min(1.0, pval)), "rank": float(rank)}
+
+
+def _re_test_general(
+    gam: GAMResults,
+    si,
+    rind_smooths: list[int],
+    Xw: np.ndarray,
+    est_disp: bool,
+    res_df: float,
+) -> dict[str, float]:
+    """recov general branch (mgcv.r:3640-3711) + reTest tail, for >1 RE smooth.
+
+    Conditions the smooth under test on the OTHER random effects by projecting
+    through ``L = chol(I + R2 S2^- R2')``, where ``S2`` is the total penalty of
+    the other REs and ``R2`` the corresponding columns of the QR R-factor of
+    ``sqrt(W_fisher) X``. Implemented in full coefficient space (penalties are
+    stored full-size and embedded), mathematically identical to R's split-space
+    recov but without the index packing.
+    """
+    eps = np.finfo(float).eps
+    phi = gam.scale if not gam.family.scale_known else 1.0
+    sig2 = phi
+    p = gam.X.shape[1]
+    smooth_info = gam.smooth_info
+    rind_set = set(rind_smooths)
+
+    R = np.linalg.qr(Xw, mode="r")  # (p, p)
+
+    # Random subspace = columns of the OTHER RE smooths; fixed = everything else
+    # (including the smooth under test).
+    rind = np.zeros(p, dtype=bool)
+    for j in rind_smooths:
+        rind[smooth_info[j].first_coef : smooth_info[j].last_coef] = True
+    rcols = np.where(rind)[0]
+    fcols = np.where(~rind)[0]
+    p1 = len(fcols)
+
+    # Total penalty of the fixed block (S1) and the other-RE block (S2).
+    pens = gam.setup.penalties.penalties
+    sp = gam.smoothing_params
+    s1_full = np.zeros((p, p))
+    s2_full = np.zeros((p, p))
+    for j, sj in enumerate(smooth_info):
+        for pk in range(sj.first_penalty, sj.first_penalty + sj.n_penalties):
+            contrib = float(sp[pk]) * pens[pk].S
+            if j in rind_set:
+                s2_full = s2_full + contrib
+            else:
+                s1_full = s1_full + contrib
+    S1 = s1_full[np.ix_(fcols, fcols)]
+    S2 = s2_full[np.ix_(rcols, rcols)]
+    R1 = R[:, fcols]  # (p, p1)
+    R2 = R[:, rcols]  # (p, p2)
+
+    # M2 with M2.T @ M2 == pinv(S2) (rank-truncated, mgcv.r:3685-3691).
+    sym = 0.5 * (S2 + S2.T)
+    ev2, vecs2 = np.linalg.eigh(sym)
+    tol2 = np.max(ev2) * eps**0.8 if ev2.size else 0.0
+    inv = np.where(ev2 > tol2, 1.0 / np.where(ev2 > tol2, ev2, 1.0), 0.0)
+    m2 = np.sqrt(inv)[:, None] * vecs2.T  # (p2, p2)
+
+    # L (upper) with L'L = I + R2 S2^- R2'  (mgcv.r:3694).
+    a = m2 @ R2.T  # (p2, p)
+    g = np.eye(p) + a.T @ a
+    g = 0.5 * (g + g.T)
+    L = np.linalg.cholesky(g).T
+
+    # Rm: trailing kxk of QR of [L R1; mroot(S1)'] with smooth-m's fixed columns
+    # moved to the end (mgcv.r:3698-3707).
+    cols_m = np.arange(si.first_coef, si.last_coef)
+    k = len(cols_m)
+    fpos = {int(c): i for i, c in enumerate(fcols)}
+    m_in_f = [fpos[int(c)] for c in cols_m]
+    m_set = set(m_in_f)
+    lrb = np.vstack([L @ R1, _mroot(S1).T])
+    order = [j for j in range(p1) if j not in m_set] + m_in_f
+    r_full = np.linalg.qr(lrb[:, order], mode="r")
+    Rm = r_full[p1 - k :, p1 - k :]
+
+    # Ve = crossprod(L R Vp) / sig2  (mgcv.r:3709).
+    lrvp = L @ R @ gam.Vp
+    Ve = lrvp.T @ lrvp / sig2
+    Ve = 0.5 * (Ve + Ve.T)
+
+    return _re_pvalue(
+        Rm, Ve[np.ix_(cols_m, cols_m)], gam.coefficients[cols_m], sig2, est_disp, res_df
+    )
 
 
 # ---------------------------------------------------------------------------

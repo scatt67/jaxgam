@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 # smaller than sqrt(eps) ≈ 1.5e-8 but large enough to avoid underflow.
 _EPS = 1e-10
 
+# R's .Machine$double.eps, used to reproduce R's exact logit linkinv/mu.eta
+# clamps (C_logit_linkinv / C_logit_mu_eta in stats/src/family.c).
+_DBL_EPS = 2.220446049250313e-16
+
 
 class Link(ABC):
     """Abstract link function: g(μ) = η, g⁻¹(η) = μ.
@@ -217,8 +221,11 @@ class LogitLink(Link):
         return xp.log(mu_clipped / (1 - mu_clipped))
 
     def inverse(self, eta: Array) -> Array:
+        # R's C_logit_linkinv clamps the result to [eps, 1-eps] so extreme eta
+        # never yields exactly 0 or 1 (which would zero working weights).
         xp = array_module(eta)
-        return 1.0 / (1.0 + xp.exp(-eta))
+        p = 1.0 / (1.0 + xp.exp(-eta))
+        return xp.clip(p, _DBL_EPS, 1.0 - _DBL_EPS)
 
     def derivative(self, mu: Array) -> Array:
         xp = array_module(mu)
@@ -226,9 +233,10 @@ class LogitLink(Link):
         return 1.0 / (mu_clipped * (1 - mu_clipped))
 
     def mu_eta(self, eta: Array) -> Array:
+        # R's C_logit_mu_eta floors dμ/dη at eps so it never returns exactly 0.
         xp = array_module(eta)
         p = 1.0 / (1.0 + xp.exp(-eta))
-        return p * (1.0 - p)
+        return xp.maximum(p * (1.0 - p), _DBL_EPS)
 
 
 class InverseLink(Link):
@@ -281,11 +289,14 @@ class ProbitLink(Link):
         return 1.0 / norm.pdf(self.link(mu))
 
     def mu_eta(self, eta: Array) -> Array:
+        # R's C_probit_mu_eta floors dμ/dη at eps so extreme |η| never yields
+        # exactly 0 (which would zero a row's working weight in PIRLS).
+        xp = array_module(eta)
         if is_jax_array(eta):
             from jax.scipy.stats import norm as jnorm
 
-            return jnorm.pdf(eta)
-        return norm.pdf(eta)
+            return xp.maximum(jnorm.pdf(eta), _DBL_EPS)
+        return xp.maximum(norm.pdf(eta), _DBL_EPS)
 
 
 class CloglogLink(Link):
@@ -308,8 +319,10 @@ class CloglogLink(Link):
         return 1.0 / ((1 - mu_clipped) * (-xp.log(1 - mu_clipped)))
 
     def mu_eta(self, eta: Array) -> Array:
+        # R's C_cloglog_mu_eta floors dμ/dη at eps so extreme η never yields
+        # exactly 0 (which would zero a row's working weight in PIRLS).
         xp = array_module(eta)
-        return xp.exp(eta - xp.exp(eta))
+        return xp.maximum(xp.exp(eta - xp.exp(eta)), _DBL_EPS)
 
 
 class SqrtLink(Link):

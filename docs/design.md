@@ -1,6 +1,6 @@
 # JaxGAM: Design Document for a Python Port of R's mgcv
 
-**Version:** 1.18
+**Version:** 1.19
 **Date:** February 2026
 **Status:** Design Phase - Post-Seventeenth Review: Scope Freeze
 
@@ -311,7 +311,7 @@ No new mechanisms - claim calibration only.
 | **Closed-form derivatives for standard families**; autodiff restricted to REML and new extended families | Standard families gain nothing from AD since V(μ) gives working weights in O(1). Extended families use `jax.grad` through numerically stable forward passes - `lgamma`, `logsumexp`, log-space arithmetic make derivatives stable by construction (see Section 9.3 for per-family analysis). Only Tweedie's series evaluation requires `custom_jvp` due to truncation-dependent terms. |
 | **Three explicit execution paths** replace transparent sparse/dense switching | JAX sparse is experimental and cannot JIT. `scipy.sparse.linalg.lsqr` forces CPU round-trips from GPU. Transparent switching produced neither good GPU perf nor good sparse perf. Users/auto-selector now choose: Dense-GPU, Sparse-CPU, or Chunked-Hybrid. |
 | **`StatisticsProvider` protocol** decouples PIRLS from data layout | v1.0 PIRLS took raw `X` arrays, preventing distributed/streaming use without rewriting the fitting loop. Now PIRLS operates on `(XtWX, XtWz)` sufficient statistics, making distributed execution a data-access swap. |
-| **`formulaic` for parametric terms** replaces the custom parser | R formula semantics (contrasts, `*` expansion, `(a+b)^2`, `.`, `I()`) have decades of edge cases. `formulaic` handles this; we only write the smooth-term preprocessor. Budget increased from 1 week to 3 weeks. |
+| **`formulaic` for parametric terms** (deferred; NOT in v1.0) | R formula semantics (contrasts, `*` expansion, `(a+b)^2`, `.`, `I()`) have decades of edge cases that `formulaic` would handle. **Not implemented in v1.0:** the shipped parser is AST-based and supports only bare-name parametric terms + `s()/te()/ti()`; R operators/idioms raise a clear error. See §13.1. |
 | **Joint identifiability constraints** (`gam_side`) added post-assembly | v1.0 applied sum-to-zero per-smooth, which produces rank-deficient models when `te(x1,x2)` overlaps `s(x1)+s(x2)`. Now mirrors mgcv's `gam.side` iterative absorption. |
 | **PIRLS convergence hardened** following mgcv's battle-tested logic | v1.0 used simple deviance-change check. Now tracks penalized deviance, coefficient change, has special early-iteration handling, clamped weight floors for binomial boundary cases, and a trust-region fallback. |
 
@@ -351,7 +351,7 @@ JaxGAM is a tiered Python port of Simon Wood's R package `mgcv` (Mixed GAM Compu
 | Paths | Dense-GPU (JAX), Dense-CPU (NumPy reference) | Cross-path agreement within MODERATE (1e-6) |
 | Features | `gam()`, `predict()`, `summary()`, `plot()` basics | EDF, p-values, CI match R ±1e-4 |
 | Constraints | Sum-to-zero, `gam_side` identifiability | CoefficientMap predict roundtrip exact |
-| Dependencies | JAX, NumPy, SciPy, formulaic, matplotlib | `uv sync` - no C compilation, no optional extras |
+| Dependencies | JAX, NumPy, SciPy, matplotlib | `uv sync` - no C compilation, no optional extras |
 
 **Tier 2 - Production (v1.1, ~4-6 months after v1.0).** Adds sparse path, big-data, extended families. Items deferred from Tier 1 land here.
 
@@ -394,7 +394,7 @@ The tier plan above describes the *full library vision*. This section describes 
 | **Constraints** | Sum-to-zero, `gam_side` identifiability via `CoefficientMap` | Required for correctness of multi-smooth models. |
 | **p ceiling** | ~5000 (GPU), ~2000 (CPU dense) | Covers nearly all practical GAM models that don't involve high-cardinality random effects. |
 | **n ceiling** | ~10M (dense X must fit in host memory + one GPU) | For larger n, users wait for `bam()` in v1.1. |
-| **Dependencies** | JAX, NumPy, SciPy, formulaic, matplotlib | `uv sync` with no extras. No C compilation. |
+| **Dependencies** | JAX, NumPy, SciPy, matplotlib | `uv sync` with no extras. No C compilation. |
 
 #### What does NOT ship in v1.0
 
@@ -777,7 +777,7 @@ The `--frozen` flag is critical for distributed: it guarantees every host instal
 | Sparse solvers | SuiteSparse CHOLMOD/SPQR via scikit-sparse | scipy.sparse.linalg | `sparse` | Sparse Cholesky, sparse QR |
 | Dense linear algebra | JAX XLA (GPU path) / scipy.linalg (CPU path) | LAPACK via scipy | (core) | QR, Cholesky, eigendecomp |
 | GPU compilation | JAX XLA (CUDA, Metal, ROCm) | - | `gpu` | Hardware acceleration |
-| Formula parsing | formulaic (parametric) + AST-based (smooth terms) | - | (core) | R-style formula interface |
+| Formula parsing | AST-based (smooth + bare-name parametric; formulaic deferred) | - | (core) | R-style formula interface |
 | Visualization | matplotlib | - | (core) | Plotting |
 | Distributed | Ray (optional) | - | `distributed` | Multi-node cluster |
 | R bridge (test only) | rpy2 | subprocess + Rscript | `dev` | Reference comparison |
@@ -5092,9 +5092,29 @@ class CorSpatial(CorrelationStructure):
 
 ### 13.1 Formula Parser
 
-**Architecture (v1.15: AST-based, not regex):** The formula parser is split into two layers. The parametric part uses `formulaic` (successor to `patsy`), which handles R-style formula semantics correctly: `*` expansion, `(a+b)^2` interactions, factor contrasts (treatment, sum, Helmert), `.` for "all other columns", `I()` for protecting arithmetic, and proper handling of categorical encoding. We write a **preprocessor** that extracts smooth terms before passing the remainder to `formulaic`.
+> **v1.0 implementation note.** The description in this section of a two-layer
+> parser backed by `formulaic` is **forward-looking and NOT implemented in
+> v1.0**. `formulaic` is not a runtime dependency. The shipped parser
+> (`jaxgam/formula/parser.py`) is a single AST pass (`_TermCollector`) that
+> supports only: smooth calls `s()/te()/ti()` with `k=`, `bs=`, `by=`, `m=`,
+> bare-name parametric terms, and `0`/`- 1`/`+ 1` intercept control. R operators
+> and idioms `*`, `:`, `^`, `.`, `I()`, `poly()`, `log()`, and `offset()` are
+> **not** supported and raise a clear `ValueError` pointing at the supported
+> syntax. Note that `offset()` here refers only to the *formula idiom*: model
+> offsets themselves **are** supported in v1.0, supplied via the `offset=`
+> argument to `GAM.fit()` (and `predict()`) rather than written in the formula
+> string. The offset flows through PIRLS (`eta = X @ beta + offset`), the
+> offset-aware null deviance, and prediction. Ordered factors are encoded with
+> `contr.poly`; aliased parametric
+> columns are dropped (NA), matching mgcv. The `formulaic`-backed parametric
+> layer below is deferred to a future release. `FormulaSpec` actually holds
+> `response`, `smooth_terms`, `parametric_terms`, and `has_intercept` (see
+> `jaxgam/formula/terms.py`), not the `parametric_formula`/`offset_terms`
+> fields shown in the prospective code.
 
-**v1.15: Why AST, not regex.** Previous versions used regex with balanced parentheses to extract smooth calls. This is a guaranteed bug factory: nested calls like `s(x, k=int(log(n)))`, interaction notation `s(x):z`, and formulas like `y ~ a * s(x)` (stripping `s(x)` leaves `y ~ a *`, invalid syntax for formulaic) all break regex extraction. The parser now uses Python's `ast` module to identify `Call` nodes, which handles arbitrary nesting, operator precedence, and complex arguments correctly.
+**Architecture (forward-looking; NOT in v1.0):** The formula parser is envisioned as two layers. The parametric part would use `formulaic` (successor to `patsy`), which handles R-style formula semantics: `*` expansion, `(a+b)^2` interactions, factor contrasts, `.` for "all other columns", and `I()` for protecting arithmetic. A preprocessor would extract smooth terms before passing the remainder to `formulaic`. **In v1.0 only the AST smooth-and-bare-name parser is implemented** (see the note above).
+
+**Why AST, not regex.** The v1.0 parser uses Python's `ast` module (not regex) to identify `Call` nodes, which handles nested calls like `s(x, k=10)`, operator structure, and keyword arguments correctly. Regex with balanced parentheses was a bug factory for nesting and was eliminated.
 
 ```python
 # formula/parser.py

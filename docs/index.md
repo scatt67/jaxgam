@@ -58,14 +58,15 @@ all families, smooth types, and post-estimation tools.
 
 ### Families
 
-Gaussian, Binomial, Poisson, Gamma -- each with its default link and
-REML/ML smoothing parameter selection.
+Gaussian, Binomial, Poisson, Gamma, and Negative Binomial -- each with its
+default link and REML smoothing parameter selection.
 
 ### Smooth types
 
 | Formula syntax | Basis type |
 |---|---|
 | `s(x, bs='tp')` | Thin-plate regression spline (default) |
+| `s(x, bs='ts')` | Thin-plate spline with shrinkage |
 | `s(x, bs='cr')` | Cubic regression spline |
 | `s(x, bs='cs')` | Cubic spline with shrinkage |
 | `s(x, bs='cc')` | Cyclic cubic spline |
@@ -93,8 +94,9 @@ These are deliberate scope boundaries, not bugs:
 
 1. **No sparse solver.** Models with > ~5,000 basis functions will hit the
    dense memory ceiling.
-2. **Four families only.** Negative binomial, Tweedie, Beta, and other
-   extended families are not yet available.
+2. **Five families.** Gaussian, Binomial, Poisson, Gamma, and negative
+   binomial are supported. Other extended families (Tweedie, Beta, SHASH,
+   Cox PH, ordered categorical) are not yet available.
 3. **Dense design matrix must fit in memory.** Datasets with > ~10M rows
    require chunked processing, which is not implemented.
 4. **Dense random effects only.** `bs="re"` is supported for modest

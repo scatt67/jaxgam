@@ -18,6 +18,8 @@ R source reference: R/smooth.r smoothCon() by-variable handling
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -67,12 +69,16 @@ class FactorBySmooth:
         spec: SmoothSpec,
         levels: list,
         by_variable: str,
+        all_levels: list | None = None,
     ) -> None:
         base_smooth._require_setup()
 
         self.base_smooth = base_smooth
         self.spec = spec
         self.levels = list(levels)
+        # Full set of levels seen at fit time (before any ordered-factor
+        # reference drop). Used to flag novel levels at predict time.
+        self.all_levels = list(all_levels) if all_levels is not None else list(levels)
         self.by_variable = by_variable
         self.n_levels = len(self.levels)
 
@@ -159,12 +165,29 @@ class FactorBySmooth:
         # Get base prediction matrix for ALL observations
         X_base = self.base_smooth.predict_matrix(new_data)
 
+        by_arr = np.asarray(by_col)
+        # Rows whose factor value was NOT in the original fit must be NA, not a
+        # confident intercept-only value. Matches mgcv predict.gam
+        # (R/mgcv.r ~2842 warning + recode to NA) and Predict.matrix
+        # (R/smooth.r ~4348: by.dum is NA -> whole smooth-block row is NA).
+        novel_mask = ~np.isin(by_arr, np.asarray(self.all_levels, dtype=by_arr.dtype))
+        if novel_mask.any():
+            novel_levels = sorted({str(v) for v in by_arr[novel_mask]})
+            warnings.warn(
+                f"factor levels {', '.join(novel_levels)} not in original fit",
+                stacklevel=2,
+            )
+
         X = np.zeros((n, self.n_coefs))
         for level_idx, level in enumerate(self.levels):
-            mask = np.asarray(by_col == level)
+            mask = np.asarray(by_arr == level)
             col_start = level_idx * self.k_per_level
             col_end = col_start + self.k_per_level
             X[mask, col_start:col_end] = X_base[mask]
+
+        # The ordered-factor reference level is in all_levels, so it stays a
+        # legitimate all-zero block (matches mgcv); only truly novel levels NA.
+        X[novel_mask, :] = np.nan
 
         return X
 
@@ -240,6 +263,7 @@ class NumericBySmooth:
         base_smooth: Smooth,
         spec: SmoothSpec,
         by_variable: str,
+        by_values: npt.NDArray[np.floating] | None = None,
     ) -> None:
         base_smooth._require_setup()
 
@@ -257,9 +281,22 @@ class NumericBySmooth:
         base_label = _smooth_label(spec)
         self.label = f"{base_label}:{by_variable}"
 
-        # Centering constraint is removed for non-constant numeric by
-        # (R's behavior: the by variable breaks confounding with intercept)
-        self.has_centering_constraint = False
+        # mgcv smoothCon (R/smooth.r ~3936) removes the centering constraint
+        # only for a NON-CONSTANT numeric by; a CONSTANT numeric by keeps the
+        # sum-to-zero constraint (otherwise the block is confounded with the
+        # intercept, giving a rank-deficient X). Decide constancy at setup from
+        # the fit-time by-values using mgcv's exact tolerance.
+        if by_values is None:
+            # Constructed without data (e.g. unit tests): keep the historical
+            # non-constant default.
+            self.has_centering_constraint = False
+        else:
+            by_arr = np.asarray(by_values, dtype=float)
+            # R: sd(by) > mean(by) * .Machine$double.eps * 1000 (sd is n-1;
+            # mean is signed, matching the R quirk).
+            tol = float(np.mean(by_arr)) * np.finfo(float).eps * 1000.0
+            is_non_constant = float(np.std(by_arr, ddof=1)) > tol
+            self.has_centering_constraint = not is_non_constant
 
     def build_design_matrix(
         self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame
@@ -355,7 +392,8 @@ def resolve_by_variable(
     by_col = get_col(data, spec.by)
 
     if is_factor(by_col):
-        levels = get_factor_levels(by_col)
+        all_levels = get_factor_levels(by_col)
+        levels = all_levels
 
         # Ordered factors: skip reference (first) level, matching R
         if is_ordered_factor(by_col) and len(levels) > 1:
@@ -372,6 +410,7 @@ def resolve_by_variable(
             spec=spec,
             levels=levels,
             by_variable=spec.by,
+            all_levels=all_levels,
         )
     else:
         # Numeric by
@@ -382,6 +421,7 @@ def resolve_by_variable(
             base_smooth=smooth,
             spec=spec,
             by_variable=spec.by,
+            by_values=by_arr,
         )
 
 

@@ -10,6 +10,7 @@ Design doc reference: docs/refactor_gam_api/design.md §3.4, §4.1, §7
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -71,7 +72,10 @@ class GAMResults:
     # -- Convergence --------------------------------------------------------
     converged: bool
     n_iter: int
-    score: float  # REML/ML value at convergence
+    score: float  # REML value at convergence
+    # optimizer terminal state: "full convergence" / "step failed" /
+    # "iteration limit" / "fixed sp"
+    convergence_info: str
 
     # -- Model structure (Phase 1 artifacts) --------------------------------
     family: ExponentialFamily
@@ -94,7 +98,7 @@ class GAMResults:
     execution_path: str
     lambda_strategy: str
     formula: str  # echoed from specification
-    method: str  # "REML" or "ML" (echoed from specification)
+    method: str  # "REML" (echoed from specification; only REML in v1.0)
     training_data: dict[str, np.ndarray]  # for plotting
 
     # ------------------------------------------------------------------
@@ -141,7 +145,7 @@ class GAMResults:
         formula : str
             Original formula string from the GAM specification.
         method : str
-            Smoothing parameter estimation method ("REML" or "ML").
+            Smoothing parameter estimation method ("REML"; only REML in v1.0).
         """
         pr = result.pirls_result
 
@@ -182,7 +186,9 @@ class GAMResults:
         Vp = phi * H_inv
 
         # Null deviance
-        null_deviance = _compute_null_deviance(setup.y, setup.weights, family)
+        null_deviance = _compute_null_deviance(
+            setup.y, setup.weights, family, setup.offset
+        )
 
         # Phase 2→3: transfer remaining arrays to NumPy
         mu = to_numpy(pr.mu)
@@ -208,6 +214,7 @@ class GAMResults:
             converged=result.converged,
             n_iter=result.n_iter,
             score=float(to_numpy(result.score)),
+            convergence_info=result.convergence_info,
             family=family,
             setup=setup,
             coef_map=setup.coef_map,
@@ -270,15 +277,34 @@ class GAMResults:
             eta = X_p @ self.coefficients
             if offset is not None:
                 eta = eta + np.asarray(offset, dtype=np.float64).ravel()
+            elif self.offset is not None and not np.allclose(self.offset, 0.0):
+                # The model was fit with an external offset, which mgcv's
+                # predict.gam does NOT recover for new data (only formula
+                # offset() terms are recovered). Surface the silent drop so
+                # exposure-offset workflows don't get badly wrong predictions.
+                warnings.warn(
+                    "This model was fit with an external offset, but no "
+                    "`offset=` was supplied to predict() on new data. The "
+                    "offset is omitted from the returned predictions (matching "
+                    "mgcv predict.gam for external offsets). Pass `offset=` to "
+                    "include it.",
+                    stacklevel=2,
+                )
 
         pred = self.family.link.linkinv(eta) if pred_type == "response" else eta
 
         if se_fit:
             if X_p is None:
                 X_p = self.X
-            # se = sqrt(rowSums((X_p @ Vp) * X_p))
+            # Link-scale SE: se = sqrt(rowSums((X_p @ Vp) * X_p))
             XVp = X_p @ self.Vp
             se = np.sqrt(np.sum(XVp * X_p, axis=1))
+            if pred_type == "response":
+                # Delta method: transform link-scale SE to the response scale
+                # via the derivative of the inverse link, matching
+                # predict.gam(type="response", se.fit=TRUE):
+                #   se_response = se_link * |dμ/dη|
+                se = se * np.abs(np.asarray(self.family.link.mu_eta(eta)))
             return pred, se
 
         return pred
@@ -388,12 +414,17 @@ class GAMResults:
         theta_line = ""
         if self.theta is not None:
             theta_line = f"  theta={self.theta:.4f},\n"
+        # Surface the optimizer's terminal state when the fit did not
+        # converge, so non-convergence is visible without inspecting fields.
+        conv_line = f"  converged={self.converged},\n"
+        if not self.converged:
+            conv_line = f"  converged={self.converged} ({self.convergence_info}),\n"
         return (
             f"GAMResults(\n"
             f"  formula='{self.formula}',\n"
             f"  family='{family_name}',\n"
             f"{theta_line}"
-            f"  converged={self.converged},\n"
+            f"{conv_line}"
             f"  deviance_explained={dev_explained:.4f},\n"
             f"  n={self.n}, edf_total={self.edf_total:.2f}\n"
             f")"
@@ -475,10 +506,17 @@ def _compute_null_deviance(
     y: np.ndarray,
     wt: np.ndarray,
     family: ExponentialFamily,
+    offset: np.ndarray | None = None,
 ) -> float:
     """Null model deviance.
 
-    Uses the weighted mean of y as the null model prediction.
+    Without an offset, the null model prediction is the weighted mean of
+    ``y`` (the intercept-only MLE for canonical-mean families). With an
+    offset, the null model is intercept-only *including* the offset,
+    ``mu_i = linkinv(beta0 + offset_i)`` with ``beta0`` fit by IRLS. This
+    matches R/mgcv and ``glm()``'s ``null.deviance``, which is offset-aware
+    (verified: a Poisson+offset null deviance equals the intercept+offset
+    fit, not the offset-free weighted mean).
 
     Parameters
     ----------
@@ -488,15 +526,55 @@ def _compute_null_deviance(
         Prior weights.
     family : ExponentialFamily
         Family with ``dev_resids()`` method.
+    offset : np.ndarray, shape (n,), optional
+        Offset vector. If ``None`` or all-zero, the weighted-mean null is
+        used.
 
     Returns
     -------
     float
         Null model deviance.
     """
-    mu_null = np.sum(wt * y) / np.sum(wt)
-    mu_null_arr = np.full_like(y, mu_null)
+    if offset is None or np.allclose(offset, 0.0):
+        mu_null = np.sum(wt * y) / np.sum(wt)
+        mu_null_arr = np.full_like(y, mu_null)
+        return float(family.dev_resids(y, mu_null_arr, wt))
+
+    offset = np.asarray(offset, dtype=np.float64).ravel()
+    beta0 = _fit_null_intercept(y, wt, family, offset)
+    mu_null_arr = np.asarray(family.link.inverse(beta0 + offset))
     return float(family.dev_resids(y, mu_null_arr, wt))
+
+
+def _fit_null_intercept(
+    y: np.ndarray,
+    wt: np.ndarray,
+    family: ExponentialFamily,
+    offset: np.ndarray,
+    max_iter: int = 100,
+    tol: float = 1e-12,
+) -> float:
+    """IRLS fit of the intercept-only model ``mu = linkinv(beta0 + offset)``.
+
+    Standard GLM IRLS for a single intercept column: at each step the
+    working response ``z = beta0 + (y - mu) * g'(mu)`` is regressed on the
+    constant with working weights ``W = wt / (V(mu) * g'(mu)^2)``, giving
+    ``beta0 <- sum(W z) / sum(W)``. Used only for offset-aware null deviance.
+    """
+    mu_bar = np.sum(wt * y) / np.sum(wt)
+    beta0 = float(family.link.link(np.asarray(mu_bar)))
+    for _ in range(max_iter):
+        eta = beta0 + offset
+        mu = np.asarray(family.link.inverse(eta))
+        g_prime = np.asarray(family.link.derivative(mu))
+        var = np.asarray(family.variance(mu))
+        weight = wt / np.maximum(var * g_prime**2, 1e-300)
+        z = beta0 + (y - mu) * g_prime  # working response minus offset
+        beta0_new = float(np.sum(weight * z) / np.sum(weight))
+        if abs(beta0_new - beta0) <= tol * (abs(beta0_new) + tol):
+            return beta0_new
+        beta0 = beta0_new
+    return beta0
 
 
 # ---------------------------------------------------------------------------

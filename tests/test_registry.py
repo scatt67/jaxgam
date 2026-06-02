@@ -130,3 +130,37 @@ class TestRegister:
         registry.register("gamma", DummyC)
         assert registry.get_class("alpha") is DummyA
         assert registry.get_class("beta") is DummyB
+
+
+class TestSmoothRegistryExports:
+    """Guard for U10: GP/RE smooths importable from jaxgam.smooths + registered.
+
+    The hardening commits added GaussianProcessSmooth / RandomEffectSmooth to
+    smooths/__init__.__all__; this pins the public-export contract so a future
+    change cannot silently drop them (the original U10 failure mode).
+    """
+
+    EXPECTED_KEYS = frozenset({"tp", "ts", "cr", "cs", "cc", "gp", "re", "te", "ti"})
+
+    def test_gp_re_importable_and_registered(self) -> None:
+        from jaxgam.smooths import (
+            GaussianProcessSmooth,
+            RandomEffectSmooth,
+            smooth_registry,
+        )
+        from jaxgam.smooths import __all__ as smooths_all
+        from jaxgam.smooths.gaussian_process import (
+            GaussianProcessSmooth as GPCanonical,
+        )
+        from jaxgam.smooths.random_effects import (
+            RandomEffectSmooth as RECanonical,
+        )
+
+        assert "GaussianProcessSmooth" in smooths_all
+        assert "RandomEffectSmooth" in smooths_all
+        assert GaussianProcessSmooth is GPCanonical
+        assert RandomEffectSmooth is RECanonical
+        assert set(smooth_registry.available) == set(self.EXPECTED_KEYS)
+        assert len(smooth_registry) == 9
+        assert smooth_registry.get_class("gp") is GPCanonical
+        assert smooth_registry.get_class("re") is RECanonical

@@ -16,6 +16,8 @@ R source reference: R/smooth.r smooth.construct.cr.smooth.spec()
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import numpy.typing as npt
 from scipy import linalg
@@ -37,6 +39,10 @@ class CubicRegressionSmooth(Smooth):
     spec : SmoothSpec
         Smooth term specification.
     """
+
+    #: Minimum basis dimension. R's smooth.construct.cr.smooth.spec
+    #: (R/smooth.r:1458-1462) bumps cr/cs to 3; cc overrides to 4.
+    _min_k: int = 3
 
     def __init__(self, spec: SmoothSpec) -> None:
         super().__init__(spec)
@@ -334,14 +340,21 @@ class CubicRegressionSmooth(Smooth):
 
         x = np.asarray(data[self.spec.variables[0]], dtype=float)
 
-        # Determine basis dimension
+        # Determine basis dimension. mgcv applies the default first, then a
+        # per-class minimum (cr/cs >= 3, cc >= 4 because the endpoints are
+        # identified). Below the minimum R warns-and-bumps rather than erroring
+        # (R/smooth.r:1458-1462 for cr, 1608-1611 for cc); a degenerate cc k=3
+        # basis would otherwise be a silently non-mgcv model.
         k = self.spec.k
         if k == -1:
-            k = 10  # R default for cr
-        if k < 3:
-            raise ValueError(
-                f"Basis dimension k={k} must be at least 3 for cubic splines."
+            k = 10  # R default for cr/cc
+        if k < self._min_k:
+            warnings.warn(
+                f"basis dimension, k, increased to minimum possible "
+                f"(k={k} -> {self._min_k}).",
+                stacklevel=2,
             )
+            k = self._min_k
         self._k = k
 
         n_unique = len(np.unique(x))
@@ -449,6 +462,10 @@ class CyclicCubicSmooth(CubicRegressionSmooth):
     spec : SmoothSpec
         Smooth term specification.
     """
+
+    #: Cyclic cubic splines need k>=4 (endpoints identified); R bumps below 4
+    #: (R/smooth.r:1608-1611).
+    _min_k: int = 4
 
     def __init__(self, spec: SmoothSpec) -> None:
         super().__init__(spec)

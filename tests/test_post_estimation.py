@@ -164,6 +164,42 @@ class TestComputeNullDeviance:
             null_dev, expected, rtol=STRICT.rtol, atol=STRICT.atol
         )
 
+    def test_poisson_offset_aware(self):
+        """Null deviance with an offset uses the intercept+offset null model.
+
+        Regression: ``_compute_null_deviance`` previously ignored the offset
+        and always used the weighted mean of y, making deviance-explained wrong
+        for offset models (R/mgcv's null deviance is offset-aware, matching
+        ``glm``). For a log-link Poisson the intercept-only-with-offset MLE is
+        closed form: ``mu_i = exp(offset_i) * sum(wt*y) / sum(wt*exp(offset))``;
+        the null deviance must match that and differ from the offset-free
+        weighted-mean value.
+        """
+        from jaxgam.families.registry import get_family
+
+        family = get_family("poisson")
+        rng = np.random.default_rng(SEED)
+        n = 60
+        y = rng.poisson(5, n).astype(float)
+        wt = np.ones(n)
+        offset = np.log(rng.uniform(0.5, 2.0, n))
+
+        null_dev = _compute_null_deviance(y, wt, family, offset)
+
+        # Closed-form Poisson intercept-only-with-offset null model.
+        mu0 = np.exp(offset) * np.sum(wt * y) / np.sum(wt * np.exp(offset))
+        expected = float(family.dev_resids(y, mu0, wt))
+        np.testing.assert_allclose(
+            null_dev, expected, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+        # And it must differ from the offset-free (buggy) value.
+        naive = _compute_null_deviance(y, wt, family)
+        assert abs(null_dev - naive) > 1.0, (
+            "offset-aware null deviance should differ from the weighted-mean "
+            f"value (got {null_dev:.4f} vs naive {naive:.4f})"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: post-estimation via GAMResults

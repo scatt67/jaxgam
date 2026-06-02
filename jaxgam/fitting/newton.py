@@ -1,6 +1,6 @@
 """Newton optimizer for smoothing parameter selection.
 
-Minimizes the REML/ML criterion over ``log_lambda`` to find optimal
+Minimizes the REML criterion over ``log_lambda`` to find optimal
 smoothing parameters. This is the outer loop in the GAM fitting
 pipeline: Newton over ``log_lambda`` (outer) wrapping PIRLS over
 ``beta`` (inner). At each Newton step, PIRLS must re-converge at
@@ -56,9 +56,7 @@ from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
 from jaxgam.fitting.reml import (
-    JointMLCriterion,
     JointREMLCriterion,
-    MLCriterion,
     REMLCriterion,
     _criterion_core,
     _CriterionBase,
@@ -121,7 +119,6 @@ def _diff_score(
     # Static args (JIT cache keys, not traced)
     family: ExponentialFamily,
     pirls_tol: float,
-    is_reml: bool,
     joint_theta: bool,
     joint_scale: bool,
     n_lambda: int,
@@ -132,11 +129,12 @@ def _diff_score(
     multi_block_ranks: tuple[int, ...],
     p: int,
     max_y: int = 0,
+    rank_deficit: int = 0,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
     All data flows as explicit arguments (no per-fit closures). Static
-    arguments (family, pirls_tol, is_reml, etc.) are compile-time constants
+    arguments (family, pirls_tol, etc.) are compile-time constants
     that key the JIT cache. The ``custom_jvp`` on PIRLS is defined inside
     this function as a closure over X, y, wt, offset, family, pirls_tol
     (all concrete or traced at trace time).
@@ -165,8 +163,6 @@ def _diff_score(
         Family (static, JIT cache key).
     pirls_tol : float
         PIRLS convergence tolerance (static).
-    is_reml : bool
-        Whether to use REML vs ML criterion (static).
     joint_theta : bool
         Whether params includes log_theta for extended families (static).
     joint_scale : bool
@@ -184,7 +180,7 @@ def _diff_score(
     Returns
     -------
     jax.Array, scalar
-        REML or ML criterion score.
+        REML criterion score.
     """
 
     # ---- Parse params: [log_lambda, <log_theta>, <log_phi>] ----
@@ -311,8 +307,21 @@ def _diff_score(
             eta = X @ beta + offset
             deta = X @ dbeta
 
-            def _eta_to_W(e):
-                return family.working_weights(family.link.inverse(e), wt)
+            if family.is_canonical:
+                # Canonical link: Fisher == observed; XtWX is the Fisher Hessian.
+                def _eta_to_W(e):
+                    return family.working_weights(family.link.inverse(e), wt)
+            else:
+                # Non-canonical: pirls returns the OBSERVED Hessian for the REML
+                # log|H|, so its derivative must use the observed weight
+                # 0.5 d²D/dη² to keep the REML gradient consistent (matches
+                # mgcv's Newton-weighted log|H|).
+                def _eta_to_W(e):
+                    def _dev_sum(ee):
+                        return family.dev_resids(y, family.link.inverse(ee), wt)
+
+                    _, d2 = jax.jvp(jax.grad(_dev_sum), (e,), (jnp.ones_like(e),))
+                    return 0.5 * d2
 
             _, dW = jax.jvp(_eta_to_W, (eta,), (deta,))
             dXtWX = (X.T * dW) @ X
@@ -342,11 +351,11 @@ def _diff_score(
         multi_block_sp_indices,
         multi_block_ranks,
         multi_block_proj_S,
+        rank_deficit,
     )
 
-    if is_reml:
-        return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
-    return core
+    # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
+    return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
 
 # Static argument names for JIT caching of _diff_score derivatives.
@@ -354,11 +363,11 @@ def _diff_score(
 _DIFF_STATIC = (
     "family",
     "pirls_tol",
-    "is_reml",
     "joint_theta",
     "joint_scale",
     "n_lambda",
     "Mp",
+    "rank_deficit",
     "singleton_sp_indices",
     "singleton_ranks",
     "multi_block_sp_indices",
@@ -424,7 +433,6 @@ def _fit_and_score_impl(
     # Static args (JIT cache keys)
     family: ExponentialFamily,
     pirls_tol: float,
-    is_reml: bool,
     joint_theta: bool,
     joint_scale: bool,
     n_lambda: int,
@@ -435,6 +443,7 @@ def _fit_and_score_impl(
     multi_block_ranks: tuple[int, ...],
     p: int,
     max_y: int = 0,
+    rank_deficit: int = 0,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
@@ -449,7 +458,7 @@ def _fit_and_score_impl(
     Returns
     -------
     score : jax.Array, scalar
-        REML or ML criterion score.
+        REML criterion score.
     pirls_result : PIRLSResult
         Converged PIRLS output.
     """
@@ -499,9 +508,11 @@ def _fit_and_score_impl(
         multi_block_sp_indices,
         multi_block_ranks,
         multi_block_proj_S,
+        rank_deficit,
     )
 
-    score = core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi) if is_reml else core
+    # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
+    score = core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
     return score, pirls_result
 
@@ -535,7 +546,7 @@ class NewtonResult:
     n_iter : int
         Number of Newton iterations taken.
     score : jax.Array, scalar
-        Final REML/ML criterion value.
+        Final REML criterion value.
     gradient : jax.Array, shape (m,)
         Final gradient of criterion w.r.t. log_lambda.
     edf : jax.Array, scalar
@@ -659,7 +670,7 @@ class NewtonOptimizer:
     fd : FittingData
         Phase 1->2 boundary container with model data and penalties.
     method : str
-        ``"REML"`` (default) or ``"ML"``.
+        ``"REML"`` (only REML is supported in v1.0).
     max_iter : int
         Maximum Newton iterations.
     tol : float, optional
@@ -684,15 +695,24 @@ class NewtonOptimizer:
         tol: float | None = None,
         max_step: float = 5.0,
         lsp_max: float = 40.0,
+        pin_lambda: bool = False,
     ) -> None:
-        if method not in ("REML", "ML"):
-            raise ValueError(f"Unknown method: {method!r}. Use 'REML' or 'ML'.")
+        if method != "REML":
+            raise ValueError(
+                f"Unknown method: {method!r}. Only 'REML' is supported in v1.0 "
+                "(ML is not implemented — see jaxgam.api._check_scope_guards)."
+            )
 
         self._fd = fd
         self._method = method
         self._max_iter = max_iter
         self._max_step = max_step
         self._lsp_max = lsp_max
+        # Pin the log smoothing parameters at their initial values and optimize
+        # only the remaining params (extended-family theta / scale). Used by the
+        # fixed-`sp` path for families with estimated theta (e.g. NB), where
+        # mgcv still estimates theta with the smoothing params held fixed.
+        self._pin_lambda = pin_lambda
         self._is_gaussian = fd.family.family_name == "gaussian"
 
         # Eigenvalue floor power: R's fast.REML.fit (Gaussian) uses
@@ -746,11 +766,11 @@ class NewtonOptimizer:
             "multi_block_proj_S": fd.multi_block_proj_S,
             "family": fd.family,
             "pirls_tol": self._pirls_tol,
-            "is_reml": self._method == "REML",
             "joint_theta": self._joint_theta,
             "joint_scale": self._joint_scale,
             "n_lambda": fd.n_penalties,
             "Mp": fd.total_penalty_null_dim,
+            "rank_deficit": fd.rank_deficit,
             "singleton_sp_indices": fd.singleton_sp_indices,
             "singleton_ranks": fd.singleton_ranks,
             "multi_block_sp_indices": fd.multi_block_sp_indices,
@@ -813,14 +833,14 @@ class NewtonOptimizer:
     def _make_criterion(
         self, pirls_result: PIRLSResult
     ) -> _CriterionBase | _JointCriterionBase:
-        """Create the appropriate criterion object from converged PIRLS."""
+        """Create the REML criterion object from converged PIRLS.
+
+        ML is not supported in v1.0 (see ``_check_scope_guards``), so only the
+        REML criterion classes are constructed.
+        """
         if self._joint_scale:
-            if self._method == "REML":
-                return JointREMLCriterion(self._fd, pirls_result)
-            return JointMLCriterion(self._fd, pirls_result)
-        if self._method == "REML":
-            return REMLCriterion(self._fd, pirls_result)
-        return MLCriterion(self._fd, pirls_result)
+            return JointREMLCriterion(self._fd, pirls_result)
+        return REMLCriterion(self._fd, pirls_result)
 
     def _fit_and_score(
         self,
@@ -1047,6 +1067,12 @@ class NewtonOptimizer:
         if np.sum(uconv1) == 0:
             uconv1 = np.ones_like(uconv, dtype=bool)
 
+        # Pinned smoothing parameters are never optimized: exclude them after
+        # all fallbacks so the Newton step moves only the free params.
+        if self._pin_lambda:
+            uconv1 = uconv1.copy()
+            uconv1[: self._fd.n_penalties] = False
+
         return uconv1
 
     def _projected_gradient(self, grad: jax.Array, params: jax.Array) -> jax.Array:
@@ -1127,15 +1153,19 @@ class NewtonOptimizer:
             grad, hess = criterion.grad_hess(params)
             hess = (hess + hess.T) / 2
 
+        # When smoothing params are pinned (fixed-`sp` with estimated theta),
+        # zero their gradient so they neither enter ``uconv`` nor the gradient
+        # convergence test -- only the free params (theta/scale) are optimized.
+        if self._pin_lambda:
+            grad = grad.at[: self._fd.n_penalties].set(0.0)
+
         scale_val = float(criterion.scale)
         if is_gaussian:
             # fast.REML.fit: score.scale <- 1 + abs(score)
             score_scale = 1.0 + abs(score)
-        elif self._method in ("REML", "ML"):
+        else:
             # newton(): score.scale <- abs(log(b$scale.est)) + abs(score)
             score_scale = abs(np.log(max(scale_val, 1e-30))) + abs(score)
-        else:
-            score_scale = scale_val + abs(score)
 
         if is_gaussian:
             # fast.REML.fit convergence: simple gradient + score change
@@ -1154,6 +1184,28 @@ class NewtonOptimizer:
                 converged = False
 
         return grad, hess, score_scale, converged
+
+    def _gradient_within_tol(
+        self, grad: jax.Array, params: jax.Array, score_scale: float
+    ) -> bool:
+        """True if the gradient meets the convergence criterion.
+
+        Mirrors the gradient portion of ``_check_convergence``: Gaussian uses
+        ``max|grad| <= score_scale * tol`` (``fast.REML.fit``); non-Gaussian
+        uses the projected gradient at the relaxed ``5 * tol`` factor
+        (``newton()``).
+
+        Used to recognize a step failure that occurs *at* the optimum as
+        convergence.  mgcv's optimizers reach the optimum via the gradient
+        test right after the final improving step; when jaxgam instead
+        exhausts step-halving one iterate later (no step can reduce a flat
+        criterion), the gradient is already within tolerance and the fit is
+        converged -- not failed.
+        """
+        if self._is_gaussian:
+            return float(jnp.max(jnp.abs(grad))) <= score_scale * self._tol
+        proj_grad = self._projected_gradient(grad, params)
+        return float(jnp.max(jnp.abs(proj_grad))) <= score_scale * self._tol * 5
 
     def _build_result(
         self,
@@ -1274,7 +1326,8 @@ class NewtonOptimizer:
                 tol=self._pirls_tol,
                 log_theta=log_theta_init_for_pirls,
             )
-            edf_init = estimate_edf(pirls_init.XtWX, pirls_init.L)
+            # Fisher-weighted EDF (XtWX may be observed info for non-canonical).
+            edf_init = estimate_edf(pirls_init.XtWX_fisher, pirls_init.L_fisher)
             phi_init = fletcher_scale(fd.y, pirls_init.mu, fd.wt, fd.family, edf_init)
             log_phi_init = jnp.log(phi_init)
             parts.append(log_phi_init[None])
@@ -1350,6 +1403,15 @@ class NewtonOptimizer:
 
             if outcome is _StepOutcome.FAILED:
                 step_failed = True
+                # A step failure at the optimum is convergence, not failure.
+                # When step-halving can no longer reduce a flat criterion but
+                # the gradient is already within tolerance, the optimizer is at
+                # the optimum -- R reports such fits as "full convergence"
+                # (its gradient test fires before step failure near the
+                # optimum). grad/score_scale here are evaluated at the current
+                # (best) params, so the test is exact.
+                if self._gradient_within_tol(grad, params, score_scale):
+                    converged = True
                 break
 
             if outcome is _StepOutcome.STUCK:
@@ -1403,8 +1465,9 @@ def newton_optimize(
     tol: float | None = None,
     max_step: float = 5.0,
     lsp_max: float = 40.0,
+    pin_lambda: bool = False,
 ) -> NewtonResult:
-    """Minimize REML/ML criterion over log smoothing parameters.
+    """Minimize REML criterion over log smoothing parameters.
 
     Outer Newton loop wrapping PIRLS inner loop. At each iteration:
 
@@ -1420,7 +1483,7 @@ def newton_optimize(
     fd : FittingData
         Phase 1->2 boundary container with model data and penalties.
     method : str
-        ``"REML"`` (default) or ``"ML"``.
+        ``"REML"`` (only REML is supported in v1.0).
     log_lambda_init : jax.Array, shape (m,), optional
         Starting log smoothing parameters. Defaults to ``fd.log_lambda_init``.
     max_iter : int
@@ -1432,6 +1495,11 @@ def newton_optimize(
     lsp_max : float or None
         Maximum absolute value for log smoothing parameters. Defaults
         to ``40.0``. ``None`` disables clamping.
+    pin_lambda : bool
+        If ``True``, hold the log smoothing parameters fixed at
+        ``log_lambda_init`` and optimize only the remaining parameters
+        (extended-family theta / scale). Used by the fixed-``sp`` path for
+        families with estimated theta.
 
     Returns
     -------
@@ -1451,5 +1519,6 @@ def newton_optimize(
         tol=tol,
         max_step=max_step,
         lsp_max=lsp_max,
+        pin_lambda=pin_lambda,
     )
     return optimizer.run()

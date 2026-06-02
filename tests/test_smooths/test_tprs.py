@@ -28,7 +28,13 @@ from jaxgam.smooths.tprs import (
     null_space_dimension,
     tps_semi_kernel,
 )
-from tests.helpers import make_smooth_spec, r_available
+from tests.helpers import (
+    SEED,
+    _AssertCollector,
+    check_that,
+    make_smooth_spec,
+    r_available,
+)
 from tests.tolerances import (
     MODERATE,
     STRICT,
@@ -222,6 +228,80 @@ class TestRComparison:
         smooth = TPRSSmooth(spec)
         smooth.setup({"x": x})
         return smooth, r_result, x
+
+    def test_tp_3d_m3_construction_vs_r(self) -> None:
+        """Default s(x1,x2,x3) (d=3, m=3): raw X/S/UZ match smoothCon (H6).
+
+        Exercises the d>=2, m>=3 odometer ordering the prior total-degree
+        grouping got wrong. Before the fix the raw basis diverged from R beyond
+        sign/rotation (X max|Δ|≈4.8); the final fit was invariant. Also guards
+        fitted column-space invariance.
+        """
+        import pandas as pd
+
+        from tests.r_bridge import RBridge
+
+        rng = np.random.default_rng(SEED)
+        n = 200
+        x1, x2, x3 = (rng.uniform(0, 1, n) for _ in range(3))
+        data = pd.DataFrame({"x1": x1, "x2": x2, "x3": x3})
+
+        bridge = RBridge()
+        r_result = bridge.smooth_construct("s(x1, x2, x3, bs='tp', k=50)", data)
+
+        spec = make_smooth_spec(["x1", "x2", "x3"], k=50)  # m defaults to 3 for d=3
+        smooth = TPRSSmooth(spec)
+        smooth.setup({"x1": x1, "x2": x2, "x3": x3})
+
+        X_py = smooth.build_design_matrix({"x1": x1, "x2": x2, "x3": x3})
+        X_r = r_result["X"]
+        collector = _AssertCollector()
+        collector.check(
+            "X_vs_r",
+            lambda: np.testing.assert_allclose(
+                normalize_column_signs(X_py),
+                normalize_column_signs(X_r),
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+                err_msg="3D m=3 design X differs from R (monomial ordering)",
+            ),
+        )
+        collector.check(
+            "S_vs_r",
+            lambda: np.testing.assert_allclose(
+                normalize_symmetric_signs(smooth._S, X_py),
+                normalize_symmetric_signs(r_result["S"][0], X_r),
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+                err_msg="3D m=3 penalty S differs from R (monomial ordering)",
+            ),
+        )
+        collector.check(
+            "UZ_vs_r",
+            lambda: np.testing.assert_allclose(
+                normalize_column_signs(smooth._UZ),
+                normalize_column_signs(r_result["UZ"]),
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+                err_msg="3D m=3 UZ differs from R (monomial ordering)",
+            ),
+        )
+
+        def _projector(M: np.ndarray) -> np.ndarray:
+            q, _ = np.linalg.qr(M)
+            return q @ q.T
+
+        collector.check(
+            "col_space_vs_r",
+            lambda: np.testing.assert_allclose(
+                _projector(X_py),
+                _projector(X_r),
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+                err_msg="3D m=3 fitted column space differs from R",
+            ),
+        )
+        collector.raise_if_any("s(x1,x2,x3) m=3 smoothCon parity vs R")
 
     def test_tp_1d_X_vs_r(self) -> None:
         """1D tp design matrix X matches R element-wise after sign normalization.
@@ -495,6 +575,21 @@ class TestParameterized:
         smooth.setup(smooth_1d_data)
         assert smooth.n_coefs == 10  # default for d=1
 
+    @pytest.mark.parametrize(("m", "expected_k"), [(1, 9), (2, 10), (3, 11)])
+    def test_default_k_includes_M_term(
+        self, m: int, expected_k: int, smooth_1d_data
+    ) -> None:
+        """Default k = M + 8 for d=1, where M = null_space_dimension(d, m).
+
+        Regression for Finding 9: the previous hardcoded ``{1: 10}`` dropped the
+        ``M`` term, so it was only coincidentally right for the default m=2.
+        Verified against R: s(x, m=1)->k=9, m=2->10, m=3->11.
+        """
+        spec = make_smooth_spec(["x"], k=-1, m=m)
+        smooth = TPRSSmooth(spec)
+        smooth.setup(smooth_1d_data)
+        assert smooth.n_coefs == expected_k
+
 
 # ===========================================================================
 # 5. Edge cases
@@ -653,6 +748,54 @@ class TestCoveragePaths:
         """_monomial_indices handles d=1 path."""
         result = _monomial_indices(1, 3)
         assert result == [(0,), (1,), (2,)]
+
+    def test_monomial_indices_match_r_odometer(self) -> None:
+        """_monomial_indices reproduces R's gen_tps_poly_powers odometer (H6).
+
+        Before the fix the null-space monomials were grouped by total degree;
+        R's odometer increments the first variable fastest, so the orderings
+        diverge for d>=2, m>=3 (including the default s(x1,x2,x3), m=3). The
+        wrong column order cascades into raw X/S/UZ vs smoothCon. Already-correct
+        d=1 and m=2 orderings are pinned too.
+        """
+
+        def _r_odometer(d: int, m: int) -> list[tuple[int, ...]]:
+            # Transcribed from mgcv/src/tprs.c gen_tps_poly_powers (lines 100-130).
+            index = [0] * d
+            out: list[tuple[int, ...]] = []
+            for _ in range(comb(m + d - 1, d)):
+                out.append(tuple(index))
+                s = sum(index)
+                if s < m - 1:
+                    index[0] += 1
+                else:
+                    s -= index[0]
+                    index[0] = 0
+                    for j in range(1, d):
+                        index[j] += 1
+                        s += 1
+                        if s == m:
+                            s -= index[j]
+                            index[j] = 0
+                        else:
+                            break
+            return out
+
+        collector = _AssertCollector()
+        for d in range(1, 5):
+            for m in range(1, 6):
+                if 2 * m <= d:  # R requires 2m > d
+                    continue
+                expected = _r_odometer(d, m)
+                collector.check(
+                    f"d={d},m={m}",
+                    lambda d=d, m=m, expected=expected: check_that(
+                        _monomial_indices(d, m) == expected,
+                        f"_monomial_indices({d},{m})={_monomial_indices(d, m)} "
+                        f"!= R odometer {expected}",
+                    ),
+                )
+        collector.raise_if_any("monomial odometer ordering vs R (H6)")
 
     def test_knot_subsampling(self) -> None:
         """Knot subsampling activates when n_unique > max_knots."""

@@ -383,73 +383,24 @@ class TestMultiSmooth:
             )
 
 
-# ---- E. ML criterion ----
+# ---- E. ML is not supported in v1.0 ----
 
 
-@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
-class TestMLOptimization:
-    """ML criterion optimization tests."""
+class TestMLNotSupported:
+    """ML is deferred in v1.0: mgcv's ML criterion needs the penalty
+    range-space determinant (MLpenalty1), not REML's full-space one.
+    The optimizer must reject method='ML' rather than silently fit a
+    wrong criterion.
+    """
 
     FORMULA = "y ~ s(x, k=10, bs='cr')"
 
-    def test_ml_converges(self):
-        """ML optimization converges."""
+    def test_ml_rejected(self):
+        """newton_optimize raises for method='ML'."""
         data = _generate_family_data("gaussian")
         fd = _setup_fd(self.FORMULA, data, Gaussian())
-        result = newton_optimize(fd, method="ML")
-        assert result.converged
-
-    def test_ml_fit_vs_r(self):
-        """ML optimization finds same fit as R (coefficients and deviance).
-
-        Uses LOOSE because our ML criterion differs from R's by a constant
-        normalization term (involving log(2*pi*phi)). This shifts the
-        gradient landscape, so ML converges to a slightly different lambda
-        than R even for Gaussian — unlike REML which matches R to 1e-15.
-        """
-        from tests.r_bridge import RBridge
-
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(self.FORMULA, data, Gaussian())
-        result = newton_optimize(fd, method="ML")
-
-        bridge = RBridge()
-        r_result = bridge.fit_gam(self.FORMULA, data, family="gaussian", method="ML")
-
-        np.testing.assert_allclose(
-            float(result.pirls_result.deviance),
-            r_result["deviance"],
-            rtol=LOOSE.rtol,
-            atol=LOOSE.atol,
-            err_msg="ML deviance differs from R",
-        )
-
-    @pytest.mark.parametrize(
-        ("family_name", "family_obj"),
-        [("poisson", Poisson()), ("binomial", Binomial())],
-        ids=["poisson", "binomial"],
-    )
-    def test_ml_glm_converges(self, family_name, family_obj):
-        """ML optimization converges for GLM families."""
-        data = _generate_family_data(family_name)
-        fd = _setup_fd(self.FORMULA, data, family_obj)
-        result = newton_optimize(fd, method="ML")
-        assert result.converged
-
-    def test_ml_differs_from_reml(self):
-        """ML and REML produce different criterion scores.
-
-        The REML criterion includes a -Mp/2*log(2*pi*phi) correction
-        that ML does not. While optimal lambda may coincide at large n,
-        the criterion values must differ.
-        """
-        data = _generate_family_data("gaussian")
-        fd = _setup_fd(self.FORMULA, data, Gaussian())
-        result_reml = newton_optimize(fd, method="REML")
-        result_ml = newton_optimize(fd, method="ML")
-
-        # Criterion values must differ (REML has the -Mp/2*log(2pi*phi) term)
-        assert abs(float(result_reml.score) - float(result_ml.score)) > 0.01
+        with pytest.raises(ValueError, match="REML"):
+            newton_optimize(fd, method="ML")
 
 
 # ---- F. Diagnostics and edge cases ----
@@ -603,6 +554,51 @@ class TestDiagnostics:
         assert result.convergence_info == "iteration limit"
         assert result.n_iter == 1
         assert not result.converged
+
+
+class TestStepFailureConvergence:
+    """Step failure at the optimum is recognized as convergence.
+
+    Bug: the Newton loop broke on ``_StepOutcome.FAILED`` with
+    ``converged=False`` even when the gradient was already within tolerance.
+    On multi-penalty models step-halving can exhaust one iterate *after* the
+    point where mgcv's gradient test would have declared convergence, so
+    jaxgam reported ``converged=False`` on a fit that is at the optimum and
+    matches mgcv. mgcv's ``fast.REML.fit`` reaches the optimum via the
+    gradient test before the step failure and only warns on the iteration
+    limit. Fixed by re-checking the gradient on step failure via
+    ``_gradient_within_tol``; this class covers that decision logic directly
+    (the end-to-end flip is data/precision-sensitive near the flat optimum,
+    so the mechanism is tested deterministically here).
+    """
+
+    FORMULA = "y ~ s(x, k=10, bs='cr')"
+
+    def test_gaussian_recognizes_within_tol_gradient(self):
+        """Gaussian: ``max|grad| <= score_scale * tol`` => convergence."""
+        fd = _setup_fd(self.FORMULA, _generate_family_data("gaussian"), Gaussian())
+        opt = NewtonOptimizer(fd)
+        n = fd.n_penalties + (1 if opt._joint_scale else 0)
+        params = jnp.zeros(n)
+        score_scale = 100.0
+        thresh = score_scale * opt._tol
+        within = jnp.full((n,), 0.5 * thresh)
+        outside = jnp.full((n,), 10.0 * thresh)
+        assert opt._gradient_within_tol(within, params, score_scale)
+        assert not opt._gradient_within_tol(outside, params, score_scale)
+
+    def test_glm_recognizes_within_tol_gradient(self):
+        """Non-Gaussian uses the relaxed ``5 * tol`` projected-gradient test."""
+        fd = _setup_fd(self.FORMULA, _generate_family_data("poisson"), Poisson())
+        opt = NewtonOptimizer(fd)
+        n = fd.n_penalties
+        params = jnp.zeros(n)  # no bounds active => projected grad == grad
+        score_scale = 100.0
+        thresh = 5.0 * score_scale * opt._tol
+        within = jnp.full((n,), 0.5 * thresh)
+        outside = jnp.full((n,), 2.0 * thresh)
+        assert opt._gradient_within_tol(within, params, score_scale)
+        assert not opt._gradient_within_tol(outside, params, score_scale)
 
 
 # ---- G. Step-halving ----

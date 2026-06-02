@@ -26,7 +26,12 @@ from jaxgam.smooths.tensor import (
     TensorProductSmooth,
     _row_tensor,
 )
-from tests.helpers import make_smooth_spec, r_available
+from tests.helpers import (
+    _AssertCollector,
+    check_that,
+    make_smooth_spec,
+    r_available,
+)
 from tests.tolerances import (
     MODERATE,
     STRICT,
@@ -174,6 +179,27 @@ class TestTensorProductStructure:
             X_predict, X_design, rtol=STRICT.rtol, atol=STRICT.atol
         )
 
+    def test_default_k_resolves_to_5(self, smooth_2d_data) -> None:
+        """Unspecified marginal k defaults to 5 per 1-D margin (R's 5^d).
+
+        Regression for Finding 2: ``te(x1, x2)`` with no k must build a
+        5x5 = 25-coef tensor (was 10x10 = 100). Explicit k is still honored.
+        """
+        # k=-1 means "unspecified" (the parser default), distinct from
+        # make_smooth_spec's own k=10 default.
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=-1, smooth_type="te")
+        smooth = TensorProductSmooth(spec)
+        smooth.setup(smooth_2d_data)
+        assert [m.n_coefs for m in smooth._marginals] == [5, 5]
+        assert smooth.n_coefs == 25
+
+        # Explicit k must still pass through unchanged.
+        spec7 = make_smooth_spec(["x1", "x2"], bs="cr", k=7, smooth_type="te")
+        smooth7 = TensorProductSmooth(spec7)
+        smooth7.setup(smooth_2d_data)
+        assert [m.n_coefs for m in smooth7._marginals] == [7, 7]
+        assert smooth7.n_coefs == 49
+
 
 # ===========================================================================
 # 4. TensorInteractionSmooth structural tests (STRICT)
@@ -191,6 +217,18 @@ class TestTensorInteractionStructure:
 
         X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (200, 16)
+
+    def test_default_k_resolves_to_5(self, smooth_2d_data) -> None:
+        """Unspecified ti() marginal k defaults to 5 per margin (Finding 2).
+
+        Each cr margin loses one column to the sum-to-zero constraint, so the
+        constrained marginals are 4 columns -> 4x4 = 16-coef interaction.
+        """
+        spec = make_smooth_spec(["x1", "x2"], bs="cr", k=-1, smooth_type="ti")
+        smooth = TensorInteractionSmooth(spec)
+        smooth.setup(smooth_2d_data)
+        assert [m.n_coefs for m in smooth._marginals] == [5, 5]
+        assert smooth.n_coefs == 16
 
     def test_smaller_than_te(self, smooth_2d_data) -> None:
         """ti columns < te columns for same k."""
@@ -359,6 +397,62 @@ class TestRComparison:
         smooth.setup({"x1": x1, "x2": x2})
 
         return smooth, r_result, {"x1": x1, "x2": x2}
+
+    def _setup_te_tp_m1(self) -> tuple:
+        """Setup te(x1, x2, bs='tp', k=5, m=1) for R comparison (Finding H3)."""
+        import pandas as pd
+
+        from tests.r_bridge import RBridge
+
+        rng = np.random.default_rng(42)
+        x1 = rng.uniform(0, 1, 100)
+        x2 = rng.uniform(0, 1, 100)
+        data_pd = pd.DataFrame({"x1": x1, "x2": x2})
+
+        bridge = RBridge()
+        r_result = bridge.smooth_construct("te(x1, x2, bs='tp', k=5, m=1)", data_pd)
+
+        spec = make_smooth_spec(["x1", "x2"], bs="tp", k=5, smooth_type="te", m=1)
+        smooth = TensorProductSmooth(spec)
+        smooth.setup({"x1": x1, "x2": x2})
+
+        return smooth, r_result, {"x1": x1, "x2": x2}
+
+    def test_te_tp_marginal_m_vs_r(self) -> None:
+        """te(tp, m=1) basis + penalty match R's smoothCon element-wise (H3).
+
+        Before the fix the marginal order was dropped, so this fit produced the
+        m=2 basis and diverged from R's m=1 reference.
+        """
+        smooth, r_result, data = self._setup_te_tp_m1()
+        X_py = smooth.build_design_matrix(data)
+        X_r = r_result["X"]
+
+        collector = _AssertCollector()
+        collector.check(
+            "basis_vs_r",
+            lambda: np.testing.assert_allclose(
+                normalize_column_signs(X_py),
+                normalize_column_signs(X_r),
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+                err_msg="te(tp, m=1) basis differs from R",
+            ),
+        )
+        for j, (py_pen, r_S) in enumerate(
+            zip(smooth.build_penalty_matrices(), r_result["S"], strict=True)
+        ):
+            collector.check(
+                f"penalty_{j}_vs_r",
+                lambda py_pen=py_pen, r_S=r_S, j=j: np.testing.assert_allclose(
+                    normalize_symmetric_signs(py_pen.S, X_py),
+                    normalize_symmetric_signs(r_S, X_r),
+                    rtol=MODERATE.rtol,
+                    atol=MODERATE.atol,
+                    err_msg=f"te(tp, m=1) penalty {j} differs from R",
+                ),
+            )
+        collector.raise_if_any("te(tp, m=1) vs R")
 
     def _setup_ti_cr(self) -> tuple:
         """Setup ti(x1, x2, bs='cr', k=5) for R comparison."""
@@ -563,6 +657,61 @@ class TestEdgeCases:
         X = smooth.build_design_matrix(smooth_2d_data)
         assert X.shape == (200, 9)
         assert np.all(np.isfinite(X))
+
+    def test_marginal_order_m_threaded_to_tp_margins(self) -> None:
+        """te(...,bs='tp',m=1) must differ from m=2 and thread m into marginals.
+
+        Finding H3: ``_create_marginals`` dropped ``spec.extra_args``, so every
+        marginal used its default order regardless of the requested ``m`` — m=1
+        silently returned the m=2 answer. R replicates a scalar m to all margins
+        (R/smooth.r:443) and the tp margin constructor honours it; cr margins
+        ignore m in both R and jaxgam, and m-absent keeps the default order.
+        """
+        rng = np.random.default_rng(42)
+        data = {"x1": rng.uniform(0, 1, 200), "x2": rng.uniform(0, 1, 200)}
+
+        def _build_tp(m):
+            sm = TensorProductSmooth(
+                make_smooth_spec(["x1", "x2"], bs="tp", k=5, smooth_type="te", m=m)
+            )
+            sm.setup(data)
+            return sm, sm.build_design_matrix(data)
+
+        sm1, X1 = _build_tp(1)
+        sm2, X2 = _build_tp(2)
+        _smd, Xd = _build_tp(None)  # m absent -> default order (==m=2 for tp d=1)
+
+        collector = _AssertCollector()
+        collector.check(
+            "m1_marginal_order",
+            lambda: check_that(
+                [mm._m for mm in sm1._marginals] == [1, 1],
+                f"te(m=1) marginals _m={[mm._m for mm in sm1._marginals]}, want [1,1]",
+            ),
+        )
+        collector.check(
+            "basis_differs",
+            lambda: check_that(
+                not np.allclose(X1, X2),
+                "te(bs='tp',m=1) basis identical to m=2 — marginal order ignored",
+            ),
+        )
+        collector.check(
+            "null_space_dim",
+            lambda: check_that(
+                sm1.null_space_dim == 1 and sm2.null_space_dim == 4,
+                f"nsd m=1->{sm1.null_space_dim} (want 1), m=2->{sm2.null_space_dim}"
+                " (want 4)",
+            ),
+        )
+        collector.check(
+            "default_preserved",
+            lambda: check_that(
+                np.allclose(Xd, X2),
+                "m-absent default must equal m=2 for tp d=1 (preserve prior default)",
+            ),
+        )
+        collector.raise_if_any("te(tp) marginal-order threading (H3)")
 
     @pytest.mark.parametrize("smooth_2d_data", [1000], indirect=True)
     def test_large_n(self, smooth_2d_data) -> None:

@@ -26,7 +26,13 @@ from jaxgam.smooths.cubic import (
     CubicShrinkageSmooth,
     CyclicCubicSmooth,
 )
-from tests.helpers import make_smooth_spec, r_available
+from tests.helpers import (
+    SEED,
+    _AssertCollector,
+    check_that,
+    make_smooth_spec,
+    r_available,
+)
 from tests.tolerances import MODERATE, STRICT
 
 _place_knots = CubicRegressionSmooth._place_knots
@@ -573,12 +579,74 @@ class TestEdgeCases:
         with pytest.raises(ValueError, match="exceeds"):
             smooth.setup({"x": x})
 
-    def test_k_less_than_3_raises(self, smooth_1d_data) -> None:
-        """k < 3 raises ValueError."""
-        spec = make_smooth_spec(["x"], k=2)
-        smooth = CubicRegressionSmooth(spec)
-        with pytest.raises(ValueError, match="at least 3"):
-            smooth.setup(smooth_1d_data)
+    def test_below_minimum_k_warns_and_bumps(self) -> None:
+        """Cubic smooths warn-and-bump below-minimum k (match mgcv); never raise.
+
+        Finding M5: mgcv requires k>=4 for cc (endpoints identified) and k>=3
+        for cr/cs, and below the minimum it warns and INCREASES k rather than
+        erroring (R/smooth.r:1458-1462 cr, 1608-1611 cc). Before the fix
+        ``s(x,bs='cc',k=3)`` silently built a degenerate 2-column basis, and
+        k=2 raised ``ValueError`` instead of bumping.
+        """
+        rng = np.random.default_rng(SEED)
+        data = {"x": rng.uniform(0.0, 1.0, 200)}
+        collector = _AssertCollector()
+
+        # cc k=3 (the M5 bug): must warn and bump to 4 -> k-1 = 3 columns.
+        def _cc_k3() -> None:
+            smooth = CyclicCubicSmooth(make_smooth_spec(["x"], bs="cc", k=3))
+            with pytest.warns(UserWarning, match="basis dimension"):
+                smooth.setup(data)
+            check_that(smooth.n_coefs == 3, f"cc k=3 n_coefs={smooth.n_coefs}, want 3")
+            check_that(smooth._X.shape == (200, 3), f"cc k=3 X={smooth._X.shape}")
+            check_that(smooth.rank == 2, f"cc k=3 rank={smooth.rank}, want 2")
+            check_that(
+                smooth.null_space_dim == 1, f"cc k=3 nsd={smooth.null_space_dim}"
+            )
+
+        collector.check("cc_k3_warns_and_bumps", _cc_k3)
+
+        # cc k=3 must produce the SAME basis as an explicit cc k=4 fit.
+        def _cc_k3_equals_k4() -> None:
+            s3 = CyclicCubicSmooth(make_smooth_spec(["x"], bs="cc", k=3))
+            with pytest.warns(UserWarning, match="basis dimension"):
+                s3.setup(data)
+            s4 = CyclicCubicSmooth(make_smooth_spec(["x"], bs="cc", k=4))
+            s4.setup(data)
+            np.testing.assert_allclose(s3._X, s4._X, rtol=STRICT.rtol, atol=STRICT.atol)
+
+        collector.check("cc_k3_matches_explicit_k4", _cc_k3_equals_k4)
+
+        # cr/cs k=2 must warn and bump to 3 (not raise).
+        def _cr_k2() -> None:
+            smooth = CubicRegressionSmooth(make_smooth_spec(["x"], bs="cr", k=2))
+            with pytest.warns(UserWarning, match="basis dimension"):
+                smooth.setup(data)
+            check_that(smooth.n_coefs == 3, f"cr k=2 n_coefs={smooth.n_coefs}, want 3")
+
+        collector.check("cr_k2_warns_and_bumps", _cr_k2)
+
+        def _cs_k2() -> None:
+            smooth = CubicShrinkageSmooth(make_smooth_spec(["x"], bs="cs", k=2))
+            with pytest.warns(UserWarning, match="basis dimension"):
+                smooth.setup(data)
+            check_that(smooth.n_coefs == 3, f"cs k=2 n_coefs={smooth.n_coefs}, want 3")
+
+        collector.check("cs_k2_warns_and_bumps", _cs_k2)
+
+        # Valid k is unaffected: cc k=5 builds 4 columns with no warning.
+        def _cc_k5_no_warn() -> None:
+            import warnings as _w
+
+            smooth = CyclicCubicSmooth(make_smooth_spec(["x"], bs="cc", k=5))
+            with _w.catch_warnings():
+                _w.simplefilter("error")
+                smooth.setup(data)
+            check_that(smooth.n_coefs == 4, f"cc k=5 n_coefs={smooth.n_coefs}, want 4")
+
+        collector.check("cc_k5_no_warning", _cc_k5_no_warn)
+
+        collector.raise_if_any("cubic below-minimum k warn-and-bump (M5)")
 
     def test_setup_required_for_design_matrix(self) -> None:
         """build_design_matrix before setup raises RuntimeError."""

@@ -171,6 +171,23 @@ class TestFactorBySmoothStructure:
                 err_msg=f"Non-level-{level} rows should be zero in block {level_idx}",
             )
 
+    def test_novel_level_predicts_nan_and_warns(
+        self, factor_by: FactorBySmooth
+    ) -> None:
+        """A factor level unseen at fit time -> NaN row + warning (Finding 6).
+
+        Matches mgcv predict.gam ("factor levels ... not in original fit" +
+        recode-to-NA). Seen levels still get finite predictions.
+        """
+        new_data = pd.DataFrame(
+            {"x": [0.2, 0.5, 0.8], "fac": ["level0", "levelZ", "level1"]}
+        )
+        with pytest.warns(UserWarning, match="not in original fit"):
+            X = factor_by.predict_matrix(new_data)
+        assert np.isnan(X[1]).all()  # novel level -> entire row NaN
+        assert np.isfinite(X[0]).all()
+        assert np.isfinite(X[2]).all()
+
     def test_design_matrix_level_block_matches_base(
         self,
         factor_by: FactorBySmooth,
@@ -334,6 +351,29 @@ class TestNumericBySmoothStructure:
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
+
+    def test_constant_by_keeps_centering(self, base_smooth: TPRSSmooth) -> None:
+        """A CONSTANT numeric by keeps the sum-to-zero constraint (Finding 12).
+
+        mgcv removes centering only for a NON-constant numeric by; a constant by
+        would otherwise be confounded with the intercept (rank-deficient X).
+        """
+        spec = make_smooth_spec(["x"], k=10, by="z")
+        const = NumericBySmooth(
+            base_smooth=base_smooth,
+            spec=spec,
+            by_variable="z",
+            by_values=np.full(200, 2.0),
+        )
+        assert const.has_centering_constraint is True
+
+        nonconst = NumericBySmooth(
+            base_smooth=base_smooth,
+            spec=spec,
+            by_variable="z",
+            by_values=np.random.default_rng(0).uniform(0.5, 2.0, 200),
+        )
+        assert nonconst.has_centering_constraint is False
 
     def test_penalty_unchanged(
         self,

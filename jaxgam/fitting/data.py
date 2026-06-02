@@ -31,7 +31,8 @@ from jaxgam.families.base import ExponentialFamily
 from jaxgam.jax_utils import build_S_lambda, to_jax
 
 if TYPE_CHECKING:
-    from jaxgam.formula.design import ModelSetup, SmoothInfo
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.smooths.constraints import TermBlock
 
 # Eigenvalue rank threshold: eigenvalues below max(eig) * _EPS_TWO_THIRDS
 # are treated as zero. Matches R's Sl.setup / totalPenaltySpace convention.
@@ -135,6 +136,14 @@ class FittingData:
     # a compile-time loop bound. Computed from data in from_setup().
     max_y: int
 
+    # Rank deficiency of the model matrix X: ``n_coef - rank(X)``. Nonzero only
+    # when the design is structurally rank-deficient (e.g. a parametric term
+    # sharing a smooth's null-space direction, ``y ~ x + s(x)``). Used as a
+    # static arg so the REML ``log|H|`` uses a generalized determinant over the
+    # identifiable subspace, matching R's rank-revealing fit. 0 => full rank
+    # (the Cholesky log-determinant path, unchanged).
+    rank_deficit: int = 0
+
     @property
     def n_penalties(self) -> int:
         """Number of penalty matrices."""
@@ -219,8 +228,15 @@ class FittingData:
         X_np = setup.X
         repara_D_jax: jax.Array | None = None
 
-        if penalty_arrays and setup.smooth_info:
-            D_global = _compute_repara_D(penalty_arrays, setup.smooth_info, n_coef)
+        # Group penalties by SMOOTH (one TermBlock per smooth), NOT by
+        # smooth_info: smooth_info is per-level for factor-by smooths (so the
+        # reported EDF/summary are per-level), but the penalty reparameterization
+        # and log|S+| block structure must stay per-smooth to keep the fit
+        # unchanged. coef_map.terms keeps exactly one block per smooth.
+        smooth_blocks = [t for t in setup.coef_map.terms if t.term_type == "smooth"]
+
+        if penalty_arrays and smooth_blocks:
+            D_global = _compute_repara_D(penalty_arrays, smooth_blocks, n_coef)
             if D_global is not None:
                 X_np = setup.X @ D_global
                 penalty_arrays = [D_global.T @ S @ D_global for S in penalty_arrays]
@@ -234,10 +250,16 @@ class FittingData:
 
         penalty_range_basis = cls._penalty_range_basis(penalty_arrays, n_coef, device)
 
-        block_meta = _build_block_metadata(penalty_arrays, setup.smooth_info, device)
+        block_meta = _build_block_metadata(penalty_arrays, smooth_blocks, device)
 
         # max(y) as a compile-time integer for NB's _lgamma_diff scan.
         max_y = int(np.max(setup.y)) if len(setup.y) > 0 else 0
+
+        # Rank deficiency of the penalized Hessian that the penalty cannot
+        # regularize away — i.e. unpenalized confounding (e.g. a parametric
+        # term sharing a smooth's null-space direction). Penalized deficiencies
+        # (e.g. RE group dummies summing to the intercept) are NOT counted.
+        rank_deficit = cls._unpenalized_rank_deficit(penalty_arrays, X_np, n_coef)
 
         return cls(
             X=X_jax,
@@ -261,6 +283,7 @@ class FittingData:
             multi_block_S_local=block_meta["multi_block_S_local"],
             repara_D=repara_D_jax,
             max_y=max_y,
+            rank_deficit=rank_deficit,
         )
 
     @staticmethod
@@ -331,6 +354,42 @@ class FittingData:
         return np.log(def_sp)
 
     @staticmethod
+    def _unpenalized_rank_deficit(
+        penalty_arrays: list[np.ndarray],
+        X_np: np.ndarray,
+        n_coef: int,
+    ) -> int:
+        """Number of unidentifiable UNPENALIZED directions in the design.
+
+        Computes ``dim(null(X) ∩ null(S_total))`` — the rank deficiency of the
+        penalized Hessian ``XtWX + S_lambda`` that the penalty cannot regularize
+        away (e.g. a parametric term confounded with a smooth's unpenalized
+        null space, ``y ~ x + s(x)``). Penalized rank deficiencies (e.g. random
+        effects whose group dummies sum to the intercept) are NOT counted,
+        because the ridge penalty makes those directions identifiable in ``H``.
+        """
+        if n_coef == 0:
+            return 0
+        if not penalty_arrays:
+            # No penalty: the entire null space of X is unpenalized.
+            return int(n_coef - np.linalg.matrix_rank(X_np))
+        St = np.zeros((n_coef, n_coef))
+        for S_np in penalty_arrays:
+            norm_j = np.sqrt(np.sum(S_np * S_np))
+            if norm_j > 0:
+                St += S_np / norm_j
+        eigs, vecs = np.linalg.eigh(St)
+        threshold = np.max(eigs) * _EPS_TWO_THIRDS
+        Mp = int(np.sum(eigs <= threshold))
+        if Mp == 0:
+            return 0
+        # Project X onto null(S_total) (the unpenalized directions); any rank
+        # deficiency there cannot be regularized by the penalty.
+        N = vecs[:, :Mp]
+        rank_unpen = int(np.linalg.matrix_rank(X_np @ N))
+        return Mp - rank_unpen
+
+    @staticmethod
     def _penalty_range_basis(
         penalty_arrays: list[np.ndarray],
         n_coef: int,
@@ -379,7 +438,7 @@ class FittingData:
 
 def _build_block_metadata(
     penalty_arrays: list[np.ndarray],
-    smooth_info: tuple[SmoothInfo, ...] | None,
+    smooth_blocks: list[TermBlock] | None,
     device: jax.Device | None,
 ) -> dict[str, Any]:
     """Classify penalties into singleton and multi-penalty blocks.
@@ -397,8 +456,9 @@ def _build_block_metadata(
     ----------
     penalty_arrays : list[np.ndarray]
         Per-penalty (p, p) matrices (NumPy, not yet on device).
-    smooth_info : tuple[SmoothInfo, ...] or None
-        Per-smooth metadata with column ranges and penalty counts.
+    smooth_blocks : list[TermBlock] or None
+        Per-smooth coefficient blocks (column range + penalty indices); one per
+        smooth (factor-by stays aggregated here).
     device : jax.Device or None
         Target JAX device for array transfer.
 
@@ -418,17 +478,15 @@ def _build_block_metadata(
     singletons: list[tuple[int, int, float]] = []
     multi_blocks: list[tuple[tuple[int, ...], int, list, list]] = []
 
-    if penalty_arrays and smooth_info:
-        for si in smooth_info:
-            if si.n_penalties == 0:
+    if penalty_arrays and smooth_blocks:
+        for t in smooth_blocks:
+            if not t.penalty_indices:
                 continue
-            col_start = si.first_coef
-            col_stop = si.last_coef
-            sp_indices = tuple(
-                range(si.first_penalty, si.first_penalty + si.n_penalties)
-            )
+            col_start = t.col_start
+            col_stop = t.col_start + t.n_coefs
+            sp_indices = tuple(t.penalty_indices)
 
-            if si.n_penalties == 1:
+            if len(sp_indices) == 1:
                 sp_idx = sp_indices[0]
                 S_local = penalty_arrays[sp_idx][col_start:col_stop, col_start:col_stop]
                 eig_vals = np.linalg.eigvalsh(S_local)
@@ -502,7 +560,7 @@ def _penalties_non_overlapping(S_locals: list[np.ndarray]) -> bool:
 
 def _compute_repara_D(
     penalty_arrays: list[np.ndarray],
-    smooth_info: tuple[SmoothInfo, ...],
+    smooth_blocks: list[TermBlock],
     n_coef: int,
 ) -> np.ndarray | None:
     """Compute Sl.setup reparameterization matrix.
@@ -516,8 +574,10 @@ def _compute_repara_D(
     ----------
     penalty_arrays : list[np.ndarray]
         Per-penalty (p, p) matrices (NumPy, not yet on device).
-    smooth_info : tuple[SmoothInfo, ...]
-        Per-smooth metadata with column ranges and penalty counts.
+    smooth_blocks : list[TermBlock]
+        Per-smooth coefficient blocks (one per smooth, with column range and
+        penalty indices). Used instead of ``smooth_info`` because the latter is
+        per-level for factor-by smooths, which must not change the fit.
     n_coef : int
         Total number of coefficients.
 
@@ -529,16 +589,16 @@ def _compute_repara_D(
     D_global = np.eye(n_coef)
     modified = False
 
-    for si in smooth_info:
-        if si.n_penalties == 0:
+    for t in smooth_blocks:
+        if not t.penalty_indices:
             continue
 
-        col_start = si.first_coef
-        col_stop = si.last_coef
+        col_start = t.col_start
+        col_stop = t.col_start + t.n_coefs
         block_size = col_stop - col_start
-        sp_indices = list(range(si.first_penalty, si.first_penalty + si.n_penalties))
+        sp_indices = list(t.penalty_indices)
 
-        if si.n_penalties == 1:
+        if len(sp_indices) == 1:
             # Singleton: eigendecompose and scale so D^T S D = I_r
             sp_idx = sp_indices[0]
             S_local = penalty_arrays[sp_idx][col_start:col_stop, col_start:col_stop]

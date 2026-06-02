@@ -4,11 +4,20 @@ Given fixed smoothing parameters (encoded in ``S_lambda``), PIRLS finds
 the penalized maximum likelihood coefficients by iterating a weighted
 least-squares solve with step-halving on penalized deviance.
 
-Standard exponential families use Fisher scoring (``gam.fit3``).
-Extended families (NB) use Newton scoring with observed weights
-(``gam.fit4``): ``w = 0.5 * d²D/dη²``.  After convergence, Fisher-
-weighted ``XtWX_fisher`` / ``L_fisher`` are computed for EDF and
-Bayesian covariance (matching R's ``gdi2``, ``gdi.c:2262-2294``).
+Standard exponential families run the PIRLS solve with Fisher weights
+(``gam.fit3``); extended families (NB) use Newton scoring with observed
+weights (``gam.fit4``): ``w = 0.5 * d²D/dη²``. The converged coefficients
+are identical under either weighting (both find the penalized-MLE
+stationary point).
+
+The REML ``log|H|`` curvature ``XtWX`` follows mgcv's information split:
+observed (Newton) information for **non-canonical** links, Fisher
+(expected) for canonical links (``gam.fit3.r:118``, ``gdi.c:2481-2498``).
+After convergence, Fisher-weighted ``XtWX_fisher`` / ``L_fisher`` are
+always computed for EDF and Bayesian covariance (``gdi.c:2262-2294``).
+Canonical-ness is the static ``family.is_canonical`` property, so the
+choice is resolved at trace time and canonical fits are byte-identical
+to the pure-Fisher path.
 
 The loop is implemented with ``jax.lax.while_loop`` so the entire
 iteration compiles to a single fused XLA kernel when JIT-compiled.
@@ -157,6 +166,49 @@ jax.tree_util.register_pytree_node(
 )
 
 
+def _observed_weights(
+    family: ExponentialFamily,
+    X: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    beta: jax.Array,
+    offset: jax.Array,
+) -> jax.Array:
+    """Per-observation observed (Newton) information weight ``0.5 d²D/dη²``.
+
+    For an exponential-dispersion family the observed information per
+    observation equals half the second derivative of the unit deviance w.r.t.
+    eta. mgcv uses these (not Fisher) weights in the REML ``log|H|`` for
+    non-canonical links (gam.fit3.r:118, gdi.c:2481-2498). The total deviance
+    is separable across observations, so the eta-Hessian is diagonal and a
+    single JVP of ``grad(D)`` in the all-ones direction recovers the diagonal.
+    """
+    eta = X @ beta + offset
+
+    def _dev_sum(e: jax.Array) -> jax.Array:
+        return family.dev_resids(y, family.link.inverse(e), wt)
+
+    grad_D = jax.grad(_dev_sum)
+    _, d2 = jax.jvp(grad_D, (eta,), (jnp.ones_like(eta),))
+    return 0.5 * d2
+
+
+def _signed_XtWX(w_signed: jax.Array, X: jax.Array) -> jax.Array:
+    """``X' diag(w) X`` with SIGNED weights for the observed-information log|H|.
+
+    Non-canonical links produce per-observation observed (Newton) weights that
+    can be negative; mgcv keeps them in the REML ``log|H|`` via a sign-aware
+    factorization (gdi.c:2481-2498). Only the magnitude is capped (to avoid
+    overflow); negatives are NOT floored to a positive value — that flooring is
+    exactly what corrupts ``log|H|`` for NB identity/sqrt links. ``H = XtWX + S``
+    stays positive-definite at a valid penalized optimum because the penalty
+    dominates the indefinite directions (the same signed observed Hessian is
+    already used by the Newton IFT in ``newton.py``).
+    """
+    w = jnp.clip(w_signed, -_W_MAX, _W_MAX)
+    return (w[:, None] * X).T @ X
+
+
 @jax.jit(static_argnames=("family", "max_iter", "tol"))
 def _pirls_loop_jit(
     X: jax.Array,
@@ -251,16 +303,30 @@ def _pirls_loop_jit(
                 (jnp.ones_like(eta),),
             )
             # Observed weights: w = 0.5 * d²D/dη².  Unlike Fisher weights,
-            # d²D/dη² can be negative for extended families.  Clamp to
-            # _W_MIN so negative or near-zero values don't cause division
-            # instability in the working response z.
+            # d²D/dη² can be NEGATIVE for non-canonical extended-family links;
+            # keep the sign (mgcv gam.fit4 / gdi.c). Only floor the *magnitude*
+            # of the working-response denominator so a near-zero curvature does
+            # not blow up z, without flipping a genuine negative to positive
+            # (that flip corrupts z for NB identity/sqrt).
             w = d2D_deta2 * 0.5
-            d2D_safe = jnp.where(d2D_deta2 > _W_MIN, d2D_deta2, _W_MIN)
+            d2D_safe = jnp.where(jnp.abs(d2D_deta2) > _W_MIN, d2D_deta2, _W_MIN)
             z = (eta - offset) - dD_deta / d2D_safe
             return w, z
 
         def _compute_dev(mu, eta):  # noqa: ARG001  mu unused: deviance computed from eta via pure-function factory
             return _dev_fn(eta, log_theta)
+
+        def _form_wls(W, z):
+            """Sign-aware (Newton) penalized WLS for extended families.
+
+            Observed weights can be negative for non-canonical links; mgcv keeps
+            them in the WLS (gam.fit4) rather than flooring to a positive value.
+            Build ``X' diag(W) X`` and ``X' diag(W) z`` directly (no ``sqrt(W)``)
+            with the magnitude capped; for canonical links (all W >= 0) this is
+            numerically identical to the sqrt form.
+            """
+            Wc = jnp.clip(W, -_W_MAX, _W_MAX)
+            return (Wc[:, None] * X).T @ X, X.T @ (Wc * z)
     else:
 
         def _compute_W_and_z(mu, eta):
@@ -271,6 +337,26 @@ def _pirls_loop_jit(
 
         def _compute_dev(mu, eta):  # noqa: ARG001
             return family.dev_resids(y, mu, wt)
+
+        def _form_wls(W, z):
+            """Fisher-scoring penalized WLS for standard families (positive W)."""
+            Wc = jnp.clip(W, _W_MIN, _W_MAX)
+            w_sqrt = jnp.sqrt(Wc)
+            wx = w_sqrt[:, None] * X
+            return wx.T @ wx, wx.T @ (w_sqrt * z)
+
+    def _is_valid(mu, eta):
+        """Family domain check, matching R's gam.fit3 ``validmu``/``valideta``.
+
+        A trial step is rejected unless every ``mu`` and ``eta`` lies in the
+        family's valid domain.  Without this guard the inverse-link Gamma can
+        walk into ``mu <= 0`` territory: ``dev_resids`` internally clamps
+        ``mu`` to a small positive floor, so the penalized deviance still
+        looks finite and step-halving never rejects the invalid step, and the
+        fit diverges (eta -> -inf).  R rejects such steps via
+        ``!validmu(mu) || !valideta(eta)`` (gam.fit3.r step-halving loop).
+        """
+        return jnp.all(family.valid_mu(mu)) & jnp.all(family.valid_eta(eta))
 
     # Initial mu from beta_init
     eta_init = X @ beta_init + offset
@@ -297,12 +383,7 @@ def _pirls_loop_jit(
         # ---- Working quantities ----
         eta_cur = X @ state.beta + offset
         W, z = _compute_W_and_z(state.mu, eta_cur)
-        W = jnp.clip(W, _W_MIN, _W_MAX)
-
-        W_sqrt = jnp.sqrt(W)
-        WX = W_sqrt[:, None] * X
-        XtWX = WX.T @ WX
-        XtWz = WX.T @ (W_sqrt * z)
+        XtWX, XtWz = _form_wls(W, z)
         beta_new, L, _ = penalized_solve(XtWX, S_lambda, XtWz)
 
         # ---- Step-halving on penalized deviance ----
@@ -313,11 +394,17 @@ def _pirls_loop_jit(
         dev_new = _compute_dev(mu_new, eta_new)
         pen_dev_new = dev_new + beta_new @ S_lambda @ beta_new
 
-        # First iteration: unconditionally accept
-        first_ok = is_first_iter & jnp.isfinite(pen_dev_new)
+        # A step is acceptable only if mu/eta stay in the family's valid
+        # domain (R's validmu/valideta), in addition to a finite, decreasing
+        # penalized deviance.
+        valid_new = _is_valid(mu_new, eta_new)
+
+        # First iteration: accept any finite, valid step
+        first_ok = is_first_iter & jnp.isfinite(pen_dev_new) & valid_new
         subsequent_ok = (
             (~is_first_iter)
             & jnp.isfinite(pen_dev_new)
+            & valid_new
             & (pen_dev_new <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev))
         )
         accepted = first_ok | subsequent_ok
@@ -334,18 +421,21 @@ def _pirls_loop_jit(
             return (sh.k < _MAX_HALVINGS) & (~sh.accepted)
 
         def _sh_body(sh: _StepHalvingState):
-            step = 0.5 ** (sh.k + 2)  # 0.25, 0.125, ...
+            step = 0.5 ** (sh.k + 1)  # 0.5, 0.25, 0.125, ... (R halves from 1)
             bt = state.beta + step * (beta_new - state.beta)
             eta_t = X @ bt + offset
             mu_t = family.link.inverse(eta_t)
             dev_t = _compute_dev(mu_t, eta_t)
             pd_t = dev_t + bt @ S_lambda @ bt
 
-            ok = jnp.isfinite(pd_t) & (
-                pd_t <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev)
+            valid_t = _is_valid(mu_t, eta_t)
+            ok = (
+                jnp.isfinite(pd_t)
+                & valid_t
+                & (pd_t <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev))
             )
-            # On first iteration, accept any finite value
-            ok = ok | (is_first_iter & jnp.isfinite(pd_t))
+            # On first iteration, accept any finite, valid value
+            ok = ok | (is_first_iter & jnp.isfinite(pd_t) & valid_t)
 
             return _StepHalvingState(
                 k=sh.k + 1, beta_try=bt, pen_dev_try=pd_t, mu_try=mu_t, accepted=ok
@@ -383,29 +473,44 @@ def _pirls_loop_jit(
 
     final = jax.lax.while_loop(_cond, _body, init_state)
 
-    # Recompute curvature at final mu for consistency (R's gam.fit3 §7.2).
+    # Recompute curvature at final mu (R's gam.fit3 §7.2). Split of information
+    # matrices (gdi.c): the REML log|H| uses OBSERVED (Newton) information for
+    # non-canonical links — INCLUDING its negative per-observation weights
+    # (gdi.c:2481-2498 is sign-aware) — while EDF/Bayesian covariance always use
+    # FISHER information (gdi.c:2262-2294). For canonical links observed ==
+    # Fisher. The converged beta is identical under either weighting.
     eta_final = X @ final.beta + offset
-    W_final, _ = _compute_W_and_z(final.mu, eta_final)
-    W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
-    W_sqrt_final = jnp.sqrt(W_final)
-    WX_final = W_sqrt_final[:, None] * X
-    XtWX_final = WX_final.T @ WX_final
-    L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
 
-    # For extended families: recompute XtWX and L using Fisher weights
-    # for EDF and Bayesian covariance.  R's gam.fit4 uses Newton weights
-    # for PIRLS but Fisher weights for EDF (gdi.c:2262-2294,
-    # gam.fit4.r:564: ``wf = pmax(0, dd$EDeta2 * .5)``).
-    # For standard families, Fisher = Newton, so just alias.
     if family.n_theta > 0 and log_theta is not None:
+        # Extended families (NB): observed (signed) weights for the REML log|H|.
+        W_final, _ = _compute_W_and_z(final.mu, eta_final)  # 0.5 d²D/dη², signed
+        XtWX_final = _signed_XtWX(W_final, X)
+        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
+        # Fisher (nonnegative) for EDF and Bayesian covariance.
         _ww_fisher_fn = family.working_weights_fn(wt)
-        W_fisher = _ww_fisher_fn(eta_final, log_theta)
-        W_fisher = jnp.clip(W_fisher, _W_MIN, _W_MAX)
-        W_sqrt_fisher = jnp.sqrt(W_fisher)
-        WX_fisher = W_sqrt_fisher[:, None] * X
+        W_fisher = jnp.clip(_ww_fisher_fn(eta_final, log_theta), _W_MIN, _W_MAX)
+        WX_fisher = jnp.sqrt(W_fisher)[:, None] * X
         XtWX_fisher = WX_fisher.T @ WX_fisher
         L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+    elif not family.is_canonical:
+        # Non-canonical standard family: the PIRLS solve used Fisher weights
+        # (nonnegative) -> keep for EDF/covariance; rebuild the REML-log|H| XtWX
+        # from OBSERVED (Newton) weights, preserving their sign (matching mgcv).
+        W_final, _ = _compute_W_and_z(final.mu, eta_final)  # Fisher for standard
+        W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
+        WX_fisher = jnp.sqrt(W_final)[:, None] * X
+        XtWX_fisher = WX_fisher.T @ WX_fisher
+        L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+        W_obs = _observed_weights(family, X, y, wt, final.beta, offset)  # signed
+        XtWX_final = _signed_XtWX(W_obs, X)
+        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
     else:
+        # Canonical standard family: Fisher == Newton (weights nonnegative).
+        W_final, _ = _compute_W_and_z(final.mu, eta_final)
+        W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
+        WX_final = jnp.sqrt(W_final)[:, None] * X
+        XtWX_final = WX_final.T @ WX_final
+        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
         XtWX_fisher = XtWX_final
         L_fisher = L_final
 

@@ -109,6 +109,23 @@ class ExponentialFamily(ABC):
     scale_known: bool = False
     response_support: ResponseSupport = REAL
 
+    #: The link class for which this family's canonical link equals the
+    #: identity Fisher==Newton. When the fitted link is canonical, Fisher
+    #: (expected) and Newton (observed) information coincide; for non-canonical
+    #: links mgcv uses observed information in the REML log|H| (gam.fit3.r:118).
+    #: Subclasses set this to their canonical link class (None = unknown).
+    canonical_link_cls: type[Link] | None = None
+
+    @property
+    def is_canonical(self) -> bool:
+        """True if the fitted link is this family's canonical link.
+
+        Static (depends only on the family/link objects, not array values), so
+        it is safe to branch on inside JIT-traced code.
+        """
+        cls = type(self).canonical_link_cls
+        return cls is not None and isinstance(self.link, cls)
+
     def __init__(self, link: str | Link | None = None) -> None:
         if link is None:
             self.link: Link = self.default_link
@@ -172,7 +189,7 @@ class ExponentialFamily(ABC):
         """Saturated log-likelihood: log L(y; y, scale, wt).
 
         The log-likelihood of the saturated model (mu = y). Used in the
-        REML/ML criterion (R's ``family$ls``).
+        REML criterion (R's ``family$ls``).
 
         Backend-agnostic: accepts both NumPy and JAX arrays.
 

@@ -239,7 +239,7 @@ mapping.
 
 | Argument | Description | Default |
 |---|---|---|
-| `k` | Marginal basis dimension (scalar applied to all margins). `-1` means auto-select (resolves to `10` for the default `cr` marginals). | -1 (auto) |
+| `k` | Marginal basis dimension (scalar applied to all margins). `-1` means auto-select, which resolves to `5` per (1-D) margin, matching R mgcv's `te()`/`ti()` default of 5^d. | -1 (auto) |
 
 Use `te()` for full tensor products and `ti()` for interaction-only terms
 (excludes main effects).
@@ -270,19 +270,24 @@ GAM("y ~ s(x, bs='ps')").fit(data)
 
 ### Registering a custom family
 
-Your class must subclass `jaxgam.families.ExponentialFamily`.
+Your class must subclass `jaxgam.families.ExponentialFamily`. Register it under
+a key that is not already built in (the built-in keys are `gaussian`,
+`binomial`, `poisson`, `gamma`, and `nb`; re-registering a built-in raises a
+`ValueError`).
 
 ```python
 from jaxgam.families import family_registry, ExponentialFamily
 
-class NegativeBinomial(ExponentialFamily):
+class Tweedie(ExponentialFamily):
     ...  # implement variance(), deviance_resids(), initialize(), etc.
 
-family_registry.register("nb", NegativeBinomial)
+family_registry.register("tweedie", Tweedie)
 
 # Now usable by name:
-GAM("y ~ s(x)", family="nb").fit(data)
+GAM("y ~ s(x)", family="tweedie").fit(data)
 ```
+
+Negative Binomial is built in — use `family="nb"` directly, no registration.
 
 ### Registering a custom link
 
@@ -310,9 +315,9 @@ link_registry.register("cauchit", CauchitLink)
 ```python
 from jaxgam.smooths import smooth_registry
 
-smooth_registry.available      # ('cc', 'cr', 'cs', 'te', 'ti', 'tp', 'ts')
+smooth_registry.available      # ('cc', 'cr', 'cs', 'gp', 're', 'te', 'ti', 'tp', 'ts')
 "tp" in smooth_registry        # True
-len(smooth_registry)           # 7
+len(smooth_registry)           # 9
 ```
 
 ---
@@ -337,12 +342,12 @@ read-only attributes (frozen dataclass):
 | `smoothing_params` | `ndarray` | Estimated smoothing parameters |
 | `converged` | `bool` | Whether the optimizer converged |
 | `n_iter` | `int` | Number of Newton iterations |
-| `score` | `float` | REML/ML value at convergence |
+| `score` | `float` | REML value at convergence |
 | `X` | `ndarray (n, p)` | Design matrix |
 | `y` | `ndarray (n,)` | Response vector |
 | `weights` | `ndarray (n,)` | Prior weights |
 | `family` | `ExponentialFamily` | Family object used for fitting |
 | `formula` | `str` | Model formula |
 | `theta` | `float \| None` | Estimated theta for NB (None for standard families) |
-| `method` | `str` | Smoothing parameter method ("REML" or "ML") |
+| `method` | `str` | Smoothing parameter method (always `"REML"` in v1.0; `"ML"` raises `NotImplementedError`) |
 | `n` | `int` | Number of observations |

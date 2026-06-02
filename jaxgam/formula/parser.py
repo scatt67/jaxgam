@@ -169,10 +169,23 @@ class _TermCollector:
             )
 
         spec = _parse_smooth_call(func_name, node)
-        self.smooth_terms.append(spec)
+        # R's terms.formula collapses identical term labels, so `y ~ s(x) + s(x)`
+        # yields a single smooth (interpret.gam0, mgcv.r:302). SmoothSpec equality
+        # compares variables+bs+k+by+smooth_type+extra_args, matching that. A
+        # *different*-config repeat (s(x,k=6)+s(x,k=8)) is NOT identical and is
+        # kept, like mgcv (which warns but keeps both).
+        if spec not in self.smooth_terms:
+            self.smooth_terms.append(spec)
 
     def _visit_name(self, node: ast.Name) -> None:
-        """Handle plain variable names as parametric terms."""
+        """Handle plain variable names as parametric terms (de-duplicated).
+
+        R's ``model.matrix`` collapses a repeated parametric term (``y ~ x + x``)
+        to a single column; without de-duplication the design matrix gains an
+        aliased column, becomes rank-deficient, and splits the coefficient.
+        """
+        if any(t.name == node.id for t in self.parametric_terms):
+            return
         self.parametric_terms.append(ParametricTerm(name=node.id))
 
     def _visit_constant(self, node: ast.Constant) -> None:
@@ -180,8 +193,12 @@ class _TermCollector:
         if node.value == 0:
             self.has_intercept = False
         elif node.value == 1:
-            # Explicit intercept — default behavior, nothing to do
-            pass
+            # Explicit ``+ 1`` re-adds the intercept. R formula semantics are
+            # order-sensitive and last-token-wins: ``y ~ 0 + x + 1`` and
+            # ``y ~ x - 1 + 1`` both restore the intercept, while
+            # ``y ~ x + 1 - 1`` removes it. The AST is walked left-to-right,
+            # so simply setting the flag here reproduces R's behavior.
+            self.has_intercept = True
         else:
             raise ValueError(
                 f"Unexpected constant in formula: {node.value}. "
@@ -266,6 +283,31 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
                     f"Argument 'by' in {func_name}() must be a variable "
                     f"name or string. Got: {ast.unparse(kw.value)}"
                 )
+        elif key == "fx":
+            # fx=True (fixed-df, unpenalized regression spline) is a deferred
+            # feature: silently fitting a penalized smooth instead would be a
+            # wrong result, so follow CLAUDE.md's deferred-feature policy.
+            if _eval_kwarg_value(kw.value, key, func_name):
+                raise NotImplementedError(
+                    "fx=True (fixed-df unpenalized regression spline) is not "
+                    "supported in v1.0. mgcv fixes the smoothing parameter and "
+                    "uses an unpenalized basis (EDF = basis dim). Planned for "
+                    "v1.1. See docs/design.md Section 5.2."
+                )
+            # fx=False is the default; accept and ignore it.
+        elif key == "sp":
+            # Per-term sp= inside s()/te()/ti() is deferred. The model-level
+            # GAM(formula, sp=[...]) argument IS honored; only the in-formula
+            # per-term form is unsupported (would otherwise be silently dropped).
+            if _eval_kwarg_value(kw.value, key, func_name) is not None:
+                raise NotImplementedError(
+                    "Per-term sp= inside s()/te()/ti() is not supported in "
+                    "v1.0. Use the model-level GAM(formula, sp=[...]) argument "
+                    "to fix all smoothing parameters, or omit sp to estimate "
+                    "them by REML. Planned for v1.1. See docs/design.md "
+                    "Section 4.3."
+                )
+            # sp=None is the R default; accept and ignore it.
         else:
             extra_args[key] = _eval_kwarg_value(kw.value, key, func_name)
 
@@ -300,6 +342,19 @@ def _eval_kwarg_value(node: ast.expr, key: str, func_name: str) -> Any:
     Any
         The evaluated value.
     """
+    # Normalize R's literal tokens (TRUE/FALSE/NA), which parse as ast.Name and
+    # would otherwise fail ast.literal_eval with a misleading "Cannot evaluate
+    # argument" error. A user porting an mgcv formula naturally writes
+    # `s(x, fx=FALSE)` (the default, identical to plain s(x)); normalizing here
+    # lets the fx handler accept FALSE / raise NotImplementedError on TRUE, and
+    # sends bs=TRUE to the proper "must be a string" error.
+    if isinstance(node, ast.Name):
+        if node.id == "TRUE":
+            return True
+        if node.id == "FALSE":
+            return False
+        if node.id == "NA":
+            return None
     try:
         return ast.literal_eval(node)
     except (ValueError, TypeError):

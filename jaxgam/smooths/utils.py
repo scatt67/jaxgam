@@ -363,10 +363,18 @@ def _get_unique_rows(
 def _subsample_knots(
     Xu: npt.NDArray[np.floating], max_knots: int, seed: int = 1
 ) -> npt.NDArray[np.floating]:
-    """Reproducible knot subsampling. Matches R's mgcv pattern.
+    """Reproducible knot subsampling (activates only when unique points > max).
 
-    Uses np.random.RandomState (legacy API) intentionally to preserve
-    bit-exact reproducibility with TPRS's pre-refactor behavior.
+    Subsampling triggers only when the number of UNIQUE covariate locations
+    exceeds ``max_knots`` (default 2000). The subset is chosen with numpy's
+    legacy ``np.random.RandomState(seed)`` for determinism.
+
+    This does NOT bit-match R mgcv's ``sample(1:nu, nk, replace=FALSE)``
+    (R/smooth.r:1300): R uses Mersenne-Twister with R-specific seed scrambling
+    and a different without-replacement algorithm, so the selected knot subset
+    differs across languages. The resulting final-fit difference is within
+    LOOSE tolerance. Exact parity is not achievable without reimplementing R's
+    RNG and is intentionally out of scope (see docs/design.md Section 4.5).
     """
     if Xu.shape[0] <= max_knots:
         return Xu

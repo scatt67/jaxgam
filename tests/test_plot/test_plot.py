@@ -23,7 +23,9 @@ import matplotlib.pyplot as plt
 from jaxgam.api import GAM
 from tests.helpers import (
     SEED,
+    _AssertCollector,
     _generate_family_data,
+    check_that,
 )
 
 # ---------------------------------------------------------------------------
@@ -237,3 +239,68 @@ class TestEdgeCases:
         assert hasattr(results, "training_data")
         assert "x" in results.training_data
         assert len(results.training_data["x"]) == len(data)
+
+
+class TestM2PlotRegression:
+    """Finding M2: 2D factor-by and random-effect smooths must plot, not crash."""
+
+    def test_2d_factor_by_and_re_plot_without_crash(self):
+        """te(x1,x2,by=fac) -> one contour panel per level; s(g,bs='re') -> QQ.
+
+        Before the fix: te-by raised KeyError ('fac' not injected into the 2D
+        grid) and s(g,bs='re') raised ValueError (string factor routed through
+        the 1D numeric plotter).
+        """
+        import matplotlib.figure
+
+        collector = _AssertCollector()
+
+        rng = np.random.default_rng(SEED)
+        n = 300
+        df_te = pd.DataFrame(
+            {
+                "x1": rng.uniform(0, 1, n),
+                "x2": rng.uniform(0, 1, n),
+                "fac": pd.Categorical(rng.choice(["a", "b", "c"], n)),
+                "y": rng.normal(0, 1, n),
+            }
+        )
+        te_model = GAM("y ~ te(x1, x2, by=fac, k=5) + fac").fit(df_te)
+
+        def _te_plot() -> None:
+            fig, axes = te_model.plot()
+            check_that(isinstance(fig, matplotlib.figure.Figure), "te-by: no Figure")
+            visible = [ax for ax in np.asarray(axes).ravel() if ax.get_visible()]
+            check_that(
+                len(visible) == 3, f"expected 3 te-by panels, got {len(visible)}"
+            )
+            check_that(
+                any(len(ax.collections) > 0 for ax in visible),
+                "te-by panels have no contour collections",
+            )
+            plt.close(fig)
+
+        collector.check("te_by_2d_plot", _te_plot)
+
+        df_re = pd.DataFrame(
+            {
+                "g": pd.Categorical(rng.choice(list("abcdef"), 200)),
+                "y": rng.normal(0, 1, 200),
+            }
+        )
+        re_model = GAM("y ~ s(g, bs='re')").fit(df_re)
+
+        def _re_plot() -> None:
+            fig, axes = re_model.plot()
+            check_that(isinstance(fig, matplotlib.figure.Figure), "re: no Figure")
+            visible = [ax for ax in np.asarray(axes).ravel() if ax.get_visible()]
+            check_that(len(visible) == 1, f"expected 1 RE panel, got {len(visible)}")
+            check_that(len(visible[0].get_lines()) >= 1, "RE QQ panel has no lines")
+            check_that(
+                visible[0].get_xlabel() == "Gaussian quantiles",
+                f"RE panel xlabel={visible[0].get_xlabel()!r} (expected QQ)",
+            )
+            plt.close(fig)
+
+        collector.check("re_qq_plot", _re_plot)
+        collector.raise_if_any("M2 plotting regression")

@@ -174,7 +174,11 @@ def plot_gam(
         # Determine smooth dimensionality
         dim = len(smooth.spec.variables)
 
-        if dim == 1:
+        if _is_random_effect(smooth):
+            # mgcv renders bs="re" smooths as a Gaussian QQ-plot of the random
+            # coefficients (R/plots.r plot.random.effect), not as a curve.
+            _plot_re_qq(model=model, term=panel.term, ax=ax)
+        elif dim == 1:
             if panel.factor_level is not None:
                 _plot_factor_by_level(
                     model=model,
@@ -214,6 +218,7 @@ def plot_gam(
                 training_data=training_data,
                 n2=n2,
                 rug=rug,
+                factor_level=panel.factor_level,
             )
         else:
             warnings.warn(f"{dim}D smooth plotting not yet supported", stacklevel=2)
@@ -349,7 +354,9 @@ def _plot_1d_core(
     # Get prediction matrix for this smooth
     X_raw = smooth.predict_matrix(pred_data)
     coef_map = model.coef_map
-    X_s = coef_map.transform_X(X_raw, term.label)
+    # Pass the TermBlock (not term.label) so label-colliding smooths use their
+    # own constraint transform rather than the first label match (S3).
+    X_s = coef_map.transform_X(X_raw, term)
 
     # Get coefficients and Vp block for this term
     coefficients = model.coefficients
@@ -577,6 +584,7 @@ def _plot_2d_smooth(
     training_data: dict[str, np.ndarray],
     n2: int,
     rug: bool,
+    factor_level: str | None = None,
 ) -> None:
     """Plot a 2D smooth term as a filled contour.
 
@@ -594,8 +602,11 @@ def _plot_2d_smooth(
         Grid size per dimension.
     rug : bool
         Show data points as scatter.
+    factor_level : str or None
+        Factor level for a 2D factor-by panel (``te(x1,x2,by=fac)``); injected
+        as the by-variable column so the per-level smooth can be evaluated.
     """
-    from jaxgam.smooths.by_variable import NumericBySmooth
+    from jaxgam.smooths.by_variable import FactorBySmooth, NumericBySmooth
 
     smooth = term.smooth
     var1 = smooth.spec.variables[0]
@@ -616,11 +627,17 @@ def _plot_2d_smooth(
     # Handle by-variable for tensor products with numeric-by
     if isinstance(smooth, NumericBySmooth):
         pred_data[smooth.by_variable] = np.ones(len(xx))
+    elif isinstance(smooth, FactorBySmooth) and factor_level is not None:
+        # 2D factor-by: hold the by-variable at this panel's level so the
+        # per-level block of the smooth is evaluated on the grid.
+        pred_data[smooth.by_variable] = np.full(len(xx), factor_level, dtype=object)
 
     # Get prediction matrix for this smooth
     X_raw = smooth.predict_matrix(pred_data)
     coef_map = model.coef_map
-    X_s = coef_map.transform_X(X_raw, term.label)
+    # Pass the TermBlock (not term.label) so label-colliding smooths use their
+    # own constraint transform rather than the first label match (S3).
+    X_s = coef_map.transform_X(X_raw, term)
 
     # Compute partial effect
     coefficients = model.coefficients
@@ -650,6 +667,52 @@ def _plot_2d_smooth(
     # Labels
     ax.set_xlabel(var1)
     ax.set_ylabel(var2)
+    title = _make_ylabel(term.label, edf)
+    if factor_level is not None:
+        title = f"{factor_level}: {title}"
+    ax.set_title(title)
+
+
+def _is_random_effect(smooth: object) -> bool:
+    """True if ``smooth`` is a random-effect (``bs="re"``) smooth.
+
+    The unwrapped ``RandomEffectSmooth`` sets ``_random = True``; by-variable
+    wrappers do not, so they are plotted as ordinary smooths.
+    """
+    return bool(getattr(smooth, "_random", False))
+
+
+def _plot_re_qq(
+    model: GAMResults,
+    term: TermBlock,
+    ax: matplotlib.axes.Axes,
+) -> None:
+    """Render a random-effect smooth as a Gaussian QQ-plot of its coefficients.
+
+    Matches mgcv's ``plot.random.effect`` (R/plots.r): ``qqnorm`` of the random
+    coefficients plus a ``qqline`` reference. No SE bands, rug, or scale.
+    """
+    from scipy import stats
+
+    b = np.asarray(model.coefficients)[term.col_start : term.col_start + term.n_coefs]
+    edf = _get_smooth_edf(model, term)
+    if b.size < 2:
+        # A single-level RE cannot form a QQ-plot; render a labeled placeholder
+        # rather than raise.
+        ax.text(
+            0.5,
+            0.5,
+            f"{term.label}\n(random effect: too few levels for a QQ-plot)",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_title(_make_ylabel(term.label, edf))
+        return
+
+    stats.probplot(b, dist="norm", plot=ax)
+    ax.set_xlabel("Gaussian quantiles")
+    ax.set_ylabel("effects")
     ax.set_title(_make_ylabel(term.label, edf))
 
 
@@ -671,18 +734,31 @@ def _get_smooth_edf(model: GAMResults, term: TermBlock) -> float:
     Returns
     -------
     float
-        Sum of per-coefficient EDF for this term.
+        Sum of the EDF for this term. For a factor-by smooth, ``smooth_info``
+        holds one entry per level (labels ``s(x):faclevel``), so the term's EDF
+        is the sum of every per-level entry lying within its column range.
 
     Raises
     ------
     ValueError
-        If the term label is not found in the model's smooth info.
+        If the term is not found in the model's smooth info.
     """
     smooth_info = model.smooth_info
     edf = model.edf
+    # Exact-label match for plain/numeric-by smooths.
     for j, si in enumerate(smooth_info):
         if si.label == term.label:
             return float(edf[j])
+    # Factor-by: per-level SmoothInfo labels differ from the TermBlock label;
+    # sum the EDF of every per-level entry within the term's column range.
+    term_stop = term.col_start + term.n_coefs
+    contained = [
+        float(edf[j])
+        for j, si in enumerate(smooth_info)
+        if term.col_start <= si.first_coef and si.last_coef <= term_stop
+    ]
+    if contained:
+        return float(sum(contained))
     raise ValueError(
         f"Smooth term {term.label!r} not found in model smooth info. "
         f"Available: {[si.label for si in smooth_info]}"

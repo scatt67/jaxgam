@@ -16,7 +16,7 @@ Covers:
 import pytest
 
 from jaxgam.formula import FormulaSpec, SmoothSpec, parse_formula
-from tests.helpers import _AssertCollector
+from tests.helpers import _AssertCollector, check_that
 
 
 class TestBasicParsing:
@@ -321,6 +321,36 @@ class TestNoIntercept:
         assert len(result.parametric_terms) == 1
         assert result.parametric_terms[0].name == "x1"
 
+    def test_intercept_token_order_last_wins(self) -> None:
+        """Intercept is last-token-wins, left-to-right, matching R terms().
+
+        Regression for Finding 1: ``+ 1`` after intercept removal re-adds the
+        intercept. These are exact R ``terms.formula`` outputs (analytic ground
+        truth, verified against R 4.5.2), so no tolerance is needed.
+        """
+        cases = {
+            "y ~ 0 + x + 1": True,
+            "y ~ x - 1 + 1": True,
+            "y ~ x + 0 + 1": True,
+            "y ~ -1 + x + 1": True,
+            "y ~ 1 + x - 1": False,
+            "y ~ x + 1 - 1": False,
+            "y ~ x - 1 + 1 - 1": False,
+            "y ~ 1 - 1 + x": False,
+            "y ~ x + 0": False,
+            "y ~ x": True,
+        }
+        collector = _AssertCollector()
+        for formula, expected in cases.items():
+            collector.check(
+                formula,
+                lambda f=formula, e=expected: check_that(
+                    parse_formula(f).has_intercept is e,
+                    f"{f}: has_intercept should be {e}",
+                ),
+            )
+        collector.raise_if_any("intercept token order")
+
 
 class TestComplexFormula:
     """Test 8: complex multi-term formulas."""
@@ -414,3 +444,82 @@ class TestErrorCases:
         """Subtraction of non-1 value raises ValueError."""
         with pytest.raises(ValueError, match="only supported as"):
             parse_formula("y ~ s(x1) - 2")
+
+
+class TestDeferredAndDuplicateArgs:
+    """Findings 4, 5, 13: deferred smooth kwargs and duplicate-term de-dup."""
+
+    def test_fx_true_raises_not_implemented(self) -> None:
+        """s(..., fx=True) is a deferred feature; raise rather than silently fit."""
+        with pytest.raises(NotImplementedError, match="fx=True"):
+            parse_formula("y ~ s(x1, fx=True)")
+
+    def test_fx_false_accepted_and_not_stored(self) -> None:
+        """fx=False is the default; accept it and do not leak it into extra_args."""
+        result = parse_formula("y ~ s(x1, fx=False)")
+        assert len(result.smooth_terms) == 1
+        assert "fx" not in result.smooth_terms[0].extra_args
+
+    def test_r_spelled_booleans_normalized(self) -> None:
+        """Finding L3: R's TRUE/FALSE tokens are accepted in DSL kwargs.
+
+        A user porting an mgcv formula writes `s(x, fx=FALSE)` (the default,
+        equivalent to plain s(x)); R booleans parse as ast.Name and previously
+        hit the misleading "Cannot evaluate argument 'fx'" error before the fx
+        handler ran. fx=TRUE must still reach NotImplementedError, and bs=TRUE
+        the "must be a string" error.
+        """
+        collector = _AssertCollector()
+
+        def _fx_false_equals_plain() -> None:
+            plain = parse_formula("y ~ s(x1)").smooth_terms[0]
+            r_false = parse_formula("y ~ s(x1, fx=FALSE)")
+            sm = r_false.smooth_terms[0]
+            check_that(
+                len(r_false.smooth_terms) == 1
+                and sm.bs == plain.bs
+                and sm.variables == plain.variables
+                and "fx" not in sm.extra_args,
+                "s(x, fx=FALSE) must parse equivalently to plain s(x)",
+            )
+
+        collector.check("fx_FALSE_equals_plain", _fx_false_equals_plain)
+
+        def _fx_true_not_implemented() -> None:
+            with pytest.raises(NotImplementedError, match="fx=True"):
+                parse_formula("y ~ s(x1, fx=TRUE)")
+
+        collector.check("fx_TRUE_not_implemented", _fx_true_not_implemented)
+
+        def _bs_true_must_be_string() -> None:
+            with pytest.raises(ValueError, match="must be a string"):
+                parse_formula("y ~ s(x1, bs=TRUE)")
+
+        collector.check("bs_TRUE_must_be_string", _bs_true_must_be_string)
+        collector.raise_if_any("R-spelled boolean normalization (L3)")
+
+    def test_identical_smooths_dedup(self) -> None:
+        """Finding S3: identical s(x)+s(x) collapses to one smooth (R terms.formula);
+        a different-config repeat is kept."""
+        assert len(parse_formula("y ~ s(x)").smooth_terms) == 1
+        assert len(parse_formula("y ~ s(x) + s(x)").smooth_terms) == 1
+        # Different config (k differs) is NOT identical -> both kept.
+        assert len(parse_formula("y ~ s(x, k=6) + s(x, k=8)").smooth_terms) == 2
+
+    def test_per_term_sp_raises_not_implemented(self) -> None:
+        """Per-term sp= inside s()/te()/ti() is deferred; raise NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="Per-term sp"):
+            parse_formula("y ~ s(x1, sp=0.1)")
+
+    def test_per_term_sp_none_accepted(self) -> None:
+        """sp=None is the R default; accept and do not store it."""
+        result = parse_formula("y ~ s(x1, sp=None)")
+        assert "sp" not in result.smooth_terms[0].extra_args
+
+    def test_duplicate_parametric_dedup(self) -> None:
+        """y ~ x + x collapses to a single parametric term (matches R)."""
+        result = parse_formula("y ~ x + x")
+        assert [t.name for t in result.parametric_terms] == ["x"]
+
+        ordered = parse_formula("y ~ x1 + x2 + x1")
+        assert [t.name for t in ordered.parametric_terms] == ["x1", "x2"]
