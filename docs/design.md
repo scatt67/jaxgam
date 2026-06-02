@@ -5100,7 +5100,12 @@ class CorSpatial(CorrelationStructure):
 > bare-name parametric terms, and `0`/`- 1`/`+ 1` intercept control. R operators
 > and idioms `*`, `:`, `^`, `.`, `I()`, `poly()`, `log()`, and `offset()` are
 > **not** supported and raise a clear `ValueError` pointing at the supported
-> syntax. Ordered factors are encoded with `contr.poly`; aliased parametric
+> syntax. Note that `offset()` here refers only to the *formula idiom*: model
+> offsets themselves **are** supported in v1.0, supplied via the `offset=`
+> argument to `GAM.fit()` (and `predict()`) rather than written in the formula
+> string. The offset flows through PIRLS (`eta = X @ beta + offset`), the
+> offset-aware null deviance, and prediction. Ordered factors are encoded with
+> `contr.poly`; aliased parametric
 > columns are dropped (NA), matching mgcv. The `formulaic`-backed parametric
 > layer below is deferred to a future release. `FormulaSpec` actually holds
 > `response`, `smooth_terms`, `parametric_terms`, and `has_intercept` (see
