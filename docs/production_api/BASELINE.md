@@ -121,6 +121,21 @@ all 300 unique covariate rows become knots, so `_E_knot` is `300 x 300`; at
 `n=5000`, knot harvesting reaches the `max_knots=2000` cap, so it is
 `2000 x 2000`.
 
+## Post-B0 GP Retained Memory
+
+Commit B0 clears `_E_knot` immediately after its setup-only eigendecomposition.
+The same recursive, identity-deduplicated walker and the same deterministic GP
+models now measure:
+
+| `n` | Pre-B0 bytes | Post-B0 bytes | `_E_knot` bytes | Reduction |
+|---:|---:|---:|---:|---:|
+| 300 | 1,068,840 | **348,840** (0.349 MB) | 720,000 → **0** | 720,000 (67.4%) |
+| 5000 | 36,075,240 | **4,075,240** (4.075 MB) | 32,000,000 → **0** | 32,000,000 (88.7%) |
+
+All other retained-state line items are unchanged. These post-B0 `"full"`
+figures are the true baseline for measuring the later
+`result="inference"` reduction.
+
 ## Commands
 
 ```sh
@@ -129,6 +144,7 @@ grep -rc "def test_" tests | grep -v ":0$" | awk -F: '{s+=$2} END {print s}'
 make install
 /usr/bin/time -p make test-cov
 uv run python /tmp/jaxgam_commit_a_memory.py
+uv run python /tmp/jaxgam_commit_b0_memory.py
 ```
 
 The memory script was temporary and is not part of the repository.

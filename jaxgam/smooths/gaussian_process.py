@@ -200,6 +200,7 @@ class GaussianProcessSmooth(Smooth):
         self._E_knot = E
 
         eigvals, eigvecs = _slanczos(E, k, tol=np.finfo(float).eps ** 0.5)
+        self._E_knot = None
 
         if (eigvals < 0).any():
             warnings.warn(
