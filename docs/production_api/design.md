@@ -1,7 +1,7 @@
 # Robust API Redesign: `result` Mode + Lean Inference Core
 
 - **Status:** Proposed (design only)
-- **Design Date:** 2026-06-05 (revised 2026-06-06 over nine review rounds)
+- **Design Date:** 2026-06-05 (revised 2026-07-28 over ten review rounds)
 - **Target Branch:** `production-api`
 - **Builds on:** [`docs/refactor_gam_api/design.md`](../refactor_gam_api/design.md) (spec/results split)
 - **Release context:** jaxgam is **pre-release** (`1.0.0a1`, unreleased). No
@@ -80,6 +80,33 @@
 > list (§11.2); `fitting/*` is correctly labeled **Phase 2** (§11.3); stdlib
 > **`pickle`** is stated as the public default over `cloudpickle` (§8); and `_X` is
 > restored to every drop/absence summary to match the hard gate (§4.2).
+>
+> **Subtraction pass (round 10).** Seven changes after an independent
+> verification pass re-derived §2.1 from the code rather than from the doc. The
+> central claim held (no `predict_matrix` reads `_S`/`_penalties`/`_E_knot`), but
+> the rounds had been purely **additive** — round 10 removes rather than patches.
+> **(1)** GP's **`_E_knot` is a dead store**, not a retention problem: it is
+> assigned at `gaussian_process.py:200` and **read nowhere in `jaxgam/`**. It is
+> **89% of the GP baseline footprint** (32.0 MB of 36.08 MB at `n=5000`), so
+> `result="full"` leaks it too. Freed unconditionally at the end of GP `setup()`
+> by a **separate one-line prerequisite commit (B0)**; the
+> `copy_for_prediction()` override is retained as **defense-in-depth**, no longer
+> load-bearing (§2.1, §7.2, §13, §14). **(2)** the **`PredictMatrixBuilder`
+> Protocol is cut** — after §6's delegation, `ModelSetup` and `PredictSpec` are
+> not two implementations but one implementation and a forwarder; `predict_core`
+> is typed directly on `PredictSpec` (§5.1, §6, §9, §11.1). **(3)** the lean type
+> **exposes `smooth_info`/`term_names`** (all-scalar metadata already carried by
+> `PredictSpec`) so `edf` is interpretable off a `GAMInferenceResult` — zero
+> bytes (§5.4, §5.5). **(4)** `formula` was about to become a **ninth stored
+> duplicate** (on both `GAMPredictor` and `_FitDiagnostics`); the lean type reads
+> it as a property (§5.4, §5.5). **(5)** the design reduces **retention, not
+> peak** — stated explicitly rather than implied (§1.1, §3.2). **(6)** a
+> `_jaxgam_version` stamp + `__setstate__` mismatch **warning** makes the
+> same-version pickle contract *detectable* instead of silent (§8) — a guardrail,
+> not the versioned format that stays out of scope. **(7)** `setup.penalties`
+> (`CompositePenalty`, embedded `(total_p, total_p)`) added to the §2.1 inventory
+> so the Metric-#3 delta is fully attributable. Citation drift fixed:
+> `registry.py:25`→`:26`, `test_results.py:64`→`:63`.
 
 ---
 
@@ -115,8 +142,24 @@ training design caches `_X`. It *also* keeps per-smooth **penalty matrices**
 interactive analysis the full result is right — you want `.summary()`/`.plot()`.
 For a job whose only output is a model to predict from, it is dead weight:
 `setup.X` is typically larger than the input, `training_data` pins the input
-frame alive, a tensor's `_penalties` are `O(n_coefs²)`, and a GP's `_E_knot` is
-`O(n_knots²)`. None of it is needed for `predict(newdata)`.
+frame alive, and a tensor's `_penalties` are `O(n_coefs²)`. None of it is needed
+for `predict(newdata)`.
+
+> **Not counted as motivation: GP's `_E_knot`.** The `O(n_knots²)` knot–knot
+> kernel is 89% of the GP baseline footprint (32.0 MB of 36.08 MB at `n=5000`),
+> but it is a **dead store**, not a retention problem — assigned at
+> `gaussian_process.py:200` and **read nowhere in `jaxgam/`**, so `result="full"`
+> leaks it just as badly. It is freed unconditionally at the end of GP `setup()`
+> by a **one-line prerequisite commit (B0, §13)** that needs none of this design.
+> Attributing it to `result="inference"` would inflate the headline with a bug
+> fix. What this design actually buys on a GP fit is the remaining ~4 MB
+> (`setup.X`, `_X`, `training_data`, `_S`).
+
+**This reduces retention, not peak.** The fit still materializes `setup.X`, every
+per-smooth `_X`, and every penalty; `result="inference"` drops them in `_from_fit`
+*after* Phase 2 completes. That is exactly right for a long-lived serving object,
+and does **nothing** for a large-`n` fit that OOMs while fitting. Peak-memory work
+(chunking, sparse) is a different project (§3.2).
 
 ### 1.2 The Fix: a `result` mode (two result types) + a lean core
 
@@ -163,7 +206,8 @@ durable serialization format (it does not; §8).
 `PredictSpec` (lazy) + a single Phase-1 predict-matrix builder + a single Phase-3
 predict finish; **export** the new public types; the zero-numerical-risk DRY
 cleanups tied to the result-type refactor (collapse the eight `setup.*` duplicate
-fields; drop the dead `hasattr` guard).
+fields; drop the dead `hasattr` guard); and the **GP `_E_knot` dead-store fix**
+(§13 commit B0) — a prerequisite, not a product of the mode.
 
 **Out of scope:** serialization *format* / `save()`/`load()` / versioning /
 integrity / migration; a JAX-free import guarantee; distributional sampling /
@@ -189,6 +233,8 @@ not implement its deprecated `__getattr__` forwarding (pre-release).
 | `setup.X` | **(n × p)** | own buffer | **dominant `O(n·p)` cost** |
 | per-smooth `_X` (and nested) | (n × k) each | own buffer | training design caches inside each smooth (and `_marginals`/`base_smooth`) — §7 |
 | per-smooth `_S` / tensor `_penalties` | **(k × k)** / **(n_coefs × n_coefs)** | own buffer | **penalty matrices — fitting-only, NOT read by predict** (§2.1 note) |
+| `setup.penalties` (`CompositePenalty`) | n_penalties × **(total_p × total_p)** | own buffer | penalties embedded in constrained space (`design.py:133`); read post-fit only by `summary()` (`summary.py:534,634`). Dropped with `setup`; line-item it in the Metric-#3 walk or the delta has an unexplained residual on multi-penalty models. |
+| GP `_E_knot` | (n_knots × n_knots) | own buffer | **dead store** — assigned `gaussian_process.py:200`, read nowhere. Freed at setup by commit B0 (§13); not a `result`-mode win. |
 | `training_data` (dict) | Σ smooth-covariate cols (n each) | view-or-copy | **pins the input frame alive** |
 | `setup.y`, `setup.weights`, `setup.offset` | (n,) each | derived | response / weights / offset |
 | `fitted_values`, `linear_predictor` | (n,) each | fresh from device | in-sample predictions |
@@ -201,10 +247,17 @@ not implement its deprecated `__getattr__` forwarding (pre-release).
 > - **TPRS** reads `_shift`, `_Xu` (knots), `_UZ` (reparam) — `tprs.py:588–599`; `_S` (`tprs.py:515`) unused in predict.
 > - **Cubic** reads `_knots`, `_F` — `cubic.py:419`; `_S` (`cubic.py:375`) unused in predict.
 > - **Random effect** reads stored levels via `_build_interaction_matrix` — `random_effects.py:222`; `_S` (`:98`) only in `build_penalty_matrices` (`:238`).
-> - **GP** reads `_knt`/`_resolved_rho`/`_shift`/`_UZ` via `_build_design` (`gaussian_process.py:157,246`); `_S` (`:226`) **and `_E_knot`** (`:200` — the `O(n_knots²)` knot–knot kernel, feeds the setup eigendecomp then dead) are NOT read by predict.
+> - **GP** reads `_knt`/`_resolved_rho`/`_shift`/`_UZ` via `_build_design` (`gaussian_process.py:157,246`); `_S` (`:226`) **and `_E_knot`** (`:200`) are NOT read by predict.
 > - **Tensor** reads `_marginals`, `_XP_list` (+ `_Z_list` for `ti`) — `tensor.py:358–362`; `_penalties` (`:321,477`) only in setup/`build_penalty_matrices`.
 >
-> So the droppable set is `_X`, the penalty caches `_S`/`_penalties`, **and GP's `_E_knot`**. The
+> **Stronger for `_E_knot`: it is read by *nothing*.** `grep -rn _E_knot jaxgam/`
+> returns exactly two hits — the declaration (`:90`) and the assignment (`:200`).
+> Not `predict_matrix`, not `build_penalty_matrices`, not `setup` after the line
+> that writes it. It is a dead store in **both** result modes, which is why it is
+> fixed at the source (commit B0, §13) rather than papered over by
+> `copy_for_prediction()`. The GP override survives as **defense-in-depth** (§7.2).
+>
+> So the droppable set is `_X`, the penalty caches `_S`/`_penalties`, **and GP's `_E_knot`** (already `None` post-B0). The
 > kept set is exactly the predict transforms: knots (`_Xu`), reparam/constraint
 > (`_UZ`, `_F`, `_XP_list`, `_Z_list`), `_shift`, stored levels — all `O(knots·k)`
 > or `O(k²)`, none `O(n)`. Tensor `_penalties` at `O(n_coefs²)` are frequently the
@@ -225,7 +278,7 @@ metadata, **dup** duplicate.
 | `converged`, `n_iter`, `convergence_info`, `theta`, `n`, `formula`, `method`, `lambda_strategy`, `execution_path` | M | no | repr, summary | provenance/metadata |
 | `family` (object) | **S**/D | no | predict (link), summary, repr | fit copies it **only** for estimated-theta NB (`api.py:122`); standard families are shared registry singletons (`registry.py:16`). Snapshot owner = `_from_fit`, post-`put_theta` (§5.3). |
 | `setup` (`ModelSetup`) | **S**/D | **yes** | predict, summary | predict needs `build_predict_matrix`; re-holds `X/y/weights/penalties` + per-smooth `_X`/penalties |
-| `coef_map`, `smooth_info`, `term_names` | **dup** | no | summary, plot | `= setup.*` |
+| `coef_map`, `smooth_info`, `term_names` | **dup**/M | no | summary, plot | `= setup.*`. **`SmoothInfo` is all `str`/`int`/`bool`** (`design.py:68–77`) — **zero arrays**, and `PredictSpec` already carries `smooth_info` (§5.2). So `smooth_info`/`term_names` are free to expose on the lean type, and must be: without them `edf` is an unlabeled array (§5.4). |
 | `X`, `y`, `weights`, `offset` | **dup/T** | **yes** | predict (self SE), summary | `= setup.*` (aliases) |
 | `training_data` (dict) | **T** | **yes** | plot | raw covariate columns, plotting only |
 
@@ -309,9 +362,10 @@ reference aliases that obscure ownership. **Seven** become `@property` reads of
    external-offset flag explicitly, and is picklable.
 6. **Honest layering & one source per path:** **one** Phase-1 predict-matrix
    builder over **one concrete `PredictSpec`**; **one** Phase-3 predict finish;
-   `predict_core` depends on a one-method Protocol; the predictor carries
-   `PredictSpec` as an explicit boundary value object (not a hidden dependency,
-   §9). Eliminate the eight `setup.*` *stored* duplications. (Deliberate
+   `predict_core` is typed directly on `PredictSpec` (**no Protocol seam** — §5.1);
+   the predictor carries `PredictSpec` as an explicit boundary value object (not a
+   hidden dependency, §9). Eliminate the eight `setup.*` *stored* duplications —
+   and introduce no new ones (`formula`, §5.5). (Deliberate
    by-reference sharing of read-only predict transforms is allowed; this is about
    removing duplicate **stored aliases**, §5.3, §7.)
 7. **Preserve the three-phase boundary;** no fitting math touched; mgcv parity
@@ -323,8 +377,9 @@ reference aliases that obscure ownership. **Seven** become `@property` reads of
 ML serving infrastructure; a JAX-free import path; distributional sampling /
 intervals / `family.sample()`; a point-only (drop-`Vp`) mode; the null-deviance
 DRY rewrite and the `summary()` CQS change (**deferred**, §10.3); back-compat
-machinery; **changing any numerical result** (predictions/SE/EDF/deviance incl.
-`null_deviance` byte-identical to today — §10).
+machinery; **peak** fit-time memory (chunking/sparse — this design changes
+retention only, §1.1); **changing any numerical result** (predictions/SE/EDF/
+deviance incl. `null_deviance` byte-identical to today — §10).
 
 ---
 
@@ -390,27 +445,43 @@ is the ISP/LSP-clean alternative to a partially-disabled object.
 
 ## 5. Object Model
 
-Three frozen types + one Protocol. Roles: `GAMPredictor` ⊂ `GAMInferenceResult`'s
-surface; `GAMResults` is the full diagnostic result.
+Three frozen types. Roles: `GAMPredictor` ⊂ `GAMInferenceResult`'s surface;
+`GAMResults` is the full diagnostic result.
 
-### 5.1 `PredictMatrixBuilder` (Protocol — `predict_core`'s parameter seam)
+### 5.1 No `PredictMatrixBuilder` Protocol (considered and cut, round 10)
+
+Rounds 4–9 carried a one-method `@runtime_checkable` Protocol in
+`jaxgam/inference/_protocol.py` so that `predict_core` could accept "either a
+`PredictSpec` (lean path) or a `ModelSetup` (full-result self-prediction)."
+**It is cut.** Once §6's delegation lands —
 
 ```python
-# jaxgam/inference/_protocol.py
-from typing import Protocol, runtime_checkable
-import numpy as np
-
-@runtime_checkable
-class PredictMatrixBuilder(Protocol):
-    def build_predict_matrix(self, newdata) -> np.ndarray: ...   # pure NumPy
+# ModelSetup, after the §6 move
+def build_predict_matrix(self, newdata):
+    return build_predict_matrix(self._lazy_predict_spec(), newdata)
 ```
 
-This exists so the **one** `predict_core` finish function (§6) accepts either a
-`PredictSpec` (lean path) or a `ModelSetup` (full-result self-prediction) without
-duplicating the finishing logic. It is a narrow, honest use of a Protocol. It is
-**not** a claim that `GAMPredictor` is decoupled from Phase 1 — the predictor
-carries a concrete `PredictSpec` (§5.3, §9). Implementers do not import the
-Protocol (structural typing) — no Phase 1 → Phase 3 import.
+— `ModelSetup` and `PredictSpec` are **not two implementations of a seam**. They
+are one implementation and a forwarder to it. Passing `setup` and passing
+`setup._lazy_predict_spec()` reach the same cached `PredictSpec` and produce
+byte-identical output, so the Protocol had exactly one shape and abstracted
+nothing. `predict_core` is therefore typed directly:
+
+```python
+def predict_core(spec: "PredictSpec", coefficients, Vp, link, newdata, *, ...): ...
+```
+
+`GAMPredictor` passes `self._predict_spec`; `GAMResults` passes
+`self.setup._lazy_predict_spec()` (already built by the time anything predicts —
+`build_predict_matrix` builds it too, so goal #3 is untouched: a full fit that
+never predicts still builds no spec).
+
+**What this removes:** a file, a public export, a `runtime_checkable` decorator
+Python does not enforce structurally anyway, and the §9 paragraph explaining why
+the Protocol was not really achieving DIP. The design's honest DIP position was
+already "bounded, no decoupling claimed" — the consistent conclusion is to delete
+the seam rather than document its limits for a fourth round. This is the one
+place the additive review process had visibly accumulated structure.
 
 ### 5.2 `PredictSpec` (NEW — Phase 1, the explicit boundary value object)
 
@@ -451,9 +522,10 @@ class GAMPredictor:                 # O(p² + Σ predict-transform size); no tra
     coefficients: np.ndarray        # (p,) constrained space (post Sl.setup back-transform)
     Vp: np.ndarray                  # (p,p) Bayesian posterior covariance — REQUIRED
     family: "ExponentialFamily"     # post-fit snapshot; exact fitted link (+ final NB theta)
-    formula: str                    # signature / audit / repr
-    offset_was_nonzero: bool        # external-offset predict warning (NOT inferred from the spec)
+    formula: str                    # signature / audit / repr (the ONE owner — §5.5)
+    offset_was_nonzero: bool        # external-offset predict warning
     _predict_spec: "PredictSpec"    # explicit Phase-1 boundary value object (§5.2)
+    _jaxgam_version: str = field(default_factory=lambda: jaxgam.__version__)
 
     def __post_init__(self):
         # Own coefficients/Vp outright: copy first (so we never alias — and then
@@ -468,20 +540,36 @@ class GAMPredictor:                 # O(p² + Σ predict-transform size); no tra
         self.__dict__.update(state)
         self.coefficients.setflags(write=False)
         self.Vp.setflags(write=False)
+        if self._jaxgam_version != jaxgam.__version__:
+            warnings.warn(                              # detectable, not silent — §8
+                f"GAMPredictor was pickled by jaxgam {self._jaxgam_version}, "
+                f"loading under {jaxgam.__version__}. Pickles are not a "
+                "cross-version format; predictions may be wrong or fail.",
+                stacklevel=2,
+            )
 ```
+
+**`_jaxgam_version` makes the pickle contract detectable.** §8 says pickles are
+same-version/transient because `PredictSpec`'s layout is not version-stable — but
+saying so in prose does nothing at load time, where a stale pickle either raises
+cryptically or silently mis-predicts. The stamp + warning costs one field and five
+lines, turns the worst failure mode (silent wrong answers in production) into a
+loud one, and is **not** the versioned artifact format that stays out of scope
+(§3.2): no schema, no migration, no integrity, no `save()`/`load()`.
 
 **Public contract (stable):** `predict(newdata, ...)` / `predict_matrix(newdata)`;
 read-only `coefficients`/`Vp`; the `family` **snapshot** (an independent deep copy,
 not a frozen object — see "Why a family snapshot" below) exposing `link` ≡
-`family.link`; `formula`. `offset_was_nonzero` and `_predict_spec` are internal
-(the spec is a concrete Phase-1 object; layout not public, not version-stable —
-§8).
+`family.link`; `formula`. `offset_was_nonzero`, `_predict_spec`, and
+`_jaxgam_version` are internal (the spec is a concrete Phase-1 object; layout not
+public, not version-stable — §8).
 
-**`offset_was_nonzero` is an explicit field, not derived from the Protocol.**
-`predict_core` needs it to reproduce the external-offset warning (§6), but the
-one-method `PredictMatrixBuilder` does not expose it. Rather than widen the
-Protocol or reach into `_predict_spec`, the predictor carries the flag directly
-and passes it to `predict_core`.
+**`offset_was_nonzero` is an explicit field, not derived from the spec.**
+`predict_core` needs it to reproduce the external-offset warning (§6). It is
+deliberately **not** stored on `PredictSpec` (the matrix builder never reads it,
+§5.2) and **not** recomputed from a retained offset array (the lean path holds
+none). One `bool`, one owner: the predictor computes it in `_from_fit` before
+`setup` is discarded and passes it down.
 
 **`Vp` is required.** Every fit produces `Vp` (it backs summary SEs too); no path
 drops it. Typing it `np.ndarray` removes a dead branch and guard. A future
@@ -530,12 +618,22 @@ surface. Neither exposes a method that raises for being in the "wrong mode."
 | Holds | Notes |
 |---|---|
 | `_predictor: GAMPredictor` | composed at fit (via `copy_for_prediction`, §7) |
-| scalar diagnostics + metadata | `edf*`, `deviance`, `null_deviance`, `score`, `scale`, `theta`, `smoothing_params`, `converged`, `n_iter`, `convergence_info`, `formula`, `method`, `lambda_strategy`, `execution_path`, `n` |
+| scalar diagnostics + metadata | `edf*`, `deviance`, `null_deviance`, `score`, `scale`, `theta`, `smoothing_params`, `converged`, `n_iter`, `convergence_info`, `method`, `lambda_strategy`, `execution_path`, `n` (**not** `formula` — property → `_predictor`, §5.5) |
 
 Surface: `predict(newdata)` / `predict_matrix(newdata)` (delegate to
-`_predictor`), `to_predictor()` → `self._predictor`, `coefficients`/`Vp`/`family`
-(properties → `_predictor`), the scalars, `__repr__`. **No** `summary`/`plot`;
+`_predictor`), `to_predictor()` → `self._predictor`, `coefficients`/`Vp`/`family`/
+`formula` (properties → `_predictor`), **`smooth_info`/`term_names`** (properties
+→ `_predictor._predict_spec`), the scalars, `__repr__`. **No** `summary`/`plot`;
 `predict` requires `newdata`.
+
+> **Why `smooth_info`/`term_names` are on the lean type.** They were classified
+> "dup" in §2.2 only because `GAMResults` reads them off `setup` — an accident of
+> where they were stored, not a memory decision. `SmoothInfo` is all
+> `str`/`int`/`bool` (`design.py:68–77`), and `PredictSpec` **already carries
+> `smooth_info`** (§5.2), so the data is retained either way; §5.5 was simply not
+> exposing it. Without it `GAMInferenceResult.edf` is a bare array with no way to
+> say which smooth each entry belongs to — on the type whose stated purpose is
+> production logging (§4.2). Exposing them costs **zero bytes**.
 
 **`GAMResults`** (`fit(result="full")`):
 
@@ -562,15 +660,25 @@ guarded `@property` reads of `setup`; the eighth, `n`, is re-homed to the
 | Current field | `GAMResults` | `GAMInferenceResult` |
 |---|---|---|
 | `coefficients`, `Vp`, `family` | direct fields | via `_predictor` (property) |
+| `formula` | direct field | **`@property` → `_predictor.formula`** (§5.3 owns it) |
 | predict-matrix state | `setup` (lazy `PredictSpec`) | inside `_predictor` (`_predict_spec`) |
-| external-offset flag | via `setup` | `_predictor.offset_was_nonzero` |
+| external-offset flag | derived from `setup.offset` | `_predictor.offset_was_nonzero` |
 | `linear_predictor`, `fitted_values`, `training_data` | held | **dropped** |
 | `setup` | held | **dropped** |
-| `coef_map`, `smooth_info`, `term_names`, `X`, `y`, `weights`, `offset` | `@property` → `setup` | not exposed (no `setup`) |
-| `edf*`, `deviance`, `null_deviance`, `smoothing_params`, `score`, `scale`, `theta`, `converged`, `n_iter`, `convergence_info`, `n`, `formula`, `method`, `lambda_strategy`, `execution_path` | shared base | shared base |
+| `smooth_info`, `term_names` | `@property` → `setup` | **`@property` → `_predictor._predict_spec`** (zero-byte metadata, §5.4) |
+| `coef_map`, `X`, `y`, `weights`, `offset` | `@property` → `setup` | not exposed (no `setup`) |
+| `edf*`, `deviance`, `null_deviance`, `smoothing_params`, `score`, `scale`, `theta`, `converged`, `n_iter`, `convergence_info`, `n`, `method`, `lambda_strategy`, `execution_path` | shared base | shared base |
 
 **Eliminated:** all eight `setup.*` re-exposures as stored fields; all dense
 training-array **and penalty-cache** retention under `result="inference"`.
+
+> **`formula` has exactly one owner.** An earlier draft put `formula: str` on
+> **both** `GAMPredictor` (§5.3, needed so a pickled predictor is self-describing
+> when it travels alone) **and** `_FitDiagnostics` — which would have introduced a
+> **ninth stored duplicate** in the same design whose DRY headline is deleting
+> eight. The predictor owns it; `GAMInferenceResult.formula` is a property.
+> `GAMResults` keeps its own stored `formula` (it has no predictor until
+> `to_predictor()`).
 
 ---
 
@@ -639,11 +747,11 @@ def finish_prediction(eta, X_p, link, Vp, *, pred_type, se_fit):
         se = se * np.abs(np.asarray(link.mu_eta(eta)))
     return pred, se
 
-def predict_core(predict_builder, coefficients, Vp, link, newdata, *,
+def predict_core(spec: "PredictSpec", coefficients, Vp, link, newdata, *,
                  pred_type="response", se_fit=False, offset=None, offset_was_nonzero=False):
     if pred_type not in ("response", "link"):
         raise ValueError(f"pred_type must be 'response' or 'link', got {pred_type!r}")
-    X_p = predict_builder.build_predict_matrix(newdata)      # PredictSpec or ModelSetup (the seam)
+    X_p = spec.build_predict_matrix(newdata)                 # one concrete type (§5.1)
     eta = X_p @ coefficients
     if offset is not None:
         eta = eta + np.asarray(offset, np.float64).ravel()
@@ -655,10 +763,20 @@ def predict_core(predict_builder, coefficients, Vp, link, newdata, *,
 
 `GAMPredictor.predict()` calls `predict_core(self._predict_spec, self.coefficients,
 self.Vp, self.family.link, newdata, …, offset_was_nonzero=self.offset_was_nonzero)`.
-`GAMResults.predict()` passes `setup` (self-prediction adds the cached-`eta`
-branch with `X_p = setup.X` only when `se_fit`) and `setup`'s offset flag — one
-finishing path. SE is the **exact** `sqrt(rowSums((X_p @ Vp) * X_p)) * |mu_eta|`
-from `results.py:299–307` — byte-identical to today and to `predict.gam`.
+`GAMResults.predict()` passes **`self.setup._lazy_predict_spec()`** (self-prediction
+adds the cached-`eta` branch with `X_p = setup.X` only when `se_fit`) and its
+derived offset flag — one finishing path over **one concrete type**, no Protocol
+(§5.1). SE is the **exact** `sqrt(rowSums((X_p @ Vp) * X_p)) * |mu_eta|` from
+`results.py:299–307` — byte-identical to today and to `predict.gam`.
+
+> **Consequence worth stating: the full path predicts through predict-only copies
+> too.** After this move, `setup.build_predict_matrix()` routes through the lazily
+> built `PredictSpec`, whose smooths are `copy_for_prediction()` copies. So every
+> existing test in `tests/test_predict/` exercises the cache-dropping path — the
+> `_X`/`_S`/`_penalties` drop is regression-gated by the **whole** predict suite,
+> not only by the new tests. This is safe precisely because §2.1 verified no
+> `predict_matrix` reads a dropped cache, and it is why "`tests/test_predict/`
+> passes byte-identically" is a strong gate rather than a formality.
 
 ---
 
@@ -727,19 +845,25 @@ class FactorBySmooth:
         clone.base_smooth = self.base_smooth.copy_for_prediction()
         return clone
 
-# jaxgam/smooths/gaussian_process.py  — base drops _X/_S; ALSO drop _E_knot (O(n_knots²) setup cache)
+# jaxgam/smooths/gaussian_process.py  — base drops _X/_S; _E_knot is already None post-B0
 class GaussianProcessSmooth(Smooth):
     def copy_for_prediction(self):
         clone = super().copy_for_prediction()    # drops _X, _S
-        clone._E_knot = None                      # knot–knot kernel, gaussian_process.py:200 — not read by predict
+        clone._E_knot = None                      # defense-in-depth: B0 already nulls it at setup
         return clone
 ```
 
 (cubic / TPRS / random-effect use the base default — verified: their
 `predict_matrix` reads only `_knots`/`_F`, `_Xu`/`_UZ`, or stored levels, never
-`_S`. **GP overrides** to additionally drop `_E_knot`: its `_build_design`
-(`gaussian_process.py:157,246`) reads `_knt`/`_resolved_rho`/`_shift`/`_UZ`, not
-`_E_knot`; §2.1. The registry audit (§12.2.8) would flag a GP that forgot this.)
+`_S`. The registry audit (§12.2.8) would flag a GP that forgot the override.)
+
+> **The GP override is defense-in-depth, not the `_E_knot` fix.** Commit B0 (§13)
+> nulls `_E_knot` at the end of `setup()`, so by the time any result exists it is
+> already `None` in **both** modes — that is where the 32 MB actually comes back
+> (§1.1, §2.1). The override is kept so the invariant survives a future change
+> that starts retaining `_E_knot` past setup, and so the §12.2.2 banned-state
+> assertion has a single consistent shape across smooth types. Do **not** cite it
+> as the source of the GP memory win.
 
 `build_predict_spec` rebuilds the `coef_map` with predict-only smooths — Phase 3
 never names a private attribute, with **no in-place mutation** of the live `setup`
@@ -800,8 +924,12 @@ pickle.loads(blob).predict(newdata, se_fit=True)
   persistence — a loaded predictor depends on `PredictSpec`'s (Phase-1) class
   layout, which can change across versions; pickles are **not** guaranteed
   portable between versions (pre-release). Durable persistence needs the versioned
-  schema we cut (§3.2). This dependence is the honest reason the DIP claim is
-  soft (§9).
+  schema we cut (§3.2).
+- **The contract is *detectable*, not just documented** (round 10): the predictor
+  stamps `_jaxgam_version` at construction and `__setstate__` **warns** on
+  mismatch (§5.3). Prose in a design doc cannot stop a stale pickle from silently
+  mis-predicting in a serving worker; a five-line check can. This is a guardrail
+  only — still no schema, no migration, no integrity, no `save()`/`load()`.
 - **stdlib `pickle` is the public default** and works when every family/link/
   smooth is **built-in or module-top-level** — the common case. **`cloudpickle` is
   *required* only for *locally-defined* custom links/families** (a `Link` subclass
@@ -828,15 +956,17 @@ pickle.loads(blob).predict(newdata, se_fit=True)
 - **ISP/LSP** — **two narrow types instead of one with raising methods**:
   `GAMInferenceResult` exposes only inference + scalars; `GAMResults` adds the
   diagnostic surface. No refused-bequest, no `DiagnosticsNotRetainedError`.
-- **DIP — honest and bounded.** `predict_core` depends on the one-method
-  `PredictMatrixBuilder` Protocol, so `ModelSetup` (self-prediction) and
-  `PredictSpec` (lean) share **one** finish path. `GAMPredictor` carries a
-  **concrete `PredictSpec`** — an explicit, deliberately-designed
-  Phase-1→Phase-3 value object (pure NumPy, `n`-independent, picklable), **not**
-  hidden behind the Protocol. We **do not claim** the predictor is decoupled from
-  Phase-1 internals: pickle depends on `PredictSpec`'s layout (§8). The real SOLID
-  wins are the ISP/LSP two-type split and the single builder/finish path — not a
-  hidden Phase-1 dependency.
+- **DIP — not claimed, and the fake seam is gone.** Rounds 4–9 justified a
+  one-method `PredictMatrixBuilder` Protocol as `predict_core`'s parameter type.
+  Round 10 cut it: after §6's delegation there is only **one** implementation
+  (`PredictSpec`) and a forwarder (`ModelSetup`), so the Protocol abstracted
+  nothing while costing a file, an export, and three rounds of caveats (§5.1).
+  `GAMPredictor` carries a **concrete `PredictSpec`** — an explicit,
+  deliberately-designed Phase-1→Phase-3 value object (pure NumPy, `n`-independent,
+  picklable). We **do not claim** the predictor is decoupled from Phase-1
+  internals: pickle depends on `PredictSpec`'s layout (§8). The real SOLID wins
+  are the ISP/LSP two-type split and the single builder/finish path — an
+  unearned Protocol was never one of them.
 - **OCP** — a new family adds a registry entry + `Link`; a new smooth implements
   `copy_for_prediction()` (or is audited as base-default-correct — enforced by the
   registry audit test §12.2.8) + `predict_matrix`. No new field per type.
@@ -887,24 +1017,24 @@ Neither blocks the result-type/memory work; both are clearly separable.
 | File | Phase | Description |
 |---|---|---|
 | `jaxgam/formula/predict_matrix.py` | 1 | `PredictSpec` + `build_predict_matrix(spec, newdata)` + module-level `_to_dict`/`_validate_equal_lengths`/`_build_parametric_matrix`/`_encode_factor`/`_contr_poly` (the full transitive closure, moved from `ModelSetup`) + `build_predict_spec(setup)`. numpy only. §5.2, §6, §7 |
-| `jaxgam/inference/__init__.py` | 3 | Public surface: **`GAMPredictor`** (+ `PredictMatrixBuilder` Protocol for typing). **`predict_core` stays private** to `_core.py` — a low-level seam over Phase-1 builders, not public API. |
-| `jaxgam/inference/_protocol.py` | 3 | `PredictMatrixBuilder` Protocol. §5.1 |
-| `jaxgam/inference/_core.py` | 3 | `predict_core` + `finish_prediction`. §6 |
-| `jaxgam/inference/predictor.py` | 3 | `GAMPredictor` (`Vp` required; `offset_was_nonzero` field; defensive-copy read-only on `coef`/`Vp`; carries `PredictSpec`). §5.3 |
-| `tests/test_inference/test_predictor.py` | — | predict parity vs `GAMResults` (incl. offset) + **vs R** (tensor, factor-by, NB, non-default built-in link — offset & locally-defined custom links excluded, §12.2.1b); pickle + cloudpickle round-trip (read-only survives); read-only `coef`/`Vp`; family-snapshot independence + final-theta; `to_predictor()` doesn't freeze/alias the result's arrays; `copy_for_prediction` drops `_X`/`_S`/`_penalties`/`_E_knot`, keeps `_XP_list`/`_Z_list`/`_UZ`. |
-| `tests/test_result_mode.py` | — | `result="inference"` ⇒ `GAMInferenceResult` (runtime `isinstance`); banned dense arrays + penalty caches absent (recursive); no `summary`/`plot`; scalars read on both; invalid `result` raises; `typing.assert_type` block (§12.5). |
+| `jaxgam/inference/__init__.py` | 3 | Public surface: **`GAMPredictor`** only. **`predict_core`/`finish_prediction` stay private** to `_core.py` — a low-level path over the Phase-1 spec, not public API. |
+| `jaxgam/inference/_core.py` | 3 | `predict_core(spec, …)` + `finish_prediction`. §6 |
+| `jaxgam/inference/predictor.py` | 3 | `GAMPredictor` (`Vp` required; `offset_was_nonzero` + `_jaxgam_version` fields; defensive-copy read-only on `coef`/`Vp`; carries `PredictSpec`). §5.3 |
+| `tests/test_inference/test_predictor.py` | — | predict parity vs `GAMResults` (incl. offset) + **vs R** (tensor, factor-by, NB, non-default built-in link — offset & locally-defined custom links excluded, §12.2.1b); pickle + cloudpickle round-trip (read-only survives; **stale-version warning**); read-only `coef`/`Vp`; family-snapshot independence + final-theta; `to_predictor()` doesn't freeze/alias the result's arrays; `copy_for_prediction` drops `_X`/`_S`/`_penalties`/`_E_knot`, keeps `_XP_list`/`_Z_list`/`_UZ`. |
+| `tests/test_result_mode.py` | — | `result="inference"` ⇒ `GAMInferenceResult` (runtime `isinstance`); banned dense arrays + penalty caches absent (recursive); no `summary`/`plot`; scalars + **`smooth_info`/`term_names`/`formula`** read on both; invalid `result` raises; `typing.assert_type` block (§12.5). |
 | `docs/production_api/implementation_plan.md` | — | Commit-by-commit breakdown. |
 
 > Package `jaxgam/inference/` (renamed from the first draft's `serving/`).
 > `PredictSpec` + builder + strip live in **Phase 1** (`formula/`); only the
-> predictor, predict-finish, and Protocol are in Phase 3 (`inference/`).
+> predictor and the predict-finish are in Phase 3 (`inference/`).
 
 ### 11.2 Modified Files
 
 | File | Change |
 |---|---|
 | `jaxgam/__init__.py` | **Export `GAMInferenceResult` and `GAMPredictor`** (add to imports + `__all__`); they are public return/handoff types. |
-| `jaxgam/smooths/base.py` (+ `tensor.py`, `gaussian_process.py`, `by_variable.py`) | Add `copy_for_prediction()` — base drops `_X`+`_S`; tensor drops `_X`+`_penalties` and recurses `_marginals`; **GP (`gaussian_process.py`) drops `_E_knot`** (the `:200` knot–knot cache); by-variable recurses `base_smooth`. Documented base-default precondition. §7.2 |
+| `jaxgam/smooths/gaussian_process.py` (**commit B0, standalone**) | Null `_E_knot` at the end of `setup()` — a dead store (`:200`, read nowhere), 32 MB at `n=5000`. Independent of this design; lands first so the baseline delta is honest. §1.1, §2.1, §13 |
+| `jaxgam/smooths/base.py` (+ `tensor.py`, `gaussian_process.py`, `by_variable.py`) | Add `copy_for_prediction()` — base drops `_X`+`_S`; tensor drops `_penalties` and recurses `_marginals` (it has no `_X`/`_S` of its own); **GP** additionally nulls `_E_knot` as defense-in-depth (already `None` post-B0); by-variable recurses `base_smooth` (`FactorBySmooth`/`NumericBySmooth` are **not** `Smooth` subclasses and hold no `_X`). Documented base-default precondition. §7.2 |
 | `jaxgam/formula/design.py` | `ModelSetup.build_predict_matrix` + the five helpers (`_to_dict`/`_validate_equal_lengths`/`_build_parametric_matrix`/`_encode_factor`/`_contr_poly`) move to `formula/predict_matrix.py` (thin `@staticmethod` shims remain for `build()`/formula tests); `ModelSetup` builds a **lazy** cached `PredictSpec` and delegates. Phase 1 → Phase 1. |
 | `jaxgam/api.py` | Keyword-only `result="full"` on **`GAM.fit()`** with `@overload`; validate value; thread the mode into `_from_fit`. **Rename the local optimizer output `result` (`api.py:136`) → `fit_result`** to free the public `result` kwarg. The **NB pre-fit `deepcopy` (`api.py:122`) is unchanged** — it is *not* the predictor snapshot (§5.3). |
 | `jaxgam/results.py` | Add `_FitDiagnostics` base + `GAMInferenceResult` + reshaped `GAMResults`; both delegate predict to `predict_core`/`finish_prediction`; **`_from_fit` takes the family snapshot (`copy.deepcopy`, post-`put_theta`) — the single snapshot owner (§5.3)**; `to_predictor()` (compose / build-on-demand from lazy `setup` spec + snapshot + offset flag); seven `setup.*` → guarded `@property` (eighth, `n`, → `_FitDiagnostics` scalar, §5.5); drop dead `hasattr`. **Rename `_from_fit`'s `result: NewtonResult` param (`results.py:111`) → `fit_result`; the mode threads as a new `result_mode` arg** (no collision with the public `result`). **`null_deviance` + `summary()` untouched (§10.3).** |
@@ -977,14 +1107,18 @@ audit.
 3. **Type/surface:** `fit(result="inference")` returns a `GAMInferenceResult`
    **instance** (runtime `isinstance`) with **no** `summary`/`plot` and a
    `newdata`-required `predict`; `fit()`/`fit(result="full")` returns a
-   `GAMResults` instance; an invalid `result` raises `ValueError`; scalars read on
-   both. The **static** `@overload` is asserted with `typing.assert_type` (teeth
-   only under a checker, §12.5); the `isinstance`/`ValueError` checks are the
-   always-on runtime guarantee.
+   `GAMResults` instance; an invalid `result` raises `ValueError`; scalars **and
+   `smooth_info`/`term_names`/`formula`** read identically on both — the metadata
+   leg is what makes `edf` interpretable on the lean type (§5.4). The **static**
+   `@overload` is asserted with `typing.assert_type` (teeth only under a checker,
+   §12.5); the `isinstance`/`ValueError` checks are the always-on runtime
+   guarantee.
 4. **Pickle round-trip (`STRICT`):** (a) `pickle` a built-in-family/link core →
    predict byte-identical + link survives + arrays still read-only; (b)
    `cloudpickle` a local-custom-link core, same (stdlib `pickle` expected to fail
-   that case — asserted).
+   that case — asserted); (c) **version stamp**: a round-trip on the current
+   version warns nothing, and a blob whose `_jaxgam_version` is mutated to a fake
+   version **warns** on load (§5.3, §8).
 5. **Aliasing / ownership (`to_predictor()` on `GAMResults`):** after the call,
    (a) `setup`'s smooths still hold `_X`/`_S`/`_penalties`/`_E_knot`; the predictor's spec
    smooths have them dropped but retain `_XP_list`/`_Z_list`; (b)
@@ -1008,8 +1142,9 @@ audit.
 
 | Where | New collected tests | Pattern |
 |---|---|---|
-| `test_result_mode.py` | ~4 (banned state absence; type/surface incl. `isinstance` + invalid-value; scalars-read) | `_AssertCollector` |
-| `test_predictor.py` | ~7 (predict equivalence × zoo; **R parity for lean + pickled**; pickle + cloudpickle; aliasing/ownership; snapshot independence + final theta; read-only incl. post-unpickle) | `@parametrize` + `_AssertCollector` |
+| `test_gaussian_process.py` (existing) | 0 (commit B0 **restructures** the existing `_E_knot` assertion at `:497` to check `E` before setup nulls it — no new test) | — |
+| `test_result_mode.py` | ~4 (banned state absence; type/surface incl. `isinstance` + invalid-value + `smooth_info`/`term_names`/`formula`; scalars-read) | `_AssertCollector` |
+| `test_predictor.py` | ~7 (predict equivalence × zoo; **R parity for lean + pickled**; pickle + cloudpickle + version stamp; aliasing/ownership; snapshot independence + final theta; read-only incl. post-unpickle) | `@parametrize` + `_AssertCollector` |
 | `test_smooths` (existing) | ~2 (`copy_for_prediction()` per type — drops `_X`/`_S`/`_penalties`/`_E_knot`, keeps transforms; registry audit) | `@parametrize` |
 | `test_results` (existing) | ~1 (duplicates-as-properties) | `_AssertCollector` |
 | **Total** | **~14** | |
@@ -1046,10 +1181,11 @@ against `main`, single working branch, discrete commits; the agent does **not**
 | Commit | Scope | Risk | § |
 |---|---|---|---|
 | A | Pre-flight baseline (test counts, coverage, retained bytes at small/large `n`, incl. tensor `_penalties` and GP `_E_knot`). Add `cloudpickle` to dev deps. | none | §8 |
+| **B0** | **GP `_E_knot` dead-store fix** — null it at the end of `setup()`; restructure the one existing assertion (`test_gaussian_process.py:497`) to check `E` before it is dropped; re-measure GP retained bytes. **Independent of this design**; lands first so A's "before" and E's "after" bracket only what the `result` mode actually buys. | low (one line + one test edit) | §1.1, §2.1, §7.2 |
 | B1 | Duplicate `setup.*` fields → guarded properties; drop dead `hasattr` guard. | low (mechanical) | §2.3, §5.5 |
-| C | **Phase-1 prediction state.** Move `build_predict_matrix` + helpers to `formula/predict_matrix.py`; `PredictSpec` (concrete, explicit fields); `ModelSetup` builds a **lazy** cached spec + delegates; `Smooth.copy_for_prediction()` (base drops `_X`+`_S`; tensor drops `_penalties` + recurses; **GP drops `_E_knot`**; by-variable recurses) + precondition; `build_predict_spec`; recursive-absence (incl. `_X`/`_S`/`_penalties`/`_E_knot`), aliasing, per-type copy, **and registry-audit** tests. | structural | §5.2, §6, §7 |
-| D | **`inference/`: `predict_core` + `finish_prediction` + `GAMPredictor`.** `Vp` required; `offset_was_nonzero` field; defensive-copy read-only on `coef`/`Vp` (+ `__setstate__`); depends on the Protocol seam; predict-equivalence `STRICT`, **R-parity for lean + pickled (§12.2.1b)**, pickle/cloudpickle, read-only, ownership tests. | core | §5.3, §6, §8, §12 |
-| E | **`result` mode + two result types + family snapshot + exports.** `_FitDiagnostics` base; `GAMInferenceResult`; reshaped `GAMResults`; `_from_fit` family snapshot (post-`put_theta`, single owner); **internal renames `result`→`fit_result` (api.py local + `_from_fit` param), mode threads as `result_mode`** to free the public kwarg; keyword-only `@overload`ed `fit()` with value validation; **export `GAMInferenceResult`/`GAMPredictor` from `jaxgam/__init__.py`** (`predict_core` stays private); `test_result_mode.py` (incl. `isinstance` + `assert_type` + invalid-value). | user-facing | §4, §5.3, §5.4, §11.2 |
+| C | **Phase-1 prediction state.** Move `build_predict_matrix` + helpers to `formula/predict_matrix.py`; `PredictSpec` (concrete, explicit fields); `ModelSetup` builds a **lazy** cached spec + delegates; `Smooth.copy_for_prediction()` (base drops `_X`+`_S`; tensor drops `_penalties` + recurses; GP nulls `_E_knot` defensively; by-variable recurses) + precondition; `build_predict_spec`; recursive-absence (incl. `_X`/`_S`/`_penalties`/`_E_knot`), aliasing, per-type copy, **and registry-audit** tests. | structural | §5.2, §6, §7 |
+| D | **`inference/`: `predict_core` + `finish_prediction` + `GAMPredictor`.** `Vp` required; `offset_was_nonzero` + `_jaxgam_version` fields; defensive-copy read-only on `coef`/`Vp` (+ `__setstate__` re-freeze and version warning); `predict_core` typed on `PredictSpec` (**no Protocol** — §5.1); predict-equivalence `STRICT`, **R-parity for lean + pickled (§12.2.1b)**, pickle/cloudpickle/version-stamp, read-only, ownership tests. | core | §5.1, §5.3, §6, §8, §12 |
+| E | **`result` mode + two result types + family snapshot + exports.** `_FitDiagnostics` base; `GAMInferenceResult` (incl. `smooth_info`/`term_names`/`formula` properties); reshaped `GAMResults` + `predict()` routed through `predict_core(setup._lazy_predict_spec(), …)`; `_from_fit` family snapshot (post-`put_theta`, single owner); **internal renames `result`→`fit_result` (api.py local + `_from_fit` param), mode threads as `result_mode`** to free the public kwarg; keyword-only `@overload`ed `fit()` with value validation; **export `GAMInferenceResult`/`GAMPredictor` from `jaxgam/__init__.py`** (`predict_core` stays private); `test_result_mode.py` (incl. `isinstance` + `assert_type` + invalid-value). | user-facing | §4, §5.3, §5.4, §11.2 |
 | F | Docs (`docs/api.md`, `docs/quickstart.md`: `result` on `fit()`, two return types; "stdlib `pickle` is the default for same-version handoff; `cloudpickle` only for locally-defined custom links/families") + `implementation_plan.md`. Optionally note a `make typecheck` target (§12.5). | none | — |
 
 > **Deferred (separate PRs):** the null-deviance DRY rewrite and the `summary()`
@@ -1071,11 +1207,14 @@ the `_from_fit` factory. No `__getattr__` forwarding (pre-release).
   `tensor.py:358–362`). `copy_for_prediction()` drops them; the recursive
   banned-state gate (§12.2.2) and per-type copy test (§12.2.8) confirm it.
   Tensor `_penalties` are `O(n_coefs²)` — the largest single win.
-- **GP `_E_knot` is a separate setup-only `O(n_knots²)` cache** (§7.2) — GP
-  **overrides** `copy_for_prediction()` to drop it (base only knows `_X`/`_S`);
-  `_build_design` reads `_knt`/`_resolved_rho`/`_shift`/`_UZ`, not `_E_knot`
-  (`gaussian_process.py:157,246`). The registry audit (§12.2.8) backstops a GP that
-  forgot it.
+- **GP `_E_knot` is a dead store, and is NOT a win for this design** (§1.1, §2.1,
+  §7.2) — assigned at `gaussian_process.py:200`, **read nowhere in `jaxgam/`**, so
+  `result="full"` leaks all 32 MB (`n=5000`) too. Commit **B0** frees it at
+  `setup()` for both modes; the `copy_for_prediction()` override stays as
+  defense-in-depth. **Do not attribute the GP reduction to `result="inference"`** —
+  after B0 the mode's GP win is the remaining ~4 MB. This was caught by a round-10
+  verification pass that re-derived §2.1 from the code; the earlier rounds had it
+  filed as a retention problem.
 - **Transforms are predict-critical and kept** — `_Xu`/`_UZ`/`_F`/`_XP_list`/
   `_Z_list`; the predict-equivalence + R-parity tests (§12.2.1) gate this.
 - **Internal equivalence ≠ R parity** — the lean and full paths sharing one
@@ -1085,9 +1224,9 @@ the `_from_fit` factory. No `__getattr__` forwarding (pre-release).
   internal + pickle parity only). **Offset is not in the direct-R gate** — `RBridge` has no offset
   arg (`r_bridge.py:241,1068`); it is covered by internal lean==full equivalence
   (incl. poisson+offset) + the post-matrix `eta + offset` term (§12.2.1b).
-- **`offset_was_nonzero` is an explicit predictor field** (§5.3) — not pulled off
-  the one-method Protocol, so the external-offset warning survives without
-  widening the seam.
+- **`offset_was_nonzero` is an explicit predictor field** (§5.3) — computed in
+  `_from_fit` before `setup` is discarded, so the external-offset warning survives
+  the setup-drop without storing an offset array or a second copy on the spec.
 - **`to_predictor()` ownership is safe by defensive copy** (§5.3) — the predictor
   copies `coefficients`/`Vp` before freezing, so building one from a `GAMResults`
   never freezes or aliases the result's own arrays. Tested §12.2.5.
@@ -1096,10 +1235,30 @@ the `_from_fit` factory. No `__getattr__` forwarding (pre-release).
   deliberately **not** deep-frozen (that would copy `O(Σk²)` or mutate a live
   `GAMResults`). The public guarantee is "coefficients and covariance are
   read-only," nothing more.
-- **DIP is honest but bounded** (§9) — `predict_core` depends on a one-method
-  Protocol; `GAMPredictor` carries a concrete `PredictSpec` as the explicit
-  Phase-1→Phase-3 boundary value object; pickle depends on its layout (§8). No
-  claim of decoupling.
+- **The `PredictMatrixBuilder` Protocol was cut** (§5.1, §9) — after §6's
+  delegation, `ModelSetup` and `PredictSpec` were one implementation and a
+  forwarder, not two implementations, so the seam abstracted nothing.
+  `predict_core` is typed on `PredictSpec`; `GAMResults` passes
+  `setup._lazy_predict_spec()`. Byte-identical output, one fewer file/export/
+  concept. No decoupling was ever claimed, and pickle still depends on
+  `PredictSpec`'s layout (§8).
+- **The full path now predicts through predict-only copies** (§6) — a consequence
+  of the lazy-spec delegation, not a separate decision. It is safe by §2.1 and it
+  makes the entire existing `tests/test_predict/` suite a regression gate on the
+  cache-dropping.
+- **Retention, not peak** (§1.1, §3.2) — the fit still materializes everything;
+  `_from_fit` drops it afterward. Correct for a serving object, useless for a fit
+  that OOMs. Stated so nobody reaches for `result="inference"` to survive a large
+  `n`.
+- **Pickle staleness is detectable** (§5.3, §8) — `_jaxgam_version` + a
+  `__setstate__` mismatch warning. Not a format; just the difference between a
+  loud failure and silently wrong production predictions.
+- **`smooth_info`/`term_names` stay on the lean type** (§5.4) — all-scalar
+  metadata `PredictSpec` already carries. Without them `edf` is an unlabeled array
+  on the type built for production logging. Zero bytes.
+- **`formula` has one owner** (§5.5) — `GAMPredictor`; the lean result reads it as
+  a property. Storing it on both would have been a ninth duplicate in the design
+  that deletes eight.
 - **`PredictSpec` is lazy on the full path** (§5.2) — a `result="full"` fit that
   never predicts builds nothing; goal #3 preserved.
 - **Family snapshot has one owner** (§5.3) — `_from_fit`, **after** `put_theta`
