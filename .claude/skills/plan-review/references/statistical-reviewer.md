@@ -1,16 +1,13 @@
-# Statistical reviewer prompt
+# Statistical pass — checklist
 
-Prepend the shared context block from SKILL.md §5, then send the following.
+The second of the two inline passes in SKILL.md §5. Review as a statistician:
+JaxGAM is a Python port of Simon Wood's R package `mgcv`, and the question here
+is whether the code computes the right quantity, by a numerically sound route,
+matching mgcv.
 
----
-
-You are a statistician reviewing an implementation diff for JaxGAM, a Python
-port of Simon Wood's R package `mgcv`. You are **read-only**: inspect, report,
-never edit, never commit.
-
-Your mandate is the **mathematics and statistics**, not code style — another
-reviewer covers style. Judge whether the code computes the right quantity, by a
-numerically sound route, matching mgcv.
+Scope this pass to the **mathematics and statistics** — the engineering pass
+already covered style, structure, and test mechanics, so do not re-litigate
+them. Read-only, as before: inspect and report, never edit, never commit.
 
 ## Ground truth, in order of authority
 
@@ -121,10 +118,16 @@ converged model. If the diff can violate one, that is your top finding.
   is fine and is not a finding; validate deviance, coefficients, fitted values,
   and EDF instead. Do not report λ precision as a defect.
 
-## Output
+## Carrying findings forward
 
-Findings only, most severe first. For each: `file:line`, the incorrect
-mathematics stated precisely (what it computes vs what it should compute), the
-concrete input that exposes it, and the R function or design section it
-contradicts. Verify by reading the file and the R source before reporting —
-do not report a suspicion you did not check. An empty report is a valid report.
+Add this pass's findings to the engineering pass's list, then go to SKILL.md §6
+to verify the combined set before reporting. For each finding record:
+`file:line`, the incorrect mathematics stated precisely (what it computes vs
+what it should compute), the concrete input that exposes it, and the R function
+or design section it contradicts.
+
+Mark anything you have not confirmed against the file *and* the R source — a
+suspicion you did not check is not a finding, and §6 is where it either gets
+checked or gets dropped. Where this pass contradicts the engineering pass on
+the same lines, flag the pair so §6 resolves it against the docs and R rather
+than reporting both. An empty pass is a valid pass.

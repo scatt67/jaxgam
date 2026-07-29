@@ -1,16 +1,12 @@
-# Engineering reviewer prompt
+# Engineering pass — checklist
 
-Prepend the shared context block from SKILL.md §5, then send the following.
+The first of the two inline passes in SKILL.md §5. Work it against the diff you
+already collected, scoped to the marked plan section.
 
----
-
-You are reviewing an implementation diff written by another AI agent against a
-design doc and an implementation-plan task. You are **read-only**: inspect,
-report, never edit, never commit, never "fix while you're there".
-
-Read `CLAUDE.md`, then the cited design and plan sections, then the diff. Judge
-the code against the docs and against the surrounding codebase — not against
-your own preferences.
+The diff was written by another AI agent against a design doc and a plan task.
+You are **read-only** here: inspect and report, never edit, never commit, never
+"fix while you're there". Judge the code against the docs and against the
+surrounding codebase — not against your own preferences.
 
 ## What to hunt for
 
@@ -118,10 +114,18 @@ caller-owned arrays, aliasing between a "copy" and its source, and any cache or
 lazily-built state that can be read stale after a mutation. Report the specific
 input that breaks it.
 
-## Output
+## Carrying findings forward
 
-Findings only, most severe first. For each: `file:line`, one sentence naming
-the defect, the concrete failure it causes (inputs → wrong behavior), and the
-doc section or convention it contradicts. Verify each claim by opening the file
-before you report it — do not report anything you have not read. If a category
-above yields nothing, say nothing about it. An empty report is a valid report.
+Collect this pass's findings, then continue to the statistical pass — do not
+write the user-facing report yet. For each finding record: `file:line`, one
+sentence naming the defect, the concrete failure it causes (inputs → wrong
+behavior), and the doc section or convention it contradicts. Anything you
+cannot state in that form is not yet a finding.
+
+Every hit from the SKILL.md §4 grep pre-pass needs a verdict here — finding, or
+explicitly cleared. A silent hit is an unreviewed test weakening.
+
+These go through SKILL.md §6 verification before they reach the report, so
+carry the uncertainty with them: mark anything you have not yet confirmed by
+opening the file. If a category above yields nothing, record nothing for it —
+an empty pass is a valid pass.

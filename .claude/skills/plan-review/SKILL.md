@@ -1,13 +1,13 @@
 ---
 name: plan-review
-description: Review working-tree changes against one unit of work — the single section of a referenced implementation_plan.md that carries an AGENT REVIEW marker — plus its sibling design.md. Spawns two parallel reviewers — engineering (YAGNI/SOLID/DRY/PEP/complexity, test-cheating detection) and statistical (mgcv/GAM math correctness vs the R source) — then verifies and reports findings. Use when asked to review an implementation against its design/plan, review the unstaged work for a commit, or check that an agent's implementation is faithful to the docs.
+description: Review working-tree changes against one unit of work — the single section of a referenced implementation_plan.md that carries an AGENT REVIEW marker — plus its sibling design.md. Runs two inline review passes, engineering (YAGNI/SOLID/DRY/PEP/complexity, test-cheating detection) and statistical (mgcv/GAM math correctness vs the R source), then verifies and reports findings. Use when asked to review an implementation against its design/plan, review the unstaged work for a commit, or check that an agent's implementation is faithful to the docs.
 ---
 
 # Plan Task Review
 
 Reviews an in-progress implementation against its authoritative design doc and
-the specific implementation-plan task it claims to deliver. Two specialist
-reviewers run in parallel; you verify their findings before reporting.
+the specific implementation-plan task it claims to deliver. Two review passes,
+run inline by you — no subagents — then a verification step before reporting.
 
 ## 1. Resolve the target — one plan file, one marked task
 
@@ -62,7 +62,7 @@ with `Read(file_path=$PLAN, offset=<start>, limit=<end-start>)` — plan files
 run well over a thousand lines, so do not read the whole file.
 
 Then resolve, and **state all four in your opening message** so the user can
-correct the scope before any agent spawns:
+correct the scope before you start reading code:
 
 | | |
 |---|---|
@@ -119,8 +119,9 @@ asked for.
 
 ## 4. Mechanical test-integrity pre-pass
 
-Run this before spawning reviewers; the grep hits become grounded evidence in
-the reviewer prompts.
+Run this before the review passes. The hits are grounded evidence — every one
+is a line the implementing agent touched in a way that can weaken a test, so
+each needs an explicit verdict in the engineering pass.
 
 ```bash
 git diff -U0 -- tests/ | grep -nE '^[+-].*(rtol|atol|tol=|approx|places=|decimal=|delta=)'
@@ -136,63 +137,59 @@ including a `ToleranceClass(...)` constructed inline at a call site. A test
 switching to a looser class than it used before is a finding unless the diff
 justifies it with a measured gap.
 
-## 5. Spawn the two reviewers
+## 5. Review inline, in two passes
 
-Launch both in the **same** message so they run in parallel, `subagent_type:
-"general-purpose"`, `run_in_background: false`.
+**Do this yourself. Do not spawn subagents** — not for the review, not for
+"gathering context" first. You have already read the plan section, the design
+sections, and the diff; a subagent would start cold and re-derive all of it,
+and its findings would come back as claims you then have to re-verify against
+the same files. Reviewing inline is both cheaper and more accurate here.
 
-Build each prompt from its reference file and prepend the shared context block:
+Run two passes over the same diff, in this order, each driven by its reference
+file. Read the reference file at the start of its pass and work the checklist:
 
-- Engineering reviewer → `references/engineering-reviewer.md`
-- Statistical reviewer → `references/statistical-reviewer.md`
+1. **Engineering pass** → `references/engineering-reviewer.md`
+   Faithfulness to the marked section, YAGNI, SOLID, DRY (and over-DRY),
+   complexity, PEP/idiom, project convention and phase discipline, test
+   integrity, edges and failure modes.
+2. **Statistical pass** → `references/statistical-reviewer.md`
+   The mathematics against the mgcv R source: estimator correctness, basis and
+   penalty construction, numerical soundness, the §18.1 hard gates, and whether
+   the tests actually pin the statistics.
 
-Shared context to prepend to **both** prompts, inlined verbatim (subagents
-start cold — they cannot see anything you have read):
+Keep the passes genuinely separate — do not collapse them into one sweep. They
+ask different questions of the same lines, and the statistical pass requires
+reading R source that the engineering pass has no reason to open. A helper the
+engineering pass wants deleted as over-abstraction is often the one the
+statistical pass finds load-bearing for numerical stability; you only see that
+tension if both passes actually ran.
 
-```
-Repo: /Users/shanecatts/Documents/GitHub/jaxgam  (read CLAUDE.md first)
-Design doc:  docs/<feature>/design.md — sections <the ones the task cites>
-Plan file:   docs/<feature>/implementation_plan.md, lines <start>–<end>
+Throughout: you are **read-only**. Inspect and report; do not edit, do not fix,
+do not commit. If the user wants fixes, that is a separate request after they
+have seen the findings.
 
-UNIT OF WORK UNDER REVIEW — the one plan section marked AGENT REVIEW.
-This section, and nothing else in the plan, defines what the diff owes:
-<paste the marked section verbatim, in full>
-
-Plan-wide invariants this section must not break:
-<paste Overview / Hard Allow-List / Definition of Done extracts>
-
-Scope: unstaged working-tree changes + untracked files. Get them with
-  `git diff` and `git ls-files --others --exclude-standard`. Review ONLY
-  those changes; pre-existing code is context, not a target. Work that
-  belongs to a different plan section is out of scope — note it in one
-  line and move on.
-Out of scope / deferred per the plan: <list>
-Mechanical pre-pass hits: <paste section-4 grep output, or "none">
-```
-
-Paste the marked section **verbatim and complete** — do not summarize it. The
-reviewers start cold and judge the diff against this text; a paraphrase loses
-exactly the non-goals and test requirements that make the review sharp.
-
-Both reviewers must be told: **read-only** — inspect, do not edit or commit;
-report findings, do not fix them.
+Hold each pass to the scope resolved in step 1. Diff hunks belonging to a
+different plan section get a one-line note, not a finding. Judge the code
+against the marked section's own text — its deliverables, its non-goals, its
+stated test requirements — not against a paraphrase of it.
 
 ## 6. Verify before reporting
 
-Subagent findings are claims, not facts. For each one:
+Your own first-pass findings are hypotheses, not facts. Before a finding goes
+in the report:
 
-- Open the cited file and line yourself and confirm the code says what the
-  finding says it says.
+- Open the cited file at the cited line and confirm the code says what you
+  think it says. Never report something you inferred from a diff hunk without
+  reading it in context — a hunk hides the guard clause twenty lines up.
 - Drop anything about code outside the diff, or about an item the plan
   explicitly defers or scopes out.
-- Drop style nits that match surrounding project convention — consistency
-  with the codebase beats abstract purity.
+- Drop style nits that match surrounding project convention — consistency with
+  the codebase beats abstract purity.
 - Where a finding is cheap to test, test it: `make test-local`, or
-  `uv run pytest <file> -x -q` for the touched tests.
-- If the two reviewers disagree (typically: engineering calls a helper
-  over-abstraction, statistics calls it necessary for numerical stability),
-  resolve it against the design doc and the R source, and report the
-  resolution rather than both claims.
+  `uv run pytest <file> -x -q` for the touched tests. A confirmed failure is
+  worth more than a paragraph of reasoning.
+- Where the two passes conflict, resolve it against the design doc and the R
+  source and report the resolution, not both claims.
 
 ## 7. Report
 
