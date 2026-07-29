@@ -80,15 +80,6 @@ class GAMResults:
     # -- Model structure (Phase 1 artifacts) --------------------------------
     family: ExponentialFamily
     setup: ModelSetup  # frozen Phase 1 output
-    coef_map: CoefficientMap  # Phase 1→3 coefficient mapping
-    smooth_info: tuple[SmoothInfo, ...]
-    term_names: tuple[str, ...]
-
-    # -- Data references ----------------------------------------------------
-    X: np.ndarray  # (n, p) design matrix
-    y: np.ndarray  # (n,) response
-    weights: np.ndarray  # (n,) prior weights
-    offset: np.ndarray | None
 
     # -- Extended family parameters -----------------------------------------
     theta: float | None  # NB dispersion (None for standard families)
@@ -217,13 +208,6 @@ class GAMResults:
             convergence_info=result.convergence_info,
             family=family,
             setup=setup,
-            coef_map=setup.coef_map,
-            smooth_info=setup.smooth_info,
-            term_names=setup.term_names,
-            X=setup.X,
-            y=setup.y,
-            weights=setup.weights,
-            offset=setup.offset,
             theta=result.theta,
             n=setup.n_obs,
             execution_path="jax",
@@ -232,6 +216,45 @@ class GAMResults:
             method=method,
             training_data=training_data,
         )
+
+    # ------------------------------------------------------------------
+    # Phase 1 aliases
+    # ------------------------------------------------------------------
+
+    @property
+    def X(self) -> np.ndarray:
+        """Constrained training design matrix owned by ``setup``."""
+        return self.setup.X
+
+    @property
+    def y(self) -> np.ndarray:
+        """Training response owned by ``setup``."""
+        return self.setup.y
+
+    @property
+    def weights(self) -> np.ndarray:
+        """Prior weights owned by ``setup``."""
+        return self.setup.weights
+
+    @property
+    def offset(self) -> np.ndarray | None:
+        """Training offset owned by ``setup``."""
+        return self.setup.offset
+
+    @property
+    def coef_map(self) -> CoefficientMap:
+        """Phase 1→3 coefficient mapping owned by ``setup``."""
+        return self.setup.coef_map
+
+    @property
+    def smooth_info(self) -> tuple[SmoothInfo, ...]:
+        """Per-smooth metadata owned by ``setup``."""
+        return self.setup.smooth_info
+
+    @property
+    def term_names(self) -> tuple[str, ...]:
+        """Model-matrix column names owned by ``setup``."""
+        return self.setup.term_names
 
     # ------------------------------------------------------------------
     # Prediction
@@ -401,11 +424,7 @@ class GAMResults:
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        family_name = (
-            self.family.family_name
-            if hasattr(self.family, "family_name")
-            else type(self.family).__name__
-        )
+        family_name = self.family.family_name
         dev_explained = (
             1.0 - self.deviance / self.null_deviance
             if self.null_deviance > 0

@@ -13,6 +13,8 @@ Design doc reference: docs/refactor_gam_api/implementation_plan.md Phase 2
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -24,7 +26,7 @@ from jaxgam.fitting.newton import newton_optimize
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.results import GAMResults
-from tests.helpers import SEED, _make_nb_data
+from tests.helpers import SEED, _AssertCollector, _make_nb_data, check_that
 from tests.tolerances import STRICT
 
 # ---------------------------------------------------------------------------
@@ -100,6 +102,46 @@ class TestGAMResultsConstruction:
         from jaxgam.families.base import ExponentialFamily
 
         assert isinstance(gam_results.family, ExponentialFamily)
+
+    def test_setup_aliases_are_properties(self, gam_results):
+        """Setup-backed values are exposed without duplicate dataclass fields."""
+        offset = np.linspace(0.1, 1.0, gam_results.n)
+        setup_with_offset = replace(gam_results.setup, offset=offset)
+        result_with_offset = replace(gam_results, setup=setup_with_offset)
+        aliases = (
+            "X",
+            "y",
+            "weights",
+            "offset",
+            "coef_map",
+            "smooth_info",
+            "term_names",
+        )
+        collector = _AssertCollector()
+        for name in aliases:
+            collector.check(
+                f"{name} is a property",
+                lambda name=name: check_that(
+                    isinstance(getattr(GAMResults, name), property),
+                    f"GAMResults.{name} is not a property",
+                ),
+            )
+            collector.check(
+                f"{name} is not stored",
+                lambda name=name: check_that(
+                    name not in GAMResults.__dataclass_fields__,
+                    f"GAMResults.{name} remains a dataclass field",
+                ),
+            )
+            collector.check(
+                f"{name} delegates to setup",
+                lambda name=name: check_that(
+                    getattr(result_with_offset, name)
+                    is getattr(result_with_offset.setup, name),
+                    f"GAMResults.{name} does not return setup.{name}",
+                ),
+            )
+        collector.raise_if_any("setup-backed GAMResults properties")
 
 
 # ---------------------------------------------------------------------------
