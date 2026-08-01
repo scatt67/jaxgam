@@ -12,8 +12,14 @@ These calls are idempotent and follow standard JAX project conventions.
 
 import os
 import pathlib
+from importlib.metadata import PackageNotFoundError, version
 
 import jax
+
+try:
+    __version__ = version("jaxgam")
+except PackageNotFoundError:  # pragma: no cover - source tree without install
+    __version__ = "0+unknown"
 
 # ---------------------------------------------------------------------------
 # JAX configuration — must run before any module-level JIT compilation.

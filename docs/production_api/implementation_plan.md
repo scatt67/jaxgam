@@ -670,7 +670,7 @@ regression gate.
 
 ---
 
-## Commit D — `inference/` Core: `predict_core` + `finish_prediction` + `GAMPredictor`
+## Commit D — `inference/` Core: `predict_core` + `finish_prediction` + `GAMPredictor` (**DONE**)
 
 **Goal:** Build the lean Phase-3 inference core: the single
 `finish_prediction` + `predict_core` finishing path over the concrete
