@@ -12,7 +12,7 @@ R source reference: R/gam.r gam.setup()
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -20,6 +20,7 @@ import numpy.typing as npt
 import pandas as pd
 from scipy import linalg
 
+from jaxgam.formula import predict_matrix
 from jaxgam.formula.terms import FormulaSpec, ParametricTerm, SmoothSpec
 from jaxgam.penalties.penalty import CompositePenalty, Penalty
 from jaxgam.smooths.by_variable import (
@@ -140,6 +141,9 @@ class ModelSetup:
     parametric_terms: tuple[ParametricTerm, ...]
     parametric_keep_cols: tuple[int, ...] = ()
     dropped_param_names: tuple[str, ...] = ()
+    _predict_spec_cache: predict_matrix.PredictSpec | None = field(
+        init=False, default=None, compare=False, repr=False
+    )
 
     # ------------------------------------------------------------------
     # Factory
@@ -431,64 +435,15 @@ class ModelSetup:
         -------
         np.ndarray, shape ``(n_new, total_coefs)``
         """
-        data_dict = self._to_dict(newdata)
+        return predict_matrix.build_predict_matrix(self._lazy_predict_spec(), newdata)
 
-        if not data_dict:
-            raise ValueError("newdata is empty — no variables found.")
-
-        # Determine n_obs from first available variable
-        first_key = next(iter(data_dict))
-        n_new = len(np.asarray(data_dict[first_key]).ravel())
-
-        # Validate that every referenced, present newdata column shares one
-        # length (named error rather than a cryptic column_stack mismatch).
-        pred_names: list[str] = [t.name for t in self.parametric_terms]
-        for si in self.smooth_info:
-            pred_names.extend(si.variables)
-            if si.by_variable is not None:
-                pred_names.append(si.by_variable)
-        self._validate_equal_lengths(
-            pred_names, data_dict, n_new, first_key, context="in newdata"
-        )
-
-        # Build parametric columns (prediction mode: use stored factor_info
-        # and orderedness so ordered-factor contr.poly contrasts are reproduced
-        # regardless of the newdata dtype).
-        X_parametric, _ = self._build_parametric_matrix(
-            self.parametric_terms,
-            newdata,
-            self.has_intercept,
-            n_new,
-            factor_info=self.factor_info,
-            ordered_factors=self.ordered_factors,
-        )
-        # Reproduce the training-time aliased-column drop so the prediction
-        # matrix has the same reduced column set as the fitted model.
-        if self.dropped_param_names:
-            X_parametric = X_parametric[:, list(self.parametric_keep_cols)]
-
-        # Build smooth columns
-        blocks: list[npt.NDArray[np.floating]] = [X_parametric]
-        coef_map = self.coef_map
-
-        for term in coef_map.terms:
-            if term.term_type == "parametric":
-                continue
-            # Get raw prediction matrix from the smooth
-            X_raw = term.smooth.predict_matrix(data_dict)
-            # Apply constraint transform (centering + gam_side). Pass the
-            # TermBlock object, not term.label, so label-colliding smooths use
-            # their own Z_centering/del_index (a label lookup returns the first).
-            X_c = coef_map.transform_X(X_raw, term)
-            blocks.append(X_c)
-
-        X_p = np.column_stack(blocks) if len(blocks) > 1 else blocks[0]
-        if X_p.shape[1] != coef_map.total_coefs:
-            raise RuntimeError(
-                f"Prediction matrix has {X_p.shape[1]} columns but model "
-                f"expects {coef_map.total_coefs}."
-            )
-        return X_p
+    def _lazy_predict_spec(self) -> predict_matrix.PredictSpec:
+        """Return the cached prediction-only state, building it on first use."""
+        spec = self._predict_spec_cache
+        if spec is None:
+            spec = predict_matrix.build_predict_spec(self)
+            object.__setattr__(self, "_predict_spec_cache", spec)
+        return spec
 
     # ------------------------------------------------------------------
     # Private static methods (pipeline steps)
@@ -498,35 +453,8 @@ class ModelSetup:
     def _to_dict(
         data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame,
     ) -> dict[str, npt.NDArray[np.floating]]:
-        """Convert data to dict of numpy arrays.
-
-        Parameters
-        ----------
-        data : dict or DataFrame
-            Input data.
-
-        Returns
-        -------
-        dict[str, np.ndarray]
-            Data as dict of arrays.
-        """
-        if isinstance(data, pd.DataFrame):
-            result = {}
-            for col in data.columns:
-                if is_factor(data[col]):
-                    # Keep factor columns as a (categorical-preserving) Series so
-                    # downstream is_factor()/get_factor_levels() in smooth
-                    # construction still recognize them. np.asarray() demotes an
-                    # INTEGER pd.Categorical to a bare int64 array, losing factor
-                    # identity (string categoricals -> object arrays, so only
-                    # integer categories were silently dropped, corrupting
-                    # s(g, bs='re')). reset_index keeps positional alignment for
-                    # the boolean masks (col == level) used in factor encoding.
-                    result[col] = data[col].reset_index(drop=True)
-                else:
-                    result[col] = np.asarray(data[col], dtype=np.float64)
-            return result
-        return dict(data)
+        """Delegate to the shared Phase-1 data conversion helper."""
+        return predict_matrix._to_dict(data)
 
     @staticmethod
     def _validate_variables(
@@ -589,23 +517,10 @@ class ModelSetup:
         ref_name: str,
         context: str = "",
     ) -> None:
-        """Check that each referenced, present variable has the expected length.
-
-        Raises a clear ValueError naming the offending variable and the expected
-        length, rather than letting a downstream ``np.column_stack`` fail with a
-        cryptic dimension-mismatch message that names neither.
-        """
-        where = f" {context}" if context else ""
-        for name in dict.fromkeys(names):
-            if name not in data_dict:
-                continue
-            m = len(np.asarray(data_dict[name]).ravel())
-            if m != expected:
-                raise ValueError(
-                    f"Variable '{name}'{where} has {m} element(s) but "
-                    f"'{ref_name}' has {expected}; all variables must share "
-                    f"one length."
-                )
+        """Delegate to the shared Phase-1 length validation helper."""
+        predict_matrix._validate_equal_lengths(
+            names, data_dict, expected, ref_name, context
+        )
 
     @staticmethod
     def _validate_finite_covariates(
@@ -672,85 +587,8 @@ class ModelSetup:
 
     @staticmethod
     def _contr_poly(n_levels: int) -> tuple[npt.NDArray[np.floating], list[str]]:
-        """Orthogonal-polynomial contrasts, matching R's ``stats::contr.poly``.
-
-        Returns an ``(n_levels, n_levels - 1)`` contrast matrix (the constant
-        column dropped) and the R column-name suffixes (``.L``, ``.Q``, ``.C``,
-        ``^4``, ...). This is R's default contrast for *ordered* factors.
-        """
-        n = n_levels
-        scores = np.arange(1, n + 1, dtype=np.float64)
-        y = scores - scores.mean()
-        vander = np.vander(y, n, increasing=True)  # columns y^0 .. y^(n-1)
-        q, r = np.linalg.qr(vander)
-        raw = q * np.diag(r)  # == R's qr.qy(QR, diag(diag(R)))
-        norms = np.sqrt((raw**2).sum(axis=0))
-        z = raw / norms
-        contrasts = z[:, 1:]  # drop the constant column
-        suffixes = [f"^{i}" for i in range(n)]
-        for pos in range(1, min(4, n)):
-            suffixes[pos] = [".L", ".Q", ".C"][pos - 1]
-        return contrasts, suffixes[1:]
-
-    @staticmethod
-    def _encode_factor(
-        col: npt.NDArray | pd.Series,
-        levels: list,
-        drop_reference: bool,
-        ordered: bool = False,
-    ) -> tuple[npt.NDArray[np.floating], list[str]]:
-        """Create the contrast matrix for a factor column.
-
-        Parameters
-        ----------
-        col : array-like
-            Factor column values.
-        levels : list
-            Ordered factor levels.
-        drop_reference : bool
-            If True, drop the first (reference) level column (treatment coding).
-        ordered : bool
-            If True (and ``drop_reference``), use R's ``contr.poly`` orthogonal
-            polynomial contrasts instead of treatment indicators, matching R's
-            default for ordered factors.
-
-        Returns
-        -------
-        dummy_matrix : np.ndarray
-            Shape ``(n, n_levels)`` or ``(n, n_levels - 1)``.
-        level_names : list[str]
-            Names for each contrast column.
-        """
-        col_arr = np.asarray(col, dtype=object)
-        n = len(col_arr)
-        n_levels = len(levels)
-        na_mask = pd.isna(col_arr)
-
-        if ordered and drop_reference and n_levels >= 2:
-            # Ordered factor with a reference dropped -> R's contr.poly.
-            contrasts, suffixes = ModelSetup._contr_poly(n_levels)
-            level_index = {lev: i for i, lev in enumerate(levels)}
-            codes = np.array([level_index.get(v, -1) for v in col_arr], dtype=np.intp)
-            dummy = np.full((n, n_levels - 1), np.nan, dtype=np.float64)
-            valid = (codes >= 0) & ~na_mask
-            dummy[valid] = contrasts[codes[valid]]
-            return dummy, suffixes
-
-        dummy = np.zeros((n, n_levels), dtype=np.float64)
-        for j, level in enumerate(levels):
-            dummy[:, j] = (col_arr == level).astype(np.float64)
-        # An NA factor value yields an all-NaN row -> NaN prediction, matching
-        # R's predict.gam (NA in -> NA out), instead of crashing or silently
-        # encoding it as the reference level.
-        dummy[na_mask, :] = np.nan
-
-        if drop_reference:
-            dummy = dummy[:, 1:]
-            level_names = [str(lev) for lev in levels[1:]]
-        else:
-            level_names = [str(lev) for lev in levels]
-
-        return dummy, level_names
+        """Delegate to the shared Phase-1 ordered-contrast helper."""
+        return predict_matrix._contr_poly(n_levels)
 
     @staticmethod
     def _build_parametric_matrix(
@@ -761,110 +599,15 @@ class ModelSetup:
         factor_info: dict[str, list] | None = None,
         ordered_factors: frozenset[str] | None = None,
     ) -> tuple[npt.NDArray[np.floating], list[str]]:
-        """Build the parametric portion of the model matrix.
-
-        Handles both training (auto-detect factors) and prediction
-        (use stored factor levels) modes.
-
-        Parameters
-        ----------
-        parametric_terms : list or tuple of ParametricTerm
-            Parametric terms from formula.
-        data : dict or DataFrame
-            Data (preserving dtypes for factor detection at training time).
-        has_intercept : bool
-            Whether to include an intercept column.
-        n_obs : int
-            Number of observations.
-        factor_info : dict[str, list] or None
-            If provided (prediction mode), uses these stored factor levels
-            instead of auto-detecting from data. If None (training mode),
-            auto-detects factors via ``is_factor()``.
-
-        Returns
-        -------
-        X_parametric : np.ndarray
-            Shape ``(n, n_parametric_cols)``.
-        param_names : list[str]
-            Column names.
-        """
-        blocks: list[npt.NDArray[np.floating]] = []
-        names: list[str] = []
-
-        if has_intercept:
-            blocks.append(np.ones((n_obs, 1), dtype=np.float64))
-            names.append("(Intercept)")
-
-        # In a no-intercept model R full-codes the FIRST factor (it absorbs the
-        # missing intercept) and treatment-codes subsequent factors, keeping the
-        # parametric block full rank. Track whether a factor has been full-coded.
-        seen_factor = False
-
-        for term in parametric_terms:
-            col = data[term.name]
-
-            if factor_info is not None:
-                # Prediction mode: use stored factor levels + orderedness, so
-                # encoding is reproduced independent of the newdata dtype.
-                is_fac = term.name in factor_info
-                levels = factor_info.get(term.name)
-                ordered = ordered_factors is not None and term.name in ordered_factors
-            else:
-                # Training mode: auto-detect
-                is_fac = is_factor(col)
-                levels = get_factor_levels(col) if is_fac else None
-                ordered = is_fac and is_ordered_factor(col)
-
-            if is_fac:
-                if factor_info is None and len(levels) < 2:
-                    raise ValueError(
-                        f"Factor variable '{term.name}' has fewer than 2 levels "
-                        f"({levels}). Cannot create dummy variables."
-                    )
-                if factor_info is not None:
-                    # Prediction mode: reject new levels instead of silently
-                    # encoding them as the reference level (matches R's
-                    # predict.gam, which errors on factor has new levels).
-                    known = set(levels)
-                    # Mask NaN BEFORE np.unique: np.unique on mixed str+NaN
-                    # raises TypeError (can't order float vs str). NaN factor
-                    # rows are not "new levels"; they predict NaN (see
-                    # _encode_factor), matching R's predict.gam NA handling.
-                    col_obj = np.asarray(col, dtype=object)
-                    na_mask = pd.isna(col_obj)
-                    observed = np.unique(col_obj[~na_mask]).tolist()
-                    unseen = sorted(
-                        {v for v in observed if v not in known},
-                        key=str,
-                    )
-                    if unseen:
-                        raise ValueError(
-                            f"Parametric factor '{term.name}' has new level(s) "
-                            f"{unseen} not seen during fitting. Predictions for "
-                            f"unseen levels of a parametric factor are undefined."
-                        )
-                # Treatment-code with an intercept; with no intercept, full-code
-                # only the first factor and treatment-code the rest (matches base
-                # R model.matrix used by mgcv's gam.setup). Numeric terms never
-                # consume the "first factor" slot.
-                drop_ref = has_intercept or seen_factor
-                seen_factor = True
-                dummy, level_names = ModelSetup._encode_factor(
-                    col, levels, drop_reference=drop_ref, ordered=ordered
-                )
-                blocks.append(dummy)
-                names.extend(f"{term.name}{lev}" for lev in level_names)
-            else:
-                col_arr = np.asarray(col, dtype=np.float64).ravel()
-                blocks.append(col_arr[:, np.newaxis])
-                names.append(term.name)
-
-        if blocks:
-            X_parametric = np.column_stack(blocks)
-        else:
-            X_parametric = np.empty((n_obs, 0), dtype=np.float64)
-
-        return X_parametric, names
+        """Delegate to the shared Phase-1 parametric matrix builder."""
+        return predict_matrix._build_parametric_matrix(
+            parametric_terms,
+            data,
+            has_intercept,
+            n_obs,
+            factor_info,
+            ordered_factors,
+        )
 
     @staticmethod
     def _drop_aliased_parametric_columns(

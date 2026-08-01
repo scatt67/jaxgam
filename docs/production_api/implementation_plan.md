@@ -487,7 +487,7 @@ behavior change** — every field still reads the same value.
 
 ---
 
-## Commit C — Phase-1 Prediction State: `PredictSpec`, Builder Move, `copy_for_prediction`
+## Commit C — Phase-1 Prediction State: `PredictSpec`, Builder Move, `copy_for_prediction` (**DONE**)
 
 **Goal:** Establish all **Phase-1** prediction plumbing the lean core
 will consume: move `ModelSetup.build_predict_matrix` + its helpers to a

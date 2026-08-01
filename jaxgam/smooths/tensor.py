@@ -14,6 +14,7 @@ R source reference: R/smooth.r smooth.construct.tensor.smooth.spec()
 
 from __future__ import annotations
 
+import copy
 from functools import reduce
 
 import numpy as np
@@ -48,6 +49,17 @@ class TensorProductSmooth(Smooth):
         self._marginals: list[Smooth] = []
         self._penalties: list[Penalty] = []
         self._XP_list: list[npt.NDArray[np.floating] | None] = []
+
+    def copy_for_prediction(self) -> TensorProductSmooth:
+        """Drop tensor penalties and fitting caches on nested marginals."""
+        clone = copy.copy(self)
+        if getattr(clone, "_X", None) is not None:
+            clone._X = None
+        clone._penalties = []
+        clone._marginals = [
+            marginal.copy_for_prediction() for marginal in self._marginals
+        ]
+        return clone
 
     @staticmethod
     def _svd_reparameterize(
