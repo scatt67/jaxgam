@@ -16,119 +16,38 @@ import pytest
 import jaxgam
 import jaxgam.inference as inference
 from jaxgam import GAM
-from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.registry import get_family
-from jaxgam.families.standard import Gamma, Gaussian
+from jaxgam.families.standard import Gaussian
 from jaxgam.formula.predict_matrix import build_predict_spec
 from jaxgam.inference import GAMPredictor
 from jaxgam.links.links import Link, LogLink
-from tests.helpers import SEED, _AssertCollector, _generate_family_data, r_available
+from jaxgam.results import _offset_was_nonzero
+from tests.helpers import (
+    _AssertCollector,
+    _generate_family_data,
+    _inference_equivalence_cases,
+    _inference_r_cases,
+    r_available,
+)
 from tests.tolerances import MODERATE
 
 
 def _make_predictor(result, *, family=None) -> GAMPredictor:
     """Construct the Commit-D predictor without Commit-E result wiring."""
-    offset_was_nonzero = result.offset is not None and not np.allclose(
-        result.offset, 0.0
-    )
     return GAMPredictor(
         coefficients=result.coefficients,
         Vp=result.Vp,
         family=copy.deepcopy(result.family if family is None else family),
         formula=result.formula,
-        offset_was_nonzero=offset_was_nonzero,
+        offset_was_nonzero=_offset_was_nonzero(result.setup),
         _predict_spec=build_predict_spec(result.setup),
     )
-
-
-def _factor_by_case(n: int = 120) -> tuple[Any, ...]:
-    rng = np.random.default_rng(SEED)
-    x = rng.uniform(size=n)
-    levels = ["a", "b"]
-    fac_values = rng.choice(levels, size=n)
-    eta = np.where(fac_values == "a", np.sin(2 * np.pi * x), 0.5 * x)
-    data = pd.DataFrame(
-        {
-            "x": x,
-            "fac": pd.Categorical(fac_values, categories=levels),
-            "y": rng.binomial(1, 1.0 / (1.0 + np.exp(-eta))).astype(float),
-        }
-    )
-    x_new = rng.uniform(size=30)
-    fac_new = rng.choice(levels, size=30)
-    newdata = pd.DataFrame(
-        {
-            "x": x_new,
-            "fac": pd.Categorical(fac_new, categories=levels),
-        }
-    )
-    return (
-        "y ~ s(x, by=fac, k=5, bs='cr') + fac",
-        data,
-        newdata,
-        "binomial",
-        [1.0, 1.0],
-        None,
-        None,
-    )
-
-
-def _tensor_case(kind: str, n: int = 120) -> tuple[Any, ...]:
-    rng = np.random.default_rng(SEED + (1 if kind == "te" else 2))
-    x1 = rng.uniform(size=n)
-    x2 = rng.uniform(size=n)
-    y = np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(scale=0.2, size=n)
-    data = pd.DataFrame({"x1": x1, "x2": x2, "y": y})
-    newdata = pd.DataFrame({"x1": rng.uniform(size=30), "x2": rng.uniform(size=30)})
-    return (
-        f"y ~ {kind}(x1, x2, k=4)",
-        data,
-        newdata,
-        "gaussian",
-        [1.0, 1.0],
-        None,
-        None,
-    )
-
-
-def _one_dimensional_case(
-    family: str | Any,
-    *,
-    offset: bool = False,
-) -> tuple[Any, ...]:
-    family_name = family if isinstance(family, str) else family.family_name.lower()
-    data = _generate_family_data(family_name, n=120)
-    rng = np.random.default_rng(SEED + 100)
-    newdata = pd.DataFrame({"x": rng.uniform(size=30)})
-    train_offset = np.linspace(0.1, 0.3, len(data)) if offset else None
-    predict_offset = np.linspace(0.2, 0.4, len(newdata)) if offset else None
-    return (
-        "y ~ s(x, k=6, bs='cr')",
-        data,
-        newdata,
-        family,
-        [1.0],
-        train_offset,
-        predict_offset,
-    )
-
-
-def _equivalence_cases() -> dict[str, tuple[Any, ...]]:
-    return {
-        "gaussian-s": _one_dimensional_case("gaussian"),
-        "binomial-factor-by": _factor_by_case(),
-        "poisson-offset": _one_dimensional_case("poisson", offset=True),
-        "negative-binomial": _one_dimensional_case("nb"),
-        "gamma-log": _one_dimensional_case(Gamma(link="log")),
-        "tensor-te": _tensor_case("te"),
-        "tensor-ti": _tensor_case("ti"),
-    }
 
 
 def test_predict_and_matrix_are_byte_identical_to_full_results() -> None:
     """The isolated predictor matches today's full result across the zoo."""
     collector = _AssertCollector()
-    for name, case in _equivalence_cases().items():
+    for name, case in _inference_equivalence_cases().items():
         formula, data, newdata, family, sp, train_offset, predict_offset = case
         result = GAM(formula, family=family, sp=sp).fit(data, offset=train_offset)
         predictor = _make_predictor(result)
@@ -172,62 +91,6 @@ def test_predict_and_matrix_are_byte_identical_to_full_results() -> None:
     collector.raise_if_any("GAMPredictor equivalence")
 
 
-def _r_cases() -> dict[str, tuple[str, str, pd.DataFrame, pd.DataFrame, Any, str]]:
-    rng = np.random.default_rng(SEED)
-
-    n = 180
-    x1 = rng.uniform(size=n)
-    x2 = rng.uniform(size=n)
-    tensor_data = pd.DataFrame(
-        {
-            "x1": x1,
-            "x2": x2,
-            "y": np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(0, 0.25, n),
-        }
-    )
-    tensor_new = pd.DataFrame({"x1": rng.uniform(size=40), "x2": rng.uniform(size=40)})
-
-    factor_formula, factor_data, factor_new, *_ = _factor_by_case(n=180)
-    nb_data = _generate_family_data("nb", n=180)
-    gamma_data = _generate_family_data("gamma", n=180)
-    one_d_new = pd.DataFrame({"x": rng.uniform(size=40)})
-
-    return {
-        "tensor": (
-            "y ~ te(x1, x2, k=5)",
-            "y ~ te(x1, x2, k=c(5,5))",
-            tensor_data,
-            tensor_new,
-            "gaussian",
-            "gaussian",
-        ),
-        "factor-by": (
-            factor_formula,
-            factor_formula,
-            factor_data,
-            factor_new,
-            "binomial",
-            "binomial",
-        ),
-        "negative-binomial": (
-            "y ~ s(x, k=8, bs='cr')",
-            "y ~ s(x, k=8, bs='cr')",
-            nb_data,
-            one_d_new,
-            NegativeBinomial(),
-            "nb",
-        ),
-        "gamma-log": (
-            "y ~ s(x, k=8, bs='cr')",
-            "y ~ s(x, k=8, bs='cr')",
-            gamma_data,
-            one_d_new,
-            Gamma(link="log"),
-            "gamma_log",
-        ),
-    }
-
-
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 def test_predictor_and_pickled_predictor_match_r(r_bridge) -> None:
     """Prediction and SE retain direct mgcv parity through stdlib pickle."""
@@ -235,7 +98,7 @@ def test_predictor_and_pickled_predictor_match_r(r_bridge) -> None:
         pytest.skip("Inference direct-R parity requires rpy2")
 
     collector = _AssertCollector()
-    for name, case in _r_cases().items():
+    for name, case in _inference_r_cases().items():
         py_formula, r_formula, data, newdata, py_family, r_family = case
         result = GAM(py_formula, family=py_family).fit(data)
         predictor = _make_predictor(result)

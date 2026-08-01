@@ -63,7 +63,7 @@ def fit_artifacts():
 def gam_results(fit_artifacts):
     """Construct a GAMResults via _from_fit()."""
     return GAMResults._from_fit(
-        result=fit_artifacts["result"],
+        fit_result=fit_artifacts["result"],
         setup=fit_artifacts["setup"],
         spec=fit_artifacts["spec"],
         data=fit_artifacts["data"],
@@ -72,6 +72,7 @@ def gam_results(fit_artifacts):
         lambda_strategy="newton_reml",
         formula="y ~ s(x)",
         method="REML",
+        result_mode="full",
     )
 
 
@@ -230,7 +231,7 @@ def _fit_nb_gam(family_obj=None, formula="y ~ s(x, k=10, bs='cr')"):
     result = newton_optimize(fd, "REML")
 
     gam_result = GAMResults._from_fit(
-        result=result,
+        fit_result=result,
         setup=setup,
         spec=spec,
         data=data,
@@ -239,6 +240,7 @@ def _fit_nb_gam(family_obj=None, formula="y ~ s(x, k=10, bs='cr')"):
         lambda_strategy="newton_reml",
         formula=formula,
         method="REML",
+        result_mode="full",
     )
     return gam_result, data
 

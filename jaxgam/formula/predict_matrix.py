@@ -37,6 +37,7 @@ class PredictSpec:
 
     coef_map: CoefficientMap
     smooth_info: tuple[SmoothInfo, ...]
+    term_names: tuple[str, ...]
     parametric_terms: tuple[ParametricTerm, ...]
     factor_info: dict[str, list]
     ordered_factors: frozenset[str]
@@ -67,6 +68,7 @@ def build_predict_spec(setup: ModelSetup) -> PredictSpec:
     return PredictSpec(
         coef_map=coef_map,
         smooth_info=setup.smooth_info,
+        term_names=setup.term_names,
         parametric_terms=setup.parametric_terms,
         factor_info=setup.factor_info,
         ordered_factors=setup.ordered_factors,

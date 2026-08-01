@@ -8,11 +8,13 @@ Public API (used directly by tests):
 
 Private API (used by conftest fixtures and complex test-local fixtures):
 - _generate_family_data() — single-predictor family data
+- _inference_equivalence_cases(), _inference_r_cases() — shared prediction zoos
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -202,3 +204,154 @@ def _generate_family_data(family_name: str, n: int | None = None) -> pd.DataFram
         raise ValueError(f"Unknown family: {family_name}")
 
     return pd.DataFrame({"x": x, "y": y})
+
+
+# ---------------------------------------------------------------------------
+# Shared inference prediction cases
+# ---------------------------------------------------------------------------
+
+
+def _inference_factor_by_case(n: int = 120) -> tuple[Any, ...]:
+    """Binomial factor-by case shared by predictor and result-mode gates."""
+    rng = np.random.default_rng(SEED)
+    levels = ["a", "b"]
+    x = rng.uniform(size=n)
+    fac_values = rng.choice(levels, size=n)
+    eta = np.where(fac_values == "a", np.sin(2 * np.pi * x), 0.5 * x)
+    data = pd.DataFrame(
+        {
+            "x": x,
+            "fac": pd.Categorical(fac_values, categories=levels),
+            "y": rng.binomial(1, 1.0 / (1.0 + np.exp(-eta))).astype(float),
+        }
+    )
+    newdata = pd.DataFrame(
+        {
+            "x": rng.uniform(size=30),
+            "fac": pd.Categorical(rng.choice(levels, size=30), categories=levels),
+        }
+    )
+    return (
+        "y ~ s(x, by=fac, k=5, bs='cr') + fac",
+        data,
+        newdata,
+        "binomial",
+        [1.0, 1.0],
+        None,
+        None,
+    )
+
+
+def _inference_tensor_case(kind: str, n: int = 120) -> tuple[Any, ...]:
+    """Gaussian tensor case shared by predictor and result-mode gates."""
+    rng = np.random.default_rng(SEED + (1 if kind == "te" else 2))
+    x1 = rng.uniform(size=n)
+    x2 = rng.uniform(size=n)
+    y = np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(scale=0.2, size=n)
+    data = pd.DataFrame({"x1": x1, "x2": x2, "y": y})
+    newdata = pd.DataFrame({"x1": rng.uniform(size=30), "x2": rng.uniform(size=30)})
+    return (
+        f"y ~ {kind}(x1, x2, k=4)",
+        data,
+        newdata,
+        "gaussian",
+        [1.0, 1.0],
+        None,
+        None,
+    )
+
+
+def _inference_one_dimensional_case(
+    family: str | Any,
+    *,
+    offset: bool = False,
+) -> tuple[Any, ...]:
+    """One-dimensional family case shared by inference behavior gates."""
+    family_name = family if isinstance(family, str) else family.family_name.lower()
+    data = _generate_family_data(family_name, n=120)
+    rng = np.random.default_rng(SEED + 100)
+    newdata = pd.DataFrame({"x": rng.uniform(size=30)})
+    train_offset = np.linspace(0.1, 0.3, len(data)) if offset else None
+    predict_offset = np.linspace(0.2, 0.4, len(newdata)) if offset else None
+    return (
+        "y ~ s(x, k=6, bs='cr')",
+        data,
+        newdata,
+        family,
+        [1.0],
+        train_offset,
+        predict_offset,
+    )
+
+
+def _inference_equivalence_cases() -> dict[str, tuple[Any, ...]]:
+    """Internal full/predictor/inference equivalence zoo."""
+    from jaxgam.families.standard import Gamma
+
+    return {
+        "gaussian-s": _inference_one_dimensional_case("gaussian"),
+        "binomial-factor-by": _inference_factor_by_case(),
+        "poisson-offset": _inference_one_dimensional_case("poisson", offset=True),
+        "negative-binomial": _inference_one_dimensional_case("nb"),
+        "gamma-log": _inference_one_dimensional_case(Gamma(link="log")),
+        "tensor-te": _inference_tensor_case("te"),
+        "tensor-ti": _inference_tensor_case("ti"),
+    }
+
+
+def _inference_r_cases() -> dict[
+    str, tuple[str, str, pd.DataFrame, pd.DataFrame, Any, str]
+]:
+    """Direct-mgcv inference cases supported by the rpy2 bridge."""
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.families.standard import Gamma
+
+    rng = np.random.default_rng(SEED)
+    n = 180
+    x1 = rng.uniform(size=n)
+    x2 = rng.uniform(size=n)
+    tensor_data = pd.DataFrame(
+        {
+            "x1": x1,
+            "x2": x2,
+            "y": np.sin(2 * np.pi * x1) + 0.5 * x2 + rng.normal(0, 0.25, n),
+        }
+    )
+    tensor_new = pd.DataFrame({"x1": rng.uniform(size=40), "x2": rng.uniform(size=40)})
+    factor_formula, factor_data, factor_new, *_ = _inference_factor_by_case(n=180)
+    one_d_new = pd.DataFrame({"x": rng.uniform(size=40)})
+
+    return {
+        "tensor": (
+            "y ~ te(x1, x2, k=5)",
+            "y ~ te(x1, x2, k=c(5,5))",
+            tensor_data,
+            tensor_new,
+            "gaussian",
+            "gaussian",
+        ),
+        "factor-by": (
+            factor_formula,
+            factor_formula,
+            factor_data,
+            factor_new,
+            "binomial",
+            "binomial",
+        ),
+        "negative-binomial": (
+            "y ~ s(x, k=8, bs='cr')",
+            "y ~ s(x, k=8, bs='cr')",
+            _generate_family_data("nb", n=180),
+            one_d_new,
+            NegativeBinomial(),
+            "nb",
+        ),
+        "gamma-log": (
+            "y ~ s(x, k=8, bs='cr')",
+            "y ~ s(x, k=8, bs='cr')",
+            _generate_family_data("gamma", n=180),
+            one_d_new,
+            Gamma(link="log"),
+            "gamma_log",
+        ),
+    }

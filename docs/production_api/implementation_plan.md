@@ -807,7 +807,7 @@ result-mode wiring lands in E.
 
 ---
 
-## Commit E — `result` Mode + Two Result Types + Family Snapshot + Exports
+## Commit E — `result` Mode + Two Result Types + Family Snapshot + Exports (**DONE**)
 
 **Goal:** Wire the user-facing surface: the keyword-only
 `@overload`ed `fit(..., result=...)`, the two result types

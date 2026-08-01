@@ -63,6 +63,24 @@ class GAMPredictor:
         offset: npt.ArrayLike | None = None,
     ) -> npt.NDArray[Any] | tuple[npt.NDArray[Any], npt.NDArray[np.floating]]:
         """Predict responses or linear predictors for new data."""
+        return self._predict(
+            newdata,
+            pred_type=pred_type,
+            se_fit=se_fit,
+            offset=offset,
+            warning_stacklevel=4,
+        )
+
+    def _predict(
+        self,
+        newdata: Data,
+        *,
+        pred_type: str,
+        se_fit: bool,
+        offset: npt.ArrayLike | None,
+        warning_stacklevel: int,
+    ) -> npt.NDArray[Any] | tuple[npt.NDArray[Any], npt.NDArray[np.floating]]:
+        """Predict with an explicit warning depth for delegating wrappers."""
         return predict_core(
             self._predict_spec,
             self.coefficients,
@@ -73,6 +91,7 @@ class GAMPredictor:
             se_fit=se_fit,
             offset=offset,
             offset_was_nonzero=self.offset_was_nonzero,
+            warning_stacklevel=warning_stacklevel,
         )
 
     def predict_matrix(self, newdata: Data) -> npt.NDArray[np.floating]:

@@ -136,6 +136,41 @@ All other retained-state line items are unchanged. These post-B0 `"full"`
 figures are the true baseline for measuring the later
 `result="inference"` reduction.
 
+## Commit-E Inference Retained Memory
+
+Commit E adds the prediction-only materialization. Using the same models,
+data seed, fixed smoothing parameters, and recursive identity-deduplicated
+walker as the baseline gives:
+
+| Model | `n` | Post-B0 full bytes | Inference bytes | Reduction | Reduction % |
+|---|---:|---:|---:|---:|---:|
+| Tensor | 300 | 785,808 | **161,792** | 624,016 | 79.4% |
+| Tensor | 5000 | 5,523,408 | **161,792** | 5,361,616 | 97.1% |
+| GP | 300 | 348,840 | **119,232** | 229,608 | 65.8% |
+| GP | 5000 | 4,075,240 | **649,632** | 3,425,608 | 84.1% |
+
+The deltas are fully attributable to the banned state removed with `setup`
+and the in-sample caches:
+
+| Dropped state | Tensor `n=300` | Tensor `n=5000` | GP `n=300` | GP `n=5000` |
+|---|---:|---:|---:|---:|
+| `setup.X` | 240,000 | 4,000,000 | 96,000 | 1,600,000 |
+| `setup.y` + `setup.weights` | 4,800 | 80,000 | 4,800 | 80,000 |
+| `setup.penalties` | 160,016 | 160,016 | 12,808 | 12,808 |
+| Per-smooth `_X` | 48,000 | 800,000 | 96,000 | 1,600,000 |
+| Per-smooth `_S` | 1,600 | 1,600 | 12,800 | 12,800 |
+| Tensor `_penalties` | 160,000 | 160,000 | 0 | 0 |
+| `training_data` | 4,800 | 80,000 | 2,400 | 40,000 |
+| `fitted_values` | 2,400 | 40,000 | 2,400 | 40,000 |
+| `linear_predictor` | 2,400 | 40,000 | 2,400 | 40,000 |
+| **Total reduction** | **624,016** | **5,361,616** | **229,608** | **3,425,608** |
+
+The lean totals are exactly the retained prediction transforms plus the core
+diagnostic arrays: 80,960 + 80,832 bytes for tensor; 106,088 + 13,144 bytes
+for GP at `n=300`; and 636,488 + 13,144 bytes for GP at `n=5000`. GP
+`_E_knot` is already zero after Commit B0 and is deliberately not credited to
+the result mode.
+
 ## Commands
 
 ```sh
@@ -145,6 +180,7 @@ make install
 /usr/bin/time -p make test-cov
 uv run python /tmp/jaxgam_commit_a_memory.py
 uv run python /tmp/jaxgam_commit_b0_memory.py
+uv run python /tmp/jaxgam_commit_e_memory.py
 ```
 
 The memory script was temporary and is not part of the repository.

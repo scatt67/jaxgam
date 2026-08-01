@@ -45,6 +45,7 @@ def predict_core(
     se_fit: bool = False,
     offset: npt.ArrayLike | None = None,
     offset_was_nonzero: bool = False,
+    warning_stacklevel: int = 3,
 ) -> npt.NDArray[Any] | tuple[npt.NDArray[Any], npt.NDArray[np.floating]]:
     """Build a prediction matrix and finish predictions on the CPU."""
     if pred_type not in ("response", "link"):
@@ -60,7 +61,7 @@ def predict_core(
             "was supplied to predict() on new data. The offset is omitted "
             "from the returned predictions (matching mgcv predict.gam for "
             "external offsets). Pass `offset=` to include it.",
-            stacklevel=3,
+            stacklevel=warning_stacklevel,
         )
 
     return finish_prediction(
