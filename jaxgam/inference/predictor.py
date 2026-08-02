@@ -22,6 +22,11 @@ if TYPE_CHECKING:
 class GAMPredictor:
     """Lean, training-data-free prediction state for a fitted GAM.
 
+    This is an optional boundary object for consumers that should receive only
+    ``predict()`` and ``predict_matrix()`` state. A ``GAMInferenceResult`` is
+    already lean and directly usable; its ``to_predictor()`` simply returns the
+    predictor it already contains.
+
     Pickles are intended for trusted, same-version transient handoff. The
     coefficients and posterior covariance are defensively copied and exposed
     as read-only arrays.

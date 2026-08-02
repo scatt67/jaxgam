@@ -27,6 +27,14 @@ uv sync
 
 ## Quick example
 
+`GAM.fit()` returns one of two result types:
+
+- `result="full"` (default) → `GAMResults` with prediction, summaries, plots,
+  and in-sample state.
+- `result="inference"` → lean `GAMInferenceResult` with new-data prediction and
+  lightweight diagnostics, but no dense training state, `summary()`, or
+  `plot()`.
+
 ```python
 import numpy as np
 import pandas as pd
@@ -38,8 +46,8 @@ x = rng.uniform(0, 1, 200)
 y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, 200)
 data = pd.DataFrame({"x": x, "y": y})
 
-# Fit a GAM — fit() returns a GAMResults object
-results = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+# Full analytical result. This is equivalent to the default .fit(data).
+results = GAM("y ~ s(x, k=10, bs='cr')").fit(data, result="full")
 
 # Inspect results
 results.summary()
@@ -49,6 +57,10 @@ fig, axes = results.plot()
 newdata = pd.DataFrame({"x": np.linspace(0, 1, 100)})
 predictions = results.predict(newdata)
 predictions, se = results.predict(newdata, se_fit=True)
+
+# Lean inference result: already ready to predict; no conversion required.
+lean = GAM("y ~ s(x, k=10, bs='cr')").fit(data, result="inference")
+lean_predictions = lean.predict(newdata)
 ```
 
 See the [Quickstart](quickstart.md) for a full tutorial covering
@@ -81,6 +93,17 @@ default link and REML smoothing parameter selection.
 - `predict()` -- response or link scale, with optional standard errors
 - `summary()` -- parametric and smooth term significance tests
 - `plot()` -- 1D smooth curves with SE bands, 2D contour plots, rug marks
+
+### Result types
+
+- `GAMResults` -- the default full result for prediction, summaries, plots, and
+  in-sample diagnostics.
+- `GAMInferenceResult` -- a lean `result="inference"` fit that keeps new-data
+  prediction and cheap diagnostics without dense training state. It is already
+  ready to predict; no conversion is required.
+- `GAMPredictor` -- the prediction-only, same-version picklable core returned by
+  either result's optional `to_predictor()` handoff. On an inference result,
+  that method returns the existing core and does not reduce memory further.
 
 ## Performance
 

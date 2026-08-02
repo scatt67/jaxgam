@@ -61,6 +61,13 @@ uv sync
 
 ## Quickstart
 
+`GAM.fit()` has two explicit result modes:
+
+- `result="full"` (the default) returns `GAMResults` for prediction,
+  `summary()`, `plot()`, and in-sample state.
+- `result="inference"` returns a lean `GAMInferenceResult` for new-data
+  prediction plus lightweight diagnostics, without dense training state.
+
 ```python
 import numpy as np
 import pandas as pd
@@ -72,8 +79,8 @@ x = rng.uniform(0, 1, 200)
 y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, 200)
 data = pd.DataFrame({"x": x, "y": y})
 
-# Fit a GAM — fit() returns a GAMResults object
-results = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+# Full analytical result. The explicit mode is equivalent to .fit(data).
+results = GAM("y ~ s(x, k=10, bs='cr')").fit(data, result="full")
 
 # Inspect results
 results.summary()
@@ -84,6 +91,20 @@ newdata = pd.DataFrame({"x": np.linspace(0, 1, 100)})
 predictions = results.predict(newdata)
 predictions, se = results.predict(newdata, se_fit=True)
 ```
+
+For new-data prediction plus lightweight fit diagnostics, choose the other mode
+at fit time:
+
+```python
+lean = GAM("y ~ s(x, k=10, bs='cr')").fit(data, result="inference")
+predictions = lean.predict(newdata)
+```
+
+`GAMInferenceResult` is already lean and ready to predict. You do **not** need
+to call `to_predictor()` afterward. That method is only an optional handoff when
+another component should receive the narrower prediction-only `GAMPredictor`;
+on an inference result it returns the existing core without copying or reducing
+memory further.
 
 See [docs/quickstart.md](docs/quickstart.md) for a full tutorial covering
 all families, smooth types, and post-estimation tools.

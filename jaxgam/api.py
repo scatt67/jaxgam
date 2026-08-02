@@ -69,8 +69,10 @@ class GAM:
     Examples
     --------
     >>> model = GAM("y ~ s(x)", family="gaussian")
-    >>> results = model.fit(data)
-    >>> results.predict(newdata)
+    >>> full = model.fit(data, result="full")  # default; model.fit(data) is equivalent
+    >>> full.summary()
+    >>> lean = model.fit(data, result="inference")
+    >>> lean.predict(newdata)  # already lean; no to_predictor() call required
     array([...])
 
     Design doc reference: docs/refactor_gam_api/design.md §3.3
@@ -131,7 +133,9 @@ class GAM:
             Offset vector, shape ``(n,)``.
         result : {"full", "inference"}
             Result materialization mode. ``"full"`` retains training-backed
-            diagnostics; ``"inference"`` returns lean prediction state.
+            diagnostics; ``"inference"`` returns a lean result that is already
+            directly usable for new-data prediction. No ``to_predictor()`` call
+            is required unless a narrower prediction-only handoff is desired.
 
         Returns
         -------

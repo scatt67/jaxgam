@@ -69,7 +69,13 @@ class _FitDiagnostics:
 
 @dataclass(frozen=True)
 class GAMInferenceResult(_FitDiagnostics):
-    """Lean fitted result retaining prediction state but no training arrays."""
+    """Lean fitted result retaining prediction state but no training arrays.
+
+    This object is directly usable for prediction; calling ``to_predictor()``
+    is optional. The method returns the predictor already composed during fit,
+    without copying state or reducing retained memory further. Use it only when
+    a downstream consumer should receive the narrower prediction-only surface.
+    """
 
     _predictor: GAMPredictor
 
@@ -124,7 +130,11 @@ class GAMInferenceResult(_FitDiagnostics):
         return self._predictor.predict_matrix(newdata)
 
     def to_predictor(self) -> GAMPredictor:
-        """Return the composed prediction-only core."""
+        """Return the existing prediction-only core without copying.
+
+        This is an optional interface handoff, not another memory optimization.
+        The inference result itself already delegates prediction to this object.
+        """
         return self._predictor
 
     def __repr__(self) -> str:
@@ -429,7 +439,11 @@ class GAMResults(_FitDiagnostics):
         return self.setup.build_predict_matrix(newdata)
 
     def to_predictor(self) -> GAMPredictor:
-        """Build an independent, prediction-only core on demand."""
+        """Build an independent, prediction-only core on demand.
+
+        This does not mutate or slim the full result. Discard the full result if
+        its training-backed state is no longer needed after the handoff.
+        """
         return GAMPredictor(
             coefficients=self.coefficients,
             Vp=self.Vp,

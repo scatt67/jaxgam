@@ -171,6 +171,37 @@ for GP at `n=300`; and 636,488 + 13,144 bytes for GP at `n=5000`. GP
 `_E_knot` is already zero after Commit B0 and is deliberately not credited to
 the result mode.
 
+## Commit-F Final Measurements
+
+The closing measurement on 2026-08-01 reran the full Docker coverage suite,
+test collection, source-level test count, and the Commit-E retained-memory
+walker. The memory values reproduced the Commit-E table above exactly.
+
+| Metric | Commit A | Commit F | Delta |
+|---|---:|---:|---:|
+| Collected test count | 1196 | **1212** | **+16** |
+| Source-level test count | 809 | **825** | **+16** |
+| Coverage | 92.93% | **93.14%** | **+0.21 percentage points** |
+| `make test-cov` pytest time | 10:54.98 | **10:49.66** | **-5.32 s** |
+| `make test-cov` wall-clock | 11:35.84 | **10:59.25** | **-36.59 s** |
+
+The test and timing deltas are informational; the hard gates are the complete
+pass, coverage above 80%, byte-identical prediction behavior, and direct mgcv
+parity. Timing varies with Docker cache and host load.
+
+### Final retained-memory deltas
+
+| Model | `n` | Honest full baseline | Final inference | Reduction | Reduction % |
+|---|---:|---:|---:|---:|---:|
+| Tensor | 300 | 785,808 | **161,792** | 624,016 | 79.4% |
+| Tensor | 5000 | 5,523,408 | **161,792** | 5,361,616 | 97.1% |
+| GP | 300 | 348,840 | **119,232** | 229,608 | 65.8% |
+| GP | 5000 | 4,075,240 | **649,632** | 3,425,608 | 84.1% |
+
+The GP comparison uses the post-B0 full result as its baseline. The separate
+B0 dead-store reductions remain 720,000 bytes (`n=300`) and 32,000,000 bytes
+(`n=5000`) and are not attributed to inference mode.
+
 ## Commands
 
 ```sh
@@ -181,6 +212,7 @@ make install
 uv run python /tmp/jaxgam_commit_a_memory.py
 uv run python /tmp/jaxgam_commit_b0_memory.py
 uv run python /tmp/jaxgam_commit_e_memory.py
+uv run python /tmp/jaxgam_commit_e_memory.py  # Commit F rerun; walker unchanged
 ```
 
 The memory script was temporary and is not part of the repository.
@@ -197,3 +229,11 @@ real 695.84
 
 `make install` resolved and installed `cloudpickle==3.1.2` from the
 `[project.optional-dependencies].dev` extra.
+
+The final Commit-F run also passed:
+
+```text
+Required test coverage of 80% reached. Total coverage: 93.14%
+1212 passed, 311 warnings in 649.66s (0:10:49)
+real 659.25
+```

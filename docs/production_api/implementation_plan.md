@@ -8,6 +8,14 @@ Implement the `result="full"|"inference"` fit mode, the two result types
 `docs/production_api/design.md` — this document is the **execution plan**
 that converts that design into a sequence of self-contained commits.
 
+**Result-mode and predictor terminology:** `result="full"` is the default and
+returns `GAMResults` with the analytical surface and retained training-backed
+state. `result="inference"` returns `GAMInferenceResult`, which is already lean
+and directly usable for new-data prediction. `to_predictor()` is an optional
+interface handoff, not a second slimming step: it builds a lean core from
+`GAMResults`, but returns the already-composed core from `GAMInferenceResult`
+with no copy or additional memory reduction.
+
 **Branch:** single working branch off `main` (`production-api`) for the
 entire feature; one PR at the end.
 **Design reference:** `docs/production_api/design.md` (stable over ten
@@ -1036,7 +1044,7 @@ the public exports.
 
 ---
 
-## Commit F — Documentation + Final Sweep
+## Commit F — Documentation + Final Sweep (**DONE**)
 
 **Goal:** Document the new surface, mark the design implemented, and run
 the closing verification before the user opens the PR.
@@ -1059,9 +1067,11 @@ the closing verification before the user opens the PR.
    reduces **retained** memory, not **peak** fit-time memory (design §1.1) —
    users will otherwise reach for it to survive a large-`n` fit.
 
-2. **`docs/quickstart.md`** — add a short "lean inference result" example:
-   `model.fit(df, result="inference")` → `predict(newdata)` →
-   `pickle.dumps(res.to_predictor())`.
+2. **`docs/quickstart.md`** — add a short "lean inference result" example whose
+   primary flow stops at `model.fit(df, result="inference")` →
+   `predict(newdata)`. Show `pickle.dumps(res.to_predictor())` separately as an
+   optional prediction-only handoff, and state that it returns the inference
+   result's existing core without copying or further reducing memory.
 
 3. **`docs/index.md`** — if it carries an API/result-type table, add
    `GAMInferenceResult` / `GAMPredictor` one-liners.
@@ -1079,12 +1089,20 @@ the closing verification before the user opens the PR.
    field lists, line citations) and fix it — design.md is the authoritative
    spec.
 
-5. **(Optional) `make typecheck`** — the repo configures no type checker
+5. **Broader documentation consistency** — update `README.md`,
+   `docs/design.md`, `AGENTS.md` (also exposed through the `CLAUDE.md`
+   symlink), and the public docstrings in `jaxgam/api.py`,
+   `jaxgam/results.py`, and `jaxgam/inference/predictor.py` so every public
+   surface describes both result modes and the role of `.to_predictor()`.
+   Record any Commit-F requirement clarification made in this implementation
+   plan; these are documentation changes, not API behavior changes.
+
+6. **(Optional) `make typecheck`** — the repo configures no type checker
    (ruff + vulture only), so the `@overload`/`assert_type` is editor-aid
    only. Optionally add a `make typecheck` target running a checker over
    the new types (design §12.5); note it in `docs/api.md` if added.
 
-6. **Final sweep** (the closing verification — no design commit follows):
+7. **Final sweep** (the closing verification — no design commit follows):
    - Re-run the Commit-A baseline measurements; record final deltas
      (test count, coverage, wall-clock, retained bytes) in `BASELINE.md`.
    - **Ownership grep** — confirm new-behavior R parity lives only in
@@ -1101,9 +1119,13 @@ the closing verification before the user opens the PR.
 
 ### Files touched
 
-- Modify: `docs/api.md`, `docs/quickstart.md`, possibly `docs/index.md`
+- Modify: `README.md`, `AGENTS.md` (`CLAUDE.md` symlink)
+- Modify: `docs/api.md`, `docs/quickstart.md`, `docs/index.md`, `docs/design.md`
 - Modify: `docs/production_api/design.md` (status → Implemented)
+- Modify: `docs/production_api/implementation_plan.md` (Commit-F clarifications)
 - Modify: `docs/production_api/BASELINE.md` (final deltas)
+- Modify (docstrings only): `jaxgam/api.py`, `jaxgam/results.py`,
+  `jaxgam/inference/predictor.py`
 - Possibly: `Makefile` + `pyproject.toml` (optional `make typecheck`)
 
 ### Validation

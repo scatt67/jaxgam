@@ -12,6 +12,20 @@ import pandas as pd
 from jaxgam import GAM, GAMResults
 ```
 
+## Choose a result type
+
+Every fit chooses one of two result materializations:
+
+| Fit call | Return type | Use it for |
+|---|---|---|
+| `model.fit(data, result="full")` | `GAMResults` | Prediction, `summary()`, `plot()`, and in-sample state |
+| `model.fit(data, result="inference")` | `GAMInferenceResult` | New-data prediction plus lightweight diagnostics, without dense training state |
+
+`result="full"` is the default, so `model.fit(data)` means exactly the same
+thing. The examples in sections 1–10 use the full result. Section 11 introduces
+the inference result. Both result types predict directly; `to_predictor()` is
+never required after fitting.
+
 ## 1. Gaussian GAM
 
 The simplest case: a continuous response with a smooth effect.
@@ -23,7 +37,7 @@ x = rng.uniform(0, 1, n)
 y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
 data = pd.DataFrame({"x": x, "y": y})
 
-results = GAM("y ~ s(x, k=10, bs='cr')").fit(data)
+results = GAM("y ~ s(x, k=10, bs='cr')").fit(data, result="full")
 print(f"Converged: {results.converged}")
 print(f"EDF: {results.edf}")
 print(f"Scale: {results.scale:.4f}")
@@ -37,6 +51,9 @@ The formula `"y ~ s(x, k=10, bs='cr')"` specifies:
 
 If `bs` is omitted, thin-plate regression splines (`tp`) are used by
 default.
+
+Here `result="full"` is written explicitly to establish the mode. Later full
+result examples use the shorter equivalent `.fit(data)` form.
 
 ## 2. Binomial GAM
 
@@ -256,7 +273,51 @@ X_new = results.predict_matrix(newdata)
 # Manual prediction: eta = X_new @ results.coefficients
 ```
 
-## 11. Summary
+## 11. Lean inference result
+
+When a fitted object is kept for new-data prediction rather than interactive
+analysis, request the lean result mode:
+
+```python
+lean = GAM("y ~ s(x, k=10, bs='cr')").fit(data, result="inference")
+predictions = lean.predict(newdata)
+```
+
+That is all you need for inference. The returned `GAMInferenceResult` is already
+lean and directly supports `predict()` and `predict_matrix()`. **Do not call
+`to_predictor()` as a routine second step:** it does not make an inference
+result smaller.
+
+The lean result retains scalar diagnostics such as `edf`, `deviance`, and
+`converged`, plus `formula`, `smooth_info`, and `term_names`. It has no
+`summary()` or `plot()`, and prediction requires `newdata`. This mode reduces
+memory retained after fitting; it does not reduce peak memory during the fit.
+
+### Optional prediction-only handoff
+
+Use `to_predictor()` only when another component should receive the narrower
+prediction-only interface, without the inference result's diagnostics:
+
+```python
+import pickle
+
+predictor = lean.to_predictor()  # returns lean's existing core; no copy
+blob = pickle.dumps(predictor)
+restored = pickle.loads(blob)
+same_predictions = restored.predict(newdata)
+```
+
+If the receiving process needs diagnostics too, pickle `lean` directly. For a
+full `GAMResults`, `to_predictor()` instead constructs an independent lean core;
+discard the full result afterward if you want its training-backed memory to be
+released.
+
+Pickles are for trusted, same-version, transient handoff. A cross-version load
+warns and is not guaranteed to work. Locally-defined custom links or families
+require `cloudpickle`; built-in and module-level definitions use stdlib
+`pickle`.
+
+## 12. Summary
 
 `summary()` prints and returns a summary object with parametric
 coefficient tests, smooth term significance tests (Wood 2013), and
@@ -272,7 +333,7 @@ Output includes:
   statistics, and p-values
 - R-squared, deviance explained, scale estimate
 
-## 12. Plotting
+## 13. Plotting
 
 `plot()` produces one panel per smooth term.
 
@@ -298,7 +359,7 @@ For 1D smooths, `plot()` shows the partial effect with shaded
 confidence bands. For 2D tensor products, it shows filled contour
 plots. Factor-by smooths produce one panel per level.
 
-## 13. Fitting options
+## 14. Fitting options
 
 ### Smoothing parameter method
 
@@ -329,10 +390,10 @@ offset = np.zeros(n)
 results = GAM("y ~ s(x)").fit(data, weights=weights, offset=offset)
 ```
 
-## 14. GAMResults attributes
+## 15. GAMResults attributes
 
-`fit()` returns a `GAMResults` frozen dataclass. All attributes are
-read-only:
+By default, `fit()` returns a `GAMResults` frozen dataclass. Its fields cannot
+be reassigned, although contained mutable objects are not recursively frozen:
 
 | Attribute | Description |
 |---|---|
