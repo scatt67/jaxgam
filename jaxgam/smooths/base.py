@@ -8,6 +8,7 @@ Design doc reference: docs/design.md Section 5.1
 
 from __future__ import annotations
 
+import copy
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
@@ -49,6 +50,21 @@ class Smooth(ABC):
         """Raise RuntimeError if setup() hasn't been called."""
         if not self._is_setup:
             raise RuntimeError(f"Call setup() before using {type(self).__name__}.")
+
+    def copy_for_prediction(self) -> Smooth:
+        """Return a shallow predict-only copy with fitting caches removed.
+
+        The prediction transforms (knots, constraint matrices, levels, and
+        reparameterizations) remain shared by reference.  This default is valid
+        only when a smooth's non-predict caches are exactly ``_X`` and ``_S``
+        and it owns no nested smooths.  Smooths with additional caches or nested
+        smooths must override this method.
+        """
+        clone = copy.copy(self)
+        for attr in ("_X", "_S"):
+            if getattr(clone, attr, None) is not None:
+                setattr(clone, attr, None)
+        return clone
 
     @staticmethod
     def _smoothcon_normalize(

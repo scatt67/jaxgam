@@ -3,16 +3,17 @@
 Provides the ``GAM`` class (sklearn-style API) that wires together:
 - Phase 1: ``parse_formula()`` → ``ModelSetup.build()``
 - Phase 2: ``FittingData.from_setup()`` → ``newton_optimize()`` / ``pirls_loop()``
-- Phase 3: ``GAMResults._from_fit()``
+- Phase 3: ``GAMResults._from_fit()`` materializes the selected result type
 
-``GAM.fit()`` returns a ``GAMResults`` frozen dataclass.
+``GAM.fit()`` returns a full ``GAMResults`` by default or a lean
+``GAMInferenceResult`` when requested.
 
 Design doc reference: docs/refactor_gam_api/design.md §3.3
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, overload
 
 import numpy as np
 
@@ -25,7 +26,7 @@ from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
-from jaxgam.results import GAMResults
+from jaxgam.results import GAMInferenceResult, GAMResults
 
 if TYPE_CHECKING:
     import jax
@@ -41,8 +42,8 @@ class GAM:
     """Generalized Additive Model specification.
 
     This class holds model specification parameters and orchestrates the
-    fit pipeline. Calling ``fit()`` returns a ``GAMResults`` frozen
-    dataclass containing all fitted state.
+    fit pipeline. Calling ``fit()`` returns a frozen full or lean result,
+    selected by the keyword-only ``result`` argument.
 
     Parameters
     ----------
@@ -68,8 +69,10 @@ class GAM:
     Examples
     --------
     >>> model = GAM("y ~ s(x)", family="gaussian")
-    >>> results = model.fit(data)
-    >>> results.predict(newdata)
+    >>> full = model.fit(data, result="full")  # default; model.fit(data) is equivalent
+    >>> full.summary()
+    >>> lean = model.fit(data, result="inference")
+    >>> lean.predict(newdata)  # already lean; no to_predictor() call required
     array([...])
 
     Design doc reference: docs/refactor_gam_api/design.md §3.3
@@ -90,12 +93,34 @@ class GAM:
         self.sp = sp
         self.device = kwargs.get("device")
 
+    @overload
     def fit(
         self,
         data: pd.DataFrame | dict,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
-    ) -> GAMResults:
+        *,
+        result: Literal["full"] = "full",
+    ) -> GAMResults: ...
+
+    @overload
+    def fit(
+        self,
+        data: pd.DataFrame | dict,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+        *,
+        result: Literal["inference"],
+    ) -> GAMInferenceResult: ...
+
+    def fit(
+        self,
+        data: pd.DataFrame | dict,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+        *,
+        result: Literal["full", "inference"] = "full",
+    ) -> GAMResults | GAMInferenceResult:
         """Fit the GAM to data.
 
         Parameters
@@ -106,14 +131,22 @@ class GAM:
             Prior weights, shape ``(n,)``.
         offset : np.ndarray, optional
             Offset vector, shape ``(n,)``.
+        result : {"full", "inference"}
+            Result materialization mode. ``"full"`` retains training-backed
+            diagnostics; ``"inference"`` returns a lean result that is already
+            directly usable for new-data prediction. No ``to_predictor()`` call
+            is required unless a narrower prediction-only handoff is desired.
 
         Returns
         -------
-        GAMResults
-            Frozen dataclass containing all fitted state.
+        GAMResults or GAMInferenceResult
+            Frozen full-diagnostic or lean-inference result.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
+        if result not in ("full", "inference"):
+            raise ValueError(f"result must be 'full' or 'inference', got {result!r}")
+
         family_obj = get_family(self.family)
 
         # Extended families have mutable theta state that is synced by
@@ -134,15 +167,15 @@ class GAM:
 
         # Phase 2: fit
         if self.sp is not None:
-            result = _fit_fixed_sp(fd, self.sp, self.method)
+            fit_result = _fit_fixed_sp(fd, self.sp, self.method)
             lambda_strategy = "fixed"
         else:
-            result = newton_optimize(fd, self.method)
+            fit_result = newton_optimize(fd, self.method)
             lambda_strategy = f"newton_{self.method.lower()}"
 
-        # Phase 2→3: construct GAMResults
+        # Phase 2→3: construct the selected result materialization
         return GAMResults._from_fit(
-            result=result,
+            fit_result=fit_result,
             setup=setup,
             spec=spec,
             data=data,
@@ -151,6 +184,7 @@ class GAM:
             lambda_strategy=lambda_strategy,
             formula=self.formula,
             method=self.method,
+            result_mode=result,
         )
 
 

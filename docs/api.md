@@ -2,16 +2,20 @@
 
 ## GAM
 
-Model specification and fit orchestration. `fit()` returns a `GAMResults`
-frozen dataclass containing all fitted state.
+Model specification and fit orchestration. `fit()` returns either a full
+`GAMResults` or a lean `GAMInferenceResult`, selected with the keyword-only
+`result` argument.
 
 ```python
-from jaxgam import GAM, GAMResults
+from jaxgam import GAM, GAMInferenceResult, GAMResults
 
 model = GAM("y ~ s(x)", family="gaussian")
-results = model.fit(data)
+results: GAMResults = model.fit(data, result="full")  # explicit default mode
 results.predict(newdata)
 results.summary()
+
+lean: GAMInferenceResult = model.fit(data, result="inference")
+lean.predict(newdata)
 ```
 
 ::: jaxgam.api.GAM
@@ -22,10 +26,48 @@ results.summary()
 
 ---
 
+## Fit result modes
+
+`GAM.fit()` accepts `result="full"` (the default) or
+`result="inference"`:
+
+| Mode | Return type | Intended use |
+|---|---|---|
+| `"full"` | `GAMResults` | Interactive analysis, self-prediction, summaries, and plots |
+| `"inference"` | `GAMInferenceResult` | New-data prediction with substantially less retained training state |
+
+If you request `result="inference"`, the returned object is already lean and
+ready to predict. **You do not need to call `to_predictor()` afterward.**
+
+The inference mode keeps coefficients, covariance, the fitted family snapshot,
+prediction transforms, and cheap fit diagnostics. It drops dense training
+arrays, in-sample caches, training data, and fitting-only penalty caches. It has
+no `summary()` or `plot()`, and `predict()` requires `newdata`.
+
+This mode reduces memory **retained after fitting**. It does not reduce peak
+fit-time memory: the dense model matrix and penalties are still constructed and
+used during the fit before the lean result is materialized.
+
+### Which object should I keep?
+
+| Object | Keep it when you need | What `to_predictor()` does |
+|---|---|---|
+| `GAMResults` | Prediction, `summary()`, `plot()`, or in-sample state | Builds an independent prediction-only core. The full result remains in memory unless you discard it. |
+| `GAMInferenceResult` | New-data prediction plus fit diagnostics and labels | Returns the predictor it already contains. It performs no copy and provides no further memory reduction. |
+| `GAMPredictor` | Only `predict()` and `predict_matrix()` | Not applicable; it is already the prediction-only core. |
+
+`to_predictor()` is therefore an optional handoff boundary, not a required step
+after an inference fit. It is most useful when downstream code should receive a
+deliberately prediction-only interface, or when extracting a lean core from a
+full result.
+
+---
+
 ## GAMResults
 
-Immutable results object returned by `GAM.fit()`. All post-estimation
-methods (prediction, summary, plotting) live here.
+Frozen full-results object returned by `GAM.fit()` by default. All
+post-estimation methods (prediction, summary, plotting) live here, and
+`to_predictor()` creates an independent prediction-only core.
 
 ```python
 from jaxgam import GAMResults
@@ -36,8 +78,103 @@ from jaxgam import GAMResults
       members:
         - predict
         - predict_matrix
+        - to_predictor
         - summary
         - plot
+
+---
+
+## GAMInferenceResult
+
+Lean result returned by `GAM.fit(..., result="inference")`. It supports
+new-data prediction and prediction-matrix construction, but deliberately has no
+training-data-backed `summary()` or `plot()` surface. Unlike
+`GAMResults.predict()`, its `predict()` method requires `newdata`.
+
+It retains `coefficients`, `Vp`, `family`, `formula`, `smooth_info`, and
+`term_names`, plus the scalar and small-array diagnostics `edf`, `edf1`,
+`edf_total`, `deviance`, `null_deviance`, `score`, `scale`, `theta`,
+`smoothing_params`, `converged`, `n_iter`, `convergence_info`, `method`,
+`lambda_strategy`, `execution_path`, and `n`. The smooth and term metadata make
+the retained EDF arrays interpretable without retaining the training setup.
+
+```python
+from jaxgam import GAM, GAMInferenceResult
+
+lean: GAMInferenceResult = GAM("y ~ s(x)").fit(
+    data,
+    result="inference",
+)
+predictions, se = lean.predict(newdata, se_fit=True)
+```
+
+That is the complete inference workflow. Call `lean.to_predictor()` only if a
+downstream consumer should receive prediction methods without the retained fit
+diagnostics. On an inference result, the method returns the already-composed
+predictor and does not reduce memory further.
+
+::: jaxgam.results.GAMInferenceResult
+    options:
+      members:
+        - predict
+        - predict_matrix
+        - to_predictor
+
+---
+
+## GAMPredictor
+
+Frozen, prediction-only core produced by either result type's
+`to_predictor()`. Its `coefficients` and `Vp` arrays are defensively copied and
+read-only. It supports `predict(newdata, ...)` and
+`predict_matrix(newdata)` without retaining dense training arrays or the
+summary/plot surface.
+
+`GAMPredictor` is a boundary object for prediction-only consumers. It is not a
+second inference mode:
+
+```python
+# Already lean and directly usable: keep diagnostics and labels.
+lean = model.fit(data, result="inference")
+predictions = lean.predict(newdata)
+
+# Optional: expose only prediction state to another component.
+predictor = lean.to_predictor()  # returns lean's existing core; no copy
+
+# Or extract prediction state from a full analytical result.
+full = model.fit(data, result="full")
+predictor_from_full = full.to_predictor()  # constructs an independent core
+```
+
+Calling `full.to_predictor()` does not mutate or slim `full`; discard the full
+result if its training-backed state is no longer needed.
+
+stdlib `pickle` is the default for same-version / transient handoff;
+`cloudpickle` is required only for locally-defined custom links/families;
+neither is a durable cross-version format. Loading a predictor pickled by a
+different jaxgam version emits a warning. As with all pickle data, only load
+trusted input. JaxGAM does not provide a serialized model format or
+`save()`/`load()` API.
+
+```python
+import pickle
+
+full = model.fit(data, result="full")
+predictor = full.to_predictor()  # optional prediction-only handoff
+blob = pickle.dumps(predictor)
+restored = pickle.loads(blob)
+predictions = restored.predict(newdata)
+```
+
+You may also pickle a `GAMInferenceResult` directly when the receiving process
+needs its diagnostics. Converting it to `GAMPredictor` narrows the receiving
+interface; it is not an additional memory optimization.
+
+::: jaxgam.inference.predictor.GAMPredictor
+    options:
+      members:
+        - predict
+        - predict_matrix
 
 ---
 
@@ -324,8 +461,9 @@ len(smooth_registry)           # 9
 
 ## GAMResults attributes
 
-The `GAMResults` object returned by `fit()` exposes all fitted state as
-read-only attributes (frozen dataclass):
+The `GAMResults` object returned by the default `fit()` mode is a frozen
+dataclass: fields cannot be reassigned, although contained mutable objects are
+not recursively frozen.
 
 | Attribute | Type | Description |
 |---|---|---|

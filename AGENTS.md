@@ -92,9 +92,10 @@ Key sections by topic area:
 
 ```
 jaxgam/
-├── __init__.py          # Public API: GAM, GAMResults
+├── __init__.py          # Public API: GAM, GAMResults, GAMInferenceResult, GAMPredictor
 ├── api.py               # GAM class (specification + fit orchestration)
-├── results.py           # GAMResults frozen dataclass + post-estimation helpers
+├── results.py           # Full/lean frozen result types + post-estimation helpers
+├── inference/           # Phase 3: prediction-only core and shared prediction finish
 ├── jax_utils.py         # JAX helpers (slogdet, pseudo-det, penalized solve)
 ├── formula/             # Phase 1: parsing and term representation
 ├── smooths/             # Phase 1: basis and penalty construction

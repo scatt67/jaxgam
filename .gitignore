@@ -2,6 +2,7 @@
 *.nbc
 *.nbi
 .claude/worktrees/*
+.claude/skills/*
 *.csv
 site/
 .coverage

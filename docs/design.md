@@ -6681,9 +6681,29 @@ model = jaxgam.bam(
 
 ### 17.1 Main Entry Point
 
-The public API is class-based. `GAM` is the only public export from
+The public API is class-based. The as-built package exports `GAM`,
+`GAMResults`, `GAMInferenceResult`, and `GAMPredictor` from
 `jaxgam.__init__`. There are no top-level `gam()`, `bam()`, or `gamm()`
 functions; `bam()` and `gamm()` are deferred to v1.1+.
+
+`GAM.fit()` has two explicit, keyword-only result modes:
+
+| Fit call | Return type | Contract |
+|---|---|---|
+| `model.fit(data, result="full")` | `GAMResults` | Full analytical result: prediction, self-prediction, `summary()`, `plot()`, and retained training-backed state |
+| `model.fit(data, result="inference")` | `GAMInferenceResult` | Lean result: new-data prediction plus lightweight diagnostics, without dense training state or `summary()`/`plot()` |
+
+`result="full"` is the default, so `.fit(data)` is shorthand for
+`.fit(data, result="full")`. Both returned objects predict directly. An
+inference result is already lean; its optional `to_predictor()` method only
+exposes the prediction-only core it already contains and does not reduce memory
+further. On a full result, `to_predictor()` constructs an independent lean core,
+but the full result retains its state until discarded. The detailed as-built
+contract lives in [`production_api/design.md`](production_api/design.md).
+
+The class skeleton below is the original pre-results architectural sketch. It
+is retained for historical algorithm context; the result-mode contract above
+supersedes its return-type and post-estimation placement details.
 
 ```python
 # api.py
@@ -6801,13 +6821,15 @@ class GAM:
         ...
 
 
-# Usage:
+# Current usage:
 #
-# >>> model = GAM("y ~ s(x1) + s(x2)", family="gaussian").fit(df)
-# >>> model.summary()
-# >>> model.plot()
-# >>> preds = model.predict(new_df)
-# >>> preds, se = model.predict(new_df, se_fit=True)
+# >>> spec = GAM("y ~ s(x1) + s(x2)", family="gaussian")
+# >>> full = spec.fit(df, result="full")       # default; .fit(df) is equivalent
+# >>> full.summary()
+# >>> full.plot()
+# >>> preds, se = full.predict(new_df, se_fit=True)
+# >>> lean = spec.fit(df, result="inference")  # already lean and directly usable
+# >>> preds = lean.predict(new_df)
 ```
 
 **`bam()` and `gamm()` are not implemented in v1.0.** They are designed for

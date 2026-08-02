@@ -18,6 +18,7 @@ R source reference: R/smooth.r smoothCon() by-variable handling
 
 from __future__ import annotations
 
+import copy
 import warnings
 
 import numpy as np
@@ -93,6 +94,14 @@ class FactorBySmooth:
         # Store labels for each level (matching R: "s(x):facLEVEL")
         base_label = _smooth_label(spec)
         self.labels = [f"{base_label}:{by_variable}{lev}" for lev in self.levels]
+
+    def copy_for_prediction(self) -> FactorBySmooth:
+        """Return a shallow copy with predict-only base-smooth state."""
+        clone = copy.copy(self)
+        if getattr(clone, "_X", None) is not None:
+            clone._X = None
+        clone.base_smooth = self.base_smooth.copy_for_prediction()
+        return clone
 
     def build_design_matrix(
         self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame
@@ -297,6 +306,14 @@ class NumericBySmooth:
             tol = float(np.mean(by_arr)) * np.finfo(float).eps * 1000.0
             is_non_constant = float(np.std(by_arr, ddof=1)) > tol
             self.has_centering_constraint = not is_non_constant
+
+    def copy_for_prediction(self) -> NumericBySmooth:
+        """Return a shallow copy with predict-only base-smooth state."""
+        clone = copy.copy(self)
+        if getattr(clone, "_X", None) is not None:
+            clone._X = None
+        clone.base_smooth = self.base_smooth.copy_for_prediction()
+        return clone
 
     def build_design_matrix(
         self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame

@@ -494,7 +494,13 @@ class TestGPVsR:
             )
 
         def E_matrix_matches() -> None:
-            _assert_close(py_smooth._E_knot, r_result["E"], STRICT)
+            assert py_smooth._E_knot is None
+            py_E, _ = py_smooth._gp_E(
+                py_smooth._knt,
+                py_smooth._knt,
+                resolved_rho=py_smooth._resolved_rho,
+            )
+            _assert_close(py_E, r_result["E"], STRICT)
 
         def UZ_columns_align_without_rotation() -> None:
             column_dots = np.sum(py_smooth._UZ * r_result["UZ"], axis=0)

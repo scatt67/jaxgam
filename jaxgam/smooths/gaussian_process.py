@@ -92,6 +92,12 @@ class GaussianProcessSmooth(Smooth):
         self._X: npt.NDArray[np.floating] | None = None
         self._S: npt.NDArray[np.floating] | None = None
 
+    def copy_for_prediction(self) -> GaussianProcessSmooth:
+        """Return predict-only GP state, defensively dropping the knot kernel."""
+        clone = super().copy_for_prediction()
+        clone._E_knot = None
+        return clone
+
     @staticmethod
     def _default_bs_dim(k_spec: int, d: int) -> int:
         if k_spec is not None and k_spec > 0:
@@ -200,6 +206,7 @@ class GaussianProcessSmooth(Smooth):
         self._E_knot = E
 
         eigvals, eigvecs = _slanczos(E, k, tol=np.finfo(float).eps ** 0.5)
+        self._E_knot = None
 
         if (eigvals < 0).any():
             warnings.warn(

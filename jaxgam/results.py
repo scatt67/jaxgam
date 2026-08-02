@@ -1,7 +1,8 @@
-"""GAMResults: frozen dataclass holding all fitted state.
+"""Full and lean frozen result types for fitted GAMs.
 
 This module defines:
-- ``GAMResults`` frozen dataclass with prediction, summary, and plot methods
+- ``GAMResults`` with prediction, summary, and plot methods
+- ``GAMInferenceResult`` with training-data-free prediction state
 - ``_from_fit()`` classmethod for construction from raw fit output
 - Post-estimation helpers (EDF, covariance, null deviance)
 
@@ -10,13 +11,15 @@ Design doc reference: docs/refactor_gam_api/design.md §3.4, §4.1, §7
 
 from __future__ import annotations
 
-import warnings
+import copy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import scipy.linalg as sla
 
+from jaxgam.inference._core import finish_prediction, predict_core
+from jaxgam.inference.predictor import GAMPredictor
 from jaxgam.jax_utils import to_numpy
 
 if TYPE_CHECKING:
@@ -32,13 +35,122 @@ if TYPE_CHECKING:
     from jaxgam.summary.summary import GAMSummary
 
 
+def _offset_was_nonzero(setup: ModelSetup) -> bool:
+    """Whether fitting used an external offset that prediction cannot recover."""
+    return setup.offset is not None and not np.allclose(setup.offset, 0.0)
+
+
 # ---------------------------------------------------------------------------
-# GAMResults frozen dataclass
+# Shared fit diagnostics and concrete result types
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class GAMResults:
+class _FitDiagnostics:
+    """Cheap fit diagnostics retained by both result materializations."""
+
+    edf: np.ndarray
+    edf1: np.ndarray
+    edf_total: float
+    deviance: float
+    null_deviance: float
+    score: float
+    scale: float
+    theta: float | None
+    smoothing_params: np.ndarray
+    converged: bool
+    n_iter: int
+    convergence_info: str
+    method: str
+    lambda_strategy: str
+    execution_path: str
+    n: int
+
+
+@dataclass(frozen=True)
+class GAMInferenceResult(_FitDiagnostics):
+    """Lean fitted result retaining prediction state but no training arrays.
+
+    This object is directly usable for prediction; calling ``to_predictor()``
+    is optional. The method returns the predictor already composed during fit,
+    without copying state or reducing retained memory further. Use it only when
+    a downstream consumer should receive the narrower prediction-only surface.
+    """
+
+    _predictor: GAMPredictor
+
+    @property
+    def coefficients(self) -> np.ndarray:
+        """Read-only fitted coefficients owned by the predictor."""
+        return self._predictor.coefficients
+
+    @property
+    def Vp(self) -> np.ndarray:
+        """Read-only Bayesian posterior covariance owned by the predictor."""
+        return self._predictor.Vp
+
+    @property
+    def family(self) -> ExponentialFamily:
+        """Post-fit family snapshot, including the fitted link and theta."""
+        return self._predictor.family
+
+    @property
+    def formula(self) -> str:
+        """Original model formula."""
+        return self._predictor.formula
+
+    @property
+    def smooth_info(self) -> tuple[SmoothInfo, ...]:
+        """Per-smooth labels and coefficient ranges for interpreting EDF."""
+        return self._predictor._predict_spec.smooth_info
+
+    @property
+    def term_names(self) -> tuple[str, ...]:
+        """Model-matrix column names retained in prediction metadata."""
+        return self._predictor._predict_spec.term_names
+
+    def predict(
+        self,
+        newdata: pd.DataFrame | dict,
+        pred_type: str = "response",
+        se_fit: bool = False,
+        offset: np.ndarray | None = None,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        """Predict from lean state; unlike ``GAMResults``, new data is required."""
+        return self._predictor._predict(
+            newdata,
+            pred_type=pred_type,
+            se_fit=se_fit,
+            offset=offset,
+            warning_stacklevel=4,
+        )
+
+    def predict_matrix(self, newdata: pd.DataFrame | dict) -> np.ndarray:
+        """Build the constrained prediction matrix for new data."""
+        return self._predictor.predict_matrix(newdata)
+
+    def to_predictor(self) -> GAMPredictor:
+        """Return the existing prediction-only core without copying.
+
+        This is an optional interface handoff, not another memory optimization.
+        The inference result itself already delegates prediction to this object.
+        """
+        return self._predictor
+
+    def __repr__(self) -> str:
+        return (
+            "GAMInferenceResult(\n"
+            f"  formula={self.formula!r},\n"
+            f"  family={self.family.family_name!r},\n"
+            f"  converged={self.converged}, n={self.n}, "
+            f"edf_total={self.edf_total:.2f}\n"
+            "  Fit with result='full' for summary() and plot().\n"
+            ")"
+        )
+
+
+@dataclass(frozen=True)
+class GAMResults(_FitDiagnostics):
     """Results from a fitted GAM.
 
     All attributes are read-only (frozen dataclass). This object is the
@@ -53,52 +165,15 @@ class GAMResults:
     fitted_values: np.ndarray  # (n,) response-scale fitted values
     linear_predictor: np.ndarray  # (n,) link-scale linear predictor
 
-    # -- Covariance & scale -------------------------------------------------
+    # -- Covariance ---------------------------------------------------------
     Vp: np.ndarray  # (p, p) Bayesian posterior covariance
-    scale: float  # dispersion parameter (phi)
-
-    # -- Degrees of freedom -------------------------------------------------
-    edf: np.ndarray  # (n_smooths,) per-smooth EDF
-    edf1: np.ndarray  # (n_smooths,) alternative EDF
-    edf_total: float  # total model EDF
-
-    # -- Deviance -----------------------------------------------------------
-    deviance: float
-    null_deviance: float
-
-    # -- Smoothing parameters -----------------------------------------------
-    smoothing_params: np.ndarray  # (n_penalties,) estimated lambda
-
-    # -- Convergence --------------------------------------------------------
-    converged: bool
-    n_iter: int
-    score: float  # REML value at convergence
-    # optimizer terminal state: "full convergence" / "step failed" /
-    # "iteration limit" / "fixed sp"
-    convergence_info: str
 
     # -- Model structure (Phase 1 artifacts) --------------------------------
     family: ExponentialFamily
     setup: ModelSetup  # frozen Phase 1 output
-    coef_map: CoefficientMap  # Phase 1→3 coefficient mapping
-    smooth_info: tuple[SmoothInfo, ...]
-    term_names: tuple[str, ...]
-
-    # -- Data references ----------------------------------------------------
-    X: np.ndarray  # (n, p) design matrix
-    y: np.ndarray  # (n,) response
-    weights: np.ndarray  # (n,) prior weights
-    offset: np.ndarray | None
-
-    # -- Extended family parameters -----------------------------------------
-    theta: float | None  # NB dispersion (None for standard families)
 
     # -- Metadata -----------------------------------------------------------
-    n: int
-    execution_path: str
-    lambda_strategy: str
     formula: str  # echoed from specification
-    method: str  # "REML" (echoed from specification; only REML in v1.0)
     training_data: dict[str, np.ndarray]  # for plotting
 
     # ------------------------------------------------------------------
@@ -108,7 +183,7 @@ class GAMResults:
     @classmethod
     def _from_fit(
         cls,
-        result: NewtonResult,
+        fit_result: NewtonResult,
         setup: ModelSetup,
         spec: FormulaSpec,
         data: pd.DataFrame | dict,
@@ -117,8 +192,9 @@ class GAMResults:
         lambda_strategy: str,
         formula: str,
         method: str,
-    ) -> GAMResults:
-        """Construct GAMResults from raw fit output.
+        result_mode: Literal["full", "inference"],
+    ) -> GAMResults | GAMInferenceResult:
+        """Construct the requested result materialization from raw fit output.
 
         Computes derived quantities (covariance, EDF, null deviance),
         extracts training data, and assembles all fields.
@@ -128,7 +204,7 @@ class GAMResults:
 
         Parameters
         ----------
-        result : NewtonResult
+        fit_result : NewtonResult
             Raw output from Newton optimization or fixed-sp PIRLS.
         setup : ModelSetup
             Phase 1 model setup.
@@ -146,13 +222,20 @@ class GAMResults:
             Original formula string from the GAM specification.
         method : str
             Smoothing parameter estimation method ("REML"; only REML in v1.0).
+        result_mode : {"full", "inference"}
+            Whether to retain full training-backed state or lean prediction
+            state only.
         """
-        pr = result.pirls_result
+        pr = fit_result.pirls_result
+
+        # Snapshot after Newton has synchronized any fitted family parameters
+        # (notably NB theta) into the fitting family instance.
+        family_snapshot = copy.deepcopy(family)
 
         # Phase 2→3: transfer to NumPy
         coefficients = to_numpy(pr.coefficients)
-        scale = float(to_numpy(result.scale))
-        edf_total = float(to_numpy(result.edf))
+        scale = float(to_numpy(fit_result.scale))
+        edf_total = float(to_numpy(fit_result.edf))
 
         # Use Fisher-weighted quantities for EDF and Bayesian covariance.
         # For standard families Fisher = Newton; for extended families (NB)
@@ -182,56 +265,102 @@ class GAMResults:
             H_inv = D @ H_inv @ D.T
 
         # Bayesian covariance
-        phi = 1.0 if family.scale_known else scale
+        phi = 1.0 if family_snapshot.scale_known else scale
         Vp = phi * H_inv
 
         # Null deviance
         null_deviance = _compute_null_deviance(
-            setup.y, setup.weights, family, setup.offset
+            setup.y, setup.weights, family_snapshot, setup.offset
         )
 
         # Phase 2→3: transfer remaining arrays to NumPy
         mu = to_numpy(pr.mu)
         eta = to_numpy(pr.eta)
         deviance = float(to_numpy(pr.deviance))
-        smoothing_params = to_numpy(result.smoothing_params)
+        smoothing_params = to_numpy(fit_result.smoothing_params)
 
-        # Extract training data for plotting
+        diagnostics = {
+            "edf": per_smooth_edf,
+            "edf1": per_smooth_edf1,
+            "edf_total": edf_total,
+            "deviance": deviance,
+            "null_deviance": null_deviance,
+            "score": float(to_numpy(fit_result.score)),
+            "scale": scale,
+            "theta": fit_result.theta,
+            "smoothing_params": smoothing_params,
+            "converged": fit_result.converged,
+            "n_iter": fit_result.n_iter,
+            "convergence_info": fit_result.convergence_info,
+            "method": method,
+            "lambda_strategy": lambda_strategy,
+            "execution_path": "jax",
+            "n": setup.n_obs,
+        }
+
+        if result_mode == "inference":
+            predictor = GAMPredictor(
+                coefficients=coefficients,
+                Vp=Vp,
+                family=family_snapshot,
+                formula=formula,
+                offset_was_nonzero=_offset_was_nonzero(setup),
+                _predict_spec=setup._lazy_predict_spec(),
+            )
+            return GAMInferenceResult(_predictor=predictor, **diagnostics)
+
+        # Plotting data is extracted only for the full diagnostic surface.
         training_data = _extract_training_data(spec, data)
-
         return cls(
             coefficients=coefficients,
             fitted_values=mu,
             linear_predictor=eta,
             Vp=Vp,
-            scale=scale,
-            edf=per_smooth_edf,
-            edf1=per_smooth_edf1,
-            edf_total=edf_total,
-            deviance=deviance,
-            null_deviance=null_deviance,
-            smoothing_params=smoothing_params,
-            converged=result.converged,
-            n_iter=result.n_iter,
-            score=float(to_numpy(result.score)),
-            convergence_info=result.convergence_info,
-            family=family,
+            family=family_snapshot,
             setup=setup,
-            coef_map=setup.coef_map,
-            smooth_info=setup.smooth_info,
-            term_names=setup.term_names,
-            X=setup.X,
-            y=setup.y,
-            weights=setup.weights,
-            offset=setup.offset,
-            theta=result.theta,
-            n=setup.n_obs,
-            execution_path="jax",
-            lambda_strategy=lambda_strategy,
             formula=formula,
-            method=method,
             training_data=training_data,
+            **diagnostics,
         )
+
+    # ------------------------------------------------------------------
+    # Phase 1 aliases
+    # ------------------------------------------------------------------
+
+    @property
+    def X(self) -> np.ndarray:
+        """Constrained training design matrix owned by ``setup``."""
+        return self.setup.X
+
+    @property
+    def y(self) -> np.ndarray:
+        """Training response owned by ``setup``."""
+        return self.setup.y
+
+    @property
+    def weights(self) -> np.ndarray:
+        """Prior weights owned by ``setup``."""
+        return self.setup.weights
+
+    @property
+    def offset(self) -> np.ndarray | None:
+        """Training offset owned by ``setup``."""
+        return self.setup.offset
+
+    @property
+    def coef_map(self) -> CoefficientMap:
+        """Phase 1→3 coefficient mapping owned by ``setup``."""
+        return self.setup.coef_map
+
+    @property
+    def smooth_info(self) -> tuple[SmoothInfo, ...]:
+        """Per-smooth metadata owned by ``setup``."""
+        return self.setup.smooth_info
+
+    @property
+    def term_names(self) -> tuple[str, ...]:
+        """Model-matrix column names owned by ``setup``."""
+        return self.setup.term_names
 
     # ------------------------------------------------------------------
     # Prediction
@@ -271,43 +400,26 @@ class GAMResults:
         if newdata is None:
             # Self-prediction: use stored linear predictor
             eta = self.linear_predictor.copy()
-            X_p = self.X if se_fit else None
-        else:
-            X_p = self.setup.build_predict_matrix(newdata)
-            eta = X_p @ self.coefficients
-            if offset is not None:
-                eta = eta + np.asarray(offset, dtype=np.float64).ravel()
-            elif self.offset is not None and not np.allclose(self.offset, 0.0):
-                # The model was fit with an external offset, which mgcv's
-                # predict.gam does NOT recover for new data (only formula
-                # offset() terms are recovered). Surface the silent drop so
-                # exposure-offset workflows don't get badly wrong predictions.
-                warnings.warn(
-                    "This model was fit with an external offset, but no "
-                    "`offset=` was supplied to predict() on new data. The "
-                    "offset is omitted from the returned predictions (matching "
-                    "mgcv predict.gam for external offsets). Pass `offset=` to "
-                    "include it.",
-                    stacklevel=2,
-                )
+            return finish_prediction(
+                eta,
+                self.X,
+                self.family.link,
+                self.Vp,
+                pred_type=pred_type,
+                se_fit=se_fit,
+            )
 
-        pred = self.family.link.linkinv(eta) if pred_type == "response" else eta
-
-        if se_fit:
-            if X_p is None:
-                X_p = self.X
-            # Link-scale SE: se = sqrt(rowSums((X_p @ Vp) * X_p))
-            XVp = X_p @ self.Vp
-            se = np.sqrt(np.sum(XVp * X_p, axis=1))
-            if pred_type == "response":
-                # Delta method: transform link-scale SE to the response scale
-                # via the derivative of the inverse link, matching
-                # predict.gam(type="response", se.fit=TRUE):
-                #   se_response = se_link * |dμ/dη|
-                se = se * np.abs(np.asarray(self.family.link.mu_eta(eta)))
-            return pred, se
-
-        return pred
+        return predict_core(
+            self.setup._lazy_predict_spec(),
+            self.coefficients,
+            self.Vp,
+            self.family.link,
+            newdata,
+            pred_type=pred_type,
+            se_fit=se_fit,
+            offset=offset,
+            offset_was_nonzero=_offset_was_nonzero(self.setup),
+        )
 
     def predict_matrix(self, newdata: pd.DataFrame | dict) -> np.ndarray:
         """Build constrained prediction matrix for new data.
@@ -325,6 +437,21 @@ class GAMResults:
             Constrained prediction matrix.
         """
         return self.setup.build_predict_matrix(newdata)
+
+    def to_predictor(self) -> GAMPredictor:
+        """Build an independent, prediction-only core on demand.
+
+        This does not mutate or slim the full result. Discard the full result if
+        its training-backed state is no longer needed after the handoff.
+        """
+        return GAMPredictor(
+            coefficients=self.coefficients,
+            Vp=self.Vp,
+            family=self.family,
+            formula=self.formula,
+            offset_was_nonzero=_offset_was_nonzero(self.setup),
+            _predict_spec=self.setup._lazy_predict_spec(),
+        )
 
     # ------------------------------------------------------------------
     # Summary and plot delegation
@@ -401,11 +528,7 @@ class GAMResults:
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        family_name = (
-            self.family.family_name
-            if hasattr(self.family, "family_name")
-            else type(self.family).__name__
-        )
+        family_name = self.family.family_name
         dev_explained = (
             1.0 - self.deviance / self.null_deviance
             if self.null_deviance > 0
