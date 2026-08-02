@@ -1,0 +1,1379 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>GAM API Refactor: Design Document - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#gam-api-refactor-design-document" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              GAM API Refactor: Design Document
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-problem-statement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Problem Statement
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Problem Statement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-not-a-problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Is Not a Problem
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-design-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Design Goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-design-modelresults-separation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Design: Model/Results Separation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Design: Model/Results Separation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-prior-art" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Prior Art
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-proposed-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Proposed Architecture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-gam-class-specification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 GAM Class (Specification)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-gamresults-class-fitted-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 GAMResults Class (Fitted Model)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-backward-compatibility-via-__getattr__" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Backward Compatibility via __getattr__
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-naming-why-not-fittedgam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Naming: Why Not FittedGAM?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-internal-composition-within-gamresults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Internal Composition within GAMResults
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Internal Composition within GAMResults">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-do-we-need-gamfit-gampredict-gamsummary-as-separate-classes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Do We Need GAMFit, GAMPredict, GAMSummary as Separate Classes?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-what-should-be-extracted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 What Should Be Extracted
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-full-proposed-module-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Full Proposed Module Layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-interaction-with-three-phase-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Interaction with Three-Phase Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-predict-method-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. predict() Method Design
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-summary-of-design-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Summary of Design Decisions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-resolved-design-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Resolved Design Decisions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="gam-api-refactor-design-document">GAM API Refactor: Design Document<a class="headerlink" href="#gam-api-refactor-design-document" title="Permanent link">&para;</a></h1>
+<h2 id="1-problem-statement">1. Problem Statement<a class="headerlink" href="#1-problem-statement" title="Permanent link">&para;</a></h2>
+<p>The <code>GAM</code> class in <code>jaxgam/api.py</code> (693 LOC) acts as a monolithic orchestrator that:</p>
+<ul>
+<li>Holds model <strong>specification</strong> (formula, family, method) <em>and</em> fitted <strong>results</strong> (30+ attributes)</li>
+<li>Uses a mutable <code>_fitted</code> flag with <code>_check_fitted()</code> guards to prevent unfitted access</li>
+<li>Contains a 90-line <code>_store_results()</code> that computes derived quantities (EDF, covariance, null deviance) and sets all fitted attributes atomically</li>
+<li>Mixes responsibilities: validation, device resolution, fitting orchestration, result storage, prediction, summary delegation, plotting delegation</li>
+</ul>
+<p>While the underlying architecture is well-separated (Phase 1/2/3 with clear module boundaries), the GAM class itself conflates "what model to fit" with "what came out of the fit."</p>
+<h3 id="what-is-not-a-problem">What Is <em>Not</em> a Problem<a class="headerlink" href="#what-is-not-a-problem" title="Permanent link">&para;</a></h3>
+<p>The GAM class is already a <strong>thin facade</strong> — the actual algorithm work is delegated to <code>formula/</code>, <code>fitting/</code>, <code>summary/</code>, and <code>plot/</code> modules. The issue is not algorithm coupling; it's <strong>state management and API shape</strong>.</p>
+<hr />
+<h2 id="2-design-goals">2. Design Goals<a class="headerlink" href="#2-design-goals" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Separate specification from results</strong> — a fitted model should be a distinct, immutable object</li>
+<li><strong>Eliminate the <code>_fitted</code> guard pattern</strong> — impossible states should be unrepresentable</li>
+<li><strong>Reduce <code>_store_results()</code> complexity</strong> — derived-quantity computation should be cohesive and testable</li>
+<li><strong>Maintain the three-phase boundary</strong> — the Phase 1 (NumPy) → Phase 2 (JAX) → Phase 3 (NumPy) contract is load-bearing and must not be violated</li>
+<li><strong>Keep the user-facing API ergonomic</strong> — sklearn-style <code>model.fit(data).predict(newdata)</code> chaining must still work</li>
+<li><strong>Pythonic, not Java-ic</strong> — prefer composition over inheritance, protocols over ABCs, dataclasses over boilerplate</li>
+</ol>
+<hr />
+<h2 id="3-design-modelresults-separation">3. Design: Model/Results Separation<a class="headerlink" href="#3-design-modelresults-separation" title="Permanent link">&para;</a></h2>
+<h3 id="31-prior-art">3.1 Prior Art<a class="headerlink" href="#31-prior-art" title="Permanent link">&para;</a></h3>
+<p>This pattern is well-established in the Python stats ecosystem:</p>
+<table>
+<thead>
+<tr>
+<th>Library</th>
+<th>Specification</th>
+<th>Fitted Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>statsmodels</strong></td>
+<td><code>GLM(endog, exog, family)</code></td>
+<td><code>GLMResults</code> (from <code>.fit()</code>)</td>
+</tr>
+<tr>
+<td><strong>scikit-learn</strong></td>
+<td><code>LinearRegression()</code></td>
+<td>mutates self (<code>.coef_</code>, <code>.intercept_</code>)</td>
+</tr>
+<tr>
+<td><strong>PyMC</strong></td>
+<td><code>Model()</code> context</td>
+<td><code>InferenceData</code> (from <code>sample()</code>)</td>
+</tr>
+<tr>
+<td><strong>brms (R)</strong></td>
+<td><code>brm(formula, data, family)</code></td>
+<td><code>brmsfit</code> object</td>
+</tr>
+<tr>
+<td><strong>mgcv (R)</strong></td>
+<td><code>gam(formula, family, data)</code></td>
+<td>returns a <code>gam</code> object (spec + results combined)</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>statsmodels pattern</strong> is the strongest fit for jaxgam:
+- Both are frequentist regression frameworks
+- Both have formula-based model specification
+- Both produce rich result objects (coefficients, covariance, diagnostics)
+- statsmodels' separation is considered one of its best design decisions</p>
+<h3 id="32-proposed-architecture">3.2 Proposed Architecture<a class="headerlink" href="#32-proposed-architecture" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GAM (specification — lightweight, immutable-ish)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── formula: str
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>├── family: str | ExponentialFamily
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── method: &quot;REML&quot; | &quot;ML&quot;
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>├── sp: array | None
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├── device: &quot;cpu&quot; | &quot;gpu&quot; | None
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>└── fit(data, weights?, offset?) ─────────►  GAMResults (frozen dataclass)
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                                                  │
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                                                  ├── coefficients_: ndarray
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                                                  ├── fitted_values_: ndarray
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                                                  ├── linear_predictor_: ndarray
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                                                  ├── Vp_: ndarray
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                                                  ├── edf_: ndarray
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                                                  ├── ... (all fitted state)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>                                                  │
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                                                  ├── predict(newdata?, ...)
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>                                                  ├── summary()
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>                                                  ├── plot(...)
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>                                                  └── predict_matrix(newdata)
+</code></pre></div>
+<h3 id="33-gam-class-specification">3.3 <code>GAM</code> Class (Specification)<a class="headerlink" href="#33-gam-class-specification" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">GAM</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Generalized Additive Model specification.</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="sd">    Parameters</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="sd">    ----------</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="sd">    formula : str</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="sd">        Model formula, e.g. &quot;y ~ s(x1) + s(x2, bs=&#39;cr&#39;)&quot;.</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="sd">    family : str or ExponentialFamily</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="sd">        Response distribution. One of &quot;gaussian&quot;, &quot;poisson&quot;, &quot;binomial&quot;, &quot;gamma&quot;.</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="sd">    method : str</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="sd">        Smoothing parameter selection method. &quot;REML&quot; or &quot;ML&quot;.</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="sd">    sp : array-like or None</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="sd">        Fixed smoothing parameters. If None, estimated via `method`.</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>        <span class="bp">self</span><span class="p">,</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>        <span class="n">formula</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>        <span class="n">family</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ExponentialFamily</span> <span class="o">=</span> <span class="s2">&quot;gaussian&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>        <span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;REML&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>        <span class="n">sp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="nb">list</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>        <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">fit</span><span class="p">(</span>
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>        <span class="bp">self</span><span class="p">,</span>
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>        <span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">,</span>
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>        <span class="n">weights</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>        <span class="n">offset</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;GAMResults&quot;</span><span class="p">:</span> <span class="o">...</span>
+</code></pre></div>
+<p><strong>Responsibilities (narrowed):</strong>
+- Store specification parameters
+- Validate scope guards (<code>_check_scope_guards</code>)
+- Orchestrate the fit pipeline: parse → build → transfer → optimize → wrap results
+- Return a <code>GAMResults</code> instance</p>
+<p><strong>What moves out:</strong>
+- All fitted attributes (<code>coefficients_</code>, <code>Vp_</code>, <code>edf_</code>, etc.)
+- <code>predict()</code>, <code>summary()</code>, <code>plot()</code>, <code>predict_matrix()</code>
+- <code>_check_fitted()</code> (no longer needed — results are a separate object)
+- <code>_store_results()</code> (becomes <code>GAMResults.from_fit()</code> or similar)</p>
+<h3 id="34-gamresults-class-fitted-model">3.4 <code>GAMResults</code> Class (Fitted Model)<a class="headerlink" href="#34-gamresults-class-fitted-model" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">GAMResults</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Results from a fitted GAM.</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="sd">    All attributes are read-only (frozen dataclass). This object is the</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="sd">    primary interface for post-estimation: prediction, inference, and</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="sd">    visualization.</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="c1"># ── Core estimates ──────────────────────────────────────</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="n">coefficients</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>        <span class="c1"># (p,) fitted coefficients</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    <span class="n">fitted_values</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>       <span class="c1"># (n,) response-scale fitted values</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>    <span class="n">linear_predictor</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>    <span class="c1"># (n,) link-scale linear predictor</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>    <span class="c1"># ── Covariance &amp; scale ──────────────────────────────────</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>    <span class="n">Vp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>                  <span class="c1"># (p, p) Bayesian posterior covariance</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="n">scale</span><span class="p">:</span> <span class="nb">float</span>                    <span class="c1"># dispersion parameter (phi)</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>    <span class="c1"># ── Degrees of freedom ──────────────────────────────────</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>    <span class="n">edf</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>                 <span class="c1"># (n_smooths,) per-smooth EDF</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>    <span class="n">edf1</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>                <span class="c1"># (n_smooths,) alternative EDF</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>    <span class="n">edf_total</span><span class="p">:</span> <span class="nb">float</span>                <span class="c1"># total model EDF</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>    <span class="c1"># ── Deviance ────────────────────────────────────────────</span>
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a>    <span class="n">deviance</span><span class="p">:</span> <span class="nb">float</span>
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a>    <span class="n">null_deviance</span><span class="p">:</span> <span class="nb">float</span>
+<a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a>
+<a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a>    <span class="c1"># ── Smoothing parameters ────────────────────────────────</span>
+<a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a>    <span class="n">smoothing_params</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>    <span class="c1"># (n_penalties,) estimated lambda</span>
+<a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a>
+<a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a>    <span class="c1"># ── Convergence ─────────────────────────────────────────</span>
+<a id="__codelineno-2-32" name="__codelineno-2-32" href="#__codelineno-2-32"></a>    <span class="n">converged</span><span class="p">:</span> <span class="nb">bool</span>
+<a id="__codelineno-2-33" name="__codelineno-2-33" href="#__codelineno-2-33"></a>    <span class="n">n_iter</span><span class="p">:</span> <span class="nb">int</span>
+<a id="__codelineno-2-34" name="__codelineno-2-34" href="#__codelineno-2-34"></a>    <span class="n">score</span><span class="p">:</span> <span class="nb">float</span>                    <span class="c1"># REML/ML value at convergence</span>
+<a id="__codelineno-2-35" name="__codelineno-2-35" href="#__codelineno-2-35"></a>
+<a id="__codelineno-2-36" name="__codelineno-2-36" href="#__codelineno-2-36"></a>    <span class="c1"># ── Model structure (Phase 1 artifacts) ─────────────────</span>
+<a id="__codelineno-2-37" name="__codelineno-2-37" href="#__codelineno-2-37"></a>    <span class="n">family</span><span class="p">:</span> <span class="n">ExponentialFamily</span>
+<a id="__codelineno-2-38" name="__codelineno-2-38" href="#__codelineno-2-38"></a>    <span class="n">setup</span><span class="p">:</span> <span class="n">ModelSetup</span>               <span class="c1"># frozen Phase 1 output</span>
+<a id="__codelineno-2-39" name="__codelineno-2-39" href="#__codelineno-2-39"></a>    <span class="n">coef_map</span><span class="p">:</span> <span class="n">CoefficientMap</span>        <span class="c1"># Phase 1→3 coefficient mapping</span>
+<a id="__codelineno-2-40" name="__codelineno-2-40" href="#__codelineno-2-40"></a>    <span class="n">smooth_info</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">SmoothInfo</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+<a id="__codelineno-2-41" name="__codelineno-2-41" href="#__codelineno-2-41"></a>    <span class="n">term_names</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+<a id="__codelineno-2-42" name="__codelineno-2-42" href="#__codelineno-2-42"></a>
+<a id="__codelineno-2-43" name="__codelineno-2-43" href="#__codelineno-2-43"></a>    <span class="c1"># ── Data references ─────────────────────────────────────</span>
+<a id="__codelineno-2-44" name="__codelineno-2-44" href="#__codelineno-2-44"></a>    <span class="n">X</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>                   <span class="c1"># (n, p) design matrix</span>
+<a id="__codelineno-2-45" name="__codelineno-2-45" href="#__codelineno-2-45"></a>    <span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>                   <span class="c1"># (n,) response</span>
+<a id="__codelineno-2-46" name="__codelineno-2-46" href="#__codelineno-2-46"></a>    <span class="n">weights</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>             <span class="c1"># (n,) prior weights</span>
+<a id="__codelineno-2-47" name="__codelineno-2-47" href="#__codelineno-2-47"></a>    <span class="n">offset</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span>
+<a id="__codelineno-2-48" name="__codelineno-2-48" href="#__codelineno-2-48"></a>
+<a id="__codelineno-2-49" name="__codelineno-2-49" href="#__codelineno-2-49"></a>    <span class="c1"># ── Metadata ────────────────────────────────────────────</span>
+<a id="__codelineno-2-50" name="__codelineno-2-50" href="#__codelineno-2-50"></a>    <span class="n">n</span><span class="p">:</span> <span class="nb">int</span>
+<a id="__codelineno-2-51" name="__codelineno-2-51" href="#__codelineno-2-51"></a>    <span class="n">execution_path</span><span class="p">:</span> <span class="nb">str</span>
+<a id="__codelineno-2-52" name="__codelineno-2-52" href="#__codelineno-2-52"></a>    <span class="n">lambda_strategy</span><span class="p">:</span> <span class="nb">str</span>
+<a id="__codelineno-2-53" name="__codelineno-2-53" href="#__codelineno-2-53"></a>    <span class="n">formula</span><span class="p">:</span> <span class="nb">str</span>                    <span class="c1"># echoed from specification</span>
+<a id="__codelineno-2-54" name="__codelineno-2-54" href="#__codelineno-2-54"></a>    <span class="n">training_data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>  <span class="c1"># for plotting</span>
+<a id="__codelineno-2-55" name="__codelineno-2-55" href="#__codelineno-2-55"></a>
+<a id="__codelineno-2-56" name="__codelineno-2-56" href="#__codelineno-2-56"></a>    <span class="c1"># ── Methods ─────────────────────────────────────────────</span>
+<a id="__codelineno-2-57" name="__codelineno-2-57" href="#__codelineno-2-57"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">predict</span><span class="p">(</span>
+<a id="__codelineno-2-58" name="__codelineno-2-58" href="#__codelineno-2-58"></a>        <span class="bp">self</span><span class="p">,</span>
+<a id="__codelineno-2-59" name="__codelineno-2-59" href="#__codelineno-2-59"></a>        <span class="n">newdata</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-2-60" name="__codelineno-2-60" href="#__codelineno-2-60"></a>        <span class="n">pred_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;response&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-61" name="__codelineno-2-61" href="#__codelineno-2-61"></a>        <span class="n">se_fit</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-2-62" name="__codelineno-2-62" href="#__codelineno-2-62"></a>        <span class="n">offset</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-2-63" name="__codelineno-2-63" href="#__codelineno-2-63"></a>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span> <span class="o">...</span>
+<a id="__codelineno-2-64" name="__codelineno-2-64" href="#__codelineno-2-64"></a>
+<a id="__codelineno-2-65" name="__codelineno-2-65" href="#__codelineno-2-65"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">predict_matrix</span><span class="p">(</span>
+<a id="__codelineno-2-66" name="__codelineno-2-66" href="#__codelineno-2-66"></a>        <span class="bp">self</span><span class="p">,</span> <span class="n">newdata</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">,</span>
+<a id="__codelineno-2-67" name="__codelineno-2-67" href="#__codelineno-2-67"></a>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-2-68" name="__codelineno-2-68" href="#__codelineno-2-68"></a>
+<a id="__codelineno-2-69" name="__codelineno-2-69" href="#__codelineno-2-69"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">summary</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;GAMSummary&quot;</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-2-70" name="__codelineno-2-70" href="#__codelineno-2-70"></a>
+<a id="__codelineno-2-71" name="__codelineno-2-71" href="#__codelineno-2-71"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">plot</span><span class="p">(</span>
+<a id="__codelineno-2-72" name="__codelineno-2-72" href="#__codelineno-2-72"></a>        <span class="bp">self</span><span class="p">,</span>
+<a id="__codelineno-2-73" name="__codelineno-2-73" href="#__codelineno-2-73"></a>        <span class="n">select</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">list</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-2-74" name="__codelineno-2-74" href="#__codelineno-2-74"></a>        <span class="n">pages</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-2-75" name="__codelineno-2-75" href="#__codelineno-2-75"></a>        <span class="n">rug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-2-76" name="__codelineno-2-76" href="#__codelineno-2-76"></a>        <span class="n">se</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-2-77" name="__codelineno-2-77" href="#__codelineno-2-77"></a>        <span class="n">shade</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-2-78" name="__codelineno-2-78" href="#__codelineno-2-78"></a>        <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+<a id="__codelineno-2-79" name="__codelineno-2-79" href="#__codelineno-2-79"></a>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">:</span> <span class="o">...</span>
+</code></pre></div>
+<p><strong>Key design decisions:</strong></p>
+<ol>
+<li>
+<p><strong>Frozen dataclass</strong> — all attributes are set at construction and immutable. This eliminates the entire class of bugs where someone accidentally mutates fitted state.</p>
+</li>
+<li>
+<p><strong>No trailing underscores</strong> — the sklearn convention (<code>coef_</code>) distinguishes fitted from unfitted attributes on the <em>same</em> object. With separate types, this distinction is structural, not naming-based. The underscore suffix is unnecessary.</p>
+</li>
+<li>
+<p><strong>Methods on the dataclass</strong> — <code>predict()</code>, <code>summary()</code>, <code>plot()</code> live on <code>GAMResults</code> because they need fitted state. This is the same as statsmodels' <code>Results.predict()</code>.</p>
+</li>
+<li>
+<p><strong>Factory classmethod for construction</strong> — a <code>_from_fit()</code> classmethod handles the derived-quantity computation that currently lives in <code>_store_results()</code>:</p>
+</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nd">@classmethod</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">_from_fit</span><span class="p">(</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="bp">cls</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">result</span><span class="p">:</span> <span class="n">NewtonResult</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">setup</span><span class="p">:</span> <span class="n">ModelSetup</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">spec</span><span class="p">:</span> <span class="n">FormulaSpec</span><span class="p">,</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">,</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">family</span><span class="p">:</span> <span class="n">ExponentialFamily</span><span class="p">,</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="n">fd</span><span class="p">:</span> <span class="n">FittingData</span><span class="p">,</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="n">lambda_strategy</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;GAMResults&quot;</span><span class="p">:</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct GAMResults from raw fit output.</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="sd">    Computes derived quantities: covariance, EDF, null deviance.</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>    <span class="c1"># ... (current _store_results logic, cleaned up)</span>
+</code></pre></div>
+<h3 id="35-backward-compatibility-via-__getattr__">3.5 Backward Compatibility via <code>__getattr__</code><a class="headerlink" href="#35-backward-compatibility-via-__getattr__" title="Permanent link">&para;</a></h3>
+<p>To avoid a hard API break, <code>GAM</code> can forward attribute access to an internal <code>results_</code> attribute:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">GAM</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">fit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">GAMResults</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">results_</span> <span class="o">=</span> <span class="n">GAMResults</span><span class="o">.</span><span class="n">_from_fit</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">results_</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__getattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>        <span class="c1"># Forward fitted attribute access: model.coefficients_ → model.results_.coefficients</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>        <span class="k">if</span> <span class="n">name</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)</span> <span class="ow">and</span> <span class="n">name</span> <span class="o">!=</span> <span class="s2">&quot;results_&quot;</span><span class="p">:</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>            <span class="n">stripped</span> <span class="o">=</span> <span class="n">name</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;results_&quot;</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">results_</span><span class="p">,</span> <span class="n">stripped</span><span class="p">):</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>                <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>                <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>                    <span class="sa">f</span><span class="s2">&quot;Accessing &#39;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39; on GAM is deprecated. &quot;</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>                    <span class="sa">f</span><span class="s2">&quot;Use &#39;results.</span><span class="si">{</span><span class="n">stripped</span><span class="si">}</span><span class="s2">&#39; instead.&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>                    <span class="ne">DeprecationWarning</span><span class="p">,</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>                    <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>                <span class="p">)</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>                <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">results_</span><span class="p">,</span> <span class="n">stripped</span><span class="p">)</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>        <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;&#39;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&#39; has no attribute &#39;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>    <span class="c1"># Thin forwarding methods (deprecated)</span>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">predict</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Use results.predict() instead&quot;</span><span class="p">,</span> <span class="ne">DeprecationWarning</span><span class="p">)</span>
+<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">results_</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>Migration path:</strong>
+1. v1.0: Both APIs work; old API emits <code>DeprecationWarning</code>
+2. v1.1+: Remove <code>__getattr__</code> forwarding</p>
+<h3 id="36-naming-why-not-fittedgam">3.6 Naming: Why Not <code>FittedGAM</code>?<a class="headerlink" href="#36-naming-why-not-fittedgam" title="Permanent link">&para;</a></h3>
+<p>Considered alternatives:</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Pros</th>
+<th>Cons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GAMResults</code></td>
+<td>Matches statsmodels convention; clearly "results of a fit"</td>
+<td>Slightly verbose</td>
+</tr>
+<tr>
+<td><code>FittedGAM</code></td>
+<td>Reads naturally ("a fitted GAM")</td>
+<td>Implies it <em>is</em> a GAM, which conflates spec and results</td>
+</tr>
+<tr>
+<td><code>GAMFit</code></td>
+<td>Short</td>
+<td>Ambiguous: is it a noun (the fit) or a verb (to fit)?</td>
+</tr>
+<tr>
+<td><code>GAMEstimate</code></td>
+<td>Precise</td>
+<td>Uncommon in Python stats</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Decision: <code>GAMResults</code></strong> — follows the dominant Python convention and is unambiguous.</p>
+<hr />
+<h2 id="4-internal-composition-within-gamresults">4. Internal Composition within <code>GAMResults</code><a class="headerlink" href="#4-internal-composition-within-gamresults" title="Permanent link">&para;</a></h2>
+<h3 id="41-do-we-need-gamfit-gampredict-gamsummary-as-separate-classes">4.1 Do We Need <code>GAMFit</code>, <code>GAMPredict</code>, <code>GAMSummary</code> as Separate Classes?<a class="headerlink" href="#41-do-we-need-gamfit-gampredict-gamsummary-as-separate-classes" title="Permanent link">&para;</a></h3>
+<p>Let's evaluate the original brainstorm against what we now know:</p>
+<p><strong>GAMFit as a class:</strong>
+- The fitting logic is already delegated to <code>fitting/newton.py</code> and <code>fitting/pirls.py</code>
+- What remains in GAM is orchestration (~40 lines) and result construction (~90 lines)
+- A separate <code>GAMFit</code> class would either duplicate this delegation or just be a thin wrapper around <code>newton_optimize()</code>
+- <strong>Verdict: Not needed as a class.</strong> The <code>GAM.fit()</code> method + <code>GAMResults._from_fit()</code> classmethod cover this cleanly.</p>
+<p><strong>GAMPredict as a class:</strong>
+- Prediction logic is ~30 lines (build matrix, matmul, link inverse, optional SE)
+- It needs: <code>setup</code>, <code>family</code>, <code>coefficients</code>, <code>Vp</code>, <code>linear_predictor</code>
+- Extracting this into a class would require passing all that state, which is exactly what <code>GAMResults</code> already holds
+- <strong>Verdict: Not needed as a separate class.</strong> <code>GAMResults.predict()</code> is the right home. If prediction grows more complex (e.g., term-wise prediction, newdata validation), it can be extracted into a <code>_predict</code> module that <code>GAMResults</code> delegates to — same pattern as <code>summary/</code>.</p>
+<p><strong>GAMSummary as a class:</strong>
+- Already exists: <code>jaxgam/summary/summary.py</code> computes summary, <code>GAMSummary</code> is a frozen dataclass
+- <code>GAM.summary()</code> is a 3-line delegation: check fitted → call <code>_summary(self)</code> → return
+- <strong>Verdict: Already well-factored.</strong> No change needed.</p>
+<h3 id="42-what-should-be-extracted">4.2 What <em>Should</em> Be Extracted<a class="headerlink" href="#42-what-should-be-extracted" title="Permanent link">&para;</a></h3>
+<p>The real complexity is in <code>_store_results()</code>, which does too many things:</p>
+<ol>
+<li>Convert JAX arrays to NumPy</li>
+<li>Compute covariance via Cholesky solve</li>
+<li>Compute hat matrix F</li>
+<li>Compute per-smooth EDF and EDF1</li>
+<li>Back-transform reparameterized coefficients</li>
+<li>Compute Bayesian covariance Vp</li>
+<li>Compute null deviance</li>
+<li>Extract training data for plotting</li>
+<li>Set 30+ attributes</li>
+</ol>
+<p><strong>Proposal: Extract a <code>PostEstimation</code> module</strong> (<code>jaxgam/post_estimation.py</code> or expand <code>fitting/reml.py</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># jaxgam/post_estimation.py</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="k">class</span><span class="w"> </span><span class="nc">PostEstimationResults</span><span class="p">:</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Derived quantities computed from raw fit output.&quot;&quot;&quot;</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">coefficients</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">Vp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="n">edf</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="n">edf1</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    <span class="n">edf_total</span><span class="p">:</span> <span class="nb">float</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>    <span class="n">null_deviance</span><span class="p">:</span> <span class="nb">float</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>    <span class="n">hat_matrix</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>  <span class="c1"># F, kept for debugging</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">compute_post_estimation</span><span class="p">(</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>    <span class="n">result</span><span class="p">:</span> <span class="n">NewtonResult</span><span class="p">,</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>    <span class="n">setup</span><span class="p">:</span> <span class="n">ModelSetup</span><span class="p">,</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>    <span class="n">family</span><span class="p">:</span> <span class="n">ExponentialFamily</span><span class="p">,</span>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>    <span class="n">fd</span><span class="p">:</span> <span class="n">FittingData</span><span class="p">,</span>
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PostEstimationResults</span><span class="p">:</span>
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute all derived quantities from raw fit output.</span>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="sd">    This function encapsulates the covariance computation, EDF</span>
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="sd">    calculation, coefficient back-transformation, and null deviance</span>
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="sd">    — everything that currently lives in GAM._store_results().</span>
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>    <span class="o">...</span>
+</code></pre></div>
+<p><strong>Benefits:</strong>
+- Independently testable (unit test covariance computation without fitting a model)
+- Clear inputs/outputs (NewtonResult → PostEstimationResults)
+- Reduces <code>GAMResults._from_fit()</code> to: call <code>compute_post_estimation()</code> + assemble the dataclass</p>
+<hr />
+<h2 id="5-full-proposed-module-layout">5. Full Proposed Module Layout<a class="headerlink" href="#5-full-proposed-module-layout" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>jaxgam/
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>├── __init__.py              # Public API: GAM, GAMResults
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>├── api.py                   # GAM class (specification + fit orchestration)
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>├── results.py               # GAMResults frozen dataclass + methods
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>├── post_estimation.py       # Derived-quantity computation (from _store_results)
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>├── jax_utils.py             # (unchanged)
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>├── formula/                 # (unchanged)
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>├── smooths/                 # (unchanged)
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>├── families/                # (unchanged)
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>├── links/                   # (unchanged)
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>├── penalties/               # (unchanged)
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>├── fitting/                 # (unchanged)
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>├── summary/                 # (unchanged)
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>├── plot/                    # (unchanged)
+</code></pre></div>
+<p><strong>Changes from original layout:</strong>
+- <code>api.py</code> slimmed to specification + orchestration (results/post-estimation extracted)
+- New <code>results.py</code> (GAMResults frozen dataclass)
+- New <code>post_estimation.py</code> (extracted from <code>_store_results</code>)
+- <code>__init__.py</code> exports both <code>GAM</code> and <code>GAMResults</code></p>
+<hr />
+<h2 id="6-interaction-with-three-phase-architecture">6. Interaction with Three-Phase Architecture<a class="headerlink" href="#6-interaction-with-three-phase-architecture" title="Permanent link">&para;</a></h2>
+<p>The refactor <strong>strengthens</strong> the three-phase boundary:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Phase 1 (NumPy)          Phase 2 (JAX)           Phase 3 (NumPy)
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>─────────────────        ──────────────           ─────────────────
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>GAM.fit() calls:         newton_optimize()        GAMResults holds:
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>  parse_formula()          pirls_loop()             .predict()
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>  ModelSetup.build()       ↓                        .summary()
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>  FittingData.from()     NewtonResult               .plot()
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>       │                      │
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>       │    jax.device_put    │     np.asarray
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>       ├─────────────────────►├──────────────────►
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>       │                      │
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>       │                      │     compute_post_estimation()
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>       │                      │            │
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>       │                      │     GAMResults._from_fit()
+</code></pre></div>
+<ul>
+<li><code>GAM</code> owns Phase 1 orchestration and the Phase 1→2 handoff</li>
+<li><code>GAMResults</code> owns Phase 3 (post-estimation methods)</li>
+<li><code>compute_post_estimation()</code> sits at the Phase 2→3 boundary</li>
+<li>The Phase 2 code (<code>fitting/</code>) is completely untouched</li>
+</ul>
+<hr />
+<h2 id="7-predict-method-design">7. <code>predict()</code> Method Design<a class="headerlink" href="#7-predict-method-design" title="Permanent link">&para;</a></h2>
+<p>Prediction currently handles four cases. This logic stays on <code>GAMResults</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">predict</span><span class="p">(</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="bp">self</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="n">newdata</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">pred_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;response&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">se_fit</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">offset</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="k">if</span> <span class="n">newdata</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>        <span class="n">eta</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">linear_predictor</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>        <span class="k">if</span> <span class="n">offset</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>            <span class="n">eta</span> <span class="o">=</span> <span class="n">eta</span> <span class="o">+</span> <span class="n">offset</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>    <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>        <span class="n">X_p</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">setup</span><span class="o">.</span><span class="n">build_predict_matrix</span><span class="p">(</span><span class="n">newdata</span><span class="p">)</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>        <span class="n">eta</span> <span class="o">=</span> <span class="n">X_p</span> <span class="o">@</span> <span class="bp">self</span><span class="o">.</span><span class="n">coefficients</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>        <span class="k">if</span> <span class="n">offset</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>            <span class="n">eta</span> <span class="o">=</span> <span class="n">eta</span> <span class="o">+</span> <span class="n">offset</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>    <span class="k">if</span> <span class="n">pred_type</span> <span class="o">==</span> <span class="s2">&quot;response&quot;</span><span class="p">:</span>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>        <span class="n">mu</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">family</span><span class="o">.</span><span class="n">link</span><span class="o">.</span><span class="n">linkinv</span><span class="p">(</span><span class="n">eta</span><span class="p">)</span>
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a>    <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a>        <span class="n">mu</span> <span class="o">=</span> <span class="n">eta</span>
+<a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a>
+<a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">se_fit</span><span class="p">:</span>
+<a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a>        <span class="k">return</span> <span class="n">mu</span>
+<a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a>
+<a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a>    <span class="c1"># SE computation</span>
+<a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a>    <span class="k">if</span> <span class="n">newdata</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a>        <span class="n">X_p</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">X</span>
+<a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a>    <span class="n">se</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">X_p</span> <span class="o">@</span> <span class="bp">self</span><span class="o">.</span><span class="n">Vp</span><span class="p">)</span> <span class="o">*</span> <span class="n">X_p</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+<a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a>    <span class="k">return</span> <span class="n">mu</span><span class="p">,</span> <span class="n">se</span>
+</code></pre></div>
+<p><strong>If prediction grows complex</strong> (v1.1+: term-wise prediction, exclude terms, confidence intervals), extract to <code>jaxgam/prediction.py</code> with <code>GAMResults.predict()</code> as a thin delegation.</p>
+<hr />
+<h2 id="8-summary-of-design-decisions">8. Summary of Design Decisions<a class="headerlink" href="#8-summary-of-design-decisions" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Decision</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Model/Results separation</strong> over mixins</td>
+<td>Eliminates impossible states structurally; follows statsmodels convention</td>
+</tr>
+<tr>
+<td><strong>Frozen dataclass</strong> for results</td>
+<td>Immutability prevents accidental mutation; all state set at construction</td>
+</tr>
+<tr>
+<td><strong>No <code>GAMFit</code> class</strong></td>
+<td>Fitting is already delegated to <code>fitting/</code>; GAM.fit() is just orchestration</td>
+</tr>
+<tr>
+<td><strong>No <code>GAMPredict</code> class</strong></td>
+<td>Prediction is simple (~30 LOC); lives naturally on GAMResults</td>
+</tr>
+<tr>
+<td><strong>Extract <code>post_estimation</code> module</strong></td>
+<td>Makes derived-quantity computation testable and reduces results construction complexity</td>
+</tr>
+<tr>
+<td><strong><code>GAMResults</code></strong> naming</td>
+<td>Matches statsmodels; unambiguous</td>
+</tr>
+<tr>
+<td><strong>No trailing underscores on results</strong></td>
+<td>Structural separation replaces naming convention</td>
+</tr>
+<tr>
+<td><strong>Backward-compat <code>__getattr__</code></strong></td>
+<td>Gradual migration; old code emits deprecation warnings</td>
+</tr>
+<tr>
+<td><strong><code>api.py</code> + <code>results.py</code> + <code>post_estimation.py</code></strong></td>
+<td>Each file has a single clear responsibility; rename to <code>gam.py</code> skipped to reduce churn</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="9-resolved-design-decisions">9. Resolved Design Decisions<a class="headerlink" href="#9-resolved-design-decisions" title="Permanent link">&para;</a></h2>
+<ol>
+<li>
+<p><strong><code>GAM.fit()</code> stores <code>self.results_</code></strong> in addition to returning <code>GAMResults</code>. This enables both <code>results = model.fit(data)</code> and <code>model.fit(data); model.results_.predict(...)</code> usage patterns, and makes deprecation forwarding work naturally.</p>
+</li>
+<li>
+<p><strong><code>summary()</code> and <code>plot()</code> accept <code>GAMResults</code></strong> directly instead of the full GAM. Internal modules are updated to work with the results object.</p>
+</li>
+<li>
+<p><strong><code>GAMResults</code> stores <code>formula</code> and <code>family</code> as metadata</strong> — no back-reference to the <code>GAM</code> specification object, avoiding circular dependencies.</p>
+</li>
+<li>
+<p><strong><code>Ve_</code> (frequentist covariance) is omitted</strong> from <code>GAMResults</code>. No placeholders — add when implemented.</p>
+</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

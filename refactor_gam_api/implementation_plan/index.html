@@ -1,0 +1,1121 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>GAM API Refactor: Implementation Plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#gam-api-refactor-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              GAM API Refactor: Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-tooling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project Tooling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-1-extract-postestimation-module-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Extract PostEstimation Module (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1: Extract PostEstimation Module (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-11-create-jaxgampost_estimationpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.1: Create jaxgam/post_estimation.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-12-wire-post_estimation-into-existing-apipy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1.2: Wire post_estimation into existing api.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-2-create-gamresults-class-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Create GAMResults Class (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2: Create GAMResults Class (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-21-create-jaxgamresultspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2.1: Create jaxgam/results.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-22-update-summary-and-plot-to-use-a-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2.2: Update summary/ and plot/ to Use a Protocol
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-3-refactor-gam-class-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Refactor GAM Class (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 3: Refactor GAM Class (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-31-rename-apipy-gampy-skipped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3.1: ~~Rename api.py → gam.py~~ (SKIPPED)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-32-slim-down-gam-class-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3.2: Slim Down GAM Class (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-33-update-__init__py-exports-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3.3: Update __init__.py Exports (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-4-clean-up-and-documentation-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4: Clean Up and Documentation (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 4: Clean Up and Documentation (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-41-remove-helper-functions-from-apipy-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.1: Remove Helper Functions from api.py (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-42-update-existing-tests-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.2: Update Existing Tests (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-43-update-agentsmd-file-organization-section-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4.3: Update AGENTS.md File Organization Section (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#success-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Success Criteria
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#estimated-scope-actual" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Estimated Scope (Actual)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="gam-api-refactor-implementation-plan">GAM API Refactor: Implementation Plan<a class="headerlink" href="#gam-api-refactor-implementation-plan" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>Split <code>jaxgam/api.py</code> into a specification class (<code>GAM</code>) and an immutable results class (<code>GAMResults</code>), extract post-estimation computation into its own module, and provide backward-compatible deprecation forwarding.</p>
+<p><strong>Branch:</strong> <code>refactor-gam-api-composition</code>
+<strong>Design reference:</strong> <code>docs/refactor_gam_api/design.md</code></p>
+<hr />
+<h2 id="project-tooling">Project Tooling<a class="headerlink" href="#project-tooling" title="Permanent link">&para;</a></h2>
+<p>Per AGENTS.md, this project uses <code>uv</code> for dependency and package management and <code>make</code> for task orchestration. All Python execution must go through <code>uv run</code> — never invoke <code>python</code> or <code>pytest</code> directly.</p>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Install dependencies</td>
+<td><code>make install</code> (<code>uv sync --extra dev</code>)</td>
+</tr>
+<tr>
+<td>Run tests locally</td>
+<td><code>make test-local</code> (<code>uv run pytest</code>)</td>
+</tr>
+<tr>
+<td>Run a single test file</td>
+<td><code>uv run pytest tests/test_post_estimation.py -x --tb=short -v</code></td>
+</tr>
+<tr>
+<td>Lint (ruff check + format + vulture)</td>
+<td><code>make lint</code></td>
+</tr>
+<tr>
+<td>Format</td>
+<td><code>make format</code></td>
+</tr>
+<tr>
+<td>Pre-commit hooks</td>
+<td><code>make pre-commit</code></td>
+</tr>
+<tr>
+<td>Full suite in Docker (with R tests)</td>
+<td><code>make test</code></td>
+</tr>
+</tbody>
+</table>
+<p>When this plan says "run the test suite," use <code>make test-local</code>. When running a specific test file during development, use <code>uv run pytest &lt;path&gt; -x --tb=short -v</code>.</p>
+<hr />
+<h2 id="phase-1-extract-postestimation-module-done">Phase 1: Extract <code>PostEstimation</code> Module (DONE)<a class="headerlink" href="#phase-1-extract-postestimation-module-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Pull the derived-quantity computation out of <code>_store_results()</code> into a testable, standalone module.</p>
+<p><strong>Design rationale:</strong> <code>_store_results()</code> does 9 distinct things in 90 lines (design.md §4.2). Extracting post-estimation computation achieves design goal #3 — making derived-quantity computation cohesive and independently testable (design.md §2). This phase is a prerequisite for Phase 2: <code>GAMResults._from_fit()</code> delegates to <code>compute_post_estimation()</code> rather than reimplementing the logic (design.md §4.2, "Benefits").</p>
+<h3 id="step-11-create-jaxgampost_estimationpy">Step 1.1: Create <code>jaxgam/post_estimation.py</code><a class="headerlink" href="#step-11-create-jaxgampost_estimationpy" title="Permanent link">&para;</a></h3>
+<p><strong>What to do:</strong>
+- Define <code>PostEstimationResults</code> frozen dataclass holding: <code>coefficients</code>, <code>Vp</code>, <code>edf</code>, <code>edf1</code>, <code>edf_total</code>, <code>null_deviance</code>, <code>hat_matrix</code>, <code>scale</code>
+- Move these functions from <code>api.py</code> into the new module:
+  - <code>_compute_per_smooth_edf()</code> → <code>compute_per_smooth_edf()</code>
+  - <code>_compute_per_smooth_edf1()</code> → <code>compute_per_smooth_edf1()</code>
+  - <code>_compute_null_deviance()</code> → <code>compute_null_deviance()</code>
+- Create <code>compute_post_estimation(result, setup, family, fd, smooth_info)</code> that:
+  - Converts JAX arrays to NumPy
+  - Computes <code>H_inv</code> via Cholesky solve
+  - Computes hat matrix <code>F = H_inv @ XtWX</code>
+  - Calls the EDF functions
+  - Back-transforms reparameterized coefficients
+  - Computes <code>Vp = phi * H_inv</code>
+  - Computes null deviance
+  - Returns <code>PostEstimationResults</code></p>
+<p><strong>Design reference:</strong> design.md §4.2 defines the <code>PostEstimationResults</code> dataclass and <code>compute_post_estimation()</code> function signature. The module sits at the Phase 2→3 boundary (design.md §6 architecture diagram).</p>
+<p><strong>Files touched:</strong>
+- Create: <code>jaxgam/post_estimation.py</code>
+- Read (not yet modify): <code>jaxgam/api.py</code> (extract logic from <code>_store_results</code>)</p>
+<p><strong>Tests:</strong>
+- Create: <code>tests/test_post_estimation.py</code>
+  - Unit test EDF computation with a known hat matrix
+  - Unit test null deviance with known family/data
+  - Integration test: fit a model, pass raw results to <code>compute_post_estimation()</code>, verify outputs match current <code>_store_results()</code> outputs</p>
+<h3 id="step-12-wire-post_estimation-into-existing-apipy">Step 1.2: Wire <code>post_estimation</code> into existing <code>api.py</code><a class="headerlink" href="#step-12-wire-post_estimation-into-existing-apipy" title="Permanent link">&para;</a></h3>
+<p><strong>What to do:</strong>
+- Replace inline computation in <code>_store_results()</code> with a call to <code>compute_post_estimation()</code>
+- Keep the attribute-setting logic in <code>_store_results()</code> for now (Phase 2 replaces it)
+- Run full test suite to verify no regressions</p>
+<p><strong>Files touched:</strong>
+- Modify: <code>jaxgam/api.py</code></p>
+<p><strong>Validation:</strong>
+- <code>make test-local</code> passes
+- All existing API tests pass unchanged</p>
+<hr />
+<h2 id="phase-2-create-gamresults-class-done">Phase 2: Create <code>GAMResults</code> Class (DONE)<a class="headerlink" href="#phase-2-create-gamresults-class-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Define the frozen results dataclass with prediction, summary, and plot methods.</p>
+<p><strong>Design rationale:</strong> The Model/Results separation (design.md §3) is the core of this refactor. It follows the statsmodels pattern (design.md §3.1) because both libraries are frequentist regression frameworks with formula-based specification and rich result objects. The frozen dataclass eliminates the <code>_fitted</code> guard pattern by making impossible states unrepresentable (design.md §2, goals #1 and #2). The class is named <code>GAMResults</code> over alternatives like <code>FittedGAM</code> or <code>GAMFit</code> (design.md §3.6) to match the dominant Python stats convention.</p>
+<h3 id="step-21-create-jaxgamresultspy">Step 2.1: Create <code>jaxgam/results.py</code><a class="headerlink" href="#step-21-create-jaxgamresultspy" title="Permanent link">&para;</a></h3>
+<p><strong>What to do:</strong>
+- Define <code>GAMResults</code> as a frozen dataclass with all attributes listed in design.md §3.4
+  - No trailing underscores on attribute names — structural separation replaces the sklearn naming convention (design.md §3.4, decision #2)
+  - Omit <code>Ve_</code> (frequentist covariance) entirely — no placeholders (design.md §9, decision #4)
+  - Store <code>formula</code> and <code>family</code> as metadata fields on <code>GAMResults</code> — no back-reference to the <code>GAM</code> specification object to avoid circular dependencies (design.md §9, decision #3)
+- Implement <code>_from_fit()</code> classmethod (design.md §3.4, decision #4) that:
+  - Calls <code>compute_post_estimation()</code> from Phase 1
+  - Calls <code>_extract_training_data()</code> (moved here or imported)
+  - Assembles all fields into the frozen dataclass
+- Implement <code>predict()</code> method — move logic from <code>GAM.predict()</code>, keeping the four-case structure (design.md §7)
+- Implement <code>predict_matrix()</code> method — move logic from <code>GAM.predict_matrix()</code>
+  - Prediction lives on <code>GAMResults</code> rather than a separate <code>GAMPredict</code> class because the logic is ~30 LOC and needs the same state <code>GAMResults</code> already holds (design.md §4.1, "GAMPredict" verdict)
+- Implement <code>summary()</code> method — delegate to <code>jaxgam.summary.summary._summary()</code>
+  - Update <code>_summary()</code> to accept <code>GAMResults</code> directly (design.md §9, decision #2)
+- Implement <code>plot()</code> method — delegate to <code>jaxgam.plot.plot_gam()</code>
+  - Update <code>plot_gam()</code> to accept <code>GAMResults</code> directly (design.md §9, decision #2)
+- Implement <code>__repr__()</code> showing formula, family, convergence status, deviance explained</p>
+<p><strong>Files touched:</strong>
+- Create: <code>jaxgam/results.py</code>
+- Modify: <code>jaxgam/summary/summary.py</code> (accept <code>GAMResults</code>)
+- Modify: <code>jaxgam/plot/plot_gam.py</code> (accept <code>GAMResults</code>)</p>
+<p><strong>Tests:</strong>
+- Create: <code>tests/test_results.py</code>
+  - Test <code>GAMResults</code> construction from mock data
+  - Test <code>predict()</code> self-prediction matches <code>fitted_values</code>
+  - Test <code>predict()</code> with new data
+  - Test <code>predict()</code> with <code>se_fit=True</code>
+  - Test <code>predict_matrix()</code> returns correct shape
+  - Test <code>summary()</code> returns <code>GAMSummary</code>
+  - Test immutability (assigning to a frozen field raises)</p>
+<h3 id="step-22-update-summary-and-plot-to-use-a-protocol">Step 2.2: Update <code>summary/</code> and <code>plot/</code> to Use a Protocol<a class="headerlink" href="#step-22-update-summary-and-plot-to-use-a-protocol" title="Permanent link">&para;</a></h3>
+<p><strong>What to do:</strong>
+- Define a <code>FittedModel</code> protocol in <code>jaxgam/results.py</code> (or a shared <code>_protocols.py</code>) that captures what <code>summary()</code> and <code>plot()</code> need:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">FittedModel</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">coefficients</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">Vp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">edf</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">family</span><span class="p">:</span> <span class="n">ExponentialFamily</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">smooth_info</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">SmoothInfo</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="c1"># ... etc</span>
+</code></pre></div>
+<ul>
+<li>Update <code>_summary()</code> and <code>plot_gam()</code> to type-hint against this protocol</li>
+<li>Both <code>GAM</code> (with forwarding) and <code>GAMResults</code> satisfy the protocol</li>
+</ul>
+<p><strong>Design rationale:</strong> Protocols over ABCs follows design goal #6 — "Pythonic, not Java-ic" (design.md §2). The protocol enables summary/plot to work with either the old or new API during the migration period (design.md §3.5, migration path) without importing concrete classes.</p>
+<p><strong>Files touched:</strong>
+- Create or modify: <code>jaxgam/results.py</code> (add protocol)
+- Modify: <code>jaxgam/summary/summary.py</code> (type hint)
+- Modify: <code>jaxgam/plot/plot_gam.py</code> (type hint)</p>
+<hr />
+<h2 id="phase-3-refactor-gam-class-done">Phase 3: Refactor <code>GAM</code> Class (DONE)<a class="headerlink" href="#phase-3-refactor-gam-class-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Slim down <code>GAM</code> to specification + fit orchestration, with backward-compat forwarding.</p>
+<p><strong>Design rationale:</strong> With <code>GAMResults</code> and <code>post_estimation</code> in place, <code>GAM</code> can be narrowed to its true responsibility: holding specification parameters and orchestrating the fit pipeline (design.md §3.3). No separate <code>GAMFit</code> class is needed because fitting is already delegated to <code>fitting/</code> modules — what remains in GAM is ~40 lines of orchestration (design.md §4.1, "GAMFit" verdict).</p>
+<p><strong>Deviation from plan:</strong> The planned rename <code>api.py</code> → <code>gam.py</code> (Step 3.1) was skipped to reduce churn. The GAM class remains in <code>api.py</code>, with <code>results.py</code> and <code>post_estimation.py</code> as sibling modules. All other Phase 3 objectives were completed as planned.</p>
+<h3 id="step-31-rename-apipy-gampy-skipped">Step 3.1: ~~Rename <code>api.py</code> → <code>gam.py</code>~~ (SKIPPED)<a class="headerlink" href="#step-31-rename-apipy-gampy-skipped" title="Permanent link">&para;</a></h3>
+<p>Skipped — keeping GAM in <code>api.py</code> avoids import churn for no functional benefit. <code>results.py</code> and <code>post_estimation.py</code> live alongside <code>api.py</code> as top-level modules.</p>
+<h3 id="step-32-slim-down-gam-class-done">Step 3.2: Slim Down <code>GAM</code> Class (DONE)<a class="headerlink" href="#step-32-slim-down-gam-class-done" title="Permanent link">&para;</a></h3>
+<p><strong>What was done:</strong>
+- Removed <code>_store_results()</code> — replaced by <code>GAMResults._from_fit()</code> (design.md §3.3, "What moves out")
+- Removed <code>_check_fitted()</code> — no longer needed; impossible states are unrepresentable with separate types (design.md §2, goal #2)
+- Removed all fitted attribute setting (30+ attributes)
+- Removed <code>predict()</code>, <code>predict_matrix()</code>, <code>summary()</code>, <code>plot()</code> method bodies — these now live on <code>GAMResults</code> (design.md §3.3, §3.4)
+- <code>fit()</code> now:
+  1. Orchestrates Phase 1 + Phase 2 (unchanged)
+  2. Calls <code>GAMResults._from_fit(...)</code> to construct results
+  3. Stores <code>self.results_ = results</code> — enables both <code>results = model.fit(data)</code> and <code>model.fit(data); model.results_.predict(...)</code> usage (design.md §9, decision #1)
+  4. Returns <code>results</code>
+- Added <code>__getattr__</code> forwarding with deprecation warnings (design.md §3.5) — maps <code>model.coefficients_</code> → <code>model.results_.coefficients</code> during migration
+- Added deprecated forwarding methods for <code>predict()</code>, <code>summary()</code>, <code>plot()</code>, <code>predict_matrix()</code> (design.md §3.5, migration path: v1.0 emits warnings, v1.1+ removes forwarding)
+- Removed dead helper functions (<code>_compute_per_smooth_edf</code>, <code>_compute_per_smooth_edf1</code>, <code>_compute_null_deviance</code>, <code>_extract_training_data</code>) — already moved to <code>post_estimation.py</code> and <code>results.py</code></p>
+<p><strong>Files touched:</strong>
+- Modify: <code>jaxgam/api.py</code></p>
+<p><strong>Tests:</strong>
+- Modified existing tests in <code>tests/test_api/</code> to use the new API (<code>results = model.fit(data)</code>)
+- Added deprecation warning tests in <code>TestDeprecationForwarding</code> (verify old API emits warnings)
+- Updated all test files accessing GAM fitted attributes to use non-underscore names:
+  - <code>tests/test_api/test_gam.py</code>
+  - <code>tests/test_edge_cases.py</code>
+  - <code>tests/test_predict/test_predict.py</code>
+  - <code>tests/test_summary/test_summary.py</code>
+  - <code>tests/test_plot/test_plot.py</code>
+  - <code>tests/test_validation_matrix.py</code>
+  - <code>tests/test_post_estimation.py</code></p>
+<h3 id="step-33-update-__init__py-exports-done">Step 3.3: Update <code>__init__.py</code> Exports (DONE)<a class="headerlink" href="#step-33-update-__init__py-exports-done" title="Permanent link">&para;</a></h3>
+<p><strong>What was done:</strong>
+- Exported both <code>GAM</code> and <code>GAMResults</code> from <code>jaxgam.__init__</code>
+- <code>from jaxgam import GAM, GAMResults</code> works</p>
+<p><strong>Files touched:</strong>
+- Modify: <code>jaxgam/__init__.py</code></p>
+<hr />
+<h2 id="phase-4-clean-up-and-documentation-done">Phase 4: Clean Up and Documentation (DONE)<a class="headerlink" href="#phase-4-clean-up-and-documentation-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Remove dead code, update tests to prefer the new API, and update project documentation.</p>
+<h3 id="step-41-remove-helper-functions-from-apipy-done">Step 4.1: Remove Helper Functions from <code>api.py</code> (DONE)<a class="headerlink" href="#step-41-remove-helper-functions-from-apipy-done" title="Permanent link">&para;</a></h3>
+<p><strong>What was done:</strong>
+- Verified <code>_compute_per_smooth_edf</code>, <code>_compute_per_smooth_edf1</code>, <code>_compute_null_deviance</code>, <code>_extract_training_data</code> moved to <code>post_estimation.py</code> / <code>results.py</code>
+- All removed from <code>api.py</code> (done as part of Phase 3 rewrite)
+- <code>_fit_fixed_sp</code> kept in <code>api.py</code> — still called by <code>GAM.fit()</code> for fixed smoothing parameter support</p>
+<h3 id="step-42-update-existing-tests-done">Step 4.2: Update Existing Tests (DONE)<a class="headerlink" href="#step-42-update-existing-tests-done" title="Permanent link">&para;</a></h3>
+<p><strong>What was done:</strong>
+- Audited all test files that import from <code>jaxgam.api</code> or access GAM fitted attributes
+- Updated to use <code>GAMResults</code> non-underscore attribute names where <code>model = GAM(...).fit(data)</code> pattern is used
+- Backward-compat paths tested via <code>TestDeprecationForwarding</code> in <code>tests/test_api/test_gam.py</code> and <code>TestMatchesLegacyGAM</code> in <code>tests/test_results.py</code></p>
+<h3 id="step-43-update-agentsmd-file-organization-section-done">Step 4.3: Update <code>AGENTS.md</code> File Organization Section (DONE)<a class="headerlink" href="#step-43-update-agentsmd-file-organization-section-done" title="Permanent link">&para;</a></h3>
+<p><strong>What was done:</strong>
+- Updated file organization table to include <code>results.py</code> and <code>post_estimation.py</code>
+- Updated <code>__init__.py</code> description to show <code>GAM, GAMResults</code> exports</p>
+<hr />
+<h2 id="success-criteria">Success Criteria<a class="headerlink" href="#success-criteria" title="Permanent link">&para;</a></h2>
+<ol>
+<li>✅ <code>GAM</code> class core (specification + fit orchestration) is ~100 LOC (down from 693). Backward-compat forwarding methods add ~140 LOC that will be removed in v1.1.</li>
+<li>✅ <code>GAMResults</code> is a frozen dataclass with all fitted state (design.md §3.4)</li>
+<li>✅ <code>_store_results()</code> no longer exists — replaced by <code>GAMResults._from_fit()</code> + <code>compute_post_estimation()</code> (design.md §4.2)</li>
+<li>✅ All 1530 tests pass (with backward-compat forwarding per design.md §3.5)</li>
+<li>✅ New tests cover: <code>GAMResults</code> construction, prediction, immutability, deprecation warnings</li>
+<li>✅ Full test suite green at every phase boundary</li>
+</ol>
+<hr />
+<h2 id="estimated-scope-actual">Estimated Scope (Actual)<a class="headerlink" href="#estimated-scope-actual" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>New Files</th>
+<th>Modified Files</th>
+<th>New Test Files</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>1 (<code>post_estimation.py</code>)</td>
+<td>1 (<code>api.py</code>)</td>
+<td>1</td>
+</tr>
+<tr>
+<td>2</td>
+<td>1 (<code>results.py</code>)</td>
+<td>2 (<code>summary.py</code>, <code>plot_gam.py</code>)</td>
+<td>1</td>
+</tr>
+<tr>
+<td>3</td>
+<td>0 (skipped rename)</td>
+<td>8 (<code>api.py</code>, <code>__init__.py</code>, 6 test files)</td>
+<td>modify existing</td>
+</tr>
+<tr>
+<td>4</td>
+<td>0</td>
+<td>1 (<code>AGENTS.md</code>)</td>
+<td>0</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>2</strong></td>
+<td><strong>~12</strong></td>
+<td><strong>2</strong></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

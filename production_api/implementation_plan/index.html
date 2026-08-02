@@ -1,0 +1,2589 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Robust API Redesign (result Mode + Lean Inference Core): Implementation Plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#robust-api-redesign-result-mode-lean-inference-core-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Robust API Redesign (result Mode + Lean Inference Core): Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-model-how-this-plan-is-executed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working Model — How This Plan Is Executed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-tooling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project Tooling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hard-allow-list-must-not-regress" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hard Allow-List — Must Not Regress
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#success-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Success Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commit-a-pre-flight-baseline-capture-cloudpickle-dev-dep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit A — Pre-flight: Baseline Capture + cloudpickle Dev Dep
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commit A — Pre-flight: Baseline Capture + cloudpickle Dev Dep">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-to-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to do
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commit-b0-gp-_e_knot-dead-store-fix-prerequisite-not-part-of-the-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit B0 — GP _E_knot Dead-Store Fix (prerequisite, not part of the mode)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commit B0 — GP _E_knot Dead-Store Fix (prerequisite, not part of the mode)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-this-is-separate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why this is separate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-to-do_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to do
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commit-b1-dry-setup-duplicates-properties-drop-dead-guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit B1 — DRY: setup.* Duplicates → Properties + Drop Dead Guard
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commit B1 — DRY: setup.* Duplicates → Properties + Drop Dead Guard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-to-do_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to do
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commit-c-phase-1-prediction-state-predictspec-builder-move-copy_for_prediction-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit C — Phase-1 Prediction State: PredictSpec, Builder Move, copy_for_prediction (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commit C — Phase-1 Prediction State: PredictSpec, Builder Move, copy_for_prediction (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-to-do_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to do
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commit-d-inference-core-predict_core-finish_prediction-gampredictor-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit D — inference/ Core: predict_core + finish_prediction + GAMPredictor (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commit D — inference/ Core: predict_core + finish_prediction + GAMPredictor (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-to-do_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to do
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commit-e-result-mode-two-result-types-family-snapshot-exports-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit E — result Mode + Two Result Types + Family Snapshot + Exports (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commit E — result Mode + Two Result Types + Family Snapshot + Exports (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-to-do_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to do
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commit-f-documentation-final-sweep-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit F — Documentation + Final Sweep (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Commit F — Documentation + Final Sweep (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-to-do_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What to do
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risk-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risk Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Risk Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#risks-specific-to-this-feature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risks specific to this feature
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out-of-scope-guardrails-do-not-implement-here" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out-of-scope guardrails (do not implement here)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rollback-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollback plan
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequencing-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequencing Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#definition-of-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Definition of Done
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="robust-api-redesign-result-mode-lean-inference-core-implementation-plan">Robust API Redesign (<code>result</code> Mode + Lean Inference Core): Implementation Plan<a class="headerlink" href="#robust-api-redesign-result-mode-lean-inference-core-implementation-plan" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>Implement the <code>result="full"|"inference"</code> fit mode, the two result types
+(<code>GAMResults</code> / <code>GAMInferenceResult</code>), and the lean picklable
+<code>GAMPredictor</code> inference core in jaxgam. The design is fully specified in
+<code>docs/production_api/design.md</code> — this document is the <strong>execution plan</strong>
+that converts that design into a sequence of self-contained commits.</p>
+<p><strong>Result-mode and predictor terminology:</strong> <code>result="full"</code> is the default and
+returns <code>GAMResults</code> with the analytical surface and retained training-backed
+state. <code>result="inference"</code> returns <code>GAMInferenceResult</code>, which is already lean
+and directly usable for new-data prediction. <code>to_predictor()</code> is an optional
+interface handoff, not a second slimming step: it builds a lean core from
+<code>GAMResults</code>, but returns the already-composed core from <code>GAMInferenceResult</code>
+with no copy or additional memory reduction.</p>
+<p><strong>Branch:</strong> single working branch off <code>main</code> (<code>production-api</code>) for the
+entire feature; one PR at the end.
+<strong>Design reference:</strong> <code>docs/production_api/design.md</code> (stable over ten
+review rounds; round 10 was a <strong>subtraction</strong> pass — see below).
+<strong>Builds on:</strong> <code>docs/refactor_gam_api/design.md</code> (the prior spec/results
+split and the removed <code>_fitted</code> guard).</p>
+<p><strong>Scope:</strong> the <strong>GP <code>_E_knot</code> dead-store fix</strong> (Commit B0 — a prerequisite,
+not a product of this design); a keyword-only <code>result</code> flag on <code>GAM.fit()</code>
+returning two narrow types; a <code>GAMInferenceResult</code> that retains <strong>no dense
+training arrays and no penalty caches</strong>; a <code>GAMPredictor</code> core (narrow,
+<code>coefficients</code>/<code>Vp</code> read-only, picklable, version-stamped) + a Phase-1
+<code>PredictSpec</code> (lazy) + a single Phase-1 predict-matrix builder + a single
+Phase-3 predict finish; <strong>export</strong> the two new public types; and the
+zero-numerical-risk DRY cleanups tied to the refactor (collapse the eight
+<code>setup.*</code> duplicate fields — seven → <code>@property</code> reads, <code>n</code> → <code>_FitDiagnostics</code>
+scalar; drop the dead <code>hasattr</code> guard).</p>
+<p><strong>What round 10 removed (read before implementing D or E):</strong> the design's
+first nine rounds were purely additive; round 10 deleted rather than
+patched. Three consequences for this plan: <strong>(1)</strong> there is <strong>no
+<code>_protocol.py</code> and no <code>PredictMatrixBuilder</code></strong> — <code>predict_core</code> is typed
+directly on <code>PredictSpec</code>, and <code>GAMResults.predict()</code> passes
+<code>self.setup._lazy_predict_spec()</code> (design §5.1). <strong>(2)</strong> <code>_E_knot</code> is a
+<strong>dead store fixed at the source in Commit B0</strong>, not a <code>result</code>-mode win —
+do not let it inflate the Commit-E memory numbers (design §1.1, §2.1).
+<strong>(3)</strong> the lean type gains three <strong>zero-byte</strong> property reads —
+<code>smooth_info</code>, <code>term_names</code>, <code>formula</code> — because <code>edf</code> is uninterpretable
+without labels and <code>formula</code> must not become a ninth stored duplicate
+(design §5.4, §5.5).
+Out of scope: serialization <em>format</em> / <code>save()</code>/<code>load()</code> / versioning; a
+JAX-free import path; distributional sampling / intervals; a point-only
+(drop-<code>Vp</code>) mode; the <strong>null-deviance DRY rewrite</strong> and the <strong><code>summary()</code>
+CQS change</strong> (both <strong>deferred</strong> to their own PRs — design §10.3). See
+design §1.3 / §3.2 for the full scope boundary.</p>
+<hr />
+<p><strong>No numerics touched (load-bearing — read before any code):</strong> this
+design changes <strong>no statistical result</strong>. Every prediction, standard
+error, EDF, scale, and deviance (including <code>null_deviance</code>) must be
+<strong>byte-identical</strong> to today (design §10). The only behavioral additions
+are the new <code>result</code> kwarg and the new lean type; the only refactors are
+<strong>mechanical</strong> (move a builder, collapse duplicate fields, add a
+predict-only copy hook). <strong>The regression gate at every commit is the
+existing <code>tests/test_predict/</code>, <code>tests/test_validation_matrix.py</code>,
+<code>tests/test_summary/</code>, <code>tests/test_plot/</code>, and <code>tests/test_post_estimation.py</code>
+suites passing unchanged.</strong> If any existing test changes output, a
+refactor is wrong — investigate before handoff.</p>
+<p><strong>The no-retention invariant is about banned owners/attributes, NOT array
+shape (load-bearing — read before any test code):</strong> the
+<code>result="inference"</code> memory test asserts that the result holds <strong>none of</strong>
+<code>setup</code>, <code>X</code>, <code>y</code>, <code>weights</code>, <code>offset</code>, <code>fitted_values</code>,
+<code>linear_predictor</code>, <code>training_data</code>, and that a <strong>recursive walk</strong> of the
+predictor's smooth graph finds no non-<code>None</code> <code>_X</code>, no non-<code>None</code>
+<code>_S</code>/<code>_E_knot</code>, and empty <code>_penalties</code> — while the predict transforms
+(<code>_Xu</code>/<code>_knt</code>/<code>_UZ</code>/<code>_F</code>/<code>_XP_list</code>/<code>_Z_list</code>/<code>_shift</code>/levels) <strong>ARE
+present</strong>. <strong>Do not</strong> test "no retained array has a dimension equal to
+<code>n</code>": knots are legitimately <code>≤ n</code> rows (<code>_Xu</code> ≤ <code>max_knots</code>), so a
+shape-based test gives false failures. Design §3.1, §7.1, §12.2.2.</p>
+<p><strong>Droppable set vs kept transforms (load-bearing):</strong> the only arrays a
+<code>copy_for_prediction()</code> may null are <strong><code>_X</code></strong> (training design),
+<strong><code>_S</code></strong> (per-smooth penalty), <strong>tensor <code>_penalties</code></strong> (<code>O(n_coefs²)</code>),
+and <strong>GP <code>_E_knot</code></strong> (<code>O(n_knots²)</code> knot–knot kernel — already <code>None</code>
+after Commit B0; the override is defense-in-depth). Each is dropped
+<strong>only because that type's <code>predict_matrix</code> does not read it</strong> —
+verified per type in design §2.1 with line citations. The predict
+transforms (<code>_Xu</code>, <code>_knt</code>, <code>_UZ</code>, <code>_F</code>, <code>_XP_list</code>, <code>_Z_list</code>, <code>_shift</code>,
+stored levels) <strong>must be kept and shared by reference</strong> — dropping or
+deep-copying them silently corrupts predictions or defeats the memory
+win. The <strong>registry audit test</strong> (§12.2.8) is the backstop: a new smooth
+that neither overrides <code>copy_for_prediction</code> nor is allow-listed cannot
+ship unaudited.</p>
+<p>Two attribute facts verified against the code, so overrides are not
+written against a doc-only mental model: <strong><code>TensorProductSmooth</code> has no
+<code>_X</code> and no <code>_S</code></strong> (it owns <code>_penalties</code> + <code>_XP_list</code>; <code>tensor.py:49-50</code>),
+and <strong><code>FactorBySmooth</code>/<code>NumericBySmooth</code> are not <code>Smooth</code> subclasses and
+hold no <code>_X</code></strong> (<code>by_variable.py:42,244</code>) — their entire job in
+<code>copy_for_prediction()</code> is recursing into <code>base_smooth</code>. Use
+<code>getattr(clone, attr, None)</code> rather than assuming an attribute exists.</p>
+<p><strong>Commit C changes the FULL path too (load-bearing):</strong> once
+<code>ModelSetup.build_predict_matrix()</code> delegates to the lazy <code>PredictSpec</code>,
+<strong>every</strong> <code>result="full"</code> prediction also runs through
+<code>copy_for_prediction()</code> copies. This is intended and is why
+"<code>tests/test_predict/</code> passes byte-identically" is a real gate rather than
+a formality — the whole existing predict suite becomes a regression test
+on the cache-dropping. It is safe only because design §2.1 verified no
+<code>predict_matrix</code> reads a dropped cache; if any predict test changes
+output, that verification was wrong. Design §6.</p>
+<p><strong>Consolidation discipline (load-bearing — read before any test code):</strong>
+this plan inherits the test-suite cleanup rules from
+<code>docs/clean_unit_tests/</code> and <code>CLAUDE.md</code> §Testing Rules:</p>
+<ol>
+<li><strong><code>tests/test_validation_matrix.py</code> is the canonical owner</strong> of broad
+   final-model R parity and the hard-gate invariants. It is <strong>unchanged</strong>
+   here (it fits <code>result="full"</code>). New files own only the new behavior.</li>
+<li><strong><code>tests.helpers._AssertCollector</code></strong> is required when multiple
+   assertions share an expensive fixture or R fit. N assertions against
+   one fit produce <strong>one</strong> collected test, not N.</li>
+<li><strong>Parameterize</strong>, do not enumerate. A predict-equivalence zoo
+   (gaussian/binomial-by/poisson+offset/NB/non-default-link/te/ti ×
+   <code>pred_type</code>) becomes one <code>@pytest.mark.parametrize</code>, not a method per
+   cell.</li>
+</ol>
+<p>Design §12.3 gives the target footprint: roughly <strong>~14–16 new collected
+tests total</strong> (test_result_mode.py ~4→<strong>~6</strong>, test_predictor.py ~7,
+test_smooths ~2, test_results ~1). The extra ~2 in <code>test_result_mode.py</code> are
+the <strong>actual-path wiring tests</strong> (fit-mode <code>full</code>==<code>inference</code> equivalence +
+direct-R on the real <code>GAMInferenceResult</code>, and the <code>_from_fit</code> snapshot —
+§12.2.1/1b/.6): the design rounds to ~14 by folding mode-equivalence into
+<code>test_predictor.py</code>, but that leg needs <code>fit(result="inference")</code> to exist, so
+it actually lands in Commit E. Still <strong>consolidated</strong> (<code>@parametrize</code> +
+<code>_AssertCollector</code>), not per-assertion enumeration — if a draft pushes well
+past ~16, consolidate more before handing off.</p>
+<p><strong>Direct-R parity for the inference path is rpy2-only (load-bearing):</strong>
+the lean/pickled path is compared to R <code>predict.gam</code> for tensor,
+factor-by, NB, and a <strong>non-default built-in link</strong> — use
+<code>Gamma(link="log")</code> (the existing <code>gamma_log</code> bridge key,
+<code>r_bridge.py:213</code>). This case <strong>must skip-guard the bridge mode</strong>:
+<code>RBridge()</code> defaults to <code>mode="auto"</code> and silently falls back to the
+subprocess path when rpy2 is absent (<code>r_bridge.py:98</code>), where <code>gamma_log</code>
+is not in the family map and would error. Guard it exactly like the
+existing GP parity test (<code>tests/test_smooths/test_gaussian_process.py:93</code>):
+take the shared auto <code>RBridge</code> and <code>pytest.skip(...)</code> when
+<code>bridge.mode != "rpy2"</code>. <strong>Offset and locally-defined custom links are
+NOT in the direct-R gate</strong> — <code>RBridge</code> has no offset argument
+(<code>r_bridge.py:241,1068</code>) and local links have no R analogue; both are
+covered by internal lean==full equivalence + the pickle round-trip
+instead. Design §12.2.1b. <strong>This gate runs on the actual
+<code>GAMInferenceResult.predict</code> in Commit E</strong> (the <code>_from_fit</code> wiring), not only
+on Commit D's directly-constructed predictor — a constructed predictor can be
+correct while the fit-mode wiring is wrong. Do <strong>not</strong> extend the subprocess
+family map or add an offset argument to the bridge (RBridge is rpy2-only).</p>
+<hr />
+<h2 id="working-model-how-this-plan-is-executed">Working Model — How This Plan Is Executed<a class="headerlink" href="#working-model-how-this-plan-is-executed" title="Permanent link">&para;</a></h2>
+<p><strong>One PR total.</strong> The entire redesign ships as a single pull request from
+one working branch.</p>
+<p><strong>Work is split into discrete commits, not PRs.</strong> Each numbered "Commit"
+below is a self-contained unit of work that an agent executes end-to-end.
+Multiple commits land on the same branch in sequence.</p>
+<p><strong>The agent must NOT run <code>git commit</code> or <code>git push</code>.</strong> The user commits
+manually after reviewing each unit. The agent's job per commit is:</p>
+<ol>
+<li>Read the unit's "What to do" and "Files touched" sections.</li>
+<li>Make the code/test changes.</li>
+<li>Run <code>make test-cov</code> for validation. This single command runs the full
+   suite in Docker (with R 4.5.2 + mgcv 1.9-3) and enforces the ≥80%
+   coverage gate — do <strong>not</strong> also run <code>make test</code> or <code>make test-local</code>,
+   they are redundant and slower.</li>
+<li>Stop and surface the results to the user (file list, test count delta,
+   coverage delta, retained-bytes delta where relevant, validation
+   output). The user reviews, commits, then triggers the next unit.</li>
+</ol>
+<p>If a unit's validation fails, fix the issue <strong>in the same unit</strong> before
+handing off — do not start the next unit on a broken tree. If the fix
+changes the scope of the unit, note that in the handoff so the user can
+adjust the commit message accordingly.</p>
+<p>The user manages: branching off <code>main</code>, commit messages, force-pushes
+(if any), and the final PR. The agent stays inside the working tree.</p>
+<hr />
+<h2 id="project-tooling">Project Tooling<a class="headerlink" href="#project-tooling" title="Permanent link">&para;</a></h2>
+<p>Per CLAUDE.md, this project uses <code>uv</code> for dependency management and
+<code>make</code> for task orchestration. All Python execution must go through
+<code>uv run</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Validation (use this — only this)</strong></td>
+<td><code>make test-cov</code></td>
+</tr>
+<tr>
+<td>Run one file in Docker</td>
+<td><code>make test-file FILE=tests/test_inference/test_predictor.py</code></td>
+</tr>
+<tr>
+<td>Count collected tests</td>
+<td><code>uv run pytest --collect-only -q tests \| tail -1</code></td>
+</tr>
+<tr>
+<td>Count source-level tests</td>
+<td><code>grep -rc "def test_" tests \| grep -v ":0$" \| awk -F: '{s+=$2} END {print s}'</code></td>
+</tr>
+<tr>
+<td>Lint</td>
+<td><code>make lint</code></td>
+</tr>
+<tr>
+<td>Pre-commit</td>
+<td><code>make pre-commit</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>make test-cov</code> runs the full suite in Docker (R 4.5.2 + mgcv 1.9-3) with
+coverage and the <code>--cov-fail-under=80</code> gate. It is a strict superset of
+<code>make test</code> / <code>make test-local</code> plus the coverage check.</p>
+<hr />
+<h2 id="hard-allow-list-must-not-regress">Hard Allow-List — Must Not Regress<a class="headerlink" href="#hard-allow-list-must-not-regress" title="Permanent link">&para;</a></h2>
+<p>These behaviors must continue to work at <strong>every</strong> commit. Because this
+design touches no numerics, the allow-list is the primary correctness
+gate. If any breaks, the unit's validation has failed and the fix lands
+in the same unit before handoff:</p>
+<ul>
+<li><strong>All <code>tests/test_predict/</code> tests</strong> — Commit C moves the predict-matrix
+  builder out of <code>ModelSetup</code>; new-data prediction and SE must be
+  byte-identical pre/post.</li>
+<li><strong>CoefficientMap roundtrip</strong> (CLAUDE.md §Common Pitfalls #3) —
+  <code>predict(model, original_data) == model.fitted_values</code> for every fit,
+  on <code>result="full"</code>.</li>
+<li><strong>All <code>tests/test_validation_matrix.py</code> cells</strong> — final-model R parity
+  and the eight hard-gate invariants (objective monotonicity, H
+  symmetry/PSD, penalty PSD, rank, EDF bounds, deviance non-negativity,
+  no NaN). Fitting is untouched, so these must pass unchanged.</li>
+<li><strong><code>tests/test_summary/</code>, <code>tests/test_plot/</code></strong> — the full <code>GAMResults</code>
+  diagnostic surface is unchanged.</li>
+<li><strong><code>tests/test_post_estimation.py</code></strong> — <code>null_deviance</code> (deferred,
+  untouched) and offset behavior stay byte-identical.</li>
+<li><strong>SE byte-parity</strong> — <code>finish_prediction</code> reproduces
+  <code>sqrt(rowSums((X_p @ Vp) * X_p)) * |mu_eta|</code> from <code>results.py:299–307</code>
+  exactly (design §10.2).</li>
+<li><strong>R bridge version check</strong> — <code>RBridge.check_versions()</code> continues to
+  pass for R 4.5.2 + mgcv 1.9-3, and the existing non-GP/non-<code>gamma_log</code>
+  bridge tests are untouched.</li>
+</ul>
+<p>If any of these fail during a commit, <strong>stop and surface the failure</strong>
+before continuing. Do not work around — fix the root cause.</p>
+<hr />
+<h2 id="success-metrics">Success Metrics<a class="headerlink" href="#success-metrics" title="Permanent link">&para;</a></h2>
+<p>Track after every commit:</p>
+<ol>
+<li><strong>Collected-test count</strong> (<code>pytest --collect-only</code>) — grows
+   monotonically toward <strong>~14–16</strong> new tests across Commits B1–E — B0 adds
+   <strong>zero</strong> (it restructures one existing assertion) (the
+   actual-path wiring tests in Commit E account for the upper end — see the
+   §12.3 footprint note). Should not shrink except where a refactor
+   legitimately consolidates; <strong>do not delete the Commit-E wiring tests</strong> to
+   chase a lower count.</li>
+<li><strong>Coverage percentage</strong> (must stay ≥80% per CLAUDE.md) — overall and
+   for every new file (<code>jaxgam/inference/*</code>, <code>jaxgam/formula/predict_matrix.py</code>)
+   by the time Commit E lands.</li>
+<li><strong>Retained-bytes delta</strong> — the raison d'être of this design. Measure the
+   <strong>true</strong> footprint with a <strong>recursive, <code>id()</code>-deduplicated <code>np.ndarray</code>
+   walker</strong> over the result object graph — <strong>not</strong> a sum of named fields,
+   which both misses the <strong>retained</strong> predict transforms
+   (<code>_Xu</code>/<code>_UZ</code>/<code>_F</code>/<code>_XP_list</code>/<code>_Z_list</code>/<code>_shift</code> and the lean predictor's
+   <code>PredictSpec</code> arrays — the design counts these toward <code>O(p² + Σ
+   predict-transform size)</code>, design §3.1/§7.1) and can double-count
+   shared buffers. The walker sums every <strong>distinct</strong> reachable
+   <code>ndarray.nbytes</code> and <strong>line-items the dropped arrays</strong> (<code>setup.X</code>,
+   per-smooth <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code>, <strong><code>setup.penalties</code></strong> — the
+   <code>CompositePenalty</code> in embedded <code>(total_p, total_p)</code> space, <code>design.py:133</code>,
+   which is dropped with <code>setup</code> and is otherwise an unexplained residual on
+   multi-penalty models — <code>training_data</code>, <code>fitted_values</code>,
+   <code>linear_predictor</code>) so the <code>full</code> − <code>inference</code> delta is
+   attributable. Run it for a <code>result="full"</code> vs <code>result="inference"</code> fit of
+   the <strong>same</strong> model — a <strong>tensor</strong> model (so <code>_penalties</code> at <code>O(n_coefs²)</code>
+   shows) and a <strong>GP</strong> model (so <code>_E_knot</code> at <code>O(n_knots²)</code> shows), at <code>n=300</code>
+   and <code>n=5000</code>.</li>
+</ol>
+<p><strong>Three measurement points, not two — B0 must be bracketed.</strong> Commit A
+   records the <code>"full"</code> footprint of <strong>today's</strong> code (including the 32 MB
+   <code>_E_knot</code> leak). Commit <strong>B0</strong> re-records <code>"full"</code> after the dead-store fix.
+   Commit E records <code>"inference"</code>. The number this design is entitled to claim
+   is <strong>B0-full − E-inference</strong>; the A → B0 drop belongs to the one-line bug
+   fix. Reporting A-full − E-inference as the design's win would credit it with
+   ~32 MB it did not earn (design §1.1).
+4. <strong><code>make test-cov</code> wall-clock</strong> — sanity check that new R-parity cells
+   don't blow up runtime.</p>
+<p><strong>Baseline (captured in Commit A):</strong> record current collected count,
+source-level count, coverage %, wall-clock, and the <code>result="full"</code>
+retained-bytes figures. Reference these in every subsequent handoff.</p>
+<hr />
+<h2 id="commit-a-pre-flight-baseline-capture-cloudpickle-dev-dep">Commit A — Pre-flight: Baseline Capture + <code>cloudpickle</code> Dev Dep<a class="headerlink" href="#commit-a-pre-flight-baseline-capture-cloudpickle-dev-dep" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Record current state so each subsequent commit can show
+measurable progress and gate against regressions, and add the one
+dev-only dependency the later pickle tests need.</p>
+<p><strong>Design reference:</strong> §8, §13 (commit A).</p>
+<h3 id="what-to-do">What to do<a class="headerlink" href="#what-to-do" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Run on a clean checkout of the working branch (before any code
+   change):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>--collect-only<span class="w"> </span>-q<span class="w"> </span>tests<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-3
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grep<span class="w"> </span>-rc<span class="w"> </span><span class="s2">&quot;def test_&quot;</span><span class="w"> </span>tests<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-v<span class="w"> </span><span class="s2">&quot;:0</span>$<span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span>-F:<span class="w"> </span><span class="s1">&#39;{s+=$2} END {print s}&#39;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nb">time</span><span class="w"> </span>make<span class="w"> </span>test-cov<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-25
+</code></pre></div>
+<ol>
+<li>
+<p><strong>Capture the <code>result="full"</code> retained-bytes baseline.</strong> Write a
+   small throwaway script (do not commit it) that fits a tensor model and a
+   GP model at <code>n ∈ {300, 5000}</code> and measures retained bytes with the
+   <strong>recursive, <code>id()</code>-deduplicated <code>np.ndarray</code> walker</strong> of Metric #3 over
+   the result object graph: sum every distinct array's <code>.nbytes</code>, and
+   <strong>line-item</strong> both the soon-to-be-dropped arrays (tensor <code>_penalties</code>, GP
+   <code>_E_knot</code>, <code>setup.X</code>, per-smooth <code>_X</code>/<code>_S</code>, <code>training_data</code>,
+   <code>fitted_values</code>, <code>linear_predictor</code>) <strong>and</strong> the retained transforms
+   (<code>_Xu</code>/<code>_UZ</code>/<code>_F</code>/<code>_XP_list</code>/<code>_Z_list</code>/<code>_shift</code>) so Commit E's reduction is
+   attributable. Record the totals + line items. This is the "before" the
+   design exists to improve.</p>
+</li>
+<li>
+<p>Record all metrics in <code>docs/production_api/BASELINE.md</code> (mirroring
+   <code>docs/gaussian_process/BASELINE.md</code>):</p>
+</li>
+<li>Collected test count</li>
+<li>Source-level test count</li>
+<li>Coverage %</li>
+<li><code>make test-cov</code> wall-clock</li>
+<li>
+<p><code>result="full"</code> retained bytes: tensor &amp; GP, <code>n=300</code> &amp; <code>n=5000</code>,
+     with the <code>_penalties</code> / <code>_E_knot</code> line items called out.</p>
+</li>
+<li>
+<p><strong>Add <code>cloudpickle</code> to <code>[project.optional-dependencies].dev</code></strong> in
+   <code>pyproject.toml</code> — the existing <code>dev</code> <strong>extra</strong> (<code>pyproject.toml:17–18</code>),
+   <strong>not</strong> a uv <code>[dependency-groups]</code> section. Docker builds the test env with
+   <code>uv sync --extra dev --extra r</code> (<code>Dockerfile:36,45</code>), so cloudpickle must
+   live in that <strong>extra</strong> or Commit D's local-custom-link pickle test won't
+   see it in Docker. It is <strong>not</strong> a runtime dependency — stdlib <code>pickle</code> is
+   the public default (design §8). Run <code>uv sync --extra dev</code> to update the
+   lock.</p>
+</li>
+</ol>
+<h3 id="files-touched">Files touched<a class="headerlink" href="#files-touched" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add: <code>docs/production_api/BASELINE.md</code></li>
+<li>Modify: <code>pyproject.toml</code> (<code>cloudpickle</code> in the
+  <code>[project.optional-dependencies].dev</code> extra) + lockfile</li>
+</ul>
+<h3 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> runs cleanly (no behavior change yet).</li>
+<li><code>cloudpickle</code> resolves in the dev environment (<code>uv run python -c
+  "import cloudpickle"</code>).</li>
+</ul>
+<h3 id="exit-criteria">Exit criteria<a class="headerlink" href="#exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Baseline file committed with all five metric groups.</li>
+<li><code>cloudpickle</code> present in the <code>dev</code> <strong>extra</strong> only (so <code>uv sync --extra dev</code>
+  installs it) — <strong>not</strong> in <code>[project.dependencies]</code> runtime deps.</li>
+<li><strong>Agent stops and hands off to user for commit.</strong> Do not proceed to
+  Commit B0.</li>
+</ul>
+<hr />
+<h2 id="commit-b0-gp-_e_knot-dead-store-fix-prerequisite-not-part-of-the-mode">Commit B0 — GP <code>_E_knot</code> Dead-Store Fix (prerequisite, not part of the mode)<a class="headerlink" href="#commit-b0-gp-_e_knot-dead-store-fix-prerequisite-not-part-of-the-mode" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Stop retaining the <code>O(n_knots²)</code> GP knot–knot kernel past
+<code>setup()</code>. This is a <strong>standalone bug fix</strong> that needs nothing from this
+design, and it must land before the memory claims are measured so the
+Commit-E delta reflects what <code>result="inference"</code> actually buys.</p>
+<p><strong>Design reference:</strong> §1.1, §2.1, §7.2, §13 (commit B0).</p>
+<h3 id="why-this-is-separate">Why this is separate<a class="headerlink" href="#why-this-is-separate" title="Permanent link">&para;</a></h3>
+<p><code>_E_knot</code> is assigned at <code>gaussian_process.py:200</code> and <strong>read nowhere in
+<code>jaxgam/</code></strong> — verify before editing:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>grep<span class="w"> </span>-rn<span class="w"> </span><span class="s2">&quot;_E_knot&quot;</span><span class="w"> </span>jaxgam/<span class="w">       </span><span class="c1"># expect exactly 2 hits: :90 decl, :200 assign</span>
+</code></pre></div>
+<p>It is <strong>89% of the GP baseline footprint</strong> (32.0 MB of 36.08 MB at
+<code>n=5000</code>), and <code>result="full"</code> leaks all of it too. Fixing it inside
+<code>copy_for_prediction()</code> would have hidden a plain dead store behind a new
+API and credited this design with a win it did not earn.</p>
+<h3 id="what-to-do_1">What to do<a class="headerlink" href="#what-to-do_1" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong><code>jaxgam/smooths/gaussian_process.py</code></strong> — in <code>setup()</code>, after <code>E</code> has
+   been consumed by the eigendecomposition, drop the reference:
+   <code>self._E_knot = None</code>. Keep the attribute declared at <code>:90</code> (the
+   <code>copy_for_prediction()</code> override in Commit C and the §12.2.2 banned-state
+   walk both expect the name to exist and be <code>None</code>).</p>
+</li>
+<li>
+<p><strong><code>tests/test_smooths/test_gaussian_process.py:497</code></strong> — the one existing
+   reader (<code>_assert_close(py_smooth._E_knot, r_result["E"], STRICT)</code>) is an
+   R-parity assertion on the knot–knot kernel and <strong>must not be deleted</strong> —
+   it is real mgcv parity coverage. Restructure it to compare the matrix
+   <strong>where it is still live</strong>: assert against the value computed inside
+   setup (expose it via the existing <code>_gp_E</code> helper on the same inputs, or
+   capture it before setup nulls the attribute). The assertion must still run
+   and still compare to R's <code>E</code> at <code>STRICT</code>.</p>
+</li>
+<li>
+<p><strong>Re-measure GP retained bytes</strong> with the Commit-A walker and append the
+   post-B0 <code>"full"</code> figures to <code>BASELINE.md</code> as the <strong>second</strong> measurement
+   point (Metric #3). This is the true "before" for the <code>result</code> mode.</p>
+</li>
+</ol>
+<h3 id="files-touched_1">Files touched<a class="headerlink" href="#files-touched_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Modify: <code>jaxgam/smooths/gaussian_process.py</code> (one line in <code>setup()</code>)</li>
+<li>Modify: <code>tests/test_smooths/test_gaussian_process.py</code> (restructure the
+  <code>_E_knot</code> parity assertion so it still checks R's <code>E</code>)</li>
+<li>Modify: <code>docs/production_api/BASELINE.md</code> (post-B0 <code>"full"</code> figures)</li>
+</ul>
+<h3 id="validation_1">Validation<a class="headerlink" href="#validation_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> passes. <strong><code>tests/test_smooths/test_gaussian_process.py</code>
+  passes in full</strong>, including the restructured <code>E</code>-vs-R assertion — if that
+  assertion was weakened or dropped, the commit is wrong.</li>
+<li>All other GP tests (construction, prediction, parity) unchanged.</li>
+<li>Collected test count <strong>unchanged</strong> (restructure, not addition).</li>
+</ul>
+<h3 id="exit-criteria_1">Exit criteria<a class="headerlink" href="#exit-criteria_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>grep -rn "_E_knot" jaxgam/</code> shows the declaration, the assignment, and
+  the new <code>None</code> reset — and nothing reads it.</li>
+<li>GP <code>"full"</code> retained bytes drop by ~<code>n_knots² × 8</code> vs Commit A, recorded
+  in <code>BASELINE.md</code>.</li>
+<li>R parity for the GP <code>E</code> matrix still asserted at <code>STRICT</code>.</li>
+<li><strong>Agent stops and hands off to user for commit.</strong> Do not proceed to
+  Commit B1.</li>
+</ul>
+<hr />
+<h2 id="commit-b1-dry-setup-duplicates-properties-drop-dead-guard">Commit B1 — DRY: <code>setup.*</code> Duplicates → Properties + Drop Dead Guard<a class="headerlink" href="#commit-b1-dry-setup-duplicates-properties-drop-dead-guard" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Collapse the <strong>seven</strong> genuinely <code>setup</code>-backed alias fields that
+<code>GAMResults</code> stores verbatim into guarded <code>@property</code> reads, and remove the dead
+<code>hasattr</code> guard in <code>__repr__</code>. (<code>n</code> is the eighth historical <code>setup.*</code> duplicate
+but is <strong>left alone here</strong> — Commit E re-homes it into <code>_FitDiagnostics</code> as
+scalar metadata, since the lean type has no <code>setup</code>; §5.5.) <strong>Mechanical, zero
+behavior change</strong> — every field still reads the same value.</p>
+<p><strong>Design reference:</strong> §2.3, §2.4, §5.5.</p>
+<h3 id="what-to-do_2">What to do<a class="headerlink" href="#what-to-do_2" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong><code>jaxgam/results.py</code></strong> — <strong>seven</strong> of the eight fields set verbatim from
+   <code>setup.*</code> in <code>_from_fit</code> (<code>results.py:220–233</code>): <code>X</code>, <code>y</code>, <code>weights</code>,
+   <code>offset</code>, <code>coef_map</code>, <code>smooth_info</code>, <code>term_names</code>. Remove them as stored
+   fields and expose each as a guarded <code>@property</code> delegating to <code>self.setup</code>
+   (design §5.5). The guard handles the (current) invariant that <code>setup</code> is
+   always present on <code>GAMResults</code>; the property simply returns
+   <code>self.setup.&lt;field&gt;</code>. <strong>Leave <code>n</code> as the existing stored scalar</strong> — it is
+   the eighth historical <code>setup.*</code> alias (<code>= setup.n_obs</code>), but Commit E
+   re-homes it into the <code>_FitDiagnostics</code> shared base (the lean type has no
+   <code>setup</code>), so converting it to a property here only to undo that in E is
+   pointless churn.</p>
+</li>
+<li>
+<p><strong>Drop the dead <code>hasattr(self.family, "family_name")</code> guard</strong> in
+   <code>__repr__</code> (<code>results.py:406</code>) — <code>family_name</code> is always present on the
+   family object (design §2.4).</p>
+</li>
+<li>
+<p>Confirm nothing else in <code>results.py</code>, <code>summary/</code>, or <code>plot/</code> writes
+   these as attributes (they should only ever be read).</p>
+</li>
+</ol>
+<h3 id="files-touched_2">Files touched<a class="headerlink" href="#files-touched_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Modify: <code>jaxgam/results.py</code> (7 fields → properties; <code>n</code> left as a scalar
+  for Commit E to re-home; drop dead guard)</li>
+<li>Modify: <code>tests/test_results.py</code> (one consolidated test that the
+  duplicates now read through <code>setup</code> and equal the prior values)</li>
+</ul>
+<h3 id="validation_2">Validation<a class="headerlink" href="#validation_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> passes with <strong>no output change</strong> — this is the merge
+  gate. Existing <code>tests/test_results.py</code>, <code>tests/test_summary/</code>,
+  <code>tests/test_plot/</code> must pass unchanged.</li>
+<li>New tests collected count up by <strong>~1</strong> (a <code>_AssertCollector</code>-backed
+  "duplicates-as-properties" test).</li>
+<li>Coverage of <code>jaxgam/results.py</code> does not drop.</li>
+</ul>
+<h3 id="exit-criteria_2">Exit criteria<a class="headerlink" href="#exit-criteria_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The <strong>seven</strong> fields read through <code>setup</code> via <code>@property</code>; <code>n</code> remains a
+  stored scalar (Commit E re-homes it to <code>_FitDiagnostics</code>); no other stored
+  aliases remain.</li>
+<li>Dead <code>hasattr</code> guard removed.</li>
+<li>All existing result/summary/plot tests pass identically.</li>
+<li><strong>Agent stops and hands off to user for commit.</strong> Do not proceed to
+  Commit C.</li>
+</ul>
+<hr />
+<h2 id="commit-c-phase-1-prediction-state-predictspec-builder-move-copy_for_prediction-done">Commit C — Phase-1 Prediction State: <code>PredictSpec</code>, Builder Move, <code>copy_for_prediction</code> (<strong>DONE</strong>)<a class="headerlink" href="#commit-c-phase-1-prediction-state-predictspec-builder-move-copy_for_prediction-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Establish all <strong>Phase-1</strong> prediction plumbing the lean core
+will consume: move <code>ModelSetup.build_predict_matrix</code> + its helpers to a
+new <code>formula/predict_matrix.py</code> free function over a concrete
+<code>PredictSpec</code>; build the spec <strong>lazily</strong> on the frozen <code>ModelSetup</code>; add
+the polymorphic <code>Smooth.copy_for_prediction()</code> hook (+ tensor / GP /
+by-variable overrides); and <code>build_predict_spec(setup)</code>. This is the
+structural heart of the design. <strong>No Phase-3 code, no new result type
+yet</strong> — but <code>ModelSetup.build_predict_matrix(newdata)</code> must keep working
+identically (it now delegates), so the existing predict suite is the
+regression gate.</p>
+<p><strong>Design reference:</strong> §5.1, §5.2, §6 (Phase-1 half), §7.</p>
+<h3 id="what-to-do_3">What to do<a class="headerlink" href="#what-to-do_3" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Create <code>jaxgam/formula/predict_matrix.py</code> (Phase 1, NumPy only — no
+   JAX, no links).</strong> Move the body of <code>ModelSetup.build_predict_matrix</code>
+   (<code>design.py:415–491</code>) here as a free function
+   <code>build_predict_matrix(spec: PredictSpec, newdata) -&gt; np.ndarray</code>, and
+   move its instance helpers to <strong>module-level</strong> functions — <strong>the full
+   transitive closure</strong>, not just the three the builder calls directly:
+   <code>_to_dict</code> (already a <code>@staticmethod</code>), <code>_validate_equal_lengths</code>,
+   <code>_build_parametric_matrix</code>, <strong>plus the two they pull in</strong> —
+   <code>_encode_factor</code> (<code>design.py:696</code>, called by <code>_build_parametric_matrix</code> at
+   <code>:852</code>) and <code>_contr_poly</code> (<code>design.py:674</code>, called by <code>_encode_factor</code> at
+   <code>:731</code>) (design §6). Moving the <strong>whole</strong> closure is what actually keeps
+   the import one-directional (next paragraph): leaving <code>_encode_factor</code> /
+   <code>_contr_poly</code> on <code>ModelSetup</code> would force <code>predict_matrix.py</code> to import
+   <code>design.py</code>, the cycle the plan is avoiding.</li>
+</ol>
+<p><strong>These helpers are shared, not predict-only — do not orphan their other
+   callers.</strong> <code>ModelSetup.build()</code> calls three of them
+   (<code>_to_dict</code>/<code>_validate_equal_lengths</code>/<code>_build_parametric_matrix</code>,
+   <code>design.py:184/227/257</code>); and the formula suite calls <strong>two</strong> directly —
+   <code>_build_parametric_matrix</code> (<code>test_design.py:858/880/892</code>) and <code>_contr_poly</code>
+   (<code>test_design.py:947/960/961/967</code>). <strong>Recommended (lowest-risk):</strong> put the
+   single implementation of all five in <code>predict_matrix.py</code> and keep <strong>thin
+   <code>@staticmethod</code> delegators</strong> on <code>ModelSetup</code> for every helper with an
+   external caller (<code>_to_dict</code>, <code>_validate_equal_lengths</code>,
+   <code>_build_parametric_matrix</code>, <code>_contr_poly</code>; e.g.
+   <code>return predict_matrix._build_parametric_matrix(...)</code>). Then <code>build()</code> and
+   every existing formula test stay <strong>byte-unchanged</strong> (no edit to
+   <code>test_design.py</code>), yet the design's goal is still met — the helpers are
+   module-level functions and <code>build_predict_matrix</code> is a free function that
+   no longer needs a <code>ModelSetup</code>. The import is one-directional: <code>design.py</code>
+   imports from <code>predict_matrix.py</code>, which imports <strong>no</strong> <code>design.py</code> symbol
+   at module scope (<code>build_predict_spec(setup)</code> takes <code>setup</code> as a duck-typed
+   parameter), so there is no cycle. <strong>Alternative (cleaner, more churn):</strong>
+   drop the delegators and update <code>build()</code>'s three call sites <strong>and</strong>
+   <code>test_design.py</code>'s call sites (three <code>_build_parametric_matrix</code> + four
+   <code>_contr_poly</code>) to the module-level functions — in which case <strong>add
+   <code>tests/test_formula/test_design.py</code> to Files-touched</strong>.</p>
+<ol>
+<li>
+<p><strong>Define <code>PredictSpec</code></strong> in the same module — a <strong>concrete frozen
+   dataclass with explicit fields</strong>, exactly the <code>n</code>-independent set the
+   builder reads (design §2.2, §5.2): <code>coef_map</code>, <code>smooth_info</code>,
+   <code>parametric_terms</code>, <code>factor_info</code>, <code>ordered_factors</code>, <code>has_intercept</code>,
+   <code>parametric_keep_cols</code>, <code>dropped_param_names</code>, <code>total_coefs</code>. It does
+   <strong>not</strong> carry <code>offset_was_nonzero</code> (the builder never reads it; that
+   flag is a <code>GAMPredictor</code>/<code>setup</code> field only — single source of truth,
+   §5.2). <code>PredictSpec.build_predict_matrix(self, newdata)</code> is a one-line
+   delegation to the free function.</p>
+</li>
+<li>
+<p><strong>Add <code>build_predict_spec(setup) -&gt; PredictSpec</code></strong> (Phase 1): rebuild
+   <code>coef_map</code> with <strong>predict-only smooths</strong> via <code>dataclasses.replace</code>
+   (design §7.2 code) — <strong>no in-place mutation of <code>setup</code>, no deepcopy of
+   <code>_X</code></strong>. Shares <code>Z_centering</code> etc. by reference.</p>
+</li>
+<li>
+<p><strong><code>ModelSetup</code> lazy spec</strong> (<code>jaxgam/formula/design.py</code>): add a private
+   <code>field(init=False, default=None, compare=False, repr=False)</code> cache and
+   a <code>_lazy_predict_spec()</code> that builds + caches the spec on first use via
+   <code>object.__setattr__</code> (because <code>ModelSetup</code> is <strong>frozen</strong>,
+   <code>design.py:79</code> — <code>functools.cached_property</code> does not work cleanly;
+   design §5.2). <code>ModelSetup.build_predict_matrix(self, newdata)</code> becomes
+   <code>return build_predict_matrix(self._lazy_predict_spec(), newdata)</code>.
+   <strong>A full fit that never predicts builds no spec</strong> (goal #3).</p>
+</li>
+<li>
+<p><strong><code>Smooth.copy_for_prediction()</code> hook</strong> — implement exactly per design
+   §7.2:</p>
+</li>
+<li><strong><code>jaxgam/smooths/base.py</code></strong>: base default — shallow <code>copy.copy</code>,
+     null <code>_X</code> and <code>_S</code>, share transforms by reference. Document the
+     <strong>base-default precondition</strong> (correct only when non-predict caches
+     are exactly <code>{_X, _S}</code> and there are no nested smooths).</li>
+<li><strong><code>jaxgam/smooths/tensor.py</code></strong>: override — set <code>_penalties = []</code> and
+     recurse <code>copy_for_prediction()</code> over <code>_marginals</code>; keep <code>_XP_list</code>
+     (+ <code>ti</code>'s <code>_Z_list</code>) by reference. (Tensor has <strong>no <code>_X</code>/<code>_S</code></strong> of its
+     own — <code>tensor.py:49-50</code>; the <code>O(n·k)</code> training designs live on the
+     marginals, which is what the recursion frees. <code>TensorInteractionSmooth</code>
+     inherits this override.)</li>
+<li><strong><code>jaxgam/smooths/gaussian_process.py</code></strong>: override — <code>super()</code> (drops
+     <code>_X</code>/<code>_S</code>) then null <code>_E_knot</code>. <strong>Defense-in-depth only:</strong> Commit B0
+     already nulls it at <code>setup()</code>, so this is a no-op on a live fit. Keep it
+     so the invariant survives a future change and so §12.2.2's banned-state
+     walk has one consistent shape across types.</li>
+<li><strong><code>jaxgam/smooths/by_variable.py</code></strong> (<code>FactorBySmooth</code> /
+     <code>NumericBySmooth</code>): override — recurse over <code>base_smooth</code>. These are
+     <strong>not <code>Smooth</code> subclasses</strong> (<code>by_variable.py:42,244</code>) and hold no <code>_X</code>,
+     so the recursion is the whole job; use <code>getattr(clone, "_X", None)</code>
+     rather than assuming the attribute.</li>
+<li>cubic / TPRS / random-effect use the <strong>base default</strong> (verified:
+     their <code>predict_matrix</code> reads only <code>_knots</code>/<code>_F</code>, <code>_Xu</code>/<code>_UZ</code>, or
+     stored levels — never <code>_S</code>; design §2.1).</li>
+</ol>
+<p><strong>Each override nulls a cache only because that type's <code>predict_matrix</code>
+   does not read it</strong> — re-verify against the cited lines while
+   implementing (design §2.1).</p>
+<ol>
+<li><strong>Tests</strong> — Phase-1 only, in <code>tests/test_smooths/</code> (the canonical
+   owner of <code>copy_for_prediction</code> per design §12.1), consolidated:</li>
+<li><strong>Per-type <code>copy_for_prediction</code></strong> (<code>@parametrize</code> over registered
+     smooth types + <code>_AssertCollector</code>, §12.2.8): after the copy,
+     <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code> are dropped (recursively) <strong>but</strong>
+     <code>predict_matrix(newdata)</code> equals the pre-copy result (transforms
+     intact) <strong>and</strong> the original smooth is untouched (no aliasing of the
+     drop into the live smooth).</li>
+<li><strong>Registry audit</strong> (§12.2.8): enumerate every type in
+     <code>smooth_registry</code> (<code>registry.py:26</code>) + the by-wrappers; assert each
+     either overrides <code>copy_for_prediction</code> or appears in an explicit
+     <code>_BASE_DEFAULT_OK</code> allowlist. <strong>Fails for any unaudited registered
+     type</strong> — this is how a future smooth that forgot the hook is caught.</li>
+<li><strong>Spec equivalence + aliasing</strong> (Phase 1): <code>build_predict_spec(setup)
+     .build_predict_matrix(newdata)</code> equals
+     <code>setup.build_predict_matrix(newdata)</code>; and <code>build_predict_spec</code> does
+     <strong>not</strong> mutate <code>setup</code> — for a model with a <strong>tensor</strong> and a <strong>GP</strong>
+     smooth, assert the live <code>setup</code>'s smooths still hold <strong>all</strong> their
+     non-predict caches (<code>_X</code>, <code>_S</code>, tensor <code>_penalties</code> non-empty, GP
+     <code>_E_knot</code> non-<code>None</code>) — the <strong>full</strong> no-mutation contract (design §7.2),
+     not just <code>_X</code>/<code>_S</code>.</li>
+<li><strong>Lazy spec stays unbuilt until needed</strong> (goal #3, design §5.2/§3.1) —
+     fold into the spec-equivalence collector above (no new collected test):
+     assert the private spec-cache field is still <code>None</code> right after
+     <code>ModelSetup.build(...)</code>, then non-<code>None</code> only after the <strong>first</strong>
+     <code>build_predict_matrix(newdata)</code>. (The <code>GAM.fit(result="full")</code>
+     never-predicts-no-spec check rides Commit E's aliasing collector, where a
+     full fit exists.)</li>
+</ol>
+<h3 id="files-touched_3">Files touched<a class="headerlink" href="#files-touched_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add: <code>jaxgam/formula/predict_matrix.py</code> (<code>PredictSpec</code>,
+  <code>build_predict_matrix</code>, helpers, <code>build_predict_spec</code>)</li>
+<li>Modify: <code>jaxgam/formula/design.py</code> (<code>ModelSetup</code> lazy spec; <code>build_predict_matrix</code></li>
+<li>the <strong>five</strong> shared helpers —
+  <code>_to_dict</code>/<code>_validate_equal_lengths</code>/<code>_build_parametric_matrix</code>/<code>_encode_factor</code>/<code>_contr_poly</code>
+  — delegate to <code>predict_matrix.py</code>; keep <code>@staticmethod</code> shims so <code>build()</code>
+  and the formula tests stay unchanged)</li>
+<li>(Only if you took the no-delegator alternative) Modify:
+  <code>tests/test_formula/test_design.py</code> (<strong>7</strong> direct call sites → module-level
+  helpers: 3× <code>_build_parametric_matrix</code> at <code>:858/880/892</code> + 4× <code>_contr_poly</code>
+  at <code>:947/960/961/967</code>)</li>
+<li>Modify: <code>jaxgam/smooths/base.py</code>, <code>tensor.py</code>, <code>gaussian_process.py</code>,
+  <code>by_variable.py</code> (add <code>copy_for_prediction()</code>)</li>
+<li>Modify: <code>tests/test_smooths/</code> (per-type copy + registry audit + spec
+  equivalence/aliasing, consolidated)</li>
+</ul>
+<h3 id="validation_3">Validation<a class="headerlink" href="#validation_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> passes. <strong>All <code>tests/test_predict/</code> tests pass
+  byte-identically</strong> — the builder move is the merge gate. <strong><code>tests/test_formula/test_design.py</code>
+  also passes unchanged</strong> (the <code>@staticmethod</code> delegators keep
+  <code>ModelSetup.build()</code> and the direct <code>_build_parametric_matrix</code> <strong>and
+  <code>_contr_poly</code></strong> test calls working); if you took the no-delegator
+  alternative, its seven call sites (3× <code>_build_parametric_matrix</code> + 4×
+  <code>_contr_poly</code>) were updated instead.</li>
+<li>New tests collected count up by <strong>~2–3</strong> (per-type copy + registry
+  audit + spec equivalence incl. the lazy-spec check, consolidated via
+  parametrize/collector).</li>
+<li>Coverage of <code>jaxgam/formula/predict_matrix.py</code> ≥ 80%.</li>
+</ul>
+<h3 id="exit-criteria_3">Exit criteria<a class="headerlink" href="#exit-criteria_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>ModelSetup.build_predict_matrix(newdata)</code> delegates and produces
+  identical output; a never-predicting full fit builds no spec.</li>
+<li>Every smooth type drops its non-predict caches and preserves
+  <code>predict_matrix</code> output; the registry audit passes for all registered
+  types.</li>
+<li><code>build_predict_spec</code> does not mutate <code>setup</code>.</li>
+<li><strong>Agent stops and hands off to user for commit.</strong> Do not proceed to
+  Commit D.</li>
+</ul>
+<hr />
+<h2 id="commit-d-inference-core-predict_core-finish_prediction-gampredictor-done">Commit D — <code>inference/</code> Core: <code>predict_core</code> + <code>finish_prediction</code> + <code>GAMPredictor</code> (<strong>DONE</strong>)<a class="headerlink" href="#commit-d-inference-core-predict_core-finish_prediction-gampredictor-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Build the lean Phase-3 inference core: the single
+<code>finish_prediction</code> + <code>predict_core</code> finishing path over the concrete
+<code>PredictSpec</code> (no Protocol — design §5.1), and the frozen, picklable
+<code>GAMPredictor</code>.
+Test predictor behavior directly (predict-equivalence, direct-R parity,
+pickle/cloudpickle/version-stamp, read-only, snapshot independence) <strong>before</strong> the
+result-mode wiring lands in E.</p>
+<p><strong>Design reference:</strong> §5.1, §5.3, §6 (Phase-3 half), §8, §12.2.</p>
+<blockquote>
+<p><strong>Ordering note.</strong> <code>GAMResults.to_predictor()</code> does not exist until
+Commit E. D therefore constructs <code>GAMPredictor</code> <strong>directly</strong> in tests
+from a <code>result="full"</code> fit: <code>coefficients</code>/<code>Vp</code> from the result, a
+<code>copy.deepcopy</code> family snapshot, and <code>_predict_spec =
+build_predict_spec(res.setup)</code> (the Commit-C Phase-1 builder). Every test
+that needs the <strong>real fit-mode wiring</strong> lands in <strong>E</strong>, where
+<code>fit(result="inference")</code>/<code>to_predictor()</code> exist: the <code>to_predictor()</code>
+aliasing/ownership test (§12.2.5), the <strong>actual-path <code>full</code>==<code>inference</code>
+predict-equivalence + direct-R gate on <code>GAMInferenceResult</code> (§12.2.1/1b)</strong>,
+and the <strong>authoritative <code>_from_fit</code> family-snapshot test (§12.2.6)</strong>. D
+proves the predictor is correct <em>in isolation</em>; E proves <code>_from_fit</code> wires
+it correctly.</p>
+</blockquote>
+<h3 id="what-to-do_4">What to do<a class="headerlink" href="#what-to-do_4" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>No <code>_protocol.py</code>.</strong> Round 10 cut the <code>PredictMatrixBuilder</code> Protocol
+   (design §5.1): after Commit C's delegation, <code>ModelSetup</code> and
+   <code>PredictSpec</code> are one implementation and a forwarder, not two
+   implementations, so the seam abstracted nothing. Do <strong>not</strong> create this
+   file. <code>predict_core</code> is typed directly on <code>PredictSpec</code>.</p>
+</li>
+<li>
+<p><strong><code>jaxgam/inference/_core.py</code></strong> — <code>finish_prediction(eta, X_p, link,
+   Vp, *, pred_type, se_fit)</code> and <code>predict_core(spec: PredictSpec,
+   coefficients, Vp, link, newdata, *, pred_type="response",
+   se_fit=False, offset=None, offset_was_nonzero=False)</code>, verbatim per
+   design §6, calling <code>spec.build_predict_matrix(newdata)</code>. <code>Vp</code> is required
+   (no <code>None</code> branch). SE is the <strong>exact</strong>
+   <code>sqrt(rowSums((X_p @ Vp) * X_p)) * |mu_eta|</code> from <code>results.py:299–307</code>.
+   The external-offset warning fires when <code>offset_was_nonzero</code> and no
+   offset is passed (matches <code>predict.gam</code>). <strong>Both <code>predict_core</code> and
+   <code>finish_prediction</code> stay private</strong> (not exported — design §11.1).</p>
+</li>
+<li>
+<p><strong><code>jaxgam/inference/predictor.py</code></strong> — the frozen <code>GAMPredictor</code>
+   dataclass per design §5.3: fields <code>coefficients</code>, <code>Vp</code> (required),
+   <code>family</code> (snapshot), <code>formula</code> (<strong>the single owner of the formula string
+   — Commit E's lean type reads it as a property, not a stored field</strong>),
+   <code>offset_was_nonzero</code> (explicit bool), <code>_predict_spec: PredictSpec</code>, and
+   <code>_jaxgam_version: str</code> defaulting to <code>jaxgam.__version__</code>.
+   <code>__post_init__</code> <strong>defensively copies</strong> <code>coefficients</code>/<code>Vp</code> (<code>np.array</code>)
+   then <code>setflags(write=False)</code>; <code>__setstate__</code> re-applies <code>write=False</code>
+   after unpickle (NumPy does not always preserve the flag) <strong>and warns when
+   <code>_jaxgam_version</code> does not match the running version</strong> — the pickle
+   contract is same-version (design §8), and a warning is the difference
+   between a loud failure and silently wrong production predictions. It is a
+   guardrail, <strong>not</strong> the versioned artifact format that stays out of scope:
+   no schema, no migration, no integrity, no <code>save()</code>/<code>load()</code>.
+   <code>predict(newdata,
+   ...)</code> delegates to <code>predict_core</code> (passing <code>self._predict_spec</code> and
+   <code>self.offset_was_nonzero</code>). <strong><code>predict_matrix(newdata)</code> does NOT go through
+   <code>predict_core</code></strong> — <code>predict_core</code> returns <em>finished predictions</em> via
+   <code>finish_prediction</code> (link-inverse applied), <strong>not</strong> the design matrix
+   (design §6). <code>predict_matrix</code> returns the constrained <code>X_p</code> by delegating
+   straight to <code>self._predict_spec.build_predict_matrix(newdata)</code>, exactly as
+   <code>GAMResults.predict_matrix</code> does today (<code>results.py:327</code>).</p>
+</li>
+<li>
+<p><strong><code>jaxgam/inference/__init__.py</code></strong> — export <strong><code>GAMPredictor</code></strong> only.
+   <code>predict_core</code> / <code>finish_prediction</code> stay private to <code>_core.py</code>
+   (design §11.1).</p>
+</li>
+<li>
+<p><strong>Tests</strong> — <code>tests/test_inference/test_predictor.py</code> (new package;
+   <code>@parametrize</code> + <code>_AssertCollector</code>), targeting design §12.2 invariants
+   1, 1b, 4, 6, 7 (~7 collected):</p>
+</li>
+<li><strong>Predict-equivalence (<code>STRICT</code>)</strong> — a directly-constructed
+     <code>GAMPredictor.predict(newdata, se_fit=True)</code> equals the source
+     <code>GAMResults.predict(newdata, se_fit=True)</code>, byte-identical, over the
+     zoo: gaussian <code>s(x)</code>, binomial factor-by, poisson + offset, NB,
+     non-default-link, <code>te()</code>, <code>ti()</code> × <code>pred_type</code>. In the <strong>same
+     collector</strong>, also assert <strong><code>GAMPredictor.predict_matrix(newdata)</code> ==
+     <code>res.predict_matrix(newdata)</code></strong> (≡ <code>setup.build_predict_matrix</code>) — the
+     matrix seam, not just the finished prediction (the <code>predict_matrix</code>
+     delegates to <code>build_predict_matrix</code>, not <code>predict_core</code>).</li>
+<li><strong>Direct-R parity (<code>STRICT</code>/<code>MODERATE</code>, §12.2.1b)</strong> — predictor
+     <strong>and</strong> a pickle→unpickle→predict round-trip vs R <code>predict.gam</code> for
+     <code>te()</code>, factor-by, NB, and <strong><code>Gamma(link="log")</code></strong> (the <code>gamma_log</code>
+     bridge key). <strong>Skip-guard <code>bridge.mode != "rpy2"</code></strong> per the
+     load-bearing note above. Offset &amp; locally-defined custom links are
+     excluded (covered by equivalence + pickle).</li>
+<li><strong>Pickle round-trip (<code>STRICT</code>)</strong> — (a) stdlib <code>pickle</code> a
+     built-in-family/link core → predict byte-identical, link survives,
+     <code>coefficients</code>/<code>Vp</code> still read-only; (b) <code>cloudpickle</code> a
+     local-custom-link core, same — and assert stdlib <code>pickle</code> <strong>fails</strong>
+     that local-link case; (c) <strong>version stamp</strong> — a same-version round-trip
+     emits <strong>no</strong> warning, and a blob whose <code>_jaxgam_version</code> is rewritten to
+     a fake version <strong>warns</strong> on load (design §5.3, §8). Fold all three into
+     one <code>_AssertCollector</code>.</li>
+<li><strong>Read-only arrays</strong> — <code>coefficients</code>/<code>Vp</code> raise on in-place write,
+     both after construction and after an unpickle round-trip.</li>
+<li><strong>Family snapshot independence + final theta</strong> — the snapshot is not
+     the registry singleton (<code>predictor.family is not get_family(name)</code>);
+     mutating the registry instance does not affect it; for NB,
+     <code>predictor.family.theta</code> is the <strong>fitted</strong> theta (post-<code>put_theta</code>).</li>
+</ol>
+<h3 id="files-touched_4">Files touched<a class="headerlink" href="#files-touched_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add: <code>jaxgam/inference/__init__.py</code>, <code>_core.py</code>, <code>predictor.py</code>
+  (<strong>no <code>_protocol.py</code></strong> — design §5.1)</li>
+<li>Add: <code>tests/test_inference/__init__.py</code>,
+  <code>tests/test_inference/test_predictor.py</code></li>
+</ul>
+<h3 id="validation_4">Validation<a class="headerlink" href="#validation_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> passes; the JAX-importing family snapshot loads fine on
+  the CPU/NumPy predict path (design §8 tradeoff).</li>
+<li>New tests collected count up by <strong>~7</strong> (per the §12.3 footprint).</li>
+<li>Coverage of every <code>jaxgam/inference/*</code> file ≥ 80%.</li>
+<li>The direct-R parity tests <strong>skip cleanly</strong> when <code>bridge.mode != "rpy2"</code>
+  and <strong>run</strong> in Docker (rpy2 present).</li>
+</ul>
+<h3 id="exit-criteria_4">Exit criteria<a class="headerlink" href="#exit-criteria_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>GAMPredictor</code> predicts byte-identically to <code>GAMResults</code> across the zoo
+  and matches R <code>predict.gam</code> for the four direct-R cases.</li>
+<li>Pickle (stdlib, built-in) and cloudpickle (local link) round-trips
+  preserve predictions and re-freeze the two arrays; stdlib-pickle fails
+  the local-link case as asserted; a version-mismatched blob warns.</li>
+<li><code>coefficients</code>/<code>Vp</code> are read-only pre- and post-unpickle; the family
+  snapshot is independent with final theta.</li>
+<li><strong>Neither</strong> <code>predict_core</code> <strong>nor</strong> <code>finish_prediction</code> is importable from
+  <code>jaxgam.inference</code>'s public surface (both stay private to <code>_core.py</code>), and
+  <strong><code>jaxgam/inference/_protocol.py</code> does not exist</strong>.</li>
+<li><strong>Agent stops and hands off to user for commit.</strong> Do not proceed to
+  Commit E.</li>
+</ul>
+<hr />
+<h2 id="commit-e-result-mode-two-result-types-family-snapshot-exports-done">Commit E — <code>result</code> Mode + Two Result Types + Family Snapshot + Exports (<strong>DONE</strong>)<a class="headerlink" href="#commit-e-result-mode-two-result-types-family-snapshot-exports-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Wire the user-facing surface: the keyword-only
+<code>@overload</code>ed <code>fit(..., result=...)</code>, the two result types
+(<code>GAMInferenceResult</code> composing a <code>GAMPredictor</code>; reshaped <code>GAMResults</code>
+with <code>to_predictor()</code>), the single post-<code>put_theta</code> family snapshot in
+<code>_from_fit</code>, the internal renames that free the public <code>result</code> kwarg, and
+the public exports.</p>
+<p><strong>Design reference:</strong> §4, §5.3, §5.4, §5.5, §11.2, §12.2.</p>
+<h3 id="what-to-do_5">What to do<a class="headerlink" href="#what-to-do_5" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong><code>jaxgam/results.py</code></strong> — add a small shared <code>_FitDiagnostics</code> base
+   carrying <strong>exactly</strong> the scalar diagnostics + metadata enumerated in design
+   §5.4/§5.5 — <code>edf</code>, <code>edf1</code>, <code>edf_total</code>, <code>deviance</code>, <code>null_deviance</code>,
+   <code>score</code>, <code>scale</code>, <code>theta</code>, <code>smoothing_params</code>, <code>converged</code>, <code>n_iter</code>,
+   <code>convergence_info</code>, <code>method</code>, <code>lambda_strategy</code>,
+   <code>execution_path</code>, <code>n</code> (all <code>O(1)</code>/<code>O(p)</code>, retained in <strong>both</strong> modes;
+   <strong><code>formula</code> is deliberately NOT here</strong> — <code>GAMPredictor</code> owns it (design
+   §5.3) and the lean type reads it as a property; putting it in the shared
+   base as well would make it a <strong>ninth stored duplicate</strong> in the design whose
+   DRY headline is deleting eight. <code>GAMResults</code> keeps its own stored
+   <code>formula</code> — it has no predictor until <code>to_predictor()</code>;
+   <code>edf</code>/<code>edf1</code>/<code>smoothing_params</code> are <code>np.ndarray</code>, the rest scalars/<code>str</code>/
+   <code>None</code> — <code>results.py:61–102</code>; the design's <code>edf*</code> shorthand expands to
+   <code>edf</code>/<code>edf1</code>/<code>edf_total</code>; <strong><code>n</code> lands here from B1's deferred <code>setup.n_obs</code>
+   alias</strong> — the one <code>setup.*</code> duplicate that becomes <code>_FitDiagnostics</code> scalar
+   metadata, not a <code>setup</code>-property, §5.5). <strong>All
+   three — the <code>_FitDiagnostics</code> base and both concrete result types — are
+   <code>@dataclass(frozen=True)</code></strong>, preserving today's frozen <code>GAMResults</code>
+   (<code>results.py:40</code>; design §5.4). The base must be frozen too: a frozen
+   dataclass cannot inherit from a non-frozen one (Python raises <code>TypeError</code>),
+   so once <code>_FitDiagnostics</code> carries the shared scalar fields it is frozen as
+   well. Then make
+   <strong><code>GAMInferenceResult</code></strong> (composes <code>_predictor: GAMPredictor</code>;
+   <code>coefficients</code>/<code>Vp</code>/<code>family</code>/<strong><code>formula</code></strong> as properties → <code>_predictor</code>;
+   <strong><code>smooth_info</code>/<code>term_names</code> as properties → <code>_predictor._predict_spec</code></strong>
+   (design §5.4 — <code>SmoothInfo</code> is all <code>str</code>/<code>int</code>/<code>bool</code>, <code>design.py:68-77</code>,
+   and the spec already carries <code>smooth_info</code>, so this costs <strong>zero bytes</strong>;
+   without it <code>edf</code> is a bare unlabeled array on the type built for production
+   logging);
+   <strong><code>predict(newdata)</code> and <code>predict_matrix(newdata)</code> delegate to
+   <code>_predictor</code>; <code>to_predictor()</code> returns <code>self._predictor</code></strong> — both required
+   on the surface per design §4.3/§5.4; <strong>no</strong> <code>summary</code>/<code>plot</code>; <code>predict</code>
+   requires <code>newdata</code>; <code>__repr__</code> hints to refit with <code>result="full"</code>) and the
+   <strong>reshaped <code>GAMResults</code></strong>
+   (<code>to_predictor()</code> builds a <code>GAMPredictor</code> on demand from <code>setup</code>'s lazy
+   <code>PredictSpec</code> + the family snapshot + <code>offset_was_nonzero</code>; the
+   predictor's defensive copy means this never freezes the result's own
+   arrays). <strong><code>offset_was_nonzero</code> is not a stored <code>ModelSetup</code> field</strong> —
+   <code>ModelSetup</code> carries only <code>offset</code> (<code>design.py:97</code>), so <strong>compute</strong> it from
+   the live <code>setup</code> as <code>setup.offset is not None and not
+   np.allclose(setup.offset, 0.0)</code> (the exact condition inlined today at
+   <code>results.py:281</code>). The <strong>lean path</strong> computes the same flag in <code>_from_fit</code>
+   <strong>before discarding <code>setup</code></strong> and stores it on the predictor, so the
+   external-offset warning survives the setup-drop; <code>to_predictor()</code> on a full
+   result derives it from the still-live <code>setup</code>.</li>
+<li><strong>Route <code>GAMResults.predict()</code> through the shared finish path</strong> (design
+     §6, §9 DRY — what makes the "one <code>finish_prediction</code>" claim true; this is
+     the <em>DRY</em> half of the PR, not just the memory half): the <strong>new-data</strong>
+     branch becomes <code>predict_core(setup._lazy_predict_spec(),
+     self.coefficients, self.Vp,
+     self.family.link, newdata, pred_type=…, se_fit=…, offset=offset,
+     offset_was_nonzero=(setup.offset is not None and not
+     np.allclose(setup.offset, 0.0)))</code> — <strong>pass the spec, not <code>setup</code></strong>
+     (round 10 cut the Protocol, design §5.1; <code>setup.build_predict_matrix</code>
+     reaches the same cached spec, so output is byte-identical) — the same
+     derived condition as
+     <code>results.py:281</code> (no precomputed flag exists on <code>ModelSetup</code>,
+     <code>design.py:97</code>); the <strong>self-prediction</strong>
+     branch (<code>newdata=None</code>) keeps the cached <code>eta = linear_predictor.copy()</code>
+     and <code>X_p = setup.X if se_fit else None</code>, then ends in
+     <code>finish_prediction(eta, X_p, family.link, Vp, pred_type=…, se_fit=…)</code>. This
+     <strong>replaces the inline <code>linkinv</code> + <code>sqrt(rowSums((X_p @ Vp) * X_p)) *
+     |mu_eta|</code> block in <code>GAMResults.predict()</code> (<code>results.py:271–311</code>)</strong> — output
+     must stay <strong>byte-identical</strong> (existing <code>tests/test_predict/</code> + the
+     CoefficientMap roundtrip are the gate); the external-offset warning moves
+     into <code>predict_core</code> (design §6) and must still fire for the offset case.</li>
+<li><strong><code>_from_fit</code> takes the family snapshot</strong> (<code>copy.deepcopy</code>, <strong>after</strong>
+     <code>put_theta</code> finalizes theta) — the <strong>single owner</strong> of the
+     predictor/result family snapshot for <strong>every</strong> fit (design §5.3).
+     Distinct from <code>api.py:122</code>'s pre-fit NB-only deepcopy, which is
+     <strong>unchanged</strong>.</li>
+<li>
+<p><strong>Rename <code>_from_fit</code>'s <code>result: NewtonResult</code> param
+     (<code>results.py:111</code>) → <code>fit_result</code></strong>, and thread the new mode as a
+     separate <code>result_mode</code> argument (design §11.2, §5.5 — frees the
+     public <code>result</code> name from the internal optimizer-output name).
+     <strong>This rename breaks existing direct callers:</strong> <code>tests/test_results.py</code>
+     constructs results via <code>GAMResults._from_fit(result=…)</code> at <strong><code>:64</code></strong> and
+     <strong><code>:190</code></strong> (keyword arg). Update both to <code>fit_result=…</code> (the design
+     favors the clean rename over a temporary keyword alias) — add the file to
+     Files-touched below.</p>
+</li>
+<li>
+<p><strong><code>jaxgam/api.py</code></strong> — keyword-only <code>result="full"</code> on <code>GAM.fit()</code> with
+   the two <code>@overload</code>s (design §4.1); validate the value (<code>ValueError</code>
+   for anything but <code>"full"</code>/<code>"inference"</code>); thread <code>result_mode</code> into
+   <code>_from_fit</code>. <strong>Rename the local optimizer output <code>result</code>
+   (<code>api.py:136</code>) → <code>fit_result</code>.</strong> The NB pre-fit <code>deepcopy</code>
+   (<code>api.py:122</code>) is <strong>unchanged</strong> (it is not the predictor snapshot).</p>
+</li>
+<li>
+<p><strong><code>jaxgam/__init__.py</code></strong> — add <code>GAMInferenceResult</code> and <code>GAMPredictor</code>
+   to imports + <code>__all__</code> (today only <code>GAM</code>/<code>GAMResults</code> are exported).</p>
+</li>
+<li>
+<p><strong>Tests</strong> — <code>tests/test_result_mode.py</code> (new; <code>_AssertCollector</code>,
+   <strong>~6 collected</strong> — §12.2.1/1b, .2, .3, .5, .6; the +2 over the design's
+   rounded ~4 are the actual-path wiring tests, which live here because they
+   need <code>fit(result="inference")</code>):</p>
+</li>
+<li><strong>Banned state absent</strong> under <code>result="inference"</code> (hard gate): no
+     <code>setup</code>/<code>fitted_values</code>/<code>linear_predictor</code>/<code>training_data</code>, and <strong>no
+     <code>X</code>/<code>y</code>/<code>weights</code>/<code>offset</code></strong> (on <code>GAMResults</code> these are <code>@property</code> reads
+     of <code>setup</code>, so the lean type — which holds no <code>setup</code> — must not expose
+     them; assert each is absent via <code>hasattr</code>); a recursive walk finds no
+     non-<code>None</code> <code>_X</code>/<code>_S</code>/<code>_E_knot</code> and empty <code>_penalties</code>; transforms
+     <code>_XP_list</code>/<code>_Z_list</code>/<code>_Xu</code>/<code>_UZ</code> <strong>present</strong>. (Banned owners/attributes —
+     <strong>not</strong> "no dim == n", per the load-bearing note; the full banned set
+     matches design §3.1/§7.1 — <code>X</code>/<code>y</code>/<code>weights</code>/<code>offset</code> included.)</li>
+<li><strong>Type / surface</strong>: <code>fit(result="inference")</code> returns a
+     <code>GAMInferenceResult</code> instance (runtime <code>isinstance</code>) with no
+     <code>summary</code>/<code>plot</code> and a <code>newdata</code>-required <code>predict</code>; <strong><code>predict_matrix(
+     newdata)</code> and <code>to_predictor()</code> ARE present on the lean type</strong> —
+     <code>predict_matrix</code> returns the same matrix as a <code>result="full"</code> fit, and
+     <code>to_predictor()</code> returns the composed predictor
+     (<code>inf_result.to_predictor() is inf_result._predictor</code>, design §5.4);
+     <code>fit()</code>/<code>fit(result="full")</code> returns <code>GAMResults</code>; invalid <code>result</code>
+     raises <code>ValueError</code>; <strong>every <code>_FitDiagnostics</code> field reads identically on
+     both types</strong> — parametrize over the concrete fields (<code>edf</code>, <code>edf1</code>,
+     <code>edf_total</code>, <code>deviance</code>, <code>null_deviance</code>, <code>score</code>, <code>scale</code>, <code>theta</code>,
+     <code>smoothing_params</code>, <code>converged</code>, <code>n_iter</code>, <code>convergence_info</code>,
+     <code>method</code>, <code>lambda_strategy</code>, <code>execution_path</code>, <code>n</code> — <code>edf*</code> is the
+     design's shorthand for <code>edf</code>/<code>edf1</code>/<code>edf_total</code>, not an attribute),
+     comparing the <strong>array</strong> fields (<code>edf</code>/<code>edf1</code>/<code>smoothing_params</code>) with
+     <code>np.testing.assert_array_equal</code> and the scalars/<code>str</code> with <code>==</code> (guard
+     <code>theta is None</code> for non-NB). <strong>Extend the same parametrization to the
+     three property-backed reads — <code>formula</code>, <code>smooth_info</code>, <code>term_names</code></strong> —
+     which are <em>not</em> <code>_FitDiagnostics</code> fields on the lean type but must still
+     compare equal across modes (design §5.4/§5.5); <code>smooth_info</code>/<code>term_names</code>
+     are what make <code>edf</code> interpretable, so assert
+     <code>len(smooth_info) == len(edf)</code> on the lean result as well. <strong>Both result
+     types stay <code>@dataclass(frozen=True)</code></strong> — assigning to a field on each
+     raises <code>FrozenInstanceError</code> (assert on both). Add a
+     <code>typing.assert_type</code> block for the <code>@overload</code> (teeth only under a
+     checker — §12.5).</li>
+<li><strong>Actual-path predict-equivalence + direct-R (the fit-mode wiring gate —
+     design §12.2.1, §12.2.1b):</strong> fit the <strong>same</strong> model both ways and assert
+     <code>full.predict(newdata, se_fit=True) == inference.predict(newdata,
+     se_fit=True)</code> byte-identical over the zoo. This exercises
+     <code>_from_fit(result_mode="inference")</code> end-to-end — Commit D's
+     directly-constructed predictor <strong>bypasses</strong> it, so a wiring bug there
+     would pass undetected. Then re-run the <strong>direct-R <code>predict.gam</code> gate on the
+     actual <code>GAMInferenceResult.predict</code></strong> (and its pickle round-trip) for
+     <code>te()</code>, factor-by, NB, and <code>Gamma(link="log")</code>, <strong>skip-guarding
+     <code>bridge.mode != "rpy2"</code></strong> (load-bearing note). This is the <em>wiring</em> gate
+     (does <code>_from_fit</code> compose the right predictor?), distinct from Commit D's
+     predictor-<em>correctness</em> gate; both live in the new-behavior files, so
+     <code>tests/test_validation_matrix.py</code> stays the sole owner of final-model R
+     parity (no duplication). <strong>Also assert the offset warning survives the
+     setup-drop:</strong> <code>fit(result="inference")</code> an offset model, then
+     <code>inference_result.predict(newdata)</code> with <strong>no</strong> <code>offset=</code> warns (the
+     <code>offset_was_nonzero</code> flag was computed in <code>_from_fit</code> before <code>setup</code> was
+     discarded), matching the full-result behavior.</li>
+<li><strong>Family snapshot via the real <code>_from_fit</code></strong> (design §5.3, §12.2.6): for
+     <strong>both</strong> <code>fit(result="full").to_predictor()</code> and
+     <code>fit(result="inference")</code>, assert the predictor's <code>family</code> is <strong>not</strong> the
+     registry singleton (<code>is not get_family(name)</code>), mutating the registry
+     instance does not leak in, and for <strong>NB</strong> <code>predictor.family.theta</code> equals
+     the <strong>fitted</strong> theta (proving the snapshot is taken <strong>after</strong>
+     <code>put_theta</code>). Commit D's snapshot test deep-copies the family by hand on a
+     constructed predictor, so it does <strong>not</strong> exercise <code>_from_fit</code> — this is
+     the authoritative owner-of-snapshot test.</li>
+<li><strong>Aliasing / ownership</strong> (<code>to_predictor()</code> on <code>GAMResults</code>, §12.2.5):
+     afterwards <code>setup</code>'s smooths still hold
+     <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code>; the predictor's spec smooths have
+     them dropped but retain <code>_XP_list</code>/<code>_Z_list</code>;
+     <code>predictor.coefficients</code>/<code>Vp</code> are <strong>distinct objects</strong> from the
+     result's, and the result's arrays are <strong>not</strong> frozen by the call. Also
+     assert the <strong>lazy spec was unbuilt</strong> on the result until this call —
+     <code>setup</code>'s spec-cache is <code>None</code> after <code>fit(result="full")</code> and non-<code>None</code>
+     only after <code>to_predictor()</code>/predict (goal #3, design §5.2).</li>
+<li><strong>Retained-bytes assertion</strong>: the <code>result="inference"</code> footprint is
+     materially smaller than <code>result="full"</code> for tensor (drops <code>_penalties</code>)
+     and GP (drops <code>setup.X</code>, <code>_X</code>, <code>training_data</code>, <code>_S</code>) models — record the
+     figures in <code>BASELINE.md</code> against the <strong>post-B0</strong> "before", not Commit A's
+     (Metric #3). GP's <code>_E_knot</code> is already gone by B0; crediting it here would
+     overstate the design's win by ~32 MB at <code>n=5000</code> (design §1.1).</li>
+</ol>
+<h3 id="files-touched_5">Files touched<a class="headerlink" href="#files-touched_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Modify: <code>jaxgam/results.py</code> (<code>_FitDiagnostics</code>, <code>GAMInferenceResult</code>,
+  reshaped <code>GAMResults</code> + <code>to_predictor()</code>, <code>_from_fit</code> snapshot + param
+  rename + <code>result_mode</code>)</li>
+<li>Modify: <code>jaxgam/api.py</code> (<code>@overload</code>ed keyword-only <code>result</code> + value
+  validation + <code>fit_result</code> rename)</li>
+<li>Modify: <code>jaxgam/__init__.py</code> (export the two new types)</li>
+<li>Modify: <code>tests/test_results.py</code> (update the two direct
+  <code>GAMResults._from_fit(result=…)</code> calls at <code>:64</code>/<code>:190</code> → <code>fit_result=…</code>
+  for the clean rename)</li>
+<li>Add: <code>tests/test_result_mode.py</code></li>
+<li>Modify: <code>docs/production_api/BASELINE.md</code> (inference footprint deltas)</li>
+</ul>
+<h3 id="validation_5">Validation<a class="headerlink" href="#validation_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> passes. The full Hard Allow-List is intact — every
+  <code>result="full"</code> <strong>statistical output and existing post-estimation result is
+  byte-identical</strong> to today. (The one <em>intentional</em> difference: <code>_from_fit</code>
+  now hands every result a <code>copy.deepcopy</code> family <strong>snapshot</strong>, so
+  <code>results.family</code> is no longer the registry singleton's object identity —
+  design §5.3, §12.2.6. No existing test asserts family object identity
+  (verified), so this breaks nothing; it is an object-identity change, not a
+  statistical one.)</li>
+<li>New tests collected count up by <strong>~6</strong> (the +2 over the design's rounded
+  ~4 are the actual-path wiring tests — §12.2.1/1b/.6 — that can only run once
+  <code>fit(result="inference")</code> exists).</li>
+<li>Coverage of the new/modified <code>results.py</code> paths ≥ 80%.</li>
+<li><code>from jaxgam import GAMInferenceResult, GAMPredictor</code> works.</li>
+</ul>
+<h3 id="exit-criteria_5">Exit criteria<a class="headerlink" href="#exit-criteria_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>fit(result="inference")</code> returns a lean <code>GAMInferenceResult</code> holding
+  none of the banned state; <code>fit(result="full")</code> is unchanged.</li>
+<li><code>to_predictor()</code> round-trips and does not freeze/alias the result's
+  arrays; the family snapshot is the single post-<code>put_theta</code> owner.</li>
+<li>Invalid <code>result</code> raises <code>ValueError</code>; both new types are exported.</li>
+<li>Retained-bytes reduction recorded vs the Commit-A baseline.</li>
+<li><strong>Agent stops and hands off to user for commit.</strong> Do not proceed to
+  Commit F.</li>
+</ul>
+<hr />
+<h2 id="commit-f-documentation-final-sweep-done">Commit F — Documentation + Final Sweep (<strong>DONE</strong>)<a class="headerlink" href="#commit-f-documentation-final-sweep-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Document the new surface, mark the design implemented, and run
+the closing verification before the user opens the PR.</p>
+<p><strong>Design reference:</strong> §8, §10.3, §12.5, §13 (commit F).</p>
+<h3 id="what-to-do_6">What to do<a class="headerlink" href="#what-to-do_6" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong><code>docs/api.md</code></strong> — document <code>result="full"|"inference"</code> on <code>fit()</code>,
+   the two return types, and <code>GAMInferenceResult</code>'s narrower surface (no
+   <code>summary</code>/<code>plot</code>; <code>predict</code> requires <code>newdata</code>; scalar diagnostics plus
+   <code>formula</code>/<code>smooth_info</code>/<code>term_names</code> retained). Document <code>GAMPredictor</code> +
+   <code>to_predictor()</code>. State the pickle
+   contract: <strong>"stdlib <code>pickle</code> is the default for same-version /
+   transient handoff; <code>cloudpickle</code> is required only for locally-defined
+   custom links/families; neither is a durable cross-version format"</strong> —
+   and note that loading a predictor pickled by a different jaxgam version
+   <strong>warns</strong> (design §8). Do <strong>not</strong> document a <code>save()</code>/<code>load()</code> or any
+   serialization format (out of scope). State plainly that <code>result="inference"</code>
+   reduces <strong>retained</strong> memory, not <strong>peak</strong> fit-time memory (design §1.1) —
+   users will otherwise reach for it to survive a large-<code>n</code> fit.</p>
+</li>
+<li>
+<p><strong><code>docs/quickstart.md</code></strong> — add a short "lean inference result" example whose
+   primary flow stops at <code>model.fit(df, result="inference")</code> →
+   <code>predict(newdata)</code>. Show <code>pickle.dumps(res.to_predictor())</code> separately as an
+   optional prediction-only handoff, and state that it returns the inference
+   result's existing core without copying or further reducing memory.</p>
+</li>
+<li>
+<p><strong><code>docs/index.md</code></strong> — if it carries an API/result-type table, add
+   <code>GAMInferenceResult</code> / <code>GAMPredictor</code> one-liners.</p>
+</li>
+<li>
+<p><strong><code>docs/production_api/design.md</code></strong> — <strong>reconcile the spec with the
+   as-built code, then</strong> change the status header from "Proposed (design only)"
+   to "Implemented" with the completion date. Sections already corrected during
+   planning, to be confirmed in sync: <strong>§6</strong> names the <strong>five-helper</strong>
+   transitive closure (not three); <strong>§8</strong> calls <code>cloudpickle</code> the <code>dev</code>
+   <strong>optional extra</strong> (not a "group"); <strong>§5.1</strong> documents the cut Protocol and
+   must match reality (no <code>_protocol.py</code> in the tree); <strong>§1.1/§2.1</strong> describe
+   <code>_E_knot</code> as a B0 dead-store fix rather than a mode win; <strong>§5.4/§5.5</strong> list
+   <code>formula</code>/<code>smooth_info</code>/<code>term_names</code> as lean-type properties. Sweep for any
+   other section that drifted from what shipped (helper names, file paths,
+   field lists, line citations) and fix it — design.md is the authoritative
+   spec.</p>
+</li>
+<li>
+<p><strong>Broader documentation consistency</strong> — update <code>README.md</code>,
+   <code>docs/design.md</code>, <code>AGENTS.md</code> (also exposed through the <code>CLAUDE.md</code>
+   symlink), and the public docstrings in <code>jaxgam/api.py</code>,
+   <code>jaxgam/results.py</code>, and <code>jaxgam/inference/predictor.py</code> so every public
+   surface describes both result modes and the role of <code>.to_predictor()</code>.
+   Record any Commit-F requirement clarification made in this implementation
+   plan; these are documentation changes, not API behavior changes.</p>
+</li>
+<li>
+<p><strong>(Optional) <code>make typecheck</code></strong> — the repo configures no type checker
+   (ruff + vulture only), so the <code>@overload</code>/<code>assert_type</code> is editor-aid
+   only. Optionally add a <code>make typecheck</code> target running a checker over
+   the new types (design §12.5); note it in <code>docs/api.md</code> if added.</p>
+</li>
+<li>
+<p><strong>Final sweep</strong> (the closing verification — no design commit follows):</p>
+</li>
+<li>Re-run the Commit-A baseline measurements; record final deltas
+     (test count, coverage, wall-clock, retained bytes) in <code>BASELINE.md</code>.</li>
+<li><strong>Ownership grep</strong> — confirm new-behavior R parity lives only in
+     <code>tests/test_inference/</code> and <code>tests/test_result_mode.py</code>, and that
+     <code>tests/test_validation_matrix.py</code> is unchanged (final-model R parity
+     is still its sole responsibility — no duplication).</li>
+<li><strong>Hard Allow-List spot check</strong>:
+     <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>tests/test_predict<span class="w"> </span>tests/test_summary<span class="w"> </span>tests/test_plot<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">               </span>tests/test_post_estimation.py<span class="w"> </span>tests/test_validation_matrix.py<span class="w"> </span>-q
+</code></pre></div></li>
+<li>Confirm <code>jaxgam/__init__.py</code> exports exactly
+     <code>GAM</code>, <code>GAMResults</code>, <code>GAMInferenceResult</code>, <code>GAMPredictor</code>.</li>
+</ol>
+<h3 id="files-touched_6">Files touched<a class="headerlink" href="#files-touched_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Modify: <code>README.md</code>, <code>AGENTS.md</code> (<code>CLAUDE.md</code> symlink)</li>
+<li>Modify: <code>docs/api.md</code>, <code>docs/quickstart.md</code>, <code>docs/index.md</code>, <code>docs/design.md</code></li>
+<li>Modify: <code>docs/production_api/design.md</code> (status → Implemented)</li>
+<li>Modify: <code>docs/production_api/implementation_plan.md</code> (Commit-F clarifications)</li>
+<li>Modify: <code>docs/production_api/BASELINE.md</code> (final deltas)</li>
+<li>Modify (docstrings only): <code>jaxgam/api.py</code>, <code>jaxgam/results.py</code>,
+  <code>jaxgam/inference/predictor.py</code></li>
+<li>Possibly: <code>Makefile</code> + <code>pyproject.toml</code> (optional <code>make typecheck</code>)</li>
+</ul>
+<h3 id="validation_6">Validation<a class="headerlink" href="#validation_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> passes (docs-only code-wise; run anyway to confirm
+  nothing was accidentally touched).</li>
+<li>Manually scan rendered docs for typos / broken links; confirm no <code>m=</code>-
+  style or <code>save()</code>/<code>load()</code> example slipped in.</li>
+<li>Hard Allow-List spot check passes individually.</li>
+</ul>
+<h3 id="exit-criteria_6">Exit criteria<a class="headerlink" href="#exit-criteria_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Public docs describe the <code>result</code> mode, two result types,
+  <code>GAMPredictor</code>, and the precise pickle contract.</li>
+<li>Design status is "Implemented"; baseline deltas recorded.</li>
+<li>No R-parity duplication; Hard Allow-List intact.</li>
+<li><strong>Agent stops and hands off to user.</strong> The user reviews, commits, and
+  opens the single PR against <code>main</code>.</li>
+</ul>
+<hr />
+<h2 id="risk-management">Risk Management<a class="headerlink" href="#risk-management" title="Permanent link">&para;</a></h2>
+<h3 id="risks-specific-to-this-feature">Risks specific to this feature<a class="headerlink" href="#risks-specific-to-this-feature" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Builder move changes prediction output (Commit C).</strong> Mitigation: it
+   is a pure code move + a delegating lazy spec — no algorithm change. The
+   gate is "<code>tests/test_predict/</code> passes byte-identically." If any predict
+   test changes output, the move is wrong — investigate before handoff.</p>
+</li>
+<li>
+<p><strong>A smooth nulls a cache its <code>predict_matrix</code> actually reads.</strong>
+   Mitigation: every <code>copy_for_prediction()</code> override is justified
+   line-by-line against that type's <code>predict_matrix</code> (design §2.1); the
+   per-type copy test asserts <code>predict_matrix(newdata)</code> is unchanged after
+   the copy; the <strong>registry audit</strong> blocks any unaudited new smooth
+   (§12.2.8). Since Commit C also routes the <strong>full</strong> path through the
+   copies, the entire existing <code>tests/test_predict/</code> suite becomes a
+   regression gate on this — a mistake here fails loudly and immediately,
+   not only in the new lean-path tests.</p>
+</li>
+</ol>
+<p>2b. <strong>Crediting the design with B0's memory win.</strong> Mitigation: three
+   measurement points (A-full, B0-full, E-inference; Metric #3). The number
+   this PR may claim is <strong>B0-full − E-inference</strong>. <code>_E_knot</code> is a dead store
+   that <code>result="full"</code> leaked too, and it is 89% of the GP baseline — quoting
+   A-full − E-inference would overstate the design by ~32 MB at <code>n=5000</code>.
+   Design §1.1, §2.1.</p>
+<ol>
+<li>
+<p><strong>No-retention test written against array shape, not owners.</strong>
+   Mitigation: the load-bearing note + §12.2.2 mandate banned
+   owners/attributes; knots are legitimately <code>≤ n</code> rows, so a <code>dim == n</code>
+   test gives false failures. The test asserts the <strong>full banned owner set</strong>
+   absent —
+   <code>setup</code>/<code>X</code>/<code>y</code>/<code>weights</code>/<code>offset</code>/<code>fitted_values</code>/<code>linear_predictor</code>/<code>training_data</code>
+   — plus <code>_S</code>/<code>_E_knot is None</code> and empty <code>_penalties</code> (recursively), never a
+   shape.</p>
+</li>
+<li>
+<p><strong><code>to_predictor()</code> freezing or aliasing the live result's arrays.</strong>
+   Mitigation: <code>GAMPredictor.__post_init__</code> <strong>defensively copies</strong>
+   <code>coefficients</code>/<code>Vp</code> before <code>write=False</code>; the aliasing/ownership test
+   (§12.2.5) asserts the predictor's arrays are distinct objects and the
+   result's arrays remain writable. Without the copy, <code>to_predictor()</code>
+   would freeze <code>GAMResults</code>' own arrays — the bug this guards.</p>
+</li>
+<li>
+<p><strong>Family snapshot has the wrong theta or aliases the registry.</strong>
+   Mitigation: the snapshot is taken in <code>_from_fit</code> <strong>after</strong>
+   <code>put_theta</code> (single owner, §5.3); the snapshot-independence test
+   asserts it is not the registry singleton and, for NB, carries the
+   fitted theta. Keep it distinct from <code>api.py:122</code>'s pre-fit NB-only
+   deepcopy (do <strong>not</strong> move the snapshot into <code>api.py</code>).</p>
+</li>
+<li>
+<p><strong>Direct-R parity case unrunnable / hard-erroring outside rpy2.</strong>
+   Mitigation: use the existing <code>gamma_log</code> bridge key (not an unwired
+   <code>poisson_identity</code>) and <strong>skip-guard <code>bridge.mode != "rpy2"</code></strong> like
+   <code>test_gaussian_process.py:93</code>. Do not extend the subprocess family map
+   or add a bridge offset argument (RBridge is rpy2-only).</p>
+</li>
+<li>
+<p><strong>Internal equivalence mistaken for R parity.</strong> Mitigation: the lean
+   and full paths share one builder, so they can agree with each other yet
+   drift from mgcv. §12.2.1b adds the <strong>direct R <code>predict.gam</code></strong> comparison
+   (and a pickled-path comparison) so a shared-but-wrong predict path is
+   caught.</p>
+</li>
+<li>
+<p><strong>Public <code>result</code> kwarg colliding with internal <code>result</code> names.</strong>
+   Mitigation: rename the optimizer-output local (<code>api.py:136</code>) and the
+   <code>_from_fit</code> param (<code>results.py:111</code>) to <code>fit_result</code>, and thread the
+   mode as <code>result_mode</code> (design §11.2). Done in Commit E.</p>
+</li>
+<li>
+<p><strong>Migrating <code>GAMResults.predict()</code> to the shared finish path changes
+   output (Commit E).</strong> Mitigation: the new-data branch calls the same
+   <code>build_predict_matrix</code> and the byte-identical <code>finish_prediction</code> SE
+   formula; the self-prediction branch keeps the cached <code>eta</code> / <code>X_p =
+   setup.X</code> path verbatim; the external-offset warning moves into
+   <code>predict_core</code> unchanged. Gate: <code>tests/test_predict/</code> + the CoefficientMap
+   roundtrip pass byte-identical and the offset warning still fires. If any
+   predict test changes output, the migration is wrong — fix before handoff.</p>
+</li>
+</ol>
+<h3 id="out-of-scope-guardrails-do-not-implement-here">Out-of-scope guardrails (do not implement here)<a class="headerlink" href="#out-of-scope-guardrails-do-not-implement-here" title="Permanent link">&para;</a></h3>
+<p><code>save()</code>/<code>load()</code> / a serialization format / versioning / integrity; a
+JAX-free import path; distributional sampling / intervals; a point-only
+(drop-<code>Vp</code>) mode; the <strong>null-deviance DRY rewrite</strong> (<code>results.py:549–577</code>
+— leave <strong>exactly</strong> as-is so <code>null_deviance</code> stays byte-identical) and the
+<strong><code>summary()</code> CQS change</strong> (<code>results.py:348–350</code>) — both <strong>deferred</strong> to
+their own PRs (design §3.2, §10.3). If a code path seems to need one of
+these, stop and confirm with the user before opening any new commit.</p>
+<h3 id="rollback-plan">Rollback plan<a class="headerlink" href="#rollback-plan" title="Permanent link">&para;</a></h3>
+<p>Each commit lands one logical change on a single working branch and can be
+reverted with <code>git revert &lt;sha&gt;</code>. Most touch disjoint file sets. Commit C
+(the builder move + <code>copy_for_prediction</code>) is the most structural; D and E
+depend on it, so prefer fixing C in place over reverting. B1, A, and F are
+cleanly revertable in isolation.</p>
+<hr />
+<h2 id="sequencing-summary">Sequencing Summary<a class="headerlink" href="#sequencing-summary" title="Permanent link">&para;</a></h2>
+<p>All commits land on a single working branch off <code>main</code>. The agent
+executes one unit at a time, validates with <code>make test-cov</code>, hands off;
+the user commits manually before triggering the next unit.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Phase 0 — Pre-flight
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>Commit A    Baseline capture + cloudpickle dev dep            ── docs/production_api/BASELINE.md, pyproject.toml
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>        │   (test counts, coverage, retained-bytes &quot;before&quot;;
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>        │    cloudpickle in dev extra only)
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>        │
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>Phase 1 — Zero-risk fixes
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>Commit B0   GP _E_knot dead-store fix                         ── smooths/gaussian_process.py,
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        │   (one line in setup(); restructure the R-parity       tests/test_smooths/test_gaussian_process.py,
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>        │    assertion; re-measure — this is the TRUE            BASELINE.md
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>        │    &quot;before&quot; for the result mode, not Commit A)
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>        │
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>Commit B1   setup.* duplicates → @property; drop dead guard   ── results.py, test_results.py
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>        │   (mechanical; output byte-identical)
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>        │
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>Phase 2 — Phase-1 prediction state (structural core)
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>Commit C    PredictSpec + builder move + copy_for_prediction  ── formula/predict_matrix.py, formula/design.py,
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>        │   (lazy spec on frozen ModelSetup; per-type cache       smooths/{base,tensor,gaussian_process,by_variable}.py,
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>        │    drop + registry audit; test_predict/ unchanged)      tests/test_smooths/
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>        │
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>Phase 3 — Lean core + user-facing surface
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>Commit D    inference/: predict_core + finish + GAMPredictor  ── jaxgam/inference/*, tests/test_inference/
+<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>        │   (NO _protocol.py — predict_core typed on
+<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>        │    PredictSpec; Vp required; defensive-copy
+<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>        │    read-only + version stamp; predict-equivalence +
+<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>        │    direct-R + pickle/cloudpickle tests; PRIVATE core)
+<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>Commit E    result mode + two types + snapshot + exports      ── results.py, api.py, __init__.py, test_result_mode.py
+<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>        │   (@overloaded keyword-only fit(); _from_fit
+<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>        │    snapshot post-put_theta; GAMResults.predict→shared
+<a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a>        │    predict_core/finish; actual-path full==inference +
+<a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>        │    direct-R wiring tests; fit_result/result_mode
+<a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>        │    renames; export the two new types)
+<a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>        │
+<a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a>Phase 4 — Docs + finalize
+<a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a>Commit F    Docs + final sweep                                ── docs/api.md, docs/quickstart.md, design.md (status),
+<a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a>        │   (pickle contract; status→Implemented; ownership      BASELINE.md
+<a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a>        │    grep; Hard Allow-List spot check)
+<a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a>        │
+<a id="__codelineno-3-38" name="__codelineno-3-38" href="#__codelineno-3-38"></a>User opens single PR against main.
+</code></pre></div>
+<p>Commit A precedes everything (cloudpickle must be available for D's
+tests, and A is the only record of today's pre-B0 footprint). <strong>B0 must
+precede C</strong> — C's GP <code>copy_for_prediction()</code> override is written as
+defense-in-depth <em>given</em> that setup already nulls <code>_E_knot</code>, and B0's
+re-measurement is the honest "before" every later memory claim is quoted
+against. B1 is independent and could move, but lands early as low-risk
+warm-up. C must precede D and E (both consume <code>PredictSpec</code> /
+<code>build_predict_spec</code>). D precedes E (E composes <code>GAMPredictor</code> and wires
+<code>to_predictor()</code>; every test needing the real fit-mode wiring —
+<code>to_predictor()</code> aliasing, <code>full</code>==<code>inference</code> equivalence, direct-R on the
+actual <code>GAMInferenceResult</code>, and the <code>_from_fit</code> snapshot — lands in E).</p>
+<hr />
+<h2 id="definition-of-done">Definition of Done<a class="headerlink" href="#definition-of-done" title="Permanent link">&para;</a></h2>
+<p>Met when the user opens the single PR for this feature:</p>
+<ul>
+<li><strong><code>GAM.fit(..., result=...)</code></strong> is keyword-only, <code>@overload</code>ed, and
+  value-validated: <code>result="full"</code> (default) returns today's
+  <code>GAMResults</code>; <code>result="inference"</code> returns a lean <code>GAMInferenceResult</code>.
+  An invalid value raises <code>ValueError</code>.</li>
+<li><strong><code>GAMInferenceResult</code></strong> retains <strong>none</strong> of <code>setup</code>, <code>X</code>, <code>y</code>,
+  <code>weights</code>, <code>offset</code>, <code>fitted_values</code>, <code>linear_predictor</code>,
+  <code>training_data</code>, or any smooth's <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code>
+  (recursively) — verified by the banned-owners test (§12.2.2), <strong>not</strong> a
+  shape test. It <strong>keeps</strong> the predict transforms and the cheap scalar
+  diagnostics, exposes <code>predict_matrix(newdata)</code>, <code>to_predictor()</code>
+  (→ its <code>_predictor</code>), and the zero-byte metadata reads
+  <code>formula</code>/<code>smooth_info</code>/<code>term_names</code> (so <code>edf</code> is interpretable), and has
+  no <code>summary</code>/<code>plot</code> (its <code>predict</code> requires <code>newdata</code>).</li>
+<li><strong><code>GAMPredictor</code></strong> is a frozen, picklable core owning
+  <code>coefficients</code>/<code>Vp</code> (defensively copied, <code>write=False</code>, re-frozen on
+  unpickle), a post-<code>put_theta</code> family snapshot, <code>offset_was_nonzero</code>,
+  <code>_jaxgam_version</code> (warns on cross-version unpickle), and a concrete
+  <code>PredictSpec</code>. <code>Vp</code> is required.</li>
+<li><strong><code>_E_knot</code> fixed at the source (B0)</strong>: <code>grep -rn "_E_knot" jaxgam/</code> shows
+  it declared, assigned, and reset to <code>None</code> in <code>setup()</code> — read by nothing.
+  The GP <code>E</code>-vs-R <code>STRICT</code> parity assertion still runs.</li>
+<li><strong>Memory win demonstrated, honestly attributed</strong>: <code>result="inference"</code>
+  retained bytes are materially below <code>result="full"</code> for tensor (drops
+  <code>_penalties</code>) and GP models, quoted against the <strong>post-B0</strong> baseline. The
+  A → B0 drop is reported separately as the dead-store fix, not as part of
+  this design's win.</li>
+<li><strong>No numerics changed</strong>: every prediction / SE / EDF / scale / deviance
+  (incl. <code>null_deviance</code>) is byte-identical to today; the entire Hard
+  Allow-List passes unchanged.</li>
+<li><strong>One Phase-1 builder, one Phase-3 finish, no seam</strong>: <code>build_predict_matrix</code>
+  over a single concrete <code>PredictSpec</code>; <code>finish_prediction</code>/<code>predict_core</code>
+  shared by both result types by being <strong>typed directly on <code>PredictSpec</code></strong> —
+  <strong><code>GAMResults.predict()</code> routed through it</strong> (new-data →
+  <code>predict_core(setup._lazy_predict_spec(), …)</code>; self-prediction → the
+  cached-<code>eta</code> <code>finish_prediction</code> branch). Because <code>predict_core</code> returns
+  <em>finished predictions</em>, <strong><code>predict_matrix()</code> delegates to
+  <code>build_predict_matrix</code>, not <code>predict_core</code></strong>. Both <code>predict_core</code> and
+  <code>finish_prediction</code> stay private, and <strong><code>_protocol.py</code> was never created</strong>
+  (design §5.1).</li>
+<li><strong><code>copy_for_prediction()</code></strong> implemented per type (base / tensor / GP /
+  by-variable), each justified against its <code>predict_matrix</code>, with the
+  <strong>registry audit test</strong> blocking any unaudited new smooth.</li>
+<li><strong>Direct-R parity</strong> for the inference and pickled paths passes at
+  STRICT/MODERATE for <code>te()</code> / factor-by / NB / <code>Gamma(link="log")</code> — on
+  <strong>both</strong> the Commit-D constructed predictor and the <strong>actual Commit-E
+  <code>GAMInferenceResult.predict</code></strong> (the <code>_from_fit</code> wiring) — with the
+  <code>bridge.mode != "rpy2"</code> skip-guard; offset and locally-defined custom
+  links are covered by internal equivalence + pickle round-trip, not
+  direct R.</li>
+<li><strong>Pickle contract</strong>: stdlib <code>pickle</code> works for built-in families/links;
+  <code>cloudpickle</code> (dev-only) covers locally-defined custom links; neither is
+  a durable cross-version format.</li>
+<li><strong>DRY</strong>: <strong>seven</strong> <code>setup.*</code> duplicate fields
+  (<code>X</code>/<code>y</code>/<code>weights</code>/<code>offset</code>/<code>coef_map</code>/<code>smooth_info</code>/<code>term_names</code>) are
+  <code>@property</code> reads; the eighth, <code>n</code>, is retained scalar metadata in
+  <code>_FitDiagnostics</code> (shared by both result types); the dead <code>hasattr</code> guard is
+  gone; and <strong>no new duplicate was introduced</strong> — <code>formula</code> lives on
+  <code>GAMPredictor</code> only, read as a property by the lean type. (Null-deviance DRY
+  and <code>summary()</code> CQS remain <strong>deferred</strong> — untouched.)</li>
+<li><strong>Exports</strong>: <code>jaxgam/__init__.py</code> exports <code>GAM</code>, <code>GAMResults</code>,
+  <code>GAMInferenceResult</code>, <code>GAMPredictor</code>.</li>
+<li><strong>Consolidation held</strong>: ~14–16 new collected tests (not 50+ from
+  per-assertion enumeration); every shared-fixture test uses
+  <code>_AssertCollector</code>; the predict zoo is <code>@parametrize</code>d.</li>
+<li><strong>No R-parity duplication</strong>: new-behavior R parity lives only in
+  <code>tests/test_inference/</code> + <code>tests/test_result_mode.py</code>;
+  <code>tests/test_validation_matrix.py</code> is unchanged.</li>
+<li><code>make test-cov</code> passes on the final commit with ≥ 80% coverage overall
+  and on every new file.</li>
+<li><code>docs/production_api/design.md</code> status is "Implemented";
+  <code>docs/api.md</code> + <code>docs/quickstart.md</code> document the new surface.</li>
+<li>All seven commit slots (A, B0, B1, C, D, E, F) are present in the branch
+  history as individual commits authored by the user.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

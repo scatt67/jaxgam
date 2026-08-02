@@ -1,0 +1,2177 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Dense Random Effects (bs="re") Implementation Design - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#dense-random-effects-bsre-implementation-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Dense Random Effects (bs="re") Implementation Design
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#table-of-contents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Table of Contents
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-what-are-dense-random-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1 What Are Dense Random Effects?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-use-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2 Use Cases
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3 Scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-dense-only-constraint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.4 Dense-Only Constraint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-r-reference-implementation-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. R Reference Implementation Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. R Reference Implementation Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-source-location" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 Source Location
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-constructor-algorithm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Constructor Algorithm
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-predict-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Predict Method
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-smoothcon-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 smoothCon() Integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-mathematical-specification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Mathematical Specification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Mathematical Specification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-model-matrix-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Model Matrix Construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-penalty-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Penalty Matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-normalization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 Normalization
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-cardinality-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Cardinality Limits
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Cardinality Limits">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-mgcv-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 mgcv Enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-practical-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Practical Limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-no-explicit-per-smooth-cardinality-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 No Explicit Per-Smooth Cardinality Check
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-smooth-class-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Smooth Class Design
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Smooth Class Design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-class-randomeffectsmooth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Class: RandomEffectSmooth
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-setup-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 setup() Method
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-model-matrix-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Model Matrix Construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-column-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 Column Ordering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#55-build_design_matrix-and-predict_matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.5 build_design_matrix() and predict_matrix()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#56-build_penalty_matrices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.6 build_penalty_matrices()
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-formula-parsing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Formula Parsing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Formula Parsing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-no-parser-changes-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 No Parser Changes Required
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-k-argument" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2 k Argument
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-constraint-pipeline-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Constraint Pipeline Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Constraint Pipeline Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-skip-centering-constraint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 Skip Centering Constraint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-skip-gamside" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 Skip gam.side()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-coefficientmap-term-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 CoefficientMap Term Type
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-penalty-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Penalty Construction
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Penalty Construction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-identity-penalty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.1 Identity Penalty
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-embedding-in-global-penalty-space" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.2 Embedding in Global Penalty Space
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.3 Properties
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Prediction
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Prediction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-training-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 Training Data
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-new-data-with-known-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 New Data with Known Levels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-new-data-with-unseen-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 New Data with Unseen Levels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#94-level-storage-for-prediction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.4 Level Storage for Prediction
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-summary-p-value-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Summary / p-value Changes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Summary / p-value Changes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#101-r-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10.1 R Behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#102-required-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10.2 Required Change
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#103-smoothinfo-extension" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10.3 SmoothInfo Extension
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-file-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. File Plan
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. File Plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#111-new-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.1 New Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#112-modified-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.2 Modified Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#113-no-changes-needed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.3 No Changes Needed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-testing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Testing Strategy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Testing Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#121-validation-matrix-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.1 Validation Matrix Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12.1 Validation Matrix Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1211-new-smooth-configs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.1.1 New Smooth Configs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1212-new-data-generator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.1.2 New Data Generator
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1213-tolerance-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.1.3 Tolerance Rules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1214-inherited-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.1.4 Inherited Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#122-unit-tests-test_random_effectspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.2 Unit Tests (test_random_effects.py)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#123-tolerance-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.3 Tolerance Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#124-test-data-fixtures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.4 Test Data Fixtures
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-implementation-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Implementation Plan
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="dense-random-effects-bsre-implementation-design">Dense Random Effects (<code>bs="re"</code>) Implementation Design<a class="headerlink" href="#dense-random-effects-bsre-implementation-design" title="Permanent link">&para;</a></h1>
+<ul>
+<li><strong>Status:</strong> Implemented</li>
+<li><strong>Design Date:</strong> 2026-04-08</li>
+<li><strong>Completion Date:</strong> 2026-05-23</li>
+<li><strong>Branch:</strong> <code>add-dense-random-effects</code></li>
+</ul>
+<hr />
+<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="#1-overview">Overview</a></li>
+<li><a href="#2-r-reference-implementation-analysis">R Reference Implementation Analysis</a></li>
+<li><a href="#3-mathematical-specification">Mathematical Specification</a></li>
+<li><a href="#4-cardinality-limits">Cardinality Limits</a></li>
+<li><a href="#5-smooth-class-design">Smooth Class Design</a></li>
+<li><a href="#6-formula-parsing">Formula Parsing</a></li>
+<li><a href="#7-constraint-pipeline-integration">Constraint Pipeline Integration</a></li>
+<li><a href="#8-penalty-construction">Penalty Construction</a></li>
+<li><a href="#9-prediction">Prediction</a></li>
+<li><a href="#10-summary--p-value-changes">Summary / p-value Changes</a></li>
+<li><a href="#11-file-plan">File Plan</a></li>
+<li><a href="#12-testing-strategy">Testing Strategy</a></li>
+<li><a href="#13-implementation-order">Implementation Order</a></li>
+</ol>
+<hr />
+<h2 id="1-overview">1. Overview<a class="headerlink" href="#1-overview" title="Permanent link">&para;</a></h2>
+<h3 id="11-what-are-dense-random-effects">1.1 What Are Dense Random Effects?<a class="headerlink" href="#11-what-are-dense-random-effects" title="Permanent link">&para;</a></h3>
+<p>In mgcv, <code>s(x, bs="re")</code> treats random effects as penalized smooth terms.
+The smoothing-penalty duality gives random effects the same mathematical
+treatment as splines: coefficients are penalized by an identity matrix (ridge
+penalty), and the smoothing parameter λ estimates σ²_ε / σ²_b (the ratio of
+residual to random-effect variance).</p>
+<p>This is <strong>not</strong> a new estimation method — it exploits the existing PIRLS + 
+REML/ML infrastructure. The smooth's penalty matrix is I_k (identity), making
+it full rank with <code>null_space_dim = 0</code>. No centering or identifiability
+constraints are needed because the full-rank penalty makes the term inherently
+identifiable.</p>
+<h3 id="12-use-cases">1.2 Use Cases<a class="headerlink" href="#12-use-cases" title="Permanent link">&para;</a></h3>
+<p>Random effects with <code>bs="re"</code> support any combination of variables:</p>
+<table>
+<thead>
+<tr>
+<th>Formula</th>
+<th>Model matrix</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>s(g, bs="re")</code></td>
+<td><code>model.matrix(~g - 1)</code></td>
+<td>Random intercepts by group <code>g</code></td>
+</tr>
+<tr>
+<td><code>s(x, g, bs="re")</code></td>
+<td><code>model.matrix(~x:g - 1)</code></td>
+<td>Random slopes of <code>x</code> by group <code>g</code></td>
+</tr>
+<tr>
+<td><code>s(g1, g2, bs="re")</code></td>
+<td><code>model.matrix(~g1:g2 - 1)</code></td>
+<td>Random interaction of <code>g1</code> and <code>g2</code></td>
+</tr>
+<tr>
+<td><code>s(x, bs="re")</code></td>
+<td><code>model.matrix(~x - 1)</code></td>
+<td>Ridge-penalized numeric effect</td>
+</tr>
+</tbody>
+</table>
+<p>Variables can be any mixture of factors and numerics. The model matrix is
+always the interaction <code>~v1:v2:...:vN - 1</code>.</p>
+<h3 id="13-scope">1.3 Scope<a class="headerlink" href="#13-scope" title="Permanent link">&para;</a></h3>
+<p><strong>In scope:</strong>
+- <code>RandomEffectSmooth</code> class with dense basis and identity penalty
+- Registration in smooth registry as <code>"re"</code>
+- Correct interaction with constraint pipeline (skip centering + gam_side)
+- Prediction with unseen factor levels (zero contribution)
+- Summary p-value type adjustment (<code>type_=1</code> for RE terms)
+- Full R comparison tests (basis, penalty, fitted model)</p>
+<p><strong>Out of scope (deferred):</strong>
+- Sparse random effects (for high-cardinality factors, deferred to sparse-CPU path)
+- <code>bs="fs"</code> (factor-smooth interactions — different mechanism, §5.6 design doc)
+- Custom precision matrices via <code>xt$S</code> argument (future enhancement)
+- <code>gam.vcomp()</code> variance component extraction (future enhancement)
+- Tensor-like RE setup (<code>re</code> as <code>tensor.smooth.spec</code> — only used in <code>bam(discrete=TRUE)</code>)</p>
+<h3 id="14-dense-only-constraint">1.4 Dense-Only Constraint<a class="headerlink" href="#14-dense-only-constraint" title="Permanent link">&para;</a></h3>
+<p>Per CLAUDE.md, v1.0 is dense-only. The basis matrix X for a factor with L
+levels is an n × L dense indicator matrix (mostly zeros). This is
+memory-inefficient for large L but correct.</p>
+<p>The practical limit is the <code>p ≤ n</code> constraint (Section 4). Dense RE works well
+for L up to a few hundred levels.</p>
+<hr />
+<h2 id="2-r-reference-implementation-analysis">2. R Reference Implementation Analysis<a class="headerlink" href="#2-r-reference-implementation-analysis" title="Permanent link">&para;</a></h2>
+<h3 id="21-source-location">2.1 Source Location<a class="headerlink" href="#21-source-location" title="Permanent link">&para;</a></h3>
+<p>The canonical R implementation is in:
+- <strong>Constructor:</strong> <code>$MGCV_SOURCE/R/smooth.r</code> lines 2571-2646 (<code>smooth.construct.re.smooth.spec</code>)
+- <strong>Predict:</strong> <code>$MGCV_SOURCE/R/smooth.r</code> lines 2650-2663 (<code>Predict.matrix.random.effect</code>)
+- <strong>Documentation:</strong> <code>$MGCV_SOURCE/man/smooth.construct.re.smooth.spec.Rd</code>
+- <strong>Examples:</strong> <code>$MGCV_SOURCE/man/random.effects.Rd</code></p>
+<h3 id="22-constructor-algorithm">2.2 Constructor Algorithm<a class="headerlink" href="#22-constructor-algorithm" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">smooth.construct.re.smooth.spec</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kr">function</span><span class="p">(</span><span class="n">object</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">,</span><span class="w"> </span><span class="n">knots</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="c1"># 1. Build interaction formula</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="n">form</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">as.formula</span><span class="p">(</span><span class="nf">paste</span><span class="p">(</span><span class="s">&quot;~&quot;</span><span class="p">,</span><span class="w"> </span><span class="nf">paste</span><span class="p">(</span><span class="n">object</span><span class="o">$</span><span class="n">term</span><span class="p">,</span><span class="w"> </span><span class="n">collapse</span><span class="o">=</span><span class="s">&quot;:&quot;</span><span class="p">),</span><span class="w"> </span><span class="s">&quot;-1&quot;</span><span class="p">))</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="c1"># 2. Build model matrix</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">X</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">model.matrix</span><span class="p">(</span><span class="n">form</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">bs.dim</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">ncol</span><span class="p">(</span><span class="n">object</span><span class="o">$</span><span class="n">X</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="c1"># 3. Construct penalty (identity by default)</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">S</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">list</span><span class="p">(</span><span class="nf">diag</span><span class="p">(</span><span class="n">object</span><span class="o">$</span><span class="n">bs.dim</span><span class="p">))</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">rank</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">object</span><span class="o">$</span><span class="n">bs.dim</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="c1"># 4. Set key flags</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">null.space.dim</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="m">0</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">C</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">matrix</span><span class="p">(</span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="nf">ncol</span><span class="p">(</span><span class="n">object</span><span class="o">$</span><span class="n">X</span><span class="p">))</span><span class="w">   </span><span class="c1"># no centering constraint</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">side.constrain</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kc">FALSE</span><span class="w">              </span><span class="c1"># skip gam.side()</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">random</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kc">TRUE</span><span class="w">                       </span><span class="c1"># p-value test type</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">noterp</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kc">TRUE</span><span class="w">                       </span><span class="c1"># skip SVD reparameterization</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">plot.me</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kc">TRUE</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">  </span><span class="n">object</span><span class="o">$</span><span class="n">te.ok</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="m">2</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">  </span><span class="nf">class</span><span class="p">(</span><span class="n">object</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="s">&quot;random.effect&quot;</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">  </span><span class="n">object</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="p">}</span>
+</code></pre></div>
+<p>Key observations:
+1. The <code>k</code> argument is <strong>ignored</strong> — <code>bs.dim</code> is always <code>ncol(X)</code>
+2. The penalty is always the identity matrix (full rank, no null space)
+3. No centering constraint (<code>C</code> is empty)
+4. Explicitly opted out of <code>gam.side()</code> identifiability checks
+5. The <code>$random</code> flag signals different p-value computation in summary</p>
+<h3 id="23-predict-method">2.3 Predict Method<a class="headerlink" href="#23-predict-method" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">Predict.matrix.random.effect</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kr">function</span><span class="p">(</span><span class="n">object</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="n">data</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="n">data</span><span class="p">[</span><span class="n">names</span><span class="w"> </span><span class="n">needed</span><span class="w"> </span><span class="kr">for</span><span class="w"> </span><span class="n">form</span><span class="p">]</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="n">X</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nf">model.matrix</span><span class="p">(</span><span class="n">object</span><span class="o">$</span><span class="n">form</span><span class="p">,</span><span class="w"> </span><span class="nf">model.frame</span><span class="p">(</span><span class="n">object</span><span class="o">$</span><span class="n">form</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">,</span><span class="w"> </span><span class="n">na.action</span><span class="o">=</span><span class="n">na.pass</span><span class="p">))</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="n">X</span><span class="p">[</span><span class="o">!</span><span class="nf">is.finite</span><span class="p">(</span><span class="n">X</span><span class="p">)]</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="m">0</span><span class="w">   </span><span class="c1"># unseen levels → NA → 0</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="n">X</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">}</span>
+</code></pre></div>
+<p>Key: unseen factor levels produce NAs in the model matrix, which are then
+zeroed out. This means predictions for new factor levels contribute zero.
+R's <code>predict.gam()</code> sets factor observations to NA if they have levels not
+present in the training data.</p>
+<h3 id="24-smoothcon-integration">2.4 smoothCon() Integration<a class="headerlink" href="#24-smoothcon-integration" title="Permanent link">&para;</a></h3>
+<p>When <code>smoothCon()</code> processes an RE smooth:
+- The empty <code>C</code> matrix means no centering absorption occurs
+- <code>scale.penalty=TRUE</code> still applies penalty normalization (divide by <code>maXX</code>)
+- The smooth is returned as-is except for normalization</p>
+<hr />
+<h2 id="3-mathematical-specification">3. Mathematical Specification<a class="headerlink" href="#3-mathematical-specification" title="Permanent link">&para;</a></h2>
+<h3 id="31-model-matrix-construction">3.1 Model Matrix Construction<a class="headerlink" href="#31-model-matrix-construction" title="Permanent link">&para;</a></h3>
+<p>For variables <code>v1, v2, ..., vp</code>, the model matrix X is equivalent to
+<code>model.matrix(~v1:v2:...:vp - 1)</code>:</p>
+<p><strong>Single factor</strong> <code>g</code> with L levels:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>X[i, j] = 1  if g[i] == level_j
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>X[i, j] = 0  otherwise
+</code></pre></div>
+Shape: (n, L). This is a one-hot indicator matrix.</p>
+<p><strong>Factor × factor</strong> <code>g1</code> (L1 levels) × <code>g2</code> (L2 levels):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>X[i, (j1-1)*L2 + j2] = 1  if g1[i] == level_j1 AND g2[i] == level_j2
+</code></pre></div>
+Shape: (n, L1 × L2). This is a one-hot indicator for each combination.</p>
+<p><strong>Numeric × factor</strong> <code>x</code> (numeric) × <code>g</code> (L levels):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>X[i, j] = x[i]  if g[i] == level_j
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>X[i, j] = 0     otherwise
+</code></pre></div>
+Shape: (n, L). Each column holds the numeric value for observations at that level.</p>
+<p><strong>Numeric × numeric</strong> <code>x1</code> × <code>x2</code>:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>X[i, 1] = x1[i] * x2[i]
+</code></pre></div>
+Shape: (n, 1). This is just the elementwise product (rarely used in practice).</p>
+<h3 id="32-penalty-matrix">3.2 Penalty Matrix<a class="headerlink" href="#32-penalty-matrix" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>S = I_k    (k × k identity matrix)
+</code></pre></div>
+<p>This is the ridge penalty. It penalizes all coefficients equally with no
+unpenalized null space (null_space_dim = 0, rank = k).</p>
+<p>The smoothing parameter λ acts as:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>σ²_b = σ²_ε / λ
+</code></pre></div></p>
+<p>where σ²_b is the random effect variance and σ²_ε is the residual variance.
+Large λ → small random effect variance → coefficients shrunk toward zero.</p>
+<h3 id="33-normalization">3.3 Normalization<a class="headerlink" href="#33-normalization" title="Permanent link">&para;</a></h3>
+<p>Like all smooths, the penalty is normalized by <code>smoothCon()</code>:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>s_scale = ||S||_1 / ||X||_∞²
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>S_normalized = S / s_scale
+</code></pre></div></p>
+<p>For the identity penalty, <code>||S||_1 = 1</code>, so:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>s_scale = 1.0 / ||X||_∞²
+</code></pre></div></p>
+<hr />
+<h2 id="4-cardinality-limits">4. Cardinality Limits<a class="headerlink" href="#4-cardinality-limits" title="Permanent link">&para;</a></h2>
+<h3 id="41-mgcv-enforcement">4.1 mgcv Enforcement<a class="headerlink" href="#41-mgcv-enforcement" title="Permanent link">&para;</a></h3>
+<p>mgcv enforces <code>p ≤ n</code> for penalized models (<code>mgcv.r</code> line 236):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kr">if</span><span class="w"> </span><span class="p">(</span><span class="nf">ncol</span><span class="p">(</span><span class="n">M</span><span class="o">$</span><span class="n">X</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="nf">nrow</span><span class="p">(</span><span class="n">M</span><span class="o">$</span><span class="n">X</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="p">(</span><span class="n">m</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="m">0</span><span class="p">)</span><span class="w"> </span><span class="nf">stop</span><span class="p">(</span><span class="s">&quot;Penalized model matrix must have no more columns than rows&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="p">}</span>
+</code></pre></div>
+<p>This is a <strong>full-model</strong> check, not per-smooth. The total number of columns
+across intercept + parametric + all smooth bases must not exceed n.</p>
+<h3 id="42-practical-limits">4.2 Practical Limits<a class="headerlink" href="#42-practical-limits" title="Permanent link">&para;</a></h3>
+<p>For a model <code>y ~ s(g, bs="re") + s(x)</code>:
+- Intercept: 1 column
+- <code>s(x)</code>: ~10 columns (default k)
+- <code>s(g, bs="re")</code>: L columns (one per factor level)
+- Constraint: L + 11 ≤ n, so max L ≈ n - 11</p>
+<p>For factor interactions <code>s(g1, g2, bs="re")</code>:
+- Columns = L1 × L2
+- Max product of levels ≈ n - (other model columns)</p>
+<h3 id="43-no-explicit-per-smooth-cardinality-check">4.3 No Explicit Per-Smooth Cardinality Check<a class="headerlink" href="#43-no-explicit-per-smooth-cardinality-check" title="Permanent link">&para;</a></h3>
+<p>There is no per-smooth cardinality check in mgcv. The constraint emerges
+naturally from the full model matrix dimension check at fit time.</p>
+<p><strong>Our implementation:</strong> We should validate <code>p ≤ n</code> in the fitting layer
+(where it's already checked) rather than adding a smooth-level limit.
+However, we should add a helpful error message when an RE smooth creates
+a model matrix wider than the data.</p>
+<hr />
+<h2 id="5-smooth-class-design">5. Smooth Class Design<a class="headerlink" href="#5-smooth-class-design" title="Permanent link">&para;</a></h2>
+<h3 id="51-class-randomeffectsmooth">5.1 Class: <code>RandomEffectSmooth</code><a class="headerlink" href="#51-class-randomeffectsmooth" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># jaxgam/smooths/random_effects.py</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">RandomEffectSmooth</span><span class="p">(</span><span class="n">Smooth</span><span class="p">):</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Dense random effects smooth (bs=&quot;re&quot;).</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="sd">    For s(v1, v2, ..., bs=&quot;re&quot;), constructs the model matrix equivalent</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="sd">    to model.matrix(~v1:v2:...:vN - 1) with an identity penalty.</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">spec</span><span class="p">:</span> <span class="n">SmoothSpec</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">spec</span><span class="p">)</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">side_constrain</span> <span class="o">=</span> <span class="kc">False</span>   <span class="c1"># skip gam.side()</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_noterp</span> <span class="o">=</span> <span class="kc">True</span>           <span class="c1"># skip SVD reparameterization</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_random</span> <span class="o">=</span> <span class="kc">True</span>           <span class="c1"># RE flag for summary p-values</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_has_centering_constraint</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># skip sum-to-zero</span>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>        <span class="c1"># Stored at setup time</span>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_levels</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># var_name → ordered levels</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_is_factor</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">bool</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_X</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_S</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</code></pre></div>
+<h3 id="52-setup-method">5.2 <code>setup()</code> Method<a class="headerlink" href="#52-setup-method" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">setup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct RE basis from data.</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="sd">    1. Determine which variables are factors, store levels</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="sd">    2. Build interaction model matrix (~v1:v2:...:vN - 1)</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="sd">    3. Set penalty = normalized identity</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>    <span class="n">variables</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">spec</span><span class="o">.</span><span class="n">variables</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>    <span class="c1"># Detect factors and store levels</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_is_factor</span> <span class="o">=</span> <span class="p">{}</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_levels</span> <span class="o">=</span> <span class="p">{}</span>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="n">variables</span><span class="p">:</span>
+<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>        <span class="n">col</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">var</span><span class="p">]</span>
+<a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>        <span class="k">if</span> <span class="n">is_factor</span><span class="p">(</span><span class="n">col</span><span class="p">):</span>
+<a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">_is_factor</span><span class="p">[</span><span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">_levels</span><span class="p">[</span><span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="n">get_factor_levels</span><span class="p">(</span><span class="n">col</span><span class="p">)</span>
+<a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>        <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">_is_factor</span><span class="p">[</span><span class="n">var</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+<a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>
+<a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>    <span class="c1"># Build interaction model matrix</span>
+<a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>    <span class="n">X</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_interaction_matrix</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+<a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a>
+<a id="__codelineno-12-24" name="__codelineno-12-24" href="#__codelineno-12-24"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_X</span> <span class="o">=</span> <span class="n">X</span>
+<a id="__codelineno-12-25" name="__codelineno-12-25" href="#__codelineno-12-25"></a>    <span class="n">k</span> <span class="o">=</span> <span class="n">X</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+<a id="__codelineno-12-26" name="__codelineno-12-26" href="#__codelineno-12-26"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">n_coefs</span> <span class="o">=</span> <span class="n">k</span>
+<a id="__codelineno-12-27" name="__codelineno-12-27" href="#__codelineno-12-27"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">null_space_dim</span> <span class="o">=</span> <span class="mi">0</span>
+<a id="__codelineno-12-28" name="__codelineno-12-28" href="#__codelineno-12-28"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">=</span> <span class="n">k</span>
+<a id="__codelineno-12-29" name="__codelineno-12-29" href="#__codelineno-12-29"></a>
+<a id="__codelineno-12-30" name="__codelineno-12-30" href="#__codelineno-12-30"></a>    <span class="c1"># Penalty = identity, then normalize</span>
+<a id="__codelineno-12-31" name="__codelineno-12-31" href="#__codelineno-12-31"></a>    <span class="n">S</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="n">k</span><span class="p">)</span>
+<a id="__codelineno-12-32" name="__codelineno-12-32" href="#__codelineno-12-32"></a>    <span class="p">[</span><span class="n">S</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">_s_scale</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_smoothcon_normalize</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="p">[</span><span class="n">S</span><span class="p">])</span>
+<a id="__codelineno-12-33" name="__codelineno-12-33" href="#__codelineno-12-33"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_S</span> <span class="o">=</span> <span class="n">S</span>
+<a id="__codelineno-12-34" name="__codelineno-12-34" href="#__codelineno-12-34"></a>
+<a id="__codelineno-12-35" name="__codelineno-12-35" href="#__codelineno-12-35"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_is_setup</span> <span class="o">=</span> <span class="kc">True</span>
+</code></pre></div>
+<h3 id="53-model-matrix-construction">5.3 Model Matrix Construction<a class="headerlink" href="#53-model-matrix-construction" title="Permanent link">&para;</a></h3>
+<p>The interaction model matrix must replicate R's <code>model.matrix(~v1:v2:...:vN - 1)</code>:</p>
+<p><strong>Single variable:</strong>
+- Factor: one-hot indicator matrix (n × L)
+- Numeric: column vector (n × 1)</p>
+<p><strong>Multiple variables (interaction):</strong>
+- Kronecker-style row-wise product of individual variable encodings
+- For each observation: the row of the interaction matrix is the outer product
+  of all individual variable rows, flattened</p>
+<p>Implementation approach:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">_build_interaction_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Build ~v1:v2:...:vN - 1 interaction matrix.&quot;&quot;&quot;</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">spec</span><span class="o">.</span><span class="n">variables</span><span class="p">[</span><span class="mi">0</span><span class="p">]])</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="c1"># Start with column of ones</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="n">result</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="n">n</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">spec</span><span class="o">.</span><span class="n">variables</span><span class="p">:</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>        <span class="n">col</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">var</span><span class="p">]</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_factor</span><span class="p">[</span><span class="n">var</span><span class="p">]:</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>            <span class="c1"># One-hot encode</span>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>            <span class="n">levels</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_levels</span><span class="p">[</span><span class="n">var</span><span class="p">]</span>
+<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>            <span class="n">indicator</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">n</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">)))</span>
+<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>            <span class="n">col_arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">col</span><span class="p">)</span>
+<a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a>            <span class="k">for</span> <span class="n">j</span><span class="p">,</span> <span class="n">lev</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">levels</span><span class="p">):</span>
+<a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a>                <span class="n">indicator</span><span class="p">[:,</span> <span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">col_arr</span> <span class="o">==</span> <span class="n">lev</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+<a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a>            <span class="n">term</span> <span class="o">=</span> <span class="n">indicator</span>
+<a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a>        <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a>            <span class="n">term</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+<a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a>
+<a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a>        <span class="c1"># Interaction: row-wise Kronecker product</span>
+<a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a>        <span class="n">new_cols</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">term</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+<a id="__codelineno-13-23" name="__codelineno-13-23" href="#__codelineno-13-23"></a>        <span class="n">new_result</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">n</span><span class="p">,</span> <span class="n">new_cols</span><span class="p">))</span>
+<a id="__codelineno-13-24" name="__codelineno-13-24" href="#__codelineno-13-24"></a>        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]):</span>
+<a id="__codelineno-13-25" name="__codelineno-13-25" href="#__codelineno-13-25"></a>            <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">term</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]):</span>
+<a id="__codelineno-13-26" name="__codelineno-13-26" href="#__codelineno-13-26"></a>                <span class="n">new_result</span><span class="p">[:,</span> <span class="n">i</span> <span class="o">*</span> <span class="n">term</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="n">result</span><span class="p">[:,</span> <span class="n">i</span><span class="p">]</span> <span class="o">*</span> <span class="n">term</span><span class="p">[:,</span> <span class="n">j</span><span class="p">]</span>
+<a id="__codelineno-13-27" name="__codelineno-13-27" href="#__codelineno-13-27"></a>        <span class="n">result</span> <span class="o">=</span> <span class="n">new_result</span>
+<a id="__codelineno-13-28" name="__codelineno-13-28" href="#__codelineno-13-28"></a>
+<a id="__codelineno-13-29" name="__codelineno-13-29" href="#__codelineno-13-29"></a>    <span class="k">return</span> <span class="n">result</span>
+</code></pre></div></p>
+<h3 id="54-column-ordering">5.4 Column Ordering<a class="headerlink" href="#54-column-ordering" title="Permanent link">&para;</a></h3>
+<p>The column ordering must match R's <code>model.matrix()</code> for R comparison tests.
+R's interaction ordering is: first variable varies fastest (leftmost term in
+the interaction formula changes first).</p>
+<p>For <code>s(g1, g2, bs="re")</code> with g1 levels [a,b] and g2 levels [x,y,z]:
+- R columns: a:x, b:x, a:y, b:y, a:z, b:z
+- First variable (g1) varies fastest, last (g2) varies slowest</p>
+<p>Verified empirically against R 4.5.2 / mgcv 1.9-3 via <code>smoothCon(s(g1, g2,
+bs="re"), data)</code>. The row-wise Kronecker implementation uses the new term's
+index as the outer (slow) index to match this convention.</p>
+<h3 id="55-build_design_matrix-and-predict_matrix">5.5 <code>build_design_matrix()</code> and <code>predict_matrix()</code><a class="headerlink" href="#55-build_design_matrix-and-predict_matrix" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_design_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_require_setup</span><span class="p">()</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">predict_matrix</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">predict_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_data</span><span class="p">):</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_require_setup</span><span class="p">()</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="n">X</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_interaction_matrix</span><span class="p">(</span><span class="n">new_data</span><span class="p">)</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>    <span class="c1"># Zero out rows with unseen factor levels (NaN → 0)</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>    <span class="n">X</span><span class="p">[</span><span class="o">~</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">X</span><span class="p">)]</span> <span class="o">=</span> <span class="mf">0.0</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>    <span class="k">return</span> <span class="n">X</span>
+</code></pre></div>
+<p>For prediction with new data:
+- Factor levels not seen during training produce NaN in the indicator encoding
+- These NaNs are zeroed out, matching R's behavior
+- This means new factor levels contribute zero to predictions</p>
+<h3 id="56-build_penalty_matrices">5.6 <code>build_penalty_matrices()</code><a class="headerlink" href="#56-build_penalty_matrices" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_penalty_matrices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_require_setup</span><span class="p">()</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>    <span class="k">return</span> <span class="p">[</span><span class="n">Penalty</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_S</span><span class="p">,</span> <span class="n">rank</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">rank</span><span class="p">,</span> <span class="n">null_space_dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)]</span>
+</code></pre></div>
+<hr />
+<h2 id="6-formula-parsing">6. Formula Parsing<a class="headerlink" href="#6-formula-parsing" title="Permanent link">&para;</a></h2>
+<h3 id="61-no-parser-changes-required">6.1 No Parser Changes Required<a class="headerlink" href="#61-no-parser-changes-required" title="Permanent link">&para;</a></h3>
+<p>The existing formula parser already handles <code>s(fac, bs="re")</code> correctly:
+- Positional args become <code>SmoothSpec.variables = ["fac"]</code>
+- <code>bs="re"</code> is captured in <code>SmoothSpec.bs = "re"</code>
+- Multiple variables: <code>s(g1, g2, bs="re")</code> → <code>variables = ["g1", "g2"]</code></p>
+<h3 id="62-k-argument">6.2 k Argument<a class="headerlink" href="#62-k-argument" title="Permanent link">&para;</a></h3>
+<p>In R, the <code>k</code> argument is ignored for <code>bs="re"</code> — the basis dimension is
+always <code>ncol(X)</code>. Our implementation should do the same: ignore <code>spec.k</code>
+and set <code>n_coefs = ncol(X)</code>.</p>
+<hr />
+<h2 id="7-constraint-pipeline-integration">7. Constraint Pipeline Integration<a class="headerlink" href="#7-constraint-pipeline-integration" title="Permanent link">&para;</a></h2>
+<h3 id="71-skip-centering-constraint">7.1 Skip Centering Constraint<a class="headerlink" href="#71-skip-centering-constraint" title="Permanent link">&para;</a></h3>
+<p>RE smooths must <strong>not</strong> have the sum-to-zero centering constraint applied.
+In R, this is signaled by <code>C = matrix(0, 0, ncol(X))</code> (empty constraint).</p>
+<p>In jaxgam, the centering pipeline in <code>CoefficientMap.build()</code> (constraints.py
+lines 369-396) applies <code>apply_sum_to_zero()</code> to all smooths unless explicitly
+skipped.</p>
+<p><strong>Required change:</strong> Add a check for <code>_has_centering_constraint</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># In CoefficientMap.build(), centering loop:</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">sm</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">smooths</span><span class="p">):</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>    <span class="c1"># Skip RE smooths (no centering needed)</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">sm</span><span class="p">,</span> <span class="s1">&#39;_has_centering_constraint&#39;</span><span class="p">,</span> <span class="kc">True</span><span class="p">):</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>        <span class="k">continue</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>    <span class="c1"># ... existing centering logic ...</span>
+</code></pre></div>
+<p>The <code>RandomEffectSmooth</code> sets <code>_has_centering_constraint = False</code> in <code>__init__</code>.</p>
+<h3 id="72-skip-gamside">7.2 Skip gam.side()<a class="headerlink" href="#72-skip-gamside" title="Permanent link">&para;</a></h3>
+<p>RE smooths set <code>side_constrain = False</code>. The existing <code>gam_side()</code> 
+implementation already checks this flag (constraints.py lines 729, 753):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">if</span> <span class="n">dim_i</span> <span class="o">==</span> <span class="n">d</span> <span class="ow">and</span> <span class="n">CoefficientMap</span><span class="o">.</span><span class="n">_smooth_side_constrain</span><span class="p">(</span><span class="n">sm</span><span class="p">):</span>
+</code></pre></div>
+<p>And <code>_smooth_side_constrain()</code> (line 991-1008) correctly reads the 
+<code>side_constrain</code> attribute. No changes needed here.</p>
+<h3 id="73-coefficientmap-term-type">7.3 CoefficientMap Term Type<a class="headerlink" href="#73-coefficientmap-term-type" title="Permanent link">&para;</a></h3>
+<p>The <code>TermBlock</code> for an RE smooth should still have <code>term_type = "smooth"</code>.
+The <code>_random</code> flag on the smooth object (not on TermBlock) is used for
+p-value dispatch.</p>
+<hr />
+<h2 id="8-penalty-construction">8. Penalty Construction<a class="headerlink" href="#8-penalty-construction" title="Permanent link">&para;</a></h2>
+<h3 id="81-identity-penalty">8.1 Identity Penalty<a class="headerlink" href="#81-identity-penalty" title="Permanent link">&para;</a></h3>
+<p>The penalty for <code>bs="re"</code> is always the identity matrix of dimension k
+(where k = <code>ncol(X)</code>). After smoothCon normalization:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>S_normalized = I_k / s_scale
+</code></pre></div>
+<p>where <code>s_scale = ||I_k||_1 / ||X||_∞² = 1 / ||X||_∞²</code>.</p>
+<h3 id="82-embedding-in-global-penalty-space">8.2 Embedding in Global Penalty Space<a class="headerlink" href="#82-embedding-in-global-penalty-space" title="Permanent link">&para;</a></h3>
+<p>The existing <code>CompositePenalty.embed()</code> handles this correctly — it places
+the k×k penalty into the correct block of the global (total_p × total_p) 
+penalty matrix. No changes needed.</p>
+<h3 id="83-properties">8.3 Properties<a class="headerlink" href="#83-properties" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Rank:</strong> k (full rank)</li>
+<li><strong>Null space dimension:</strong> 0</li>
+<li><strong>Number of penalties:</strong> 1</li>
+<li><strong>Smoothing parameter:</strong> 1 (one λ for the term)</li>
+</ul>
+<hr />
+<h2 id="9-prediction">9. Prediction<a class="headerlink" href="#9-prediction" title="Permanent link">&para;</a></h2>
+<h3 id="91-training-data">9.1 Training Data<a class="headerlink" href="#91-training-data" title="Permanent link">&para;</a></h3>
+<p><code>predict_matrix(training_data)</code> should reproduce <code>build_design_matrix()</code>.
+Since the construction is deterministic (no eigendecomposition), this is
+straightforward.</p>
+<h3 id="92-new-data-with-known-levels">9.2 New Data with Known Levels<a class="headerlink" href="#92-new-data-with-known-levels" title="Permanent link">&para;</a></h3>
+<p>For factor levels present in training: prediction works normally via the
+indicator matrix.</p>
+<h3 id="93-new-data-with-unseen-levels">9.3 New Data with Unseen Levels<a class="headerlink" href="#93-new-data-with-unseen-levels" title="Permanent link">&para;</a></h3>
+<p>For factor levels NOT present in training:
+1. The indicator encoding produces NaN for unseen levels
+2. NaNs are zeroed out in the prediction matrix
+3. The unseen level contributes zero to the linear predictor
+4. This matches R's behavior exactly</p>
+<p>Implementation: in <code>predict_matrix()</code>, after building the interaction matrix,
+zero out all non-finite values:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">X</span><span class="p">[</span><span class="o">~</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">X</span><span class="p">)]</span> <span class="o">=</span> <span class="mf">0.0</span>
+</code></pre></div></p>
+<h3 id="94-level-storage-for-prediction">9.4 Level Storage for Prediction<a class="headerlink" href="#94-level-storage-for-prediction" title="Permanent link">&para;</a></h3>
+<p>Factor levels must be stored at <code>setup()</code> time and reused in
+<code>predict_matrix()</code>. The stored levels define which columns exist in the basis.
+New data is encoded against these stored levels.</p>
+<hr />
+<h2 id="10-summary-p-value-changes">10. Summary / p-value Changes<a class="headerlink" href="#10-summary-p-value-changes" title="Permanent link">&para;</a></h2>
+<h3 id="101-r-behavior">10.1 R Behavior<a class="headerlink" href="#101-r-behavior" title="Permanent link">&para;</a></h3>
+<p>In R's <code>summary.gam()</code>, RE terms (identified by <code>$random == TRUE</code>) receive
+a different p-value test:
+- <code>type_ = 1</code> in <code>testStat()</code> (integer rank rounding instead of fractional)
+- The test statistic interpretation changes for random effects</p>
+<h3 id="102-required-change">10.2 Required Change<a class="headerlink" href="#102-required-change" title="Permanent link">&para;</a></h3>
+<p>In <code>jaxgam/summary/summary.py</code>, the smooth p-value loop (line 213-220)
+currently hardcodes <code>type_=0</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">res</span> <span class="o">=</span> <span class="n">_test_stat</span><span class="p">(</span><span class="n">p_i</span><span class="p">,</span> <span class="n">X_i</span><span class="p">,</span> <span class="n">V_i</span><span class="p">,</span> <span class="n">rank</span><span class="o">=...</span><span class="p">,</span> <span class="n">type_</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">res_df</span><span class="o">=</span><span class="n">rdf</span><span class="p">)</span>
+</code></pre></div>
+<p>This needs to check whether the smooth is a random effect:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Determine test type: RE terms use type_=1 (integer rank)</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="n">is_re</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">si_smooth</span><span class="p">,</span> <span class="s1">&#39;_random&#39;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="n">test_type</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">is_re</span> <span class="k">else</span> <span class="mi">0</span>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="n">res</span> <span class="o">=</span> <span class="n">_test_stat</span><span class="p">(</span><span class="n">p_i</span><span class="p">,</span> <span class="n">X_i</span><span class="p">,</span> <span class="n">V_i</span><span class="p">,</span> <span class="n">rank</span><span class="o">=...</span><span class="p">,</span> <span class="n">type_</span><span class="o">=</span><span class="n">test_type</span><span class="p">,</span> <span class="n">res_df</span><span class="o">=</span><span class="n">rdf</span><span class="p">)</span>
+</code></pre></div>
+<p>The <code>SmoothInfo</code> dataclass may need an additional field, or we access the
+smooth object through the <code>coef_map</code>. The cleanest approach is to add an
+<code>is_random</code> field to <code>SmoothInfo</code>.</p>
+<h3 id="103-smoothinfo-extension">10.3 SmoothInfo Extension<a class="headerlink" href="#103-smoothinfo-extension" title="Permanent link">&para;</a></h3>
+<p>Add <code>is_random: bool = False</code> to <code>SmoothInfo</code> (design.py):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">SmoothInfo</span><span class="p">:</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>    <span class="c1"># ... existing fields ...</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>    <span class="n">is_random</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># True for bs=&quot;re&quot; terms</span>
+</code></pre></div>
+<p>Populate from the smooth object in <code>_build_smooth_info()</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="n">is_random</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">sm</span><span class="p">,</span> <span class="s1">&#39;base_smooth&#39;</span><span class="p">,</span> <span class="n">sm</span><span class="p">),</span> <span class="s1">&#39;_random&#39;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</code></pre></div>
+<hr />
+<h2 id="11-file-plan">11. File Plan<a class="headerlink" href="#11-file-plan" title="Permanent link">&para;</a></h2>
+<h3 id="111-new-files">11.1 New Files<a class="headerlink" href="#111-new-files" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/smooths/random_effects.py</code></td>
+<td><code>RandomEffectSmooth</code> class</td>
+</tr>
+<tr>
+<td><code>tests/test_smooths/test_random_effects.py</code></td>
+<td>Unit + R comparison tests</td>
+</tr>
+</tbody>
+</table>
+<h3 id="112-modified-files">11.2 Modified Files<a class="headerlink" href="#112-modified-files" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/smooths/registry.py</code></td>
+<td>Add <code>"re": RandomEffectSmooth</code></td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/constraints.py</code></td>
+<td>Skip centering for <code>_has_centering_constraint=False</code></td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/design.py</code></td>
+<td>Add <code>is_random</code> to <code>SmoothInfo</code>; populate in <code>_build_smooth_info()</code></td>
+</tr>
+<tr>
+<td><code>jaxgam/summary/summary.py</code></td>
+<td>Pass <code>type_=1</code> for RE terms</td>
+</tr>
+<tr>
+<td><code>tests/conftest.py</code></td>
+<td>Add factor data fixtures</td>
+</tr>
+</tbody>
+</table>
+<h3 id="113-no-changes-needed">11.3 No Changes Needed<a class="headerlink" href="#113-no-changes-needed" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/formula/parser.py</code></td>
+<td>Already handles <code>bs="re"</code> correctly</td>
+</tr>
+<tr>
+<td><code>jaxgam/penalties/penalty.py</code></td>
+<td>Identity penalty is just <code>Penalty(np.eye(k))</code></td>
+</tr>
+<tr>
+<td><code>jaxgam/fitting/*</code></td>
+<td>RE smooths are transparent to PIRLS/REML</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/base.py</code></td>
+<td>Base class interface is sufficient</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="12-testing-strategy">12. Testing Strategy<a class="headerlink" href="#12-testing-strategy" title="Permanent link">&para;</a></h2>
+<p>Testing is split across two locations following the existing project pattern:</p>
+<ul>
+<li>
+<p><strong><code>tests/test_smooths/test_random_effects.py</code></strong> — basis-level unit tests
+  and smooth-construct R comparisons (analogous to <code>test_cubic.py</code>,
+  <code>test_tprs.py</code>). These test the <code>RandomEffectSmooth</code> class in isolation.</p>
+</li>
+<li>
+<p><strong><code>tests/test_validation_matrix.py</code></strong> — full-model R comparisons across
+  all smooth × family combinations. RE smooth configs are added as new cells
+  in the existing parametrized matrix, inheriting all the existing test
+  methods (deviance, fitted values, EDF, scale, coefficients, self-prediction
+  roundtrip, hard-gate invariants).</p>
+</li>
+</ul>
+<h3 id="121-validation-matrix-integration">12.1 Validation Matrix Integration<a class="headerlink" href="#121-validation-matrix-integration" title="Permanent link">&para;</a></h3>
+<p>The validation matrix (<code>test_validation_matrix.py</code>) systematically tests every
+smooth config × family cell. RE adds <strong>3 new smooth configs</strong> and a
+<strong>new data generator</strong>, expanding the matrix from 35 cells to 50 cells.</p>
+<h4 id="1211-new-smooth-configs">12.1.1 New Smooth Configs<a class="headerlink" href="#1211-new-smooth-configs" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Added to SMOOTH_CONFIGS in test_validation_matrix.py</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="s2">&quot;re&quot;</span><span class="p">:</span> <span class="n">SmoothConfig</span><span class="p">(</span>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>    <span class="n">py_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>    <span class="n">r_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>    <span class="n">data_type</span><span class="o">=</span><span class="s2">&quot;re&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a><span class="p">),</span>
+<a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a><span class="s2">&quot;re_slope&quot;</span><span class="p">:</span> <span class="n">SmoothConfig</span><span class="p">(</span>
+<a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a>    <span class="n">py_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(x, g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a>    <span class="n">r_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(x, g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a>    <span class="n">data_type</span><span class="o">=</span><span class="s2">&quot;re&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a><span class="p">),</span>
+<a id="__codelineno-24-13" name="__codelineno-24-13" href="#__codelineno-24-13"></a><span class="s2">&quot;re_mixed&quot;</span><span class="p">:</span> <span class="n">SmoothConfig</span><span class="p">(</span>
+<a id="__codelineno-24-14" name="__codelineno-24-14" href="#__codelineno-24-14"></a>    <span class="n">py_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(x, k=10, bs=&#39;tp&#39;) + s(g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-15" name="__codelineno-24-15" href="#__codelineno-24-15"></a>    <span class="n">r_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(x, k=10, bs=&#39;tp&#39;) + s(g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-16" name="__codelineno-24-16" href="#__codelineno-24-16"></a>    <span class="n">data_type</span><span class="o">=</span><span class="s2">&quot;re&quot;</span><span class="p">,</span>
+<a id="__codelineno-24-17" name="__codelineno-24-17" href="#__codelineno-24-17"></a><span class="p">),</span>
+</code></pre></div>
+<p>These cover the three most important RE patterns:
+- <code>re</code> — random intercepts (RE-only model)
+- <code>re_slope</code> — random slopes (numeric × factor interaction)
+- <code>re_mixed</code> — RE alongside a standard smooth (most common real-world usage)</p>
+<h4 id="1212-new-data-generator">12.1.2 New Data Generator<a class="headerlink" href="#1212-new-data-generator" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">_make_re_data</span><span class="p">(</span><span class="n">family_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">SEED</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Random effects data: continuous x + factor g with group-level effects.&quot;&quot;&quot;</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>    <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>    <span class="n">n</span> <span class="o">=</span> <span class="mi">300</span>
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>    <span class="n">n_groups</span> <span class="o">=</span> <span class="mi">20</span>
+<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a>    <span class="n">g</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">([</span><span class="sa">f</span><span class="s2">&quot;g</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_groups</span><span class="p">)],</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a>
+<a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a>    <span class="c1"># True group effects</span>
+<a id="__codelineno-25-10" name="__codelineno-25-10" href="#__codelineno-25-10"></a>    <span class="n">b_intercept</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="n">n_groups</span><span class="p">)</span>
+<a id="__codelineno-25-11" name="__codelineno-25-11" href="#__codelineno-25-11"></a>    <span class="n">group_idx</span> <span class="o">=</span> <span class="p">{</span><span class="sa">f</span><span class="s2">&quot;g</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_groups</span><span class="p">)}</span>
+<a id="__codelineno-25-12" name="__codelineno-25-12" href="#__codelineno-25-12"></a>    <span class="n">group_effect</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">b_intercept</span><span class="p">[</span><span class="n">group_idx</span><span class="p">[</span><span class="n">gi</span><span class="p">]]</span> <span class="k">for</span> <span class="n">gi</span> <span class="ow">in</span> <span class="n">g</span><span class="p">])</span>
+<a id="__codelineno-25-13" name="__codelineno-25-13" href="#__codelineno-25-13"></a>
+<a id="__codelineno-25-14" name="__codelineno-25-14" href="#__codelineno-25-14"></a>    <span class="c1"># Smooth + RE truth</span>
+<a id="__codelineno-25-15" name="__codelineno-25-15" href="#__codelineno-25-15"></a>    <span class="n">eta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">x</span><span class="p">)</span> <span class="o">+</span> <span class="n">group_effect</span>
+<a id="__codelineno-25-16" name="__codelineno-25-16" href="#__codelineno-25-16"></a>
+<a id="__codelineno-25-17" name="__codelineno-25-17" href="#__codelineno-25-17"></a>    <span class="k">if</span> <span class="n">family_name</span> <span class="o">==</span> <span class="s2">&quot;gaussian&quot;</span><span class="p">:</span>
+<a id="__codelineno-25-18" name="__codelineno-25-18" href="#__codelineno-25-18"></a>        <span class="n">y</span> <span class="o">=</span> <span class="n">eta</span> <span class="o">+</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-25-19" name="__codelineno-25-19" href="#__codelineno-25-19"></a>    <span class="k">elif</span> <span class="n">family_name</span> <span class="o">==</span> <span class="s2">&quot;binomial&quot;</span><span class="p">:</span>
+<a id="__codelineno-25-20" name="__codelineno-25-20" href="#__codelineno-25-20"></a>        <span class="n">prob</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">eta</span><span class="p">))</span>
+<a id="__codelineno-25-21" name="__codelineno-25-21" href="#__codelineno-25-21"></a>        <span class="n">y</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">binomial</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">prob</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+<a id="__codelineno-25-22" name="__codelineno-25-22" href="#__codelineno-25-22"></a>    <span class="k">elif</span> <span class="n">family_name</span> <span class="o">==</span> <span class="s2">&quot;poisson&quot;</span><span class="p">:</span>
+<a id="__codelineno-25-23" name="__codelineno-25-23" href="#__codelineno-25-23"></a>        <span class="n">y</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">poisson</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">eta</span> <span class="o">*</span> <span class="mf">0.5</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+<a id="__codelineno-25-24" name="__codelineno-25-24" href="#__codelineno-25-24"></a>    <span class="k">elif</span> <span class="n">family_name</span> <span class="o">==</span> <span class="s2">&quot;gamma&quot;</span><span class="p">:</span>
+<a id="__codelineno-25-25" name="__codelineno-25-25" href="#__codelineno-25-25"></a>        <span class="n">mu</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">eta</span> <span class="o">*</span> <span class="mf">0.3</span> <span class="o">+</span> <span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-25-26" name="__codelineno-25-26" href="#__codelineno-25-26"></a>        <span class="n">y</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">gamma</span><span class="p">(</span><span class="mf">5.0</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="n">mu</span> <span class="o">/</span> <span class="mf">5.0</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-25-27" name="__codelineno-25-27" href="#__codelineno-25-27"></a>    <span class="k">elif</span> <span class="n">family_name</span> <span class="o">==</span> <span class="s2">&quot;nb&quot;</span><span class="p">:</span>
+<a id="__codelineno-25-28" name="__codelineno-25-28" href="#__codelineno-25-28"></a>        <span class="n">mu</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">eta</span> <span class="o">*</span> <span class="mf">0.5</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">)</span>
+<a id="__codelineno-25-29" name="__codelineno-25-29" href="#__codelineno-25-29"></a>        <span class="n">theta</span> <span class="o">=</span> <span class="mf">2.0</span>
+<a id="__codelineno-25-30" name="__codelineno-25-30" href="#__codelineno-25-30"></a>        <span class="n">y</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">negative_binomial</span><span class="p">(</span>
+<a id="__codelineno-25-31" name="__codelineno-25-31" href="#__codelineno-25-31"></a>            <span class="n">n</span><span class="o">=</span><span class="n">theta</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="n">theta</span> <span class="o">/</span> <span class="p">(</span><span class="n">mu</span> <span class="o">+</span> <span class="n">theta</span><span class="p">),</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span>
+<a id="__codelineno-25-32" name="__codelineno-25-32" href="#__codelineno-25-32"></a>        <span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+<a id="__codelineno-25-33" name="__codelineno-25-33" href="#__codelineno-25-33"></a>    <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-25-34" name="__codelineno-25-34" href="#__codelineno-25-34"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown family: </span><span class="si">{</span><span class="n">family_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-25-35" name="__codelineno-25-35" href="#__codelineno-25-35"></a>
+<a id="__codelineno-25-36" name="__codelineno-25-36" href="#__codelineno-25-36"></a>    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span>
+<a id="__codelineno-25-37" name="__codelineno-25-37" href="#__codelineno-25-37"></a>        <span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="n">x</span><span class="p">,</span>
+<a id="__codelineno-25-38" name="__codelineno-25-38" href="#__codelineno-25-38"></a>        <span class="s2">&quot;g&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Categorical</span><span class="p">(</span><span class="n">g</span><span class="p">),</span>
+<a id="__codelineno-25-39" name="__codelineno-25-39" href="#__codelineno-25-39"></a>        <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="n">y</span><span class="p">,</span>
+<a id="__codelineno-25-40" name="__codelineno-25-40" href="#__codelineno-25-40"></a>    <span class="p">})</span>
+</code></pre></div>
+<p>Wire into <code>_get_data()</code>:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">data_type</span> <span class="o">==</span> <span class="s2">&quot;re&quot;</span><span class="p">:</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>    <span class="k">return</span> <span class="n">_make_re_data</span><span class="p">(</span><span class="n">family</span><span class="p">)</span>
+</code></pre></div></p>
+<h4 id="1213-tolerance-rules">12.1.3 Tolerance Rules<a class="headerlink" href="#1213-tolerance-rules" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># In _r_tol(): RE models use MODERATE for Gaussian, LOOSE otherwise</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="c1"># (same rule as single-smooth models — RE has one sp, deterministic basis)</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="k">if</span> <span class="n">family_name</span> <span class="o">==</span> <span class="s2">&quot;gaussian&quot;</span> <span class="ow">and</span> <span class="n">smooth_key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;tp&quot;</span><span class="p">,</span> <span class="s2">&quot;cr&quot;</span><span class="p">,</span> <span class="s2">&quot;re&quot;</span><span class="p">):</span>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>    <span class="k">return</span> <span class="n">MODERATE</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="k">return</span> <span class="n">LOOSE</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># In _compare_fitted_not_coefs(): RE coefficients are directly comparable</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="c1"># (no sign ambiguity, no flat REML surface with multiple sp)</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="c1"># re and re_slope: compare coefficients directly</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="c1"># re_mixed: compare fitted values (contains TPRS with sign ambiguity)</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="k">return</span> <span class="n">smooth_key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;tp&quot;</span><span class="p">,</span> <span class="s2">&quot;tp_by&quot;</span><span class="p">,</span> <span class="s2">&quot;te&quot;</span><span class="p">,</span> <span class="s2">&quot;ti&quot;</span><span class="p">,</span> <span class="s2">&quot;te_by&quot;</span><span class="p">,</span> <span class="s2">&quot;cr_by&quot;</span><span class="p">,</span> <span class="s2">&quot;re_mixed&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h4 id="1214-inherited-tests">12.1.4 Inherited Tests<a class="headerlink" href="#1214-inherited-tests" title="Permanent link">&para;</a></h4>
+<p>Adding RE configs to <code>SMOOTH_CONFIGS</code> automatically inherits all existing
+test methods in both <code>TestValidationMatrix</code> and <code>TestHardGateInvariants</code>:</p>
+<p><strong>TestValidationMatrix (R comparison, 15 new cells):</strong>
+- <code>test_deviance_vs_r</code> — deviance matches R
+- <code>test_fitted_values_vs_r</code> — fitted values match R
+- <code>test_edf_vs_r</code> — total EDF matches R
+- <code>test_scale_vs_r</code> — scale parameter matches R
+- <code>test_coefficients_vs_r</code> — coefficients or fitted values match R
+- <code>test_self_prediction_roundtrip</code> — <code>predict()</code> reproduces <code>fitted_values</code>
+- <code>test_theta_vs_r</code> — theta matches R (NB family only)</p>
+<p><strong>TestHardGateInvariants (no R required, 15 new cells):</strong>
+- <code>test_convergence</code> — model converges
+- <code>test_deviance_non_negative</code> — deviance ≥ 0
+- <code>test_no_nan_in_converged</code> — no NaN/Inf in coefficients, fitted values
+- <code>test_edf_bounds</code> — EDF in valid range
+- <code>test_vp_symmetric_psd</code> — Bayesian covariance is symmetric PSD
+- <code>test_penalty_psd</code> — penalty matrices are symmetric PSD
+- <code>test_theta_positive</code> — theta &gt; 0 (NB only)
+- <code>test_model_matrix_rank</code> — model matrix has sufficient rank</p>
+<h3 id="122-unit-tests-test_random_effectspy">12.2 Unit Tests (<code>test_random_effects.py</code>)<a class="headerlink" href="#122-unit-tests-test_random_effectspy" title="Permanent link">&para;</a></h3>
+<p>These test <code>RandomEffectSmooth</code> in isolation, without the full GAM fitting
+pipeline. They live in <code>tests/test_smooths/test_random_effects.py</code>, following
+the pattern of <code>test_cubic.py</code> and <code>test_tprs.py</code>.</p>
+<p><strong>Structural tests (no R):</strong>
+- Identity penalty is symmetric PSD with correct rank
+- Basis matrix shape matches number of factor levels
+- <code>null_space_dim == 0</code> and <code>rank == n_coefs</code>
+- <code>side_constrain == False</code> and <code>_has_centering_constraint == False</code>
+- <code>_random == True</code>
+- <code>predict_matrix</code> reproduces <code>build_design_matrix</code> on training data</p>
+<p><strong>Factor handling (no R):</strong>
+- Single factor: correct indicator matrix
+- Multiple factors: correct interaction columns and ordering
+- Numeric × factor: correct weighted indicator
+- Numeric only: correct single-column matrix
+- Factor with many levels (stress test)</p>
+<p><strong>Prediction edge cases (no R):</strong>
+- Unseen factor levels → zero rows in prediction matrix
+- Subset of training levels → correct subset of columns</p>
+<p><strong>R basis comparison (requires R + mgcv):</strong>
+- <code>s(g, bs="re")</code> — single factor basis X and penalty S vs R
+- <code>s(g1, g2, bs="re")</code> — factor × factor interaction vs R
+- <code>s(x, g, bs="re")</code> — numeric × factor vs R
+- Compare X, S, rank, null_space_dim at STRICT tolerance (deterministic)</p>
+<h3 id="123-tolerance-summary">12.3 Tolerance Summary<a class="headerlink" href="#123-tolerance-summary" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Location</th>
+<th>Tolerance</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Basis matrix X</td>
+<td><code>test_random_effects.py</code></td>
+<td>STRICT</td>
+<td>Deterministic, no eigendecomposition</td>
+</tr>
+<tr>
+<td>Penalty matrix S</td>
+<td><code>test_random_effects.py</code></td>
+<td>STRICT</td>
+<td>Identity matrix — exact after normalization</td>
+</tr>
+<tr>
+<td>Deviance</td>
+<td>validation matrix</td>
+<td>MODERATE/LOOSE</td>
+<td>Standard fitting tolerance</td>
+</tr>
+<tr>
+<td>Fitted values</td>
+<td>validation matrix</td>
+<td>MODERATE/LOOSE</td>
+<td>Standard fitting tolerance</td>
+</tr>
+<tr>
+<td>Coefficients (re, re_slope)</td>
+<td>validation matrix</td>
+<td>MODERATE</td>
+<td>Single sp, direct comparison</td>
+</tr>
+<tr>
+<td>Fitted values (re_mixed)</td>
+<td>validation matrix</td>
+<td>MODERATE/LOOSE</td>
+<td>Contains TPRS sign ambiguity</td>
+</tr>
+<tr>
+<td>EDF</td>
+<td>validation matrix</td>
+<td>MODERATE/LOOSE</td>
+<td>Derived from fitting</td>
+</tr>
+<tr>
+<td>Hard-gate invariants</td>
+<td>validation matrix</td>
+<td>per-invariant</td>
+<td>Structural, must always hold</td>
+</tr>
+</tbody>
+</table>
+<h3 id="124-test-data-fixtures">12.4 Test Data Fixtures<a class="headerlink" href="#124-test-data-fixtures" title="Permanent link">&para;</a></h3>
+<p>For <code>test_random_effects.py</code>, add fixtures to <code>tests/conftest.py</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">re_factor_data</span><span class="p">():</span>
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Single-factor data for RE smooth tests.&quot;&quot;&quot;</span>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>    <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">SEED</span><span class="p">)</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>    <span class="n">n</span> <span class="o">=</span> <span class="mi">200</span>
+<a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>    <span class="n">n_groups</span> <span class="o">=</span> <span class="mi">20</span>
+<a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a>    <span class="n">g</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">([</span><span class="sa">f</span><span class="s2">&quot;g</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_groups</span><span class="p">)],</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-29-8" name="__codelineno-29-8" href="#__codelineno-29-8"></a>    <span class="k">return</span> <span class="p">{</span>
+<a id="__codelineno-29-9" name="__codelineno-29-9" href="#__codelineno-29-9"></a>        <span class="s2">&quot;g&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Categorical</span><span class="p">(</span><span class="n">g</span><span class="p">),</span>
+<a id="__codelineno-29-10" name="__codelineno-29-10" href="#__codelineno-29-10"></a>    <span class="p">}</span>
+<a id="__codelineno-29-11" name="__codelineno-29-11" href="#__codelineno-29-11"></a>
+<a id="__codelineno-29-12" name="__codelineno-29-12" href="#__codelineno-29-12"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<a id="__codelineno-29-13" name="__codelineno-29-13" href="#__codelineno-29-13"></a><span class="k">def</span><span class="w"> </span><span class="nf">re_two_factor_data</span><span class="p">():</span>
+<a id="__codelineno-29-14" name="__codelineno-29-14" href="#__codelineno-29-14"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Two-factor data for RE interaction tests.&quot;&quot;&quot;</span>
+<a id="__codelineno-29-15" name="__codelineno-29-15" href="#__codelineno-29-15"></a>    <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">SEED</span><span class="p">)</span>
+<a id="__codelineno-29-16" name="__codelineno-29-16" href="#__codelineno-29-16"></a>    <span class="n">n</span> <span class="o">=</span> <span class="mi">200</span>
+<a id="__codelineno-29-17" name="__codelineno-29-17" href="#__codelineno-29-17"></a>    <span class="n">g1</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">([</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">],</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-29-18" name="__codelineno-29-18" href="#__codelineno-29-18"></a>    <span class="n">g2</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">([</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;y&quot;</span><span class="p">],</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-29-19" name="__codelineno-29-19" href="#__codelineno-29-19"></a>    <span class="k">return</span> <span class="p">{</span>
+<a id="__codelineno-29-20" name="__codelineno-29-20" href="#__codelineno-29-20"></a>        <span class="s2">&quot;g1&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Categorical</span><span class="p">(</span><span class="n">g1</span><span class="p">),</span>
+<a id="__codelineno-29-21" name="__codelineno-29-21" href="#__codelineno-29-21"></a>        <span class="s2">&quot;g2&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Categorical</span><span class="p">(</span><span class="n">g2</span><span class="p">),</span>
+<a id="__codelineno-29-22" name="__codelineno-29-22" href="#__codelineno-29-22"></a>    <span class="p">}</span>
+<a id="__codelineno-29-23" name="__codelineno-29-23" href="#__codelineno-29-23"></a>
+<a id="__codelineno-29-24" name="__codelineno-29-24" href="#__codelineno-29-24"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<a id="__codelineno-29-25" name="__codelineno-29-25" href="#__codelineno-29-25"></a><span class="k">def</span><span class="w"> </span><span class="nf">re_numeric_factor_data</span><span class="p">():</span>
+<a id="__codelineno-29-26" name="__codelineno-29-26" href="#__codelineno-29-26"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Numeric × factor data for random slope tests.&quot;&quot;&quot;</span>
+<a id="__codelineno-29-27" name="__codelineno-29-27" href="#__codelineno-29-27"></a>    <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">SEED</span><span class="p">)</span>
+<a id="__codelineno-29-28" name="__codelineno-29-28" href="#__codelineno-29-28"></a>    <span class="n">n</span> <span class="o">=</span> <span class="mi">200</span>
+<a id="__codelineno-29-29" name="__codelineno-29-29" href="#__codelineno-29-29"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-29-30" name="__codelineno-29-30" href="#__codelineno-29-30"></a>    <span class="n">g</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">([</span><span class="sa">f</span><span class="s2">&quot;g</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">)],</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
+<a id="__codelineno-29-31" name="__codelineno-29-31" href="#__codelineno-29-31"></a>    <span class="k">return</span> <span class="p">{</span>
+<a id="__codelineno-29-32" name="__codelineno-29-32" href="#__codelineno-29-32"></a>        <span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="n">x</span><span class="p">,</span>
+<a id="__codelineno-29-33" name="__codelineno-29-33" href="#__codelineno-29-33"></a>        <span class="s2">&quot;g&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Categorical</span><span class="p">(</span><span class="n">g</span><span class="p">),</span>
+<a id="__codelineno-29-34" name="__codelineno-29-34" href="#__codelineno-29-34"></a>    <span class="p">}</span>
+</code></pre></div>
+<hr />
+<h2 id="13-implementation-plan">13. Implementation Plan<a class="headerlink" href="#13-implementation-plan" title="Permanent link">&para;</a></h2>
+<p>See <a href="../implementation_plan/">implementation_plan.md</a> for the detailed
+PR-by-PR breakdown.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

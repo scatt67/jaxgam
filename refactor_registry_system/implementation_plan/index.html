@@ -1,0 +1,890 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Registry Refactor — Implementation Plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#registry-refactor-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Registry Refactor — Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#step-1-create-jaxgamregistrypy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Create jaxgam/registry.py ✅
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-2-create-teststest_registrypy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Create tests/test_registry.py ✅
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-3-migrate-smooth-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Migrate smooth registry ✅
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-4-migrate-family-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Migrate family registry ✅
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-migrate-link-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: Migrate link registry ✅
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-6-final-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 6: Final verification ✅
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="registry-refactor-implementation-plan">Registry Refactor — Implementation Plan<a class="headerlink" href="#registry-refactor-implementation-plan" title="Permanent link">&para;</a></h1>
+<p>LLM-optimized step-by-step plan.</p>
+<p><strong>Before starting:</strong> Read <code>docs/refactor_class_system/design.md</code> lines 1-19 for the problem statement and goals driving this refactor. Read lines 121-132 for the inconsistency summary table that motivates unifying the three registries. Read lines 134-146 for alternatives considered and why <code>Registry[T]</code> was chosen.</p>
+<h2 id="step-1-create-jaxgamregistrypy">Step 1: Create <code>jaxgam/registry.py</code> ✅<a class="headerlink" href="#step-1-create-jaxgamregistrypy" title="Permanent link">&para;</a></h2>
+<p>Create generic <code>Registry[T]</code> class. No dependencies on smooths/families/links.</p>
+<p><strong>Design context:</strong> Read <code>design.md</code> lines 148-274 for the full <code>Registry[T]</code> API specification, constructor signature, all method signatures with docstrings, and the key design decisions (immutability via <code>MappingProxyType</code>, case-insensitive keys, <code>cache_instances</code> flag, <code>get_class()</code> vs <code>get_instance()</code> separation, and error type rationale).</p>
+<ul>
+<li><code>MappingProxyType</code> for immutability</li>
+<li><code>get_class(key) -&gt; type[T]</code> — case-insensitive, raises <code>KeyError</code></li>
+<li><code>get_instance(key) -&gt; T</code> — optional caching via <code>cache_instances</code> flag</li>
+<li><code>.available</code> property, <code>__contains__</code>, <code>__len__</code>, <code>__repr__</code></li>
+<li>Error format: <code>f"Unknown {self._name}: {key!r}. Available: {available}"</code></li>
+</ul>
+<p><strong>Verify:</strong> <code>python -c "from jaxgam.registry import Registry"</code></p>
+<h2 id="step-2-create-teststest_registrypy">Step 2: Create <code>tests/test_registry.py</code> ✅<a class="headerlink" href="#step-2-create-teststest_registrypy" title="Permanent link">&para;</a></h2>
+<p>Test <code>Registry</code> in isolation with a trivial <code>DummyClass</code>.</p>
+<p><strong>Design context:</strong> Read <code>design.md</code> lines 514-537 for the full test list and the specific existing test assertions that must remain green.</p>
+<p>Cover: <code>get_class</code> valid/invalid, case-insensitive lookup, <code>get_instance</code> cached/uncached, <code>available</code>, <code>__contains__</code>, <code>__len__</code>, <code>__repr__</code>, immutability (<code>TypeError</code> on <code>_entries</code> mutation).</p>
+<p><strong>Verify:</strong> <code>make test-local</code> (or <code>python -m pytest tests/test_registry.py -v</code>)</p>
+<h2 id="step-3-migrate-smooth-registry">Step 3: Migrate smooth registry ✅<a class="headerlink" href="#step-3-migrate-smooth-registry" title="Permanent link">&para;</a></h2>
+<p><strong>Design context:</strong> Read <code>design.md</code> lines 21-48 for the current smooth registry implementation and its call sites. Read lines 278-321 for the exact before/after code and error message compatibility analysis.</p>
+<p><strong>File:</strong> <code>jaxgam/smooths/registry.py</code></p>
+<ol>
+<li>Add <code>from jaxgam.registry import Registry</code></li>
+<li>Replace <code>_SMOOTH_REGISTRY</code> dict with <code>smooth_registry = Registry({...}, name="basis type")</code></li>
+<li>Simplify <code>get_smooth_class()</code> to delegate: <code>return smooth_registry.get_class(bs_name)</code></li>
+</ol>
+<p><strong>File:</strong> <code>jaxgam/smooths/__init__.py</code></p>
+<ol>
+<li>Add <code>from jaxgam.smooths.registry import smooth_registry</code> import</li>
+<li>Add <code>"smooth_registry"</code> to <code>__all__</code></li>
+</ol>
+<p><strong>Verify:</strong> <code>make test-local</code> — all smooth tests pass unchanged.</p>
+<h2 id="step-4-migrate-family-registry">Step 4: Migrate family registry ✅<a class="headerlink" href="#step-4-migrate-family-registry" title="Permanent link">&para;</a></h2>
+<p><strong>Design context:</strong> Read <code>design.md</code> lines 50-85 for the current family registry implementation, its call sites, and the special caching behavior for JAX JIT object identity. Read lines 323-369 for the exact before/after code, error message compatibility analysis (the <code>"Available families"</code> → <code>"Available"</code> change), and how <code>cache_instances=True</code> replaces the manual <code>_FAMILY_CACHE</code>.</p>
+<p><strong>File:</strong> <code>jaxgam/families/registry.py</code></p>
+<ol>
+<li>Add <code>from jaxgam.registry import Registry</code></li>
+<li>Replace <code>_FAMILY_REGISTRY</code> + <code>_FAMILY_CACHE</code> with <code>family_registry = Registry({...}, name="family", cache_instances=True)</code></li>
+<li>Simplify <code>get_family()</code>:</li>
+<li>Pass-through for <code>ExponentialFamily</code> instances (unchanged)</li>
+<li>String path: <code>return family_registry.get_instance(name_or_instance)</code></li>
+<li><code>TypeError</code> path unchanged</li>
+</ol>
+<p><strong>File:</strong> <code>jaxgam/families/__init__.py</code></p>
+<ol>
+<li>Add <code>from jaxgam.families.registry import family_registry</code> import</li>
+<li>Add <code>"family_registry"</code> to <code>__all__</code></li>
+</ol>
+<p><strong>Critical check:</strong> <code>tests/test_families.py:683</code> matches <code>"Unknown family"</code> — the <code>name="family"</code> parameter produces <code>"Unknown family: ..."</code> which matches.</p>
+<p><strong>Verify:</strong> <code>make test-local</code> — all family tests pass unchanged.</p>
+<h2 id="step-5-migrate-link-registry">Step 5: Migrate link registry ✅<a class="headerlink" href="#step-5-migrate-link-registry" title="Permanent link">&para;</a></h2>
+<p><strong>Design context:</strong> Read <code>design.md</code> lines 87-119 for the current link registry (embedded in the ABC) and its <code>ValueError</code> (not <code>KeyError</code>) error behavior. Read lines 371-428 for the full migration plan: creating <code>jaxgam/links/registry.py</code>, removing <code>_LINK_REGISTRY</code> from <code>links.py</code>, and the <code>from_name()</code> wrapper that catches <code>KeyError</code> and re-raises as <code>ValueError</code> for backward compatibility. Read lines 430-440 for the error handling summary table.</p>
+<p><strong>File:</strong> <code>jaxgam/links/registry.py</code> (CREATE)</p>
+<ol>
+<li>Import all link classes from <code>jaxgam.links.links</code></li>
+<li>Import <code>Registry</code> from <code>jaxgam.registry</code></li>
+<li>Create <code>link_registry = Registry({...}, name="link function")</code></li>
+<li>Create <code>get_link(name: str) -&gt; Link</code> wrapping <code>link_registry.get_instance(name)</code></li>
+</ol>
+<p><strong>File:</strong> <code>jaxgam/links/links.py</code> (MODIFY)</p>
+<ol>
+<li>Remove <code>_LINK_REGISTRY</code> dict (lines 324-333)</li>
+<li>Update <code>Link.from_name()</code>:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nd">@staticmethod</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">from_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Link</span><span class="p">:</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam.links.registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_link</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        <span class="k">return</span> <span class="n">get_link</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="k">except</span> <span class="ne">KeyError</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>        <span class="kn">from</span><span class="w"> </span><span class="nn">jaxgam.links.registry</span><span class="w"> </span><span class="kn">import</span> <span class="n">link_registry</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="n">valid</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">link_registry</span><span class="o">.</span><span class="n">available</span><span class="p">)</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>            <span class="sa">f</span><span class="s2">&quot;Unknown link function </span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2">. Valid options: </span><span class="si">{</span><span class="n">valid</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="kc">None</span>
+</code></pre></div></li>
+</ol>
+<p><strong>File:</strong> <code>jaxgam/links/__init__.py</code> (MODIFY)</p>
+<ol>
+<li>Add imports: <code>from jaxgam.links.registry import link_registry, get_link</code></li>
+<li>Add <code>"link_registry"</code>, <code>"get_link"</code> to <code>__all__</code></li>
+</ol>
+<p><strong>Critical check:</strong> <code>tests/test_links.py:318</code> matches <code>ValueError</code> + <code>"Unknown link function"</code> — preserved by the <code>from_name()</code> wrapper.</p>
+<p><strong>Verify:</strong> <code>make test-local</code> — all link tests pass unchanged.</p>
+<h2 id="step-6-final-verification">Step 6: Final verification ✅<a class="headerlink" href="#step-6-final-verification" title="Permanent link">&para;</a></h2>
+<p><strong>Design context:</strong> Read <code>design.md</code> lines 442-470 for the full compatibility guarantees — zero-impact public API signatures, zero-impact call sites, and the list of new additions.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>test-local<span class="w">          </span><span class="c1"># all tests green</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="s2">from jaxgam.smooths import smooth_registry, get_smooth_class</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="s2">from jaxgam.families import family_registry, get_family</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="s2">from jaxgam.links import link_registry, get_link</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="s2">print(smooth_registry)</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="s2">print(family_registry)</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="s2">print(link_registry)</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="s2">print(smooth_registry.available)</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="s2">print(family_registry.available)</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="s2">print(link_registry.available)</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="s2">&quot;</span>
+</code></pre></div>
+<h2 id="file-checklist">File checklist<a class="headerlink" href="#file-checklist" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>File</th>
+<th>Action</th>
+<th>Design doc reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>jaxgam/registry.py</code></td>
+<td>CREATE</td>
+<td>Lines 148-262 (full API)</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>tests/test_registry.py</code></td>
+<td>CREATE</td>
+<td>Lines 514-537 (test plan)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>jaxgam/smooths/registry.py</code></td>
+<td>MODIFY</td>
+<td>Lines 278-321 (before/after + compat)</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>jaxgam/smooths/__init__.py</code></td>
+<td>MODIFY</td>
+<td>Line 321 (export note)</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>jaxgam/families/registry.py</code></td>
+<td>MODIFY</td>
+<td>Lines 323-369 (before/after + compat)</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>jaxgam/families/__init__.py</code></td>
+<td>MODIFY</td>
+<td>Line 369 (export note)</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>jaxgam/links/registry.py</code></td>
+<td>CREATE</td>
+<td>Lines 371-428 (new file + migration)</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>jaxgam/links/links.py</code></td>
+<td>MODIFY</td>
+<td>Lines 405-427 (remove dict, update from_name)</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>jaxgam/links/__init__.py</code></td>
+<td>MODIFY</td>
+<td>Line 428 (export note)</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2879 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Robust API Redesign: result Mode + Lean Inference Core - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#robust-api-redesign-result-mode-lean-inference-core" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Robust API Redesign: result Mode + Lean Inference Core
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#table-of-contents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Table of Contents
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-the-problem-a-training-job-pays-for-state-it-never-uses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1 The Problem: a training job pays for state it never uses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-the-fix-a-result-mode-two-result-types-a-lean-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2 The Fix: a result mode (two result types) + a lean core
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3 Scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-relation-to-refactor_gam_api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.4 Relation to refactor_gam_api
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-current-state-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Current-State Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Current-State Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-what-fitdf-retains-in-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 What fit(df) retains in memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-field-inventory-and-consumer-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Field Inventory and Consumer Map
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-duplication-dry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Duplication (DRY)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-pre-implementation-smells-in-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Pre-implementation smells in scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-solid-audit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5 SOLID Audit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-design-goals-and-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Design Goals and Non-Goals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Design Goals and Non-Goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Goals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 Non-Goals
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-result-mode-and-two-result-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The result Mode and Two Result Types
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. The result Mode and Two Result Types">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Surface
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-what-the-mode-means-exact-disposition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 What the mode means — exact disposition
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-behavioral-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 Behavioral semantics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-object-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Object Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Object Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-no-predictmatrixbuilder-protocol-considered-and-cut-round-10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 No PredictMatrixBuilder Protocol (considered and cut, round 10)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-predictspec-new-phase-1-the-explicit-boundary-value-object" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 PredictSpec (NEW — Phase 1, the explicit boundary value object)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-gampredictor-new-phase-3-the-lean-picklable-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 GAMPredictor (NEW — Phase 3, the lean picklable core)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-the-two-result-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.4 The two result types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#55-field-ownership-table-every-current-field-new-home" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.5 Field-Ownership Table (every current field → new home)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-the-shared-predict-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. The Shared Predict Path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-memory-reduction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Memory Reduction
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Memory Reduction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-the-honest-invariant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 The honest invariant
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-copy_for_prediction-drop-_x-penalty-caches-share-the-transforms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 copy_for_prediction() — drop _X + penalty caches, share the transforms
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-picklability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Picklability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-solid-dry-scorecard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. SOLID / DRY Scorecard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-numerical-and-correctness-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Numerical and Correctness Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Numerical and Correctness Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#101-coefficient-space" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10.1 Coefficient space
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#102-se-byte-parity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10.2 SE byte-parity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#103-deferred-cleanups-kept-out-of-the-critical-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10.3 Deferred cleanups (kept out of the critical path)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-file-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. File Plan
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. File Plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#111-new-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.1 New Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#112-modified-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.2 Modified Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#113-no-changes-needed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.3 No Changes Needed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-testing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Testing Strategy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Testing Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#121-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.1 Ownership
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#122-core-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.2 Core invariants
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#123-collected-test-footprint-as-implemented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.3 Collected-test footprint (as implemented)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#124-hard-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.4 Hard gates
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#125-typing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.5 Typing
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-implementation-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Implementation Sequence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-risks-and-tradeoffs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Risks and Tradeoffs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="robust-api-redesign-result-mode-lean-inference-core">Robust API Redesign: <code>result</code> Mode + Lean Inference Core<a class="headerlink" href="#robust-api-redesign-result-mode-lean-inference-core" title="Permanent link">&para;</a></h1>
+<ul>
+<li><strong>Status:</strong> Implemented (2026-08-01)</li>
+<li><strong>Design Date:</strong> 2026-06-05 (revised 2026-07-28 over ten review rounds)</li>
+<li><strong>Target Branch:</strong> <code>production-api</code></li>
+<li><strong>Builds on:</strong> <a href="../../refactor_gam_api/design/"><code>docs/refactor_gam_api/design.md</code></a> (spec/results split)</li>
+<li><strong>Release context:</strong> jaxgam is <strong>pre-release</strong> (<code>1.0.0a1</code>, unreleased). No
+  downstream users to keep compatible, so this makes the <strong>clean change</strong> — no
+  deprecation cycle, no <code>__getattr__</code> forwarding.</li>
+</ul>
+<blockquote>
+<p><strong>Scope (round 1).</strong> An earlier draft bundled an MLOps serving layer
+(versioned/integrity artifact, <code>save()</code>/<code>load()</code>, a JAX-free import guarantee,
+family rehydration from a key, posterior sampling). <strong>Removed.</strong> The design
+keeps two goals: <strong>(1) a robust, SOLID/DRY API</strong> and <strong>(2) a result that does
+not crush memory</strong>, with the inference core a plain <strong>picklable</strong> object.
+Durable/cross-version persistence is out of scope (§8).</p>
+<p><strong>Lifecycle/layering (rounds 2–3).</strong> The mode is a <code>fit()</code> option, not model
+spec; <strong>Phase 1 owns prediction-state construction and cache-dropping</strong>,
+<strong>Phase 3 only consumes</strong>; the predictor is <strong>mode-specific</strong> (never eagerly
+cloned); the no-retention invariant is framed by <strong>banned owners/attributes</strong>,
+not array shapes; pickle is <strong>same-version/transient</strong>.</p>
+<p><strong>Interface &amp; correctness (round 4).</strong> <code>result="inference"</code> returns a <strong>distinct
+narrower type</strong> (<code>GAMInferenceResult</code>) via <code>@overload</code>, not a partially-disabled
+<code>GAMResults</code>. Stripping uses a <strong><code>copy_for_prediction()</code></strong> hook; Phase 3 predict
+is <strong>CPU/NumPy</strong>; the mode keyword is keyword-only.</p>
+<p><strong>Tightening (round 5).</strong> Two result types; <code>Vp</code> required; defensive-copy
+read-only on <code>coefficients</code>/<code>Vp</code>; null-deviance DRY rewrite <strong>deferred</strong> (left
+byte-identical by not touching it).</p>
+<p><strong>Honesty pass (round 6).</strong> Nine fixes after a parity-focused review:
+<strong>(1)</strong> <code>copy_for_prediction()</code> also drops <strong>penalty caches</strong> (<code>_S</code>/<code>_penalties</code>)
+— <em>verified</em>: no <code>predict_matrix</code> reads them (<code>tprs.py:599</code>,
+<code>tensor.py:365–374,517–533</code>,
+<code>cubic.py:419</code>, <code>random_effects.py:222</code>), and tensor <code>_penalties</code> are
+<code>O(n_coefs²)</code> (often the dominant cost). The round-5 "drop <code>_X</code>, keep everything
+else" was wrong (§7). <strong>(2)</strong> <code>offset_was_nonzero</code> is an <strong>explicit
+<code>GAMPredictor</code> field</strong>, not pulled off the one-method Protocol (§5.3, §6).
+<strong>(3)</strong> the public read-only guarantee is <strong>downgraded to exactly
+"<code>coefficients</code> and <code>Vp</code> are read-only"</strong> (§5.3, §9). <strong>(4)</strong> <code>PredictSpec</code> is
+<strong>owned as the explicit Phase-1→Phase-3 boundary value object</strong> (<code>_predict_spec</code>,
+reversing round-5's Protocol-typed field — pickle exposes the concrete type
+anyway); the DIP claim is softened and the Protocol survives only as
+<code>predict_core</code>'s parameter seam (§5.1, §9). <strong>(5)</strong> <code>ModelSetup</code>'s <code>PredictSpec</code>
+is <strong>lazy</strong> (§5.2), and tests add <strong>direct R parity</strong> for the inference/pickled
+path (§12.2). <strong>(6)</strong> the family <strong>snapshot has one owner</strong> — <code>_from_fit</code>,
+<em>after</em> <code>put_theta</code> finalizes theta — distinct from api.py's pre-fit NB copy
+(§5.3, §11.2). <strong>(7)</strong> the user-facing flag is <code>result="full"|"inference"</code>
+(names the outcome). <strong>(8)</strong> the <code>summary()</code> CQS change is <strong>deferred</strong> out of
+scope (§9, §10.3). <strong>(9)</strong> the <code>@overload</code> typing claim is editor-aid-only
+unless <code>make typecheck</code> is added (§12.5).</p>
+<p><strong>Contract precision (round 7).</strong> Eight fixes after an implementability review:
+<strong>(1)</strong> offset is <strong>removed from the direct-R hard gate</strong> — <code>RBridge</code> has no
+offset argument at fit or predict (<code>r_bridge.py:241,1068</code>), and offset parity is
+covered transitively (§12.2.1b). <strong>(2)</strong> GP overrides <code>copy_for_prediction()</code> to
+drop <strong><code>_E_knot</code></strong> — an <code>O(n_knots²)</code> setup-only cache not read by predict
+(<code>gaussian_process.py:206</code> vs <code>_build_design</code>/<code>predict_matrix</code> at <code>:163,253</code>);
+at that round it was considered a result-retention miss, corrected in round 10
+(§7.2). <strong>(3)</strong> <code>offset_was_nonzero</code> is <strong>removed from <code>PredictSpec</code></strong> (the
+builder never reads it) — it lives only on <code>GAMPredictor</code>/<code>setup</code> (§5.2). <strong>(4)</strong>
+the public <code>result=</code> kwarg collides with the internal optimizer-output <code>result</code>
+(the optimizer-output local and <code>_from_fit</code> parameter); internal renames
+(<code>fit_result</code>, <code>result_mode</code>)
+are required (§11.2). <strong>(5)</strong> the lazy <code>PredictSpec</code> on a <strong>frozen</strong> <code>ModelSetup</code>
+(<code>design.py:81</code>) uses a <code>field(init=False)</code> cache + <code>object.__setattr__</code>, not
+<code>cached_property</code> (§5.2, §6). <strong>(6)</strong> stdlib <strong><code>pickle</code> is the public default</strong>;
+<code>cloudpickle</code> (only for locally-defined custom links) stays dev-only —
+persistence is downstream's concern, not a runtime dep (§8). <strong>(7)</strong> <code>family</code> is
+described as a <strong>snapshot</strong>, not "read-only family" (§5.3). <strong>(8)</strong> <code>predict_core</code>
+stays <strong>private</strong>; at that round <code>inference/</code> exported <code>GAMPredictor</code> plus a
+<code>PredictMatrixBuilder</code> Protocol for typing, which round 10 subsequently cut
+(§5.1, §11.1).</p>
+<p><strong>Consistency &amp; implementability polish (rounds 8–9).</strong> No design changes —
+doc-internal fixes after two verification passes against the repo: the direct-R
+link example is now a <strong>bridge-expressible</strong> key — <code>Gamma(link="log")</code> (the
+existing <code>gamma_log</code>, <code>r_bridge.py:213</code>, rpy2-only with a <code>bridge.mode != "rpy2"</code>
+skip-guard per <code>test_gaussian_process.py:93</code>) — rather than the unwired
+<code>poisson(link="identity")</code> (§12.2.1b); <strong><code>_E_knot</code></strong> is listed in every
+banned-cache enumeration and <code>gaussian_process.py</code> added to the modified-file
+list (§11.2); <code>fitting/*</code> is correctly labeled <strong>Phase 2</strong> (§11.3); stdlib
+<strong><code>pickle</code></strong> is stated as the public default over <code>cloudpickle</code> (§8); and <code>_X</code> is
+restored to every drop/absence summary to match the hard gate (§4.2).</p>
+<p><strong>Subtraction pass (round 10).</strong> Seven changes after an independent
+verification pass re-derived §2.1 from the code rather than from the doc. The
+central claim held (no <code>predict_matrix</code> reads <code>_S</code>/<code>_penalties</code>/<code>_E_knot</code>), but
+the rounds had been purely <strong>additive</strong> — round 10 removes rather than patches.
+<strong>(1)</strong> GP's <strong><code>_E_knot</code> is a dead store</strong>, not a retention problem: it is
+assigned at <code>gaussian_process.py:206</code>, cleared at <code>:209</code>, and <strong>read nowhere in
+<code>jaxgam/</code></strong>. It is
+<strong>89% of the GP baseline footprint</strong> (32.0 MB of 36.08 MB at <code>n=5000</code>), so
+<code>result="full"</code> leaks it too. Freed unconditionally at the end of GP <code>setup()</code>
+by a <strong>separate one-line prerequisite commit (B0)</strong>; the
+<code>copy_for_prediction()</code> override is retained as <strong>defense-in-depth</strong>, no longer
+load-bearing (§2.1, §7.2, §13, §14). <strong>(2)</strong> the <strong><code>PredictMatrixBuilder</code>
+Protocol is cut</strong> — after §6's delegation, <code>ModelSetup</code> and <code>PredictSpec</code> are
+not two implementations but one implementation and a forwarder; <code>predict_core</code>
+is typed directly on <code>PredictSpec</code> (§5.1, §6, §9, §11.1). <strong>(3)</strong> the lean type
+<strong>exposes <code>smooth_info</code>/<code>term_names</code></strong> (all-scalar metadata already carried by
+<code>PredictSpec</code>) so <code>edf</code> is interpretable off a <code>GAMInferenceResult</code> — zero
+bytes (§5.4, §5.5). <strong>(4)</strong> <code>formula</code> was about to become a <strong>ninth stored
+duplicate</strong> (on both <code>GAMPredictor</code> and <code>_FitDiagnostics</code>); the lean type reads
+it as a property (§5.4, §5.5). <strong>(5)</strong> the design reduces <strong>retention, not
+peak</strong> — stated explicitly rather than implied (§1.1, §3.2). <strong>(6)</strong> a
+<code>_jaxgam_version</code> stamp + <code>__setstate__</code> mismatch <strong>warning</strong> makes the
+same-version pickle contract <em>detectable</em> instead of silent (§8) — a guardrail,
+not the versioned format that stays out of scope. <strong>(7)</strong> <code>setup.penalties</code>
+(<code>CompositePenalty</code>, embedded <code>(total_p, total_p)</code>) added to the §2.1 inventory
+so the Metric-#3 delta is fully attributable. Citation drift fixed:
+one registry line and one result-test line.</p>
+</blockquote>
+<hr />
+<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="#1-overview">Overview</a></li>
+<li><a href="#2-current-state-analysis">Current-State Analysis</a></li>
+<li><a href="#3-design-goals-and-non-goals">Design Goals and Non-Goals</a></li>
+<li><a href="#4-the-result-mode-and-two-result-types">The <code>result</code> Mode and Two Result Types</a></li>
+<li><a href="#5-object-model">Object Model</a></li>
+<li><a href="#6-the-shared-predict-path">The Shared Predict Path (Phase 1 builder + Phase 3 finish)</a></li>
+<li><a href="#7-memory-reduction">Memory Reduction: <code>copy_for_prediction</code> and the Honest Invariant</a></li>
+<li><a href="#8-picklability">Picklability</a></li>
+<li><a href="#9-solid-dry-scorecard">SOLID / DRY Scorecard</a></li>
+<li><a href="#10-numerical-and-correctness-considerations">Numerical and Correctness Considerations</a></li>
+<li><a href="#11-file-plan">File Plan</a></li>
+<li><a href="#12-testing-strategy">Testing Strategy</a></li>
+<li><a href="#13-implementation-sequence">Implementation Sequence</a></li>
+<li><a href="#14-risks-and-tradeoffs">Risks and Tradeoffs</a></li>
+</ol>
+<hr />
+<h2 id="1-overview">1. Overview<a class="headerlink" href="#1-overview" title="Permanent link">&para;</a></h2>
+<h3 id="11-the-problem-a-training-job-pays-for-state-it-never-uses">1.1 The Problem: a training job pays for state it never uses<a class="headerlink" href="#11-the-problem-a-training-job-pays-for-state-it-never-uses" title="Permanent link">&para;</a></h3>
+<p><code>GAM.fit(data)</code> returns a <code>GAMResults</code> (<code>jaxgam/results.py</code>) that retains
+everything scaling with the <strong>training</strong> row count <code>n</code>: the design matrix
+<code>setup.X</code> at <code>O(n·p)</code>, raw covariate columns in <code>training_data</code>, response/
+weights/offset, in-sample <code>fitted_values</code>/<code>linear_predictor</code>, and per-smooth
+training design caches <code>_X</code>. It <em>also</em> keeps per-smooth <strong>penalty matrices</strong>
+(<code>_S</code>, tensor <code>_penalties</code>) that fitting needed but prediction does not. For
+interactive analysis the full result is right — you want <code>.summary()</code>/<code>.plot()</code>.
+For a job whose only output is a model to predict from, it is dead weight:
+<code>setup.X</code> is typically larger than the input, <code>training_data</code> pins the input
+frame alive, and a tensor's <code>_penalties</code> are <code>O(n_coefs²)</code>. None of it is needed
+for <code>predict(newdata)</code>.</p>
+<blockquote>
+<p><strong>Not counted as motivation: GP's <code>_E_knot</code>.</strong> The <code>O(n_knots²)</code> knot–knot
+kernel is 89% of the GP baseline footprint (32.0 MB of 36.08 MB at <code>n=5000</code>),
+but it is a <strong>dead store</strong>, not a retention problem — assigned at
+<code>GaussianProcessSmooth.setup()</code> and <strong>read nowhere in <code>jaxgam/</code></strong>, so before
+B0 <code>result="full"</code> leaked it just as badly. It is now freed unconditionally at
+the end of GP <code>setup()</code>
+by a <strong>one-line prerequisite commit (B0, §13)</strong> that needs none of this design.
+Attributing it to <code>result="inference"</code> would inflate the headline with a bug
+fix. What this design actually buys on a GP fit is the remaining ~4 MB
+(<code>setup.X</code>, <code>_X</code>, <code>training_data</code>, <code>_S</code>).</p>
+</blockquote>
+<p><strong>This reduces retention, not peak.</strong> The fit still materializes <code>setup.X</code>, every
+per-smooth <code>_X</code>, and every penalty; <code>result="inference"</code> drops them in <code>_from_fit</code>
+<em>after</em> Phase 2 completes. That is exactly right for a long-lived serving object,
+and does <strong>nothing</strong> for a large-<code>n</code> fit that OOMs while fitting. Peak-memory work
+(chunking, sparse) is a different project (§3.2).</p>
+<h3 id="12-the-fix-a-result-mode-two-result-types-a-lean-core">1.2 The Fix: a <code>result</code> mode (two result types) + a lean core<a class="headerlink" href="#12-the-fix-a-result-mode-two-result-types-a-lean-core" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>A keyword-only <code>result: Literal["full", "inference"] = "full"</code> on
+   <code>GAM.fit()</code>.</strong> <code>"full"</code> (default) returns a <strong><code>GAMResults</code></strong> — today's surface.
+   <code>"inference"</code> returns a distinct, narrower <strong><code>GAMInferenceResult</code></strong> that retains
+   <strong>none of the dense training arrays and no penalty caches</strong> (§3.1, §7) and
+   drops the <strong>training-data-backed diagnostic surface</strong>
+   (<code>summary()</code>/<code>plot()</code>/self-prediction). It <strong>keeps</strong> the cheap scalar
+   diagnostics (<code>edf*</code>, <code>deviance</code>, <code>null_deviance</code>, <code>score</code>, …) — they are
+   already computed and cost <code>O(1)</code>/<code>O(p)</code> (§4.2). <code>fit()</code> is <code>@overload</code>ed so the
+   static type is exact (§12.5).</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">model</span> <span class="o">=</span> <span class="n">GAM</span><span class="p">(</span><span class="s2">&quot;y ~ s(x)&quot;</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="s2">&quot;poisson&quot;</span><span class="p">)</span>     <span class="c1"># pure spec — reusable</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">res</span><span class="p">:</span>  <span class="n">GAMResults</span>         <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>                      <span class="c1"># full</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">lean</span><span class="p">:</span> <span class="n">GAMInferenceResult</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">&quot;inference&quot;</span><span class="p">)</span>  <span class="c1"># lean</span>
+</code></pre></div>
+<p><code>result</code> lives on <code>fit()</code> (beside <code>weights</code>/<code>offset</code>) because it controls
+   <strong>result materialization</strong>, not the statistical model. Naming the <em>outcome</em>
+   (<code>"inference"</code>) rather than a behavior (<code>diagnostics=False</code>) keeps the call
+   site self-documenting and is extensible (an eager-diagnostics mode could be a
+   third value).</p>
+<ol>
+<li><strong>A lean, picklable inference core, <code>GAMPredictor</code></strong> (<code>jaxgam/inference/</code>):
+   the irreducible state for point + standard-error prediction — coefficients
+   (β̂), the Bayesian posterior covariance <code>Vp</code> (<strong>required</strong>), a snapshot of the
+   fitted family (exact link, final NB <code>theta</code>), an external-offset flag, and an
+   <code>n</code>-independent predict-matrix spec. No training data, no dense training-row array,
+   no penalty matrices, with <strong><code>coefficients</code>/<code>Vp</code> read-only</strong> (§5.3), picklable
+   for same-version/transient handoff (§8). <code>GAMInferenceResult</code> <em>composes</em> one;
+   <code>GAMResults</code> <em>builds</em> one on demand via <code>to_predictor()</code>.</li>
+</ol>
+<p>"Robust for downstream production" = the <strong>in-memory objects</strong> are lean, narrowly
+typed, and read-only on the two arrays that matter — <em>not</em> that jaxgam ships a
+durable serialization format (it does not; §8).</p>
+<h3 id="13-scope">1.3 Scope<a class="headerlink" href="#13-scope" title="Permanent link">&para;</a></h3>
+<p><strong>In scope:</strong> keyword-only <code>result</code> on <code>GAM.fit()</code> returning two types; a
+<code>GAMInferenceResult</code> retaining no dense training arrays and no penalty caches; a
+<code>GAMPredictor</code> core (narrow, <code>coefficients</code>/<code>Vp</code> read-only, picklable) + a Phase-1
+<code>PredictSpec</code> (lazy) + a single Phase-1 predict-matrix builder + a single Phase-3
+predict finish; <strong>export</strong> the new public types; the zero-numerical-risk DRY
+cleanups tied to the result-type refactor (collapse the eight <code>setup.*</code> duplicate
+fields; drop the dead <code>hasattr</code> guard); and the <strong>GP <code>_E_knot</code> dead-store fix</strong>
+(§13 commit B0) — a prerequisite, not a product of the mode.</p>
+<p><strong>Out of scope:</strong> serialization <em>format</em> / <code>save()</code>/<code>load()</code> / versioning /
+integrity / migration; a JAX-free import guarantee; distributional sampling /
+intervals / <code>family.sample()</code>; a point-only (drop-<code>Vp</code>) mode; the <strong>null-deviance
+DRY rewrite</strong> and the <strong><code>summary()</code> CQS change</strong> (both <strong>deferred</strong> — orthogonal,
+user-visible/math-adjacent; §10.3); back-compat machinery; <strong>any change to a
+numerical result</strong> (predictions/SE/EDF/deviance incl. <code>null_deviance</code>
+byte-identical to today — §10).</p>
+<h3 id="14-relation-to-refactor_gam_api">1.4 Relation to <code>refactor_gam_api</code><a class="headerlink" href="#14-relation-to-refactor_gam_api" title="Permanent link">&para;</a></h3>
+<p>Builds on the prior spec-vs-results split and the removed <code>_fitted</code> guard; does
+not implement its deprecated <code>__getattr__</code> forwarding (pre-release).</p>
+<hr />
+<h2 id="2-current-state-analysis">2. Current-State Analysis<a class="headerlink" href="#2-current-state-analysis" title="Permanent link">&para;</a></h2>
+<h3 id="21-what-fitdf-retains-in-memory">2.1 What <code>fit(df)</code> retains in memory<a class="headerlink" href="#21-what-fitdf-retains-in-memory" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Held array</th>
+<th>Size</th>
+<th>Copy or alias?</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>setup.X</code></td>
+<td><strong>(n × p)</strong></td>
+<td>own buffer</td>
+<td><strong>dominant <code>O(n·p)</code> cost</strong></td>
+</tr>
+<tr>
+<td>per-smooth <code>_X</code> (and nested)</td>
+<td>(n × k) each</td>
+<td>own buffer</td>
+<td>training design caches inside each smooth (and <code>_marginals</code>/<code>base_smooth</code>) — §7</td>
+</tr>
+<tr>
+<td>per-smooth <code>_S</code> / tensor <code>_penalties</code></td>
+<td><strong>(k × k)</strong> / <strong>(n_coefs × n_coefs)</strong></td>
+<td>own buffer</td>
+<td><strong>penalty matrices — fitting-only, NOT read by predict</strong> (§2.1 note)</td>
+</tr>
+<tr>
+<td><code>setup.penalties</code> (<code>CompositePenalty</code>)</td>
+<td>n_penalties × <strong>(total_p × total_p)</strong></td>
+<td>own buffer</td>
+<td>penalties embedded in constrained space (<code>ModelSetup.penalties</code>); read post-fit only by <code>summary()</code>. Dropped with <code>setup</code>; line-item it in the Metric-#3 walk or the delta has an unexplained residual on multi-penalty models.</td>
+</tr>
+<tr>
+<td>GP <code>_E_knot</code></td>
+<td>(n_knots × n_knots)</td>
+<td>own buffer</td>
+<td><strong>dead store</strong> — assigned and immediately cleared in <code>GaussianProcessSmooth.setup()</code>, read nowhere. Freed at setup by commit B0 (§13); not a <code>result</code>-mode win.</td>
+</tr>
+<tr>
+<td><code>training_data</code> (dict)</td>
+<td>Σ smooth-covariate cols (n each)</td>
+<td>view-or-copy</td>
+<td><strong>pins the input frame alive</strong></td>
+</tr>
+<tr>
+<td><code>setup.y</code>, <code>setup.weights</code>, <code>setup.offset</code></td>
+<td>(n,) each</td>
+<td>derived</td>
+<td>response / weights / offset</td>
+</tr>
+<tr>
+<td><code>fitted_values</code>, <code>linear_predictor</code></td>
+<td>(n,) each</td>
+<td>fresh from device</td>
+<td>in-sample predictions</td>
+</tr>
+<tr>
+<td><code>results.X / y / weights / offset</code></td>
+<td>—</td>
+<td><strong>aliases of <code>setup.*</code></strong></td>
+<td>same buffers, not extra copies</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>What <code>predict_matrix</code> actually reads (verified this round) — penalties are
+NOT predict-critical.</strong> Every read of <code>_S</code>/<code>_penalties</code> (and GP's <code>_E_knot</code>) is
+in <code>build_penalty_matrices()</code>/setup/eigendecomp (Phase-1 fitting), <strong>never</strong> in a
+<code>predict_matrix</code>:
+- <strong>TPRS</strong> reads <code>_shift</code>, <code>_Xu</code> (knots), <code>_UZ</code> (reparam) — <code>tprs.py:588–599</code>; <code>_S</code> (<code>tprs.py:515</code>) unused in predict.
+- <strong>Cubic</strong> reads <code>_knots</code>, <code>_F</code> — <code>cubic.py:419</code>; <code>_S</code> (<code>cubic.py:375</code>) unused in predict.
+- <strong>Random effect</strong> reads stored levels via <code>_build_interaction_matrix</code> — <code>random_effects.py:222</code>; <code>_S</code> (<code>:98</code>) only in <code>build_penalty_matrices</code> (<code>:238</code>).
+- <strong>GP</strong> reads <code>_knt</code>/<code>_resolved_rho</code>/<code>_shift</code>/<code>_UZ</code> via <code>_build_design</code> and <code>predict_matrix</code> (<code>gaussian_process.py:163,253</code>); <code>_S</code> and <code>_E_knot</code> are NOT read by predict.
+- <strong>Tensor</strong> reads <code>_marginals</code>, <code>_XP_list</code> (+ <code>_Z_list</code> for <code>ti</code>) in <code>predict_matrix</code> (<code>tensor.py:365–374,517–533</code>); <code>_penalties</code> is only used in setup/<code>build_penalty_matrices</code>.</p>
+<p><strong>Stronger for <code>_E_knot</code>: it is read by <em>nothing</em>.</strong> <code>grep -rn _E_knot jaxgam/</code>
+shows only writes: declaration, defensive clearing in <code>copy_for_prediction()</code>,
+assignment during setup, and the immediate B0 reset to <code>None</code>
+(<code>gaussian_process.py:90,98,206,209</code>). Not <code>predict_matrix</code>, not
+<code>build_penalty_matrices</code>. It is a dead store in <strong>both</strong> result modes, which is
+why it is fixed at the source (commit B0, §13) rather than papered over by
+<code>copy_for_prediction()</code>. The GP override survives as <strong>defense-in-depth</strong> (§7.2).</p>
+<p>So the droppable set is <code>_X</code>, the penalty caches <code>_S</code>/<code>_penalties</code>, <strong>and GP's <code>_E_knot</code></strong> (already <code>None</code> post-B0). The
+kept set is exactly the predict transforms: knots (<code>_Xu</code>), reparam/constraint
+(<code>_UZ</code>, <code>_F</code>, <code>_XP_list</code>, <code>_Z_list</code>), <code>_shift</code>, stored levels — all <code>O(knots·k)</code>
+or <code>O(k²)</code>, none <code>O(n)</code>. Tensor <code>_penalties</code> at <code>O(n_coefs²)</code> are frequently the
+single largest retained array, so dropping them is a material win, not cosmetic.</p>
+</blockquote>
+<h3 id="22-field-inventory-and-consumer-map">2.2 Field Inventory and Consumer Map<a class="headerlink" href="#22-field-inventory-and-consumer-map" title="Permanent link">&para;</a></h3>
+<p>Categories: <strong>S</strong> serving-critical, <strong>D</strong> diagnostic, <strong>T</strong> training-data, <strong>M</strong>
+metadata, <strong>dup</strong> duplicate.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Cat</th>
+<th>Scales <code>n</code>?</th>
+<th>Consumers</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coefficients</code> (p,)</td>
+<td><strong>S</strong></td>
+<td>no</td>
+<td>predict, summary, plot</td>
+<td>most important serving array</td>
+</tr>
+<tr>
+<td><code>Vp</code> (p,p)</td>
+<td><strong>S</strong></td>
+<td>no</td>
+<td>predict (SE), summary, plot</td>
+<td><strong>always populated by a fit</strong> — §5.3 makes it required</td>
+</tr>
+<tr>
+<td><code>linear_predictor</code> (n,)</td>
+<td>D</td>
+<td><strong>yes</strong></td>
+<td>predict (self only)</td>
+<td>cache of <code>X@coef</code></td>
+</tr>
+<tr>
+<td><code>fitted_values</code> (n,)</td>
+<td>D</td>
+<td><strong>yes</strong></td>
+<td>summary, repr</td>
+<td>cache of <code>linkinv(eta)</code></td>
+</tr>
+<tr>
+<td><code>scale</code>, <code>edf</code>, <code>edf1</code>, <code>edf_total</code>, <code>deviance</code>, <code>null_deviance</code>, <code>smoothing_params</code>, <code>score</code></td>
+<td>D</td>
+<td>no/<code>O(p)</code></td>
+<td>summary, plot, repr</td>
+<td>cheap scalar/<code>O(p)</code> — <strong>kept in both result types</strong> (§4.2)</td>
+</tr>
+<tr>
+<td><code>converged</code>, <code>n_iter</code>, <code>convergence_info</code>, <code>theta</code>, <code>n</code>, <code>formula</code>, <code>method</code>, <code>lambda_strategy</code>, <code>execution_path</code></td>
+<td>M</td>
+<td>no</td>
+<td>repr, summary</td>
+<td>provenance/metadata</td>
+</tr>
+<tr>
+<td><code>family</code> (object)</td>
+<td><strong>S</strong>/D</td>
+<td>no</td>
+<td>predict (link), summary, repr</td>
+<td>Before fitting, <code>GAM.fit()</code> copies only mutable extended families (<code>api.py:155–158</code>) to protect the registry; <code>_from_fit</code> then snapshots every fitted family (<code>results.py:233</code>). Snapshot owner = <code>_from_fit</code>, post-<code>put_theta</code> (§5.3).</td>
+</tr>
+<tr>
+<td><code>setup</code> (<code>ModelSetup</code>)</td>
+<td><strong>S</strong>/D</td>
+<td><strong>yes</strong></td>
+<td>predict, summary</td>
+<td>predict needs <code>build_predict_matrix</code>; re-holds <code>X/y/weights/penalties</code> + per-smooth <code>_X</code>/penalties</td>
+</tr>
+<tr>
+<td><code>coef_map</code>, <code>smooth_info</code>, <code>term_names</code></td>
+<td><strong>dup</strong>/M</td>
+<td>no</td>
+<td>summary, plot</td>
+<td><code>= setup.*</code>. <strong><code>SmoothInfo</code> is all <code>str</code>/<code>int</code>/<code>bool</code></strong> (<code>design.py:68–77</code>) — <strong>zero arrays</strong>, and <code>PredictSpec</code> already carries <code>smooth_info</code> (§5.2). So <code>smooth_info</code>/<code>term_names</code> are free to expose on the lean type, and must be: without them <code>edf</code> is an unlabeled array (§5.4).</td>
+</tr>
+<tr>
+<td><code>X</code>, <code>y</code>, <code>weights</code>, <code>offset</code></td>
+<td><strong>dup/T</strong></td>
+<td><strong>yes</strong></td>
+<td>predict (self SE), summary</td>
+<td><code>= setup.*</code> (aliases)</td>
+</tr>
+<tr>
+<td><code>training_data</code> (dict)</td>
+<td><strong>T</strong></td>
+<td><strong>yes</strong></td>
+<td>plot</td>
+<td>raw covariate columns, plotting only</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Minimal inference set</strong> (<code>predict(newdata, se_fit=True)</code>): <code>coefficients</code>,
+<code>Vp</code>, the fitted <code>family</code> (for <code>link</code>), the external-offset flag, and the
+predict-matrix metadata (with predict-only smooths — <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code>
+dropped).</p>
+<blockquote>
+<p><strong>Verified (this session):</strong> <code>ModelSetup.build_predict_matrix()</code>
+(now <code>formula/predict_matrix.py:82–137</code>) reads only <code>newdata</code> + the
+<code>n</code>-independent metadata
+(<code>parametric_terms</code>, <code>has_intercept</code>, <code>factor_info</code>, <code>ordered_factors</code>,
+<code>dropped_param_names</code>, <code>parametric_keep_cols</code>, <code>coef_map.{terms, transform_X,
+total_coefs}</code>, plus <code>smooth_info</code> for length-validation) and calls
+<code>term.smooth.predict_matrix</code>. The thin <code>ModelSetup</code> compatibility shims are
+<code>_to_dict</code> (<code>formula/design.py:453</code>), <code>_validate_equal_lengths</code>
+(<code>formula/design.py:513</code>), and <code>_build_parametric_matrix</code>
+(<code>formula/design.py:594</code>); their real bodies live at
+<code>formula/predict_matrix.py:140</code>, <code>:160</code>, and <code>:242</code>. The last calls
+<code>_encode_factor</code> (<code>:204</code>), which calls <code>_contr_poly</code> (<code>:185</code>), so the §6
+move relocates <strong>five</strong> helpers in all. Never reads
+<code>self.X</code>/<code>y</code>/
+<code>weights</code>. That <strong>exact attribute list is the <code>PredictSpec</code> field set</strong> (§5.2).</p>
+</blockquote>
+<h3 id="23-duplication-dry">2.3 Duplication (DRY)<a class="headerlink" href="#23-duplication-dry" title="Permanent link">&para;</a></h3>
+<p>Before this implementation, eight fields were set verbatim from <code>setup.*</code> in
+<code>_from_fit</code>:
+<code>X</code>, <code>y</code>, <code>weights</code>, <code>offset</code>, <code>coef_map</code>, <code>smooth_info</code>, <code>term_names</code>, <code>n</code> —
+reference aliases that obscure ownership. <strong>Seven</strong> become <code>@property</code> reads of
+<code>setup</code> (§5.5); <code>n</code> (= <code>setup.n_obs</code>) is instead re-homed to the
+<code>_FitDiagnostics</code> shared base as scalar metadata, since the lean
+<code>GAMInferenceResult</code> retains no <code>setup</code>.</p>
+<h3 id="24-pre-implementation-smells-in-scope">2.4 Pre-implementation smells in scope<a class="headerlink" href="#24-pre-implementation-smells-in-scope" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Smell</th>
+<th>Severity</th>
+<th>Evidence</th>
+<th>Disposition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Result retained all <code>O(n)</code> state + penalties by default; no opt-out</td>
+<td>critical</td>
+<td><code>setup.X</code>, per-smooth <code>_X</code>, <code>_S</code>/<code>_penalties</code>, <code>training_data</code></td>
+<td>fixed by the result mode (<code>_E_knot</code> fixed separately by B0)</td>
+</tr>
+<tr>
+<td>Raw covariates + response retained; pins input frame</td>
+<td>major</td>
+<td><code>training_data</code>, <code>setup.y</code></td>
+<td>dropped under <code>result="inference"</code></td>
+</tr>
+<tr>
+<td>Eight <code>setup.*</code> fields duplicated as stored aliases</td>
+<td>major</td>
+<td>pre-implementation <code>_from_fit</code></td>
+<td>fixed (→ properties)</td>
+</tr>
+<tr>
+<td>Dead <code>hasattr(family, "family_name")</code> guard in <code>__repr__</code></td>
+<td>trivial</td>
+<td>pre-implementation <code>GAMResults.__repr__</code></td>
+<td>fixed</td>
+</tr>
+<tr>
+<td><code>summary()</code> prints to stdout <em>and</em> returns</td>
+<td>minor</td>
+<td><code>GAMResults.summary</code></td>
+<td><strong>deferred (§10.3)</strong> — user-visible, orthogonal</td>
+</tr>
+<tr>
+<td>Null-deviance re-implements IRLS instead of reusing family helpers</td>
+<td>minor</td>
+<td><code>_compute_null_deviance</code> / <code>_fit_null_intercept</code></td>
+<td><strong>deferred (§10.3)</strong> — math-adjacent</td>
+</tr>
+</tbody>
+</table>
+<h3 id="25-solid-audit">2.5 SOLID Audit<a class="headerlink" href="#25-solid-audit" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>SRP</strong> — <code>GAMResults</code> changes for four reasons (inference, summary, plot,
+  data-holding).</li>
+<li><strong>ISP/LSP</strong> — a predict-only client carries matplotlib/summary/training_data;
+  a single result type whose diagnostic methods raise under <code>result="inference"</code>
+  would be a refused-bequest (round 4 fixes this with two types, §4).</li>
+<li><strong>DIP</strong> — predict reaches into concrete <code>ModelSetup</code>/<code>CoefficientMap</code>. The
+  shipped design uses an explicit boundary value object (<code>PredictSpec</code>) typed
+  directly by <code>predict_core</code>; the one-method Protocol considered in rounds 4–9
+  was cut in round 10 because it abstracted only this single implementation. It
+  does <strong>not</strong> claim the predictor is decoupled from Phase 1 (§5.1, §9).</li>
+</ul>
+<hr />
+<h2 id="3-design-goals-and-non-goals">3. Design Goals and Non-Goals<a class="headerlink" href="#3-design-goals-and-non-goals" title="Permanent link">&para;</a></h2>
+<h3 id="31-goals">3.1 Goals<a class="headerlink" href="#31-goals" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong><code>result="inference"</code> ⇒ no dense training arrays and no penalty caches
+   retained</strong>, framed by <strong>banned owners/attributes</strong>: <code>setup</code>, <code>fitted_values</code>,
+   <code>linear_predictor</code>, <code>training_data</code> not held; <code>X</code>/<code>y</code>/<code>weights</code>/<code>offset</code> never
+   stored; and <strong>no smooth retains <code>_X</code>, <code>_S</code>, <code>_penalties</code>, or GP's <code>_E_knot</code></strong> (recursively,
+   including nested <code>_marginals</code>/<code>base_smooth</code>). It <strong>does</strong> retain the predict
+   transforms (knots <code>_Xu</code>, reparam <code>_UZ</code>/<code>_F</code>/<code>_XP_list</code>/<code>_Z_list</code>, <code>_shift</code>,
+   stored levels) — bounded by <code>max_knots</code>/<code>k</code>, not <code>n</code> — and the cheap scalar
+   diagnostics. Retained inference state is <code>O(p² + Σ_smooth predict-transform
+   size)</code>; the penalty <code>O(Σ k²)</code> / <code>O(Σ n_coefs²)</code> is <strong>gone</strong>. (Test asserts
+   banned owners/attributes incl. <code>_S</code>/<code>_E_knot is None</code> and empty <code>_penalties</code>,
+   <strong>not</strong> "no array has dim == n" — knots are legitimately <code>≤ n</code> rows; §12.2.2.)</li>
+<li><strong>Phase 1 owns prediction-state construction and cache-dropping;</strong> Phase 3
+   only consumes. No Phase 3 → Phase 1 private access; no upward import.</li>
+<li><strong>No eager predictor materialization</strong> (<code>result="full"</code>): nothing is
+   cloned/stripped at fit; <code>ModelSetup</code>'s <code>PredictSpec</code> is built <strong>lazily</strong> on the
+   first <code>predict(newdata)</code>/<code>to_predictor()</code>, so a full fit that never predicts
+   pays nothing (§5.2).</li>
+<li><strong>Two narrow result types</strong> (no runtime-raising diagnostic methods); the lean
+   type exposes only inference + cheap scalars; both are <strong>exported</strong> (§11).</li>
+<li><strong>A lean inference core</strong> (<code>GAMPredictor</code>) that <strong>owns</strong> <code>coefficients</code>/<code>Vp</code>
+   (defensive copy, then <code>write=False</code>), snapshots the family, carries the
+   external-offset flag explicitly, and is picklable.</li>
+<li><strong>Honest layering &amp; one source per path:</strong> <strong>one</strong> Phase-1 predict-matrix
+   builder over <strong>one concrete <code>PredictSpec</code></strong>; <strong>one</strong> Phase-3 predict finish;
+   <code>predict_core</code> is typed directly on <code>PredictSpec</code> (<strong>no Protocol seam</strong> — §5.1);
+   the predictor carries <code>PredictSpec</code> as an explicit boundary value object (not a
+   hidden dependency, §9). Eliminate the eight <code>setup.*</code> <em>stored</em> duplications —
+   and introduce no new ones (<code>formula</code>, §5.5). (Deliberate
+   by-reference sharing of read-only predict transforms is allowed; this is about
+   removing duplicate <strong>stored aliases</strong>, §5.3, §7.)</li>
+<li><strong>Preserve the three-phase boundary;</strong> no fitting math touched; mgcv parity
+   preserved by construction <em>and verified directly for the inference path</em>
+   (§12.2); Phase 3 predict is CPU/NumPy (§6).</li>
+</ol>
+<h3 id="32-non-goals">3.2 Non-Goals<a class="headerlink" href="#32-non-goals" title="Permanent link">&para;</a></h3>
+<p>ML serving infrastructure; a JAX-free import path; distributional sampling /
+intervals / <code>family.sample()</code>; a point-only (drop-<code>Vp</code>) mode; the null-deviance
+DRY rewrite and the <code>summary()</code> CQS change (<strong>deferred</strong>, §10.3); back-compat
+machinery; <strong>peak</strong> fit-time memory (chunking/sparse — this design changes
+retention only, §1.1); <strong>changing any numerical result</strong> (predictions/SE/EDF/
+deviance incl. <code>null_deviance</code> byte-identical to today — §10).</p>
+<hr />
+<h2 id="4-the-result-mode-and-two-result-types">4. The <code>result</code> Mode and Two Result Types<a class="headerlink" href="#4-the-result-mode-and-two-result-types" title="Permanent link">&para;</a></h2>
+<h3 id="41-surface">4.1 Surface<a class="headerlink" href="#41-surface" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Literal</span><span class="p">,</span> <span class="n">overload</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">GAM</span><span class="p">:</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">formula</span><span class="p">,</span> <span class="n">family</span><span class="o">=</span><span class="s2">&quot;gaussian&quot;</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;REML&quot;</span><span class="p">,</span> <span class="n">sp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span> <span class="o">...</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="nd">@overload</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">fit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">offset</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>            <span class="n">result</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;full&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;full&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;GAMResults&quot;</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="nd">@overload</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">fit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">offset</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>            <span class="n">result</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;inference&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="s2">&quot;GAMInferenceResult&quot;</span><span class="p">:</span> <span class="o">...</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">fit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">offset</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">&quot;full&quot;</span><span class="p">):</span> <span class="o">...</span>
+</code></pre></div>
+<p><code>result</code> is <strong>keyword-only</strong> (<code>*</code>), cannot be passed positionally, and the
+overloads disambiguate the return type statically. It controls <strong>result
+materialization</strong>, alongside the per-call <code>weights</code>/<code>offset</code>. Invalid values
+raise <code>ValueError</code> at the top of <code>fit()</code>.</p>
+<h3 id="42-what-the-mode-means-exact-disposition">4.2 What the mode means — exact disposition<a class="headerlink" href="#42-what-the-mode-means-exact-disposition" title="Permanent link">&para;</a></h3>
+<p><code>result</code> toggles the <strong>training-data-backed diagnostic surface</strong> + the penalty
+caches, not the diagnostic <em>values</em>. Precisely:</p>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th><code>GAMResults</code> (<code>result="full"</code>)</th>
+<th><code>GAMInferenceResult</code> (<code>result="inference"</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dense training arrays (<code>setup.X</code>, per-smooth <code>_X</code>, <code>training_data</code>, <code>y</code>/<code>weights</code>/<code>offset</code>, <code>fitted_values</code>, <code>linear_predictor</code>)</td>
+<td>retained</td>
+<td><strong>dropped</strong></td>
+</tr>
+<tr>
+<td>Penalty caches (<code>_S</code>, tensor <code>_penalties</code>)</td>
+<td>retained</td>
+<td><strong>dropped</strong> (fitting-only; §2.1)</td>
+</tr>
+<tr>
+<td>GP <code>_E_knot</code> dead store</td>
+<td><strong>cleared during setup by B0</strong></td>
+<td><strong>cleared during setup by B0</strong> (the prediction-copy hook also clears it defensively)</td>
+</tr>
+<tr>
+<td>Predict-critical state (<code>coefficients</code>, <code>Vp</code>, family snapshot, knots/reparam transforms)</td>
+<td>retained</td>
+<td>retained</td>
+</tr>
+<tr>
+<td>Cheap scalar diagnostics (<code>edf*</code>, <code>deviance</code>, <code>null_deviance</code>, <code>score</code>, <code>scale</code>, <code>theta</code>, <code>converged</code>, …)</td>
+<td>retained</td>
+<td><strong>retained</strong> (<code>O(1)</code>/<code>O(p)</code>, already computed; useful for production logging)</td>
+</tr>
+<tr>
+<td>Diagnostic <em>surface</em>: <code>summary()</code>, <code>plot()</code>, self-prediction cache</td>
+<td>present</td>
+<td><strong>absent</strong></td>
+</tr>
+</tbody>
+</table>
+<p>So the cheap scalars are kept in <strong>both</strong> modes — dropping them would save
+nothing. <code>result="inference"</code> means <em>no training arrays, no penalty caches, no
+summary/plot surface</em> — the scalar diagnostics remain accessible.</p>
+<h3 id="43-behavioral-semantics">4.3 Behavioral semantics<a class="headerlink" href="#43-behavioral-semantics" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>GAMResults</code></th>
+<th><code>GAMInferenceResult</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>predict(newdata, se_fit=...)</code></td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>predict()</code> self-prediction (<code>newdata=None</code>)</td>
+<td>✅ (cached <code>eta</code>)</td>
+<td><strong>method requires <code>newdata</code></strong> (no in-sample cache)</td>
+</tr>
+<tr>
+<td><code>predict_matrix(newdata)</code>, <code>to_predictor()</code></td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>coefficients</code>, <code>Vp</code>, <code>family</code>/<code>link</code>, <code>formula</code></td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>scalar diagnostics (§4.2 row 4)</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>summary()</code>, <code>plot()</code></td>
+<td>✅</td>
+<td><strong>not present</strong> (<code>AttributeError</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>There is <strong>no <code>DiagnosticsNotRetainedError</code></strong>: the lean type simply does not have
+<code>summary()</code>/<code>plot()</code>, and its <code>predict(newdata)</code> requires <code>newdata</code>. The type
+system (and <code>@overload</code>) communicates the contract; <code>GAMInferenceResult.__repr__</code>
+adds a one-line hint ("fit with <code>result='full'</code> for <code>summary()</code>/<code>plot()</code>"). This
+is the ISP/LSP-clean alternative to a partially-disabled object.</p>
+<hr />
+<h2 id="5-object-model">5. Object Model<a class="headerlink" href="#5-object-model" title="Permanent link">&para;</a></h2>
+<p>Three frozen types. Roles: <code>GAMPredictor</code> ⊂ <code>GAMInferenceResult</code>'s surface;
+<code>GAMResults</code> is the full diagnostic result.</p>
+<blockquote>
+<p><strong>User-facing distinction:</strong> <code>fit(result="inference")</code> already returns a lean,
+directly usable prediction object. Calling <code>to_predictor()</code> on that result is
+optional: it returns the exact composed <code>_predictor</code> (<code>is</code> identity), performs
+no copy, and cannot reduce retained memory further. The method exists as a
+uniform handoff boundary across both result types. On <code>GAMResults</code> it builds an
+independent lean core; on <code>GAMInferenceResult</code> it exposes the core already
+built during fit. A caller keeps the inference result when it wants prediction
+plus diagnostics/labels, and hands off <code>GAMPredictor</code> when the receiving
+component should have prediction methods only.</p>
+</blockquote>
+<h3 id="51-no-predictmatrixbuilder-protocol-considered-and-cut-round-10">5.1 No <code>PredictMatrixBuilder</code> Protocol (considered and cut, round 10)<a class="headerlink" href="#51-no-predictmatrixbuilder-protocol-considered-and-cut-round-10" title="Permanent link">&para;</a></h3>
+<p>Rounds 4–9 carried a one-method <code>@runtime_checkable</code> Protocol in
+<code>jaxgam/inference/_protocol.py</code> so that <code>predict_core</code> could accept "either a
+<code>PredictSpec</code> (lean path) or a <code>ModelSetup</code> (full-result self-prediction)."
+<strong>It is cut.</strong> Once §6's delegation lands —</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># ModelSetup, after the §6 move</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_predict_matrix</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">newdata</span><span class="p">):</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="k">return</span> <span class="n">build_predict_matrix</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_lazy_predict_spec</span><span class="p">(),</span> <span class="n">newdata</span><span class="p">)</span>
+</code></pre></div>
+<p>— <code>ModelSetup</code> and <code>PredictSpec</code> are <strong>not two implementations of a seam</strong>. They
+are one implementation and a forwarder to it. Passing <code>setup</code> and passing
+<code>setup._lazy_predict_spec()</code> reach the same cached <code>PredictSpec</code> and produce
+byte-identical output, so the Protocol had exactly one shape and abstracted
+nothing. <code>predict_core</code> is therefore typed directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">predict_core</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="s2">&quot;PredictSpec&quot;</span><span class="p">,</span> <span class="n">coefficients</span><span class="p">,</span> <span class="n">Vp</span><span class="p">,</span> <span class="n">link</span><span class="p">,</span> <span class="n">newdata</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span> <span class="o">...</span>
+</code></pre></div>
+<p><code>GAMPredictor</code> passes <code>self._predict_spec</code>; <code>GAMResults</code> passes
+<code>self.setup._lazy_predict_spec()</code> (already built by the time anything predicts —
+<code>build_predict_matrix</code> builds it too, so goal #3 is untouched: a full fit that
+never predicts still builds no spec).</p>
+<p><strong>What this removes:</strong> a file, a public export, a <code>runtime_checkable</code> decorator
+Python does not enforce structurally anyway, and the §9 paragraph explaining why
+the Protocol was not really achieving DIP. The design's honest DIP position was
+already "bounded, no decoupling claimed" — the consistent conclusion is to delete
+the seam rather than document its limits for a fourth round. This is the one
+place the additive review process had visibly accumulated structure.</p>
+<h3 id="52-predictspec-new-phase-1-the-explicit-boundary-value-object">5.2 <code>PredictSpec</code> (NEW — Phase 1, the explicit boundary value object)<a class="headerlink" href="#52-predictspec-new-phase-1-the-explicit-boundary-value-object" title="Permanent link">&para;</a></h3>
+<p>Lives in <strong><code>jaxgam/formula/predict_matrix.py</code> (Phase 1)</strong>, with the builder and
+helpers it feeds (§6). A <strong>concrete dataclass with explicit fields</strong> — the exact
+<code>n</code>-independent set the builder reads (§2.2): <code>coef_map</code>, <code>smooth_info</code>,
+<code>parametric_terms</code>, <code>factor_info</code>, <code>ordered_factors</code>, <code>has_intercept</code>,
+<code>parametric_keep_cols</code>, <code>dropped_param_names</code>, <code>total_coefs</code>. (It does <strong>not</strong>
+carry <code>offset_was_nonzero</code> — the matrix builder never reads it; that flag lives on
+<code>GAMPredictor</code>/<code>setup</code> only, §5.3, to avoid two sources of truth.) Its
+<code>coef_map</code>'s smooths are <strong>predict-only copies</strong> (training <code>_X</code> <strong>and</strong> penalty
+caches <code>_S</code>/<code>_penalties</code>/<code>_E_knot</code> dropped, predict transforms shared by reference
+— §7). <code>build_predict_matrix(self, newdata)</code> delegates to the Phase-1 free
+function. It is the <strong>deliberate, documented Phase-1→Phase-3 boundary value
+object</strong> (pure NumPy, <code>n</code>-independent, picklable by construction) — not hidden
+behind an abstraction.</p>
+<p><strong>Lazy on the full path.</strong> <code>ModelSetup</code> does <strong>not</strong> build a <code>PredictSpec</code> at
+setup. It builds one <strong>lazily</strong> when <code>ModelSetup.build_predict_matrix(newdata)</code> or
+<code>to_predictor()</code> first needs it, so a <code>result="full"</code> fit that never predicts pays
+nothing (goal #3). Because <code>ModelSetup</code> is a <strong>frozen</strong> dataclass
+(<code>design.py:81</code>), the cache is a private <code>field(init=False, default=None,
+compare=False, repr=False)</code> populated on first access via <code>object.__setattr__</code>
+(plain <code>functools.cached_property</code> does not work cleanly on a frozen dataclass).
+The lean path (<code>result="inference"</code>) builds the spec once in <code>_from_fit</code> and
+discards <code>setup</code>.</p>
+<h3 id="53-gampredictor-new-phase-3-the-lean-picklable-core">5.3 <code>GAMPredictor</code> (NEW — Phase 3, the lean picklable core)<a class="headerlink" href="#53-gampredictor-new-phase-3-the-lean-picklable-core" title="Permanent link">&para;</a></h3>
+<p><code>jaxgam/inference/predictor.py</code>. Frozen; owns <code>coefficients</code>/<code>Vp</code>;
+training-data-free; penalty-free.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="k">class</span><span class="w"> </span><span class="nc">GAMPredictor</span><span class="p">:</span>                 <span class="c1"># O(p² + Σ predict-transform size); no training/penalty arrays</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">coefficients</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>        <span class="c1"># (p,) constrained space (post Sl.setup back-transform)</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="n">Vp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>                  <span class="c1"># (p,p) Bayesian posterior covariance — REQUIRED</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="n">family</span><span class="p">:</span> <span class="s2">&quot;ExponentialFamily&quot;</span>     <span class="c1"># post-fit snapshot; exact fitted link (+ final NB theta)</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="n">formula</span><span class="p">:</span> <span class="nb">str</span>                    <span class="c1"># signature / audit / repr (the ONE owner — §5.5)</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>    <span class="n">offset_was_nonzero</span><span class="p">:</span> <span class="nb">bool</span>        <span class="c1"># external-offset predict warning</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    <span class="n">_predict_spec</span><span class="p">:</span> <span class="s2">&quot;PredictSpec&quot;</span>    <span class="c1"># explicit Phase-1 boundary value object (§5.2)</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="n">_jaxgam_version</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">jaxgam</span><span class="o">.</span><span class="n">__version__</span><span class="p">)</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>        <span class="c1"># Own coefficients/Vp outright: copy first (so we never alias — and then</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>        <span class="c1"># freeze — a caller&#39;s buffer; this is what lets GAMResults.to_predictor()</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>        <span class="c1"># be safe), then write-protect. O(p²) once; negligible beside a fit.</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>        <span class="nb">object</span><span class="o">.</span><span class="fm">__setattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;coefficients&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">coefficients</span><span class="p">))</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>        <span class="nb">object</span><span class="o">.</span><span class="fm">__setattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;Vp&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">Vp</span><span class="p">))</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">coefficients</span><span class="o">.</span><span class="n">setflags</span><span class="p">(</span><span class="n">write</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">Vp</span><span class="o">.</span><span class="n">setflags</span><span class="p">(</span><span class="n">write</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">__setstate__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>  <span class="c1"># re-apply the freeze after unpickling</span>
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>        <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">coefficients</span><span class="o">.</span><span class="n">setflags</span><span class="p">(</span><span class="n">write</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">Vp</span><span class="o">.</span><span class="n">setflags</span><span class="p">(</span><span class="n">write</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_jaxgam_version</span> <span class="o">!=</span> <span class="n">jaxgam</span><span class="o">.</span><span class="n">__version__</span><span class="p">:</span>
+<a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a>            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>                              <span class="c1"># detectable, not silent — §8</span>
+<a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a>                <span class="sa">f</span><span class="s2">&quot;GAMPredictor was pickled by jaxgam </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_jaxgam_version</span><span class="si">}</span><span class="s2">, &quot;</span>
+<a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a>                <span class="sa">f</span><span class="s2">&quot;loading under </span><span class="si">{</span><span class="n">jaxgam</span><span class="o">.</span><span class="n">__version__</span><span class="si">}</span><span class="s2">. Pickles are not a &quot;</span>
+<a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a>                <span class="s2">&quot;cross-version format; predictions may be wrong or fail.&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a>                <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>            <span class="p">)</span>
+</code></pre></div>
+<p><strong><code>_jaxgam_version</code> makes the pickle contract detectable.</strong> §8 says pickles are
+same-version/transient because <code>PredictSpec</code>'s layout is not version-stable — but
+saying so in prose does nothing at load time, where a stale pickle either raises
+cryptically or silently mis-predicts. The stamp + warning costs one field and five
+lines, turns the worst failure mode (silent wrong answers in production) into a
+loud one, and is <strong>not</strong> the versioned artifact format that stays out of scope
+(§3.2): no schema, no migration, no integrity, no <code>save()</code>/<code>load()</code>.</p>
+<p><strong>Public contract (stable):</strong> <code>predict(newdata, ...)</code> / <code>predict_matrix(newdata)</code>;
+read-only <code>coefficients</code>/<code>Vp</code>; the <code>family</code> <strong>snapshot</strong> (an independent deep copy,
+not a frozen object — see "Why a family snapshot" below) exposing <code>link</code> ≡
+<code>family.link</code>; <code>formula</code>. <code>offset_was_nonzero</code>, <code>_predict_spec</code>, and
+<code>_jaxgam_version</code> are internal (the spec is a concrete Phase-1 object; layout not
+public, not version-stable — §8).</p>
+<p><strong><code>offset_was_nonzero</code> is an explicit field, not derived from the spec.</strong>
+<code>predict_core</code> needs it to reproduce the external-offset warning (§6). It is
+deliberately <strong>not</strong> stored on <code>PredictSpec</code> (the matrix builder never reads it,
+§5.2) and <strong>not</strong> recomputed from a retained offset array (the lean path holds
+none). One <code>bool</code>, one owner: the predictor computes it in <code>_from_fit</code> before
+<code>setup</code> is discarded and passes it down.</p>
+<p><strong><code>Vp</code> is required.</strong> Every fit produces <code>Vp</code> (it backs summary SEs too); no path
+drops it. Typing it <code>np.ndarray</code> removes a dead branch and guard. A future
+point-only mode is <strong>out of scope</strong> (§3.2); it would be a separate type, not a
+nullable field.</p>
+<p><strong>Read-only guarantee — exactly two arrays.</strong> The enforced, public guarantee is:
+<strong><code>coefficients</code> and <code>Vp</code> are read-only</strong> (defensively copied at construction and
+re-frozen on unpickle, then <code>write=False</code>). That is all we promise. The family/
+link object graph and the predict-transform arrays (<code>_Xu</code>/<code>_UZ</code>/<code>_XP_list</code>/
+<code>_Z_list</code>/<code>_F</code>) are <strong>shared by reference</strong> and read-only <strong>by contract</strong> — the
+predict path treats them as <code>const</code>, but they are <strong>not</strong> frozen (deep-freezing
+would either mutate buffers a live <code>GAMResults</code> still owns or force an <code>O(Σk²)</code>
+copy this design avoids). Callers must not mutate predictor internals. We do
+<strong>not</strong> claim deep immutability. Tests check only the two enforced arrays
+(§12.2.7) + the family snapshot's independence (§12.2.6).</p>
+<p><strong>Why a family snapshot, and who owns it.</strong> Two distinct copies exist; keep them
+separate (round 6):</p>
+<ul>
+<li><strong>api.py pre-fit copy (unchanged):</strong> <code>GAM.fit()</code> deep-copies the family <strong>only</strong>
+  for an extended family with mutable theta (<code>api.py:155–158</code>), to protect the shared registry
+  singleton from theta mutation <em>during</em> fitting. <code>theta</code> is then synced into
+  this instance post-fit by <code>put_theta</code>.</li>
+<li><strong><code>_from_fit</code> snapshot (the predictor's <code>family</code>):</strong> taken <strong>after</strong> fitting,
+  <strong>after <code>put_theta</code> finalizes theta</strong>, by <code>copy.deepcopy</code> of the post-fit
+  family object — so the snapshot has <strong>final</strong> theta and the predictor never
+  aliases the fitting instance or the registry singleton. This is the <strong>single
+  owner</strong> of the predictor/result family snapshot, for <strong>every</strong> fit (standard
+  families included — <code>registry.py:16</code> singletons, so the deepcopy also gives
+  snapshot independence and preserves a custom link, <code>api.py:81–89</code>). <code>O(1)</code>,
+  Phase 3, no JIT-cache implication.</li>
+</ul>
+<p><code>coefficients</code> are in the <strong>constrained coefficient space after the Sl.setup
+back-transform</strong> (inside <code>GAMResults._from_fit</code>), consumed against the
+<strong>constrained</strong> prediction matrix — not raw basis (§10.1).</p>
+<h3 id="54-the-two-result-types">5.4 The two result types<a class="headerlink" href="#54-the-two-result-types" title="Permanent link">&para;</a></h3>
+<p>Both are frozen dataclasses sharing the cheap scalar diagnostics + metadata (via
+a small shared base, <code>_FitDiagnostics</code>); they differ in retained state and
+surface. Neither exposes a method that raises for being in the "wrong mode."</p>
+<p><strong><code>GAMInferenceResult</code></strong> (<code>fit(result="inference")</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Holds</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_predictor: GAMPredictor</code></td>
+<td>composed at fit (via <code>copy_for_prediction</code>, §7)</td>
+</tr>
+<tr>
+<td>scalar diagnostics + metadata</td>
+<td><code>edf*</code>, <code>deviance</code>, <code>null_deviance</code>, <code>score</code>, <code>scale</code>, <code>theta</code>, <code>smoothing_params</code>, <code>converged</code>, <code>n_iter</code>, <code>convergence_info</code>, <code>method</code>, <code>lambda_strategy</code>, <code>execution_path</code>, <code>n</code> (<strong>not</strong> <code>formula</code> — property → <code>_predictor</code>, §5.5)</td>
+</tr>
+</tbody>
+</table>
+<p>Surface: <code>predict(newdata)</code> / <code>predict_matrix(newdata)</code> (delegate to
+<code>_predictor</code>), <code>to_predictor()</code> → <code>self._predictor</code>, <code>coefficients</code>/<code>Vp</code>/<code>family</code>/
+<code>formula</code> (properties → <code>_predictor</code>), <strong><code>smooth_info</code>/<code>term_names</code></strong> (properties
+→ <code>_predictor._predict_spec</code>), the scalars, <code>__repr__</code>. <strong>No</strong> <code>summary</code>/<code>plot</code>;
+<code>predict</code> requires <code>newdata</code>.</p>
+<p><code>to_predictor()</code> is <strong>not</strong> a required post-fit operation and is <strong>not</strong> another
+memory mode. The inference result already owns that predictor, so the method is
+an identity-returning interface narrowing only. Serializing the inference result
+keeps its diagnostics; serializing the returned predictor deliberately omits
+them.</p>
+<blockquote>
+<p><strong>Why <code>smooth_info</code>/<code>term_names</code> are on the lean type.</strong> They were classified
+"dup" in §2.2 only because <code>GAMResults</code> reads them off <code>setup</code> — an accident of
+where they were stored, not a memory decision. <code>SmoothInfo</code> is all
+<code>str</code>/<code>int</code>/<code>bool</code> (<code>design.py:68–77</code>), and <code>PredictSpec</code> <strong>already carries
+<code>smooth_info</code></strong> (§5.2), so the data is retained either way; §5.5 was simply not
+exposing it. Without it <code>GAMInferenceResult.edf</code> is a bare array with no way to
+say which smooth each entry belongs to — on the type whose stated purpose is
+production logging (§4.2). Exposing them costs <strong>zero bytes</strong>.</p>
+</blockquote>
+<p><strong><code>GAMResults</code></strong> (<code>fit(result="full")</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Holds</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coefficients</code>, <code>Vp</code>, <code>family</code> (snapshot)</td>
+<td>core arrays, held directly</td>
+</tr>
+<tr>
+<td><code>setup: ModelSetup</code></td>
+<td>the predict-builder (lazy <code>PredictSpec</code>) + <code>X/y/weights/penalties</code> for summary</td>
+</tr>
+<tr>
+<td><code>fitted_values</code>, <code>linear_predictor</code>, <code>training_data</code></td>
+<td>in-sample caches + raw covariates</td>
+</tr>
+<tr>
+<td>scalar diagnostics + metadata</td>
+<td>same shared base as above</td>
+</tr>
+</tbody>
+</table>
+<p>Surface: everything in <code>GAMInferenceResult</code> <strong>plus</strong> <code>summary()</code>, <code>plot()</code>, and
+self-prediction (<code>predict(newdata=None)</code> via <code>linear_predictor</code>/<code>setup</code>).
+<code>to_predictor()</code> builds a <code>GAMPredictor</code> <strong>on demand</strong> from <code>setup</code>'s lazily-built
+<code>PredictSpec</code> (§7) + the family snapshot + <code>offset_was_nonzero</code>; the predictor
+<strong>defensively copies</strong> <code>coefficients</code>/<code>Vp</code> (§5.3), so this never freezes the
+result's own arrays. <strong>Seven</strong> of the eight <code>setup.*</code> duplicate fields (<code>X</code>,
+<code>y</code>, <code>weights</code>, <code>offset</code>, <code>coef_map</code>, <code>smooth_info</code>, <code>term_names</code>) become
+guarded <code>@property</code> reads of <code>setup</code>; the eighth, <code>n</code>, is re-homed to the
+<code>_FitDiagnostics</code> shared base as retained scalar metadata (§5.5) — the lean
+<code>GAMInferenceResult</code> has no <code>setup</code> to back a property.</p>
+<h3 id="55-field-ownership-table-every-current-field-new-home">5.5 Field-Ownership Table (every current field → new home)<a class="headerlink" href="#55-field-ownership-table-every-current-field-new-home" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Current field</th>
+<th><code>GAMResults</code></th>
+<th><code>GAMInferenceResult</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coefficients</code>, <code>Vp</code>, <code>family</code></td>
+<td>direct fields</td>
+<td>via <code>_predictor</code> (property)</td>
+</tr>
+<tr>
+<td><code>formula</code></td>
+<td>direct field</td>
+<td><strong><code>@property</code> → <code>_predictor.formula</code></strong> (§5.3 owns it)</td>
+</tr>
+<tr>
+<td>predict-matrix state</td>
+<td><code>setup</code> (lazy <code>PredictSpec</code>)</td>
+<td>inside <code>_predictor</code> (<code>_predict_spec</code>)</td>
+</tr>
+<tr>
+<td>external-offset flag</td>
+<td>derived from <code>setup.offset</code></td>
+<td><code>_predictor.offset_was_nonzero</code></td>
+</tr>
+<tr>
+<td><code>linear_predictor</code>, <code>fitted_values</code>, <code>training_data</code></td>
+<td>held</td>
+<td><strong>dropped</strong></td>
+</tr>
+<tr>
+<td><code>setup</code></td>
+<td>held</td>
+<td><strong>dropped</strong></td>
+</tr>
+<tr>
+<td><code>smooth_info</code>, <code>term_names</code></td>
+<td><code>@property</code> → <code>setup</code></td>
+<td><strong><code>@property</code> → <code>_predictor._predict_spec</code></strong> (zero-byte metadata, §5.4)</td>
+</tr>
+<tr>
+<td><code>coef_map</code>, <code>X</code>, <code>y</code>, <code>weights</code>, <code>offset</code></td>
+<td><code>@property</code> → <code>setup</code></td>
+<td>not exposed (no <code>setup</code>)</td>
+</tr>
+<tr>
+<td><code>edf*</code>, <code>deviance</code>, <code>null_deviance</code>, <code>smoothing_params</code>, <code>score</code>, <code>scale</code>, <code>theta</code>, <code>converged</code>, <code>n_iter</code>, <code>convergence_info</code>, <code>n</code>, <code>method</code>, <code>lambda_strategy</code>, <code>execution_path</code></td>
+<td>shared base</td>
+<td>shared base</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Eliminated:</strong> all eight <code>setup.*</code> re-exposures as stored fields; all dense
+training-array <strong>and penalty-cache</strong> retention under <code>result="inference"</code>.</p>
+<blockquote>
+<p><strong><code>formula</code> has exactly one owner.</strong> An earlier draft put <code>formula: str</code> on
+<strong>both</strong> <code>GAMPredictor</code> (§5.3, needed so a pickled predictor is self-describing
+when it travels alone) <strong>and</strong> <code>_FitDiagnostics</code> — which would have introduced a
+<strong>ninth stored duplicate</strong> in the same design whose DRY headline is deleting
+eight. The predictor owns it; <code>GAMInferenceResult.formula</code> is a property.
+<code>GAMResults</code> keeps its own stored <code>formula</code> (it has no predictor until
+<code>to_predictor()</code>).</p>
+</blockquote>
+<hr />
+<h2 id="6-the-shared-predict-path">6. The Shared Predict Path<a class="headerlink" href="#6-the-shared-predict-path" title="Permanent link">&para;</a></h2>
+<p>The split follows the phase boundary, and <strong>Phase 3 predict is CPU/NumPy</strong>: it
+accepts and returns NumPy arrays, calls the existing link objects (NumPy via
+<code>array_module</code> — <code>links.py:179,187,…</code>), and performs <strong>no <code>jax.device_put</code> and no
+JIT</strong>. (The current <code>GAMResults.predict</code> already does this; the refactor
+preserves it.)</p>
+<p><strong>Phase 1 — matrix construction</strong> (<code>jaxgam/formula/predict_matrix.py</code>, numpy
+only, no JAX, no links). The body in <code>ModelSetup.build_predict_matrix</code>
+(<code>formula/predict_matrix.py:82–137</code>) lives as a free function over a <strong>single concrete
+<code>PredictSpec</code></strong>; its instance helpers — <strong>and their full transitive closure</strong> —
+become <strong>module-level</strong> Phase-1 functions. <code>build_predict_matrix</code> directly calls
+<code>_to_dict</code>/<code>_validate_equal_lengths</code>/<code>_build_parametric_matrix</code>;
+<code>_build_parametric_matrix</code> in turn calls <code>_encode_factor</code>, which calls
+<code>_contr_poly</code>, so <strong>all five</strong> move (moving only the first three would force a
+<code>predict_matrix.py</code> → <code>design.py</code> import). <code>ModelSetup.build()</code> and the formula
+tests still call these, so keep thin <code>@staticmethod</code> shims on <code>ModelSetup</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># jaxgam/formula/predict_matrix.py   — Phase 1</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_predict_matrix</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="s2">&quot;PredictSpec&quot;</span><span class="p">,</span> <span class="n">newdata</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;`spec` is a PredictSpec — a concrete dataclass carrying exactly the</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="sd">    n-independent attribute set the build reads (§5.2). One type.&quot;&quot;&quot;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">data_dict</span> <span class="o">=</span> <span class="n">_to_dict</span><span class="p">(</span><span class="n">newdata</span><span class="p">)</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">_validate_equal_lengths</span><span class="p">(</span><span class="n">spec</span><span class="p">,</span> <span class="n">data_dict</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">X_parametric</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_build_parametric_matrix</span><span class="p">(</span><span class="n">spec</span><span class="o">.</span><span class="n">parametric_terms</span><span class="p">,</span> <span class="n">newdata</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>                                               <span class="n">spec</span><span class="o">.</span><span class="n">has_intercept</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>                                               <span class="n">spec</span><span class="o">.</span><span class="n">factor_info</span><span class="p">,</span> <span class="n">spec</span><span class="o">.</span><span class="n">ordered_factors</span><span class="p">)</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    <span class="c1"># ... transform_X over spec.coef_map.terms; shape-check spec.total_coefs ...</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>    <span class="k">return</span> <span class="n">X_p</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="k">def</span><span class="w"> </span><span class="nf">_to_dict</span><span class="p">(</span><span class="n">newdata</span><span class="p">):</span> <span class="o">...</span>                 <span class="c1"># moved from ModelSetup (already @staticmethod)</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">_validate_equal_lengths</span><span class="p">(</span><span class="n">spec</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span> <span class="o">...</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="k">def</span><span class="w"> </span><span class="nf">_build_parametric_matrix</span><span class="p">(</span><span class="n">parametric_terms</span><span class="p">,</span> <span class="n">newdata</span><span class="p">,</span> <span class="n">has_intercept</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span> <span class="o">...</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="k">def</span><span class="w"> </span><span class="nf">_encode_factor</span><span class="p">(</span><span class="o">...</span><span class="p">):</span> <span class="o">...</span>               <span class="c1"># transitive: called by _build_parametric_matrix</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="k">def</span><span class="w"> </span><span class="nf">_contr_poly</span><span class="p">(</span><span class="n">n_levels</span><span class="p">):</span> <span class="o">...</span>             <span class="c1"># transitive: called by _encode_factor</span>
+</code></pre></div>
+<p><code>ModelSetup.build_predict_matrix(self, newdata)</code> delegates: <code>return
+build_predict_matrix(self._lazy_predict_spec(), newdata)</code>, where
+<code>_lazy_predict_spec()</code> builds and caches the spec on first use — on the frozen
+<code>ModelSetup</code> via an <code>init=False</code> field set with <code>object.__setattr__</code> (§5.2).
+<code>PredictSpec.build_predict_matrix</code> is the same one-line delegation. <strong>One concrete
+state, one builder.</strong></p>
+<p><strong>Phase 3 — predict finish</strong> (<code>jaxgam/inference/_core.py</code>, touches <code>link</code>). One
+<code>finish_prediction</code>, called by both the new-data and cached self-prediction
+paths. <code>Vp</code> is required, so there is no <code>None</code> branch; <code>offset_was_nonzero</code> is a
+parameter (the predictor passes its field; <code>GAMResults</code> passes <code>setup</code>'s):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># jaxgam/inference/_core.py</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">finish_prediction</span><span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">X_p</span><span class="p">,</span> <span class="n">link</span><span class="p">,</span> <span class="n">Vp</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">pred_type</span><span class="p">,</span> <span class="n">se_fit</span><span class="p">):</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">pred</span> <span class="o">=</span> <span class="n">link</span><span class="o">.</span><span class="n">linkinv</span><span class="p">(</span><span class="n">eta</span><span class="p">)</span> <span class="k">if</span> <span class="n">pred_type</span> <span class="o">==</span> <span class="s2">&quot;response&quot;</span> <span class="k">else</span> <span class="n">eta</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">se_fit</span><span class="p">:</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>        <span class="k">return</span> <span class="n">pred</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    <span class="n">se</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">X_p</span> <span class="o">@</span> <span class="n">Vp</span><span class="p">)</span> <span class="o">*</span> <span class="n">X_p</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>           <span class="c1"># exact established operation order</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    <span class="k">if</span> <span class="n">pred_type</span> <span class="o">==</span> <span class="s2">&quot;response&quot;</span><span class="p">:</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>        <span class="n">se</span> <span class="o">=</span> <span class="n">se</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">link</span><span class="o">.</span><span class="n">mu_eta</span><span class="p">(</span><span class="n">eta</span><span class="p">)))</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="k">return</span> <span class="n">pred</span><span class="p">,</span> <span class="n">se</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">predict_core</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="s2">&quot;PredictSpec&quot;</span><span class="p">,</span> <span class="n">coefficients</span><span class="p">,</span> <span class="n">Vp</span><span class="p">,</span> <span class="n">link</span><span class="p">,</span> <span class="n">newdata</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>                 <span class="n">pred_type</span><span class="o">=</span><span class="s2">&quot;response&quot;</span><span class="p">,</span> <span class="n">se_fit</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">offset</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">offset_was_nonzero</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>    <span class="k">if</span> <span class="n">pred_type</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;response&quot;</span><span class="p">,</span> <span class="s2">&quot;link&quot;</span><span class="p">):</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;pred_type must be &#39;response&#39; or &#39;link&#39;, got </span><span class="si">{</span><span class="n">pred_type</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>    <span class="n">X_p</span> <span class="o">=</span> <span class="n">spec</span><span class="o">.</span><span class="n">build_predict_matrix</span><span class="p">(</span><span class="n">newdata</span><span class="p">)</span>                 <span class="c1"># one concrete type (§5.1)</span>
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>    <span class="n">eta</span> <span class="o">=</span> <span class="n">X_p</span> <span class="o">@</span> <span class="n">coefficients</span>
+<a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a>    <span class="k">if</span> <span class="n">offset</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a>        <span class="n">eta</span> <span class="o">=</span> <span class="n">eta</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">offset</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
+<a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a>    <span class="k">elif</span> <span class="n">offset_was_nonzero</span><span class="p">:</span>
+<a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a>        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Model fit with an external offset; none passed to predict() &quot;</span>
+<a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a>                      <span class="s2">&quot;on new data — offset omitted (matches mgcv predict.gam).&quot;</span><span class="p">,</span> <span class="n">stacklevel</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a>    <span class="k">return</span> <span class="n">finish_prediction</span><span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">X_p</span><span class="p">,</span> <span class="n">link</span><span class="p">,</span> <span class="n">Vp</span><span class="p">,</span> <span class="n">pred_type</span><span class="o">=</span><span class="n">pred_type</span><span class="p">,</span> <span class="n">se_fit</span><span class="o">=</span><span class="n">se_fit</span><span class="p">)</span>
+</code></pre></div>
+<p><code>GAMPredictor.predict()</code> calls <code>predict_core(self._predict_spec, self.coefficients,
+self.Vp, self.family.link, newdata, …, offset_was_nonzero=self.offset_was_nonzero)</code>.
+<code>GAMResults.predict()</code> passes <strong><code>self.setup._lazy_predict_spec()</code></strong> (self-prediction
+adds the cached-<code>eta</code> branch with <code>X_p = setup.X</code> only when <code>se_fit</code>) and its
+derived offset flag — one finishing path over <strong>one concrete type</strong>, no Protocol
+(§5.1). SE is the <strong>exact</strong> <code>sqrt(rowSums((X_p @ Vp) * X_p)) * |mu_eta|</code> from
+the prior <code>GAMResults.predict()</code> implementation — byte-identical to today and
+to <code>predict.gam</code>.</p>
+<blockquote>
+<p><strong>Consequence worth stating: the full path predicts through predict-only copies
+too.</strong> After this move, <code>setup.build_predict_matrix()</code> routes through the lazily
+built <code>PredictSpec</code>, whose smooths are <code>copy_for_prediction()</code> copies. So every
+existing test in <code>tests/test_predict/</code> exercises the cache-dropping path — the
+<code>_X</code>/<code>_S</code>/<code>_penalties</code> drop is regression-gated by the <strong>whole</strong> predict suite,
+not only by the new tests. This is safe precisely because §2.1 verified no
+<code>predict_matrix</code> reads a dropped cache, and it is why "<code>tests/test_predict/</code>
+passes byte-identically" is a strong gate rather than a formality.</p>
+</blockquote>
+<hr />
+<h2 id="7-memory-reduction">7. Memory Reduction<a class="headerlink" href="#7-memory-reduction" title="Permanent link">&para;</a></h2>
+<h3 id="71-the-honest-invariant">7.1 The honest invariant<a class="headerlink" href="#71-the-honest-invariant" title="Permanent link">&para;</a></h3>
+<p>"Zero <code>O(n)</code> retention" is false for knot-based bases, and "no retained array has
+a dimension equal to <code>n</code>" is inconsistent with §7's requirements: prediction
+needs the knots. The invariant is framed by <strong>banned owners/attributes</strong> (§3.1):</p>
+<blockquote>
+<p><code>result="inference"</code> retains none of: <code>setup</code>, <code>X</code>, <code>y</code>, <code>weights</code>, <code>offset</code>,
+<code>fitted_values</code>, <code>linear_predictor</code>, <code>training_data</code>, any smooth's <code>_X</code>, or any
+smooth's <strong>penalty cache</strong> (<code>_S</code>, tensor <code>_penalties</code>, GP's <code>_E_knot</code>) — recursively. It <strong>does</strong>
+retain the predict transforms (<code>_Xu</code>, <code>_knt</code>, <code>_UZ</code>, <code>_F</code>, <code>_XP_list</code>,
+<code>_Z_list</code>, <code>_shift</code>, stored levels) — bounded by <code>max_knots</code>/<code>k</code>, not <code>n</code>. The
+penalty <code>O(Σ k²)</code>/<code>O(Σ n_coefs²)</code> is dropped. Retained inference state is
+<code>O(p² + Σ_smooth predict-transform size)</code>.</p>
+</blockquote>
+<h3 id="72-copy_for_prediction-drop-_x-penalty-caches-share-the-transforms">7.2 <code>copy_for_prediction()</code> — drop <code>_X</code> + penalty caches, share the transforms<a class="headerlink" href="#72-copy_for_prediction-drop-_x-penalty-caches-share-the-transforms" title="Permanent link">&para;</a></h3>
+<p>Each smooth owns the knowledge of which arrays are <em>not</em> read by its
+<code>predict_matrix</code> (<code>_X</code> and the penalty caches) vs the predict transforms, via a
+<strong>public Phase-1 hook</strong> returning a <strong>predict-only copy</strong>. A <strong>shallow</strong> copy that
+nulls only the non-predict caches and <strong>shares the predict transforms by
+reference</strong> — so it neither duplicates the <code>O(n·k)</code> <code>_X</code> (drops it) nor copies the
+knot/reparam arrays (read-only during prediction):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># jaxgam/smooths/base.py  (Phase 1)</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">Smooth</span><span class="p">(</span><span class="n">ABC</span><span class="p">):</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">copy_for_prediction</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Smooth&quot;</span><span class="p">:</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Predict-only shallow copy: drops the (n×k) training design `_X` AND the</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="sd">        penalty cache `_S`; shares all predict transforms (_Xu, _knt, _UZ, _F, …)</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="sd">        by reference.</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="sd">        BASE-DEFAULT PRECONDITION: correct ONLY when the smooth&#39;s non-predict</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="sd">        caches are exactly {_X, _S} and it has NO nested smooths. A smooth that</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="sd">        violates this (e.g. tensor&#39;s `_penalties`, nested marginals) MUST</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="sd">        override. The registry audit test (§12.2.8) fails for any registered</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="sd">        smooth that neither overrides this nor is allow-listed as base-OK.</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="sd">        &quot;&quot;&quot;</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>        <span class="n">clone</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>        <span class="k">for</span> <span class="n">attr</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;_X&quot;</span><span class="p">,</span> <span class="s2">&quot;_S&quot;</span><span class="p">):</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>            <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">clone</span><span class="p">,</span> <span class="n">attr</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>                <span class="nb">setattr</span><span class="p">(</span><span class="n">clone</span><span class="p">,</span> <span class="n">attr</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>        <span class="k">return</span> <span class="n">clone</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="c1"># jaxgam/smooths/tensor.py  — drop _penalties (O(n_coefs²)), KEEP _XP_list/_Z_list (predict reads them)</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="k">class</span><span class="w"> </span><span class="nc">TensorProductSmooth</span><span class="p">(</span><span class="n">Smooth</span><span class="p">):</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">copy_for_prediction</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>        <span class="n">clone</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>        <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">clone</span><span class="p">,</span> <span class="s2">&quot;_X&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a>            <span class="n">clone</span><span class="o">.</span><span class="n">_X</span> <span class="o">=</span> <span class="kc">None</span>
+<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a>        <span class="n">clone</span><span class="o">.</span><span class="n">_penalties</span> <span class="o">=</span> <span class="p">[]</span>                 <span class="c1"># fitting-only (tensor.py:333,347,489,504)</span>
+<a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a>        <span class="n">clone</span><span class="o">.</span><span class="n">_marginals</span> <span class="o">=</span> <span class="p">[</span><span class="n">m</span><span class="o">.</span><span class="n">copy_for_prediction</span><span class="p">()</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_marginals</span><span class="p">]</span>  <span class="c1"># recurse: drop _X/_S</span>
+<a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a>        <span class="k">return</span> <span class="n">clone</span>                                <span class="c1"># _XP_list (+ ti&#39;s _Z_list) shared by reference</span>
+<a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a>
+<a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a><span class="c1"># jaxgam/smooths/by_variable.py  (FactorBySmooth / NumericBySmooth — not Smooth subclasses)</span>
+<a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a><span class="k">class</span><span class="w"> </span><span class="nc">FactorBySmooth</span><span class="p">:</span>
+<a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">copy_for_prediction</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a>        <span class="n">clone</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+<a id="__codelineno-7-35" name="__codelineno-7-35" href="#__codelineno-7-35"></a>        <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">clone</span><span class="p">,</span> <span class="s2">&quot;_X&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-7-36" name="__codelineno-7-36" href="#__codelineno-7-36"></a>            <span class="n">clone</span><span class="o">.</span><span class="n">_X</span> <span class="o">=</span> <span class="kc">None</span>
+<a id="__codelineno-7-37" name="__codelineno-7-37" href="#__codelineno-7-37"></a>        <span class="n">clone</span><span class="o">.</span><span class="n">base_smooth</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_smooth</span><span class="o">.</span><span class="n">copy_for_prediction</span><span class="p">()</span>
+<a id="__codelineno-7-38" name="__codelineno-7-38" href="#__codelineno-7-38"></a>        <span class="k">return</span> <span class="n">clone</span>
+<a id="__codelineno-7-39" name="__codelineno-7-39" href="#__codelineno-7-39"></a>
+<a id="__codelineno-7-40" name="__codelineno-7-40" href="#__codelineno-7-40"></a><span class="c1"># jaxgam/smooths/gaussian_process.py  — base drops _X/_S; _E_knot is already None post-B0</span>
+<a id="__codelineno-7-41" name="__codelineno-7-41" href="#__codelineno-7-41"></a><span class="k">class</span><span class="w"> </span><span class="nc">GaussianProcessSmooth</span><span class="p">(</span><span class="n">Smooth</span><span class="p">):</span>
+<a id="__codelineno-7-42" name="__codelineno-7-42" href="#__codelineno-7-42"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">copy_for_prediction</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-7-43" name="__codelineno-7-43" href="#__codelineno-7-43"></a>        <span class="n">clone</span> <span class="o">=</span> <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">copy_for_prediction</span><span class="p">()</span>    <span class="c1"># drops _X, _S</span>
+<a id="__codelineno-7-44" name="__codelineno-7-44" href="#__codelineno-7-44"></a>        <span class="n">clone</span><span class="o">.</span><span class="n">_E_knot</span> <span class="o">=</span> <span class="kc">None</span>                      <span class="c1"># defense-in-depth: B0 already nulls it at setup</span>
+<a id="__codelineno-7-45" name="__codelineno-7-45" href="#__codelineno-7-45"></a>        <span class="k">return</span> <span class="n">clone</span>
+</code></pre></div>
+<p>(cubic / TPRS / random-effect use the base default — verified: their
+<code>predict_matrix</code> reads only <code>_knots</code>/<code>_F</code>, <code>_Xu</code>/<code>_UZ</code>, or stored levels, never
+<code>_S</code>. The registry audit (§12.2.8) would flag a GP that forgot the override.)</p>
+<blockquote>
+<p><strong>The GP override is defense-in-depth, not the <code>_E_knot</code> fix.</strong> Commit B0 (§13)
+nulls <code>_E_knot</code> at the end of <code>setup()</code>, so by the time any result exists it is
+already <code>None</code> in <strong>both</strong> modes — that is where the 32 MB actually comes back
+(§1.1, §2.1). The override is kept so the invariant survives a future change
+that starts retaining <code>_E_knot</code> past setup, and so the §12.2.2 banned-state
+assertion has a single consistent shape across smooth types. Do <strong>not</strong> cite it
+as the source of the GP memory win.</p>
+</blockquote>
+<p><code>build_predict_spec</code> rebuilds the <code>coef_map</code> with predict-only smooths — Phase 3
+never names a private attribute, with <strong>no in-place mutation</strong> of the live <code>setup</code>
+and <strong>no deepcopy of <code>_X</code></strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># jaxgam/formula/predict_matrix.py  (Phase 1)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">dataclasses</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_predict_spec</span><span class="p">(</span><span class="n">setup</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PredictSpec</span><span class="p">:</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">new_terms</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>        <span class="n">dataclasses</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">smooth</span><span class="o">=</span><span class="n">t</span><span class="o">.</span><span class="n">smooth</span><span class="o">.</span><span class="n">copy_for_prediction</span><span class="p">())</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>        <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="s2">&quot;smooth&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">t</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">setup</span><span class="o">.</span><span class="n">coef_map</span><span class="o">.</span><span class="n">terms</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="p">)</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    <span class="n">coef_map</span> <span class="o">=</span> <span class="n">dataclasses</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">setup</span><span class="o">.</span><span class="n">coef_map</span><span class="p">,</span> <span class="n">terms</span><span class="o">=</span><span class="n">new_terms</span><span class="p">)</span>   <span class="c1"># shares Z_centering etc. by ref</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    <span class="k">return</span> <span class="n">PredictSpec</span><span class="p">(</span><span class="n">coef_map</span><span class="o">=</span><span class="n">coef_map</span><span class="p">,</span> <span class="n">smooth_info</span><span class="o">=</span><span class="n">setup</span><span class="o">.</span><span class="n">smooth_info</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+</code></pre></div>
+<p>The predict-only smooths set <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code> to <code>None</code>/<code>[]</code> <strong>on the
+copies</strong>, leaving <code>setup</code>'s own <code>coef_map.terms</code> intact for summary/
+self-prediction.</p>
+<ul>
+<li><strong><code>result="inference"</code>:</strong> <code>_from_fit</code> builds the spec, composes the predictor,
+  and <strong>discards <code>setup</code></strong> — the original <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code> arrays are freed.</li>
+<li><strong><code>result="full"</code> + <code>to_predictor()</code>:</strong> <code>setup</code> stays live; the predictor reuses
+  <code>setup</code>'s lazily-built <code>PredictSpec</code> (predict-only copies, transforms shared) and
+  <strong>defensively copies</strong> <code>coefficients</code>/<code>Vp</code> (§5.3). No <code>O(n·k)</code>/<code>O(n_coefs²)</code>
+  duplication, no mutation of <code>setup</code>'s smooths, no freezing of the result's
+  arrays.</li>
+</ul>
+<blockquote>
+<p><strong>Each <code>copy_for_prediction()</code> is verified against that type's <code>predict_matrix</code>
+at implementation (Commit C)</strong> — a smooth nulls a cache only because its
+<code>predict_matrix</code> does not read it (§2.1 line citations). The <strong>registry audit
+test</strong> (§12.2.8) is the backstop: it fails when a registered smooth type is
+neither overriding <code>copy_for_prediction</code> nor allow-listed as base-default-OK, so
+a <em>new</em> smooth cannot ship unaudited.</p>
+</blockquote>
+<hr />
+<h2 id="8-picklability">8. Picklability<a class="headerlink" href="#8-picklability" title="Permanent link">&para;</a></h2>
+<p><code>GAMPredictor</code> (and <code>GAMInferenceResult</code>, which composes one) is a frozen
+dataclass of NumPy arrays, the family snapshot, a <code>str</code>, a <code>bool</code>, and the opaque
+<code>_predict_spec</code> (a <code>PredictSpec</code>: pure-NumPy Phase-1 types; Phase-1 modules import
+no JAX).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># Extract from a full result when only prediction should cross the boundary.</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">predictor</span> <span class="o">=</span> <span class="n">full_results</span><span class="o">.</span><span class="n">to_predictor</span><span class="p">()</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">blob</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">predictor</span><span class="p">)</span>                     <span class="c1"># built-in families/links</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">pickle</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">newdata</span><span class="p">,</span> <span class="n">se_fit</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="c1"># An inference result is already lean and can be used or pickled directly.</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="n">lean</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">result</span><span class="o">=</span><span class="s2">&quot;inference&quot;</span><span class="p">)</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="n">lean</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">newdata</span><span class="p">)</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="n">pickle</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">lean</span><span class="p">)</span>                                 <span class="c1"># retains cheap diagnostics</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="c1"># Optional interface narrowing; returns lean&#39;s existing core without copying.</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="n">pickle</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">lean</span><span class="o">.</span><span class="n">to_predictor</span><span class="p">())</span>                  <span class="c1"># prediction interface only</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="c1"># locally-defined custom Link? install + use cloudpickle instead (see below).</span>
+</code></pre></div>
+<p><strong>Precise contract:</strong></p>
+<ul>
+<li><strong>Purpose: same-version / transient handoff</strong> (worker processes on the <em>same</em>
+  jaxgam version; in-session caching). <strong>Not</strong> durable, cross-version
+  persistence — a loaded predictor depends on <code>PredictSpec</code>'s (Phase-1) class
+  layout, which can change across versions; pickles are <strong>not</strong> guaranteed
+  portable between versions (pre-release). Durable persistence needs the versioned
+  schema we cut (§3.2).</li>
+<li><strong>The contract is <em>detectable</em>, not just documented</strong> (round 10): the predictor
+  stamps <code>_jaxgam_version</code> at construction and <code>__setstate__</code> <strong>warns</strong> on
+  mismatch (§5.3). Prose in a design doc cannot stop a stale pickle from silently
+  mis-predicting in a serving worker; a five-line check can. This is a guardrail
+  only — still no schema, no migration, no integrity, no <code>save()</code>/<code>load()</code>.</li>
+<li><strong>stdlib <code>pickle</code> is the public default</strong> and works when every family/link/
+  smooth is <strong>built-in or module-top-level</strong> — the common case. <strong><code>cloudpickle</code> is
+  <em>required</em> only for <em>locally-defined</em> custom links/families</strong> (a <code>Link</code> subclass
+  defined in a function/test); stdlib <code>pickle</code> cannot serialize a locally-scoped
+  class. We do <strong>not</strong> ship <code>cloudpickle</code> as a runtime dependency — persistence is
+  downstream's concern (scope, §3.2); a user who deploys local custom links
+  installs <code>cloudpickle</code> themselves (or we expose an optional <code>[serialization]</code>
+  extra). <code>cloudpickle</code> is in the <strong><code>dev</code></strong> optional extra
+  (<code>[project.optional-dependencies].dev</code>, installed in CI/Docker via <code>uv sync
+  --extra dev</code>) because the tests exercise that path.</li>
+<li><strong>Read-only survives the round-trip:</strong> <code>__setstate__</code> re-applies <code>write=False</code>
+  to <code>coefficients</code>/<code>Vp</code> (NumPy does not always preserve the flag through pickle).</li>
+<li><strong>Not provided:</strong> a file format, <code>save()</code>/<code>load()</code>, versioning, integrity/
+  signing. <strong>Pickle is trusted-input only.</strong></li>
+<li><strong>Tradeoff:</strong> unpickling and using the core imports JAX transitively via the
+  family module. No JAX-free path.</li>
+</ul>
+<hr />
+<h2 id="9-solid-dry-scorecard">9. SOLID / DRY Scorecard<a class="headerlink" href="#9-solid-dry-scorecard" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>SRP</strong> — Inference (<code>GAMPredictor</code>), the two results, and Phase-1 construction
+  (<code>ModelSetup</code>) change for distinct reasons.</li>
+<li><strong>ISP/LSP</strong> — <strong>two narrow types instead of one with raising methods</strong>:
+  <code>GAMInferenceResult</code> exposes only inference + scalars; <code>GAMResults</code> adds the
+  diagnostic surface. No refused-bequest, no <code>DiagnosticsNotRetainedError</code>.</li>
+<li><strong>DIP — not claimed, and the fake seam is gone.</strong> Rounds 4–9 justified a
+  one-method <code>PredictMatrixBuilder</code> Protocol as <code>predict_core</code>'s parameter type.
+  Round 10 cut it: after §6's delegation there is only <strong>one</strong> implementation
+  (<code>PredictSpec</code>) and a forwarder (<code>ModelSetup</code>), so the Protocol abstracted
+  nothing while costing a file, an export, and three rounds of caveats (§5.1).
+  <code>GAMPredictor</code> carries a <strong>concrete <code>PredictSpec</code></strong> — an explicit,
+  deliberately-designed Phase-1→Phase-3 value object (pure NumPy, <code>n</code>-independent,
+  picklable). We <strong>do not claim</strong> the predictor is decoupled from Phase-1
+  internals: pickle depends on <code>PredictSpec</code>'s layout (§8). The real SOLID wins
+  are the ISP/LSP two-type split and the single builder/finish path — an
+  unearned Protocol was never one of them.</li>
+<li><strong>OCP</strong> — a new family adds a registry entry + <code>Link</code>; a new smooth implements
+  <code>copy_for_prediction()</code> (or is audited as base-default-correct — enforced by the
+  registry audit test §12.2.8) + <code>predict_matrix</code>. No new field per type.</li>
+<li><strong>DRY</strong> — eight <code>setup.*</code> duplications removed; <strong>one</strong> Phase-1
+  <code>build_predict_matrix</code> over one concrete state; <strong>one</strong> <code>finish_prediction</code>
+  (cached + new-data + both result types). (The <code>summary()</code> CQS and null-deviance
+  DRY cleanups are <strong>deferred</strong>, §10.3 — not part of this design's DRY claims.)</li>
+</ul>
+<hr />
+<h2 id="10-numerical-and-correctness-considerations">10. Numerical and Correctness Considerations<a class="headerlink" href="#10-numerical-and-correctness-considerations" title="Permanent link">&para;</a></h2>
+<h3 id="101-coefficient-space">10.1 Coefficient space<a class="headerlink" href="#101-coefficient-space" title="Permanent link">&para;</a></h3>
+<p><code>coefficients</code> are in the <strong>constrained coefficient space after the Sl.setup
+back-transform</strong> (inside <code>GAMResults._from_fit</code>), consumed against the
+<strong>constrained</strong> prediction matrix. Not raw/un-constrained basis.</p>
+<h3 id="102-se-byte-parity">10.2 SE byte-parity<a class="headerlink" href="#102-se-byte-parity" title="Permanent link">&para;</a></h3>
+<p><code>finish_prediction</code> uses the exact <code>sqrt(rowSums((X_p @ Vp) * X_p)) * |mu_eta|</code>
+operation order from the pre-refactor prediction path. New-data SE is
+numerically identical to today; the
+self-prediction fast path (<code>GAMResults</code> only) still reads <code>setup.X</code>.</p>
+<h3 id="103-deferred-cleanups-kept-out-of-the-critical-path">10.3 Deferred cleanups (kept out of the critical path)<a class="headerlink" href="#103-deferred-cleanups-kept-out-of-the-critical-path" title="Permanent link">&para;</a></h3>
+<p>Two cosmetic improvements are <strong>deferred to separate PRs</strong> so this design touches
+no numerics and no default-path I/O:</p>
+<ul>
+<li><strong>Null-deviance DRY</strong> (<code>results.py:_compute_null_deviance</code> and
+  <code>_fit_null_intercept</code>): math-adjacent and
+  byte-parity-sensitive (the loop uses a <code>max(·, 1e-300)</code> weight floor that
+  <code>family.working_weights</code> lacks). <strong>Left exactly as-is</strong>, so <code>null_deviance</code> is
+  byte-identical <em>because nothing touches it</em>. If revisited: reuse
+  <code>working_response</code> while keeping the floored weight; own byte-identity gate.</li>
+<li><strong><code>summary()</code> CQS</strong> (<code>GAMResults.summary</code>): making <code>summary()</code> query-only
+  (return instead of print) is a <strong>user-visible default-path behavior change</strong>
+  unrelated to lean inference. Deferred to its own PR with its own test. (Two
+  review rounds flagged bundling it as scope creep.)</li>
+</ul>
+<p>Neither blocks the result-type/memory work; both are clearly separable.</p>
+<hr />
+<h2 id="11-file-plan">11. File Plan<a class="headerlink" href="#11-file-plan" title="Permanent link">&para;</a></h2>
+<h3 id="111-new-files">11.1 New Files<a class="headerlink" href="#111-new-files" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Phase</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/formula/predict_matrix.py</code></td>
+<td>1</td>
+<td><code>PredictSpec</code> + <code>build_predict_matrix(spec, newdata)</code> + module-level <code>_to_dict</code>/<code>_validate_equal_lengths</code>/<code>_build_parametric_matrix</code>/<code>_encode_factor</code>/<code>_contr_poly</code> (the full transitive closure, moved from <code>ModelSetup</code>) + <code>build_predict_spec(setup)</code>. numpy only. §5.2, §6, §7</td>
+</tr>
+<tr>
+<td><code>jaxgam/inference/__init__.py</code></td>
+<td>3</td>
+<td>Public surface: <strong><code>GAMPredictor</code></strong> only. <strong><code>predict_core</code>/<code>finish_prediction</code> stay private</strong> to <code>_core.py</code> — a low-level path over the Phase-1 spec, not public API.</td>
+</tr>
+<tr>
+<td><code>jaxgam/inference/_core.py</code></td>
+<td>3</td>
+<td><code>predict_core(spec, …)</code> + <code>finish_prediction</code>. §6</td>
+</tr>
+<tr>
+<td><code>jaxgam/inference/predictor.py</code></td>
+<td>3</td>
+<td><code>GAMPredictor</code> (<code>Vp</code> required; <code>offset_was_nonzero</code> + <code>_jaxgam_version</code> fields; defensive-copy read-only on <code>coef</code>/<code>Vp</code>; carries <code>PredictSpec</code>). §5.3</td>
+</tr>
+<tr>
+<td><code>tests/test_inference/test_predictor.py</code></td>
+<td>—</td>
+<td>predict parity vs <code>GAMResults</code> (incl. offset) + <strong>vs R</strong> (tensor, factor-by, NB, non-default built-in link — offset &amp; locally-defined custom links excluded, §12.2.1b); pickle + cloudpickle round-trip (read-only survives; <strong>stale-version warning</strong>); read-only <code>coef</code>/<code>Vp</code>; family-snapshot independence + final-theta; <code>to_predictor()</code> doesn't freeze/alias the result's arrays; <code>copy_for_prediction</code> drops <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code>, keeps <code>_XP_list</code>/<code>_Z_list</code>/<code>_UZ</code>.</td>
+</tr>
+<tr>
+<td><code>tests/test_result_mode.py</code></td>
+<td>—</td>
+<td><code>result="inference"</code> ⇒ <code>GAMInferenceResult</code> (runtime <code>isinstance</code>); banned dense arrays + penalty caches absent (recursive); no <code>summary</code>/<code>plot</code>; scalars + <strong><code>smooth_info</code>/<code>term_names</code>/<code>formula</code></strong> read on both; invalid <code>result</code> raises; <code>typing.assert_type</code> block (§12.5).</td>
+</tr>
+<tr>
+<td><code>docs/production_api/implementation_plan.md</code></td>
+<td>—</td>
+<td>Commit-by-commit breakdown.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Package <code>jaxgam/inference/</code> (renamed from the first draft's <code>serving/</code>).
+<code>PredictSpec</code> + builder + strip live in <strong>Phase 1</strong> (<code>formula/</code>); only the
+predictor and the predict-finish are in Phase 3 (<code>inference/</code>).</p>
+</blockquote>
+<h3 id="112-modified-files">11.2 Modified Files<a class="headerlink" href="#112-modified-files" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jaxgam/__init__.py</code></td>
+<td><strong>Export <code>GAMInferenceResult</code> and <code>GAMPredictor</code></strong> (add to imports + <code>__all__</code>); they are public return/handoff types.</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/gaussian_process.py</code> (<strong>commit B0, standalone</strong>)</td>
+<td>Null <code>_E_knot</code> at the end of <code>setup()</code> — a dead store (assigned at <code>:206</code>, cleared at <code>:209</code>, read nowhere), 32 MB at <code>n=5000</code>. Independent of this design; lands first so the baseline delta is honest. §1.1, §2.1, §13</td>
+</tr>
+<tr>
+<td><code>jaxgam/smooths/base.py</code> (+ <code>tensor.py</code>, <code>gaussian_process.py</code>, <code>by_variable.py</code>)</td>
+<td>Add <code>copy_for_prediction()</code> — base drops <code>_X</code>+<code>_S</code>; tensor drops <code>_penalties</code> and recurses <code>_marginals</code> (it has no <code>_X</code>/<code>_S</code> of its own); <strong>GP</strong> additionally nulls <code>_E_knot</code> as defense-in-depth (already <code>None</code> post-B0); by-variable recurses <code>base_smooth</code> (<code>FactorBySmooth</code>/<code>NumericBySmooth</code> are <strong>not</strong> <code>Smooth</code> subclasses and hold no <code>_X</code>). Documented base-default precondition. §7.2</td>
+</tr>
+<tr>
+<td><code>jaxgam/formula/design.py</code></td>
+<td><code>ModelSetup.build_predict_matrix</code> + the five helpers (<code>_to_dict</code>/<code>_validate_equal_lengths</code>/<code>_build_parametric_matrix</code>/<code>_encode_factor</code>/<code>_contr_poly</code>) move to <code>formula/predict_matrix.py</code> (thin <code>@staticmethod</code> shims remain for <code>build()</code>/formula tests); <code>ModelSetup</code> builds a <strong>lazy</strong> cached <code>PredictSpec</code> and delegates. Phase 1 → Phase 1.</td>
+</tr>
+<tr>
+<td><code>jaxgam/api.py</code></td>
+<td>Keyword-only <code>result="full"</code> on <strong><code>GAM.fit()</code></strong> with <code>@overload</code>; validate value; thread the mode into <code>_from_fit</code>. <strong>Rename the local optimizer output <code>result</code> → <code>fit_result</code></strong> to free the public <code>result</code> kwarg. The <strong>extended-family pre-fit <code>deepcopy</code> (<code>api.py:155–158</code>) is unchanged</strong> — it is <em>not</em> the predictor snapshot (§5.3).</td>
+</tr>
+<tr>
+<td><code>jaxgam/results.py</code></td>
+<td>Add <code>_FitDiagnostics</code> base + <code>GAMInferenceResult</code> + reshaped <code>GAMResults</code>; both delegate predict to <code>predict_core</code>/<code>finish_prediction</code>; <strong><code>_from_fit</code> takes the family snapshot (<code>copy.deepcopy</code>, post-<code>put_theta</code>) — the single snapshot owner (§5.3)</strong>; <code>to_predictor()</code> (compose / build-on-demand from lazy <code>setup</code> spec + snapshot + offset flag); seven <code>setup.*</code> → guarded <code>@property</code> (eighth, <code>n</code>, → <code>_FitDiagnostics</code> scalar, §5.5); drop dead <code>hasattr</code>. <strong>Rename <code>_from_fit</code>'s optimizer-output parameter → <code>fit_result</code>; the mode threads as a new <code>result_mode</code> arg</strong> (no collision with the public <code>result</code>). <strong><code>null_deviance</code> + <code>summary()</code> untouched (§10.3).</strong></td>
+</tr>
+<tr>
+<td><code>pyproject.toml</code></td>
+<td>Add <code>cloudpickle</code> to the <strong><code>dev</code></strong> optional extra (<code>[project.optional-dependencies].dev</code>; tests exercise the local-custom-link path); <strong>not</strong> a runtime dep — stdlib <code>pickle</code> is the public default (§8).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="113-no-changes-needed">11.3 No Changes Needed<a class="headerlink" href="#113-no-changes-needed" title="Permanent link">&para;</a></h3>
+<p><code>fitting/*</code> (<strong>Phase 2</strong> JAX/JIT — unchanged; the predict <em>finish</em> lives in the
+new Phase-3 <code>inference/</code>, not here); <code>families/*</code> (predictor snapshots the family;
+no rehydration/<code>sample()</code>); <code>families/registry.py</code>; <code>penalties/*</code>;
+<code>plot/plot_gam.py</code> (reads via <code>GAMResults</code>, present only when <code>result="full"</code>);
+<code>smooths/constraints.py</code> (<code>CoefficientMap</code>/<code>TermBlock</code> rebuilt via
+<code>dataclasses.replace</code>, §7.2).</p>
+<hr />
+<h2 id="12-testing-strategy">12. Testing Strategy<a class="headerlink" href="#12-testing-strategy" title="Permanent link">&para;</a></h2>
+<p>Per <code>docs/clean_unit_tests/</code>: the validation matrix owns final-model R parity;
+per-area files own layer-specific behavior; parametrize + <code>_AssertCollector</code>.</p>
+<h3 id="121-ownership">12.1 Ownership<a class="headerlink" href="#121-ownership" title="Permanent link">&para;</a></h3>
+<p><code>tests/test_validation_matrix.py</code> — unchanged (fits <code>result="full"</code>).
+<code>tests/test_inference/</code> and <code>tests/test_result_mode.py</code> own the new
+behavior, <strong>including direct R parity for the inference path</strong> (§12.2.1b). A
+Phase-1 test owns <code>copy_for_prediction()</code> across smooth types + the registry
+audit.</p>
+<h3 id="122-core-invariants">12.2 Core invariants<a class="headerlink" href="#122-core-invariants" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Predict-equivalence (<code>STRICT</code>):</strong> <code>predictor.predict(newdata, se_fit=True)
+   == result.predict(newdata, se_fit=True)</code> byte-identical; <code>GAMResults</code> vs
+   <code>GAMInferenceResult</code> give identical <code>predict(newdata)</code>. Zoo: gaussian <code>s(x)</code>,
+   binomial factor-by, poisson + offset, NB, non-default-link, <code>te()</code>, <code>ti()</code> ×
+   <code>pred_type</code>.
+   <strong>1b. Direct R parity for the lean &amp; pickled path (<code>STRICT</code>/<code>MODERATE</code> per
+   <code>tests/tolerances.py</code>):</strong> because (1) only proves the two jaxgam paths agree
+   with <em>each other</em>, also compare <code>GAMInferenceResult.predict</code> <strong>and</strong> a
+   pickle→unpickle→<code>predict</code> round-trip <strong>against R <code>predict.gam</code></strong> for at least
+   <code>te()</code>, factor-by, NB, and a <strong>non-default built-in link</strong> — use one already
+   expressible in <code>RBridge</code>: <code>Gamma(link="log")</code> (the existing <code>gamma_log</code> key,
+   <code>r_bridge.py:213</code>, rpy2-path-only). The subprocess family map (<code>r_bridge.py:85</code>)
+   carries default links only and is <strong>not</strong> extended — adding a <code>poisson_identity</code>
+   key is out of scope (rpy2-only test infra; same rationale as offset below).
+   Because the subprocess fallback can't express <code>gamma_log</code>, this case must run
+   under rpy2 — guard it like the existing GP parity test (<code>test_gaussian_process.py:93</code>):
+   take the shared auto <code>RBridge</code> and <code>pytest.skip("...requires rpy2")</code> when
+   <code>bridge.mode != "rpy2"</code> (<code>RBridge()</code> silently falls back to subprocess when rpy2
+   is unavailable, <code>r_bridge.py:98</code>; <code>RBridge(mode="rpy2")</code> would instead hard-error
+   there, so the skip-guard is the safe form).
+   This guards against a shared-but-wrong predict path (per the project rule:
+   results must match canonical mgcv).
+   <strong>Locally-defined custom links/families have no R analogue</strong>, so (like offset)
+   they are covered by internal lean==full parity (§12.2.1) + the pickle/
+   cloudpickle round-trip (§12.2.4), <strong>not</strong> direct R.
+   <strong>Offset is excluded from this direct-R gate:</strong> <code>RBridge</code> has <strong>no offset
+   argument</strong> at fit or predict (<code>r_bridge.py:241,1068</code>), and adding one is out of
+   scope (rpy2-only test infra). Offset is instead covered by (1)'s internal
+   lean==full equivalence (which <em>includes</em> the poisson+offset case, byte-
+   identical) plus the fact that the offset enters as a post-matrix <code>eta + offset</code>
+   term — identical in both jaxgam paths and to <code>predict.gam</code> — over a predict
+   matrix whose R parity the non-offset cases above already establish.</li>
+<li><strong>Banned state absent under <code>result="inference"</code></strong> (hard gate): the result
+   holds no <code>setup</code>/<code>fitted_values</code>/<code>linear_predictor</code>/<code>training_data</code>; a
+   <strong>recursive walk</strong> of the predictor's smooth graph finds no non-<code>None</code> <code>_X</code>,
+   <strong>no non-<code>None</code> <code>_S</code>/<code>_E_knot</code>, and empty <code>_penalties</code></strong>; and the predict
+   transforms (<code>_XP_list</code>/<code>_Z_list</code>/<code>_Xu</code>/<code>_UZ</code>) <strong>ARE present</strong>. (Banned owners/attributes
+   — not "no array has dim == n.")</li>
+<li><strong>Type/surface:</strong> <code>fit(result="inference")</code> returns a <code>GAMInferenceResult</code>
+   <strong>instance</strong> (runtime <code>isinstance</code>) with <strong>no</strong> <code>summary</code>/<code>plot</code> and a
+   <code>newdata</code>-required <code>predict</code>; <code>fit()</code>/<code>fit(result="full")</code> returns a
+   <code>GAMResults</code> instance; an invalid <code>result</code> raises <code>ValueError</code>; scalars <strong>and
+   <code>smooth_info</code>/<code>term_names</code>/<code>formula</code></strong> read identically on both — the metadata
+   leg is what makes <code>edf</code> interpretable on the lean type (§5.4). The <strong>static</strong>
+   <code>@overload</code> is asserted with <code>typing.assert_type</code> (teeth only under a checker,
+   §12.5); the <code>isinstance</code>/<code>ValueError</code> checks are the always-on runtime
+   guarantee.</li>
+<li><strong>Pickle round-trip (<code>STRICT</code>):</strong> (a) <code>pickle</code> a built-in-family/link core →
+   predict byte-identical + link survives + arrays still read-only; (b)
+   <code>cloudpickle</code> a local-custom-link core, same (stdlib <code>pickle</code> expected to fail
+   that case — asserted); (c) <strong>version stamp</strong>: a round-trip on the current
+   version warns nothing, and a blob whose <code>_jaxgam_version</code> is mutated to a fake
+   version <strong>warns</strong> on load (§5.3, §8).</li>
+<li><strong>Aliasing / ownership (<code>to_predictor()</code> on <code>GAMResults</code>):</strong> after the call,
+   (a) <code>setup</code>'s smooths still hold <code>_X</code>/<code>_S</code>/<code>_penalties</code> (while <code>_E_knot</code> is
+   already <code>None</code> after B0); the predictor's spec smooths have the fitting caches
+   dropped but retain <code>_XP_list</code>/<code>_Z_list</code>; (b)
+   <code>predictor.coefficients</code>/<code>Vp</code> are <strong>distinct objects</strong> from the result's, and
+   the result's arrays are <strong>not</strong> frozen by the call (defensive copy, §5.3).</li>
+<li><strong>Family snapshot independence + final theta:</strong> <code>predictor.family is not
+   get_family(name)</code>; mutating the registry instance does not affect the
+   predictor; for NB, <code>predictor.family.theta</code> equals the <strong>fitted</strong> theta (taken
+   post-<code>put_theta</code>, §5.3), not the initial value.</li>
+<li><strong>Read-only arrays:</strong> <code>coefficients</code>/<code>Vp</code> raise on in-place write (after
+   construction <em>and</em> after an unpickle round-trip). (No claim is tested for
+   transforms/family — they are read-only by contract only, §5.3.)</li>
+<li><strong><code>copy_for_prediction()</code> per type + registry audit</strong> (Phase 1): after the
+   copy, <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code> are dropped but <code>predict_matrix(newdata)</code> equals
+   the pre-copy result (transforms intact); the original smooth is untouched. A
+   <strong>registry-level test enumerates every registered smooth/by-wrapper type</strong> and
+   asserts each either overrides <code>copy_for_prediction</code> or appears in an explicit
+   <code>_BASE_DEFAULT_OK</code> allowlist — <strong>failing for any unaudited registered type</strong>.</li>
+</ol>
+<h3 id="123-collected-test-footprint-as-implemented">12.3 Collected-test footprint (as implemented)<a class="headerlink" href="#123-collected-test-footprint-as-implemented" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Where</th>
+<th>New collected tests</th>
+<th>Pattern</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_gaussian_process.py</code> (existing)</td>
+<td>0 (commit B0 <strong>restructures</strong> the existing <code>_E_knot</code> assertion to check <code>E</code> before setup nulls it — no new test)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>test_result_mode.py</code></td>
+<td>6 (type/surface + banned state; mode equivalence; actual-path R parity; family snapshot; predictor ownership/memory)</td>
+<td><code>@parametrize</code> + <code>_AssertCollector</code></td>
+</tr>
+<tr>
+<td><code>test_predictor.py</code></td>
+<td>6 (predict equivalence × zoo; <strong>R parity for lean + pickled</strong>; pickle + cloudpickle + version stamp; ownership/read-only; family snapshot; validation/offset/private surface)</td>
+<td><code>@parametrize</code> + <code>_AssertCollector</code></td>
+</tr>
+<tr>
+<td><code>test_prediction_copy.py</code></td>
+<td>3 (<code>copy_for_prediction()</code> per type; registry audit; predict-spec equivalence/aliasing/laziness)</td>
+<td><code>@parametrize</code> + <code>_AssertCollector</code></td>
+</tr>
+<tr>
+<td><code>test_results.py</code></td>
+<td>1 (duplicates-as-properties)</td>
+<td><code>_AssertCollector</code></td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>16</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="124-hard-gates">12.4 Hard gates<a class="headerlink" href="#124-hard-gates" title="Permanent link">&para;</a></h3>
+<p>Predict-equivalence (§12.2.1), <strong>direct R parity for the inference/pickled path
+(§12.2.1b)</strong>, and banned-state absence (§12.2.2) are the <code>STRICT</code> gates that block
+the build. (Null-deviance and <code>summary()</code> are untouched, §10.3, so their existing
+tests continue to pass unchanged.)</p>
+<h3 id="125-typing">12.5 Typing<a class="headerlink" href="#125-typing" title="Permanent link">&para;</a></h3>
+<p>The <code>@overload</code> gives editors/IDEs the exact return type and documents the
+contract. The repo configures <strong>no type checker</strong> (<code>pyproject.toml</code>: ruff +
+vulture only). Therefore:</p>
+<ul>
+<li>The <strong>runtime</strong> contract (<code>fit(result="inference")</code> <em>is a</em> <code>GAMInferenceResult</code>;
+  invalid <code>result</code> raises) is enforced by <code>isinstance</code>/<code>ValueError</code> tests
+  (§12.2.3) — always on.</li>
+<li>The <strong>static</strong> overload is <strong>editor/IDE aid only</strong> unless a checker is added.
+  Adding <code>pyright</code>/<code>mypy</code> (a <code>make typecheck</code> target running the <code>assert_type</code>
+  block) is the way to give it teeth — flagged as optional maintainer tooling,
+  not assumed by this design.</li>
+</ul>
+<hr />
+<h2 id="13-implementation-sequence">13. Implementation Sequence<a class="headerlink" href="#13-implementation-sequence" title="Permanent link">&para;</a></h2>
+<p>Pre-release ⇒ an <strong>implementation order</strong>, not a migration. <strong>One PR</strong> at the end
+against <code>main</code>, single working branch, discrete commits; the agent does <strong>not</strong>
+<code>git commit</code>/<code>push</code>; each unit runs <code>make test-cov</code> and hands off.</p>
+<table>
+<thead>
+<tr>
+<th>Commit</th>
+<th>Scope</th>
+<th>Risk</th>
+<th>§</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td>Pre-flight baseline (test counts, coverage, retained bytes at small/large <code>n</code>, incl. tensor <code>_penalties</code> and GP <code>_E_knot</code>). Add <code>cloudpickle</code> to dev deps.</td>
+<td>none</td>
+<td>§8</td>
+</tr>
+<tr>
+<td><strong>B0</strong></td>
+<td><strong>GP <code>_E_knot</code> dead-store fix</strong> — null it at the end of <code>setup()</code>; restructure the existing R-parity assertion to check <code>E</code> before it is dropped; re-measure GP retained bytes. <strong>Independent of this design</strong>; lands first so A's "before" and E's "after" bracket only what the <code>result</code> mode actually buys.</td>
+<td>low (one line + one test edit)</td>
+<td>§1.1, §2.1, §7.2</td>
+</tr>
+<tr>
+<td>B1</td>
+<td>Duplicate <code>setup.*</code> fields → guarded properties; drop dead <code>hasattr</code> guard.</td>
+<td>low (mechanical)</td>
+<td>§2.3, §5.5</td>
+</tr>
+<tr>
+<td>C</td>
+<td><strong>Phase-1 prediction state.</strong> Move <code>build_predict_matrix</code> + helpers to <code>formula/predict_matrix.py</code>; <code>PredictSpec</code> (concrete, explicit fields); <code>ModelSetup</code> builds a <strong>lazy</strong> cached spec + delegates; <code>Smooth.copy_for_prediction()</code> (base drops <code>_X</code>+<code>_S</code>; tensor drops <code>_penalties</code> + recurses; GP nulls <code>_E_knot</code> defensively; by-variable recurses) + precondition; <code>build_predict_spec</code>; recursive-absence (incl. <code>_X</code>/<code>_S</code>/<code>_penalties</code>/<code>_E_knot</code>), aliasing, per-type copy, <strong>and registry-audit</strong> tests.</td>
+<td>structural</td>
+<td>§5.2, §6, §7</td>
+</tr>
+<tr>
+<td>D</td>
+<td><strong><code>inference/</code>: <code>predict_core</code> + <code>finish_prediction</code> + <code>GAMPredictor</code>.</strong> <code>Vp</code> required; <code>offset_was_nonzero</code> + <code>_jaxgam_version</code> fields; defensive-copy read-only on <code>coef</code>/<code>Vp</code> (+ <code>__setstate__</code> re-freeze and version warning); <code>predict_core</code> typed on <code>PredictSpec</code> (<strong>no Protocol</strong> — §5.1); predict-equivalence <code>STRICT</code>, <strong>R-parity for lean + pickled (§12.2.1b)</strong>, pickle/cloudpickle/version-stamp, read-only, ownership tests.</td>
+<td>core</td>
+<td>§5.1, §5.3, §6, §8, §12</td>
+</tr>
+<tr>
+<td>E</td>
+<td><strong><code>result</code> mode + two result types + family snapshot + exports.</strong> <code>_FitDiagnostics</code> base; <code>GAMInferenceResult</code> (incl. <code>smooth_info</code>/<code>term_names</code>/<code>formula</code> properties); reshaped <code>GAMResults</code> + <code>predict()</code> routed through <code>predict_core(setup._lazy_predict_spec(), …)</code>; <code>_from_fit</code> family snapshot (post-<code>put_theta</code>, single owner); <strong>internal renames <code>result</code>→<code>fit_result</code> (api.py local + <code>_from_fit</code> param), mode threads as <code>result_mode</code></strong> to free the public kwarg; keyword-only <code>@overload</code>ed <code>fit()</code> with value validation; <strong>export <code>GAMInferenceResult</code>/<code>GAMPredictor</code> from <code>jaxgam/__init__.py</code></strong> (<code>predict_core</code> stays private); <code>test_result_mode.py</code> (incl. <code>isinstance</code> + <code>assert_type</code> + invalid-value).</td>
+<td>user-facing</td>
+<td>§4, §5.3, §5.4, §11.2</td>
+</tr>
+<tr>
+<td>F</td>
+<td>Docs (<code>docs/api.md</code>, <code>docs/quickstart.md</code>, <code>docs/index.md</code>: <code>result</code> on <code>fit()</code>, two return types; "stdlib <code>pickle</code> is the default for same-version handoff; <code>cloudpickle</code> only for locally-defined custom links/families"); status reconciliation; final <code>BASELINE.md</code> measurements.</td>
+<td>none</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Deferred (separate PRs):</strong> the null-deviance DRY rewrite and the <code>summary()</code>
+CQS change (§10.3) — orthogonal, each with its own gate.</p>
+</blockquote>
+<p>Predict-equivalence, R-parity for the inference path, and banned-state absence are
+the correctness surface.</p>
+<hr />
+<h2 id="14-risks-and-tradeoffs">14. Risks and Tradeoffs<a class="headerlink" href="#14-risks-and-tradeoffs" title="Permanent link">&para;</a></h2>
+<p><strong>Keep from the prior refactor:</strong> the spec-vs-results split, removing <code>_fitted</code>,
+the <code>_from_fit</code> factory. No <code>__getattr__</code> forwarding (pre-release).</p>
+<ul>
+<li><strong>Penalty caches are fitting-only, not predict-critical</strong> (§2.1, §7) — <em>verified</em>
+  that no <code>predict_matrix</code> reads <code>_S</code>/<code>_penalties</code> (see the per-smooth function
+  citations in §2.1). <code>copy_for_prediction()</code> drops them; the recursive
+  banned-state gate (§12.2.2) and per-type copy test (§12.2.8) confirm it.
+  Tensor <code>_penalties</code> are <code>O(n_coefs²)</code> — the largest single win.</li>
+<li><strong>GP <code>_E_knot</code> is a dead store, and is NOT a win for this design</strong> (§1.1, §2.1,
+  §7.2) — assigned at <code>gaussian_process.py:206</code>, immediately cleared at <code>:209</code>,
+  and <strong>read nowhere in <code>jaxgam/</code></strong>. Before B0, <code>result="full"</code> leaked all 32 MB
+  (<code>n=5000</code>) too. Commit <strong>B0</strong> frees it at
+  <code>setup()</code> for both modes; the <code>copy_for_prediction()</code> override stays as
+  defense-in-depth. <strong>Do not attribute the GP reduction to <code>result="inference"</code></strong> —
+  after B0 the mode's GP win is the remaining ~4 MB. This was caught by a round-10
+  verification pass that re-derived §2.1 from the code; the earlier rounds had it
+  filed as a retention problem.</li>
+<li><strong>Transforms are predict-critical and kept</strong> — <code>_Xu</code>/<code>_UZ</code>/<code>_F</code>/<code>_XP_list</code>/
+  <code>_Z_list</code>; the predict-equivalence + R-parity tests (§12.2.1) gate this.</li>
+<li><strong>Internal equivalence ≠ R parity</strong> — the lean and full paths sharing one
+  builder could agree with each other yet drift from mgcv. §12.2.1b adds <strong>direct
+  R comparison</strong> for the inference and pickled paths (tensor/factor-by/NB/
+  non-default built-in link; locally-defined custom links have no R analogue →
+  internal + pickle parity only). <strong>Offset is not in the direct-R gate</strong> — <code>RBridge</code> has no offset
+  arg (<code>r_bridge.py:241,1068</code>); it is covered by internal lean==full equivalence
+  (incl. poisson+offset) + the post-matrix <code>eta + offset</code> term (§12.2.1b).</li>
+<li><strong><code>offset_was_nonzero</code> is an explicit predictor field</strong> (§5.3) — computed in
+  <code>_from_fit</code> before <code>setup</code> is discarded, so the external-offset warning survives
+  the setup-drop without storing an offset array or a second copy on the spec.</li>
+<li><strong><code>to_predictor()</code> ownership is safe by defensive copy</strong> (§5.3) — the predictor
+  copies <code>coefficients</code>/<code>Vp</code> before freezing, so building one from a <code>GAMResults</code>
+  never freezes or aliases the result's own arrays. Tested §12.2.5.</li>
+<li><strong>Read-only is exactly two arrays</strong> (§5.3) — <code>coefficients</code>/<code>Vp</code> only;
+  family/link graph + transforms are shared by reference, const <strong>by contract</strong>,
+  deliberately <strong>not</strong> deep-frozen (that would copy <code>O(Σk²)</code> or mutate a live
+  <code>GAMResults</code>). The public guarantee is "coefficients and covariance are
+  read-only," nothing more.</li>
+<li><strong>The <code>PredictMatrixBuilder</code> Protocol was cut</strong> (§5.1, §9) — after §6's
+  delegation, <code>ModelSetup</code> and <code>PredictSpec</code> were one implementation and a
+  forwarder, not two implementations, so the seam abstracted nothing.
+  <code>predict_core</code> is typed on <code>PredictSpec</code>; <code>GAMResults</code> passes
+  <code>setup._lazy_predict_spec()</code>. Byte-identical output, one fewer file/export/
+  concept. No decoupling was ever claimed, and pickle still depends on
+  <code>PredictSpec</code>'s layout (§8).</li>
+<li><strong>The full path now predicts through predict-only copies</strong> (§6) — a consequence
+  of the lazy-spec delegation, not a separate decision. It is safe by §2.1 and it
+  makes the entire existing <code>tests/test_predict/</code> suite a regression gate on the
+  cache-dropping.</li>
+<li><strong>Retention, not peak</strong> (§1.1, §3.2) — the fit still materializes everything;
+  <code>_from_fit</code> drops it afterward. Correct for a serving object, useless for a fit
+  that OOMs. Stated so nobody reaches for <code>result="inference"</code> to survive a large
+  <code>n</code>.</li>
+<li><strong>Pickle staleness is detectable</strong> (§5.3, §8) — <code>_jaxgam_version</code> + a
+  <code>__setstate__</code> mismatch warning. Not a format; just the difference between a
+  loud failure and silently wrong production predictions.</li>
+<li><strong><code>smooth_info</code>/<code>term_names</code> stay on the lean type</strong> (§5.4) — all-scalar
+  metadata <code>PredictSpec</code> already carries. Without them <code>edf</code> is an unlabeled array
+  on the type built for production logging. Zero bytes.</li>
+<li><strong><code>formula</code> has one owner</strong> (§5.5) — <code>GAMPredictor</code>; the lean result reads it as
+  a property. Storing it on both would have been a ninth duplicate in the design
+  that deletes eight.</li>
+<li><strong><code>PredictSpec</code> is lazy on the full path</strong> (§5.2) — a <code>result="full"</code> fit that
+  never predicts builds nothing; goal #3 preserved.</li>
+<li><strong>Family snapshot has one owner</strong> (§5.3) — <code>_from_fit</code>, <strong>after</strong> <code>put_theta</code>
+  finalizes theta, distinct from api.py's NB pre-fit registry-protection copy.
+  Tested for final theta + independence (§12.2.6).</li>
+<li><strong><code>Vp</code> is required</strong> (§5.3) — no dead nullable branch; a point-only mode would be
+  a separate type.</li>
+<li><strong>Knot-based bases retain <code>O(knots·k + k²)</code> transforms</strong> (§7.1) — inherent;
+  documented. Still a large reduction from <code>O(n·p)</code> + penalties.</li>
+<li><strong><code>result="full"|"inference"</code> names the outcome</strong> (§4) — chosen over a
+  <code>diagnostics</code> boolean (which read as "no diagnostics" while scalars are kept);
+  self-documenting at the call site and extensible.</li>
+<li><strong>Public <code>result</code> collided with the internal optimizer-output <code>result</code></strong> —
+  freed by internal renames (<code>fit_result</code> local</li>
+<li><code>_from_fit</code> param; the mode threads as <code>result_mode</code>); §11.2, commit E.</li>
+<li><strong>Deferred cleanups</strong> (§10.3) — null-deviance DRY and <code>summary()</code> CQS are out of
+  this PR (math-adjacent / user-visible, orthogonal); <code>null_deviance</code> and
+  <code>summary()</code> are byte/behavior-identical because untouched.</li>
+<li><strong>Pickle is same-version/transient, trusted-input only</strong> (§8) — <strong>stdlib
+  <code>pickle</code> is the public default</strong> (built-in families/links); <code>cloudpickle</code>
+  (dev-only, <strong>not</strong> a runtime dep) is needed only for <em>locally-defined</em> custom
+  links; no versioning/integrity; read-only re-applied on unpickle.</li>
+<li><strong>Typing is documented, not gate-enforced by default</strong> (§12.5) — <code>@overload</code> +
+  <code>assert_type</code> document the contract; runtime <code>isinstance</code>/<code>ValueError</code> enforce
+  it; a static checker (<code>make typecheck</code>) is optional maintainer tooling.</li>
+<li><strong>Two result types instead of one</strong> — slightly more surface (both exported), but
+  ISP/LSP-clean; the shared scalar base + shared predict free-functions keep it
+  DRY.</li>
+</ul>
+<p><strong>Tradeoff accepted:</strong> <code>result="inference"</code> retains no training arrays, no penalty
+caches, and no summary/plot surface (it keeps the cheap scalars, §4.2). The binary
+mode is simpler than precomputing partial diagnostics; an eager-diagnostics third
+<code>result</code> value could be added later without disturbing this design.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

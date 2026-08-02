@@ -1,0 +1,1445 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Test Suite Cleanup: Implementation Plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#test-suite-cleanup-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Test Suite Cleanup: Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-model-how-this-plan-is-executed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working Model — How This Plan Is Executed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-tooling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project Tooling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#success-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Success Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-0-pre-flight-baseline-capture-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 0 — Pre-flight: Baseline Capture (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-1-validation-matrix-consolidation-commit-a-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 — Validation Matrix Consolidation (Commit A) (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1 — Validation Matrix Consolidation (Commit A) (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#current-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#target-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Target structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#implementation-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-2-r-parity-ownership-sweep-commit-b-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 — R-Parity Ownership Sweep (Commit B) (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2 — R-Parity Ownership Sweep (Commit B) (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ownership-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ownership rules
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#implementation-steps_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#files-touched_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files touched
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-3-file-level-cleanup-commits-commits-c-through-h" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 — File-Level Cleanup Commits (Commits C through H)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 3 — File-Level Cleanup Commits (Commits C through H)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#commit-c-families-links-cleanup-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit C: Families &amp; Links cleanup (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-d-smooths-cleanup-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit D: Smooths cleanup (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-e-penalties-constraints-linalg-edge-validation-cleanup-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit E: Penalties / Constraints / Linalg / Edge / Validation cleanup (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-f-api-results-predict-post-estimation-cleanup-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit F: API / Results / Predict / Post-estimation cleanup (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-g-summary-plot-formula-bridge-registry-infrastructure-cleanup-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit G: Summary / Plot / Formula / Bridge / Registry / Infrastructure cleanup (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-h-fitting-cleanup-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commit H: Fitting cleanup (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-4-final-sweep-commit-i-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4 — Final Sweep (Commit I) (DONE)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 4 — Final Sweep (Commit I) (DONE)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-criteria_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risk-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risk Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Risk Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#risks-specific-to-this-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risks specific to this cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rollback-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollback plan
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequencing-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequencing Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#definition-of-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Definition of Done
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="test-suite-cleanup-implementation-plan">Test Suite Cleanup: Implementation Plan<a class="headerlink" href="#test-suite-cleanup-implementation-plan" title="Permanent link">&para;</a></h1>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>Reduce the jaxgam test suite from <strong>2,151 collected tests / 30,020 lines</strong> to roughly <strong>1,250 collected tests / ~27,000 lines</strong> while preserving every R-bridge comparison, hard-gate invariant, finite-difference AD validation, and documented regression test.</p>
+<p><strong>Branch:</strong> single working branch off <code>main</code> for the whole cleanup; one PR at the end.
+<strong>Audit reference:</strong> <code>scratch/audit_unit_tests_v3.md</code> (synthesis of v1 collection-level audit and v2 per-file agent audit)
+<strong>Per-file cut lists:</strong> <code>scratch/audit_unit_tests_v2.md</code>
+<strong>Mandatory-keep regression tests:</strong> <code>scratch/audit_unit_tests_v2.md</code> §"Regression Test Inventory"</p>
+<p><strong>Scope decision (resolved):</strong> Random effects (<code>bs="re"</code>) are in v1.0. <code>CLAUDE.md</code> has been updated to remove RE from the "What Is NOT in v1.0" list. All RE tests remain in the default suite.</p>
+<hr />
+<h2 id="working-model-how-this-plan-is-executed">Working Model — How This Plan Is Executed<a class="headerlink" href="#working-model-how-this-plan-is-executed" title="Permanent link">&para;</a></h2>
+<p><strong>One PR total.</strong> The entire cleanup ships as a single pull request from one working branch.</p>
+<p><strong>Work is split into discrete commits, not PRs.</strong> Each numbered "Commit" below is a self-contained unit of work that an agent executes end-to-end. Multiple commits land on the same branch in sequence.</p>
+<p><strong>The agent must NOT run <code>git commit</code> or <code>git push</code>.</strong> The user commits manually after reviewing each unit. The agent's job per commit is:</p>
+<ol>
+<li>Read the unit's "What to do" and "Files touched" sections.</li>
+<li>Make the code/test changes.</li>
+<li>Run <code>make test-cov</code> for validation. This single command runs the full suite in Docker (with R 4.5.2 + mgcv 1.9-3) and enforces the ≥80% coverage gate — do <strong>not</strong> also run <code>make test</code> or <code>make test-local</code>, they are redundant and slow.</li>
+<li>Stop and surface the results to the user (file list, test count delta, coverage delta, validation output). The user reviews, commits, then triggers the next unit.</li>
+</ol>
+<p>If a unit's validation fails, fix the issue <strong>in the same unit</strong> before handing off — do not start the next unit on a broken tree. If the fix changes the scope of the unit, note that in the handoff so the user can adjust the commit message accordingly.</p>
+<p>The user manages: branching off <code>main</code>, commit messages, force-pushes (if any), and the final PR. The agent stays inside the working tree.</p>
+<hr />
+<h2 id="project-tooling">Project Tooling<a class="headerlink" href="#project-tooling" title="Permanent link">&para;</a></h2>
+<p>Per CLAUDE.md, this project uses <code>uv</code> for dependency management and <code>make</code> for task orchestration. All Python execution must go through <code>uv run</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Validation (use this — only this)</strong></td>
+<td><code>make test-cov</code></td>
+</tr>
+<tr>
+<td>Count collected tests</td>
+<td><code>uv run pytest --collect-only -q tests \| tail -1</code></td>
+</tr>
+<tr>
+<td>Count source-level tests</td>
+<td><code>grep -rc "def test_" tests \| awk -F: '{s+=$2} END {print s}'</code></td>
+</tr>
+<tr>
+<td>Lint</td>
+<td><code>make lint</code></td>
+</tr>
+<tr>
+<td>Pre-commit</td>
+<td><code>make pre-commit</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>make test-cov</code> runs the full suite in Docker (R 4.5.2 + mgcv 1.9-3) with coverage and the <code>--cov-fail-under=80</code> gate. It is a strict superset of <code>make test</code> and <code>make test-local</code> plus the coverage check, so the agent should run it instead of all three. <code>make test</code> and <code>make test-local</code> exist for human use and are not part of the agent validation loop.</p>
+<hr />
+<h2 id="success-metrics">Success Metrics<a class="headerlink" href="#success-metrics" title="Permanent link">&para;</a></h2>
+<p>Track all three after every commit:</p>
+<ol>
+<li><strong>Collected-test count</strong> (<code>pytest --collect-only</code>) — primary indicator of CI speed impact.</li>
+<li><strong>Source-level test count</strong> (<code>grep -c "def test_"</code>) — indicator of maintenance surface.</li>
+<li><strong>Coverage percentage</strong> (must stay ≥80% per CLAUDE.md §Testing Rules).</li>
+</ol>
+<p><strong>Baseline</strong> (verified 2026-05-11 on branch <code>clean-unit-tests</code>):</p>
+<ul>
+<li>Collected: <strong>2,151</strong></li>
+<li>Source-level: <strong>~1,082</strong></li>
+<li>Coverage: TBD — capture in Phase 0.</li>
+</ul>
+<p><strong>Targets after full execution:</strong></p>
+<ul>
+<li>Collected: ≤ <strong>1,250</strong> (~42% reduction)</li>
+<li>Source-level: ≤ <strong>800</strong> (~26% reduction)</li>
+<li>Coverage: ≥ 80% per module</li>
+</ul>
+<hr />
+<h2 id="phase-0-pre-flight-baseline-capture-done">Phase 0 — Pre-flight: Baseline Capture (<strong>DONE</strong>)<a class="headerlink" href="#phase-0-pre-flight-baseline-capture-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Record current state so each subsequent commit can show measurable progress.</p>
+<p>Run on a clean checkout of the working branch (before any cleanup commits):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>--collect-only<span class="w"> </span>-q<span class="w"> </span>tests<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-3
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grep<span class="w"> </span>-rc<span class="w"> </span><span class="s2">&quot;def test_&quot;</span><span class="w"> </span>tests<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-v<span class="w"> </span><span class="s2">&quot;:0</span>$<span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span>-F:<span class="w"> </span><span class="s1">&#39;{s+=$2} END {print s}&#39;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nb">time</span><span class="w"> </span>make<span class="w"> </span>test-cov<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-25
+</code></pre></div>
+<p><code>make test-cov</code> produces both the coverage report (use the totals line) and the wall-clock when wrapped in <code>time</code>.</p>
+<p>Record the four numbers (collected, source-level, coverage %, wall-clock) in this file (or a <code>BASELINE.md</code> next to it). Every subsequent unit references them.</p>
+<p><strong>Exit criteria:</strong> Baseline metrics captured in the repo so every commit's handoff can show measurable progress against them.</p>
+<hr />
+<h2 id="phase-1-validation-matrix-consolidation-commit-a-done">Phase 1 — Validation Matrix Consolidation (Commit A) (<strong>DONE</strong>)<a class="headerlink" href="#phase-1-validation-matrix-consolidation-commit-a-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Reduce <code>tests/test_validation_matrix.py</code> from 15 methods/cell to 2 methods/cell. Saves ~650 collected tests — the single largest reduction in the suite.</p>
+<p><strong>Audit reference:</strong> v3 §1.</p>
+<h3 id="current-structure">Current structure<a class="headerlink" href="#current-structure" title="Permanent link">&para;</a></h3>
+<p><code>tests/test_validation_matrix.py</code> has:</p>
+<ul>
+<li>50 cells (10 smooth configs × 5 families: gaussian, poisson, binomial, gamma, nb), parameterized via fixtures.</li>
+<li><code>TestValidationMatrix</code>: 7 R-comparison methods (<code>test_deviance_vs_r</code>, <code>test_fitted_values_vs_r</code>, <code>test_edf_vs_r</code>, <code>test_scale_vs_r</code>, <code>test_coefficients_vs_r</code>, <code>test_self_prediction_roundtrip</code>, <code>test_theta_vs_r</code>).</li>
+<li><code>TestHardGateInvariants</code>: 8 invariant methods (<code>test_convergence</code>, <code>test_deviance_non_negative</code>, <code>test_no_nan_in_converged</code>, <code>test_edf_bounds</code>, <code>test_vp_symmetric_psd</code>, <code>test_penalty_psd</code>, <code>test_theta_positive</code>, <code>test_model_matrix_rank</code>).</li>
+<li>Total: 50 × 15 = <strong>750 collected tests</strong>.</li>
+</ul>
+<h3 id="target-structure">Target structure<a class="headerlink" href="#target-structure" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">TestValidationMatrix</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">test_matches_r</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cell</span><span class="p">):</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>        <span class="c1"># One R fit + one Python fit; all 7 quantities asserted via collector.</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>        <span class="o">...</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="k">class</span><span class="w"> </span><span class="nc">TestHardGateInvariants</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">test_all_invariants</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">fitted_model</span><span class="p">):</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        <span class="c1"># One model; all 8 invariants asserted via collector.</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>        <span class="o">...</span>
+</code></pre></div>
+<p>Total: 50 × 2 = <strong>100 collected tests</strong>.</p>
+<h3 id="implementation-steps">Implementation steps<a class="headerlink" href="#implementation-steps" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Add a failure-accumulator helper</strong> in <code>tests/helpers.py</code>:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">_AssertCollector</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span> <span class="bp">self</span><span class="o">.</span><span class="n">failures</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">check</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">fn</span><span class="p">):</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>        <span class="k">try</span><span class="p">:</span> <span class="n">fn</span><span class="p">()</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="k">except</span> <span class="ne">AssertionError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">failures</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">raise_if_any</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">label</span><span class="p">):</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">failures</span><span class="p">:</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>            <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2"> failed:</span><span class="se">\n</span><span class="s2">  - &quot;</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">  - &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">failures</span><span class="p">)</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>            <span class="p">)</span>
+</code></pre></div>
+<p>This keeps failure messages debuggable — when consolidation breaks one quantity, the test report still names every broken quantity, not just the first.</p>
+<ol>
+<li>
+<p><strong>Rewrite <code>TestValidationMatrix</code></strong> to one <code>test_matches_r</code> method. Body computes the R reference once, then calls <code>collector.check(...)</code> for each of the 7 quantities, finally <code>collector.raise_if_any(cell_id)</code>.</p>
+</li>
+<li>
+<p><strong>Rewrite <code>TestHardGateInvariants</code></strong> to one <code>test_all_invariants</code> method following the same pattern over the 8 invariants.</p>
+</li>
+<li>
+<p><strong>Do NOT cut</strong> <code>test_self_prediction_roundtrip</code> (v2 flagged it, but it's the CoefficientMap roundtrip check — CLAUDE.md §Common Pitfalls #3 calls this out as load-bearing). Fold it into the consolidated <code>test_matches_r</code>.</p>
+</li>
+<li>
+<p><strong>Per-cell speedup:</strong> since each consolidated test fits once instead of 15 times, also verify the R fit is memoized per cell using a session- or class-scoped fixture. If not, add the memoization in this commit.</p>
+</li>
+</ol>
+<h3 id="files-touched">Files touched<a class="headerlink" href="#files-touched" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Modify: <code>tests/test_validation_matrix.py</code></li>
+<li>Modify: <code>tests/helpers.py</code> (add <code>_AssertCollector</code>)</li>
+</ul>
+<h3 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> passes (full Docker suite + R + ≥80% coverage gate). Do not also run <code>make test</code> or <code>make test-local</code>.</li>
+<li><code>pytest --collect-only -q tests/test_validation_matrix.py</code> reports <strong>100</strong> tests (down from 750).</li>
+<li>Coverage of <code>jaxgam/</code> does not drop.</li>
+<li>Wall-clock for the file shorter (fewer R fits per cell).</li>
+</ul>
+<h3 id="exit-criteria">Exit criteria<a class="headerlink" href="#exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Collected count for the file: 100.</li>
+<li>All 50 cells still exercise all 15 underlying assertions through the collector.</li>
+<li><strong>Agent stops and hands off to user for commit.</strong> Do not proceed to Commit B.</li>
+</ul>
+<hr />
+<h2 id="phase-2-r-parity-ownership-sweep-commit-b-done">Phase 2 — R-Parity Ownership Sweep (Commit B) (<strong>DONE</strong>)<a class="headerlink" href="#phase-2-r-parity-ownership-sweep-commit-b-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Assign each R-parity behavior to exactly one canonical file; delete the duplicates.</p>
+<p><strong>Audit reference:</strong> v3 §2.</p>
+<h3 id="ownership-rules">Ownership rules<a class="headerlink" href="#ownership-rules" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Owns</th>
+<th>Does not own</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tests/test_validation_matrix.py</code></td>
+<td>Broad family × smooth R parity (consolidated <code>test_matches_r</code>)</td>
+<td>Layer internals</td>
+</tr>
+<tr>
+<td><code>tests/test_fitting/test_newton.py</code></td>
+<td>Optimizer internals: <code>newton_optimize</code>, objective traces, gradient/Hessian behavior, convergence diagnostics</td>
+<td>Final-model R parity</td>
+</tr>
+<tr>
+<td><code>tests/test_fitting/test_pirls.py</code></td>
+<td>PIRLS internals: step-halving, offset equivalence, working-response behavior, curvature regressions</td>
+<td>Family × R parity</td>
+</tr>
+<tr>
+<td><code>tests/test_predict/test_predict.py</code></td>
+<td>New-data prediction &amp; SE vs R</td>
+<td>Self-prediction roundtrip (matrix owns)</td>
+</tr>
+<tr>
+<td><code>tests/test_summary/test_summary.py</code></td>
+<td>Summary tables, EDF attribution, p-values, Davies</td>
+<td>Final-model parity</td>
+</tr>
+<tr>
+<td><code>tests/test_api/test_gam.py</code></td>
+<td>Public API orchestration, routing, input validation, fixed-<code>sp</code></td>
+<td>Family × R parity, hard-gate copies</td>
+</tr>
+</tbody>
+</table>
+<h3 id="implementation-steps_1">Implementation steps<a class="headerlink" href="#implementation-steps_1" title="Permanent link">&para;</a></h3>
+<ol>
+<li>For each non-matrix file, walk every test that calls <code>r_bridge</code>. For each:</li>
+<li>Asserting on a layer-internal quantity (intermediate <code>newton_optimize</code> output, PIRLS working response, etc.)? → <strong>keep</strong>.</li>
+<li>
+<p>Asserting only on <code>GAMResults</code> fields the matrix now owns (deviance, fitted_values, edf, scale, coefficients, theta) or any hard-gate invariant? → <strong>delete</strong>.</p>
+</li>
+<li>
+<p>Apply specific cuts validated by this sweep:</p>
+</li>
+<li><code>test_api/test_gam.py::TestEndToEnd::test_gaussian_basic</code>, <code>test_all_fields_finite</code>, <code>test_vp_symmetric_psd</code>.</li>
+<li><code>test_fitting/test_newton.py::TestInvariants::test_deviance_non_negative</code>, <code>test_no_nan_in_converged</code>, <code>test_edf_bounds</code>.</li>
+<li>
+<p><code>test_results.py</code> self-prediction roundtrips that duplicate the matrix.</p>
+</li>
+<li>
+<p>Run the audit grep:</p>
+</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>grep<span class="w"> </span>-rl<span class="w"> </span><span class="s2">&quot;r_bridge\.fit_gam\|RBridge(&quot;</span><span class="w"> </span>tests/<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>xargs<span class="w"> </span>grep<span class="w"> </span>-l<span class="w"> </span><span class="s2">&quot;deviance\|fitted_values\|edf\|coefficients&quot;</span>
+</code></pre></div>
+<p>Each file in the result must own at least one behavior from the table. If not, all R comparisons in it are duplicates.</p>
+<h3 id="files-touched_1">Files touched<a class="headerlink" href="#files-touched_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>tests/test_api/test_gam.py</code></li>
+<li><code>tests/test_fitting/test_newton.py</code></li>
+<li><code>tests/test_fitting/test_pirls.py</code></li>
+<li><code>tests/test_results.py</code></li>
+<li><code>tests/test_post_estimation.py</code></li>
+</ul>
+<h3 id="validation_1">Validation<a class="headerlink" href="#validation_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make test-cov</code> passes. Do not also run <code>make test</code> or <code>make test-local</code>.</li>
+<li>For each behavior in the ownership table, exactly one test file is responsible.</li>
+</ul>
+<h3 id="exit-criteria_1">Exit criteria<a class="headerlink" href="#exit-criteria_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>~30–50 source-level tests cut.</li>
+<li>Grep audit confirms no R-parity behavior is silently lost.</li>
+<li><strong>Agent stops and hands off to user for commit.</strong> Do not proceed to Commit C.</li>
+</ul>
+<hr />
+<h2 id="phase-3-file-level-cleanup-commits-commits-c-through-h">Phase 3 — File-Level Cleanup Commits (Commits C through H)<a class="headerlink" href="#phase-3-file-level-cleanup-commits-commits-c-through-h" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> Apply v2's per-file cut lists. One commit per logical group. Order is biggest mechanical wins first; most numerically sensitive last.</p>
+<p><strong>Audit reference:</strong> v2 (each section below maps to v2's per-file findings).</p>
+<p>For every commit in this phase:</p>
+<ul>
+<li>Continue on the same working branch (no new branches).</li>
+<li>Use the cut lists in <code>scratch/audit_unit_tests_v2.md</code> as the work list.</li>
+<li><strong>Do NOT cut anything in v2's "Regression Test Inventory — MUST PRESERVE" table.</strong> Treat that table as a hard allow-list.</li>
+<li>Run <code>make test-cov</code> after the changes (single command — full Docker suite + R + coverage gate). Do not also run <code>make test</code> or <code>make test-local</code>.</li>
+<li>When handing off to the user, surface: (1) files touched, (2) test count before/after, (3) coverage delta, (4) <code>make test-cov</code> output. The user uses this for the commit message.</li>
+<li><strong>Do not run <code>git commit</code> or <code>git push</code>.</strong></li>
+</ul>
+<p>Commits in this phase touch disjoint file sets, so the order does not matter for correctness — but executing in the listed order keeps the most sensitive cleanup (fitting) last, after the others have validated the workflow.</p>
+<h3 id="commit-c-families-links-cleanup-done">Commit C: Families &amp; Links cleanup (<strong>DONE</strong>)<a class="headerlink" href="#commit-c-families-links-cleanup-done" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong> <code>tests/test_families.py</code>, <code>tests/test_links.py</code>
+<strong>Estimated cuts:</strong> ~53–58 source-level tests, ~680 lines.
+<strong>Reference:</strong> v2 §Group 3.</p>
+<p><strong>Critical preservation (override v2 if seen):</strong>
+- <code>TestFamilyStaticCacheKey</code> (lines 1500–1600) — regression for commit <code>0512673</code> (NB deepcopy → JIT cache miss). The docstring explicitly names the failure mode.
+- <code>TestNBJITCacheReuse</code> (lines 1603–end) — same regression.</p>
+<p><strong>Watch list:</strong> after cuts, <code>tests/test_families.py</code> should still have at least one consolidated test exercising JIT compilation for each Phase 2 method per CLAUDE.md commit conventions.</p>
+<h3 id="commit-d-smooths-cleanup-done">Commit D: Smooths cleanup (<strong>DONE</strong>)<a class="headerlink" href="#commit-d-smooths-cleanup-done" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong> <code>tests/test_smooths/test_tprs.py</code>, <code>test_cubic.py</code>, <code>test_tensor.py</code>, <code>test_by_variable.py</code>, <code>test_random_effects.py</code>
+<strong>Estimated cuts:</strong> ~68 source-level tests, ~485 lines.
+<strong>Reference:</strong> v2 §Group 1.</p>
+<p><strong>Critical preservation:</strong>
+- Unseen-level RE tests in <code>test_random_effects.py</code> (commit <code>5014785</code>).
+- Factor × factor and numeric × factor column-ordering checks (memory note: design doc had wrong column ordering; always verify against R).</p>
+<p><strong>Pattern:</strong> most cuts are per-basis (cr/cs/cc) duplicates that collapse to <code>@pytest.mark.parametrize('bs', ['cr','cs','cc'])</code>. Apply the parameterization rather than deleting the underlying checks.</p>
+<h3 id="commit-e-penalties-constraints-linalg-edge-validation-cleanup-done">Commit E: Penalties / Constraints / Linalg / Edge / Validation cleanup (<strong>DONE</strong>)<a class="headerlink" href="#commit-e-penalties-constraints-linalg-edge-validation-cleanup-done" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong> <code>tests/test_penalties.py</code>, <code>tests/test_constraints.py</code>, <code>tests/test_linalg.py</code>, <code>tests/test_edge_cases.py</code>, <code>tests/test_validation_matrix.py</code> (small sweep beyond Phase 1)
+<strong>Estimated cuts:</strong> ~44 source-level tests, ~400 lines.
+<strong>Reference:</strong> v2 §Group 4.</p>
+<p><strong>Critical preservation:</strong>
+- <code>CoefficientMap.constrained_to_full</code> roundtrip tests (CLAUDE.md §Common Pitfalls #3).
+- <code>apply_sum_to_zero</code> factor-by centering tests (CLAUDE.md §Common Pitfalls #6).
+- <code>test_cholesky_stability.py</code> — issue #6 regression. Keep as standalone file (do not merge into <code>test_linalg.py</code>); the file boundary aids incident traceability.</p>
+<p><strong>Watch list:</strong> input-validation tests in <code>test_edge_cases.py</code> (k&gt;n raises, NaN-in-response raises, etc.) should be dropped only if equivalent input validation exists at the GAM construction layer. Verify with a quick read of <code>jaxgam/api.py</code> before deleting.</p>
+<h3 id="commit-f-api-results-predict-post-estimation-cleanup-done">Commit F: API / Results / Predict / Post-estimation cleanup (<strong>DONE</strong>)<a class="headerlink" href="#commit-f-api-results-predict-post-estimation-cleanup-done" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong> <code>tests/test_api/test_gam.py</code>, <code>tests/test_results.py</code>, <code>tests/test_post_estimation.py</code>, <code>tests/test_predict/test_predict.py</code>
+<strong>Estimated cuts:</strong> ~30 source-level tests, ~460 lines.
+<strong>Reference:</strong> v2 §Group 5.</p>
+<p><strong>Critical preservation:</strong>
+- <code>TestNBPostEstimation</code> (newer NB theta post-estimation feature).
+- At least one canonical self-prediction roundtrip per family (CoefficientMap load-bearing).
+- All <code>TestSEVsR</code> tests in predict.</p>
+<p><strong>Note:</strong> Phase 2 (Commit B) already removed the hard-gate duplicates from <code>test_api/test_gam.py</code>. This commit handles the remaining metadata / repr / immutability boilerplate (<code>test_construction_succeeds</code>, <code>test_no_trailing_underscores</code>, <code>TestRepr::*</code>, etc.).</p>
+<h3 id="commit-g-summary-plot-formula-bridge-registry-infrastructure-cleanup-done">Commit G: Summary / Plot / Formula / Bridge / Registry / Infrastructure cleanup (<strong>DONE</strong>)<a class="headerlink" href="#commit-g-summary-plot-formula-bridge-registry-infrastructure-cleanup-done" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong> <code>tests/test_summary/test_summary.py</code>, <code>tests/test_plot/test_plot.py</code>, <code>tests/test_formula/test_parser.py</code>, <code>tests/test_formula/test_design.py</code>, <code>tests/test_r_bridge.py</code>, <code>tests/test_registry.py</code>, <code>tests/test_infrastructure.py</code>
+<strong>Estimated cuts:</strong> ~39–51 source-level tests, ~435 lines.
+<strong>Reference:</strong> v2 §Group 6.</p>
+<p><strong>Critical preservation:</strong>
+- All R-bridge summary parity (<code>TestSummaryVsR</code>, <code>TestMultiSmoothSummaryVsR</code>, <code>TestDaviesVsR</code>, <code>TestRandomEffectSummaryVsR</code>).
+- All 10 <code>TestErrorCases</code> parser tests.
+- <code>r_bridge.check_versions()</code> test (CLAUDE.md §Docker Test Environment — protects against silently running tests against the wrong mgcv version).</p>
+<h3 id="commit-h-fitting-cleanup-done">Commit H: Fitting cleanup (<strong>DONE</strong>)<a class="headerlink" href="#commit-h-fitting-cleanup-done" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong> <code>tests/test_fitting/test_newton.py</code>, <code>test_fitting_data.py</code>, <code>test_reml.py</code>, <code>test_pirls.py</code>, <code>test_nb_custom_jvp.py</code>, <code>test_nb_fitting.py</code>, <code>test_cholesky_stability.py</code>
+<strong>Estimated cuts:</strong> ~32–40 source-level tests, ~500 lines.
+<strong>Reference:</strong> v2 §Group 2.</p>
+<p><strong>Most numerically sensitive — do last. Critical preservation:</strong>
+- <code>TestCurvatureConsistency::test_halved_step_curvature_matches_accepted_mu</code> (commit <code>7e0b3a5</code> regression).
+- <code>test_cholesky_stability.py</code> (all 3 tests) — issue #6 regression.
+- All finite-difference validation tests (REML gradient/Hessian FD, NB custom JVP FD, custom_jvp FD).
+- Step-halving tests (CLAUDE.md §Common Pitfalls #5: "Step-halving is essential, not optional").</p>
+<hr />
+<h2 id="phase-4-final-sweep-commit-i-done">Phase 4 — Final Sweep (Commit I) (<strong>DONE</strong>)<a class="headerlink" href="#phase-4-final-sweep-commit-i-done" title="Permanent link">&para;</a></h2>
+<p><strong>Goal:</strong> After phases 1–3, walk the suite once more and confirm ownership and coverage. This is the last commit before the user opens the PR.</p>
+<h3 id="steps">Steps<a class="headerlink" href="#steps" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Re-run baseline measurement commands</strong> from Phase 0. Confirm targets hit.</p>
+</li>
+<li>
+<p><strong>Grep for remaining R-bridge duplication:</strong></p>
+</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>grep<span class="w"> </span>-rl<span class="w"> </span><span class="s2">&quot;r_bridge\.fit_gam\|RBridge(&quot;</span><span class="w"> </span>tests/<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>xargs<span class="w"> </span>grep<span class="w"> </span>-l<span class="w"> </span><span class="s2">&quot;deviance\|fitted_values\|edf\|coefficients&quot;</span>
+</code></pre></div>
+<p>For each file in the result, confirm it owns at least one unique behavior per Phase 2's ownership table. Delete any remaining duplicates.</p>
+<ol>
+<li><strong>Run validation:</strong></li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span>test-cov
+</code></pre></div>
+<p>This runs the full Docker suite (with R 4.5.2 + mgcv 1.9-3) and enforces the ≥80% coverage gate. Do not also run <code>make test</code> or <code>make test-local</code>. If any module dropped below 80%, investigate which test was carrying it and either restore it or add a targeted replacement.</p>
+<ol>
+<li><strong>Verify regression-test preservation.</strong> Grep the test tree for each entry in v2's "MUST PRESERVE" table:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>grep<span class="w"> </span>-rn<span class="w"> </span><span class="s2">&quot;TestFamilyStaticCacheKey\|TestNBJITCacheReuse\|test_halved_step_curvature_matches_accepted_mu\|test_cholesky_stability&quot;</span><span class="w"> </span>tests/
+</code></pre></div>
+<p>Each must still exist.</p>
+<ol>
+<li><strong>Update <code>CLAUDE.md</code> §Testing Rules</strong> if any conventions changed during cleanup (e.g., a new helper or parameterization pattern that should be documented).</li>
+</ol>
+<h3 id="exit-criteria_2">Exit criteria<a class="headerlink" href="#exit-criteria_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Collected count ≤ 1,250.</li>
+<li>Source-level count ≤ 800.</li>
+<li>Coverage ≥ 80%.</li>
+<li>No R-bridge behavior tested in more than one file (per ownership table).</li>
+<li>All "MUST PRESERVE" regression tests still exist.</li>
+<li><strong>Agent stops and hands off to user.</strong> The user reviews, commits, and opens the PR against <code>main</code>.</li>
+</ul>
+<hr />
+<h2 id="risk-management">Risk Management<a class="headerlink" href="#risk-management" title="Permanent link">&para;</a></h2>
+<h3 id="risks-specific-to-this-cleanup">Risks specific to this cleanup<a class="headerlink" href="#risks-specific-to-this-cleanup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Consolidated validation matrix loses failure granularity.</strong> Mitigation: the <code>_AssertCollector</code> helper in Phase 1 accumulates failures so the test message names every broken quantity, not just the first.</p>
+</li>
+<li>
+<p><strong>Deleting an R-parity test before another file owns it.</strong> Mitigation: Phase 2 explicitly enforces the ownership table before file-level cleanup begins. The grep-based audit in Phase 4 catches anything missed.</p>
+</li>
+<li>
+<p><strong>Cutting a test that uniquely covers a code path under JIT.</strong> Mitigation: coverage check after every commit; investigate any per-module drop below 80%.</p>
+</li>
+<li>
+<p><strong>Regression tests look like toothless tests.</strong> Mitigation: v2's "Regression Test Inventory" is referenced from every commit's handoff notes. The user cross-references before committing.</p>
+</li>
+</ol>
+<h3 id="rollback-plan">Rollback plan<a class="headerlink" href="#rollback-plan" title="Permanent link">&para;</a></h3>
+<p>Because each commit lands one logical change on a single working branch, individual commits can be reverted with <code>git revert &lt;sha&gt;</code> without disturbing others. Commits C–H touch disjoint files; only Commit B (ownership sweep) and Commit I (final sweep) depend on earlier work.</p>
+<p>Commit A (validation matrix consolidation) is the most disruptive single change. If it causes problems, rollback is <code>git revert &lt;commit-A-sha&gt;</code> — only one file is affected.</p>
+<hr />
+<h2 id="sequencing-summary">Sequencing Summary<a class="headerlink" href="#sequencing-summary" title="Permanent link">&para;</a></h2>
+<p>All commits land on a single working branch off <code>main</code>. The agent executes one unit at a time, validates, hands off; the user commits manually before triggering the next unit.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Phase 0 (baseline capture — no commit)
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>        │
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>Commit A  Phase 1 — validation matrix consolidation   ── ~650 collected tests
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>Commit B  Phase 2 — R-parity ownership sweep          ── ~30-50 source tests
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>        │
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>Phase 3 (file-level cleanups; sequential commits on the same branch)
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>        ├─ Commit C  Families &amp; Links                       ── ~53-58 source tests
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>        ├─ Commit D  Smooths                                 ── ~68 source tests
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>        ├─ Commit E  Penalties/Constraints/Linalg/Edge/Validation ── ~44 source tests
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>        ├─ Commit F  API/Results/Predict/Post-est            ── ~30 source tests
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        ├─ Commit G  Summary/Plot/Formula/Bridge/Registry/Infra ── ~39-51 source tests
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        └─ Commit H  Fitting (most sensitive — do last)      ── ~32-40 source tests
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>        │
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>Commit I  Phase 4 — final sweep + ownership verification + coverage check
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>        │
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>User opens single PR against `main`.
+</code></pre></div>
+<p>Commits A and B must complete before Phase 3 starts (Commit B depends on the matrix being the canonical owner, established in A). Phase 3 commits touch disjoint files, so the order within Phase 3 is for safety (most sensitive last), not correctness.</p>
+<hr />
+<h2 id="definition-of-done">Definition of Done<a class="headerlink" href="#definition-of-done" title="Permanent link">&para;</a></h2>
+<p>Met when the user opens the single PR for this cleanup:</p>
+<ul>
+<li>Default collected test count: ≤ 1,250.</li>
+<li>Source-level test count: ≤ 800.</li>
+<li>Coverage: ≥ 80% per module.</li>
+<li>All regression tests in v2's "MUST PRESERVE" table still exist and pass.</li>
+<li>All R-parity behaviors have exactly one canonical owning file (verified by grep).</li>
+<li><code>make test-cov</code> (Docker, with R 4.5.2 + mgcv 1.9-3, coverage gate) passes on the final commit.</li>
+<li><code>CLAUDE.md</code> accurately reflects scope (no stale "RE not in v1.0" statement — fixed pre-Phase-0).</li>
+<li>All nine units (Phase 0 baseline + Commits A–I) are present in the branch history as individual commits authored by the user.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,940 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Dense Random Effects — Implementation Plan - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#dense-random-effects-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Dense Random Effects — Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pr-1-randomeffectsmooth-class-unit-tests-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PR 1: RandomEffectSmooth class + unit tests (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pr-2-registry-constraint-pipeline-integration-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PR 2: Registry + constraint pipeline integration (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pr-3-smoothinfois_random-summary-p-value-type-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PR 3: SmoothInfo.is_random + summary p-value type (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pr-4-validation-matrix-re-cells-done" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PR 4: Validation matrix — RE cells (DONE)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pr-5-prediction-with-unseen-factor-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PR 5: Prediction with unseen factor levels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pr-6-documentation-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PR 6: Documentation + cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependency-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency Graph
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="dense-random-effects-implementation-plan">Dense Random Effects — Implementation Plan<a class="headerlink" href="#dense-random-effects-implementation-plan" title="Permanent link">&para;</a></h1>
+<p><strong>Design doc:</strong> <a href="../design/">design.md</a><br />
+<strong>Date:</strong> 2026-04-08<br />
+<strong>Branch:</strong> <code>add-dense-random-effects</code></p>
+<p>Six sequential PRs. Each is a small, independently reviewable unit that
+leaves the codebase green. Later PRs depend on earlier ones.</p>
+<hr />
+<h2 id="pr-1-randomeffectsmooth-class-unit-tests-done">PR 1: <code>RandomEffectSmooth</code> class + unit tests (DONE)<a class="headerlink" href="#pr-1-randomeffectsmooth-class-unit-tests-done" title="Permanent link">&para;</a></h2>
+<p><strong>Title:</strong> <code>[phase1] smooths/re: add RandomEffectSmooth basis and penalty construction</code></p>
+<p><strong>Goal:</strong> Implement the core smooth class in isolation. After this PR, the
+class can construct bases and penalties, but is not wired into the GAM
+pipeline.</p>
+<p><strong>Files created:</strong>
+- <code>jaxgam/smooths/random_effects.py</code> — <code>RandomEffectSmooth</code> class
+- <code>tests/test_smooths/test_random_effects.py</code> — unit tests</p>
+<p><strong>Work:</strong>
+1. Implement <code>RandomEffectSmooth(Smooth)</code> with:
+   - <code>__init__</code> — set <code>side_constrain=False</code>, <code>_noterp=True</code>,
+     <code>_random=True</code>, <code>_has_centering_constraint=False</code>
+   - <code>setup(data)</code> — detect factors via <code>is_factor()</code>/<code>get_factor_levels()</code>
+     from <code>by_variable.py</code>, store levels, build interaction model matrix
+     (<code>~v1:v2:...:vN - 1</code>), set identity penalty with <code>_smoothcon_normalize</code>
+   - <code>_build_interaction_matrix(data)</code> — row-wise Kronecker product of
+     per-variable encodings (one-hot for factors, column for numerics)
+   - <code>build_design_matrix(data)</code> — delegates to <code>predict_matrix</code>
+   - <code>predict_matrix(new_data)</code> — rebuild interaction matrix, zero out
+     non-finite entries (unseen factor levels)
+   - <code>build_penalty_matrices()</code> — return <code>[Penalty(self._S, rank=k, null_space_dim=0)]</code>
+2. Add test fixtures to <code>tests/conftest.py</code>:
+   - <code>re_factor_data</code> — single factor, 20 levels
+   - <code>re_two_factor_data</code> — two factors (3 × 2)
+   - <code>re_numeric_factor_data</code> — numeric × factor (10 levels)
+3. Write unit tests:
+   - Structural: shape, rank, <code>null_space_dim==0</code>, flags
+   - Penalty: symmetric PSD, identity (pre-normalization), full rank
+   - Single factor: one-hot indicator matrix is correct
+   - Factor × factor: interaction columns and ordering
+   - Numeric × factor: weighted indicator
+   - Numeric only: single column
+   - Prediction: unseen levels → zero rows
+   - Prediction: <code>predict_matrix</code> reproduces <code>build_design_matrix</code> on
+     same data
+4. Add R basis comparison tests (skip if R unavailable):
+   - <code>s(g, bs='re')</code> — X, S, rank, null_space_dim vs R (STRICT)
+   - <code>s(g1, g2, bs='re')</code> — factor interaction vs R (STRICT)
+   - <code>s(x, g, bs='re')</code> — numeric × factor vs R (STRICT)</p>
+<p><strong>Does NOT touch:</strong> registry, constraints, design.py, summary, validation
+matrix. The class exists but is not yet callable from <code>GAM()</code>.</p>
+<p><strong>Verify:</strong> <code>pytest tests/test_smooths/test_random_effects.py</code> passes.
+Existing tests unaffected.</p>
+<hr />
+<h2 id="pr-2-registry-constraint-pipeline-integration-done">PR 2: Registry + constraint pipeline integration (DONE)<a class="headerlink" href="#pr-2-registry-constraint-pipeline-integration-done" title="Permanent link">&para;</a></h2>
+<p><strong>Title:</strong> <code>[phase1] smooths/re: register bs="re" and skip centering constraints</code></p>
+<p><strong>Goal:</strong> Wire <code>RandomEffectSmooth</code> into the model setup pipeline so that
+<code>GAM("y ~ s(g, bs='re')")</code> can construct the model matrix. After this PR,
+RE models can be assembled (Phase 1) but not yet fitted through the full
+validation matrix.</p>
+<p><strong>Files modified:</strong>
+- <code>jaxgam/smooths/registry.py</code> — add <code>"re": RandomEffectSmooth</code>
+- <code>jaxgam/smooths/constraints.py</code> — skip centering for
+  <code>_has_centering_constraint=False</code></p>
+<p><strong>Files modified (tests):</strong>
+- <code>tests/test_smooths/test_random_effects.py</code> — add integration tests</p>
+<p><strong>Work:</strong>
+1. Add <code>"re": RandomEffectSmooth</code> to <code>smooth_registry</code> in <code>registry.py</code>.
+   Import <code>RandomEffectSmooth</code> from <code>jaxgam.smooths.random_effects</code>.
+2. In <code>CoefficientMap.build()</code> (constraints.py), add a skip condition to
+   the centering loop:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Before existing NumericBySmooth check:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">if</span> <span class="ow">not</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">sm</span><span class="p">,</span> <span class="s1">&#39;_has_centering_constraint&#39;</span><span class="p">,</span> <span class="kc">True</span><span class="p">):</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="k">continue</span>
+</code></pre></div>
+3. Add integration tests:
+   - <code>ModelSetup.build()</code> with <code>"y ~ s(g, bs='re')"</code> succeeds
+   - RE smooth passes through constraint pipeline with no centering
+     applied (verify <code>Z_centering is None</code> for the RE term)
+   - RE smooth has no <code>del_index</code> from <code>gam_side</code>
+   - RE + standard smooth together: <code>"y ~ s(x) + s(g, bs='re')"</code> —
+     verify both terms are in the model matrix with correct dimensions
+   - Verify the number of columns in X equals intercept + smooth cols +
+     RE cols (no column lost to centering)</p>
+<p><strong>Verify:</strong> <code>pytest tests/test_smooths/ tests/test_constraints.py</code> passes.
+<code>GAM("y ~ s(g, bs='re')").fit(data)</code> produces a fitted model (manual
+smoke test).</p>
+<hr />
+<h2 id="pr-3-smoothinfois_random-summary-p-value-type-done">PR 3: <code>SmoothInfo.is_random</code> + summary p-value type (DONE)<a class="headerlink" href="#pr-3-smoothinfois_random-summary-p-value-type-done" title="Permanent link">&para;</a></h2>
+<p><strong>Title:</strong> <code>[phase3] summary: use integer-rank test for random effect terms</code></p>
+<p><strong>Goal:</strong> RE terms get the correct p-value test type (<code>type_=1</code>) in
+<code>summary()</code>. After this PR, <code>model.summary()</code> produces correct output
+for RE models.</p>
+<p><strong>Files modified:</strong>
+- <code>jaxgam/formula/design.py</code> — add <code>is_random: bool = False</code> to
+  <code>SmoothInfo</code>; populate in <code>_build_smooth_info()</code>
+- <code>jaxgam/summary/summary.py</code> — dispatch <code>type_=1</code> for RE terms</p>
+<p><strong>Files modified (tests):</strong>
+- <code>tests/test_smooths/test_random_effects.py</code> — add summary test</p>
+<p><strong>Work:</strong>
+1. Add <code>is_random: bool = False</code> field to <code>SmoothInfo</code> dataclass
+   (design.py). Place it after the existing fields with a default so
+   existing construction is unaffected.
+2. In <code>_build_smooth_info()</code>, populate from the smooth object:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">base</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">sm</span><span class="p">,</span> <span class="s1">&#39;base_smooth&#39;</span><span class="p">,</span> <span class="n">sm</span><span class="p">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">is_random</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="s1">&#39;_random&#39;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</code></pre></div>
+3. In <code>summary.py</code>, replace the hardcoded <code>type_=0</code> with:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">test_type</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">si</span><span class="o">.</span><span class="n">is_random</span> <span class="k">else</span> <span class="mi">0</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">res</span> <span class="o">=</span> <span class="n">_test_stat</span><span class="p">(</span><span class="n">p_i</span><span class="p">,</span> <span class="n">X_i</span><span class="p">,</span> <span class="n">V_i</span><span class="p">,</span> <span class="n">rank</span><span class="o">=...</span><span class="p">,</span> <span class="n">type_</span><span class="o">=</span><span class="n">test_type</span><span class="p">,</span> <span class="n">res_df</span><span class="o">=</span><span class="n">rdf</span><span class="p">)</span>
+</code></pre></div>
+   where <code>si</code> is the <code>SmoothInfo</code> for the current smooth. (Need to
+   access <code>smooth_info</code> by index in the loop — already available as
+   <code>si</code> from <code>for i, si in enumerate(smooth_info):</code>.)
+4. Add test: fit <code>y ~ s(x) + s(g, bs='re')</code>, call <code>summary()</code>, verify
+   the RE term's smooth table row uses integer ref.df (whole number)
+   while the standard smooth's ref.df is fractional.</p>
+<p><strong>Verify:</strong> <code>pytest tests/test_smooths/test_random_effects.py tests/test_summary/</code> passes. Existing summary tests unaffected (no existing smooth
+has <code>_random=True</code>).</p>
+<hr />
+<h2 id="pr-4-validation-matrix-re-cells-done">PR 4: Validation matrix — RE cells (DONE)<a class="headerlink" href="#pr-4-validation-matrix-re-cells-done" title="Permanent link">&para;</a></h2>
+<p><strong>Title:</strong> <code>[testing] validation-matrix: add re, re_slope, re_mixed cells</code></p>
+<p><strong>Goal:</strong> Add RE smooth configs to the validation matrix, providing
+systematic R comparison across all 5 families (15 new R-comparison cells +
+15 new hard-gate invariant cells).</p>
+<p><strong>Files modified:</strong>
+- <code>tests/test_validation_matrix.py</code></p>
+<p><strong>Work:</strong>
+1. Add <code>_make_re_data(family_name, seed)</code> data generator:
+   - n=300, 20 groups, continuous x, true group effects
+   - Same family-dispatch pattern as existing generators
+2. Add 3 entries to <code>SMOOTH_CONFIGS</code>:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="s2">&quot;re&quot;</span><span class="p">:</span> <span class="n">SmoothConfig</span><span class="p">(</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">py_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">r_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">data_type</span><span class="o">=</span><span class="s2">&quot;re&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="p">),</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="s2">&quot;re_slope&quot;</span><span class="p">:</span> <span class="n">SmoothConfig</span><span class="p">(</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">py_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(x, g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">r_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(x, g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="n">data_type</span><span class="o">=</span><span class="s2">&quot;re&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">),</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="s2">&quot;re_mixed&quot;</span><span class="p">:</span> <span class="n">SmoothConfig</span><span class="p">(</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="n">py_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(x, k=10, bs=&#39;tp&#39;) + s(g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="n">r_formula</span><span class="o">=</span><span class="s2">&quot;y ~ s(x, k=10, bs=&#39;tp&#39;) + s(g, bs=&#39;re&#39;)&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="n">data_type</span><span class="o">=</span><span class="s2">&quot;re&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="p">),</span>
+</code></pre></div>
+3. Wire <code>_get_data()</code>:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">data_type</span> <span class="o">==</span> <span class="s2">&quot;re&quot;</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="k">return</span> <span class="n">_make_re_data</span><span class="p">(</span><span class="n">family</span><span class="p">)</span>
+</code></pre></div>
+4. Update <code>_r_tol()</code>: add <code>"re"</code> to the Gaussian-MODERATE set:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">if</span> <span class="n">family_name</span> <span class="o">==</span> <span class="s2">&quot;gaussian&quot;</span> <span class="ow">and</span> <span class="n">smooth_key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;tp&quot;</span><span class="p">,</span> <span class="s2">&quot;cr&quot;</span><span class="p">,</span> <span class="s2">&quot;re&quot;</span><span class="p">):</span>
+</code></pre></div>
+5. Update <code>_compare_fitted_not_coefs()</code>: add <code>"re_mixed"</code> to the
+   fitted-values set (TPRS sign ambiguity), leave <code>"re"</code> and
+   <code>"re_slope"</code> out (direct coefficient comparison).</p>
+<p><strong>Verify:</strong> <code>pytest tests/test_validation_matrix.py</code> — all 50 cells pass
+(35 existing + 15 new). Hard-gate invariants pass without R.</p>
+<hr />
+<h2 id="pr-5-prediction-with-unseen-factor-levels">PR 5: Prediction with unseen factor levels<a class="headerlink" href="#pr-5-prediction-with-unseen-factor-levels" title="Permanent link">&para;</a></h2>
+<p><strong>Title:</strong> <code>[phase3] predict: handle unseen factor levels in RE terms</code></p>
+<p><strong>Goal:</strong> Ensure <code>predict(newdata)</code> with factor levels not seen during
+training produces zero contribution from the RE term, matching R's
+behavior. This is already handled at the smooth level (PR 1), but needs
+end-to-end validation through the full <code>predict()</code> pipeline including
+<code>ModelSetup.build_predict_matrix()</code>.</p>
+<p><strong>Files modified:</strong>
+- <code>tests/test_smooths/test_random_effects.py</code> — add end-to-end prediction
+  tests</p>
+<p><strong>Work:</strong>
+1. Test: fit <code>y ~ s(x) + s(g, bs='re')</code>, then predict with newdata
+   containing a mix of seen and unseen factor levels. Verify:
+   - Predictions for seen levels are finite and reasonable
+   - Predictions for unseen levels equal the smooth-only prediction
+     (RE contribution is zero)
+   - Results match R's <code>predict.gam()</code> with the same unseen levels
+2. Test: predict with newdata that omits the factor column entirely
+   (using <code>exclude="s(g)"</code> pattern if supported, or verify the error
+   message is clear).
+3. Test: predict with a single unseen level — entire RE contribution
+   is zero for that observation.</p>
+<p><strong>Verify:</strong> All existing + new tests pass.</p>
+<hr />
+<h2 id="pr-6-documentation-cleanup">PR 6: Documentation + cleanup<a class="headerlink" href="#pr-6-documentation-cleanup" title="Permanent link">&para;</a></h2>
+<p><strong>Title:</strong> <code>[docs] smooths/re: add dense random effects to documentation</code></p>
+<p><strong>Goal:</strong> Update user-facing docs and clean up any loose ends.</p>
+<p><strong>Files modified:</strong>
+- <code>docs/dense_random_effects/design.md</code> — mark status as "Implemented"
+- <code>docs/R_SOURCE_MAP.md</code> — add RE source mapping
+- <code>docs/quickstart.md</code> — add RE example (if appropriate)</p>
+<p><strong>Work:</strong>
+1. Update <code>design.md</code> status to "Implemented" with completion date.
+2. Add RE entries to <code>R_SOURCE_MAP.md</code>:
+   - <code>smooth.construct.re.smooth.spec</code> → <code>jaxgam/smooths/random_effects.py</code>
+   - <code>Predict.matrix.random.effect</code> → same file
+3. Add a brief RE usage example to quickstart if it includes examples
+   of different smooth types.
+4. Verify no TODO/FIXME comments remain in the RE code.</p>
+<p><strong>Verify:</strong> Full test suite passes. Documentation builds cleanly.</p>
+<hr />
+<h2 id="dependency-graph">Dependency Graph<a class="headerlink" href="#dependency-graph" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>PR 1  RandomEffectSmooth class + unit tests
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>  │
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  ▼
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>PR 2  Registry + constraint pipeline ── requires PR 1
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>  │
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>  ├──────────────┬──────────────┐
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>  ▼              ▼              ▼
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>PR 3  Summary  PR 4  ValMatrix  PR 5  Prediction
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>  │              │              │
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>  └──────────────┴──────────────┘
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>                 │
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>                 ▼
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>        PR 6  Documentation
+</code></pre></div>
+<p>PRs 3, 4, and 5 only depend on PR 2, so they can be developed in parallel
+after PR 2 merges. PR 6 is a final cleanup after everything else lands.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

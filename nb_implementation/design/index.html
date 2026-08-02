@@ -1,0 +1,2368 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Python port of R's mgcv package for Generalized Additive Models">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Negative Binomial Family Implementation Design - jaxgam</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#negative-binomial-family-implementation-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="jaxgam" class="md-header__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            jaxgam
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Negative Binomial Family Implementation Design
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../citations/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Citations
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../design/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Design Doc
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../R_SOURCE_MAP/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  R Source Map
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="jaxgam" class="md-nav__button md-logo" aria-label="jaxgam" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    jaxgam
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/scatt67/jaxgam" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    scatt67/jaxgam
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design Doc
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../R_SOURCE_MAP/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    R Source Map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#table-of-contents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Table of Contents
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-what-is-the-negative-binomial-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1 What Is the Negative Binomial Family?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-why-this-is-high-risk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.2 Why This Is High-Risk
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.3 Scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-r-reference-implementation-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. R Reference Implementation Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. R Reference Implementation Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-negbin-standard-family-fixed-theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 negbin() -- Standard Family (Fixed theta)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-nb-extended-family-estimated-theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 nb() -- Extended Family (Estimated theta)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-how-rs-newton-jointly-optimizes-theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 How R's Newton Jointly Optimizes Theta
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-key-r-source-file-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Key R Source File Map
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-architectural-decision-which-r-family-to-port" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Architectural Decision: Which R Family to Port
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-mathematical-specification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Mathematical Specification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Mathematical Specification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-log-likelihood-per-observation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1 Log-Likelihood (Per-Observation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-variance-function" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2 Variance Function
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-deviance-residuals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3 Deviance Residuals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-saturated-log-likelihood" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4 Saturated Log-Likelihood
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#45-initialize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.5 Initialize
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-theta-optimization-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Theta Optimization Strategy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Theta Optimization Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-joint-optimization-matching-rs-newton" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.1 Joint Optimization Matching R's Newton
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-how-theta-enters-the-ad-trace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.2 How Theta Enters the AD Trace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-design-constraint-future-optimizer-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5.3 Design Constraint: Future Optimizer Compatibility
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-extending-the-custom_jvp-for-theta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Extending the custom_jvp for Theta
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Extending the custom_jvp for Theta">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-current-custom_jvp-standard-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.1 Current custom_jvp (Standard Families)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-extended-custom_jvp-extended-families" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.2 Extended custom_jvp (Extended Families)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-performance-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.3 Performance Impact
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-concrete-code-structure-in-_diff_score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6.4 Concrete Code Structure in _diff_score
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-family-class-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Family Class Design
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Family Class Design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-extendedfamily-base-class" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.1 ExtendedFamily Base Class
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-negativebinomial-class" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.2 NegativeBinomial Class
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-standard-family-methods-read-theta-from-self" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.3 Standard Family Methods (Read Theta from self)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#74-pure-function-factories-explicit-theta-for-ad" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.4 Pure-Function Factories (Explicit Theta for AD)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#75-why-this-interface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7.5 Why This Interface
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-pirls-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. PIRLS Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. PIRLS Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-no-pirls-changes-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.1 No PIRLS Changes Required
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-non-canonical-links-deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.2 Non-Canonical Links (Deferred)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-newton-optimizer-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Newton Optimizer Changes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Newton Optimizer Changes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-newtonoptimizerinit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 NewtonOptimizer.init
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-initial-params-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 Initial Params Construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-after-each-accepted-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 After Each Accepted Step
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#94-_build_result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.4 _build_result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#95-clamping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.5 Clamping
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-phase-by-phase-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Phase-by-Phase Changes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Phase-by-Phase Changes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-numpy-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 (NumPy, Setup)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-jax-fitting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 (JAX, Fitting)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-numpy-post-estimation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 (NumPy, Post-estimation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-file-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. File Plan
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. File Plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#new-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        New Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#modified-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modified Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-testing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Testing Strategy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. Testing Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#121-unit-tests-test_negative_binomialpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.1 Unit Tests (test_negative_binomial.py)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#122-r-comparison-tests-test_nb_fittingpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.2 R Comparison Tests (test_nb_fitting.py)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#123-hard-gate-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12.3 Hard-Gate Invariants
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-risk-register" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Risk Register
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Risk Register">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#r1-custom_jvp-correctness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        R1: custom_jvp Correctness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#r2-jit-recompilation-on-theta-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        R2: JIT Recompilation on Theta Change
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#r3-numerical-stability-of-ad-through-lgamma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        R3: Numerical Stability of AD Through lgamma
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#r4-non-canonical-link-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        R4: Non-Canonical Link Support
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-implementation-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Implementation Order
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="14. Implementation Order">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-extendedfamily-base-negativebinomial-family-class" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: ExtendedFamily Base + NegativeBinomial Family Class
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-ad-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: AD Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-extended-custom_jvp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Extended custom_jvp
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-newton-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Newton Integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-5-full-r-comparison-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: Full R Comparison Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-6-post-estimation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 6: Post-Estimation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="negative-binomial-family-implementation-design">Negative Binomial Family Implementation Design<a class="headerlink" href="#negative-binomial-family-implementation-design" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Design Phase
+<strong>Date:</strong> 2026-03-21
+<strong>Branch:</strong> <code>implement-nb-distribution</code></p>
+<hr />
+<h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
+<ol>
+<li><a href="#1-overview">Overview</a></li>
+<li><a href="#2-r-reference-implementation-analysis">R Reference Implementation Analysis</a></li>
+<li><a href="#3-architectural-decision-which-r-family-to-port">Architectural Decision: Which R Family to Port</a></li>
+<li><a href="#4-mathematical-specification">Mathematical Specification</a></li>
+<li><a href="#5-theta-optimization-strategy">Theta Optimization Strategy</a></li>
+<li><a href="#6-extending-the-custom_jvp-for-theta">Extending the custom_jvp for Theta</a></li>
+<li><a href="#7-family-class-design">Family Class Design</a></li>
+<li><a href="#8-pirls-integration">PIRLS Integration</a></li>
+<li><a href="#9-newton-optimizer-changes">Newton Optimizer Changes</a></li>
+<li><a href="#10-phase-by-phase-changes">Phase-by-Phase Changes</a></li>
+<li><a href="#11-file-plan">File Plan</a></li>
+<li><a href="#12-testing-strategy">Testing Strategy</a></li>
+<li><a href="#13-risk-register">Risk Register</a></li>
+<li><a href="#14-implementation-order">Implementation Order</a></li>
+</ol>
+<hr />
+<h2 id="1-overview">1. Overview<a class="headerlink" href="#1-overview" title="Permanent link">&para;</a></h2>
+<h3 id="11-what-is-the-negative-binomial-family">1.1 What Is the Negative Binomial Family?<a class="headerlink" href="#11-what-is-the-negative-binomial-family" title="Permanent link">&para;</a></h3>
+<p>The Negative Binomial (NB) distribution models count data with overdispersion
+(variance exceeds the mean). It generalizes Poisson by adding a dispersion
+parameter theta (also called "size" or "shape"):</p>
+<ul>
+<li><strong>Mean:</strong> mu</li>
+<li><strong>Variance:</strong> mu + mu^2/theta</li>
+<li>As theta -&gt; infinity, NB -&gt; Poisson</li>
+</ul>
+<p>In mgcv, NB is an <strong>extended family</strong> -- unlike standard families (Gaussian,
+Poisson, Binomial, Gamma), it has an extra distributional parameter theta that
+must be estimated alongside the smoothing parameters and coefficients.</p>
+<h3 id="12-why-this-is-high-risk">1.2 Why This Is High-Risk<a class="headerlink" href="#12-why-this-is-high-risk" title="Permanent link">&para;</a></h3>
+<p>NB touches nearly every layer of the fitting pipeline:</p>
+<ol>
+<li><strong>Family layer:</strong> New <code>ExtendedFamily</code> base class between <code>ExponentialFamily</code>
+   and <code>NegativeBinomial</code>, with pure-function factories (<code>deviance_fn</code>,
+   <code>working_weights_fn</code>) for AD inside the custom_jvp.</li>
+<li><strong>custom_jvp on PIRLS:</strong> Must be extended to compute <code>d(beta*)/d(theta)</code> via
+   the implicit function theorem, matching R's <code>ift2</code> in <code>gdi.c</code>.</li>
+<li><strong>Newton outer loop:</strong> <code>params</code> vector grows from <code>[log_lambda]</code> to
+   <code>[log_lambda, log_theta]</code>. The REML criterion and its gradient/Hessian
+   include theta dimensions.</li>
+<li><strong>REML criterion:</strong> The saturated log-likelihood <code>ls_sat</code> must take
+   <code>log_theta</code> as an explicit JAX-traced argument so <code>jax.grad</code> captures it.</li>
+</ol>
+<h3 id="13-scope">1.3 Scope<a class="headerlink" href="#13-scope" title="Permanent link">&para;</a></h3>
+<p>This design covers the <code>nb()</code> extended family with:
+- Estimated theta (default) and fixed theta modes
+- Log link (default), identity link, sqrt link
+- Joint theta optimization in the existing Newton optimizer
+- Full R-matching correctness</p>
+<p>Out of scope (deferred):
+- <code>negbin()</code> standard family (fixed theta with grid search)
+- Truncated NB, zero-inflated NB
+- Other extended families (Tweedie, Beta, SHASH, etc.) -- though NB
+  establishes the infrastructure they will reuse
+- Fellner-Schall optimizer -- the family interface is designed to not block
+  a future EFS implementation (which would use <code>estimate_theta()</code> separately
+  rather than joint optimization), but EFS itself is not built here</p>
+<hr />
+<h2 id="2-r-reference-implementation-analysis">2. R Reference Implementation Analysis<a class="headerlink" href="#2-r-reference-implementation-analysis" title="Permanent link">&para;</a></h2>
+<p>mgcv provides <strong>two</strong> NB implementations.</p>
+<h3 id="21-negbin-standard-family-fixed-theta">2.1 <code>negbin()</code> -- Standard Family (Fixed theta)<a class="headerlink" href="#21-negbin-standard-family-fixed-theta" title="Permanent link">&para;</a></h3>
+<p><strong>File:</strong> <code>$MGCV_SOURCE/R/gam.fit3.r</code> lines 2564-2642</p>
+<ul>
+<li>theta is <strong>fixed</strong> (passed as argument, never estimated during fitting)</li>
+<li>Uses <code>gam.fit3</code> -- standard PIRLS with <code>V(mu) * g'(mu)^2</code> weights</li>
+<li>Class is <code>"family"</code> (standard), not <code>"extended.family"</code></li>
+</ul>
+<h3 id="22-nb-extended-family-estimated-theta">2.2 <code>nb()</code> -- Extended Family (Estimated theta)<a class="headerlink" href="#22-nb-extended-family-estimated-theta" title="Permanent link">&para;</a></h3>
+<p><strong>File:</strong> <code>$MGCV_SOURCE/R/efam.r</code> lines 161-310</p>
+<ul>
+<li>theta can be <strong>estimated</strong> (default) or fixed</li>
+<li>Uses <code>gam.fit4</code> -- extended PIRLS with <code>Dd()</code> deviance derivatives</li>
+<li>theta stored internally as <code>log(theta)</code> for unconstrained optimization</li>
+<li><code>n.theta = 1</code> when estimated, <code>0</code> when fixed</li>
+<li><code>getTheta(trans=FALSE)</code> returns log(theta); <code>getTheta(trans=TRUE)</code> returns theta</li>
+<li><code>Dd()</code> provides deviance derivatives up to 4th order w.r.t. mu plus
+  mixed partials w.r.t. theta (efam.r lines 207-237)</li>
+<li><code>ls()</code> provides saturated log-likelihood with first and second derivatives
+  w.r.t. theta via digamma/trigamma (efam.r lines 248-275)</li>
+</ul>
+<h3 id="23-how-rs-newton-jointly-optimizes-theta">2.3 How R's Newton Jointly Optimizes Theta<a class="headerlink" href="#23-how-rs-newton-jointly-optimizes-theta" title="Permanent link">&para;</a></h3>
+<p>This was a critical finding during design. R's Newton optimizer <strong>does</strong> jointly
+optimize theta -- it is NOT an outer iteration.</p>
+<p>The <code>sp</code> vector passed through the pipeline is <code>[theta, log_lambda, &lt;log_scale&gt;]</code>.
+<code>gam.fit3</code> dispatches to <code>gam.fit4</code> for extended families (gam.fit3.r line 111).
+<code>gam.fit4</code> returns <code>REML1</code> and <code>REML2</code> -- the gradient and Hessian of the REML
+criterion w.r.t. the <strong>full</strong> parameter vector including theta (gam.fit4.r
+lines 738-764). <code>newton()</code> then takes a joint Newton step over all dimensions.</p>
+<p>The REML gradient has four components for the theta dimensions:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>R variable</th>
+<th>Source</th>
+<th>What it captures</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Deviance gradient</td>
+<td><code>D1[1:nth]</code></td>
+<td><code>gdi2</code> C routine</td>
+<td><code>d(beta*)/d(theta) . dD/d(eta) + dD/d(theta)</code> -- both indirect (through beta) and direct</td>
+</tr>
+<tr>
+<td>Penalty gradient</td>
+<td><code>P1[1:nth]</code></td>
+<td><code>gdi2</code> C routine</td>
+<td><code>2 * beta' . S . d(beta*)/d(theta)</code> -- indirect through beta only</td>
+</tr>
+<tr>
+<td>Log-det gradient</td>
+<td><code>ldet1[1:nth]</code></td>
+<td><code>gdi2</code> C routine</td>
+<td><code>tr(H^{-1} . dH/d(theta))</code> -- through working weights changing with theta</td>
+</tr>
+<tr>
+<td>Saturated loglik</td>
+<td><code>lsth1</code></td>
+<td><code>family$ls()</code></td>
+<td><code>d(ls_sat)/d(theta)</code> -- direct via digamma/trigamma</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>d(beta*)/d(theta)</code> terms come from <code>ift2</code> (gdi.c lines 1368-1462) which
+applies the implicit function theorem:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>d(beta*)/d(theta) = -H^{-1} . 0.5 . X&#39; . d^2D/(d(eta) d(theta))
+</code></pre></div>
+<p>where <code>d^2D/(d(eta) d(theta))</code> is the mixed derivative of deviance w.r.t.
+linear predictor and theta. R computes this analytically via <code>Dd$Dmuth</code> -&gt;
+<code>dDeta$Detath</code> (gam.fit4.r lines 4-77).</p>
+<p>The <code>estimate.theta()</code> function (efam.r lines 5-96) is used only by the
+<strong>EFS</strong> score type (gam.fit4.r line 509: <code>if (scoreType=="EFS")</code>), not by
+Newton REML/ML.</p>
+<h3 id="24-key-r-source-file-map">2.4 Key R Source File Map<a class="headerlink" href="#24-key-r-source-file-map" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Lines</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>$MGCV_SOURCE/R/efam.r</code></td>
+<td>161-310</td>
+<td><code>nb()</code> extended family definition</td>
+</tr>
+<tr>
+<td><code>$MGCV_SOURCE/R/efam.r</code></td>
+<td>5-96</td>
+<td><code>estimate.theta()</code> (used by EFS only)</td>
+</tr>
+<tr>
+<td><code>$MGCV_SOURCE/R/gam.fit3.r</code></td>
+<td>2564-2642</td>
+<td><code>negbin()</code> standard family</td>
+</tr>
+<tr>
+<td><code>$MGCV_SOURCE/R/gam.fit3.r</code></td>
+<td>106-116</td>
+<td><code>gam.fit3</code> dispatch to <code>gam.fit4</code></td>
+</tr>
+<tr>
+<td><code>$MGCV_SOURCE/R/gam.fit4.r</code></td>
+<td>4-77</td>
+<td><code>dDeta()</code> -- mu-to-eta derivative conversion</td>
+</tr>
+<tr>
+<td><code>$MGCV_SOURCE/R/gam.fit4.r</code></td>
+<td>240-548</td>
+<td><code>gam.fit4()</code> -- PIRLS for extended families</td>
+</tr>
+<tr>
+<td><code>$MGCV_SOURCE/R/gam.fit4.r</code></td>
+<td>725-764</td>
+<td>REML criterion with theta derivatives</td>
+</tr>
+<tr>
+<td><code>$MGCV_SOURCE/src/gdi.c</code></td>
+<td>1368-1462</td>
+<td><code>ift2()</code> -- IFT for d(beta*)/d(theta)</td>
+</tr>
+<tr>
+<td><code>$MGCV_SOURCE/src/gdi.c</code></td>
+<td>1953-2250</td>
+<td><code>gdi2()</code> -- full derivative computation</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-architectural-decision-which-r-family-to-port">3. Architectural Decision: Which R Family to Port<a class="headerlink" href="#3-architectural-decision-which-r-family-to-port" title="Permanent link">&para;</a></h2>
+<p><strong>Decision: Port <code>nb()</code> (extended family).</strong></p>
+<ol>
+<li>Theta estimation is the key feature -- users rarely know theta a priori.</li>
+<li><code>negbin()</code> (fixed theta) is trivial to add later as <code>NegativeBinomial(theta=5.0, fixed=True)</code>.</li>
+<li>NB establishes the extended family infrastructure for Tweedie, Beta, etc.</li>
+</ol>
+<p><strong>Key design choice: AD replaces hand-coded derivatives.</strong></p>
+<p>R's <code>gam.fit4</code> uses <code>Dd()</code> -- ~50 lines of hand-coded analytical derivatives
+of the deviance up to 4th order, passed to the C routine <code>gdi2</code>. We replace
+all of this with <code>jax.grad</code> through stable forward passes (per design.md
+section 9.3). No <code>custom_jvp</code> needed for NB itself -- only for the PIRLS IFT.</p>
+<hr />
+<h2 id="4-mathematical-specification">4. Mathematical Specification<a class="headerlink" href="#4-mathematical-specification" title="Permanent link">&para;</a></h2>
+<h3 id="41-log-likelihood-per-observation">4.1 Log-Likelihood (Per-Observation)<a class="headerlink" href="#41-log-likelihood-per-observation" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>l(y, mu, theta) = lgamma(y + theta) - lgamma(theta) - lgamma(y + 1)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>                  + theta * log(theta) - theta * log(mu + theta)
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>                  + y * log(mu) - y * log(mu + theta)
+</code></pre></div>
+<h3 id="42-variance-function">4.2 Variance Function<a class="headerlink" href="#42-variance-function" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>V(mu) = mu + mu^2/theta
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>V&#39;(mu) = 1 + 2*mu/theta
+</code></pre></div>
+<h3 id="43-deviance-residuals">4.3 Deviance Residuals<a class="headerlink" href="#43-deviance-residuals" title="Permanent link">&para;</a></h3>
+<p>Per-observation unit deviance (R's <code>dev.resids</code>, efam.r lines 199-205):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>d_i = 2 * wt_i * [y_i * log(max(1, y_i) / mu_i)
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>                   - (y_i + theta) * log((y_i + theta) / (mu_i + theta))]
+</code></pre></div>
+<h3 id="44-saturated-log-likelihood">4.4 Saturated Log-Likelihood<a class="headerlink" href="#44-saturated-log-likelihood" title="Permanent link">&para;</a></h3>
+<p>R's <code>family$ls()</code> (efam.r lines 248-275):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>ls = -sum(wt * [(y + theta)*log(y + theta) - ylogy + lgamma(y + 1)
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>                - theta*log(theta) + lgamma(theta) - lgamma(theta + y)])
+</code></pre></div>
+<p>where <code>ylogy = y*log(y)</code> for <code>y &gt; 0</code>, else <code>0</code>.</p>
+<h3 id="45-initialize">4.5 Initialize<a class="headerlink" href="#45-initialize" title="Permanent link">&para;</a></h3>
+<p>R's initialization (efam.r line 280): <code>mustart = y + (y == 0) / 6</code></p>
+<hr />
+<h2 id="5-theta-optimization-strategy">5. Theta Optimization Strategy<a class="headerlink" href="#5-theta-optimization-strategy" title="Permanent link">&para;</a></h2>
+<h3 id="51-joint-optimization-matching-rs-newton">5.1 Joint Optimization Matching R's Newton<a class="headerlink" href="#51-joint-optimization-matching-rs-newton" title="Permanent link">&para;</a></h3>
+<p>R's Newton jointly optimizes <code>[theta, log_lambda]</code> with the full REML gradient
+and Hessian. We match this: <code>log_theta</code> is appended to the <code>params</code> vector
+and <code>jax.grad</code>/<code>jax.hessian</code> of the REML criterion capture all theta
+dependencies automatically.</p>
+<p>The params vector for NB is:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>params = [log_lambda_1, ..., log_lambda_m, log_theta]
+</code></pre></div>
+<p>This follows the identical pattern used for unknown-scale families (Gaussian,
+Gamma) where <code>log_phi</code> is appended:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>params = [log_lambda_1, ..., log_lambda_m, log_phi]
+</code></pre></div>
+<p>The static flag <code>joint_theta</code> (analogous to <code>joint_scale</code>) controls whether
+<code>log_theta</code> is present in <code>params</code>.</p>
+<h3 id="52-how-theta-enters-the-ad-trace">5.2 How Theta Enters the AD Trace<a class="headerlink" href="#52-how-theta-enters-the-ad-trace" title="Permanent link">&para;</a></h3>
+<p>Theta affects the REML criterion through two paths:</p>
+<p><strong>Path A: Direct (outside PIRLS).</strong> The saturated log-likelihood <code>ls_sat(theta)</code>
+depends on theta directly. This is handled by calling
+<code>family.saturated_loglik_theta(y, wt, phi, log_theta)</code> with <code>log_theta</code> as a
+traced JAX value inside <code>_diff_score</code>. <code>jax.grad</code> differentiates through it
+automatically. This is structurally identical to how <code>phi</code> enters for
+Gaussian/Gamma via <code>family.saturated_loglik(y, wt, phi)</code>.</p>
+<p><strong>Path B: Indirect (through PIRLS).</strong> The PIRLS solution <code>(beta*, XtWX, deviance)</code>
+depends on theta because the deviance formula and variance function both contain
+theta. R captures this via <code>ift2</code> (the implicit function theorem in <code>gdi.c</code>).
+We capture it by extending the <code>custom_jvp</code> on PIRLS to include <code>log_theta</code> as
+a primal -- see Section 6.</p>
+<p>Both paths are needed for the full gradient. Path A alone (the "partial joint"
+approach considered earlier) would miss 3 of 4 gradient terms and give poor
+Newton convergence in the theta dimension.</p>
+<h3 id="53-design-constraint-future-optimizer-compatibility">5.3 Design Constraint: Future Optimizer Compatibility<a class="headerlink" href="#53-design-constraint-future-optimizer-compatibility" title="Permanent link">&para;</a></h3>
+<p>The family interface provides both:
+- <strong>Mutable state</strong> (<code>get_theta</code>/<code>put_theta</code> + methods reading <code>self._log_theta</code>)
+  -- used by PIRLS at runtime and available for future optimizers (e.g. EFS)
+  that estimate theta separately
+- <strong>Explicit-argument pure functions</strong> (<code>deviance_fn</code>, <code>working_weights_fn</code>,
+  <code>saturated_loglik_theta</code>) -- used by Newton's custom_jvp and criterion</p>
+<p>This separation means a future optimizer can use the same family object with a
+different theta-update strategy without any family changes.</p>
+<hr />
+<h2 id="6-extending-the-custom_jvp-for-theta">6. Extending the custom_jvp for Theta<a class="headerlink" href="#6-extending-the-custom_jvp-for-theta" title="Permanent link">&para;</a></h2>
+<h3 id="61-current-custom_jvp-standard-families">6.1 Current custom_jvp (Standard Families)<a class="headerlink" href="#61-current-custom_jvp-standard-families" title="Permanent link">&para;</a></h3>
+<p>The existing custom_jvp (newton.py lines 179-222) has 2 primals:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">_pirls_out</span><span class="p">(</span><span class="n">S_lambda</span><span class="p">,</span> <span class="n">beta_warm</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">(</span><span class="n">beta</span><span class="p">,</span> <span class="n">XtWX</span><span class="p">,</span> <span class="n">dev</span><span class="p">)</span>
+</code></pre></div>
+<p>The JVP computes how <code>(beta, XtWX, dev)</code> change when <code>S_lambda</code> is perturbed,
+using the IFT:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>dbeta = -H^{-1} . (dS @ beta)        # IFT for lambda
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>deta = X @ dbeta
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>dW = JVP of W(eta) w.r.t. eta        # chain through working weights
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>ddev = JVP of D(eta) w.r.t. eta      # chain through deviance
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>dXtWX = X&#39; . diag(dW) . X
+</code></pre></div>
+<h3 id="62-extended-custom_jvp-extended-families">6.2 Extended custom_jvp (Extended Families)<a class="headerlink" href="#62-extended-custom_jvp-extended-families" title="Permanent link">&para;</a></h3>
+<p>For <code>n_theta &gt; 0</code>, the custom_jvp gains a 3rd primal:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">_pirls_out</span><span class="p">(</span><span class="n">S_lambda</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">,</span> <span class="n">beta_warm</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="p">(</span><span class="n">beta</span><span class="p">,</span> <span class="n">XtWX</span><span class="p">,</span> <span class="n">dev</span><span class="p">)</span>
+</code></pre></div>
+<p>The JVP now handles tangents <code>(dS, dtheta, _)</code>:</p>
+<p><strong>Step 1: IFT with both lambda and theta contributions.</strong></p>
+<p>The IFT at the PIRLS stationary point <code>d(0.5*PenDev)/d(beta) = 0</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>For lambda: d^2(0.5*PenDev)/(d(beta) d(S)) in direction dS = dS . beta
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>For theta:  d^2(0.5*PenDev)/(d(beta) d(theta)) . dtheta = 0.5 * X&#39; . d^2D/(d(eta) d(theta)) . dtheta
+</code></pre></div>
+<p>R computes <code>d^2D/(d(eta) d(theta))</code> analytically via <code>Dd$Dmuth</code> -&gt; <code>dDeta$Detath</code>.
+We compute it with JAX AD:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">dev_fn</span> <span class="o">=</span> <span class="n">family</span><span class="o">.</span><span class="n">deviance_fn</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">)</span>  <span class="c1"># pure function D(eta, log_theta) -&gt; scalar</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">grad_D_eta</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">dev_fn</span><span class="p">,</span> <span class="n">argnums</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># dD/d(eta)</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">_</span><span class="p">,</span> <span class="n">d_grad_D</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jvp</span><span class="p">(</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="k">lambda</span> <span class="n">lt</span><span class="p">:</span> <span class="n">grad_D_eta</span><span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">lt</span><span class="p">),</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="p">(</span><span class="n">log_theta</span><span class="p">,),</span> <span class="p">(</span><span class="n">dtheta</span><span class="p">,)</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="p">)</span>  <span class="c1"># d^2D/(d(eta) d(theta)) . dtheta, shape (n,)</span>
+</code></pre></div>
+<p>Combined IFT solve:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">rhs</span> <span class="o">=</span> <span class="n">dS</span> <span class="o">@</span> <span class="n">beta</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">d_grad_D</span><span class="p">)</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">dbeta</span> <span class="o">=</span> <span class="n">cho_solve</span><span class="p">((</span><span class="n">L</span><span class="p">,</span> <span class="kc">True</span><span class="p">),</span> <span class="o">-</span><span class="n">rhs</span><span class="p">)</span>
+</code></pre></div>
+<p>This matches R's <code>ift2</code> (gdi.c lines 1396-1408) where the first <code>n_theta</code>
+columns of <code>b1</code> use <code>Db_th = -0.5 * X' @ Det_th</code> and the remaining columns
+use <code>Db_th = -sp[i] * S_i @ beta</code>.</p>
+<p><strong>Step 2: ddev and dW via joint (eta, theta) JVPs.</strong></p>
+<p>Unlike standard families where only eta changes, here both eta and theta change.
+We use joint JVPs to capture both effects in one call:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">deta</span> <span class="o">=</span> <span class="n">X</span> <span class="o">@</span> <span class="n">dbeta</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">_</span><span class="p">,</span> <span class="n">ddev</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jvp</span><span class="p">(</span><span class="n">dev_fn</span><span class="p">,</span> <span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">),</span> <span class="p">(</span><span class="n">deta</span><span class="p">,</span> <span class="n">dtheta</span><span class="p">))</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">_</span><span class="p">,</span> <span class="n">dW</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jvp</span><span class="p">(</span><span class="n">ww_fn</span><span class="p">,</span> <span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">),</span> <span class="p">(</span><span class="n">deta</span><span class="p">,</span> <span class="n">dtheta</span><span class="p">))</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="n">dXtWX</span> <span class="o">=</span> <span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">T</span> <span class="o">*</span> <span class="n">dW</span><span class="p">)</span> <span class="o">@</span> <span class="n">X</span>
+</code></pre></div>
+<p>This captures:
+- <code>ddev = dD/d(eta) . deta + dD/d(theta) . dtheta</code> (indirect + direct)
+- <code>dW = dW/d(eta) . deta + dW/d(theta) . dtheta</code> (indirect + direct)</p>
+<p>Matching all four R gradient terms from Section 2.3.</p>
+<p><strong>Step 3: Standard families unchanged.</strong></p>
+<p>When <code>family.n_theta == 0</code> (compile-time constant via static <code>family</code> arg),
+the standard 2-primal custom_jvp is used. Zero cost for existing families.</p>
+<h3 id="63-performance-impact">6.3 Performance Impact<a class="headerlink" href="#63-performance-impact" title="Permanent link">&para;</a></h3>
+<p>Adding <code>log_theta</code> as a 3rd primal adds one tangent direction. For
+<code>jax.hessian</code>, cost goes from <code>O(m^2)</code> to <code>O((m+1)^2)</code> JVP passes where
+<code>m</code> = number of smoothing parameters. Since the theta JVP involves a scalar
+tangent (vs the <code>(p,p)</code> matrix tangent for <code>S_lambda</code>), each theta-related
+pass is cheap. The increase is marginal.</p>
+<h3 id="64-concrete-code-structure-in-_diff_score">6.4 Concrete Code Structure in <code>_diff_score</code><a class="headerlink" href="#64-concrete-code-structure-in-_diff_score" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">_diff_score</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">beta_warm</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">S_list</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>                <span class="n">family</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">joint_theta</span><span class="p">,</span> <span class="n">joint_scale</span><span class="p">,</span> <span class="n">n_lambda</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="c1"># Parse params</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="n">idx</span> <span class="o">=</span> <span class="n">n_lambda</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="n">log_lambda</span> <span class="o">=</span> <span class="n">params</span><span class="p">[:</span><span class="n">idx</span><span class="p">]</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="k">if</span> <span class="n">joint_theta</span><span class="p">:</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>        <span class="n">log_theta</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="n">idx</span><span class="p">];</span> <span class="n">idx</span> <span class="o">+=</span> <span class="mi">1</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>    <span class="k">if</span> <span class="n">joint_scale</span><span class="p">:</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>        <span class="n">phi</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">idx</span><span class="p">])</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>    <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>        <span class="n">phi</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>    <span class="c1"># ls_sat -- direct theta dependence (outside custom_jvp)</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a>    <span class="k">if</span> <span class="n">joint_theta</span><span class="p">:</span>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a>        <span class="n">ls_sat</span> <span class="o">=</span> <span class="n">family</span><span class="o">.</span><span class="n">saturated_loglik_theta</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">,</span> <span class="n">phi</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">)</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a>    <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a>        <span class="n">ls_sat</span> <span class="o">=</span> <span class="n">family</span><span class="o">.</span><span class="n">saturated_loglik</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">,</span> <span class="n">phi</span><span class="p">)</span>
+<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a>
+<a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a>    <span class="n">S_lambda</span> <span class="o">=</span> <span class="n">build_S_lambda</span><span class="p">(</span><span class="n">log_lambda</span><span class="p">,</span> <span class="n">S_list</span><span class="p">,</span> <span class="n">p</span><span class="p">)</span>
+<a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a>
+<a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a>    <span class="k">if</span> <span class="n">family</span><span class="o">.</span><span class="n">n_theta</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">joint_theta</span><span class="p">:</span>
+<a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a>        <span class="c1"># --- Extended family path: 3 primals ---</span>
+<a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a>        <span class="n">dev_fn</span> <span class="o">=</span> <span class="n">family</span><span class="o">.</span><span class="n">deviance_fn</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">)</span>
+<a id="__codelineno-14-25" name="__codelineno-14-25" href="#__codelineno-14-25"></a>        <span class="n">ww_fn</span> <span class="o">=</span> <span class="n">family</span><span class="o">.</span><span class="n">working_weights_fn</span><span class="p">(</span><span class="n">wt</span><span class="p">)</span>
+<a id="__codelineno-14-26" name="__codelineno-14-26" href="#__codelineno-14-26"></a>
+<a id="__codelineno-14-27" name="__codelineno-14-27" href="#__codelineno-14-27"></a>        <span class="nd">@jax</span><span class="o">.</span><span class="n">custom_jvp</span>
+<a id="__codelineno-14-28" name="__codelineno-14-28" href="#__codelineno-14-28"></a>        <span class="k">def</span><span class="w"> </span><span class="nf">_pirls_out</span><span class="p">(</span><span class="n">S_lam</span><span class="p">,</span> <span class="n">lt</span><span class="p">,</span> <span class="n">bw</span><span class="p">):</span>
+<a id="__codelineno-14-29" name="__codelineno-14-29" href="#__codelineno-14-29"></a>            <span class="n">result</span> <span class="o">=</span> <span class="n">pirls_loop</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">bw</span><span class="p">,</span> <span class="n">S_lam</span><span class="p">,</span> <span class="n">family</span><span class="p">,</span> <span class="n">wt</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+<a id="__codelineno-14-30" name="__codelineno-14-30" href="#__codelineno-14-30"></a>            <span class="k">return</span> <span class="n">result</span><span class="o">.</span><span class="n">coefficients</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">XtWX</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">deviance</span>
+<a id="__codelineno-14-31" name="__codelineno-14-31" href="#__codelineno-14-31"></a>
+<a id="__codelineno-14-32" name="__codelineno-14-32" href="#__codelineno-14-32"></a>        <span class="nd">@_pirls_out</span><span class="o">.</span><span class="n">defjvp</span>
+<a id="__codelineno-14-33" name="__codelineno-14-33" href="#__codelineno-14-33"></a>        <span class="k">def</span><span class="w"> </span><span class="nf">_pirls_jvp</span><span class="p">(</span><span class="n">primals</span><span class="p">,</span> <span class="n">tangents</span><span class="p">):</span>
+<a id="__codelineno-14-34" name="__codelineno-14-34" href="#__codelineno-14-34"></a>            <span class="n">S_lam</span><span class="p">,</span> <span class="n">lt</span><span class="p">,</span> <span class="n">bw</span> <span class="o">=</span> <span class="n">primals</span>
+<a id="__codelineno-14-35" name="__codelineno-14-35" href="#__codelineno-14-35"></a>            <span class="n">dS</span><span class="p">,</span> <span class="n">dlt</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">tangents</span>
+<a id="__codelineno-14-36" name="__codelineno-14-36" href="#__codelineno-14-36"></a>            <span class="n">beta</span><span class="p">,</span> <span class="n">XtWX</span><span class="p">,</span> <span class="n">dev</span> <span class="o">=</span> <span class="n">_pirls_out</span><span class="p">(</span><span class="n">S_lam</span><span class="p">,</span> <span class="n">lt</span><span class="p">,</span> <span class="n">bw</span><span class="p">)</span>
+<a id="__codelineno-14-37" name="__codelineno-14-37" href="#__codelineno-14-37"></a>
+<a id="__codelineno-14-38" name="__codelineno-14-38" href="#__codelineno-14-38"></a>            <span class="n">H</span> <span class="o">=</span> <span class="n">XtWX</span> <span class="o">+</span> <span class="n">S_lam</span>
+<a id="__codelineno-14-39" name="__codelineno-14-39" href="#__codelineno-14-39"></a>            <span class="n">L</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">cho_factor</span><span class="p">(</span><span class="n">H</span><span class="p">)</span>
+<a id="__codelineno-14-40" name="__codelineno-14-40" href="#__codelineno-14-40"></a>            <span class="n">eta</span> <span class="o">=</span> <span class="n">X</span> <span class="o">@</span> <span class="n">beta</span> <span class="o">+</span> <span class="n">offset</span>
+<a id="__codelineno-14-41" name="__codelineno-14-41" href="#__codelineno-14-41"></a>
+<a id="__codelineno-14-42" name="__codelineno-14-42" href="#__codelineno-14-42"></a>            <span class="c1"># IFT: lambda + theta</span>
+<a id="__codelineno-14-43" name="__codelineno-14-43" href="#__codelineno-14-43"></a>            <span class="n">rhs</span> <span class="o">=</span> <span class="n">dS</span> <span class="o">@</span> <span class="n">beta</span>
+<a id="__codelineno-14-44" name="__codelineno-14-44" href="#__codelineno-14-44"></a>            <span class="n">grad_D_eta</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">dev_fn</span><span class="p">,</span> <span class="n">argnums</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<a id="__codelineno-14-45" name="__codelineno-14-45" href="#__codelineno-14-45"></a>            <span class="n">_</span><span class="p">,</span> <span class="n">d_grad_D</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jvp</span><span class="p">(</span>
+<a id="__codelineno-14-46" name="__codelineno-14-46" href="#__codelineno-14-46"></a>                <span class="k">lambda</span> <span class="n">lt_</span><span class="p">:</span> <span class="n">grad_D_eta</span><span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">lt_</span><span class="p">),</span> <span class="p">(</span><span class="n">lt</span><span class="p">,),</span> <span class="p">(</span><span class="n">dlt</span><span class="p">,)</span>
+<a id="__codelineno-14-47" name="__codelineno-14-47" href="#__codelineno-14-47"></a>            <span class="p">)</span>
+<a id="__codelineno-14-48" name="__codelineno-14-48" href="#__codelineno-14-48"></a>            <span class="n">rhs</span> <span class="o">=</span> <span class="n">rhs</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">d_grad_D</span><span class="p">)</span>
+<a id="__codelineno-14-49" name="__codelineno-14-49" href="#__codelineno-14-49"></a>            <span class="n">dbeta</span> <span class="o">=</span> <span class="n">cho_solve</span><span class="p">((</span><span class="n">L</span><span class="p">,</span> <span class="kc">True</span><span class="p">),</span> <span class="o">-</span><span class="n">rhs</span><span class="p">)</span>
+<a id="__codelineno-14-50" name="__codelineno-14-50" href="#__codelineno-14-50"></a>            <span class="n">deta</span> <span class="o">=</span> <span class="n">X</span> <span class="o">@</span> <span class="n">dbeta</span>
+<a id="__codelineno-14-51" name="__codelineno-14-51" href="#__codelineno-14-51"></a>
+<a id="__codelineno-14-52" name="__codelineno-14-52" href="#__codelineno-14-52"></a>            <span class="c1"># ddev and dW: joint JVPs over (eta, theta)</span>
+<a id="__codelineno-14-53" name="__codelineno-14-53" href="#__codelineno-14-53"></a>            <span class="n">_</span><span class="p">,</span> <span class="n">ddev</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jvp</span><span class="p">(</span><span class="n">dev_fn</span><span class="p">,</span> <span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">lt</span><span class="p">),</span> <span class="p">(</span><span class="n">deta</span><span class="p">,</span> <span class="n">dlt</span><span class="p">))</span>
+<a id="__codelineno-14-54" name="__codelineno-14-54" href="#__codelineno-14-54"></a>            <span class="n">_</span><span class="p">,</span> <span class="n">dW</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jvp</span><span class="p">(</span><span class="n">ww_fn</span><span class="p">,</span> <span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">lt</span><span class="p">),</span> <span class="p">(</span><span class="n">deta</span><span class="p">,</span> <span class="n">dlt</span><span class="p">))</span>
+<a id="__codelineno-14-55" name="__codelineno-14-55" href="#__codelineno-14-55"></a>            <span class="n">dXtWX</span> <span class="o">=</span> <span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">T</span> <span class="o">*</span> <span class="n">dW</span><span class="p">)</span> <span class="o">@</span> <span class="n">X</span>
+<a id="__codelineno-14-56" name="__codelineno-14-56" href="#__codelineno-14-56"></a>
+<a id="__codelineno-14-57" name="__codelineno-14-57" href="#__codelineno-14-57"></a>            <span class="k">return</span> <span class="p">(</span><span class="n">beta</span><span class="p">,</span> <span class="n">XtWX</span><span class="p">,</span> <span class="n">dev</span><span class="p">),</span> <span class="p">(</span><span class="n">dbeta</span><span class="p">,</span> <span class="n">dXtWX</span><span class="p">,</span> <span class="n">ddev</span><span class="p">)</span>
+<a id="__codelineno-14-58" name="__codelineno-14-58" href="#__codelineno-14-58"></a>
+<a id="__codelineno-14-59" name="__codelineno-14-59" href="#__codelineno-14-59"></a>        <span class="n">beta</span><span class="p">,</span> <span class="n">XtWX</span><span class="p">,</span> <span class="n">dev</span> <span class="o">=</span> <span class="n">_pirls_out</span><span class="p">(</span><span class="n">S_lambda</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">,</span> <span class="n">beta_warm</span><span class="p">)</span>
+<a id="__codelineno-14-60" name="__codelineno-14-60" href="#__codelineno-14-60"></a>
+<a id="__codelineno-14-61" name="__codelineno-14-61" href="#__codelineno-14-61"></a>    <span class="k">else</span><span class="p">:</span>
+<a id="__codelineno-14-62" name="__codelineno-14-62" href="#__codelineno-14-62"></a>        <span class="c1"># --- Standard family path: 2 primals (existing, unchanged) ---</span>
+<a id="__codelineno-14-63" name="__codelineno-14-63" href="#__codelineno-14-63"></a>        <span class="nd">@jax</span><span class="o">.</span><span class="n">custom_jvp</span>
+<a id="__codelineno-14-64" name="__codelineno-14-64" href="#__codelineno-14-64"></a>        <span class="k">def</span><span class="w"> </span><span class="nf">_pirls_out</span><span class="p">(</span><span class="n">S_lam</span><span class="p">,</span> <span class="n">bw</span><span class="p">):</span>
+<a id="__codelineno-14-65" name="__codelineno-14-65" href="#__codelineno-14-65"></a>            <span class="o">...</span>  <span class="c1"># existing code</span>
+<a id="__codelineno-14-66" name="__codelineno-14-66" href="#__codelineno-14-66"></a>
+<a id="__codelineno-14-67" name="__codelineno-14-67" href="#__codelineno-14-67"></a>        <span class="n">beta</span><span class="p">,</span> <span class="n">XtWX</span><span class="p">,</span> <span class="n">dev</span> <span class="o">=</span> <span class="n">_pirls_out</span><span class="p">(</span><span class="n">S_lambda</span><span class="p">,</span> <span class="n">beta_warm</span><span class="p">)</span>
+<a id="__codelineno-14-68" name="__codelineno-14-68" href="#__codelineno-14-68"></a>
+<a id="__codelineno-14-69" name="__codelineno-14-69" href="#__codelineno-14-69"></a>    <span class="c1"># Criterion (unchanged)</span>
+<a id="__codelineno-14-70" name="__codelineno-14-70" href="#__codelineno-14-70"></a>    <span class="n">core</span> <span class="o">=</span> <span class="n">_criterion_core</span><span class="p">(</span><span class="n">log_lambda</span><span class="p">,</span> <span class="n">XtWX</span><span class="p">,</span> <span class="n">beta</span><span class="p">,</span> <span class="n">dev</span><span class="p">,</span> <span class="n">ls_sat</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+<a id="__codelineno-14-71" name="__codelineno-14-71" href="#__codelineno-14-71"></a>    <span class="o">...</span>
+</code></pre></div>
+<hr />
+<h2 id="7-family-class-design">7. Family Class Design<a class="headerlink" href="#7-family-class-design" title="Permanent link">&para;</a></h2>
+<h3 id="71-extendedfamily-base-class">7.1 ExtendedFamily Base Class<a class="headerlink" href="#71-extendedfamily-base-class" title="Permanent link">&para;</a></h3>
+<p>Extended families have extra distributional parameters (theta) that are jointly
+estimated with smoothing parameters via Newton. The <code>ExtendedFamily</code> base class
+sits between <code>ExponentialFamily</code> and concrete families like <code>NegativeBinomial</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>ExponentialFamily          (variance, deviance_resids, aic, initialize, ...)
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>  |
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>  +-- Gaussian, Binomial, Poisson, Gamma    (n_theta = 0, standard families)
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>  |
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>  +-- ExtendedFamily       (get_theta, put_theta, deviance_fn, working_weights_fn, ...)
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>        |
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>        +-- NegativeBinomial                 (n_theta = 1)
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>        +-- (future: Tweedie, Beta, SHASH)
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># families/extended.py</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">ExtendedFamily</span><span class="p">(</span><span class="n">ExponentialFamily</span><span class="p">):</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Base class for families with extra parameters estimated via Newton.</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="sd">    Extended families provide:</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="sd">    - Mutable theta state (get_theta/put_theta) for PIRLS runtime</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="sd">    - Pure-function factories (deviance_fn, working_weights_fn) for the</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="sd">      custom_jvp on PIRLS, where theta must be a traced JAX value</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="sd">    - Explicit-theta saturated loglik for the REML criterion AD trace</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="sd">    The theta interface uses arrays of shape (n_theta,) throughout,</span>
+<a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="sd">    so families with multiple extra parameters (e.g. scat with df + scale)</span>
+<a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a><span class="sd">    work without interface changes.</span>
+<a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a>
+<a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a><span class="sd">    The fitting code branches on `family.n_theta &gt; 0` (compile-time check)</span>
+<a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a><span class="sd">    to select the extended custom_jvp path. The abstractmethods here</span>
+<a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a><span class="sd">    ensure any new extended family implements the required interface.</span>
+<a id="__codelineno-16-19" name="__codelineno-16-19" href="#__codelineno-16-19"></a><span class="sd">    &quot;&quot;&quot;</span>
+<a id="__codelineno-16-20" name="__codelineno-16-20" href="#__codelineno-16-20"></a>
+<a id="__codelineno-16-21" name="__codelineno-16-21" href="#__codelineno-16-21"></a>    <span class="nd">@abstractmethod</span>
+<a id="__codelineno-16-22" name="__codelineno-16-22" href="#__codelineno-16-22"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_theta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">transformed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<a id="__codelineno-16-23" name="__codelineno-16-23" href="#__codelineno-16-23"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Extra parameter vector, shape (n_theta,).</span>
+<a id="__codelineno-16-24" name="__codelineno-16-24" href="#__codelineno-16-24"></a>
+<a id="__codelineno-16-25" name="__codelineno-16-25" href="#__codelineno-16-25"></a><span class="sd">        Log-scale by default. transformed=True returns natural scale</span>
+<a id="__codelineno-16-26" name="__codelineno-16-26" href="#__codelineno-16-26"></a><span class="sd">        (e.g. exp(log_theta) for positive parameters).</span>
+<a id="__codelineno-16-27" name="__codelineno-16-27" href="#__codelineno-16-27"></a><span class="sd">        &quot;&quot;&quot;</span>
+<a id="__codelineno-16-28" name="__codelineno-16-28" href="#__codelineno-16-28"></a>        <span class="o">...</span>
+<a id="__codelineno-16-29" name="__codelineno-16-29" href="#__codelineno-16-29"></a>
+<a id="__codelineno-16-30" name="__codelineno-16-30" href="#__codelineno-16-30"></a>    <span class="nd">@abstractmethod</span>
+<a id="__codelineno-16-31" name="__codelineno-16-31" href="#__codelineno-16-31"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">put_theta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-16-32" name="__codelineno-16-32" href="#__codelineno-16-32"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Set extra parameter vector (log-scale), shape (n_theta,).</span>
+<a id="__codelineno-16-33" name="__codelineno-16-33" href="#__codelineno-16-33"></a>
+<a id="__codelineno-16-34" name="__codelineno-16-34" href="#__codelineno-16-34"></a><span class="sd">        Called by Newton after each accepted step.</span>
+<a id="__codelineno-16-35" name="__codelineno-16-35" href="#__codelineno-16-35"></a><span class="sd">        &quot;&quot;&quot;</span>
+<a id="__codelineno-16-36" name="__codelineno-16-36" href="#__codelineno-16-36"></a>        <span class="o">...</span>
+<a id="__codelineno-16-37" name="__codelineno-16-37" href="#__codelineno-16-37"></a>
+<a id="__codelineno-16-38" name="__codelineno-16-38" href="#__codelineno-16-38"></a>    <span class="nd">@abstractmethod</span>
+<a id="__codelineno-16-39" name="__codelineno-16-39" href="#__codelineno-16-39"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">deviance_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">):</span>
+<a id="__codelineno-16-40" name="__codelineno-16-40" href="#__codelineno-16-40"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return pure JAX function D(eta, log_theta_vec) -&gt; scalar.</span>
+<a id="__codelineno-16-41" name="__codelineno-16-41" href="#__codelineno-16-41"></a>
+<a id="__codelineno-16-42" name="__codelineno-16-42" href="#__codelineno-16-42"></a><span class="sd">        log_theta_vec has shape (n_theta,).</span>
+<a id="__codelineno-16-43" name="__codelineno-16-43" href="#__codelineno-16-43"></a><span class="sd">        Used by the custom_jvp for IFT theta terms and joint JVPs.</span>
+<a id="__codelineno-16-44" name="__codelineno-16-44" href="#__codelineno-16-44"></a><span class="sd">        Must capture (y, wt, link) in closure; theta is an explicit arg.</span>
+<a id="__codelineno-16-45" name="__codelineno-16-45" href="#__codelineno-16-45"></a><span class="sd">        &quot;&quot;&quot;</span>
+<a id="__codelineno-16-46" name="__codelineno-16-46" href="#__codelineno-16-46"></a>        <span class="o">...</span>
+<a id="__codelineno-16-47" name="__codelineno-16-47" href="#__codelineno-16-47"></a>
+<a id="__codelineno-16-48" name="__codelineno-16-48" href="#__codelineno-16-48"></a>    <span class="nd">@abstractmethod</span>
+<a id="__codelineno-16-49" name="__codelineno-16-49" href="#__codelineno-16-49"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">working_weights_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">):</span>
+<a id="__codelineno-16-50" name="__codelineno-16-50" href="#__codelineno-16-50"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return pure JAX function W(eta, log_theta_vec) -&gt; (n,) array.</span>
+<a id="__codelineno-16-51" name="__codelineno-16-51" href="#__codelineno-16-51"></a>
+<a id="__codelineno-16-52" name="__codelineno-16-52" href="#__codelineno-16-52"></a><span class="sd">        log_theta_vec has shape (n_theta,).</span>
+<a id="__codelineno-16-53" name="__codelineno-16-53" href="#__codelineno-16-53"></a><span class="sd">        Used by the custom_jvp for joint dW JVPs.</span>
+<a id="__codelineno-16-54" name="__codelineno-16-54" href="#__codelineno-16-54"></a><span class="sd">        Must capture (wt, link) in closure; theta is an explicit arg.</span>
+<a id="__codelineno-16-55" name="__codelineno-16-55" href="#__codelineno-16-55"></a><span class="sd">        &quot;&quot;&quot;</span>
+<a id="__codelineno-16-56" name="__codelineno-16-56" href="#__codelineno-16-56"></a>        <span class="o">...</span>
+<a id="__codelineno-16-57" name="__codelineno-16-57" href="#__codelineno-16-57"></a>
+<a id="__codelineno-16-58" name="__codelineno-16-58" href="#__codelineno-16-58"></a>    <span class="nd">@abstractmethod</span>
+<a id="__codelineno-16-59" name="__codelineno-16-59" href="#__codelineno-16-59"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">saturated_loglik_theta</span><span class="p">(</span>
+<a id="__codelineno-16-60" name="__codelineno-16-60" href="#__codelineno-16-60"></a>        <span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">wt</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">scale</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<a id="__codelineno-16-61" name="__codelineno-16-61" href="#__codelineno-16-61"></a>    <span class="p">):</span>
+<a id="__codelineno-16-62" name="__codelineno-16-62" href="#__codelineno-16-62"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Saturated log-likelihood with explicit theta for AD trace.</span>
+<a id="__codelineno-16-63" name="__codelineno-16-63" href="#__codelineno-16-63"></a>
+<a id="__codelineno-16-64" name="__codelineno-16-64" href="#__codelineno-16-64"></a><span class="sd">        log_theta has shape (n_theta,).</span>
+<a id="__codelineno-16-65" name="__codelineno-16-65" href="#__codelineno-16-65"></a><span class="sd">        Called inside _diff_score where log_theta is a traced JAX array.</span>
+<a id="__codelineno-16-66" name="__codelineno-16-66" href="#__codelineno-16-66"></a><span class="sd">        jax.grad differentiates through this w.r.t. log_theta.</span>
+<a id="__codelineno-16-67" name="__codelineno-16-67" href="#__codelineno-16-67"></a><span class="sd">        &quot;&quot;&quot;</span>
+<a id="__codelineno-16-68" name="__codelineno-16-68" href="#__codelineno-16-68"></a>        <span class="o">...</span>
+</code></pre></div>
+<p>This is ~30 lines with no logic -- just abstract method declarations that
+enforce the contract. <code>ExponentialFamily</code> is unchanged; <code>n_theta: int = 0</code>
+stays on it so the fitting code can check <code>family.n_theta &gt; 0</code> without
+caring about the type hierarchy.</p>
+<h3 id="72-negativebinomial-class">7.2 NegativeBinomial Class<a class="headerlink" href="#72-negativebinomial-class" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># families/negative_binomial.py</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">NegativeBinomial</span><span class="p">(</span><span class="n">ExtendedFamily</span><span class="p">):</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    <span class="n">family_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;nb&quot;</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>    <span class="n">scale_known</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>   <span class="c1"># phi = 1</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>    <span class="n">n_theta</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>           <span class="c1"># overridden in __init__ based on theta arg</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">theta</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">fixed</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">link</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">link</span><span class="p">)</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>        <span class="k">if</span> <span class="n">theta</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;theta must be positive, got </span><span class="si">{</span><span class="n">theta</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">theta</span><span class="p">)])</span>
+<a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">n_theta</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">if</span> <span class="n">fixed</span> <span class="k">else</span> <span class="mi">1</span>
+<a id="__codelineno-17-15" name="__codelineno-17-15" href="#__codelineno-17-15"></a>
+<a id="__codelineno-17-16" name="__codelineno-17-16" href="#__codelineno-17-16"></a>    <span class="nd">@property</span>
+<a id="__codelineno-17-17" name="__codelineno-17-17" href="#__codelineno-17-17"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">default_link</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Link</span><span class="p">:</span>
+<a id="__codelineno-17-18" name="__codelineno-17-18" href="#__codelineno-17-18"></a>        <span class="k">return</span> <span class="n">LogLink</span><span class="p">()</span>
+<a id="__codelineno-17-19" name="__codelineno-17-19" href="#__codelineno-17-19"></a>
+<a id="__codelineno-17-20" name="__codelineno-17-20" href="#__codelineno-17-20"></a>    <span class="c1"># -- ExtendedFamily interface --</span>
+<a id="__codelineno-17-21" name="__codelineno-17-21" href="#__codelineno-17-21"></a>
+<a id="__codelineno-17-22" name="__codelineno-17-22" href="#__codelineno-17-22"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_theta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">transformed</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<a id="__codelineno-17-23" name="__codelineno-17-23" href="#__codelineno-17-23"></a>        <span class="k">if</span> <span class="n">transformed</span><span class="p">:</span>
+<a id="__codelineno-17-24" name="__codelineno-17-24" href="#__codelineno-17-24"></a>            <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span><span class="p">)</span>
+<a id="__codelineno-17-25" name="__codelineno-17-25" href="#__codelineno-17-25"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span>
+<a id="__codelineno-17-26" name="__codelineno-17-26" href="#__codelineno-17-26"></a>
+<a id="__codelineno-17-27" name="__codelineno-17-27" href="#__codelineno-17-27"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">put_theta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">):</span>
+<a id="__codelineno-17-28" name="__codelineno-17-28" href="#__codelineno-17-28"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">log_theta</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="73-standard-family-methods-read-theta-from-self">7.3 Standard Family Methods (Read Theta from self)<a class="headerlink" href="#73-standard-family-methods-read-theta-from-self" title="Permanent link">&para;</a></h3>
+<p>Used by PIRLS (Phase 2 runtime) and post-estimation (Phase 3). These
+read <code>self._log_theta</code> which is fixed during a single PIRLS run.</p>
+<p>All standard family methods read <code>self._log_theta[0]</code> (scalar) from the
+stored vector. The <code>[0]</code> index extracts the single NB dispersion parameter.
+Future multi-theta families (e.g. scat) would index multiple elements.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">variance</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mu</span><span class="p">):</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>        <span class="n">xp</span> <span class="o">=</span> <span class="n">array_module</span><span class="p">(</span><span class="n">mu</span><span class="p">)</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>        <span class="n">theta</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>        <span class="k">return</span> <span class="n">mu</span> <span class="o">+</span> <span class="n">mu</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="n">theta</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">dvar</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mu</span><span class="p">):</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>        <span class="n">theta</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>        <span class="k">return</span> <span class="mf">1.0</span> <span class="o">+</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">mu</span> <span class="o">/</span> <span class="n">theta</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">deviance_resids</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">mu</span><span class="p">,</span> <span class="n">wt</span><span class="p">):</span>
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>        <span class="c1"># R: efam.r lines 199-205</span>
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>        <span class="n">xp</span> <span class="o">=</span> <span class="n">array_module</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a>        <span class="n">theta</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a>        <span class="n">mu_safe</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">mu</span><span class="p">,</span> <span class="mf">1e-10</span><span class="p">)</span>
+<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a>        <span class="n">y_safe</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">y</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a>        <span class="n">d</span> <span class="o">=</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">wt</span> <span class="o">*</span> <span class="p">(</span>
+<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a>            <span class="n">y</span> <span class="o">*</span> <span class="n">xp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">y_safe</span> <span class="o">/</span> <span class="n">mu_safe</span><span class="p">)</span>
+<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a>            <span class="o">-</span> <span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">*</span> <span class="n">xp</span><span class="o">.</span><span class="n">log</span><span class="p">((</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">mu_safe</span> <span class="o">+</span> <span class="n">theta</span><span class="p">))</span>
+<a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a>        <span class="p">)</span>
+<a id="__codelineno-18-20" name="__codelineno-18-20" href="#__codelineno-18-20"></a>        <span class="n">d</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">d</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+<a id="__codelineno-18-21" name="__codelineno-18-21" href="#__codelineno-18-21"></a>        <span class="k">return</span> <span class="n">xp</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">y</span> <span class="o">-</span> <span class="n">mu_safe</span><span class="p">)</span> <span class="o">*</span> <span class="n">xp</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">d</span><span class="p">)</span>
+<a id="__codelineno-18-22" name="__codelineno-18-22" href="#__codelineno-18-22"></a>
+<a id="__codelineno-18-23" name="__codelineno-18-23" href="#__codelineno-18-23"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">saturated_loglik</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">,</span> <span class="n">scale</span><span class="p">):</span>
+<a id="__codelineno-18-24" name="__codelineno-18-24" href="#__codelineno-18-24"></a>        <span class="c1"># R: efam.r lines 248-275 (forward pass only, no theta derivs)</span>
+<a id="__codelineno-18-25" name="__codelineno-18-25" href="#__codelineno-18-25"></a>        <span class="n">theta</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<a id="__codelineno-18-26" name="__codelineno-18-26" href="#__codelineno-18-26"></a>        <span class="n">ylogy</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">y</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="n">y</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">)</span>
+<a id="__codelineno-18-27" name="__codelineno-18-27" href="#__codelineno-18-27"></a>        <span class="n">term</span> <span class="o">=</span> <span class="p">(</span>
+<a id="__codelineno-18-28" name="__codelineno-18-28" href="#__codelineno-18-28"></a>            <span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">-</span> <span class="n">ylogy</span>
+<a id="__codelineno-18-29" name="__codelineno-18-29" href="#__codelineno-18-29"></a>            <span class="o">+</span> <span class="n">jsp</span><span class="o">.</span><span class="n">gammaln</span><span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="mf">1.0</span><span class="p">)</span> <span class="o">-</span> <span class="n">theta</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">theta</span><span class="p">)</span>
+<a id="__codelineno-18-30" name="__codelineno-18-30" href="#__codelineno-18-30"></a>            <span class="o">+</span> <span class="n">jsp</span><span class="o">.</span><span class="n">gammaln</span><span class="p">(</span><span class="n">theta</span><span class="p">)</span> <span class="o">-</span> <span class="n">jsp</span><span class="o">.</span><span class="n">gammaln</span><span class="p">(</span><span class="n">theta</span> <span class="o">+</span> <span class="n">y</span><span class="p">)</span>
+<a id="__codelineno-18-31" name="__codelineno-18-31" href="#__codelineno-18-31"></a>        <span class="p">)</span>
+<a id="__codelineno-18-32" name="__codelineno-18-32" href="#__codelineno-18-32"></a>        <span class="k">return</span> <span class="o">-</span><span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">term</span> <span class="o">*</span> <span class="n">wt</span><span class="p">)</span>
+<a id="__codelineno-18-33" name="__codelineno-18-33" href="#__codelineno-18-33"></a>
+<a id="__codelineno-18-34" name="__codelineno-18-34" href="#__codelineno-18-34"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">aic</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">mu</span><span class="p">,</span> <span class="n">wt</span><span class="p">,</span> <span class="n">scale</span><span class="p">):</span>
+<a id="__codelineno-18-35" name="__codelineno-18-35" href="#__codelineno-18-35"></a>        <span class="c1"># R: efam.r lines 239-246. Phase 3 only (NumPy).</span>
+<a id="__codelineno-18-36" name="__codelineno-18-36" href="#__codelineno-18-36"></a>        <span class="n">theta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_theta</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<a id="__codelineno-18-37" name="__codelineno-18-37" href="#__codelineno-18-37"></a>        <span class="n">mu_safe</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">mu</span><span class="p">,</span> <span class="mf">1e-10</span><span class="p">)</span>
+<a id="__codelineno-18-38" name="__codelineno-18-38" href="#__codelineno-18-38"></a>        <span class="n">term</span> <span class="o">=</span> <span class="p">(</span>
+<a id="__codelineno-18-39" name="__codelineno-18-39" href="#__codelineno-18-39"></a>            <span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">mu_safe</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">-</span> <span class="n">y</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">mu_safe</span><span class="p">)</span>
+<a id="__codelineno-18-40" name="__codelineno-18-40" href="#__codelineno-18-40"></a>            <span class="o">+</span> <span class="n">gammaln</span><span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="mf">1.0</span><span class="p">)</span> <span class="o">-</span> <span class="n">theta</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">theta</span><span class="p">)</span>
+<a id="__codelineno-18-41" name="__codelineno-18-41" href="#__codelineno-18-41"></a>            <span class="o">+</span> <span class="n">gammaln</span><span class="p">(</span><span class="n">theta</span><span class="p">)</span> <span class="o">-</span> <span class="n">gammaln</span><span class="p">(</span><span class="n">theta</span> <span class="o">+</span> <span class="n">y</span><span class="p">)</span>
+<a id="__codelineno-18-42" name="__codelineno-18-42" href="#__codelineno-18-42"></a>        <span class="p">)</span>
+<a id="__codelineno-18-43" name="__codelineno-18-43" href="#__codelineno-18-43"></a>        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="mf">2.0</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">term</span> <span class="o">*</span> <span class="n">wt</span><span class="p">))</span>
+<a id="__codelineno-18-44" name="__codelineno-18-44" href="#__codelineno-18-44"></a>
+<a id="__codelineno-18-45" name="__codelineno-18-45" href="#__codelineno-18-45"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">):</span>
+<a id="__codelineno-18-46" name="__codelineno-18-46" href="#__codelineno-18-46"></a>        <span class="c1"># R: mustart &lt;- y + (y == 0)/6</span>
+<a id="__codelineno-18-47" name="__codelineno-18-47" href="#__codelineno-18-47"></a>        <span class="n">y_arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+<a id="__codelineno-18-48" name="__codelineno-18-48" href="#__codelineno-18-48"></a>        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">y_arr</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="n">y_arr</span> <span class="o">+</span> <span class="mf">1.0</span><span class="o">/</span><span class="mf">6.0</span><span class="p">,</span> <span class="n">y_arr</span><span class="p">)</span>
+<a id="__codelineno-18-49" name="__codelineno-18-49" href="#__codelineno-18-49"></a>
+<a id="__codelineno-18-50" name="__codelineno-18-50" href="#__codelineno-18-50"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">valid_mu</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mu</span><span class="p">):</span>
+<a id="__codelineno-18-51" name="__codelineno-18-51" href="#__codelineno-18-51"></a>        <span class="k">return</span> <span class="n">mu</span> <span class="o">&gt;</span> <span class="mi">0</span>
+<a id="__codelineno-18-52" name="__codelineno-18-52" href="#__codelineno-18-52"></a>
+<a id="__codelineno-18-53" name="__codelineno-18-53" href="#__codelineno-18-53"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">valid_eta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">eta</span><span class="p">):</span>
+<a id="__codelineno-18-54" name="__codelineno-18-54" href="#__codelineno-18-54"></a>        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">eta</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="74-pure-function-factories-explicit-theta-for-ad">7.4 Pure-Function Factories (Explicit Theta for AD)<a class="headerlink" href="#74-pure-function-factories-explicit-theta-for-ad" title="Permanent link">&para;</a></h3>
+<p>Used by the custom_jvp (Section 6) and by the criterion's <code>ls_sat</code> term.
+These return pure JAX functions that take <code>log_theta</code> as an explicit array
+argument of shape <code>(n_theta,)</code> so it participates in the AD trace.
+NB indexes <code>log_theta[0]</code> for its single parameter.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">saturated_loglik_theta</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">,</span> <span class="n">scale</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">):</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Saturated log-likelihood with explicit theta for AD trace.</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="sd">        log_theta has shape (n_theta,) = (1,) for NB.&quot;&quot;&quot;</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>        <span class="n">theta</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">log_theta</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>        <span class="n">ylogy</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">y</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="n">y</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">y</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">)</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>        <span class="n">term</span> <span class="o">=</span> <span class="p">(</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>            <span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">-</span> <span class="n">ylogy</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>            <span class="o">+</span> <span class="n">jsp</span><span class="o">.</span><span class="n">gammaln</span><span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="mf">1.0</span><span class="p">)</span> <span class="o">-</span> <span class="n">theta</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">theta</span><span class="p">)</span>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>            <span class="o">+</span> <span class="n">jsp</span><span class="o">.</span><span class="n">gammaln</span><span class="p">(</span><span class="n">theta</span><span class="p">)</span> <span class="o">-</span> <span class="n">jsp</span><span class="o">.</span><span class="n">gammaln</span><span class="p">(</span><span class="n">theta</span> <span class="o">+</span> <span class="n">y</span><span class="p">)</span>
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>        <span class="p">)</span>
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>        <span class="k">return</span> <span class="o">-</span><span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">term</span> <span class="o">*</span> <span class="n">wt</span><span class="p">)</span>
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>
+<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">deviance_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">wt</span><span class="p">):</span>
+<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return pure JAX function D(eta, log_theta_vec) -&gt; scalar.</span>
+<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a><span class="sd">        log_theta_vec has shape (n_theta,) = (1,) for NB.</span>
+<a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a>
+<a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a><span class="sd">        Used by the custom_jvp for IFT theta terms and joint JVPs.</span>
+<a id="__codelineno-19-18" name="__codelineno-19-18" href="#__codelineno-19-18"></a><span class="sd">        Captures (y, wt, link) in closure; theta is an explicit arg.</span>
+<a id="__codelineno-19-19" name="__codelineno-19-19" href="#__codelineno-19-19"></a><span class="sd">        &quot;&quot;&quot;</span>
+<a id="__codelineno-19-20" name="__codelineno-19-20" href="#__codelineno-19-20"></a>        <span class="n">link_inv</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">link</span><span class="o">.</span><span class="n">inverse</span>
+<a id="__codelineno-19-21" name="__codelineno-19-21" href="#__codelineno-19-21"></a>        <span class="k">def</span><span class="w"> </span><span class="nf">_dev</span><span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">):</span>
+<a id="__codelineno-19-22" name="__codelineno-19-22" href="#__codelineno-19-22"></a>            <span class="n">theta</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">log_theta</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<a id="__codelineno-19-23" name="__codelineno-19-23" href="#__codelineno-19-23"></a>            <span class="n">mu</span> <span class="o">=</span> <span class="n">link_inv</span><span class="p">(</span><span class="n">eta</span><span class="p">)</span>
+<a id="__codelineno-19-24" name="__codelineno-19-24" href="#__codelineno-19-24"></a>            <span class="n">mu_safe</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">mu</span><span class="p">,</span> <span class="mf">1e-10</span><span class="p">)</span>
+<a id="__codelineno-19-25" name="__codelineno-19-25" href="#__codelineno-19-25"></a>            <span class="n">y_safe</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">y</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+<a id="__codelineno-19-26" name="__codelineno-19-26" href="#__codelineno-19-26"></a>            <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mf">2.0</span> <span class="o">*</span> <span class="n">wt</span> <span class="o">*</span> <span class="p">(</span>
+<a id="__codelineno-19-27" name="__codelineno-19-27" href="#__codelineno-19-27"></a>                <span class="n">y</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">y_safe</span> <span class="o">/</span> <span class="n">mu_safe</span><span class="p">)</span>
+<a id="__codelineno-19-28" name="__codelineno-19-28" href="#__codelineno-19-28"></a>                <span class="o">-</span> <span class="p">(</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">((</span><span class="n">y</span> <span class="o">+</span> <span class="n">theta</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">mu_safe</span> <span class="o">+</span> <span class="n">theta</span><span class="p">))</span>
+<a id="__codelineno-19-29" name="__codelineno-19-29" href="#__codelineno-19-29"></a>            <span class="p">))</span>
+<a id="__codelineno-19-30" name="__codelineno-19-30" href="#__codelineno-19-30"></a>        <span class="k">return</span> <span class="n">_dev</span>
+<a id="__codelineno-19-31" name="__codelineno-19-31" href="#__codelineno-19-31"></a>
+<a id="__codelineno-19-32" name="__codelineno-19-32" href="#__codelineno-19-32"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">working_weights_fn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wt</span><span class="p">):</span>
+<a id="__codelineno-19-33" name="__codelineno-19-33" href="#__codelineno-19-33"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Return pure JAX function W(eta, log_theta_vec) -&gt; (n,) array.</span>
+<a id="__codelineno-19-34" name="__codelineno-19-34" href="#__codelineno-19-34"></a><span class="sd">        log_theta_vec has shape (n_theta,) = (1,) for NB.</span>
+<a id="__codelineno-19-35" name="__codelineno-19-35" href="#__codelineno-19-35"></a>
+<a id="__codelineno-19-36" name="__codelineno-19-36" href="#__codelineno-19-36"></a><span class="sd">        Used by the custom_jvp for joint dW JVPs.</span>
+<a id="__codelineno-19-37" name="__codelineno-19-37" href="#__codelineno-19-37"></a><span class="sd">        Captures (wt, link) in closure; theta is an explicit arg.</span>
+<a id="__codelineno-19-38" name="__codelineno-19-38" href="#__codelineno-19-38"></a><span class="sd">        &quot;&quot;&quot;</span>
+<a id="__codelineno-19-39" name="__codelineno-19-39" href="#__codelineno-19-39"></a>        <span class="n">link_inv</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">link</span><span class="o">.</span><span class="n">inverse</span>
+<a id="__codelineno-19-40" name="__codelineno-19-40" href="#__codelineno-19-40"></a>        <span class="n">link_deriv</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">link</span><span class="o">.</span><span class="n">derivative</span>
+<a id="__codelineno-19-41" name="__codelineno-19-41" href="#__codelineno-19-41"></a>        <span class="k">def</span><span class="w"> </span><span class="nf">_ww</span><span class="p">(</span><span class="n">eta</span><span class="p">,</span> <span class="n">log_theta</span><span class="p">):</span>
+<a id="__codelineno-19-42" name="__codelineno-19-42" href="#__codelineno-19-42"></a>            <span class="n">theta</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">log_theta</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<a id="__codelineno-19-43" name="__codelineno-19-43" href="#__codelineno-19-43"></a>            <span class="n">mu</span> <span class="o">=</span> <span class="n">link_inv</span><span class="p">(</span><span class="n">eta</span><span class="p">)</span>
+<a id="__codelineno-19-44" name="__codelineno-19-44" href="#__codelineno-19-44"></a>            <span class="n">V</span> <span class="o">=</span> <span class="n">mu</span> <span class="o">+</span> <span class="n">mu</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="n">theta</span>
+<a id="__codelineno-19-45" name="__codelineno-19-45" href="#__codelineno-19-45"></a>            <span class="n">g_prime</span> <span class="o">=</span> <span class="n">link_deriv</span><span class="p">(</span><span class="n">mu</span><span class="p">)</span>
+<a id="__codelineno-19-46" name="__codelineno-19-46" href="#__codelineno-19-46"></a>            <span class="k">return</span> <span class="n">wt</span> <span class="o">/</span> <span class="p">(</span><span class="n">V</span> <span class="o">*</span> <span class="n">g_prime</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+<a id="__codelineno-19-47" name="__codelineno-19-47" href="#__codelineno-19-47"></a>        <span class="k">return</span> <span class="n">_ww</span>
+</code></pre></div>
+<h3 id="75-why-this-interface">7.5 Why This Interface<a class="headerlink" href="#75-why-this-interface" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Who calls it</th>
+<th>Why theta handling differs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>variance(mu)</code></td>
+<td>PIRLS hot loop (JIT)</td>
+<td>Reads <code>self._log_theta</code> -- theta is fixed during PIRLS</td>
+</tr>
+<tr>
+<td><code>deviance_resids(y, mu, wt)</code></td>
+<td>PIRLS, post-estimation</td>
+<td>Same -- fixed theta</td>
+</tr>
+<tr>
+<td><code>saturated_loglik(y, wt, scale)</code></td>
+<td>Criterion (fixed theta)</td>
+<td>Standard families, or NB with fixed theta</td>
+</tr>
+<tr>
+<td><code>saturated_loglik_theta(y, wt, scale, log_theta)</code></td>
+<td>Criterion (joint theta)</td>
+<td><code>log_theta</code> is a traced JAX value for <code>jax.grad</code></td>
+</tr>
+<tr>
+<td><code>deviance_fn(y, wt)</code></td>
+<td>custom_jvp only</td>
+<td>Returns <code>D(eta, log_theta)</code> -- both args traced for IFT + JVP</td>
+</tr>
+<tr>
+<td><code>working_weights_fn(wt)</code></td>
+<td>custom_jvp only</td>
+<td>Returns <code>W(eta, log_theta)</code> -- both args traced for dW JVP</td>
+</tr>
+</tbody>
+</table>
+<p>Standard families don't implement the last three methods (they're <code>@abstractmethod</code>
+on <code>ExtendedFamily</code>, not on <code>ExponentialFamily</code>). The <code>if family.n_theta &gt; 0</code>
+branch in <code>_diff_score</code> (compile-time constant) ensures they're never called
+for standard families.</p>
+<hr />
+<h2 id="8-pirls-integration">8. PIRLS Integration<a class="headerlink" href="#8-pirls-integration" title="Permanent link">&para;</a></h2>
+<h3 id="81-no-pirls-changes-required">8.1 No PIRLS Changes Required<a class="headerlink" href="#81-no-pirls-changes-required" title="Permanent link">&para;</a></h3>
+<p>For the <strong>log link</strong> (canonical for NB), Fisher scoring weights from
+<code>wt / (V(mu) * g'(mu)^2)</code> give correct results. The existing <code>pirls_loop</code>
+calls <code>family.working_weights(mu, wt)</code> and <code>family.working_response(y, mu, eta)</code>,
+which NB inherits from <code>ExponentialFamily</code> (using <code>variance</code> and <code>link</code>).</p>
+<p>NB overrides <code>variance(mu)</code> to return <code>mu + mu^2/theta</code> and <code>dev_resids</code> for
+the NB deviance formula. Everything else works unchanged.</p>
+<h3 id="82-non-canonical-links-deferred">8.2 Non-Canonical Links (Deferred)<a class="headerlink" href="#82-non-canonical-links-deferred" title="Permanent link">&para;</a></h3>
+<p>For identity and sqrt links, R's <code>gam.fit4</code> uses observed-Hessian weights
+via <code>Dd$Deta2</code> instead of Fisher weights. This would require overriding
+<code>working_weights</code> with AD-based observed weights. Deferred -- log link covers</p>
+<blockquote>
+<p>95% of NB use cases.</p>
+</blockquote>
+<hr />
+<h2 id="9-newton-optimizer-changes">9. Newton Optimizer Changes<a class="headerlink" href="#9-newton-optimizer-changes" title="Permanent link">&para;</a></h2>
+<h3 id="91-newtonoptimizerinit">9.1 NewtonOptimizer.<strong>init</strong><a class="headerlink" href="#91-newtonoptimizerinit" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="bp">self</span><span class="o">.</span><span class="n">_joint_theta</span> <span class="o">=</span> <span class="n">fd</span><span class="o">.</span><span class="n">family</span><span class="o">.</span><span class="n">n_theta</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">fd</span><span class="o">.</span><span class="n">n_penalties</span> <span class="o">&gt;</span> <span class="mi">0</span>
+</code></pre></div>
+<p>Add <code>joint_theta</code> to <code>_jit_kwargs</code> as a static arg.</p>
+<h3 id="92-initial-params-construction">9.2 Initial Params Construction<a class="headerlink" href="#92-initial-params-construction" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="n">params</span> <span class="o">=</span> <span class="n">log_lambda</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_joint_theta</span><span class="p">:</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>    <span class="n">log_theta_init</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">fd</span><span class="o">.</span><span class="n">family</span><span class="o">.</span><span class="n">get_theta</span><span class="p">())</span>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>    <span class="n">params</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">params</span><span class="p">,</span> <span class="n">log_theta_init</span><span class="p">[</span><span class="kc">None</span><span class="p">]])</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_joint_scale</span><span class="p">:</span>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>    <span class="n">params</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">params</span><span class="p">,</span> <span class="n">log_phi_init</span><span class="p">[</span><span class="kc">None</span><span class="p">]])</span>
+</code></pre></div>
+<h3 id="93-after-each-accepted-step">9.3 After Each Accepted Step<a class="headerlink" href="#93-after-each-accepted-step" title="Permanent link">&para;</a></h3>
+<p>Update the family's stored theta so the next PIRLS run uses the correct value:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_joint_theta</span><span class="p">:</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>    <span class="n">new_log_theta</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">params_new</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_fd</span><span class="o">.</span><span class="n">n_penalties</span><span class="p">])</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_fd</span><span class="o">.</span><span class="n">family</span><span class="o">.</span><span class="n">put_theta</span><span class="p">(</span><span class="n">new_log_theta</span><span class="p">)</span>
+</code></pre></div>
+<p>This triggers JIT recompilation (family is a static arg with changed internal
+state). Acceptable cost: theta changes once per Newton iteration (~5-10 times
+total), recompilation is ~50ms vs ~500ms PIRLS work.</p>
+<h3 id="94-_build_result">9.4 _build_result<a class="headerlink" href="#94-_build_result" title="Permanent link">&para;</a></h3>
+<p>Extract <code>log_lambda</code> from the joint params vector (skip theta/phi components)
+for the returned <code>NewtonResult</code>. Store estimated theta on the result.</p>
+<h3 id="95-clamping">9.5 Clamping<a class="headerlink" href="#95-clamping" title="Permanent link">&para;</a></h3>
+<p><code>_clamp_params</code> should only clamp <code>log_lambda</code>, not <code>log_theta</code>. Theta has no
+natural bounds (though very large <code>|log_theta|</code> values are unlikely).</p>
+<hr />
+<h2 id="10-phase-by-phase-changes">10. Phase-by-Phase Changes<a class="headerlink" href="#10-phase-by-phase-changes" title="Permanent link">&para;</a></h2>
+<h3 id="phase-1-numpy-setup">Phase 1 (NumPy, Setup)<a class="headerlink" href="#phase-1-numpy-setup" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>families/extended.py</code></td>
+<td><strong>New.</strong> <code>ExtendedFamily</code> base class (Section 7.1)</td>
+</tr>
+<tr>
+<td><code>families/negative_binomial.py</code></td>
+<td><strong>New.</strong> <code>NegativeBinomial</code> class (Section 7.2-7.4)</td>
+</tr>
+<tr>
+<td><code>families/registry.py</code></td>
+<td>Register <code>"nb"</code> key</td>
+</tr>
+<tr>
+<td><code>families/__init__.py</code></td>
+<td>Export <code>ExtendedFamily</code>, <code>NegativeBinomial</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-2-jax-fitting">Phase 2 (JAX, Fitting)<a class="headerlink" href="#phase-2-jax-fitting" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fitting/newton.py</code></td>
+<td>Extend <code>_diff_score</code> with 3-primal custom_jvp (Section 6.4). Add <code>joint_theta</code> flag to <code>NewtonOptimizer</code>. Update params construction, step acceptance, result building.</td>
+</tr>
+<tr>
+<td><code>fitting/pirls.py</code></td>
+<td><strong>No changes.</strong></td>
+</tr>
+<tr>
+<td><code>fitting/reml.py</code></td>
+<td><strong>No changes.</strong> Theta is handled in <code>_diff_score</code>, not in the criterion classes.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-3-numpy-post-estimation">Phase 3 (NumPy, Post-estimation)<a class="headerlink" href="#phase-3-numpy-post-estimation" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>results.py</code></td>
+<td>Store estimated theta on <code>GAMResults</code></td>
+</tr>
+<tr>
+<td><code>api.py</code></td>
+<td>Detect <code>n_theta &gt; 0</code>, pass theta to results</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="11-file-plan">11. File Plan<a class="headerlink" href="#11-file-plan" title="Permanent link">&para;</a></h2>
+<h3 id="new-files">New Files<a class="headerlink" href="#new-files" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>jaxgam/
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>  families/
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>    extended.py              # ExtendedFamily base class (~30 lines)
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>    negative_binomial.py     # NegativeBinomial class (~250 lines)
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>tests/
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>  test_negative_binomial.py  # Unit + AD validation tests (~300 lines)
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a>  test_fitting/
+<a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>    test_nb_fitting.py       # End-to-end R comparison tests (~250 lines)
+</code></pre></div>
+<h3 id="modified-files">Modified Files<a class="headerlink" href="#modified-files" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>jaxgam/
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>  families/registry.py      # Add &quot;nb&quot; entry (~2 lines)
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>  families/__init__.py       # Export ExtendedFamily, NegativeBinomial (~3 lines)
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>  fitting/newton.py          # Extended custom_jvp + joint_theta (~80 lines)
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>  api.py                     # Detect extended family (~10 lines)
+<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>  results.py                 # Store theta (~5 lines)
+</code></pre></div>
+<hr />
+<h2 id="12-testing-strategy">12. Testing Strategy<a class="headerlink" href="#12-testing-strategy" title="Permanent link">&para;</a></h2>
+<h3 id="121-unit-tests-test_negative_binomialpy">12.1 Unit Tests (test_negative_binomial.py)<a class="headerlink" href="#121-unit-tests-test_negative_binomialpy" title="Permanent link">&para;</a></h3>
+<p><strong>Family methods against R values:</strong>
+- <code>variance(mu)</code> matches <code>mu + mu^2/theta</code> for various theta
+- <code>deviance_resids(y, mu, wt)</code> matches R's <code>nb()$dev.resids()</code>
+- <code>saturated_loglik(y, wt, scale)</code> matches R's <code>nb()$ls()$ls</code>
+- <code>aic(y, mu, wt, scale)</code> matches R's <code>nb()$aic()</code>
+- <code>initialize(y, wt)</code> matches <code>y + (y == 0)/6</code>
+- Edge cases: y=0, large y, large theta, theta -&gt; infinity (Poisson limit)</p>
+<p><strong>Theta management:</strong>
+- <code>get_theta()</code> / <code>put_theta()</code> round-trip
+- Constructor: positive theta -&gt; fixed (n_theta=0)
+- Constructor: negative theta -&gt; estimated, starting at -theta
+- Constructor: None -&gt; estimated, starting at 1</p>
+<p><strong>AD validation (per design.md section 9.5):</strong>
+- <code>jax.grad</code> through <code>saturated_loglik_theta</code> matches finite differences
+- <code>jax.grad</code> through <code>deviance_fn(y, wt)</code> matches finite differences
+- Mixed derivative <code>d^2D/(d(eta) d(theta))</code> matches finite differences
+- Test at extreme theta: 0.01, 0.1, 1, 10, 100, 1000, 10000
+- Test at extreme y/mu combinations</p>
+<p><strong>custom_jvp validation:</strong>
+- <code>dβ*/d(log_theta)</code> from IFT matches finite-difference perturbation of theta
+- <code>d(deviance)/d(log_theta)</code> matches finite differences
+- <code>d(XtWX)/d(log_theta)</code> matches finite differences
+- Full REML gradient w.r.t. <code>log_theta</code> matches finite differences</p>
+<h3 id="122-r-comparison-tests-test_nb_fittingpy">12.2 R Comparison Tests (test_nb_fitting.py)<a class="headerlink" href="#122-r-comparison-tests-test_nb_fittingpy" title="Permanent link">&para;</a></h3>
+<p>Using <code>r_bridge.py</code>:</p>
+<ol>
+<li>Simple: <code>y ~ s(x)</code> with <code>nb()</code>, estimated theta</li>
+<li>Fixed theta: <code>y ~ s(x)</code> with <code>nb(theta=2)</code></li>
+<li>Multiple smooths: <code>y ~ s(x1) + s(x2)</code> with <code>nb()</code></li>
+<li>With offset: <code>y ~ s(x) + offset(log(exposure))</code></li>
+<li>Factor-by smooth: <code>y ~ s(x, by=group)</code> with <code>nb()</code></li>
+<li>High overdispersion (theta small): test convergence</li>
+<li>Low overdispersion (theta large, near Poisson): test theta -&gt; infinity</li>
+</ol>
+<p><strong>Tolerances:</strong>
+- Coefficients: STRICT (rtol=1e-4)
+- Deviance: STRICT
+- Theta: MODERATE (rtol=1e-3) -- REML surface is flat near theta optimum
+- Smoothing parameters: MODERATE
+- EDF: MODERATE
+- Fitted values: STRICT</p>
+<h3 id="123-hard-gate-invariants">12.3 Hard-Gate Invariants<a class="headerlink" href="#123-hard-gate-invariants" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Deviance &gt;= 0</li>
+<li>No NaN in converged model</li>
+<li>EDF bounds: 1 &lt;= edf_j &lt;= k_j</li>
+<li>Penalty PSD, H symmetry/PSD</li>
+<li>Objective monotonicity (penalized deviance decreases each PIRLS iteration)</li>
+<li>Theta &gt; 0 after estimation</li>
+</ul>
+<hr />
+<h2 id="13-risk-register">13. Risk Register<a class="headerlink" href="#13-risk-register" title="Permanent link">&para;</a></h2>
+<h3 id="r1-custom_jvp-correctness">R1: custom_jvp Correctness<a class="headerlink" href="#r1-custom_jvp-correctness" title="Permanent link">&para;</a></h3>
+<p><strong>Risk:</strong> The extended JVP with theta IFT terms could have sign errors or
+missing factors (the 0.5 factor from the PenDev convention is subtle).</p>
+<p><strong>Mitigation:</strong> Validate every JVP output against finite differences. Test
+<code>dbeta</code>, <code>ddev</code>, <code>dXtWX</code> individually, not just the final REML gradient.
+R's <code>ift2</code> in <code>gdi.c</code> is the reference for the exact formula.</p>
+<h3 id="r2-jit-recompilation-on-theta-change">R2: JIT Recompilation on Theta Change<a class="headerlink" href="#r2-jit-recompilation-on-theta-change" title="Permanent link">&para;</a></h3>
+<p><strong>Risk:</strong> <code>put_theta()</code> changes <code>self._log_theta</code> on the family object (static
+JIT arg), triggering recompilation.</p>
+<p><strong>Mitigation:</strong> Acceptable cost -- theta changes ~5-10 times per fit,
+recompilation is ~50ms vs ~500ms PIRLS. Future optimization: pass theta as a
+dynamic arg (requires broader refactor).</p>
+<h3 id="r3-numerical-stability-of-ad-through-lgamma">R3: Numerical Stability of AD Through lgamma<a class="headerlink" href="#r3-numerical-stability-of-ad-through-lgamma" title="Permanent link">&para;</a></h3>
+<p><strong>Risk:</strong> <code>lgamma(y+theta) - lgamma(theta)</code> cancellation at large theta.</p>
+<p><strong>Mitigation:</strong> Per design.md section 9.3, JAX differentiates <code>lgamma</code> to
+<code>digamma</code> (stable special function). At large theta, NB -&gt; Poisson and
+gradient imprecision is harmless. Validated by extreme-theta AD tests.</p>
+<h3 id="r4-non-canonical-link-support">R4: Non-Canonical Link Support<a class="headerlink" href="#r4-non-canonical-link-support" title="Permanent link">&para;</a></h3>
+<p><strong>Risk:</strong> Identity/sqrt links need observed-Hessian weights, not Fisher.</p>
+<p><strong>Mitigation:</strong> Deferred. Log link covers &gt;95% of NB use. Document limitation.</p>
+<hr />
+<h2 id="14-implementation-order">14. Implementation Order<a class="headerlink" href="#14-implementation-order" title="Permanent link">&para;</a></h2>
+<h3 id="step-1-extendedfamily-base-negativebinomial-family-class">Step 1: ExtendedFamily Base + NegativeBinomial Family Class<a class="headerlink" href="#step-1-extendedfamily-base-negativebinomial-family-class" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>families/extended.py</code> -- <code>ExtendedFamily</code> base class (Section 7.1)</li>
+<li><code>families/negative_binomial.py</code> -- all methods from Section 7.2-7.4</li>
+<li>Registry registration</li>
+<li>Unit tests against R values (no fitting yet)</li>
+</ul>
+<h3 id="step-2-ad-validation">Step 2: AD Validation<a class="headerlink" href="#step-2-ad-validation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Finite-difference tests for all pure-function factories</li>
+<li>Mixed derivative <code>d^2D/(d(eta) d(theta))</code> validation</li>
+<li>Extreme parameter regime tests</li>
+</ul>
+<h3 id="step-3-extended-custom_jvp">Step 3: Extended custom_jvp<a class="headerlink" href="#step-3-extended-custom_jvp" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Extend <code>_diff_score</code> in <code>newton.py</code> (Section 6.4)</li>
+<li><code>joint_theta</code> flag and params construction</li>
+<li>Validate JVP outputs against finite differences</li>
+</ul>
+<h3 id="step-4-newton-integration">Step 4: Newton Integration<a class="headerlink" href="#step-4-newton-integration" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>NewtonOptimizer</code> changes (Section 9)</li>
+<li><code>put_theta</code> after step acceptance</li>
+<li>End-to-end test: simple <code>y ~ s(x)</code> with NB</li>
+</ul>
+<h3 id="step-5-full-r-comparison-tests">Step 5: Full R Comparison Tests<a class="headerlink" href="#step-5-full-r-comparison-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>All test models from Section 12.2</li>
+<li>Verify STRICT/MODERATE tolerances</li>
+<li>Hard-gate invariants</li>
+</ul>
+<h3 id="step-6-post-estimation">Step 6: Post-Estimation<a class="headerlink" href="#step-6-post-estimation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Store theta on <code>GAMResults</code></li>
+<li>Display in summary</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
