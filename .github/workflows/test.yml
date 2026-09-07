@@ -2,7 +2,6 @@ name: Tests
 
 on:
   pull_request:
-    branches: [main, "codex/scale-**", "codex/efs-**"]
   push:
     branches: [main]
 
