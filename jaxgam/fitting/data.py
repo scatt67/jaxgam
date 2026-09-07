@@ -366,7 +366,18 @@ def _build_block_metadata(
             for sp, S in zip(block.sp_indices, penalties, strict=True):
                 _append_singleton(singletons, sp, S)
         else:
-            total = np.add.reduce([S / np.linalg.norm(S, "fro") for S in penalties])
+            # A structurally present zero penalty still owns an sp index, but
+            # it contributes neither a range direction nor a determinant
+            # factor.  mgcv's norm-based combined range construction likewise
+            # cannot normalize a zero matrix.
+            normalized = [
+                S / norm for S in penalties if (norm := np.linalg.norm(S, "fro")) > 0
+            ]
+            total = (
+                np.add.reduce(normalized)
+                if normalized
+                else np.zeros((block.size, block.size))
+            )
             eigs, U = np.linalg.eigh(total)
             rank = int(np.sum(eigs > np.max(eigs) * _EPS_TWO_THIRDS))
             range_basis = U[:, -rank:] if rank else U[:, :0]

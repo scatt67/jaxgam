@@ -23,7 +23,7 @@ import pandas as pd
 import pytest
 
 from jaxgam.families.standard import Gaussian
-from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.data import FittingData, _build_block_metadata
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.penalty_ops import (
     JaxLocalPenalty,
@@ -36,6 +36,12 @@ from jaxgam.fitting.reml import REMLCriterion, reml_criterion
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.jax_utils import build_S_lambda, to_jax, to_numpy
+from jaxgam.penalties.structure import (
+    DenseLocalPenalty,
+    IdentityTransform,
+    PenaltyBlock,
+    PenaltyStructure,
+)
 from tests.helpers import SEED, N
 from tests.tolerances import MODERATE, STRICT
 
@@ -834,3 +840,45 @@ class TestREMLInvariance:
             atol=STRICT.atol,
             err_msg="REML score must be invariant under reparameterization",
         )
+
+
+def test_coupled_metadata_retains_zero_penalty_without_nan() -> None:
+    """A zero member of a coupled block preserves its lambda slot safely."""
+    structure = PenaltyStructure(
+        3,
+        (
+            PenaltyBlock(
+                0,
+                3,
+                (0, 1, 2),
+                (
+                    DenseLocalPenalty(np.zeros((3, 3))),
+                    DenseLocalPenalty(np.diag([1.0, 0.0, 1.0])),
+                    DenseLocalPenalty(np.diag([2.0, 1.0, 0.0])),
+                ),
+                IdentityTransform(3),
+                (0, 2, 2),
+            ),
+        ),
+    )
+    metadata = _build_block_metadata(structure, None)
+
+    assert metadata["multi_block_sp_indices"] == ((0, 1, 2),)
+    assert metadata["multi_block_ranks"] == (3,)
+    for projected in metadata["multi_block_proj_S"][0]:
+        assert np.all(np.isfinite(np.asarray(projected)))
+    from jaxgam.fitting import penalty_ops
+
+    gradient = jax.grad(
+        lambda rho: penalty_ops.log_pdet(
+            rho,
+            metadata["singleton_sp_indices"],
+            metadata["singleton_ranks"],
+            metadata["singleton_eig_constants"],
+            metadata["multi_block_sp_indices"],
+            metadata["multi_block_ranks"],
+            metadata["multi_block_proj_S"],
+        )
+    )(jnp.zeros(3))
+    assert np.all(np.isfinite(np.asarray(gradient)))
+    np.testing.assert_allclose(gradient[0], 0.0, rtol=STRICT.rtol, atol=STRICT.atol)
