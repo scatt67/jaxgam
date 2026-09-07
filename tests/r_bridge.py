@@ -268,6 +268,98 @@ class RBridge:
             return self._fit_rpy2(formula, data, family, method)
         return self._fit_subprocess(formula, data, family, method)
 
+    def fix_dependence(
+        self,
+        X1: np.ndarray,
+        X2: np.ndarray,
+        tol: float = np.finfo(float).eps ** 0.5,
+        rank_def: int = 0,
+    ) -> list[int] | None:
+        """Call mgcv's unexported ``fixDependence`` reference routine.
+
+        Returned indices are converted from R's one-based convention to
+        Python's zero-based convention.
+        """
+        X1 = np.asarray(X1, dtype=np.float64)
+        X2 = np.asarray(X2, dtype=np.float64)
+        if X1.ndim != 2 or X2.ndim != 2:
+            raise ValueError("X1 and X2 must both be two-dimensional arrays.")
+        if X1.shape[0] != X2.shape[0]:
+            raise ValueError("X1 and X2 must have the same number of rows.")
+
+        if self.mode == "rpy2":
+            return self._fix_dependence_rpy2(X1, X2, tol, rank_def)
+        return self._fix_dependence_subprocess(X1, X2, tol, rank_def)
+
+    def _fix_dependence_rpy2(
+        self, X1: np.ndarray, X2: np.ndarray, tol: float, rank_def: int
+    ) -> list[int] | None:
+        """Call ``mgcv:::fixDependence`` through rpy2."""
+        from rpy2.robjects import FloatVector
+
+        ro = self._ro
+        matrix = ro.r["matrix"]
+        X1_r = matrix(
+            FloatVector(X1.ravel(order="F")), nrow=X1.shape[0], ncol=X1.shape[1]
+        )
+        X2_r = matrix(
+            FloatVector(X2.ravel(order="F")), nrow=X2.shape[0], ncol=X2.shape[1]
+        )
+        fix_dependence = ro.r("mgcv:::fixDependence")
+        ind = fix_dependence(X1_r, X2_r, tol=float(tol), **{"rank.def": int(rank_def)})
+        if ind is None or ind is ro.NULL or len(ind) == 0:
+            return None
+        return [int(index) - 1 for index in ind]
+
+    def _fix_dependence_subprocess(
+        self, X1: np.ndarray, X2: np.ndarray, tol: float, rank_def: int
+    ) -> list[int] | None:
+        """Call ``mgcv:::fixDependence`` through Rscript."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            x1_path = os.path.join(tmpdir, "X1.csv")
+            x2_path = os.path.join(tmpdir, "X2.csv")
+            script_path = os.path.join(tmpdir, "fix_dependence.R")
+            result_path = os.path.join(tmpdir, "indices.csv")
+            np.savetxt(x1_path, X1, delimiter=",")
+            np.savetxt(x2_path, X2, delimiter=",")
+
+            script = "\n".join(
+                [
+                    "library(mgcv)",
+                    f'X1 <- as.matrix(read.csv("{x1_path}", header=FALSE))',
+                    f'X2 <- as.matrix(read.csv("{x2_path}", header=FALSE))',
+                    (
+                        "ind <- mgcv:::fixDependence(X1, X2, "
+                        f"tol={tol:.17g}, rank.def={rank_def})"
+                    ),
+                    "if (is.null(ind)) {",
+                    f'    writeLines("", "{result_path}")',
+                    "} else {",
+                    (
+                        "    write.csv(data.frame(index=as.integer(ind)), "
+                        f'"{result_path}", row.names=FALSE)'
+                    ),
+                    "}",
+                ]
+            )
+            with open(script_path, "w") as f:
+                f.write(script)
+
+            proc = subprocess.run(
+                ["Rscript", script_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if proc.returncode != 0:
+                raise RBridgeError(
+                    f"Rscript failed (exit {proc.returncode}):\n{proc.stderr}"
+                )
+            with open(result_path) as f:
+                if not f.read().strip():
+                    return None
+            return (pd.read_csv(result_path)["index"].astype(int) - 1).tolist()
+
     def _fit_rpy2(
         self,
         formula: str,
