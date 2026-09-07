@@ -8,9 +8,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.efs_oracle import make_efs_fixture
 from tests.helpers import _AssertCollector, make_smooth_spec
 from tests.r_bridge import RBridge, gp_config_to_mgcv_m
-from tests.tolerances import STRICT
+from tests.tolerances import MODERATE, STRICT
 
 
 def _r_available() -> bool:
@@ -35,6 +36,109 @@ class TestRBridgeAvailability:
     def test_check_versions_accepts_pinned_environment(self) -> None:
         ok, reason = RBridge.check_versions()
         assert ok, reason
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+class TestRBridgeEFS:
+    """Pinned EFS oracle calls use real mgcv fits and private instrumentation."""
+
+    def test_fit_efs_has_stable_full_fit_and_control_metadata(self) -> None:
+        data, fixture = make_efs_fixture(seed=91, n=48)
+        bridge = RBridge(mode="subprocess")
+        first = bridge.fit_efs(
+            fixture.formula,
+            data,
+            family=fixture.family,
+            weights="w",
+            offset="offset",
+            controls={"efs_lspmax": 12.0, "efs_tol": 0.05},
+        )
+        second = bridge.fit_efs(
+            fixture.formula,
+            data,
+            family=fixture.family,
+            weights="w",
+            offset="offset",
+            controls={"efs_lspmax": 12.0, "efs_tol": 0.05},
+        )
+
+        assert first["optimizer"] == "efs"
+        assert first["controls"] == {"efs_lspmax": 12.0, "efs_tol": 0.05}
+        assert first["provenance"]["data_hash"] == fixture.data_hash
+        assert first["provenance"]["source_commit"] == fixture.source_commit
+        assert first["outer_iterations"] > 0
+        assert first["convergence"] in {"full convergence", "iteration limit reached"}
+        np.testing.assert_allclose(
+            first["coefficients"],
+            second["coefficients"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            first["score_history"],
+            second["score_history"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_efs_diagnostics_uses_real_penalty_and_pirls_statistics(self) -> None:
+        data, fixture = make_efs_fixture(seed=92, n=48)
+        bridge = RBridge(mode="subprocess")
+        fit = bridge.fit_efs(
+            fixture.formula, data, fixture.family, weights="w", offset="offset"
+        )
+        diagnostics = bridge.efs_diagnostics(
+            fixture.formula, data, fixture.family, weights="w", offset="offset"
+        )
+        statistics = diagnostics["statistics"]
+
+        assert {
+            "ldetS1",
+            "bSb",
+            "trVS",
+            "score_phi",
+            "update_phi",
+            "reported_phi",
+        } <= set(statistics)
+        assert len(statistics) >= len(fit["smoothing_params"])
+        assert np.all(
+            np.isfinite(statistics[["ldetS1", "bSb", "trVS", "score"]].to_numpy())
+        )
+        assert diagnostics["initial_shift"] == 2.5
+        assert (
+            diagnostics["source_commit"] == "fb7e8e718377513e78ba6c6bf7e60757fc6a32a9"
+        )
+        assert diagnostics["provenance"]["data_hash"] == fixture.data_hash
+        # For Poisson the score uses phi=1 even though gam.fit3 reports a
+        # Fletcher-like scale estimate for diagnostics.
+        np.testing.assert_allclose(
+            statistics["score_phi"], 1.0, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        np.testing.assert_allclose(
+            statistics["update_phi"],
+            statistics["score_phi"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert np.any(
+            np.abs(statistics["reported_phi"] - statistics["score_phi"]) > MODERATE.atol
+        )
+        np.testing.assert_allclose(
+            diagnostics["final_score"],
+            fit["reml_score"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_fit_efs_validates_structured_inputs(self) -> None:
+        data, fixture = make_efs_fixture(n=24)
+        bridge = RBridge(mode="subprocess")
+        with pytest.raises(ValueError, match="weights column"):
+            bridge.fit_efs(fixture.formula, data, fixture.family, weights="missing")
+        with pytest.raises(ValueError, match="Unsupported EFS controls"):
+            bridge.fit_efs(
+                fixture.formula, data, fixture.family, controls={"outer_limit": 3}
+            )
 
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
