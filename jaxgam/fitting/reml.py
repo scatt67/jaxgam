@@ -586,9 +586,19 @@ class _CriterionBase(ABC):
         self.edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
-        self._ls_sat = fd.family.saturated_loglik(
-            fd.y, fd.wt, self.scale, max_y=fd.max_y
-        )
+        if fd.family.family_name == "nb" and fd.count_prefix_plan is not None:
+            self._ls_sat = fd.family.saturated_loglik(
+                fd.y,
+                fd.wt,
+                self.scale,
+                max_y=fd.max_y,
+                count_indices=fd.count_prefix_plan.indices,
+                integer_counts=fd.count_prefix_plan.integer_counts,
+            )
+        else:
+            self._ls_sat = fd.family.saturated_loglik(
+                fd.y, fd.wt, self.scale, max_y=fd.max_y
+            )
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
         self._XtWX = pirls_result.XtWX
         self._beta = pirls_result.coefficients
