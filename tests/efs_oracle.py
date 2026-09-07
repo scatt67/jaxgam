@@ -260,6 +260,24 @@ def run_scripted_efs_controller(
     )
 
 
+def run_pinned_r_scripted_efs(
+    initial_rho: np.ndarray, log_ratio: np.ndarray, fits: list[ScriptedFit]
+) -> dict[str, object]:
+    """Run pinned ``efsudr`` through a private rpy2 scripted fitter."""
+    from tests.r_bridge import RBridge
+
+    if initial_rho.ndim != 1 or log_ratio.shape != initial_rho.shape:
+        raise ValueError("initial_rho and log_ratio must be equal-length vectors")
+    if not fits:
+        raise ValueError("fits must contain at least one scripted fit")
+    return RBridge(mode="rpy2").efs_scripted_controller_reference(
+        initial_rho,
+        log_ratio,
+        np.asarray([fit.score for fit in fits], dtype=np.float64),
+        np.asarray([fit.deviance for fit in fits], dtype=np.float64),
+    )
+
+
 def _main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate a reproducible EFS oracle fixture"

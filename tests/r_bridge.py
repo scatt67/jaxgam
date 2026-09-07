@@ -675,6 +675,94 @@ class RBridge:
         if not ok:
             raise RBridgeError(f"Pinned EFS oracle unavailable: {reason}")
 
+    def efs_scripted_controller_reference(
+        self,
+        initial_rho: np.ndarray,
+        log_ratio: np.ndarray,
+        fit_scores: np.ndarray,
+        fit_deviances: np.ndarray,
+    ) -> dict[str, Any]:
+        """Run pinned ``efsudr`` with a private scripted coefficient fitter."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        from tests.r_ast import clone_function, make_r_callback
+
+        initial_rho = np.asarray(initial_rho, dtype=np.float64)
+        log_ratio = np.asarray(log_ratio, dtype=np.float64)
+        fit_scores = np.asarray(fit_scores, dtype=np.float64)
+        fit_deviances = np.asarray(fit_deviances, dtype=np.float64)
+        if initial_rho.ndim != 1 or log_ratio.shape != initial_rho.shape:
+            raise ValueError("initial_rho and log_ratio must be equal-length vectors")
+        if (
+            fit_scores.ndim != 1
+            or fit_scores.size == 0
+            or fit_deviances.shape != fit_scores.shape
+        ):
+            raise ValueError(
+                "scripted EFS scores and deviances must be nonempty equal-length vectors"
+            )
+        n_parameters = len(initial_rho)
+        private = self._ro.r["new.env"](parent=self._ro.r["getNamespace"]("mgcv"))
+        proposals: list[np.ndarray] = []
+        r_add = self._ro.r["+"]
+        r_ratio = self._to_r_vector(log_ratio)
+
+        def scripted_fit(**arguments: Any) -> Any:
+            packed = arguments["sp"]
+            proposals.append(np.array(packed, dtype=np.float64, copy=True))
+            index = min(len(proposals) - 1, len(fit_scores) - 1)
+            return self._ro.ListVector(
+                {
+                    "coefficients": self._base.rep(1.0, len(packed)),
+                    "rV": self._base.matrix(0.0, nrow=len(packed), ncol=len(packed)),
+                    "ldetS1": self._base.exp(r_add(packed, r_ratio)),
+                    "scale": self._ro.FloatVector([1.0]),
+                    "REML": self._ro.FloatVector([fit_scores[index]]),
+                    "dev": self._ro.FloatVector([fit_deviances[index]]),
+                }
+            )
+
+        fit_callback = make_r_callback(scripted_fit)
+        private["gam.fit3"] = fit_callback
+        efsudr = clone_function(
+            self._utils.getFromNamespace("efsudr", "mgcv"), environment=private
+        )
+        identity = self._base.diag(n_parameters)
+        bracket = self._ro.r["["]
+        roots = rinterface.ListSexpVector(
+            [
+                bracket(identity, rinterface.MissingArg, index + 1, drop=False)
+                for index in range(n_parameters)
+            ]
+        )
+        try:
+            output = efsudr(
+                x=self._base.matrix(1.0, nrow=3, ncol=n_parameters),
+                y=self._base.rep(1.0, 3),
+                lsp=self._to_r_vector(initial_rho),
+                Eb=identity,
+                UrS=roots,
+                weights=self._base.rep(1.0, 3),
+                family=self._stats.poisson(),
+                U1=identity,
+                Mp=0,
+                control=self._mgcv.gam_control(),
+            )
+        finally:
+            private["gam.fit3"] = self._ro.NULL
+        outer = output.rx2("outer.info")
+        return {
+            "proposals": np.vstack(proposals),
+            "accepted_sp": np.asarray(output.rx2("sp"), dtype=np.float64).copy(),
+            "final_score": float(np.asarray(output.rx2("REML"))[0]),
+            "score_history": np.asarray(
+                outer.rx2("score.hist"), dtype=np.float64
+            ).copy(),
+            "iter": int(np.asarray(output.rx2("iter"))[0]),
+            "convergence": str(outer.rx2("conv")[0]),
+        }
+
     @staticmethod
     def _validate_efs_inputs(
         data: pd.DataFrame,
