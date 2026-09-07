@@ -58,7 +58,8 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jsla
 
-from jaxgam.jax_utils import block_log_det_S, build_S_lambda, cho_factor
+from jaxgam.fitting import penalty_ops
+from jaxgam.jax_utils import cho_factor
 
 if TYPE_CHECKING:
     from jaxgam.families.base import ExponentialFamily
@@ -111,7 +112,7 @@ def _criterion_core(
     beta: jax.Array,
     deviance: jax.Array,
     ls_sat: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     phi: jax.Array,
     singleton_sp_indices: tuple[int, ...],
     singleton_ranks: tuple[int, ...],
@@ -141,8 +142,8 @@ def _criterion_core(
         Unpenalized deviance from PIRLS.
     ls_sat : jax.Array, scalar
         Saturated log-likelihood.
-    S_list : tuple[jax.Array, ...]
-        Per-penalty (p, p) matrices.
+    penalty_structure : JaxPenaltyStructure
+        Local per-block penalty descriptors.
     phi : jax.Array, scalar
         Dispersion parameter.
     singleton_sp_indices, singleton_ranks : tuple[int, ...]
@@ -161,8 +162,7 @@ def _criterion_core(
     jax.Array, scalar
         Core criterion value (before REML correction term).
     """
-    p = beta.shape[0]
-    S_lambda = build_S_lambda(log_lambda, S_list, p)
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
 
     penalty = beta @ S_lambda @ beta
     Dp = deviance + penalty
@@ -191,7 +191,7 @@ def _criterion_core(
         ev = jnp.maximum(ev, jnp.finfo(H.dtype).tiny)
         log_det_H = jnp.sum(jnp.log(ev))
 
-    log_det_S = block_log_det_S(
+    log_det_S = penalty_ops.log_pdet(
         log_lambda,
         singleton_sp_indices,
         singleton_ranks,
@@ -360,7 +360,7 @@ def reml_criterion(
     beta: jax.Array,
     deviance: jax.Array,
     ls_sat: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     phi: jax.Array,
     Mp: int,
     singleton_sp_indices: tuple[int, ...],
@@ -384,7 +384,7 @@ def reml_criterion(
     ----------
     log_lambda : jax.Array, shape (m,)
         Log smoothing parameters.
-    XtWX, beta, deviance, ls_sat, S_list, phi, Mp
+    XtWX, beta, deviance, ls_sat, penalty_structure, phi, Mp
         See ``_criterion_core``.
     singleton_sp_indices, singleton_ranks, singleton_eig_constants,
     multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
@@ -401,7 +401,7 @@ def reml_criterion(
         beta,
         deviance,
         ls_sat,
-        S_list,
+        penalty_structure,
         phi,
         singleton_sp_indices,
         singleton_ranks,
@@ -426,7 +426,7 @@ def reml_criterion_joint(
     deviance: jax.Array,
     y: jax.Array,
     wt: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     Mp: int,
     n_lambda: int,
     family: ExponentialFamily,
@@ -452,7 +452,7 @@ def reml_criterion_joint(
     ----------
     params : jax.Array, shape (n_lambda + 1,)
         ``[log_lambda_1, ..., log_lambda_m, log_phi]``.
-    XtWX, beta, deviance, y, wt, S_list, Mp, n_lambda, family
+    XtWX, beta, deviance, y, wt, penalty_structure, Mp, n_lambda, family
         See ``_criterion_core`` / ``reml_criterion``.
     singleton_sp_indices, singleton_ranks, singleton_eig_constants,
     multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
@@ -472,7 +472,7 @@ def reml_criterion_joint(
         beta,
         deviance,
         ls_sat,
-        S_list,
+        penalty_structure,
         phi,
         singleton_sp_indices,
         singleton_ranks,
@@ -592,7 +592,7 @@ class _CriterionBase(ABC):
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
         self._XtWX = pirls_result.XtWX
         self._beta = pirls_result.coefficients
-        self._S_list = fd.S_list
+        self._penalty_structure = fd.penalty_structure
         self._Mp = fd.total_penalty_null_dim
         self._rank_deficit = fd.rank_deficit
         # Block-structured log|S+| metadata
@@ -610,7 +610,7 @@ class _CriterionBase(ABC):
             "beta": self._beta,
             "deviance": self._deviance,
             "ls_sat": self._ls_sat,
-            "S_list": self._S_list,
+            "penalty_structure": self._penalty_structure,
             "phi": self.scale,
             "Mp": self._Mp,
             "rank_deficit": self._rank_deficit,
@@ -717,7 +717,7 @@ class _JointCriterionBase(ABC):
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
         self._XtWX = pirls_result.XtWX
         self._beta = pirls_result.coefficients
-        self._S_list = fd.S_list
+        self._penalty_structure = fd.penalty_structure
         self._y = fd.y
         self._wt = fd.wt
         # Retained as attribute because joint criteria need to call
@@ -743,7 +743,7 @@ class _JointCriterionBase(ABC):
             "deviance": self._deviance,
             "y": self._y,
             "wt": self._wt,
-            "S_list": self._S_list,
+            "penalty_structure": self._penalty_structure,
             "Mp": self._Mp,
             "rank_deficit": self._rank_deficit,
             "n_lambda": self._n_lambda,

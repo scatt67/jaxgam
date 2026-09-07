@@ -52,6 +52,7 @@ import numpy as np
 from jax.scipy.linalg import cho_solve
 
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
@@ -64,7 +65,7 @@ from jaxgam.fitting.reml import (
     estimate_edf,
     fletcher_scale,
 )
-from jaxgam.jax_utils import build_S_lambda, cho_factor
+from jaxgam.jax_utils import cho_factor
 
 # R's default Newton convergence tolerance (gam.control()$newton$conv.tol).
 # This is ~67x looser than sqrt(eps) ≈ 1.5e-8, matching R's deliberate
@@ -113,7 +114,7 @@ def _diff_score(
     y: jax.Array,
     wt: jax.Array,
     offset: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     singleton_eig_constants: jax.Array,
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     # Static args (JIT cache keys, not traced)
@@ -155,8 +156,8 @@ def _diff_score(
         Warm-start coefficients from previous PIRLS.
     X, y, wt, offset : jax.Array
         Model data on device.
-    S_list : tuple[jax.Array, ...]
-        Per-penalty matrices.
+    penalty_structure : JaxPenaltyStructure
+        Local per-block penalty descriptors.
     singleton_eig_constants, multi_block_proj_S
         Block-structured log|S+| data (dynamic JAX arrays).
     family : ExponentialFamily
@@ -183,6 +184,7 @@ def _diff_score(
         REML criterion score.
     """
 
+    _ = p  # Retained static cache-key compatibility for compiled callers.
     # ---- Parse params: [log_lambda, <log_theta>, <log_phi>] ----
     idx = n_lambda
     log_lambda = params[:idx]
@@ -200,7 +202,7 @@ def _diff_score(
     else:
         ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
-    S_lambda = build_S_lambda(log_lambda, S_list, p)
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
 
     # ---- custom_jvp on PIRLS ----
     if family.n_theta > 0 and joint_theta:
@@ -343,7 +345,7 @@ def _diff_score(
         beta,
         dev,
         ls_sat,
-        S_list,
+        penalty_structure,
         phi,
         singleton_sp_indices,
         singleton_ranks,
@@ -427,7 +429,7 @@ def _fit_and_score_impl(
     y: jax.Array,
     wt: jax.Array,
     offset: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     singleton_eig_constants: jax.Array,
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     # Static args (JIT cache keys)
@@ -462,6 +464,7 @@ def _fit_and_score_impl(
     pirls_result : PIRLSResult
         Converged PIRLS output.
     """
+    _ = p  # Retained static cache-key compatibility for compiled callers.
     # Parse params: [log_lambda, <log_theta>, <log_phi>]
     idx = n_lambda
     log_lambda = params[:idx]
@@ -481,7 +484,7 @@ def _fit_and_score_impl(
     else:
         ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
-    S_lambda = build_S_lambda(log_lambda, S_list, p)
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
     pirls_result = pirls_loop(
         X,
         y,
@@ -500,7 +503,7 @@ def _fit_and_score_impl(
         pirls_result.coefficients,
         pirls_result.deviance,
         ls_sat,
-        S_list,
+        penalty_structure,
         phi,
         singleton_sp_indices,
         singleton_ranks,
@@ -761,7 +764,7 @@ class NewtonOptimizer:
             "y": fd.y,
             "wt": fd.wt,
             "offset": offset,
-            "S_list": fd.S_list,
+            "penalty_structure": fd.penalty_structure,
             "singleton_eig_constants": fd.singleton_eig_constants,
             "multi_block_proj_S": fd.multi_block_proj_S,
             "family": fd.family,
