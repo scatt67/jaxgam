@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -258,6 +260,108 @@ def run_scripted_efs_controller(
     return EFSControllerTrace(
         tuple(events), tuple(lsp), fit.score, multiplier, "iteration_limit"
     )
+
+
+def run_pinned_r_scripted_efs(
+    initial_rho: np.ndarray, log_ratio: np.ndarray, fits: list[ScriptedFit]
+) -> dict[str, object]:
+    """Run installed pinned R ``efsudr`` with a private scripted ``gam.fit3``.
+
+    The fake fitter supplies exactly the values read by ``efsudr`` while its
+    penalty roots make each smoothing parameter's update ratio ``exp(log_ratio)``.
+    This keeps the controller itself inside the installed, version-gated R code.
+    """
+    from tests.r_bridge import RBridge
+
+    RBridge._require_pinned_efs_versions()
+    if initial_rho.ndim != 1 or log_ratio.shape != initial_rho.shape:
+        raise ValueError("initial_rho and log_ratio must be equal-length vectors")
+    if not fits:
+        raise ValueError("fits must contain at least one scripted fit")
+
+    n_parameters = len(initial_rho)
+    rho = ",".join(repr(float(x)) for x in initial_rho)
+    ratio = ",".join(repr(float(x)) for x in log_ratio)
+    scores = ",".join(repr(f.score) for f in fits)
+    devs = ",".join(repr(f.deviance) for f in fits)
+    source = RBridge._pinned_efsudr_source()
+    script = "\n".join(
+        [
+            source,
+            "e <- new.env(parent=environment(efsudr))",
+            "e$i <- 0L",
+            "e$rho <- list()",
+            "e$gam.fit3 <- function(...) {",
+            "  a <- list(...)",
+            "  e$i <- e$i + 1L",
+            "  e$rho[[e$i]] <- a$sp",
+            f"  j <- min(e$i, {len(fits)}L)",
+            "  list(",
+            "    coefficients=rep(1, length(a$sp)),",
+            "    rV=matrix(0, length(a$sp), length(a$sp)),",
+            f"    ldetS1=exp(a$sp + c({ratio})),",
+            "    scale=1,",
+            f"    REML=c({scores})[j],",
+            f"    dev=c({devs})[j]",
+            "  )",
+            "}",
+            "environment(efsudr) <- e",
+            f"m <- {n_parameters}L",
+            "o <- efsudr(",
+            "  x=matrix(1, 3, m),",
+            "  y=rep(1, 3),",
+            f"  lsp=c({rho}),",
+            "  Eb=diag(m),",
+            "  UrS=lapply(seq_len(m), function(i) diag(m)[, i, drop=FALSE]),",
+            "  weights=rep(1, 3),",
+            "  family=poisson(),",
+            "  U1=diag(m),",
+            "  Mp=0,",
+            "  control=mgcv::gam.control()",
+            ")",
+            "write.csv(do.call(rbind, e$rho), 'rho.csv', row.names=FALSE)",
+            "write.csv(",
+            "  data.frame(sp=as.numeric(o$sp)),",
+            "  'accepted_sp.csv',",
+            "  row.names=FALSE",
+            ")",
+            "write.csv(",
+            "  data.frame(score=as.numeric(o$outer.info$score.hist)),",
+            "  'score_history.csv',",
+            "  row.names=FALSE",
+            ")",
+            "writeLines(paste(o$iter, o$outer.info$conv, o$REML, sep='|'), 'out.txt')",
+            "",
+        ]
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "x.R"
+        path.write_text(script)
+        subprocess.run(
+            ["Rscript", str(path)],
+            cwd=directory,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        proposals = pd.read_csv(Path(directory) / "rho.csv").to_numpy()
+        accepted_sp = pd.read_csv(Path(directory) / "accepted_sp.csv")["sp"].to_numpy(
+            dtype=np.float64
+        )
+        score_history = pd.read_csv(Path(directory) / "score_history.csv")[
+            "score"
+        ].to_numpy(dtype=np.float64)
+        iteration, convergence, score = (
+            (Path(directory) / "out.txt").read_text().split("|")
+        )
+    return {
+        "proposals": proposals,
+        "accepted_sp": accepted_sp,
+        "final_score": float(score),
+        "score_history": score_history,
+        "iter": int(iteration),
+        "convergence": convergence,
+    }
 
 
 def _main() -> None:
