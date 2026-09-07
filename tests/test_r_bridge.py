@@ -36,6 +36,37 @@ class TestRBridgeAvailability:
         ok, reason = RBridge.check_versions()
         assert ok, reason
 
+    @pytest.mark.skipif(not RBridge.available(), reason="rpy2 with mgcv unavailable")
+    def test_default_reference_never_launches_rscript(self, monkeypatch) -> None:
+        """Default selection and version checks stay in the embedded R process."""
+        import subprocess
+
+        def unexpected_process(*_args, **_kwargs):
+            raise AssertionError("RBridge attempted to launch an external process")
+
+        monkeypatch.setattr(subprocess, "run", unexpected_process)
+        monkeypatch.setattr(subprocess, "check_output", unexpected_process)
+        assert RBridge.available()
+        bridge = RBridge()
+        bridge._require_rpy2()
+        assert bridge.mode == "rpy2"
+
+    @pytest.mark.skipif(not RBridge.available(), reason="rpy2 with mgcv unavailable")
+    def test_object_transport_preserves_values_and_dimensions(self) -> None:
+        """Subnormals, signed zero, and adjacent floats survive direct transfer."""
+        bridge = RBridge()
+        source = np.array(
+            [[0.0, -0.0], [np.nextafter(1.0, 2.0), np.nextafter(0.0, 1.0)]]
+        ).T
+        result = np.asarray(bridge._to_r_matrix(source), dtype=np.float64)
+        np.testing.assert_array_equal(result.view(np.uint64), source.view(np.uint64))
+        integers = np.array([0, 1, np.iinfo(np.int32).max], dtype=np.int64)
+        np.testing.assert_array_equal(bridge._to_r_vector(integers), integers)
+        with pytest.raises(ValueError, match="non-missing range"):
+            bridge._to_r_vector(np.array([np.iinfo(np.int32).min]))
+        with pytest.raises(ValueError, match="two-dimensional"):
+            bridge._to_r_matrix(integers)
+
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeFitGam:
