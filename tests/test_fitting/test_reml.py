@@ -99,7 +99,7 @@ def _reml_args(fd, pirls_result, log_lambda):
         "beta": pirls_result.coefficients,
         "deviance": deviance,
         "ls_sat": ls_sat,
-        "S_list": fd.S_list,
+        "penalty_structure": fd.penalty_structure,
         "phi": phi,
         "Mp": Mp,
         "singleton_sp_indices": fd.singleton_sp_indices,
