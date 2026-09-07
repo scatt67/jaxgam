@@ -7,6 +7,7 @@ from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
@@ -135,13 +136,21 @@ class FittingData:
             )
             if integer_counts:
                 max_y = int(np.max(y_np)) if y_np.size else 0
+                int64_max = np.iinfo(np.int64).max
+                if max_y > int64_max:
+                    raise ValueError(
+                        "NB count-prefix indices require responses representable "
+                        f"as int64, got maximum count {max_y}."
+                    )
                 capacity = max(1, max_y)  # y_safe=1 is evaluated under where.
                 indices_np = y_np.astype(np.int64)
             else:
                 capacity = 0
-                indices_np = np.zeros(y_np.shape, dtype=np.int32)
+                indices_np = np.zeros(y_np.shape, dtype=np.int64)
             count_prefix_plan = CountPrefixPlan(
-                indices=to_jax(indices_np, device=device),
+                indices=jax.device_put(
+                    jnp.asarray(indices_np, dtype=jnp.int64), device
+                ),
                 max_count=max_y,
                 capacity=capacity,
                 integer_counts=integer_counts,

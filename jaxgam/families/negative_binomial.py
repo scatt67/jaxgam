@@ -48,8 +48,14 @@ _MU_EPS = 1e-10
 # larger tables use the mgcv-style polygamma difference where it is well
 # conditioned.  The recurrence remains available to callers that need a
 # different large-count policy.
+# XLA's differentiated prefix kernel needs about 3.14x the raw table in the
+# current CPU backend (26,284,424 bytes for a 1,048,576-entry table). Keep a
+# 4x safety margin and budget the compiled derivative, not merely the table.
 _PREFIX_WORKSPACE_BYTES = 8 << 20
+_PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER = 4
 _VECTOR_DIFF_MAX_THETA_TO_COUNT = 1e6
+_FRACTIONAL_ASYMPTOTIC_THETA = 1e6
+_FRACTIONAL_ASYMPTOTIC_THETA_TO_RESPONSE = 1e4
 
 
 class NegativeBinomial(ExtendedFamily):
@@ -156,7 +162,7 @@ class NegativeBinomial(ExtendedFamily):
         *,
         max_y: int = 0,
         count_indices=None,
-        integer_counts: bool = True,
+        integer_counts: bool | None = None,
     ) -> float:
         """Saturated log-likelihood (R's family$ls).  Phase 2 only (JAX).
 
@@ -256,7 +262,7 @@ class NegativeBinomial(ExtendedFamily):
         *,
         max_y: int = 0,
         count_indices=None,
-        integer_counts: bool = True,
+        integer_counts: bool | None = None,
     ):
         """Saturated log-likelihood with explicit theta for AD trace.
 
@@ -389,32 +395,44 @@ def _lgamma_diff_jvp(capacity, integer_counts, primals, tangents):
     #           = digamma(theta) - digamma(theta+y)
     #           = -sum_{k=0}^{y-1} 1/(theta+k)
     # This avoids subtracting two large digamma values at large theta.
+    indices = jnp.asarray(count_indices, dtype=jnp.int64)
+    valid_indices = (indices >= 0) & (indices <= capacity)
     if not integer_counts:
         # This is mgcv nb()$ls' digamma derivative. It is also the exact
         # meaning for fractional NB responses, which are accepted today.
         raw_difference = jsp.digamma(theta) - jsp.digamma(theta + y)
         # Avoid subtracting nearly equal digammas for fractional responses,
-        # where the integer recurrence is inapplicable. The first two terms
+        # where the integer recurrence is inapplicable. The first three terms
         # of psi(theta)-psi(theta+y) are enough once theta dwarfs y; AD of
         # this expression supplies the matching second theta derivative.
-        asymptotic = -y / theta + y * (y - 1.0) / (2.0 * theta**2)
+        asymptotic = (
+            -y / theta
+            + y * (y - 1.0) / (2.0 * theta**2)
+            - y * (2.0 * y**2 - 3.0 * y + 1.0) / (6.0 * theta**3)
+        )
         dtheta_value = jnp.where(
-            theta > 1e6 * jnp.maximum(jnp.abs(y), 1.0), asymptotic, raw_difference
+            theta
+            >= jnp.maximum(
+                _FRACTIONAL_ASYMPTOTIC_THETA * (1.0 - 1e-12),
+                _FRACTIONAL_ASYMPTOTIC_THETA_TO_RESPONSE * jnp.abs(y),
+            ),
+            asymptotic,
+            raw_difference,
         )
     elif capacity <= 0:
         dtheta_value = jnp.zeros_like(y)
-    elif (capacity + 1) * np.dtype(np.float64).itemsize <= _PREFIX_WORKSPACE_BYTES:
+    elif (capacity + 1) * np.dtype(
+        np.float64
+    ).itemsize * _PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER <= _PREFIX_WORKSPACE_BYTES:
         reciprocal = 1.0 / (theta + jnp.arange(capacity, dtype=y.dtype))
         prefix = jnp.concatenate((jnp.zeros(1, dtype=y.dtype), jnp.cumsum(reciprocal)))
         # FittingData validates this metadata once. Direct callers receive a
         # non-finite derivative for an undersized plan instead of truncation.
-        indices = jnp.asarray(count_indices, dtype=jnp.int64)
-        valid = (indices >= 0) & (indices <= capacity)
         # ``mode='fill'`` makes malformed direct-helper metadata visible. JAX
         # otherwise clamps out-of-range gathers, which would silently turn an
         # undersized plan into the wrong derivative.
         dtheta_value = jnp.where(
-            valid,
+            valid_indices,
             -jnp.take(prefix, indices, mode="fill", fill_value=jnp.nan),
             jnp.nan,
         )
@@ -426,7 +444,7 @@ def _lgamma_diff_jvp(capacity, integer_counts, primals, tangents):
         def _stable_recurrence(_: None):
             def body(k, acc):
                 return acc + jnp.where(
-                    k < jnp.asarray(count_indices, dtype=jnp.int64),
+                    k < indices,
                     1.0 / (theta + k),
                     0.0,
                 )
@@ -436,12 +454,15 @@ def _lgamma_diff_jvp(capacity, integer_counts, primals, tangents):
         def _vectorized(_: None):
             return jsp.digamma(theta) - jsp.digamma(theta + y)
 
-        positive_counts = jnp.where(
-            jnp.asarray(count_indices, dtype=jnp.int64) > 0,
-            jnp.asarray(count_indices, dtype=y.dtype),
-            jnp.inf,
-        )
-        smallest_count = jnp.minimum(jnp.min(positive_counts), 1.0)
+        if indices.shape[0] == 0:
+            smallest_count = jnp.array(1.0, dtype=y.dtype)
+        else:
+            positive_counts = jnp.where(
+                indices > 0,
+                jnp.asarray(indices, dtype=y.dtype),
+                jnp.inf,
+            )
+            smallest_count = jnp.minimum(jnp.min(positive_counts), 1.0)
         dtheta_value = jax.lax.cond(
             theta <= _VECTOR_DIFF_MAX_THETA_TO_COUNT * smallest_count,
             _vectorized,
@@ -449,6 +470,9 @@ def _lgamma_diff_jvp(capacity, integer_counts, primals, tangents):
             operand=None,
         )
 
+    # Metadata must be valid even on the recurrence/vectorized/empty paths;
+    # never turn an undersized plan into a finite but truncated derivative.
+    dtheta_value = jnp.where(valid_indices, dtheta_value, jnp.nan)
     tangent_out = dtheta_value * dtheta - jsp.digamma(theta + y) * dy
 
     return primal_out, tangent_out
@@ -461,11 +485,21 @@ def _lgamma_diff(theta, y, max_y):
     callers retain the old signature and receive the same integer fast path.
     """
     capacity = max(1, max_y)
-    indices = jnp.asarray(y, dtype=jnp.int64)
-    return _lgamma_diff_planned(theta, y, indices, capacity, True)
+
+    def integer_path(_: None):
+        return _lgamma_diff_planned(
+            theta, y, jnp.asarray(y, dtype=jnp.int64), capacity, True
+        )
+
+    def fractional_path(_: None):
+        return _lgamma_diff_planned(
+            theta, y, jnp.zeros(y.shape, dtype=jnp.int64), 0, False
+        )
+
+    return jax.lax.cond(jnp.all(y == jnp.floor(y)), integer_path, fractional_path, None)
 
 
-def _saturated_loglik_jax(y, wt, theta, max_y, count_indices=None, integer_counts=True):
+def _saturated_loglik_jax(y, wt, theta, max_y, count_indices=None, integer_counts=None):
     """Numerically stable saturated log-likelihood (JAX).
 
     Rewrites for stability at large theta (near-Poisson limit):
@@ -480,14 +514,14 @@ def _saturated_loglik_jax(y, wt, theta, max_y, count_indices=None, integer_count
     """
     ylogy = jnp.where(y > 0, y * jnp.log(y), 0.0)
     y_safe = jnp.where(y > 0, y, 1.0)
-    capacity = max(1, max_y) if integer_counts else 0
-    if count_indices is None:
-        count_indices = jnp.asarray(y, dtype=jnp.int64)
-    lgamma_diff = jnp.where(
-        y > 0,
-        _lgamma_diff_planned(theta, y_safe, count_indices, capacity, integer_counts),
-        0.0,
-    )
+    if count_indices is None or integer_counts is None:
+        lgamma_value = _lgamma_diff(theta, y_safe, max_y)
+    else:
+        capacity = max(1, max_y) if integer_counts else 0
+        lgamma_value = _lgamma_diff_planned(
+            theta, y_safe, count_indices, capacity, integer_counts
+        )
+    lgamma_diff = jnp.where(y > 0, lgamma_value, 0.0)
     # Note: ``theta * log1p(y/theta)`` is optimized for the large-theta
     # regime (near-Poisson limit) where the original
     # ``(y+theta)*log(y+theta) - theta*log(theta)`` suffers cancellation.

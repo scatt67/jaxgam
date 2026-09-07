@@ -933,7 +933,7 @@ class NewtonOptimizer:
             "count_indices": (
                 fd.count_prefix_plan.indices
                 if fd.count_prefix_plan is not None
-                else jnp.zeros(fd.n_obs, dtype=jnp.int32)
+                else jnp.zeros(0, dtype=jnp.int64)
             ),
             "family": fd.family,
             "pirls_tol": self._pirls_tol,

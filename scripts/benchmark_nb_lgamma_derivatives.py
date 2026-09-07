@@ -9,7 +9,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
+import tempfile
 import time
+
+# Must precede importing JAX. This keeps a benchmark invocation from using a
+# developer's persistent compilation cache. The directory is retained in the
+# record for reproducing a particular run and removed by the OS later.
+if "JAX_COMPILATION_CACHE_DIR" not in os.environ:
+    os.environ["JAX_COMPILATION_CACHE_DIR"] = tempfile.mkdtemp(
+        prefix="jaxgam-nb-cache-"
+    )
 
 import jax
 import jax.numpy as jnp
@@ -31,27 +42,53 @@ def _seconds(fn, *args) -> float:
     return time.perf_counter() - start
 
 
+def _prefix_hessian(theta, y, indices, max_y):
+    return jax.hessian(
+        lambda t: jnp.sum(_lgamma_diff_planned(t, y, indices, max_y, True))
+    )(theta)
+
+
+def _legacy_hessian(theta, y, max_y):
+    return jax.jacfwd(lambda t: jnp.sum(_legacy_derivative(t, y, max_y)))(theta)
+
+
 def _measure(n: int, max_y: int, outlier: bool, repeats: int) -> dict[str, float | int]:
     rng = np.random.default_rng(20260907)
-    y_np = rng.integers(0, max_y + 1, size=n, dtype=np.int32)
+    base_max_y = min(max_y, 16) if outlier else max_y
+    y_np = rng.integers(0, base_max_y + 1, size=n, dtype=np.int64)
     if outlier:
         y_np[-1] = max_y
     y = jnp.asarray(y_np, dtype=jnp.float64)
     indices = jnp.asarray(y_np)
     theta = jnp.array(2.0)
-    prefix = jax.jit(
-        jax.hessian(lambda t: jnp.sum(_lgamma_diff_planned(t, y, indices, max_y, True)))
+    prefix = jax.jit(_prefix_hessian, static_argnames=("max_y",))
+    legacy = jax.jit(_legacy_hessian, static_argnames=("max_y",))
+    cold_start = time.perf_counter()
+    prefix_compiled = prefix.lower(theta, y, indices, max_y).compile()
+    jax.block_until_ready(prefix_compiled(theta, y, indices))
+    cold_prefix = time.perf_counter() - cold_start
+    cold_start = time.perf_counter()
+    legacy_compiled = legacy.lower(theta, y, max_y).compile()
+    jax.block_until_ready(legacy_compiled(theta, y))
+    cold_legacy = time.perf_counter() - cold_start
+    warm_prefix = np.median(
+        [_seconds(prefix_compiled, theta, y, indices) for _ in range(repeats)]
     )
-    legacy = jax.jit(jax.jacfwd(lambda t: jnp.sum(_legacy_derivative(t, y, max_y))))
-    cold_prefix = _seconds(prefix, theta)
-    cold_legacy = _seconds(legacy, theta)
-    warm_prefix = np.median([_seconds(prefix, theta) for _ in range(repeats)])
-    warm_legacy = np.median([_seconds(legacy, theta) for _ in range(repeats)])
+    warm_legacy = np.median(
+        [_seconds(legacy_compiled, theta, y) for _ in range(repeats)]
+    )
     return {
         "n": n,
         "max_y": max_y,
+        "base_max_y": base_max_y,
         "outlier": int(outlier),
         "prefix_table_bytes": (max_y + 1) * 8,
+        "prefix_compiler_temp_bytes": (
+            prefix_compiled.memory_analysis().temp_size_in_bytes
+        ),
+        "legacy_compiler_temp_bytes": (
+            legacy_compiled.memory_analysis().temp_size_in_bytes
+        ),
         "cold_prefix_seconds": cold_prefix,
         "cold_legacy_seconds": cold_legacy,
         "warm_prefix_seconds": float(warm_prefix),
@@ -66,12 +103,19 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--outlier", action="store_true")
     args = parser.parse_args()
+    metadata = {
+        "jax_version": jax.__version__,
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "devices": [str(device) for device in jax.devices()],
+        "compilation_cache_dir": os.environ["JAX_COMPILATION_CACHE_DIR"],
+    }
     results = [
         _measure(n, max_y, args.outlier, args.repeats)
         for n in args.rows
         for max_y in args.max_counts
     ]
-    print(json.dumps(results, indent=2))
+    print(json.dumps({"metadata": metadata, "results": results}, indent=2))
 
 
 if __name__ == "__main__":
