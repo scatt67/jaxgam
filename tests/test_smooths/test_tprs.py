@@ -19,6 +19,7 @@ from math import comb, pi
 import numpy as np
 import pytest
 
+from jaxgam.smooths import tprs as tprs_module
 from jaxgam.smooths.tprs import (
     TPRSShrinkageSmooth,
     TPRSSmooth,
@@ -825,3 +826,25 @@ class TestCoveragePaths:
         x_new = rng.randn(30)
         X_new = smooth.build_design_matrix({"x": x_new})
         assert X_new.shape == (30, 5)
+
+    def test_prediction_distance_work_is_row_batched(self, monkeypatch) -> None:
+        """TPRS prediction never builds a rows-by-knots-by-dimension tensor."""
+        batch_rows = 11
+        monkeypatch.setattr(tprs_module, "DISTANCE_BATCH_ROWS", batch_rows)
+        calls: list[int] = []
+        original = tprs_module._compute_distance_matrix
+
+        def recorded_distance(X1, X2):
+            calls.append(len(X1))
+            return original(X1, X2)
+
+        monkeypatch.setattr(tprs_module, "_compute_distance_matrix", recorded_distance)
+        x = np.linspace(0.01, 0.99, 29)
+        smooth = TPRSSmooth(make_smooth_spec(["x"], k=8))
+        smooth.setup({"x": x})
+        calls.clear()
+
+        X = smooth.predict_matrix({"x": x[::-1]})
+
+        assert X.shape == (len(x), 8)
+        assert calls == [batch_rows, batch_rows, len(x) - 2 * batch_rows]

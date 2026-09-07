@@ -370,6 +370,7 @@ class CoefficientMap:
         X_parametric: npt.NDArray[np.floating] | None = None,
         apply_centering: bool = True,
         apply_side: bool = True,
+        copy_inputs: bool = True,
         tol: float = np.finfo(float).eps ** 0.5,
     ) -> tuple[
         CoefficientMap,
@@ -399,6 +400,10 @@ class CoefficientMap:
             Whether to apply sum-to-zero centering constraints.
         apply_side : bool
             Whether to apply gam_side identifiability constraints.
+        copy_inputs : bool
+            Whether inputs remain owned by the caller. Model setup transfers
+            ownership because the raw blocks are short-lived; direct callers
+            retain the conservative copying contract.
         tol : float
             Tolerance for dependence detection.
 
@@ -413,9 +418,16 @@ class CoefficientMap:
         """
         m = len(smooths)
 
-        # Work on copies
-        X_blocks = [X.copy() for X in X_smooth_blocks]
-        S_blocks = [[S.copy() for S in Ss] for Ss in S_smooth_blocks]
+        # Constraint transformations replace blocks rather than mutating their
+        # elements. Model assembly can therefore transfer short-lived raw
+        # blocks without copying them, while public/direct callers keep the
+        # historical defensive-copy behavior.
+        if copy_inputs:
+            X_blocks = [X.copy() for X in X_smooth_blocks]
+            S_blocks = [[S.copy() for S in Ss] for Ss in S_smooth_blocks]
+        else:
+            X_blocks = list(X_smooth_blocks)
+            S_blocks = [list(Ss) for Ss in S_smooth_blocks]
 
         # Track centering Z matrices per smooth
         Z_centering_list: list[npt.NDArray[np.floating] | None] = [None] * m

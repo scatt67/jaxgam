@@ -66,6 +66,35 @@ class Smooth(ABC):
                 setattr(clone, attr, None)
         return clone
 
+    def training_design_matrix(self) -> npt.NDArray[np.floating]:
+        """Return the basis constructed during :meth:`setup`.
+
+        Setup owns construction of the training basis, matching mgcv's
+        ``smoothCon`` contract. Model assembly consumes this explicit handoff
+        instead of asking ``build_design_matrix`` to infer whether supplied
+        data happen to be the training rows. Prediction callers must continue
+        to use ``build_design_matrix`` or ``predict_matrix``.
+        """
+        self._require_setup()
+        X = getattr(self, "_X", None)
+        if X is None:
+            raise RuntimeError(
+                f"{type(self).__name__} did not retain its training basis."
+            )
+        return X
+
+    def consume_training_design_matrix(self) -> npt.NDArray[np.floating]:
+        """Transfer ownership of the setup-built matrix to model assembly.
+
+        The dense training matrix belongs to ``ModelSetup`` after Phase 1;
+        prediction retains only basis transforms. Clearing the fit-only cache
+        prevents tensor and wrapper smooths from retaining a second n-by-k
+        matrix after assembly.
+        """
+        X = self.training_design_matrix()
+        self._X = None
+        return X
+
     @staticmethod
     def _smoothcon_normalize(
         X: npt.NDArray[np.floating],

@@ -195,6 +195,27 @@ class TestSetupInvariants:
         collector.check("predict_matrix == build_design_matrix", predict_equals_design)
         collector.raise_if_any(f"setup invariants (stationary={stationary})")
 
+    def test_prediction_distance_work_is_row_batched(self, monkeypatch) -> None:
+        """GP prediction bounds each kernel-distance workspace by row count."""
+        batch_rows = 11
+        monkeypatch.setattr(gp_module, "DISTANCE_BATCH_ROWS", batch_rows)
+        calls: list[int] = []
+        original = gp_module._compute_distance_matrix
+
+        def recorded_distance(X1, X2):
+            calls.append(len(X1))
+            return original(X1, X2)
+
+        monkeypatch.setattr(gp_module, "_compute_distance_matrix", recorded_distance)
+        x = np.linspace(0.01, 0.99, 29)
+        smooth = _make_gp_smooth({"x": x}, stationary=False, k=8)
+        calls.clear()
+
+        X = smooth.predict_matrix({"x": x[::-1]})
+
+        assert X.shape == (len(x), smooth.n_coefs)
+        assert calls == [batch_rows, batch_rows, len(x) - 2 * batch_rows]
+
     def test_dimension_defaults(self, gp_1d_data: dict, gp_2d_data: dict) -> None:
         """Default bs.dim per dimension and the d>3 explicit-k requirement."""
         rng = np.random.default_rng(0)
