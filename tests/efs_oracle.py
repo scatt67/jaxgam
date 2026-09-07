@@ -146,6 +146,9 @@ class EFSControllerTrace:
     events: tuple[EFSControllerEvent, ...]
     accepted_log_smoothing: tuple[float, ...]
     accepted_score: float
+    score_history: tuple[float, ...]
+    iteration: int
+    convergence: Literal["full convergence", "iteration limit reached"]
     multiplier: float
     stop_reason: Literal["score_window", "deviance", "iteration_limit"]
 
@@ -208,6 +211,25 @@ def run_scripted_efs_controller(
     score_history: list[float] = []
     old_deviance: float | None = None
 
+    def trace(
+        stop_reason: Literal["score_window", "deviance", "iteration_limit"],
+    ) -> EFSControllerTrace:
+        convergence: Literal["full convergence", "iteration limit reached"] = (
+            "iteration limit reached"
+            if iteration == control.outer_limit
+            else "full convergence"
+        )
+        return EFSControllerTrace(
+            tuple(events),
+            tuple(lsp),
+            fit.score,
+            tuple(score_history),
+            iteration,
+            convergence,
+            multiplier,
+            stop_reason,
+        )
+
     for iteration in range(1, control.outer_limit + 1):
         old_score = fit.score
         candidate = np.minimum(lsp + ratio_log * multiplier, control.lspmax)
@@ -246,20 +268,14 @@ def run_scripted_efs_controller(
             and original_max_step < 0.05
             and max(abs(np.diff(score_history[-4:]))) < control.score_tolerance
         ):
-            return EFSControllerTrace(
-                tuple(events), tuple(lsp), fit.score, multiplier, "score_window"
-            )
+            return trace("score_window")
         if old_deviance is not None and abs(old_deviance - fit.deviance) < (
             100.0 * control.deviance_epsilon * abs(fit.deviance)
         ):
-            return EFSControllerTrace(
-                tuple(events), tuple(lsp), fit.score, multiplier, "deviance"
-            )
+            return trace("deviance")
         old_deviance = fit.deviance
 
-    return EFSControllerTrace(
-        tuple(events), tuple(lsp), fit.score, multiplier, "iteration_limit"
-    )
+    return trace("iteration_limit")
 
 
 def run_pinned_r_scripted_efs(

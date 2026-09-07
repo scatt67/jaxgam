@@ -9,6 +9,7 @@ import pytest
 
 from tests.efs_oracle import (
     EFSControl,
+    EFSControllerTrace,
     ScriptedFit,
     canonical_data_hash,
     make_efs_fixture,
@@ -16,7 +17,7 @@ from tests.efs_oracle import (
     run_scripted_efs_controller,
     write_efs_fixture,
 )
-from tests.helpers import r_available
+from tests.helpers import _AssertCollector, check_that, r_available
 from tests.tolerances import STRICT
 
 
@@ -29,6 +30,71 @@ def _provider(*fits: ScriptedFit):
         return next(pending)
 
     return provide
+
+
+def _assert_scripted_trace_matches_pinned_r(
+    initial_log_smoothing: np.ndarray,
+    log_ratio: np.ndarray,
+    fits: list[ScriptedFit],
+) -> tuple[EFSControllerTrace, dict[str, object]]:
+    """Compare every R-observable controller result from one scripted refit path."""
+    trace = run_scripted_efs_controller(
+        initial_log_smoothing, log_ratio, _provider(*fits)
+    )
+    oracle = run_pinned_r_scripted_efs(initial_log_smoothing, log_ratio, fits)
+    collector = _AssertCollector()
+    collector.check(
+        "proposal sequence",
+        lambda: np.testing.assert_allclose(
+            oracle["proposals"],
+            [event.log_smoothing for event in trace.events],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "accepted smoothing parameters",
+        lambda: np.testing.assert_allclose(
+            oracle["accepted_sp"],
+            np.exp(trace.accepted_log_smoothing),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "accepted score history",
+        lambda: np.testing.assert_allclose(
+            oracle["score_history"],
+            trace.score_history,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "iteration",
+        lambda: check_that(
+            trace.iteration == oracle["iter"],
+            f"Python {trace.iteration}, R {oracle['iter']}",
+        ),
+    )
+    collector.check(
+        "convergence label",
+        lambda: check_that(
+            trace.convergence == oracle["convergence"],
+            f"Python {trace.convergence!r}, R {oracle['convergence']!r}",
+        ),
+    )
+    collector.check(
+        "final score",
+        lambda: np.testing.assert_allclose(
+            oracle["final_score"],
+            trace.accepted_score,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.raise_if_any("pinned scripted EFS parity")
+    return trace, oracle
 
 
 def test_fixture_generator_is_deterministic_and_records_provenance(tmp_path) -> None:
@@ -203,45 +269,71 @@ def test_controller_rejects_invalid_parameter_vectors_and_controls() -> None:
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R with mgcv not available")
-def test_pinned_r_scripted_extension_then_contraction_matches_python() -> None:
+def test_pinned_r_initial_shift_and_default_cap_match_python() -> None:
     fits = [
         ScriptedFit(10, 10),
         ScriptedFit(9, 9),
-        ScriptedFit(8, 8),
-        ScriptedFit(11, 7),
-        ScriptedFit(10.5, 8),
+        ScriptedFit(9, 9),
+        ScriptedFit(9, 9),
     ]
-    python = run_scripted_efs_controller(
-        np.array([0.0]),
-        np.array([0.01]),
-        _provider(*fits),
-        control=EFSControl(outer_limit=2),
+    trace, _ = _assert_scripted_trace_matches_pinned_r(
+        np.array([14.0]), np.array([1.0]), fits
     )
-    oracle = run_pinned_r_scripted_efs(np.array([0.0]), np.array([0.01]), fits)
+
     np.testing.assert_allclose(
-        oracle["proposals"],
-        [event.log_smoothing for event in python.events],
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
+        trace.events[0].log_smoothing, [16.5], rtol=STRICT.rtol, atol=STRICT.atol
     )
     np.testing.assert_allclose(
-        oracle["accepted_sp"],
-        np.exp(python.accepted_log_smoothing),
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
+        trace.events[1].log_smoothing, [15.0], rtol=STRICT.rtol, atol=STRICT.atol
     )
-    np.testing.assert_allclose(
-        oracle["score_history"],
-        [8.0, 10.5],
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
-    )
-    assert python.stop_reason == "deviance"
-    assert oracle["final_score"] == python.accepted_score
+    assert trace.stop_reason == "deviance"
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R with mgcv not available")
-def test_pinned_r_scripted_helper_supports_two_parameters() -> None:
+@pytest.mark.parametrize(
+    ("extension_score", "expected_multiplier", "expected_log_smoothing"),
+    [
+        pytest.param(8.0, 2.0, 2.54, id="strict-win"),
+        pytest.param(9.0, 1.0, 2.52, id="tie"),
+        pytest.param(9.1, 1.0, 2.52, id="loss"),
+    ],
+)
+def test_pinned_r_extension_acceptance_is_strict(
+    extension_score: float,
+    expected_multiplier: float,
+    expected_log_smoothing: float,
+) -> None:
+    if extension_score < 9.0:
+        fits = [
+            ScriptedFit(10, 10),
+            ScriptedFit(9, 9),
+            ScriptedFit(extension_score, 8),
+            ScriptedFit(7, 8),
+            ScriptedFit(7, 8),
+        ]
+    else:
+        fits = [
+            ScriptedFit(10, 10),
+            ScriptedFit(9, 9),
+            ScriptedFit(extension_score, 8),
+            ScriptedFit(8, 9),
+            ScriptedFit(8, 9),
+        ]
+    trace, _ = _assert_scripted_trace_matches_pinned_r(
+        np.array([0.0]), np.array([0.01]), fits
+    )
+
+    assert trace.multiplier == expected_multiplier
+    np.testing.assert_allclose(
+        trace.accepted_log_smoothing,
+        [expected_log_smoothing],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R with mgcv not available")
+def test_pinned_r_contraction_floor_accepts_finite_worsening() -> None:
     fits = [
         ScriptedFit(10, 10),
         ScriptedFit(9, 9),
@@ -249,51 +341,118 @@ def test_pinned_r_scripted_helper_supports_two_parameters() -> None:
         ScriptedFit(11, 7),
         ScriptedFit(10.5, 8),
     ]
-    python = run_scripted_efs_controller(
-        np.array([0.0, 0.25]),
-        np.array([0.01, 0.02]),
-        _provider(*fits),
-        control=EFSControl(outer_limit=2),
+    trace, _ = _assert_scripted_trace_matches_pinned_r(
+        np.array([0.0]), np.array([0.01]), fits
     )
-    oracle = run_pinned_r_scripted_efs(
+
+    contraction = [event for event in trace.events if event.phase == "contraction"]
+    assert len(contraction) == 1
+    assert contraction[0].multiplier == 1.0
+    assert trace.multiplier == 1.0
+    assert trace.accepted_score == 10.5
+    assert trace.stop_reason == "deviance"
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R with mgcv not available")
+def test_pinned_r_original_max_step_gates_extension_before_multiplier_changes() -> None:
+    fits = [
+        ScriptedFit(10, 10),
+        ScriptedFit(9, 9),
+        ScriptedFit(8, 8),
+        ScriptedFit(7, 8),
+    ]
+    trace, _ = _assert_scripted_trace_matches_pinned_r(
+        np.array([0.0]), np.array([0.03]), fits
+    )
+
+    assert [event.phase for event in trace.events].count("extension") == 1
+    assert trace.multiplier == 2.0
+    assert trace.stop_reason == "deviance"
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R with mgcv not available")
+def test_pinned_r_four_accepted_score_window_matches_python() -> None:
+    fits = [
+        ScriptedFit(10.0, 100.0),
+        ScriptedFit(9.98, 99.0),
+        ScriptedFit(9.98, 99.0),
+        ScriptedFit(9.96, 98.0),
+        ScriptedFit(9.96, 98.0),
+        ScriptedFit(9.94, 97.0),
+        ScriptedFit(9.94, 97.0),
+        ScriptedFit(9.92, 96.0),
+        ScriptedFit(9.92, 96.0),
+    ]
+    trace, _ = _assert_scripted_trace_matches_pinned_r(
+        np.array([0.0]), np.array([0.01]), fits
+    )
+
+    np.testing.assert_allclose(
+        trace.score_history,
+        [9.98, 9.96, 9.94, 9.92],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert trace.iteration == 4
+    assert trace.stop_reason == "score_window"
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R with mgcv not available")
+def test_pinned_r_deviance_epsilon_boundary_matches_python() -> None:
+    fits = [
+        ScriptedFit(5.0, 10.0),
+        ScriptedFit(4.0, 9.0),
+        ScriptedFit(3.0, 9.00005),
+    ]
+    trace, _ = _assert_scripted_trace_matches_pinned_r(
+        np.array([0.0]), np.array([0.1]), fits
+    )
+
+    assert EFSControl().deviance_epsilon == 1e-7
+    assert trace.iteration == 2
+    assert trace.stop_reason == "deviance"
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R with mgcv not available")
+def test_pinned_r_two_parameter_helper_matches_python() -> None:
+    fits = [
+        ScriptedFit(10, 10),
+        ScriptedFit(9, 9),
+        ScriptedFit(8, 8),
+        ScriptedFit(11, 7),
+        ScriptedFit(10.5, 8),
+    ]
+    trace, _ = _assert_scripted_trace_matches_pinned_r(
         np.array([0.0, 0.25]), np.array([0.01, 0.02]), fits
     )
 
-    np.testing.assert_allclose(
-        oracle["proposals"],
-        [event.log_smoothing for event in python.events],
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
+    assert trace.stop_reason == "deviance"
+
+
+def _score_window_at_iteration_limit_fits() -> list[ScriptedFit]:
+    fits = [ScriptedFit(1000.0, 1000.0)]
+    for iteration in range(1, 197):
+        fit = ScriptedFit(1000.0 - iteration, 1000.0 - iteration)
+        fits.extend((fit, fit))
+    fits.extend(
+        (
+            ScriptedFit(5.0, 803.0),
+            ScriptedFit(5.0, 803.0),
+            ScriptedFit(5.01, 802.0),
+            ScriptedFit(5.02, 801.0),
+            ScriptedFit(5.03, 800.0),
+        )
     )
-    np.testing.assert_allclose(
-        oracle["accepted_sp"],
-        np.exp(python.accepted_log_smoothing),
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
-    )
-    assert python.stop_reason == "deviance"
+    return fits
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R with mgcv not available")
-def test_pinned_r_scripted_rejected_extension_returns_accepted_state() -> None:
-    fits = [
-        ScriptedFit(10, 10),
-        ScriptedFit(9, 9),
-        ScriptedFit(9.1, 8),
-        ScriptedFit(8, 9),
-        ScriptedFit(9, 8),
-    ]
-    oracle = run_pinned_r_scripted_efs(np.array([0.0]), np.array([0.01]), fits)
+def test_pinned_r_score_window_at_200_keeps_iteration_limit_label() -> None:
+    trace, oracle = _assert_scripted_trace_matches_pinned_r(
+        np.array([0.0]), np.array([0.01]), _score_window_at_iteration_limit_fits()
+    )
 
-    np.testing.assert_allclose(
-        oracle["proposals"][-2], [2.52], rtol=STRICT.rtol, atol=STRICT.atol
-    )
-    np.testing.assert_allclose(
-        oracle["proposals"][-1], [2.53], rtol=STRICT.rtol, atol=STRICT.atol
-    )
-    np.testing.assert_allclose(
-        oracle["accepted_sp"],
-        np.exp([2.52]),
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
-    )
+    assert trace.iteration == 200
+    assert trace.stop_reason == "score_window"
+    assert trace.convergence == "iteration limit reached"
+    assert oracle["convergence"] == "iteration limit reached"
