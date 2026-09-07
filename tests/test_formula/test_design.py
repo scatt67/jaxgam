@@ -522,13 +522,16 @@ class TestRComparison:
         spec = parse_formula(formula)
         setup = ModelSetup.build(spec, data)
 
-        si = setup.smooth_info[0]
-        pen_idx = next(iter(setup.smooth_penalty_indices(si.label)))
-        S_global = setup.penalties.penalties[pen_idx].S
-        S_block = S_global[si.first_coef : si.last_coef, si.first_coef : si.last_coef]
+        block = setup.penalties.blocks[0]
+        S_block = block.dense_penalties()[0]
 
-        assert S_block.shape == r_pen.shape, (
-            f"Penalty shape: Python {S_block.shape} != R {r_pen.shape}"
+        assert S_block.shape == r_pen.shape
+        np.testing.assert_allclose(
+            S_block,
+            r_pen,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="Local constrained penalty differs from R",
         )
 
     def test_no_nesting_no_deletion(self, r_bridge, data) -> None:
@@ -1198,7 +1201,7 @@ class TestRepeatedSmoothLabels:
 
         blocks = [t for t in setup.coef_map.terms if t.term_type == "smooth"]
         si0, si1 = setup.smooth_info
-        pens = setup.penalties.penalties
+        penalty_blocks = setup.penalties.blocks
         c = _AssertCollector()
 
         c.check(
@@ -1220,11 +1223,12 @@ class TestRepeatedSmoothLabels:
         )
 
         def _pen_in_block(i: int) -> None:
-            lo, hi = self._pen_support(pens[i].S)
             b = blocks[i]
             check_that(
-                b.col_start <= lo and hi < b.col_start + b.n_coefs,
-                f"penalty {i} support ({lo},{hi}) escapes block "
+                penalty_blocks[i].start == b.col_start
+                and penalty_blocks[i].stop == b.col_start + b.n_coefs,
+                f"local penalty {i} interval [{penalty_blocks[i].start},"
+                f"{penalty_blocks[i].stop}) does not match owning block "
                 f"[{b.col_start},{b.col_start + b.n_coefs})",
             )
 
