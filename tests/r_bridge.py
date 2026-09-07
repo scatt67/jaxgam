@@ -16,6 +16,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -29,6 +30,7 @@ from jaxgam.formula.terms import SmoothSpec
 
 _REQUIRED_R_VERSION = "4.5.2"
 _REQUIRED_MGCV_VERSION = "1.9.3"
+_PINNED_MGCV_SOURCE_COMMIT = "fb7e8e718377513e78ba6c6bf7e60757fc6a32a9"
 
 _KERNEL_TO_MGCV_TYPE = {
     "spherical": 1,
@@ -258,6 +260,44 @@ class RBridge:
     #  fit_gam                                                            #
     # ------------------------------------------------------------------ #
 
+    def _get_efs_family_rpy2(self, family: str, theta: float | None) -> Any:
+        """Construct the exact pinned EFS family through package functions."""
+        nb_links = {"nb": "log", "nb_identity": "identity", "nb_sqrt": "sqrt"}
+        if theta is not None:
+            if not np.isfinite(theta) or theta <= 0:
+                raise ValueError("EFS NB theta must be finite and positive")
+            if family not in nb_links:
+                raise ValueError(
+                    "EFS theta is supported only for family='nb' or its named link keys"
+                )
+            return self._mgcv.nb(theta=float(theta), link=nb_links[family])
+        if family in nb_links:
+            return self._mgcv.nb(link=nb_links[family])
+        constructors = {
+            "gaussian": self._stats.gaussian,
+            "binomial": self._stats.binomial,
+            "poisson": self._stats.poisson,
+            "gamma": self._stats.Gamma,
+        }
+        links = {
+            "identity": "identity",
+            "log": "log",
+            "logit": "logit",
+            "inverse": "inverse",
+            "probit": "probit",
+            "cloglog": "cloglog",
+            "sqrt": "sqrt",
+            "inverse_squared": "1/mu^2",
+        }
+        for name, constructor in constructors.items():
+            if family == name:
+                return constructor()
+            if family.startswith(name + "_"):
+                link = family[len(name) + 1 :]
+                if link in links:
+                    return constructor(link=links[link])
+        raise ValueError(f"Unknown EFS family: {family!r}")
+
     def fit_gam(
         self,
         formula: str,
@@ -324,6 +364,10 @@ class RBridge:
         if ind is None or ind is self._ro.NULL or len(ind) == 0:
             return None
         return [int(index) - 1 for index in ind]
+
+    # ------------------------------------------------------------------ #
+    #  pinned extended Fellner--Schall oracle                            #
+    # ------------------------------------------------------------------ #
 
     def source_qr_update(
         self,
@@ -434,6 +478,41 @@ class RBridge:
             float(fit.rx2("gcv.ubre")[0]),
             float(fit.rx2("deviance")[0]),
             np.asarray(fit.rx2("fitted.values"), dtype=np.float64).copy(),
+        )
+
+    def fit_efs(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str = "gaussian",
+        *,
+        weights: str | None = None,
+        offset: str | None = None,
+        controls: dict[str, float] | None = None,
+        initial_smoothing: np.ndarray | None = None,
+        initial_scale: float | None = None,
+        null_coef: bool = False,
+        scale: float = -1.0,
+        theta: float | None = None,
+    ) -> dict[str, Any]:
+        """Fit pinned mgcv ``optimizer='efs'`` as an oracle-only bridge call.
+
+        This calls the pinned package in-process with direct rpy2 objects.
+        """
+        self._require_pinned_efs_versions()
+        return self._fit_efs_rpy2(
+            formula,
+            data,
+            family,
+            weights,
+            offset,
+            controls,
+            initial_smoothing,
+            initial_scale,
+            null_coef,
+            scale,
+            theta,
+            skip_offset_null_deviance=False,
         )
 
     def nb_saturated_likelihood_derivatives(
@@ -552,6 +631,712 @@ class RBridge:
                 else:
                     accepted[(name, link)] = True
         return accepted
+
+    def efs_diagnostics(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str = "gaussian",
+        *,
+        weights: str | None = None,
+        offset: str | None = None,
+        controls: dict[str, float] | None = None,
+        initial_smoothing: np.ndarray | None = None,
+        initial_scale: float | None = None,
+        null_coef: bool = False,
+        scale: float = -1.0,
+        theta: float | None = None,
+        initial_log_theta: float | None = None,
+        initial_beta: np.ndarray | None = None,
+        beta_old_init: np.ndarray | None = None,
+    ) -> dict[str, Any]:
+        """Return real per-refit EFS statistics from a private source copy."""
+        self._require_pinned_efs_versions()
+        return self._efs_diagnostics_rpy2(
+            formula,
+            data,
+            family,
+            weights,
+            offset,
+            controls,
+            initial_smoothing,
+            initial_scale,
+            null_coef,
+            scale,
+            theta,
+            initial_log_theta,
+            initial_beta,
+            beta_old_init,
+        )
+
+    @staticmethod
+    def _require_pinned_efs_versions() -> None:
+        ok, reason = RBridge.check_versions()
+        if not ok:
+            raise RBridgeError(f"Pinned EFS oracle unavailable: {reason}")
+
+    @staticmethod
+    def _validate_efs_inputs(
+        data: pd.DataFrame,
+        weights: str | None,
+        offset: str | None,
+        controls: dict[str, float] | None,
+        initial_smoothing: np.ndarray | None,
+    ) -> tuple[dict[str, float], np.ndarray | None]:
+        for column_name, label in ((weights, "weights"), (offset, "offset")):
+            if column_name is not None and column_name not in data.columns:
+                raise ValueError(
+                    f"{label} column {column_name!r} is not present in data"
+                )
+        allowed = {"efs_lspmax", "efs_tol"}
+        resolved = {"efs_lspmax": 15.0, "efs_tol": 0.1}
+        if controls is not None:
+            unknown = set(controls) - allowed
+            if unknown:
+                raise ValueError(f"Unsupported EFS controls: {sorted(unknown)}")
+            resolved.update({key: float(value) for key, value in controls.items()})
+        if (
+            not all(np.isfinite(value) for value in resolved.values())
+            or resolved["efs_tol"] <= 0
+        ):
+            raise ValueError("EFS controls must be finite and efs_tol must be positive")
+        if initial_smoothing is None:
+            return resolved, None
+        initial = np.asarray(initial_smoothing, dtype=np.float64)
+        if (
+            initial.ndim != 1
+            or not np.all(np.isfinite(initial))
+            or np.any(initial <= 0)
+        ):
+            raise ValueError("initial_smoothing must be a finite positive vector")
+        return resolved, initial
+
+    @staticmethod
+    def _efs_provenance(data: pd.DataFrame) -> dict[str, str]:
+        """Return the source/version/data identity recorded with EFS oracle output."""
+        payload = data.to_csv(index=False, float_format="%.17g", lineterminator="\n")
+        return {
+            "r_version": _REQUIRED_R_VERSION,
+            "mgcv_version": _REQUIRED_MGCV_VERSION,
+            "source_commit": _PINNED_MGCV_SOURCE_COMMIT,
+            "data_hash": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        }
+
+    def _fit_efs_rpy2(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        weights: str | None,
+        offset: str | None,
+        controls: dict[str, float] | None,
+        initial_smoothing: np.ndarray | None,
+        initial_scale: float | None,
+        null_coef: bool,
+        scale: float,
+        theta: float | None,
+        *,
+        skip_offset_null_deviance: bool,
+    ) -> dict[str, Any]:
+        """Call pinned ``gam`` with EFS controls and optional private AST gate."""
+        self._require_rpy2()
+        from tests.r_ast import call, clone_function, find_call_paths, replace_call
+
+        resolved, initial = self._validate_efs_inputs(
+            data, weights, offset, controls, initial_smoothing
+        )
+        if initial_scale is not None and (
+            not np.isfinite(initial_scale) or initial_scale <= 0
+        ):
+            raise ValueError("EFS initial_scale must be finite and positive")
+        r_data = self._to_r_dataframe(data)
+        r_family = self._get_efs_family_rpy2(family, theta)
+        r_formula = self._ro.Formula(formula)
+        setup_args: dict[str, Any] = {}
+        if weights is not None:
+            setup_args["weights"] = self._to_r_vector(
+                data[weights].to_numpy(dtype=np.float64)
+            )
+        if offset is not None:
+            setup_args["offset"] = self._to_r_vector(
+                data[offset].to_numpy(dtype=np.float64)
+            )
+        r_gam = self._mgcv.gam
+        if skip_offset_null_deviance:
+            namespace = self._ro.r["getNamespace"]("mgcv")
+            private_env = self._ro.r["new.env"](parent=namespace)
+            original_estimate = self._utils.getFromNamespace("estimate.gam", "mgcv")
+            paths = find_call_paths(
+                original_estimate, "if", required_symbols=("null.deviance", "glm")
+            )
+            if len(paths) != 1:
+                raise RBridgeError("Pinned estimate.gam null-deviance anchor changed")
+            node = self._ro.r["body"](original_estimate)
+            for index in paths[0]:
+                node = node[index]
+            replacement = call(
+                "if",
+                call("&&", self._ro.BoolVector([False]), node[1]),
+                node[2],
+            )
+            private_env["estimate.gam"] = replace_call(
+                original_estimate,
+                path=paths[0],
+                expected_head="if",
+                replacement=replacement,
+            )
+            r_gam = clone_function(
+                self._utils.getFromNamespace("gam", "mgcv"), environment=private_env
+            )
+        fit_args: dict[str, Any] = {
+            **setup_args,
+            "method": "REML",
+            "optimizer": "efs",
+            "control": self._mgcv.gam_control(
+                efs_lspmax=resolved["efs_lspmax"], efs_tol=resolved["efs_tol"]
+            ),
+            "scale": float(scale),
+        }
+        if initial is not None and (scale > 0 or initial_scale is not None):
+            fit_args["in.out"] = self._ro.ListVector(
+                {
+                    "sp": self._to_r_vector(initial),
+                    "scale": self._ro.FloatVector(
+                        [1.0 if initial_scale is None else float(initial_scale)]
+                    ),
+                }
+            )
+        if null_coef:
+            setup = r_gam(
+                r_formula, data=r_data, family=r_family, fit=False, **setup_args
+            )
+            fit_args["null.coef"] = self._call_internal("get.null.coef", setup).rx2(
+                "null.coef"
+            )
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        try:
+            model = r_gam(r_formula, data=r_data, family=r_family, **fit_args)
+        except RRuntimeError as exc:
+            raise RBridgeError(str(exc)) from exc
+        result = self._extract_fit_results_rpy2(model)
+        outer = model.rx2("outer.info")
+        result.update(
+            outer_iterations=int(np.asarray(outer.rx2("iter"))[0]),
+            score_history=np.asarray(outer.rx2("score.hist"), dtype=np.float64).ravel(
+                order="F"
+            ),
+            convergence=str(outer.rx2("conv")[0]),
+            optimizer="efs",
+            controls=resolved,
+            provenance=self._efs_provenance(data),
+        )
+        if skip_offset_null_deviance:
+            result["oracle_stage"] = "selected_before_offset_null_deviance"
+        return result
+
+    def _efs_diagnostics_rpy2(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        weights: str | None,
+        offset: str | None,
+        controls: dict[str, float] | None,
+        initial_smoothing: np.ndarray | None,
+        initial_scale: float | None,
+        null_coef: bool,
+        scale: float,
+        theta: float | None,
+        initial_log_theta: float | None,
+        initial_beta: np.ndarray | None,
+        beta_old_init: np.ndarray | None,
+    ) -> dict[str, Any]:
+        """Trace pinned EFS through private, object-level mgcv closures."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        from tests.r_ast import (
+            clone_function,
+            find_call_paths,
+            instrument_function,
+            make_r_callback,
+        )
+
+        resolved, initial = self._validate_efs_inputs(
+            data, weights, offset, controls, initial_smoothing
+        )
+        if initial_scale is not None and (
+            not np.isfinite(initial_scale) or initial_scale <= 0
+        ):
+            raise ValueError("EFS initial_scale must be finite and positive")
+        if initial_log_theta is not None and not np.isfinite(initial_log_theta):
+            raise ValueError("EFS initial_log_theta must be finite")
+
+        def optional_vector(value: np.ndarray | None, name: str) -> Any:
+            if value is None:
+                return self._ro.NULL
+            vector = np.asarray(value, dtype=np.float64)
+            if vector.ndim != 1 or vector.size == 0 or not np.all(np.isfinite(vector)):
+                raise ValueError(f"EFS {name} must be a nonempty finite vector")
+            return self._to_r_vector(vector)
+
+        start = optional_vector(initial_beta, "initial_beta")
+        old_beta = optional_vector(beta_old_init, "beta_old_init")
+        r_data = self._to_r_dataframe(data)
+        r_family = self._get_efs_family_rpy2(family, theta)
+        setup_args: dict[str, Any] = {}
+        if weights is not None:
+            setup_args["weights"] = self._to_r_vector(
+                data[weights].to_numpy(dtype=np.float64)
+            )
+        if offset is not None:
+            setup_args["offset"] = self._to_r_vector(
+                data[offset].to_numpy(dtype=np.float64)
+            )
+        setup = self._mgcv.gam(
+            self._ro.Formula(formula),
+            data=r_data,
+            family=r_family,
+            fit=False,
+            **setup_args,
+        )
+        r_family = setup.rx2("family")
+        for function in ("fix.family.link", "fix.family.var", "fix.family.ls"):
+            r_family = self._call_internal(function, r_family)
+        theta_count = r_family.rx2("n.theta")
+        n_theta = (
+            0
+            if bool(self._base.is_null(theta_count)[0])
+            else int(np.asarray(theta_count)[0])
+        )
+        if initial_log_theta is not None and n_theta > 0:
+            r_family.rx2("putTheta")(
+                self._to_r_vector(np.asarray([initial_log_theta], dtype=np.float64))
+            )
+
+        r_x = setup.rx2("X")
+        n_coef = int(self._base.ncol(r_x)[0])
+        roots = self._call_internal(
+            "mini.roots",
+            setup.rx2("S"),
+            setup.rx2("off"),
+            n_coef,
+            setup.rx2("rank"),
+        )
+        penalty_space = self._call_internal(
+            "totalPenaltySpace",
+            setup.rx2("S"),
+            setup.rx2("H"),
+            setup.rx2("off"),
+            n_coef,
+        )
+        y_range = penalty_space.rx2("Y")
+        u1 = self._base.cbind(y_range, penalty_space.rx2("Z"))
+        mp = int(self._base.ncol(penalty_space.rx2("Z"))[0])
+        multiply = self._ro.r["%*%"]
+        ur_s = rinterface.ListSexpVector(
+            [multiply(self._base.t(y_range), root) for root in roots]
+        )
+        if initial is not None and (scale > 0 or initial_scale is not None):
+            initial_sp = self._to_r_vector(initial)
+        else:
+            initial_sp = self._call_internal(
+                "initial.spg",
+                r_x,
+                setup.rx2("y"),
+                setup.rx2("w"),
+                r_family,
+                setup.rx2("S"),
+                setup.rx2("rank"),
+                setup.rx2("off"),
+                offset=setup.rx2("offset"),
+                E=penalty_space.rx2("E"),
+            )
+        lsp = self._base.log(initial_sp)
+        if n_theta:
+            lsp = self._base.c(r_family.rx2("getTheta")(), lsp)
+        fit_scale = (
+            1.0 if str(r_family.rx2("family")[0]) in {"poisson", "binomial"} else scale
+        )
+        if fit_scale <= 0:
+            if initial_scale is None:
+                null_fit = self._call_internal("get.null.coef", setup)
+                initial_scale = float(
+                    np.asarray(self._ro.r["/"](null_fit.rx2("null.scale"), 10))[0]
+                )
+            lsp = self._base.c(lsp, self._base.log(float(initial_scale)))
+        if old_beta is self._ro.NULL and null_coef:
+            old_beta = self._call_internal("get.null.coef", setup).rx2("null.coef")
+
+        trace_log: list[pd.DataFrame] = []
+        coefficient_log: list[np.ndarray] = []
+        fitted_log: list[np.ndarray] = []
+        start_log: list[np.ndarray] = []
+        theta_log: list[np.ndarray] = []
+        retained_log: list[bool] = []
+        initial_state_log: list[pd.DataFrame] = []
+        prefix_log: list[dict[str, Any]] = []
+        multiplier_log: list[float] = []
+        branch_log: list[str] = []
+        private = self._ro.r["new.env"](parent=self._ro.r["getNamespace"]("mgcv"))
+
+        def single(value: Any) -> float:
+            return float(np.asarray(value, dtype=np.float64).ravel()[0])
+
+        def copied(value: Any) -> np.ndarray:
+            return np.array(value, dtype=np.float64, copy=True).ravel(order="F")
+
+        def record_retained(value: Any) -> None:
+            retained_log.append(not bool(self._base.is_null(value)[0]))
+
+        def record_initial(
+            eta: Any,
+            mu: Any,
+            mustart: Any,
+            null_eta: Any,
+            etaold: Any,
+            current_offset: Any,
+            current_theta: Any,
+            response: Any,
+        ) -> None:
+            rows = len(response)
+            initial_state_log.append(
+                pd.DataFrame(
+                    {
+                        "call": np.full(rows, len(trace_log) + 1, dtype=np.int64),
+                        "row": np.arange(1, rows + 1),
+                        "retained": np.full(rows, retained_log[-1], dtype=bool),
+                        "eta": copied(eta),
+                        "mu": copied(mu),
+                        "mustart": copied(mustart),
+                        "null_eta": copied(null_eta),
+                        "etaold": copied(etaold),
+                        "offset": copied(current_offset),
+                        "theta": np.full(rows, single(current_theta)),
+                    }
+                )
+            )
+
+        def record_prefix(iteration: Any, pdev: Any, old_pdev: Any) -> None:
+            if int(np.asarray(iteration)[0]) != 1:
+                return
+            current = single(pdev)
+            previous = single(old_pdev)
+            r_minus = self._ro.r["-"]
+            r_add = self._ro.r["+"]
+            r_times = self._ro.r["*"]
+            r_threshold = r_times(
+                r_times(10, r_add(0.1, self._base.abs(old_pdev))),
+                self._base.sqrt(self._ro.r[".Machine"].rx2("double.eps")),
+            )
+            diverging = self._ro.r[">"](r_minus(pdev, old_pdev), r_threshold)
+            prefix_log.append(
+                {
+                    "call": len(trace_log) + 1,
+                    "pdev": current,
+                    "old_pdev": previous,
+                    "diverging": bool(diverging[0]),
+                }
+            )
+
+        fit4 = clone_function(
+            self._utils.getFromNamespace("gam.fit4", "mgcv"), environment=private
+        )
+        for path, anchor, symbols, callback, when in (
+            ((25,), ("coefold", "null.coef"), ("start",), record_retained, "before"),
+            (
+                (29,),
+                ("mu", "linkinv"),
+                (
+                    "eta",
+                    "mu",
+                    "mustart",
+                    "null.eta",
+                    "etaold",
+                    "offset",
+                    "theta",
+                    "y",
+                ),
+                record_initial,
+                "after",
+            ),
+            (
+                (37, 3, 18),
+                ("pdev", "penalty"),
+                ("iter", "pdev", "old.pdev"),
+                record_prefix,
+                "after",
+            ),
+        ):
+            if path not in find_call_paths(fit4, "<-", required_symbols=anchor):
+                raise RBridgeError(f"Pinned gam.fit4 trace anchor changed: {path!r}")
+            fit4 = instrument_function(
+                fit4,
+                path=path,
+                expected_head="<-",
+                capture_symbols=symbols,
+                callback=callback,
+                when=when,
+            )
+        private["gam.fit4"] = fit4
+        fit3 = clone_function(
+            self._utils.getFromNamespace("gam.fit3", "mgcv"), environment=private
+        )
+        callback_failure: list[Exception] = []
+
+        def record_fit3(**args: Any) -> Any:
+            try:
+                fit = fit3(**args)
+                r_field = self._ro.r["$"]
+                nsp = len(args["UrS"])
+                fit_family = self._ro.conversion.get_conversion().rpy2py(args["family"])
+                nth = (
+                    int(np.asarray(fit_family.rx2("n.theta"))[0])
+                    if bool(self._base.inherits(args["family"], "extended.family")[0])
+                    else 0
+                )
+                y_space = self._ro.r["["](
+                    args["U1"],
+                    rinterface.MissingArg,
+                    self._base.seq_len(
+                        int(self._base.ncol(args["U1"])[0])
+                        - int(np.asarray(args["Mp"])[0])
+                    ),
+                    drop=False,
+                )
+                y_beta = self._base.drop(
+                    multiply(self._base.t(y_space), fit.rx2("coefficients"))
+                )
+                rv_y = multiply(self._base.t(fit.rx2("rV")), y_space)
+                square = self._ro.r["^"]
+                bsb = np.asarray(
+                    [
+                        single(self._base.sum(square(multiply(y_beta, root), 2)))
+                        for root in args["UrS"]
+                    ]
+                )
+                trvs = np.asarray(
+                    [
+                        single(self._base.sum(square(multiply(rv_y, root), 2)))
+                        for root in args["UrS"]
+                    ]
+                )
+                packed_sp = copied(args["sp"])
+                estimate_scale = len(packed_sp) > nth + nsp
+                score_phi = (
+                    single(self._base.exp(self._utils.tail(args["sp"], 1)))
+                    if estimate_scale
+                    else single(args["scale"])
+                )
+                update_phi = (
+                    single(r_field(fit, "scale"))
+                    if estimate_scale
+                    else single(args["scale"])
+                )
+                theta_in = packed_sp[0] if nth else np.nan
+                theta_out = single(fit_family.rx2("getTheta")()) if nth else np.nan
+                number = len(trace_log) + 1
+                trace_log.append(
+                    pd.DataFrame(
+                        {
+                            "call": np.full(nsp, number, dtype=np.int64),
+                            "parameter": np.arange(1, nsp + 1),
+                            "log_smoothing": packed_sp[nth : nth + nsp],
+                            "ldetS1": copied(fit.rx2("ldetS1"))[:nsp],
+                            "bSb": bsb,
+                            "trVS": trvs,
+                            "score": np.full(nsp, single(fit.rx2("REML"))),
+                            "score_phi": np.full(nsp, score_phi),
+                            "update_phi": np.full(nsp, update_phi),
+                            "reported_phi": np.full(nsp, single(r_field(fit, "scale"))),
+                            "theta_input": np.full(nsp, theta_in),
+                            "theta_output": np.full(nsp, theta_out),
+                            "deviance": np.full(nsp, single(r_field(fit, "dev"))),
+                        }
+                    )
+                )
+                coefficient_log.append(copied(fit.rx2("coefficients")))
+                fitted_log.append(copied(fit.rx2("fitted.values")))
+                start_log.append(
+                    np.full(n_coef, np.nan)
+                    if bool(self._base.is_null(args.get("start", self._ro.NULL))[0])
+                    else copied(args["start"])
+                )
+                theta_log.append(np.asarray([theta_in, theta_out]))
+                return fit
+            except Exception as exc:
+                callback_failure.append(exc)
+                return self._ro.NULL
+
+        fit3_callback = make_r_callback(record_fit3)
+        private["gam.fit3"] = fit3_callback
+        efsudr = clone_function(
+            self._utils.getFromNamespace("efsudr", "mgcv"), environment=private
+        )
+        efsudr = self._instrument_efs_branches(
+            efsudr, multiplier_log, branch_log, instrument_function
+        )
+        call_args: dict[str, Any] = {
+            "x": r_x,
+            "y": setup.rx2("y"),
+            "lsp": lsp,
+            "Eb": penalty_space.rx2("E"),
+            "UrS": ur_s,
+            "weights": setup.rx2("w"),
+            "family": r_family,
+            "offset": setup.rx2("offset"),
+            "U1": u1,
+            "intercept": setup.rx2("intercept"),
+            "scale": fit_scale,
+            "Mp": mp,
+            "control": self._mgcv.gam_control(
+                efs_lspmax=resolved["efs_lspmax"], efs_tol=resolved["efs_tol"]
+            ),
+            "n.true": setup.rx2("n.true"),
+        }
+        if start is not self._ro.NULL:
+            call_args["start"] = start
+        if old_beta is not self._ro.NULL:
+            call_args["null.coef"] = old_beta
+        try:
+            fit = efsudr(**call_args)
+        except Exception:
+            if callback_failure:
+                raise RBridgeError(str(callback_failure[0])) from callback_failure[0]
+            raise
+        finally:
+            # Remove the R -> Python callback -> R private-environment cycle.
+            # The copied trace remains independent of these temporary bindings.
+            private["gam.fit3"] = self._ro.NULL
+            private["gam.fit4"] = self._ro.NULL
+        if callback_failure:
+            raise RBridgeError(str(callback_failure[0])) from callback_failure[0]
+        result = {
+            "statistics": pd.concat(trace_log, ignore_index=True),
+            "coefficients": np.vstack(coefficient_log),
+            "fitted_values": np.vstack(fitted_log),
+            "starts": np.vstack(start_log),
+            "theta_trace": np.vstack(theta_log),
+            "start_retained": np.asarray(retained_log, dtype=bool),
+            "initial_states": (
+                pd.concat(initial_state_log, ignore_index=True)
+                if initial_state_log
+                else pd.DataFrame(
+                    columns=(
+                        "call",
+                        "row",
+                        "retained",
+                        "eta",
+                        "mu",
+                        "mustart",
+                        "null_eta",
+                        "etaold",
+                        "offset",
+                        "theta",
+                    )
+                )
+            ),
+            "inner_prefix": pd.DataFrame(
+                prefix_log, columns=("call", "pdev", "old_pdev", "diverging")
+            ),
+            "multipliers": np.asarray(multiplier_log, dtype=np.float64),
+            "branches": branch_log,
+            "final_score": single(fit.rx2("REML")),
+            "selected_packed_sp": copied(fit.rx2("sp")),
+            "selected_coefficients": copied(fit.rx2("coefficients")),
+            "selected_fitted_values": copied(fit.rx2("fitted.values")),
+            "selected_deviance": single(self._ro.r["$"](fit, "dev")),
+            "initial_shift": 2.5,
+            "source_commit": _PINNED_MGCV_SOURCE_COMMIT,
+            "controls": resolved,
+            "provenance": self._efs_provenance(data),
+        }
+        return result
+
+    @staticmethod
+    def _instrument_efs_branches(
+        efsudr: Any,
+        multipliers: list[float],
+        branches: list[str],
+        instrument_function: Any,
+    ) -> Any:
+        """Record only actually entered pinned EFS branch and multiplier nodes."""
+        from tests.r_ast import find_call_paths
+
+        for path, head, symbols in (
+            ((5,), "<-", ("mult",)),
+            ((13, 3, 21, 1), "<=", ("old.reml",)),
+            ((13, 3, 21, 2, 1, 2, 6, 1), "<", ("fit2", "REML")),
+            ((13, 3, 21, 2, 1, 2, 6, 2, 3), "<-", ("mult",)),
+            ((13, 3, 21, 3, 1, 2, 1), "<-", ("mult",)),
+        ):
+            if path not in find_call_paths(efsudr, head, required_symbols=symbols):
+                raise RBridgeError(f"Pinned efsudr branch anchor changed: {path!r}")
+        anchors = (
+            (
+                (5,),
+                "<-",
+                ("mult",),
+                lambda value: multipliers.append(float(value[0])),
+                "after",
+            ),
+            (
+                (13, 3, 21, 2),
+                "{",
+                (),
+                lambda: branches.append("improvement"),
+                "before",
+            ),
+            (
+                (13, 3, 21, 2, 1, 2, 6, 2),
+                "{",
+                (),
+                lambda: branches.append("extension_won"),
+                "before",
+            ),
+            (
+                (13, 3, 21, 2, 1, 2, 6, 3),
+                "{",
+                (),
+                lambda: branches.append("extension_lost"),
+                "before",
+            ),
+            (
+                (13, 3, 21, 3),
+                "{",
+                (),
+                lambda: branches.append("worsening"),
+                "before",
+            ),
+            (
+                (13, 3, 21, 2, 1, 2, 6, 2, 3),
+                "<-",
+                ("mult",),
+                lambda value: multipliers.append(float(value[0])),
+                "after",
+            ),
+            (
+                (13, 3, 21, 3, 1, 2, 1),
+                "<-",
+                ("mult",),
+                lambda value: multipliers.append(float(value[0])),
+                "after",
+            ),
+        )
+        # Deepest first so each pinned path still refers to the original AST.
+        for path, head, captures, callback, when in sorted(
+            anchors, key=lambda item: len(item[0]), reverse=True
+        ):
+            efsudr = instrument_function(
+                efsudr,
+                path=path,
+                expected_head=head,
+                capture_symbols=captures,
+                callback=callback,
+                when=when,
+            )
+        return efsudr
 
     def _fit_rpy2(
         self,
