@@ -92,12 +92,20 @@ class RandomEffectSmooth(Smooth):
         self.null_space_dim = 0
         self.rank = k
 
-        # Penalty = identity, then normalize
-        # ||I||_1 is one, so smoothCon normalization leaves this identity
-        # unchanged. Keep only its scalar representation; build_penalty_matrices
-        # creates a short-lived compatibility matrix for constraint setup.
-        self._s_scale = 1.0
-        self._penalty_scale = 1.0
+        # Penalty = identity, then apply smoothCon normalization.  Although
+        # ||I||_1 is one, smoothCon divides it by ||X||_inf^2 and then divides
+        # S by that scale: the retained symbolic identity therefore has scale
+        # ||X||_inf^2.  This is one for ordinary factor effects but is not one
+        # for numeric-by-factor interactions.
+        max_x_sq = np.linalg.norm(X, ord=np.inf) ** 2
+        if max_x_sq > 0:
+            self._s_scale = 1.0 / max_x_sq
+            self._penalty_scale = max_x_sq
+        else:
+            # smoothCon returns the unscaled penalty when the design has no
+            # magnitude. Keep its symbolic identity representation finite.
+            self._s_scale = 1.0
+            self._penalty_scale = 1.0
 
         self._is_setup = True
 
