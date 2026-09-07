@@ -21,6 +21,7 @@ import pytest
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import (
     _W_MAX,
@@ -574,8 +575,12 @@ class TestVsR:
         """Compare PIRLS result against R reference for coefficients,
         deviance, and fitted values."""
         coefs = to_numpy(result.coefficients)
-        if fd is not None and fd.repara_D is not None:
-            coefs = to_numpy(fd.repara_D) @ coefs
+        if fd is not None:
+            coefs = to_numpy(
+                penalty_ops.transform_coefficients(
+                    fd.penalty_structure, result.coefficients
+                )
+            )
         np.testing.assert_allclose(
             coefs,
             r_ref["coefficients"],
@@ -694,8 +699,11 @@ class TestInverseLinkGammaValidDomain:
 
         mu = to_numpy(result.mu)
         coefs = to_numpy(result.coefficients)
-        if fd.repara_D is not None:
-            coefs = to_numpy(fd.repara_D) @ coefs
+        coefs = to_numpy(
+            penalty_ops.transform_coefficients(
+                fd.penalty_structure, result.coefficients
+            )
+        )
 
         collector = _AssertCollector()
         collector.check(

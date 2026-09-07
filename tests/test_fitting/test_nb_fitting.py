@@ -25,6 +25,7 @@ import pytest
 from jaxgam import GAM
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Poisson
+from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.newton import NewtonResult, newton_optimize
 from tests.helpers import (
@@ -47,10 +48,11 @@ jax.config.update("jax_enable_x64", True)
 
 def _back_transform_coefs(result: NewtonResult, fd: FittingData) -> np.ndarray:
     """Back-transform coefficients from Sl.setup reparameterized space."""
-    coefs = np.asarray(result.pirls_result.coefficients)
-    if fd.repara_D is not None:
-        coefs = np.asarray(fd.repara_D) @ coefs
-    return coefs
+    return np.asarray(
+        penalty_ops.transform_coefficients(
+            fd.penalty_structure, result.pirls_result.coefficients
+        )
+    )
 
 
 def _make_poisson_data(
