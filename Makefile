@@ -72,3 +72,7 @@ pre-commit: ## run pre-commit on all files
 .PHONY: pre-commit-install
 pre-commit-install: ## install pre-commit hooks
 	$(UV) run pre-commit install
+
+.PHONY: benchmark-nb-lgamma
+benchmark-nb-lgamma: ## benchmark NB lgamma derivative prefix kernel
+	$(UV) run python scripts/benchmark_nb_lgamma_derivatives.py

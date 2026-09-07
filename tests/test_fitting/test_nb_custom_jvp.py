@@ -50,6 +50,11 @@ def _build_diff_score_kwargs(fd: FittingData, joint_theta: bool):
         "penalty_structure": fd.penalty_structure,
         "singleton_eig_constants": fd.singleton_eig_constants,
         "multi_block_proj_S": fd.multi_block_proj_S,
+        "count_indices": (
+            fd.count_prefix_plan.indices
+            if fd.count_prefix_plan is not None
+            else jnp.zeros(fd.n_obs, dtype=jnp.int32)
+        ),
         "family": fd.family,
         "pirls_tol": 1e-8,
         "joint_theta": joint_theta,
@@ -62,6 +67,11 @@ def _build_diff_score_kwargs(fd: FittingData, joint_theta: bool):
         "multi_block_ranks": fd.multi_block_ranks,
         "p": fd.n_coef,
         "max_y": fd.max_y,
+        "integer_counts": (
+            fd.count_prefix_plan.integer_counts
+            if fd.count_prefix_plan is not None
+            else True
+        ),
     }
 
 
