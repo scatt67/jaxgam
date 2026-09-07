@@ -22,7 +22,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam import api as api_module
+from jaxgam.api import GAM
 from jaxgam.families.standard import Gaussian
+from jaxgam.fitting import data as data_module
+from jaxgam.fitting import initialization as initialization_module
+from jaxgam.fitting import newton as newton_module
 from jaxgam.fitting.data import FittingData, _build_block_metadata
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.penalty_ops import (
@@ -251,6 +256,80 @@ class TestFromSetupBasic:
             err_msg="weights must match after transfer",
         )
 
+    def test_beta_init_is_in_fitting_coordinates(self, gaussian_setup):
+        """The boundary caches the one start used by PIRLS and REML scoring."""
+        family = Gaussian()
+        fd = FittingData.from_setup(gaussian_setup, family)
+
+        expected = initialize_beta(
+            np.asarray(fd.X),
+            gaussian_setup.y,
+            gaussian_setup.weights,
+            family,
+            gaussian_setup.offset,
+        )
+
+        assert fd.beta_init is not None
+        np.testing.assert_allclose(
+            to_numpy(fd.beta_init),
+            to_numpy(expected),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_weighted_crossproduct_diag_preserves_weighting_order(
+        self, monkeypatch
+    ) -> None:
+        """Batching keeps the legacy sqrt-weighting scale behavior."""
+        monkeypatch.setattr(data_module, "_INITIAL_SP_BATCH_ROWS", 3)
+        ordinary_X = np.arange(24, dtype=float).reshape(8, 3) / 7
+        ordinary_w = np.linspace(0.2, 1.6, len(ordinary_X))
+        cases = [
+            (ordinary_X, ordinary_w),
+            (np.full((8, 2), 1e200), np.full(8, 1e-300)),
+            (np.full((8, 2), 1e-200), np.full(8, 1e300)),
+        ]
+
+        for X, weights in cases:
+            expected = np.sum((np.sqrt(weights)[:, None] * X) ** 2, axis=0)
+            actual = FittingData._weighted_crossproduct_diag(X, weights)
+            np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=0.0)
+
+    @pytest.mark.parametrize(
+        ("family", "sp", "y"),
+        [
+            ("gaussian", None, np.sin(np.linspace(0.01, 0.99, 32) * 2 * np.pi)),
+            ("poisson", [1.0], np.resize([0, 1, 2, 3], 32)),
+        ],
+    )
+    def test_gam_fit_computes_cpu_start_once(self, monkeypatch, family, sp, y) -> None:
+        """Gaussian Newton and Poisson fixed-sp reuse the boundary start."""
+        calls = 0
+        original = initialization_module.initialize_beta_cpu
+
+        def recorded_initialize(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(data_module, "initialize_beta_cpu", recorded_initialize)
+
+        def fallback_called(*_args, **_kwargs):
+            raise AssertionError("GAM fit recomputed the cached CPU initialization")
+
+        monkeypatch.setattr(api_module, "initialize_beta", fallback_called)
+        monkeypatch.setattr(newton_module, "initialize_beta", fallback_called)
+        data = pd.DataFrame(
+            {
+                "x": np.linspace(0.01, 0.99, 32),
+                "y": y,
+            }
+        )
+
+        GAM("y ~ s(x, bs='cr', k=6)", family=family, sp=sp).fit(data)
+
+        assert calls == 1
+
 
 class TestFromSetupOffset:
     """Test offset handling in from_setup."""
@@ -437,18 +516,15 @@ class TestEndToEnd:
 
         fd = FittingData.from_setup(setup, family)
 
-        # Initialize beta (Phase 1 → Phase 2 boundary)
-        beta_init = initialize_beta(
-            setup.X, setup.y, setup.weights, family, setup.offset
-        )
-        beta_jax = to_jax(np.asarray(beta_init))
+        # The Phase 1→2 boundary owns a single fitting-coordinate start.
+        assert fd.beta_init is not None
 
         # Compute S_lambda from initial sp
         S_combined = fd.S_lambda(fd.log_lambda_init)
 
         # Run PIRLS
         result = pirls_loop(
-            fd.X, fd.y, beta_jax, S_combined, fd.family, fd.wt, fd.offset
+            fd.X, fd.y, fd.beta_init, S_combined, fd.family, fd.wt, fd.offset
         )
 
         assert result.converged

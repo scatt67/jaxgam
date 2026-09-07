@@ -19,6 +19,7 @@ from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
 from jaxgam.smooths.gp_kernels import GPKernel, gp_kernel_registry
 from jaxgam.smooths.utils import (
+    DISTANCE_BATCH_ROWS,
     _compute_distance_matrix,
     _get_unique_rows,
     _slanczos,
@@ -163,10 +164,18 @@ class GaussianProcessSmooth(Smooth):
     def _build_design(
         self, x_centered: npt.NDArray[np.floating]
     ) -> npt.NDArray[np.floating]:
-        E_xn, _ = self._gp_E(x_centered, self._knt, resolved_rho=self._resolved_rho)
-        pen_block = E_xn @ self._UZ
-        null_block = self._gp_T(x_centered)
-        return np.hstack([pen_block, null_block])
+        n_rows = x_centered.shape[0]
+        X = np.empty((n_rows, self.n_coefs), dtype=float)
+        for start in range(0, n_rows, DISTANCE_BATCH_ROWS):
+            stop = min(start + DISTANCE_BATCH_ROWS, n_rows)
+            rows = x_centered[start:stop]
+            distances = _compute_distance_matrix(rows, self._knt)
+            E_rows = self._kernel.evaluate(
+                distances / self._resolved_rho, power=self._power
+            )
+            X[start:stop, : self.rank] = E_rows @ self._UZ
+            X[start:stop, self.rank :] = self._gp_T(rows)
+        return X
 
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
         for v in self.spec.variables:

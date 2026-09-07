@@ -356,13 +356,15 @@ def _fit_fixed_sp(
     S_lam = fd.S_lambda(log_lambda)
 
     # Initialize beta and run PIRLS
-    beta_init = initialize_beta(
-        np.asarray(fd.X),
-        np.asarray(fd.y),
-        np.asarray(fd.wt),
-        fd.family,
-        np.asarray(fd.offset) if fd.offset is not None else None,
-    )
+    beta_init = fd.beta_init
+    if beta_init is None:
+        beta_init = initialize_beta(
+            np.asarray(fd.X),
+            np.asarray(fd.y),
+            np.asarray(fd.wt),
+            fd.family,
+            np.asarray(fd.offset) if fd.offset is not None else None,
+        )
 
     log_theta = None
     if fd.family.n_theta > 0:

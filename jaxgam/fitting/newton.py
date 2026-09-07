@@ -822,8 +822,10 @@ class NewtonOptimizer:
         return jnp.clip(params, -lsp_max, lsp_max)
 
     def _initial_beta(self) -> jax.Array:
-        """Compute initial beta via Phase 1 initialization (NumPy -> JAX)."""
+        """Return the boundary-cached start, with a legacy fixture fallback."""
         fd = self._fd
+        if fd.beta_init is not None:
+            return fd.beta_init
         offset_np = np.asarray(fd.offset) if fd.offset is not None else None
         return initialize_beta(
             np.asarray(fd.X),
