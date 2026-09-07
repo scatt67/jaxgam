@@ -22,7 +22,11 @@ from jaxgam.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
 )
-from jaxgam.smooths.constraints import CoefficientMap, TermBlock
+from jaxgam.smooths.constraints import (
+    CoefficientMap,
+    TermBlock,
+    _apply_householder_qt,
+)
 from jaxgam.smooths.gaussian_process import GaussianProcessSmooth
 from jaxgam.smooths.tensor import TensorProductSmooth
 from jaxgam.smooths.tprs import TPRSSmooth
@@ -295,6 +299,108 @@ class TestFixDependence:
 
         assert ind_tight is None
         assert ind_loose is not None
+
+    def test_packed_reflectors_match_full_qt(self):
+        """Packed reflectors reproduce the full-Q residual coordinates."""
+        from scipy import linalg
+
+        rng = np.random.default_rng(SEED)
+        X1 = rng.standard_normal((137, 9))
+        X2 = rng.standard_normal((137, 6))
+
+        (packed_qr, tau), _, _ = linalg.qr(X1, pivoting=True, mode="raw")
+        QtX2_packed = _apply_householder_qt(packed_qr, tau, X2)
+        Q_full, _, _ = linalg.qr(X1, pivoting=True, mode="full")
+
+        reflector_error = np.linalg.norm(QtX2_packed - Q_full.T @ X2)
+        assert reflector_error < 1e-12
+
+    def test_tall_input_uses_raw_qr_without_full_q(self, monkeypatch):
+        """Tall dependence checks never request SciPy's full Q factor."""
+        from jaxgam.smooths import constraints
+
+        rng = np.random.default_rng(SEED)
+        X1 = rng.standard_normal((20_000, 3))
+        X2 = np.column_stack([X1 @ rng.standard_normal(3), rng.standard_normal(20_000)])
+        qr = constraints.linalg.qr
+        modes: list[str | None] = []
+
+        def qr_without_full_q(*args, **kwargs):
+            mode = kwargs.get("mode")
+            modes.append(mode)
+            if mode in (None, "full"):
+                raise AssertionError("fix_dependence requested a full Q factor")
+            return qr(*args, **kwargs)
+
+        monkeypatch.setattr(constraints.linalg, "qr", qr_without_full_q)
+
+        assert CoefficientMap.fix_dependence(X1, X2) == [0]
+        assert modes == ["raw", "economic"]
+
+    def test_rank_deficient_reference_matches_full_q_algorithm(self):
+        """Rank-deficient X1 retains the old residual-coordinate semantics."""
+        from scipy import linalg
+
+        rng = np.random.default_rng(SEED)
+        X_base = rng.standard_normal((120, 3))
+        X1 = np.column_stack([X_base, X_base[:, 1]])
+        X2 = np.column_stack([X1 @ rng.standard_normal(4), rng.standard_normal(120)])
+
+        Q_full, R1, _ = linalg.qr(X1, pivoting=True, mode="full")
+        R11 = abs(R1[0, 0])
+        residual = (Q_full.T @ X2)[X1.shape[1] :, :]
+        _, R2, piv2 = linalg.qr(residual, pivoting=True, mode="economic")
+        r_dim = min(residual.shape)
+        r0 = r_dim
+        while r0 > 0:
+            block = R2[r0 - 1 : r_dim, r0 - 1 : r_dim]
+            if np.mean(np.abs(block)) >= R11 * np.finfo(float).eps ** 0.5:
+                break
+            r0 -= 1
+        expected = None if r0 >= r_dim else [int(piv2[j]) for j in range(r0, r_dim)]
+
+        actual = CoefficientMap.fix_dependence(X1, X2)
+        assert (actual is None) == (expected is None)
+        if actual is not None:
+            assert set(actual) == set(expected)
+
+    def test_wide_reference_and_empty_candidate_columns_return_none(self):
+        """Wide X1 and an X2 with no columns have empty residual QR blocks."""
+        rng = np.random.default_rng(SEED)
+        X1_wide = rng.standard_normal((4, 7))
+        X2 = rng.standard_normal((4, 3))
+
+        assert CoefficientMap.fix_dependence(X1_wide, X2) is None
+        assert CoefficientMap.fix_dependence(X2, np.empty((4, 0))) is None
+
+    def test_mixed_float_inputs_detect_dependence(self):
+        """Mixed float32/float64 inputs share one LAPACK reflector dtype."""
+        rng = np.random.default_rng(SEED)
+        X1 = rng.standard_normal((80, 4)).astype(np.float32)
+        X2 = np.column_stack([X1 @ rng.standard_normal(4), rng.standard_normal(80)])
+
+        assert CoefficientMap.fix_dependence(X1, X2.astype(np.float64)) == [0]
+
+    @pytest.mark.parametrize("failure_at", ["query", "execution"])
+    def test_householder_lapack_failures_are_reported(self, monkeypatch, failure_at):
+        """LAPACK status codes from both ormqr calls are not ignored."""
+        from jaxgam.smooths import constraints
+
+        packed_qr = np.eye(3)
+        tau = np.ones(3)
+        matrix = np.ones((3, 2))
+
+        def failing_ormqr(_side, _trans, _packed, _tau, right_hand_side, lwork):
+            if failure_at == "query" and lwork == -1:
+                return right_hand_side, np.array([1.0]), -5
+            if lwork == -1:
+                return right_hand_side, np.array([1.0]), 0
+            return right_hand_side, np.array([1.0]), 3
+
+        monkeypatch.setattr(constraints, "get_lapack_funcs", lambda *_: failing_ormqr)
+
+        with pytest.raises(np.linalg.LinAlgError, match="ormqr"):
+            _apply_householder_qt(packed_qr, tau, matrix)
 
 
 # ===========================================================================
@@ -749,6 +855,39 @@ class TestRComparison:
         if not RBridge.available():
             pytest.skip("R with mgcv not available")
         return RBridge()
+
+    @pytest.mark.parametrize("mode", ["subprocess", "rpy2"])
+    def test_fix_dependence_matches_pinned_mgcv(self, mode):
+        """Direct packed-QR results agree with mgcv in both bridge modes."""
+        from tests.r_bridge import RBridge
+
+        if mode == "rpy2":
+            pytest.importorskip("rpy2.robjects")
+        ok, reason = RBridge.check_versions()
+        if not ok:
+            pytest.skip(f"R version mismatch: {reason}")
+
+        rng = np.random.default_rng(SEED)
+        X1 = rng.standard_normal((100, 4))
+        X2 = np.column_stack(
+            [
+                rng.standard_normal(100),
+                X1 @ rng.standard_normal(4),
+                rng.standard_normal(100),
+            ]
+        )
+
+        bridge = RBridge(mode=mode)
+        py_ind = CoefficientMap.fix_dependence(X1, X2)
+        r_ind = bridge.fix_dependence(X1, X2)
+
+        assert py_ind is not None
+        assert r_ind is not None
+        assert set(py_ind) == set(r_ind)
+
+        X2_independent = rng.standard_normal((100, 3))
+        assert CoefficientMap.fix_dependence(X1, X2_independent) is None
+        assert bridge.fix_dependence(X1, X2_independent) is None
 
     def _get_smoothcon_raw_and_absorbed(self, bridge):
         """Call R's smoothCon with absorb.cons=FALSE and TRUE."""

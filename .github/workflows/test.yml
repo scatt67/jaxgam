@@ -2,7 +2,6 @@ name: Tests
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -39,9 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --extra dev
-      - run: uv run ruff check
-      - run: uv run ruff format --check
-      - run: uv run vulture jaxgam --min-confidence 80
+      - run: make lint
 
   test-full:
     runs-on: ubuntu-latest
@@ -58,9 +55,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Run tests with coverage
-        run: |
-          docker run --rm -v ${{ github.workspace }}/coverage:/coverage jaxgam-test:ci \
-            uv run pytest --tb=short --cov=jaxgam --cov-branch --cov-report=xml:/coverage/coverage.xml
+        run: make test-cov-ci DOCKER_TAG=ci
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:

@@ -50,6 +50,13 @@ test-cov: docker-build ## run tests with coverage in Docker
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
 		uv run pytest --cov --cov-report=term-missing --cov-fail-under=80
 
+.PHONY: test-cov-ci
+test-cov-ci: ## run CI coverage using an already-built Docker image
+	mkdir -p coverage
+	docker run --rm -v $(CURDIR)/coverage:/coverage $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest --tb=short --cov=jaxgam --cov-branch \
+		--cov-report=xml:/coverage/coverage.xml
+
 .PHONY: colima-start
 colima-start: ## start colima VM (no-op if already running)
 	@colima status 2>/dev/null || colima start --cpu $(COLIMA_CPU) --memory $(COLIMA_MEMORY)
