@@ -36,7 +36,11 @@ import jax.scipy.special as jsp
 import numpy as np
 from scipy.special import gammaln
 
-from jaxgam.families.base import NON_NEGATIVE
+from jaxgam.families.base import (
+    NON_NEGATIVE,
+    FamilyExecutionCapabilities,
+    FamilyParameterSnapshot,
+)
 from jaxgam.families.extended import ExtendedFamily
 from jaxgam.jax_utils import array_module
 from jaxgam.links.links import Link, LogLink
@@ -133,6 +137,27 @@ class NegativeBinomial(ExtendedFamily):
             return np.exp(self._log_theta)
         return self._log_theta.copy()
 
+    def execution_capabilities(self) -> FamilyExecutionCapabilities:
+        """Describe NB's explicit-theta, observed-information primitives."""
+        return FamilyExecutionCapabilities(
+            row_separable=True,
+            fisher_working_system=True,
+            observed_information=True,
+            direct_deviance=True,
+            differentiable_deviance=True,
+            saturated_loglikelihood=True,
+            dynamic_theta=self.n_theta > 0,
+            dynamic_phi=False,
+        )
+
+    def execution_parameter_snapshot(self) -> FamilyParameterSnapshot:
+        """Freeze theta mode/value so launches cannot observe later mutation."""
+        return FamilyParameterSnapshot(
+            theta_mode="estimated" if self.n_theta > 0 else "fixed",
+            log_theta=tuple(float(value) for value in self._log_theta),
+            phi_mode="known",
+        )
+
     def put_theta(self, log_theta: np.ndarray) -> None:
         """Set log(theta) vector. Called by Newton after each accepted step."""
         self._log_theta = np.asarray(log_theta, dtype=np.float64).reshape(
@@ -203,6 +228,22 @@ class NegativeBinomial(ExtendedFamily):
         )
         d = xp.maximum(d, 0.0)
         return xp.sign(y - mu_safe) * xp.sqrt(d)
+
+    def deviance_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Direct NB deviance at the stored theta for non-JIT callers."""
+        return self.deviance_contributions_for_parameters(
+            y, mu, wt, jnp.asarray(self._log_theta)
+        )
+
+    def deviance_derivative_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Smooth NB deviance at stored theta for observed-information AD."""
+        return self.deviance_derivative_contributions_for_parameters(
+            y, mu, wt, jnp.asarray(self._log_theta)
+        )
 
     def aic(
         self,
@@ -279,6 +320,18 @@ class NegativeBinomial(ExtendedFamily):
         theta = jnp.exp(log_theta[0])
         return _saturated_loglik_jax(y, wt, theta, max_y, count_indices, integer_counts)
 
+    def saturated_loglikelihood_for_parameters(
+        self,
+        y: np.ndarray,
+        wt: np.ndarray,
+        scale: float,
+        log_theta: np.ndarray,
+        *,
+        max_y: int = 0,
+    ):
+        """Evaluate saturated likelihood from explicit, immutable theta data."""
+        return self.saturated_loglik_theta(y, wt, scale, log_theta, max_y=max_y)
+
     def deviance_fn(self, y: np.ndarray, wt: np.ndarray):
         """Return pure JAX function ``D(eta, log_theta_vec) -> scalar``.
 
@@ -327,6 +380,98 @@ class NegativeBinomial(ExtendedFamily):
             return wt / (V * g_prime**2)
 
         return _ww
+
+    def working_weights_for_parameters(
+        self,
+        mu: np.ndarray,  # noqa: ARG002 - eta is the stable factory input
+        eta: np.ndarray,
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Use explicit theta; never read mutable ``_log_theta`` in a kernel."""
+        return self.working_weights_fn(wt)(eta, log_theta)
+
+    def deviance_contributions_for_parameters(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Direct NB deviance at explicit theta without residual square roots."""
+        xp = array_module(y)
+        theta = xp.exp(log_theta[0])
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_safe = xp.where(y > 0, y, 1.0)
+        contribution = (
+            2.0
+            * wt
+            * (
+                y * xp.log(y_safe / mu_safe)
+                - (y + theta) * xp.log1p((y - mu_safe) / (mu_safe + theta))
+            )
+        )
+        return xp.maximum(contribution, 0.0)
+
+    def deviance_derivative_contributions_for_parameters(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Interior-domain NB deviance with no reporting clamp kink."""
+        xp = array_module(y)
+        theta = xp.exp(log_theta[0])
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_safe = xp.where(y > 0, y, 1.0)
+        return (
+            2.0
+            * wt
+            * (
+                y * xp.log(y_safe / mu_safe)
+                - (y + theta) * xp.log1p((y - mu_safe) / (mu_safe + theta))
+            )
+        )
+
+    def execution_summary_from_batch(
+        self, y: np.ndarray, wt: np.ndarray, valid: np.ndarray
+    ) -> tuple[np.ndarray, ...]:
+        """Append bounded count-prefix planning metadata to the base summary."""
+        xp = array_module(y)
+        base = super().execution_summary_from_batch(y, wt, valid)
+        real = valid & xp.isfinite(y)
+        safe_y = xp.where(real, y, 0.0)
+        return (*base, xp.max(safe_y), xp.all(~valid | (y == xp.floor(y))))
+
+    def merge_execution_summaries(
+        self, left: tuple[np.ndarray, ...], right: tuple[np.ndarray, ...]
+    ) -> tuple[np.ndarray, ...]:
+        """Merge additive base leaves plus max/all NB count metadata."""
+        if len(left) != 6 or len(right) != 6:
+            raise ValueError("NB execution summaries require six leaves.")
+        xp = array_module(left[4])
+        return (
+            left[0] + right[0],
+            left[1] + right[1],
+            left[2] + right[2],
+            xp.logical_and(left[3], right[3]),
+            xp.maximum(left[4], right[4]),
+            xp.logical_and(left[5], right[5]),
+        )
+
+    def finalize_execution_summary(
+        self, summary: tuple[float, ...]
+    ) -> dict[str, float]:
+        """Expose count-prefix metadata without retaining observations."""
+        if len(summary) != 6:
+            raise ValueError("NB execution summaries require six leaves.")
+        result = super().finalize_execution_summary(summary[:4])
+        result.update(
+            max_count=float(summary[4]),
+            integer_counts=bool(summary[5]),
+        )
+        return result
 
     def __repr__(self) -> str:
         theta_val = float(np.exp(self._log_theta[0]))
