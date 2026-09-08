@@ -117,22 +117,334 @@ def test_fixed_nb_efs_requires_extended_initial_sp_and_returns_fixed_theta() -> 
     assert np.all(np.isfinite(np.asarray(result.pirls_result.XtWX_fisher)))
 
 
-@pytest.mark.parametrize(
-    "family",
-    [
-        NegativeBinomial(theta=2.7),
-        NegativeBinomial(theta=2.7, fixed=True, link="identity"),
-    ],
-)
-def test_known_scale_efs_rejects_nonfixed_or_nonlog_nb(family) -> None:
+def test_known_scale_efs_rejects_nonlog_nb() -> None:
     data = _fixed_nb_data(n=40)
+    family = NegativeBinomial(theta=2.7, fixed=True, link="identity")
     setup, fd = _build("y ~ s(x, bs='cr', k=5)", data, family)
-    with pytest.raises(NotImplementedError, match="fixed-theta NB/log"):
+    with pytest.raises(NotImplementedError, match="NB/log"):
         dense_efs_known_scale(
             fd,
             initial_log_lambda=efs_initial_log_lambda(setup, family),
             control=EFSControl(outer_limit=1),
         )
+
+
+def test_estimated_nb_efs_requires_explicit_staged_start_contract() -> None:
+    data = _fixed_nb_data(n=40)
+    family = NegativeBinomial(theta=2.7)
+    setup, fd = _build("y ~ s(x, bs='cr', k=5)", data, family)
+    initial = efs_initial_log_lambda(setup, family)
+    with pytest.raises(ValueError, match="explicit beta_init"):
+        dense_efs_known_scale(
+            fd, initial_log_lambda=initial, control=EFSControl(outer_limit=1)
+        )
+    with pytest.raises(ValueError, match="beta_old_init"):
+        dense_efs_known_scale(
+            fd,
+            initial_log_lambda=initial,
+            beta_init=jax.numpy.zeros((fd.n_coef,)),
+            control=EFSControl(outer_limit=1),
+        )
+
+
+def test_estimated_nb_efs_keeps_theta_explicit_and_family_unchanged() -> None:
+    data = _fixed_nb_data(n=48)
+    family = NegativeBinomial(theta=2.7)
+    setup, fd = _build(
+        "y ~ s(x, bs='cr', k=6)",
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    beta0 = jax.numpy.zeros((fd.n_coef,), dtype=fd.X.dtype)
+    theta0 = jax.numpy.asarray(family.get_theta(transformed=False))
+    result = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=efs_initial_log_lambda(setup, family),
+        initial_log_theta=theta0,
+        beta_init=beta0,
+        beta_old_init=beta0,
+        control=EFSControl(outer_limit=4),
+    )
+    assert result.theta is not None
+    assert np.isfinite(result.theta)
+    assert result.scale == 1.0
+    np.testing.assert_array_equal(
+        family.get_theta(transformed=False), np.asarray(theta0)
+    )
+    assert np.all(np.isfinite(np.asarray(result.pirls_result.XtWX_fisher)))
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_pinned_nb_efs_trace_pins_explicit_theta_and_old_state_starts() -> None:
+    """The private EFS trace records selected theta, not mutable family residue."""
+    data = _fixed_nb_data(n=48)
+    family = NegativeBinomial(theta=2.7)
+    formula = "y ~ s(x, bs='cr', k=6)"
+    setup, fd = _build(
+        formula,
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    beta0 = jax.numpy.zeros((fd.n_coef,), dtype=fd.X.dtype)
+    theta0 = jax.numpy.asarray(family.get_theta(transformed=False))
+    rho = efs_initial_log_lambda(setup, family)
+    r_trace = RBridge(mode="subprocess").efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+        scale=1.0,
+        initial_log_theta=float(np.asarray(theta0[0])),
+        initial_beta=np.asarray(beta0),
+        beta_old_init=np.asarray(beta0),
+        controls={"efs_tol": 1e-12},
+    )
+    j_initial = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        rho + 2.5,
+        beta0,
+        EFSControl(),
+        log_theta_start=theta0,
+        beta_old_init=beta0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(j_initial.pirls_result.mu),
+        r_trace["fitted_values"][0],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    assert j_initial.log_theta is not None
+    np.testing.assert_allclose(
+        np.asarray(j_initial.log_theta[0]),
+        r_trace["theta_trace"][0, 1],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    starts = r_trace["starts"]
+    theta_trace = r_trace["theta_trace"]
+    np.testing.assert_allclose(starts[0], beta0, rtol=STRICT.rtol, atol=STRICT.atol)
+    np.testing.assert_allclose(
+        theta_trace[0, 0], theta0[0], rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    # Away from an extension/contraction, the pinned private trace advances
+    # both warm components from the immediately selected fit.
+    np.testing.assert_allclose(starts[1:], r_trace["coefficients"][:-1])
+    np.testing.assert_allclose(theta_trace[1:, 0], theta_trace[:-1, 1])
+
+
+def test_estimated_nb_controller_keeps_old_beta_and_theta_for_all_trials(
+    monkeypatch,
+) -> None:
+    """Candidate, extension, and contraction cannot leak a trial theta."""
+    data = _fixed_nb_data(n=48)
+    family = NegativeBinomial(theta=2.7)
+    setup, fd = _build(
+        "y ~ s(x, bs='cr', k=6)",
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    beta0 = jax.numpy.zeros((fd.n_coef,), dtype=fd.X.dtype)
+    theta0 = jax.numpy.asarray(family.get_theta(transformed=False))
+    rho = efs_initial_log_lambda(setup, family)
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        rho + 2.5,
+        beta0,
+        EFSControl(),
+        log_theta_start=theta0,
+        beta_old_init=beta0,
+    )
+    calls: list[tuple[np.ndarray, np.ndarray]] = []
+    scores = iter([10.0, 9.0, 8.0, 11.0, 10.5])
+    output_thetas = iter([0.1, 0.2, 0.3, 0.4, 0.5])
+
+    def scripted(_fd, _plan, rho, beta, _control, **kwargs):
+        incoming_theta = kwargs["log_theta_start"]
+        calls.append((np.asarray(beta), np.asarray(incoming_theta)))
+        number = len(calls)
+        return replace(
+            base,
+            log_lambda=rho,
+            pirls_result=replace(
+                base.pirls_result,
+                coefficients=jax.numpy.full_like(beta, number),
+                deviance=jax.numpy.asarray(20.0 + number),
+            ),
+            score=jax.numpy.asarray(next(scores)),
+            log_theta=jax.numpy.asarray([next(output_thetas)]),
+            theta_status=jax.numpy.asarray(0),
+            valid=True,
+            inner_converged=True,
+        )
+
+    monkeypatch.setattr(execution_efs, "_fit_state", scripted)
+    monkeypatch.setattr(
+        execution_efs,
+        "efs_raw_update",
+        lambda rho, _stats, phi, multiplier, _cap: EFSRawUpdate(
+            jax.numpy.ones_like(rho),
+            jax.numpy.exp(jax.numpy.full_like(rho, 0.01)),
+            rho + 0.01 * multiplier,
+            phi == 1,
+        ),
+    )
+    result = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=rho,
+        initial_log_theta=theta0,
+        beta_init=beta0,
+        beta_old_init=beta0,
+        control=EFSControl(outer_limit=2),
+    )
+    assert len(calls) == 5
+    np.testing.assert_array_equal(calls[1][0], np.full(fd.n_coef, 1.0))
+    np.testing.assert_array_equal(calls[2][0], np.full(fd.n_coef, 1.0))
+    np.testing.assert_array_equal(calls[3][0], np.full(fd.n_coef, 3.0))
+    np.testing.assert_array_equal(calls[4][0], np.full(fd.n_coef, 3.0))
+    np.testing.assert_allclose(
+        [call[1][0] for call in calls], [theta0[0], 0.1, 0.1, 0.3, 0.3]
+    )
+    assert result.theta == pytest.approx(np.exp(0.5))
+    assert result.scale == 1.0
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_estimated_nb_efs_rejects_the_pinned_r_start_reset_path() -> None:
+    """Do not pretend a discarded R warm start is a valid EFS5c start."""
+    data = _fixed_nb_data(n=48)
+    family = NegativeBinomial(theta=2.7)
+    formula = "y ~ s(x, bs='cr', k=6)"
+    setup, fd = _build(
+        formula,
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    beta_old = jax.numpy.zeros((fd.n_coef,), dtype=fd.X.dtype)
+    beta_bad = jax.numpy.full((fd.n_coef,), 30.0, dtype=fd.X.dtype)
+    theta0 = jax.numpy.asarray(family.get_theta(transformed=False))
+    rho = efs_initial_log_lambda(setup, family)
+    r_trace = RBridge(mode="subprocess").efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+        scale=1.0,
+        initial_log_theta=float(np.asarray(theta0[0])),
+        initial_beta=np.asarray(beta_bad),
+        beta_old_init=np.asarray(beta_old),
+    )
+    assert not r_trace["start_retained"][0]
+    with pytest.raises(ValueError, match="would reset to mustart"):
+        dense_efs_known_scale(
+            fd,
+            initial_log_lambda=rho,
+            initial_log_theta=theta0,
+            beta_init=beta_bad,
+            beta_old_init=beta_old,
+            control=EFSControl(outer_limit=1),
+        )
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> None:
+    """Internal EFS5d parity is only claimed for the explicit admitted start."""
+    data = _fixed_nb_data(n=48)
+    family = NegativeBinomial(theta=2.7)
+    formula = "y ~ s(x, bs='cr', k=6)"
+    setup, fd = _build(
+        formula,
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    beta0 = jax.numpy.zeros((fd.n_coef,), dtype=fd.X.dtype)
+    theta0 = jax.numpy.asarray(family.get_theta(transformed=False))
+    rho = efs_initial_log_lambda(setup, family)
+    r_trace = RBridge(mode="subprocess").efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+        scale=1.0,
+        initial_log_theta=float(np.asarray(theta0[0])),
+        initial_beta=np.asarray(beta0),
+        beta_old_init=np.asarray(beta0),
+    )
+    j_fit = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=rho,
+        initial_log_theta=theta0,
+        beta_init=beta0,
+        beta_old_init=beta0,
+    )
+    statistics = r_trace["statistics"]
+    final = statistics.loc[statistics["call"] == statistics["call"].max()].sort_values(
+        "parameter"
+    )
+    collector = _AssertCollector()
+    collector.check(
+        "fitted values",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.mu,
+            r_trace["fitted_values"][-1],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "deviance",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.deviance,
+            final["deviance"].iloc[0],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "criterion",
+        lambda: np.testing.assert_allclose(
+            j_fit.score,
+            r_trace["final_score"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "selected theta",
+        lambda: np.testing.assert_allclose(
+            j_fit.theta,
+            np.exp(r_trace["theta_trace"][-1, 1]),
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "smoothing parameters",
+        lambda: np.testing.assert_allclose(
+            j_fit.smoothing_params,
+            np.exp(final["log_smoothing"].to_numpy()),
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.raise_if_any("estimated-NB EFS matched-start parity")
 
 
 def test_efs_bridge_fixed_nb_theta_requires_positive_nb_family() -> None:
