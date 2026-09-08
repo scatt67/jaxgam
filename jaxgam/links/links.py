@@ -113,6 +113,20 @@ class Link(ABC):
             Derivative of link function evaluated at mu.
         """
 
+    def second_derivative(self, mu: Array) -> Array:
+        """Return ``d² eta / d mu²`` for observed-Newton initialization.
+
+        This is deliberately an opt-in link contract.  The first-working
+        primitive follows pinned ``gam.fit3``'s alpha arithmetic, where an
+        AD-derived derivative can leave a roundoff residue in a value that R
+        evaluates exactly to zero.  Custom links must implement this method
+        before opting into that observed-system primitive.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement second_derivative() for "
+            "observed-Newton initialization."
+        )
+
     def linkinv(self, eta: Array) -> Array:
         """Alias for ``inverse``: μ = g⁻¹(η)."""
         return self.inverse(eta)
@@ -135,6 +149,20 @@ class Link(ABC):
         """
         mu = self.inverse(eta)
         return 1.0 / self.derivative(mu)
+
+    def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
+        """Return the strict CPU link used by the opt-in R-style start path.
+
+        Ordinary :meth:`link` implementations may deliberately clamp their
+        input so dense/JIT PIRLS remains numerically total.  A streamed
+        initializer needs to distinguish an invalid R starting value from a
+        clipped one before the global shrink-to-null procedure begins.  The
+        built-in boundary-sensitive links override this method with the
+        corresponding unguarded NumPy arithmetic.  Custom links retain their
+        established ``link`` behavior unless they explicitly provide a
+        stricter implementation.
+        """
+        return np.asarray(self.link(np.asarray(mu, dtype=float)), dtype=float)
 
     @staticmethod
     def from_name(name: str) -> Link:
@@ -183,6 +211,10 @@ class IdentityLink(Link):
         xp = array_module(mu)
         return xp.ones_like(mu, dtype=float)
 
+    def second_derivative(self, mu: Array) -> Array:
+        xp = array_module(mu)
+        return xp.zeros_like(mu, dtype=float)
+
     def mu_eta(self, eta: Array) -> Array:
         xp = array_module(eta)
         return xp.ones_like(eta, dtype=float)
@@ -197,6 +229,10 @@ class LogLink(Link):
         xp = array_module(mu)
         return xp.log(xp.maximum(mu, _EPS))
 
+    def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.log(np.asarray(mu, dtype=float))
+
     def inverse(self, eta: Array) -> Array:
         xp = array_module(eta)
         return xp.exp(eta)
@@ -204,6 +240,10 @@ class LogLink(Link):
     def derivative(self, mu: Array) -> Array:
         xp = array_module(mu)
         return 1.0 / xp.maximum(mu, _EPS)
+
+    def second_derivative(self, mu: Array) -> Array:
+        xp = array_module(mu)
+        return -1.0 / xp.maximum(mu, _EPS) ** 2
 
     def mu_eta(self, eta: Array) -> Array:
         xp = array_module(eta)
@@ -220,6 +260,11 @@ class LogitLink(Link):
         mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
         return xp.log(mu_clipped / (1 - mu_clipped))
 
+    def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
+        mu = np.asarray(mu, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.log(mu / (1.0 - mu))
+
     def inverse(self, eta: Array) -> Array:
         # R's C_logit_linkinv clamps the result to [eps, 1-eps] so extreme eta
         # never yields exactly 0 or 1 (which would zero working weights).
@@ -231,6 +276,13 @@ class LogitLink(Link):
         xp = array_module(mu)
         mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
         return 1.0 / (mu_clipped * (1 - mu_clipped))
+
+    def second_derivative(self, mu: Array) -> Array:
+        xp = array_module(mu)
+        mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
+        # Keep mgcv's ``1/(1-mu)^2 - 1/mu^2`` association: it is relevant
+        # to its exact ``alpha == 0`` replacement in gam.fit3.
+        return 1.0 / (1.0 - mu_clipped) ** 2 - 1.0 / mu_clipped**2
 
     def mu_eta(self, eta: Array) -> Array:
         # R's C_logit_mu_eta floors dμ/dη at eps so it never returns exactly 0.
@@ -248,12 +300,20 @@ class InverseLink(Link):
         xp = array_module(mu)
         return 1.0 / xp.maximum(mu, _EPS)
 
+    def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return 1.0 / np.asarray(mu, dtype=float)
+
     def inverse(self, eta: Array) -> Array:
         return 1.0 / eta
 
     def derivative(self, mu: Array) -> Array:
         xp = array_module(mu)
         return -1.0 / xp.maximum(mu, _EPS) ** 2
+
+    def second_derivative(self, mu: Array) -> Array:
+        xp = array_module(mu)
+        return 2.0 / xp.maximum(mu, _EPS) ** 3
 
     def mu_eta(self, eta: Array) -> Array:
         """dμ/dη = -1/η² (since μ = 1/η)."""
@@ -274,6 +334,9 @@ class ProbitLink(Link):
             return jndtri(mu_clipped)
         return ndtri(mu_clipped)
 
+    def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
+        return ndtri(np.asarray(mu, dtype=float))
+
     def inverse(self, eta: Array) -> Array:
         if is_jax_array(eta):
             from jax.scipy.special import ndtr as jndtr
@@ -287,6 +350,17 @@ class ProbitLink(Link):
 
             return 1.0 / jnorm.pdf(self.link(mu))
         return 1.0 / norm.pdf(self.link(mu))
+
+    def second_derivative(self, mu: Array) -> Array:
+        xp = array_module(mu)
+        eta = self.link(mu)
+        if is_jax_array(mu):
+            from jax.scipy.stats import norm as jnorm
+
+            density = xp.maximum(jnorm.pdf(eta), _DBL_EPS)
+        else:
+            density = xp.maximum(norm.pdf(eta), _DBL_EPS)
+        return eta / density**2
 
     def mu_eta(self, eta: Array) -> Array:
         # R's C_probit_mu_eta floors dμ/dη at eps so extreme |η| never yields
@@ -309,6 +383,11 @@ class CloglogLink(Link):
         mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
         return xp.log(-xp.log(1 - mu_clipped))
 
+    def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
+        mu = np.asarray(mu, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.log(-np.log(1.0 - mu))
+
     def inverse(self, eta: Array) -> Array:
         xp = array_module(eta)
         return 1.0 - xp.exp(-xp.exp(eta))
@@ -317,6 +396,16 @@ class CloglogLink(Link):
         xp = array_module(mu)
         mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
         return 1.0 / ((1 - mu_clipped) * (-xp.log(1 - mu_clipped)))
+
+    def second_derivative(self, mu: Array) -> Array:
+        xp = array_module(mu)
+        mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
+        log_one_minus_mu = xp.log1p(-mu_clipped)
+        return (
+            -1.0
+            / ((1.0 - mu_clipped) ** 2 * log_one_minus_mu)
+            * (1.0 + 1.0 / log_one_minus_mu)
+        )
 
     def mu_eta(self, eta: Array) -> Array:
         # R's C_cloglog_mu_eta floors dμ/dη at eps so extreme η never yields
@@ -334,12 +423,20 @@ class SqrtLink(Link):
         xp = array_module(mu)
         return xp.sqrt(xp.maximum(mu, _EPS))
 
+    def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
+        with np.errstate(invalid="ignore"):
+            return np.sqrt(np.asarray(mu, dtype=float))
+
     def inverse(self, eta: Array) -> Array:
         return eta**2
 
     def derivative(self, mu: Array) -> Array:
         xp = array_module(mu)
         return 0.5 / xp.sqrt(xp.maximum(mu, _EPS))
+
+    def second_derivative(self, mu: Array) -> Array:
+        xp = array_module(mu)
+        return -0.25 * xp.maximum(mu, _EPS) ** -1.5
 
     def mu_eta(self, eta: Array) -> Array:
         return 2.0 * eta
@@ -357,6 +454,10 @@ class InverseSquaredLink(Link):
         xp = array_module(mu)
         return 1.0 / xp.maximum(mu, _EPS) ** 2
 
+    def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return 1.0 / np.asarray(mu, dtype=float) ** 2
+
     def inverse(self, eta: Array) -> Array:
         xp = array_module(eta)
         return 1.0 / xp.sqrt(xp.maximum(eta, _EPS))
@@ -364,6 +465,10 @@ class InverseSquaredLink(Link):
     def derivative(self, mu: Array) -> Array:
         xp = array_module(mu)
         return -2.0 / xp.maximum(mu, _EPS) ** 3
+
+    def second_derivative(self, mu: Array) -> Array:
+        xp = array_module(mu)
+        return 6.0 * xp.maximum(mu, _EPS) ** -4
 
     def mu_eta(self, eta: Array) -> Array:
         """dμ/dη = -1/(2η^{3/2}) (since μ = 1/√η)."""

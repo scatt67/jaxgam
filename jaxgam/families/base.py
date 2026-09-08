@@ -151,6 +151,24 @@ class FamilyParameterSnapshot:
     phi_mode: Literal["known", "estimated"]
 
 
+@dataclass(frozen=True)
+class FamilyInitialWorkingState:
+    """One bounded CPU batch's R-style first working state.
+
+    ``eta`` is the response-scale predictor ``link(mustart)``.  It is not a
+    coefficient projection and deliberately has no offset or design matrix
+    argument.  ``input_ok`` distinguishes an R-initialization input error
+    from ``domain_ok``: only the latter is eligible for a later global
+    shrink towards a caller-supplied null predictor.
+    """
+
+    mustart: np.ndarray
+    eta: np.ndarray
+    mu: np.ndarray
+    input_ok: bool
+    domain_ok: bool
+
+
 def _freeze_execution_value(value: object) -> object:
     """Return a deterministic immutable snapshot for lineage comparison.
 
@@ -255,6 +273,7 @@ class ExponentialFamily(ABC):
             saturated_loglikelihood=True,
             dynamic_theta=False,
             dynamic_phi=not self.scale_known,
+            coefficient_system="fisher" if self.is_canonical else "observed",
             fisher_equals_observed_for_score=self.is_canonical,
         )
 
@@ -579,6 +598,101 @@ class ExponentialFamily(ABC):
                 f"[{np.min(y_arr):.4g}, {np.max(y_arr):.4g}]"
             )
         return self._initialize_impl(y_arr, wt)
+
+    def execution_initial_response_cpu(
+        self,
+        y: np.ndarray,
+        prior_weight: np.ndarray,  # noqa: ARG002
+    ) -> np.ndarray:
+        """Return the response seen by R-style initialization.
+
+        The default preserves all real rows.  Families such as Binomial can
+        override the narrow zero-prior-weight behavior owned by their R
+        initializer without changing the legacy :meth:`initialize` path.
+        """
+        return y
+
+    def execution_initial_input_ok_cpu(
+        self, y: np.ndarray, prior_weight: np.ndarray
+    ) -> np.ndarray:
+        """Return per-row validity for the opt-in strict start primitive."""
+        finite = np.isfinite(y) & np.isfinite(prior_weight)
+        weights_ok = prior_weight >= 0.0
+        support_ok = np.ones(y.shape, dtype=bool)
+        if self.response_support.lower_inclusive:
+            support_ok &= y >= self.response_support.lower
+        else:
+            support_ok &= y > self.response_support.lower
+        if self.response_support.upper_inclusive:
+            support_ok &= y <= self.response_support.upper
+        else:
+            support_ok &= y < self.response_support.upper
+        return finite & weights_ok & support_ok
+
+    def execution_initial_mustart_cpu(
+        self, y: np.ndarray, prior_weight: np.ndarray
+    ) -> np.ndarray:
+        """Return the strict family-owned ``mustart`` for bounded execution.
+
+        This opt-in hook is intentionally separate from :meth:`initialize`.
+        Existing dense setup retains its established defensive clipping;
+        strict starts may instead report an invalid R input before a caller
+        chooses whether a predictor-domain shrink is meaningful.
+        """
+        return np.asarray(self._initialize_impl(y, prior_weight), dtype=float)
+
+    def initial_working_state_cpu(
+        self,
+        y: np.ndarray,
+        prior_weight: np.ndarray,
+        valid: np.ndarray,
+    ) -> FamilyInitialWorkingState:
+        """Build one masked, exact-R-style first ``mustart``/``eta`` state.
+
+        Invalid padded tails are replaced by the family-owned finite padding
+        pair before any initializer or link operation.  Real invalid inputs
+        are never silently clipped: they set ``input_ok=False``.  A valid
+        zero-prior-weight row is still passed to the family initializer, as
+        it is in R (with any family-specific zero-weight normalization).
+        """
+        y = np.asarray(y, dtype=float)
+        prior_weight = np.asarray(prior_weight, dtype=float)
+        valid = np.asarray(valid, dtype=bool)
+        if y.ndim != 1 or prior_weight.shape != y.shape or valid.shape != y.shape:
+            raise ValueError("Initial working state expects matching 1-D batch arrays.")
+
+        padding = self.execution_padding()
+        normalized_y = np.asarray(
+            self.execution_initial_response_cpu(y, prior_weight), dtype=float
+        )
+        row_input_ok = self.execution_initial_input_ok_cpu(normalized_y, prior_weight)
+        real_input = valid & row_input_ok
+        y_safe = np.where(real_input, normalized_y, padding.response)
+        weight_safe = np.where(real_input, prior_weight, 0.0)
+        mustart_raw = self.execution_initial_mustart_cpu(y_safe, weight_safe)
+        eta_raw = np.asarray(self.link.initial_link_cpu(mustart_raw), dtype=float)
+        mu_raw = np.asarray(self.link.inverse(eta_raw), dtype=float)
+
+        eta = np.where(real_input, eta_raw, padding.eta)
+        mu_padding = np.asarray(self.link.inverse(np.asarray(padding.eta)))
+        mu = np.where(real_input, mu_raw, mu_padding)
+        mustart_padding = np.asarray(mu_padding, dtype=float)
+        mustart = np.where(real_input, mustart_raw, mustart_padding)
+        domain_rows = (
+            np.isfinite(eta)
+            & np.isfinite(mu)
+            & np.asarray(self.valid_eta(eta), dtype=bool)
+            & np.asarray(self.valid_mu(mu), dtype=bool)
+        )
+        input_ok = bool(np.all(~valid | row_input_ok))
+        domain_ok = input_ok and bool(np.all(~valid | domain_rows))
+        return FamilyInitialWorkingState(
+            mustart=mustart,
+            eta=eta,
+            mu=mu,
+            input_ok=input_ok,
+            domain_ok=domain_ok,
+        )
 
     @abstractmethod
     def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:
