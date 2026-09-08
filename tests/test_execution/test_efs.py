@@ -20,6 +20,7 @@ from jaxgam.execution.efs import (
 )
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.efs import EFSRawUpdate, prepare_efs_statistics
 from jaxgam.fitting.pirls import pirls_loop
@@ -394,16 +395,25 @@ def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> Non
         beta_init=beta0,
         beta_old_init=beta0,
     )
-    statistics = r_trace["statistics"]
-    final = statistics.loc[statistics["call"] == statistics["call"].max()].sort_values(
-        "parameter"
-    )
+    selected_sp = r_trace["selected_packed_sp"]
+    assert selected_sp.shape == (fd.n_penalties + 1,)
     collector = _AssertCollector()
+    collector.check(
+        "coefficients",
+        lambda: np.testing.assert_allclose(
+            penalty_ops.transform_coefficients(
+                fd.penalty_structure, j_fit.pirls_result.coefficients
+            ),
+            r_trace["selected_coefficients"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
     collector.check(
         "fitted values",
         lambda: np.testing.assert_allclose(
             j_fit.pirls_result.mu,
-            r_trace["fitted_values"][-1],
+            r_trace["selected_fitted_values"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
         ),
@@ -412,7 +422,7 @@ def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> Non
         "deviance",
         lambda: np.testing.assert_allclose(
             j_fit.pirls_result.deviance,
-            final["deviance"].iloc[0],
+            r_trace["selected_deviance"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
         ),
@@ -430,7 +440,7 @@ def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> Non
         "selected theta",
         lambda: np.testing.assert_allclose(
             j_fit.theta,
-            np.exp(r_trace["theta_trace"][-1, 1]),
+            selected_sp[0],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
         ),
@@ -439,7 +449,7 @@ def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> Non
         "smoothing parameters",
         lambda: np.testing.assert_allclose(
             j_fit.smoothing_params,
-            np.exp(final["log_smoothing"].to_numpy()),
+            selected_sp[1:],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
         ),
@@ -978,6 +988,49 @@ def test_pinned_unknown_scale_winning_extension_has_split_phi_timing() -> None:
     np.testing.assert_allclose(extension["score_phi"], candidate["score_phi"])
     assert extension["update_phi"] != candidate["update_phi"]
     np.testing.assert_allclose(next_fit["score_phi"], candidate["update_phi"])
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_pinned_efs_extension_loss_returns_selected_fit_not_last_trial() -> None:
+    """A rejected extension leaves the mutable family/trial trace stale."""
+    rng = np.random.default_rng(0)
+    x = np.linspace(-1.0, 1.0, 50)
+    data = pd.DataFrame(
+        {
+            "x": x,
+            "y": 0.2 + 0.5 * np.sin(2.0 * x) + rng.normal(0.0, 0.15, len(x)),
+        }
+    )
+    diagnostic = RBridge(mode="subprocess").efs_diagnostics(
+        "y ~ s(x, bs='cr', k=6)",
+        data,
+        "gaussian",
+        controls={"efs_tol": 1e-20},
+    )
+    assert "extension_lost" in diagnostic["branches"]
+    last_call = diagnostic["statistics"]["call"].max()
+    last_deviance = (
+        diagnostic["statistics"]
+        .loc[diagnostic["statistics"]["call"] == last_call, "deviance"]
+        .iloc[0]
+    )
+    # The selected fit is the efsudr return value. The last private gam.fit3
+    # trace belongs to a rejected extension in this deterministic fixture.
+    assert (
+        np.max(
+            np.abs(diagnostic["selected_coefficients"] - diagnostic["coefficients"][-1])
+        )
+        > 1e-8
+    )
+    assert (
+        np.max(
+            np.abs(
+                diagnostic["selected_fitted_values"] - diagnostic["fitted_values"][-1]
+            )
+        )
+        > 1e-8
+    )
+    assert abs(diagnostic["selected_deviance"] - last_deviance) > 1e-8
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
