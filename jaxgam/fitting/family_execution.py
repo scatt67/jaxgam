@@ -185,6 +185,44 @@ jax.tree_util.register_pytree_node(
 
 
 @dataclass(frozen=True)
+class InitialBatchWorkingQuantities:
+    """Raw first-iteration systems evaluated at a supplied per-row eta.
+
+    ``observed_weight`` is the smooth direct-deviance curvature.  The
+    ``newton_weight``/``newton_response`` pair is the literal alpha-adjusted
+    arithmetic in pinned ``gam.fit3`` for regular noncanonical links; it is
+    not clipped, absolutized, or sent to a positive-definite solver here.
+    A later signed-system route must decide whether the step is indefinite
+    and reproduce mgcv's step-local Fisher fallback.
+    """
+
+    eta: jax.Array
+    mu: jax.Array
+    fisher_weight: jax.Array
+    fisher_response: jax.Array
+    observed_weight: jax.Array
+    newton_alpha: jax.Array
+    newton_weight: jax.Array
+    newton_response: jax.Array
+    domain_ok: jax.Array
+
+
+_INITIAL_BATCH_WORKING_FIELDS = [
+    field.name for field in fields(InitialBatchWorkingQuantities)
+]
+jax.tree_util.register_pytree_node(
+    InitialBatchWorkingQuantities,
+    lambda result: (
+        [getattr(result, name) for name in _INITIAL_BATCH_WORKING_FIELDS],
+        None,
+    ),
+    lambda _, children: InitialBatchWorkingQuantities(
+        **dict(zip(_INITIAL_BATCH_WORKING_FIELDS, children, strict=True))
+    ),
+)
+
+
+@dataclass(frozen=True)
 class RegularFletcherStatistics:
     """Bounded sufficient statistics for one regular-family scale reduction.
 
@@ -489,6 +527,117 @@ def batch_working_quantities(
         observed_weight=observed_raw,
         working_response=working_response,
         deviance=jnp.sum(jnp.where(valid, direct, 0.0)),
+        domain_ok=domain_ok,
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def batch_initial_working_quantities(
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    valid: jax.Array,
+    eta_start: jax.Array,
+    parameters: FamilyExecutionParameters,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> InitialBatchWorkingQuantities:
+    """Evaluate first W/z from an explicit dynamic per-row starting eta.
+
+    This deliberately does not accept ``X`` or ``beta``.  R's ``start=NULL``
+    first loop uses ``eta = linkfun(mustart)`` before a weighted least-squares
+    coefficient exists.  Padding is made finite before inverse-link or
+    direct-deviance arithmetic and masked only after raw W/z are formed.
+    """
+    _validate_context(family, context)
+    _require_capabilities(
+        context,
+        "row_separable",
+        "fisher_working_system",
+        "observed_information",
+        "differentiable_deviance",
+    )
+    valid = jnp.asarray(valid, dtype=bool)
+    finite_vectors = (
+        jnp.isfinite(y)
+        & jnp.isfinite(prior_weight)
+        & jnp.isfinite(offset)
+        & jnp.isfinite(eta_start)
+    )
+    real_input = (
+        valid & finite_vectors & (prior_weight >= 0.0) & _response_valid(family, y)
+    )
+    padding = context.padding
+    y_safe = jnp.where(real_input, y, padding.response)
+    weight_safe = jnp.where(real_input, prior_weight, 0.0)
+    offset_safe = jnp.where(real_input, offset, 0.0)
+    eta_safe = jnp.where(real_input, eta_start, padding.eta)
+    mu = family.link.inverse(eta_safe)
+    eta_domain = family.valid_eta(eta_safe)
+    mu_domain = family.valid_mu(mu)
+    domain_rows = real_input & eta_domain & mu_domain
+
+    variance = family.variance(mu)
+    mu_eta = family.link.mu_eta(eta_safe)
+    fisher_weight = weight_safe * mu_eta**2 / variance
+    fisher_response = (eta_safe - offset_safe) + (y_safe - mu) / mu_eta
+
+    def _deviance_at_eta(eta_value: jax.Array) -> jax.Array:
+        mu_value = family.link.inverse(eta_value)
+        return jnp.sum(
+            family.deviance_derivative_contributions_for_parameters(
+                y_safe,
+                mu_value,
+                weight_safe,
+                parameters.log_theta,
+            )
+        )
+
+    gradient = jax.grad(_deviance_at_eta)
+    _, second = jax.jvp(gradient, (eta_safe,), (jnp.ones_like(eta_safe),))
+    observed_weight = 0.5 * second
+    d2link = family.link.second_derivative(mu)
+    alpha_terms = family.dvar(mu) / variance + d2link * mu_eta
+    # R evaluates this expression in separate vector operations before its
+    # exact-zero replacement. Keep a materialization barrier so XLA does not
+    # turn a mathematically zero alpha into a fused-roundoff residue.
+    alpha_correction = jax.lax.optimization_barrier((y_safe - mu) * alpha_terms)
+    alpha_raw = jax.lax.optimization_barrier(1.0 + alpha_correction)
+    # R's separate vector operations can produce an exact zero here while
+    # XLA's fused arithmetic leaves a few ulps (notably Binomial/log at
+    # y==1). Treat only a unit-scale rounding-resolution residue as that
+    # same zero, then apply gam.fit3's literal eps replacement. This neither
+    # clips a signed Newton weight nor selects a Fisher fallback.
+    alpha_roundoff_zero = jnp.abs(alpha_raw) <= (
+        8.0 * jnp.finfo(jnp.float64).eps * (1.0 + jnp.abs(alpha_correction))
+    )
+    alpha = jnp.where(
+        (alpha_raw == 0.0) | alpha_roundoff_zero,
+        jnp.finfo(jnp.float64).eps,
+        alpha_raw,
+    )
+    newton_weight = weight_safe * alpha * mu_eta**2 / variance
+    newton_response = (eta_safe - offset_safe) + (y_safe - mu) / (mu_eta * alpha)
+
+    theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
+    finite_outputs = (
+        jnp.all(jnp.isfinite(fisher_weight))
+        & jnp.all(jnp.isfinite(fisher_response))
+        & jnp.all(jnp.isfinite(observed_weight))
+        & jnp.all(jnp.isfinite(alpha))
+        & jnp.all(jnp.isfinite(newton_weight))
+        & jnp.all(jnp.isfinite(newton_response))
+    )
+    domain_ok = jnp.all(~valid | domain_rows) & theta_finite & finite_outputs
+    return InitialBatchWorkingQuantities(
+        eta=eta_safe,
+        mu=mu,
+        fisher_weight=jnp.where(valid, fisher_weight, 0.0),
+        fisher_response=jnp.where(valid, fisher_response, 0.0),
+        observed_weight=jnp.where(valid, observed_weight, 0.0),
+        newton_alpha=jnp.where(valid, alpha, 0.0),
+        newton_weight=jnp.where(valid, newton_weight, 0.0),
+        newton_response=jnp.where(valid, newton_response, 0.0),
         domain_ok=domain_ok,
     )
 

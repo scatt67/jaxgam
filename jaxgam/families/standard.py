@@ -128,6 +128,22 @@ class Gaussian(ExponentialFamily):
         """Initialize mu = y for Gaussian."""
         return y.copy()
 
+    def execution_initial_input_ok_cpu(
+        self, y: np.ndarray, prior_weight: np.ndarray
+    ) -> np.ndarray:
+        """Match stats::gaussian's strict NULL-start link guard.
+
+        Legacy links intentionally clip at their numerical boundary.  R's
+        ``gaussian()$initialize`` instead rejects nonpositive log starts and
+        zero inverse starts before ``gam.fit3`` can shrink a predictor.
+        """
+        ok = super().execution_initial_input_ok_cpu(y, prior_weight)
+        if isinstance(self.link, LogLink):
+            ok &= y > 0.0
+        elif isinstance(self.link, InverseLink):
+            ok &= y != 0.0
+        return ok
+
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """All finite mu are valid for Gaussian."""
         xp = array_module(mu)
@@ -298,6 +314,12 @@ class Binomial(ExponentialFamily):
         (0.25, 0.75), safely away from the boundary.
         """
         return (wt * y + 0.5) / (wt + 1.0)
+
+    def execution_initial_response_cpu(
+        self, y: np.ndarray, prior_weight: np.ndarray
+    ) -> np.ndarray:
+        """Apply stats::binomial's zero-weight response normalization."""
+        return np.where(prior_weight == 0.0, 0.0, y)
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Binomial: 0 < mu < 1."""
@@ -577,6 +599,18 @@ class Gamma(ExponentialFamily):
         Follows R's Gamma()$initialize which ensures mu > 0.
         """
         return np.maximum(y, np.finfo(float).eps)
+
+    def execution_initial_mustart_cpu(
+        self,
+        y: np.ndarray,
+        prior_weight: np.ndarray,  # noqa: ARG002
+    ) -> np.ndarray:
+        """Return stats::Gamma's un-clipped strict start.
+
+        The base contract has already rejected nonpositive real responses;
+        keeping this separate preserves dense's defensive historical clip.
+        """
+        return np.asarray(y, dtype=float).copy()
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Gamma: mu > 0."""
