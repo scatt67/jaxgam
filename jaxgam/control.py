@@ -21,7 +21,7 @@ class FitControl:
     the policy to fitting reductions.
     """
 
-    execution: Literal["dense"] = "dense"
+    execution: Literal["dense", "stream"] = "dense"
     batch_rows: int = 65_536
     memory_budget_bytes: int = 512 * 1024 * 1024
     output_budget_bytes: int = 512 * 1024 * 1024
@@ -29,10 +29,8 @@ class FitControl:
     gaussian_compression: bool = False
 
     def __post_init__(self) -> None:
-        if self.execution != "dense":
-            raise NotImplementedError(
-                "Only execution='dense' is available until streamed execution lands."
-            )
+        if self.execution not in ("dense", "stream"):
+            raise ValueError("execution must be 'dense' or 'stream'.")
         for name in ("batch_rows", "memory_budget_bytes", "output_budget_bytes"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -43,5 +41,5 @@ class FitControl:
             raise ValueError("gaussian_compression must be a boolean.")
         if self.gaussian_compression:
             raise NotImplementedError(
-                "gaussian_compression=True is not available for dense execution."
+                "gaussian_compression=True is not available for this execution path."
             )
