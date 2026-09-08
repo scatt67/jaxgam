@@ -67,6 +67,16 @@ class PreparedModel:
         )
 
 
+def _scan_valid(source: RowSource, batch_rows: int):
+    """Yield only unpadded Phase-1 batches for the initial exact contract."""
+    for batch in source.scan(batch_rows):
+        if not np.all(batch.valid):
+            raise NotImplementedError(
+                "Prepared setup does not yet support padded batches."
+            )
+        yield batch
+
+
 def _exact_cubic_knots(
     values: RowSource, variable: str, k: int
 ) -> npt.NDArray[np.floating]:
@@ -83,7 +93,7 @@ def _exact_cubic_knots(
             connection.execute("PRAGMA temp_store = FILE")
             connection.execute("PRAGMA cache_size = -2048")
             connection.execute("CREATE TABLE values_table (value REAL NOT NULL)")
-            for batch in values.scan(65_536):
+            for batch in _scan_valid(values, 65_536):
                 if variable not in batch.columns:
                     raise ValueError(
                         f"Smooth variable '{variable}' not found in source."
@@ -176,11 +186,11 @@ def prepare_model(
             "Prepared setup does not yet support by-variable or tensor smooths."
         )
     try:
-        first = next(source.scan(1))
+        first = next(_scan_valid(source, 1))
     except StopIteration as error:
         raise ValueError("RowSource advertised rows but yielded no batches.") from error
     try:
-        replay_first = next(source.scan(1))
+        replay_first = next(_scan_valid(source, 1))
     except StopIteration as error:
         raise TypeError("Prepared setup requires a replayable RowSource.") from error
     if not np.array_equal(first.row_positions, replay_first.row_positions):
@@ -224,7 +234,7 @@ def prepare_model(
     param_R = np.empty((0, n_parametric))
     smooth_sums = [np.zeros(smooth.n_coefs) for smooth in smooths]
     smooth_norms = [0.0 for _ in smooths]
-    for batch in source.scan(65_536):
+    for batch in _scan_valid(source, 65_536):
         columns = dict(batch.columns)
         parametric, _ = _batch_parametric(
             formula_spec, columns, len(batch.row_positions)
@@ -397,7 +407,7 @@ def prepare_fitting(
     response_max = -np.inf
     offset_min = np.inf
     offset_max = -np.inf
-    for batch in source.scan(65_536):
+    for batch in _scan_valid(source, 65_536):
         if batch.y is None:
             raise ValueError("Prepared fitting requires a response in the RowSource.")
         y = np.asarray(batch.y, dtype=float)
@@ -442,7 +452,7 @@ def prepare_fitting(
     beta_init, _, _, _ = np.linalg.lstsq(qr_R, qr_target, rcond=dense_rcond)
     # Retain the dense initializer's valid-domain fallback without retaining X.
     valid = True
-    for batch in source.scan(65_536):
+    for batch in _scan_valid(source, 65_536):
         if not np.all(batch.valid):
             raise NotImplementedError(
                 "Prepared setup does not yet support padded batches."
@@ -461,7 +471,7 @@ def prepare_fitting(
         rhs_null = np.zeros(prepared.n_coef)
         qr_R = np.empty((0, prepared.n_coef))
         qr_target = np.empty(0)
-        for batch in source.scan(65_536):
+        for batch in _scan_valid(source, 65_536):
             if not np.all(batch.valid):
                 raise NotImplementedError(
                     "Prepared setup does not yet support padded batches."
@@ -481,7 +491,7 @@ def prepare_fitting(
         covered[block.start : block.stop] = True
     rank_R = np.empty((0, 0))
     rank_columns = 0
-    for batch in source.scan(65_536):
+    for batch in _scan_valid(source, 65_536):
         if not np.all(batch.valid):
             raise NotImplementedError(
                 "Prepared setup does not yet support padded batches."
