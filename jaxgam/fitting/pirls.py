@@ -57,13 +57,19 @@ def canonical_working_quantities(
     eta: jax.Array,
     wt: jax.Array,
     offset: jax.Array,
+    log_theta: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     """Return standard-family Fisher weights and offset-free working response.
 
     Both dense PIRLS and streamed reductions use this family-owned arithmetic;
     callers apply their own bounded-row masking after weight clipping.
     """
-    return family.working_weights(mu, wt), family.working_response(y, mu, eta - offset)
+    if log_theta is None:
+        # Preserve the dense default operation order exactly.
+        weight = family.working_weights(mu, wt)
+    else:
+        weight = family.working_weights_for_parameters(mu, eta, wt, log_theta)
+    return weight, family.working_response(y, mu, eta - offset)
 
 
 def accepted_penalized_step(

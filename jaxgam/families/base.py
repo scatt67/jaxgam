@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
@@ -76,6 +77,92 @@ UNIT_INTERVAL = ResponseSupport(lower=0, upper=1)
 
 
 # ---------------------------------------------------------------------------
+# Execution-contract descriptors
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FamilyExecutionCapabilities:
+    """Static mathematical capabilities exposed to fitting backends.
+
+    This is deliberately a family-owned descriptor rather than a registry of
+    family names.  Backends may choose a *release policy* on top of these
+    capabilities, but construction or registration alone is never evidence
+    that a particular execution route has been validated.
+    """
+
+    row_separable: bool
+    fisher_working_system: bool
+    observed_information: bool
+    direct_deviance: bool
+    differentiable_deviance: bool
+    saturated_loglikelihood: bool
+    dynamic_theta: bool
+    dynamic_phi: bool
+
+
+@dataclass(frozen=True)
+class FamilyPadding:
+    """Finite values safe to evaluate for an invalid padded row.
+
+    ``eta`` is separate from ``offset`` because an inverse link can be
+    undefined at the usual zero-filled linear predictor.  Kernels must select
+    this eta before calling ``link.inverse``.
+    """
+
+    response: float
+    eta: float
+
+
+@dataclass(frozen=True)
+class FamilyParameterSnapshot:
+    """Host snapshot of dynamic family parameters and their modes.
+
+    The values are immutable Python scalars so a caller can validate that a
+    mutable family was not changed between preparation and a device launch.
+    JIT kernels receive a separate array pytree; they never read mutable
+    family parameter storage.
+    """
+
+    theta_mode: Literal["none", "fixed", "estimated"]
+    log_theta: tuple[float, ...]
+    phi_mode: Literal["known", "estimated"]
+
+
+def _freeze_execution_value(value: object) -> object:
+    """Return a deterministic immutable snapshot for lineage comparison.
+
+    This intentionally favours a clear host-side failure for unusual mutable
+    configuration over claiming that object identity is a stable numerical
+    contract.  Array payloads are small family/link configuration, never
+    training data.
+    """
+    if value is None or isinstance(value, (bool, int, float, str, bytes, type)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return ("ndarray", value.dtype.str, value.shape, value.tobytes())
+    if isinstance(value, (tuple, list)):
+        return tuple(_freeze_execution_value(item) for item in value)
+    if isinstance(value, dict):
+        return tuple(
+            (str(key), _freeze_execution_value(item))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        )
+    if hasattr(value, "__dict__"):
+        return (
+            type(value),
+            _freeze_execution_value(vars(value)),
+        )
+    raise TypeError(
+        "Family/link execution configuration must be immutable or provide "
+        "a serializable __dict__; got "
+        f"{type(value)!r}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # ExponentialFamily base class
 # ---------------------------------------------------------------------------
 
@@ -125,6 +212,99 @@ class ExponentialFamily(ABC):
         """
         cls = type(self).canonical_link_cls
         return cls is not None and isinstance(self.link, cls)
+
+    def execution_capabilities(self) -> FamilyExecutionCapabilities:
+        """Return the static capabilities needed by bounded fit backends.
+
+        Standard exponential families use a positive Fisher working system
+        and expose observed information through their direct deviance.  A
+        family that needs a different coefficient system or parameter state
+        overrides this descriptor on its existing class; drivers do not
+        branch on ``family_name``.
+        """
+        return FamilyExecutionCapabilities(
+            row_separable=True,
+            fisher_working_system=True,
+            observed_information=True,
+            direct_deviance=type(self).deviance_contributions
+            is not ExponentialFamily.deviance_contributions,
+            differentiable_deviance=type(self).deviance_derivative_contributions
+            is not ExponentialFamily.deviance_derivative_contributions,
+            saturated_loglikelihood=True,
+            dynamic_theta=False,
+            dynamic_phi=not self.scale_known,
+        )
+
+    def execution_padding(self) -> FamilyPadding:
+        """Return a finite response/eta pair for masked padded rows.
+
+        The mean used to obtain the eta is deliberately interior to the
+        response support.  This makes the default safe for the built-in
+        inverse and inverse-squared links as well as log links.  Custom
+        families with a narrower link domain can override it explicitly.
+        """
+        if self.response_support == UNIT_INTERVAL:
+            response, mean = 0.5, 0.5
+        elif self.response_support == POSITIVE:
+            response, mean = 1.0, 1.0
+        elif self.response_support == NON_NEGATIVE:
+            response, mean = 0.0, 1.0
+        else:
+            response, mean = 0.0, 1.0
+        eta = float(np.asarray(self.link.link(np.asarray(mean))).reshape(()))
+        mu = np.asarray(self.link.inverse(np.asarray(eta)))
+        if (
+            not np.isfinite(eta)
+            or not bool(np.all(self.valid_mu(mu)))
+            or not bool(np.all(self.valid_eta(np.asarray(eta))))
+        ):
+            raise ValueError(
+                f"{type(self).__name__} must override execution_padding() with "
+                "finite valid response and eta values."
+            )
+        return FamilyPadding(response=response, eta=eta)
+
+    def execution_parameter_snapshot(self) -> FamilyParameterSnapshot:
+        """Return the immutable host-side parameter snapshot for a launch."""
+        return FamilyParameterSnapshot(
+            theta_mode="none",
+            log_theta=(),
+            phi_mode="known" if self.scale_known else "estimated",
+        )
+
+    def execution_static_config(self) -> tuple[object, ...]:
+        """Freeze family/link configuration that affects mathematical traces.
+
+        Unlike ``_static_cache_key()``, this deliberately snapshots public and
+        private instance attributes so a mutable custom link/family cannot be
+        silently reused after preparation.  Dynamic distribution parameters
+        belong to ``execution_parameter_snapshot()`` instead.
+        """
+        excluded = self.execution_dynamic_config_attributes()
+        attributes = tuple(
+            (name, _freeze_execution_value(value))
+            for name, value in sorted(vars(self).items())
+            if name not in excluded
+        )
+        return (
+            type(self),
+            self.family_name,
+            self._static_cache_key(),
+            type(self.link),
+            _freeze_execution_value(vars(self.link)),
+            attributes,
+            self.execution_capabilities(),
+            self.execution_padding(),
+        )
+
+    def execution_dynamic_config_attributes(self) -> frozenset[str]:
+        """Names owned by explicit dynamic parameter state, not static config.
+
+        Extended families override this instead of relying on a base-class
+        spelling such as ``_log_theta``.  This keeps the contract usable for a
+        future family with different mutable parameter storage.
+        """
+        return frozenset()
 
     def __init__(self, link: str | Link | None = None) -> None:
         if link is None:
@@ -265,6 +445,39 @@ class ExponentialFamily(ABC):
         dr = self.deviance_resids(y, mu, wt)
         xp = array_module(dr)
         return xp.sum(dr**2)
+
+    def deviance_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Return direct per-row deviance contributions without ``sqrt``.
+
+        Streamed reductions and derivative providers must use this primitive
+        rather than square ``deviance_resids``: differentiating through a
+        square root at an exact fit creates an avoidable AD singularity.
+        Built-in families override it with their existing unit-deviance
+        arithmetic.  A custom family that omits it is constructible for dense
+        compatibility code but explicitly lacks the direct-deviance execution
+        capability.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement direct deviance "
+            "contributions for bounded execution."
+        )
+
+    def deviance_derivative_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Return the smooth direct-deviance primitive used for AD.
+
+        Reported deviance may clamp tiny negative roundoff to zero.  That
+        clamp is nondifferentiable at an exact fit and must never sit on an
+        observed-information AD path.  Families therefore provide this
+        separate, algebraically equivalent interior-domain expression.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement differentiable "
+            "deviance contributions for bounded execution."
+        )
 
     @abstractmethod
     def aic(
@@ -423,6 +636,140 @@ class ExponentialFamily(ABC):
         """
         g_prime = self.link.derivative(mu)
         return eta + (y - mu) * g_prime
+
+    def working_weights_for_parameters(
+        self,
+        mu: np.ndarray,
+        eta: np.ndarray,  # noqa: ARG002 - standard families need mu only
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Pure working-weight hook with explicit dynamic theta input.
+
+        Standard families reject nonempty theta rather than reading mutable
+        state inside a JIT kernel.  Extended families override this method and
+        use the supplied array directly.
+        """
+        if log_theta.shape[0] != 0:
+            raise ValueError(
+                f"{type(self).__name__} must override "
+                "working_weights_for_parameters() for theta-dependent fits."
+            )
+        return self.working_weights(mu, wt)
+
+    def deviance_contributions_for_parameters(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Pure direct-deviance hook with explicit dynamic theta input."""
+        if log_theta.shape[0] != 0:
+            raise ValueError(
+                f"{type(self).__name__} must override "
+                "deviance_contributions_for_parameters() for theta-dependent fits."
+            )
+        return self.deviance_contributions(y, mu, wt)
+
+    def saturated_loglikelihood_for_parameters(
+        self,
+        y: np.ndarray,
+        wt: np.ndarray,
+        scale: float,
+        log_theta: np.ndarray,
+        *,
+        max_y: int = 0,
+    ) -> float:
+        """Pure saturated-likelihood hook with explicit dynamic theta input."""
+        if log_theta.shape[0] != 0:
+            raise ValueError(
+                f"{type(self).__name__} must override "
+                "saturated_loglikelihood_for_parameters() for theta-dependent "
+                "fits."
+            )
+        return self.saturated_loglik(y, wt, scale, max_y=max_y)
+
+    def deviance_derivative_contributions_for_parameters(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Explicit-parameter smooth-deviance hook used only by AD paths."""
+        if log_theta.shape[0] != 0:
+            raise ValueError(
+                f"{type(self).__name__} must override "
+                "deviance_derivative_contributions_for_parameters() for "
+                "theta-dependent fits."
+            )
+        return self.deviance_derivative_contributions(y, mu, wt)
+
+    def execution_summary_from_batch(
+        self, y: np.ndarray, wt: np.ndarray, valid: np.ndarray
+    ) -> tuple[np.ndarray, ...]:
+        """Return bounded mergeable summary leaves for one batch.
+
+        The tuple is intentionally family-owned and extensible.  The base
+        fields are valid-row count, positive-weight count, and the sum of
+        positive-weight logs.  Families with additional global metadata (for
+        example NB count-prefix planning) append leaves and override merge and
+        finalization together.
+        """
+        xp = array_module(y)
+        finite_input = xp.isfinite(y) & xp.isfinite(wt)
+        weight_ok = wt >= 0.0
+        real = valid
+        safe_weight = xp.where(finite_input, wt, 0.0)
+        positive = real & (safe_weight > 0)
+        log_weight = xp.where(positive, xp.maximum(safe_weight, 1e-300), 1.0)
+        return (
+            xp.sum(real),
+            xp.sum(positive),
+            xp.sum(xp.log(log_weight)),
+            xp.all(~valid | (finite_input & weight_ok)),
+        )
+
+    def merge_execution_summaries(
+        self, left: tuple[np.ndarray, ...], right: tuple[np.ndarray, ...]
+    ) -> tuple[np.ndarray, ...]:
+        """Merge two summaries produced by ``execution_summary_from_batch``."""
+        if len(left) != len(right):
+            raise ValueError("Family execution summaries have incompatible shapes.")
+        if len(left) < 1:
+            raise ValueError("Family execution summary must include input validity.")
+        return (
+            *tuple(a + b for a, b in zip(left[:-1], right[:-1], strict=True)),
+            np.logical_and(left[-1], right[-1]),
+        )
+
+    def finalize_execution_summary(
+        self, summary: tuple[float, ...]
+    ) -> dict[str, float]:
+        """Name base summary leaves after a bounded host reduction."""
+        if len(summary) != 4:
+            raise ValueError("Base family summary requires exactly four leaves.")
+        return {
+            "n_valid_rows": float(summary[0]),
+            "n_positive_weight": float(summary[1]),
+            "sum_log_positive_weight": float(summary[2]),
+            "input_ok": bool(summary[3]),
+        }
+
+    def execution_summary_input_ok(self, summary: object) -> bool:
+        """Return whether a finalized summary includes only valid real rows.
+
+        Families with vector or mapping-shaped summary pytrees override this
+        alongside their merge/finalize methods.  Keeping this family-owned
+        avoids imposing a hidden fixed leaf layout on future reductions.
+        """
+        if not isinstance(summary, tuple) or len(summary) < 4:
+            raise ValueError(
+                f"{type(self).__name__} must implement "
+                "execution_summary_input_ok() for its summary pytree."
+            )
+        return bool(summary[3])
 
     def scale_estimate(
         self,
