@@ -50,6 +50,40 @@ _PEN_DEV_REL_TOL = 1e-7
 _MAX_HALVINGS = 25
 
 
+def canonical_working_quantities(
+    family: ExponentialFamily,
+    y: jax.Array,
+    mu: jax.Array,
+    eta: jax.Array,
+    wt: jax.Array,
+    offset: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Return standard-family Fisher weights and offset-free working response.
+
+    Both dense PIRLS and streamed reductions use this family-owned arithmetic;
+    callers apply their own bounded-row masking after weight clipping.
+    """
+    return family.working_weights(mu, wt), family.working_response(y, mu, eta - offset)
+
+
+def accepted_penalized_step(
+    trial_penalized_deviance: jax.Array,
+    current_penalized_deviance: jax.Array,
+    domain_ok: jax.Array,
+    first_iteration: bool | jax.Array,
+) -> jax.Array:
+    """Dense PIRLS's finite/domain/decrease acceptance criterion."""
+    finite_valid = jnp.isfinite(trial_penalized_deviance) & domain_ok
+    return finite_valid & (
+        jnp.asarray(first_iteration)
+        | (
+            trial_penalized_deviance
+            <= current_penalized_deviance
+            + _PEN_DEV_REL_TOL * jnp.abs(current_penalized_deviance)
+        )
+    )
+
+
 @dataclass(frozen=True)
 class _PIRLSState:
     """Internal while_loop state for PIRLS. Registered as JAX pytree."""
@@ -330,10 +364,7 @@ def _pirls_loop_jit(
     else:
 
         def _compute_W_and_z(mu, eta):
-            W = family.working_weights(mu, wt)
-            eta_no_offset = eta - offset
-            z = family.working_response(y, mu, eta_no_offset)
-            return W, z
+            return canonical_working_quantities(family, y, mu, eta, wt, offset)
 
         def _compute_dev(mu, eta):  # noqa: ARG001
             return family.dev_resids(y, mu, wt)
@@ -400,14 +431,9 @@ def _pirls_loop_jit(
         valid_new = _is_valid(mu_new, eta_new)
 
         # First iteration: accept any finite, valid step
-        first_ok = is_first_iter & jnp.isfinite(pen_dev_new) & valid_new
-        subsequent_ok = (
-            (~is_first_iter)
-            & jnp.isfinite(pen_dev_new)
-            & valid_new
-            & (pen_dev_new <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev))
+        accepted = accepted_penalized_step(
+            pen_dev_new, state.pen_dev, valid_new, is_first_iter
         )
-        accepted = first_ok | subsequent_ok
 
         sh_init = _StepHalvingState(
             k=jnp.int32(0),
@@ -429,13 +455,7 @@ def _pirls_loop_jit(
             pd_t = dev_t + bt @ S_lambda @ bt
 
             valid_t = _is_valid(mu_t, eta_t)
-            ok = (
-                jnp.isfinite(pd_t)
-                & valid_t
-                & (pd_t <= state.pen_dev + _PEN_DEV_REL_TOL * jnp.abs(state.pen_dev))
-            )
-            # On first iteration, accept any finite, valid value
-            ok = ok | (is_first_iter & jnp.isfinite(pd_t) & valid_t)
+            ok = accepted_penalized_step(pd_t, state.pen_dev, valid_t, is_first_iter)
 
             return _StepHalvingState(
                 k=sh.k + 1, beta_try=bt, pen_dev_try=pd_t, mu_try=mu_t, accepted=ok
