@@ -828,6 +828,12 @@ class RBridge:
             multiplier_path = os.path.join(tmpdir, "multipliers.csv")
             branch_path = os.path.join(tmpdir, "branches.txt")
             score_path = os.path.join(tmpdir, "score.txt")
+            selected_sp_path = os.path.join(tmpdir, "selected_sp.csv")
+            selected_coefficient_path = os.path.join(
+                tmpdir, "selected_coefficients.csv"
+            )
+            selected_fitted_path = os.path.join(tmpdir, "selected_fitted.csv")
+            selected_deviance_path = os.path.join(tmpdir, "selected_deviance.txt")
             data.to_csv(data_path, index=False)
             source = self._pinned_efsudr_source()
 
@@ -958,6 +964,14 @@ class RBridge:
                     f"write.csv(data.frame(multiplier=trace_env$multiplier_history), {multiplier_path!r}, row.names=FALSE)",
                     f"writeLines(trace_env$branch_history, {branch_path!r})",
                     f"writeLines(format(fit$REML, digits=17), {score_path!r})",
+                    # ``efsudr`` returns the selected fit after accepting or
+                    # rejecting an extension.  ``family`` can instead retain
+                    # the last trial's theta, so all final oracle comparisons
+                    # must use this returned packed state.
+                    f"write.csv(data.frame(v=as.numeric(fit$sp)), {selected_sp_path!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(v=as.numeric(fit$coefficients)), {selected_coefficient_path!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(v=as.numeric(fit$fitted.values)), {selected_fitted_path!r}, row.names=FALSE)",
+                    f"writeLines(format(fit$dev, digits=17), {selected_deviance_path!r})",
                 ]
             )
             Path(script_path).write_text(script, encoding="utf-8")
@@ -982,6 +996,18 @@ class RBridge:
                 "branches": branches,
                 "final_score": float(
                     Path(score_path).read_text(encoding="utf-8").strip()
+                ),
+                "selected_packed_sp": pd.read_csv(selected_sp_path)["v"].to_numpy(
+                    dtype=np.float64
+                ),
+                "selected_coefficients": pd.read_csv(selected_coefficient_path)[
+                    "v"
+                ].to_numpy(dtype=np.float64),
+                "selected_fitted_values": pd.read_csv(selected_fitted_path)[
+                    "v"
+                ].to_numpy(dtype=np.float64),
+                "selected_deviance": float(
+                    Path(selected_deviance_path).read_text(encoding="utf-8").strip()
                 ),
                 "initial_shift": 2.5,
                 "source_commit": _PINNED_MGCV_SOURCE_COMMIT,
