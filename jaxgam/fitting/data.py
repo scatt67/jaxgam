@@ -33,6 +33,7 @@ from jaxgam.penalties.structure import (
 
 if TYPE_CHECKING:
     from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.prepare import PreparedModel
 
 
 _EPS_TWO_THIRDS = np.finfo(float).eps ** (2.0 / 3.0)
@@ -54,6 +55,66 @@ class CountPrefixPlan:
     max_count: int
     capacity: int
     integer_counts: bool
+
+
+@dataclass(frozen=True)
+class PreparedFittingMetadata:
+    """Observation-independent Phase-2 metadata for prepared backends.
+
+    This deliberately contains neither a design matrix nor response, weights,
+    or offsets.  It is the compact fitting metadata needed by stream routes to
+    form penalty and REML statistics without retaining training rows.
+    """
+
+    penalty_structure: penalty_ops.JaxPenaltyStructure
+    log_lambda_init: jax.Array
+    family: ExponentialFamily
+    n_obs: int
+    n_coef: int
+    total_penalty_rank: int
+    singleton_sp_indices: tuple[int, ...]
+    singleton_ranks: tuple[int, ...]
+    singleton_eig_constants: jax.Array
+    multi_block_sp_indices: tuple[tuple[int, ...], ...]
+    multi_block_ranks: tuple[int, ...]
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...]
+    rank_deficit: int = 0
+
+    @property
+    def n_penalties(self) -> int:
+        return self.penalty_structure.n_penalties
+
+    @property
+    def total_penalty_null_dim(self) -> int:
+        return self.n_coef - self.total_penalty_rank
+
+    @classmethod
+    def from_prepared(
+        cls,
+        prepared: PreparedModel,
+        family: ExponentialFamily,
+        device: jax.Device | None = None,
+    ) -> PreparedFittingMetadata:
+        """Transfer only frozen prepared fitting metadata to the device."""
+        fitting = prepared.fitting
+        if fitting is None:
+            raise ValueError("Prepared fitting metadata requires fitting preparation.")
+        metadata = _build_block_metadata(fitting.penalty_structure, device)
+        return cls(
+            penalty_structure=_to_jax_structure(fitting.penalty_structure, device),
+            log_lambda_init=to_jax(fitting.log_lambda_init, device=device),
+            family=family,
+            n_obs=prepared.n_obs,
+            n_coef=prepared.n_coef,
+            total_penalty_rank=fitting.total_penalty_rank,
+            singleton_sp_indices=metadata["singleton_sp_indices"],
+            singleton_ranks=metadata["singleton_ranks"],
+            singleton_eig_constants=metadata["singleton_eig_constants"],
+            multi_block_sp_indices=metadata["multi_block_sp_indices"],
+            multi_block_ranks=metadata["multi_block_ranks"],
+            multi_block_proj_S=metadata["multi_block_proj_S"],
+            rank_deficit=fitting.unpenalized_rank_deficit,
+        )
 
 
 @dataclass(frozen=True)
