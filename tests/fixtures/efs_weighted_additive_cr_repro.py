@@ -1,10 +1,4 @@
-"""Reproduction for the EFS weighted-offset additive CR parity investigation.
-
-This is intentionally an executable diagnostic fixture, not a passing test:
-the known discrepancy must remain visible until its first divergent state is
-explained and corrected.  It uses the exact seed, formula, and inputs reported
-in the EFS-3 investigation on 2026-09-08.
-"""
+"""Pinned EFS weighted-offset additive cubic-regression fixture."""
 
 from __future__ import annotations
 
