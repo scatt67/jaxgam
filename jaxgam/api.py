@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Literal, overload
 
 import numpy as np
 
+from jaxgam.control import FitControl
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.registry import get_family
 from jaxgam.fitting.data import FittingData
@@ -26,7 +27,7 @@ from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
-from jaxgam.results import GAMInferenceResult, GAMResults
+from jaxgam.results import GAMInferenceResult, GAMPredictionResult, GAMResults
 
 if TYPE_CHECKING:
     import jax
@@ -84,6 +85,7 @@ class GAM:
         family: str | ExponentialFamily = "gaussian",
         method: str = "REML",
         sp: np.ndarray | list | None = None,
+        control: FitControl | None = None,
         **kwargs,
     ) -> None:
         _check_scope_guards(method, kwargs)
@@ -92,6 +94,9 @@ class GAM:
         self.method = method.upper()
         self.sp = sp
         self.device = kwargs.get("device")
+        if control is not None and not isinstance(control, FitControl):
+            raise TypeError("control must be a FitControl instance or None.")
+        self.control = FitControl() if control is None else control
 
     @overload
     def fit(
@@ -113,14 +118,24 @@ class GAM:
         result: Literal["inference"],
     ) -> GAMInferenceResult: ...
 
+    @overload
     def fit(
         self,
         data: pd.DataFrame | dict,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
         *,
-        result: Literal["full", "inference"] = "full",
-    ) -> GAMResults | GAMInferenceResult:
+        result: Literal["prediction"],
+    ) -> GAMPredictionResult: ...
+
+    def fit(
+        self,
+        data: pd.DataFrame | dict,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+        *,
+        result: Literal["full", "inference", "prediction"] = "full",
+    ) -> GAMResults | GAMInferenceResult | GAMPredictionResult:
         """Fit the GAM to data.
 
         Parameters
@@ -144,8 +159,10 @@ class GAM:
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
-        if result not in ("full", "inference"):
-            raise ValueError(f"result must be 'full' or 'inference', got {result!r}")
+        if result not in ("full", "inference", "prediction"):
+            raise ValueError(
+                f"result must be 'full', 'inference', or 'prediction', got {result!r}"
+            )
 
         family_obj = get_family(self.family)
 
@@ -185,6 +202,7 @@ class GAM:
             formula=self.formula,
             method=self.method,
             result_mode=result,
+            control=self.control,
         )
 
 

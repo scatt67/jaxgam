@@ -99,7 +99,11 @@ def test_predict_iter_matches_concrete_prediction_with_source_offsets() -> None:
     predictor = _make_predictor(result)
     offset = np.linspace(-0.1, 0.2, len(data))
     source = ArrayRowSource({"x": data["x"].to_numpy()}, offset=offset)
-    got = np.concatenate(list(predictor.predict_iter(source, 9, pred_type="link")))
+    batches = list(predictor.predict_iter(source, 9, pred_type="link"))
+    np.testing.assert_array_equal(
+        np.concatenate([positions for positions, _ in batches]), np.arange(len(data))
+    )
+    got = np.concatenate([prediction for _, prediction in batches])
     expected = predictor.predict(data[["x"]], pred_type="link", offset=offset)
     np.testing.assert_allclose(got, expected)
 
