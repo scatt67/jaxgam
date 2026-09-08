@@ -1,14 +1,15 @@
-"""Dense, known-scale extended Fellner--Schall execution adapter.
+"""Dense regular-family extended Fellner--Schall execution adapter.
 
-This is intentionally an internal controller.  It supports the first EFS
-regime only (Poisson/log and binomial/logit), and keeps accepted and trial
-states separate so a rejected refit can never leak into the next iteration.
+This is intentionally an internal controller.  It supports known-scale
+Poisson/log and binomial/logit plus regular unknown-scale Gaussian/identity
+and Gamma inverse/log. Accepted and trial states remain separate so a rejected
+refit can never leak into the next iteration.
 """
 
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import jax
@@ -80,19 +81,39 @@ def efs_initial_log_scale(setup, family) -> jax.Array:
 
 def _efs_initial_log_scale_from_arrays(y, wt, family) -> jax.Array:
     """Array-level implementation shared by setup and dense fit adapters."""
-    y = np.asarray(y, dtype=np.float64)
-    wt = np.asarray(wt, dtype=np.float64)
     if y.ndim != 1 or y.size == 0 or wt.shape != y.shape:
         raise ValueError(
             "EFS initial scale requires nonempty aligned response and weights"
         )
-    if not np.all(np.isfinite(y)) or not np.all(np.isfinite(wt)) or np.any(wt <= 0):
-        raise ValueError("EFS initial scale requires finite strictly positive weights")
-    # Retain family response validation before using the same response mean as
-    # get.null.coef().  ``initialize`` may perform support checks.
-    family.initialize(y, wt)
-    mu = np.full_like(y, np.mean(y))
-    null_scale = float(np.asarray(family.dev_resids(y, mu, wt))) / y.size
+    # Keep all reductions bounded by the initialization batch.  This is also
+    # where Python family initialization performs response-domain validation,
+    # before we reproduce get.null.coef's unweighted mean convention.
+    response_sum = 0.0
+    n_obs = int(y.shape[0])
+    batch_rows = 8192
+    for start in range(0, n_obs, batch_rows):
+        stop = min(start + batch_rows, n_obs)
+        y_batch = np.asarray(y[start:stop], dtype=np.float64)
+        wt_batch = np.asarray(wt[start:stop], dtype=np.float64)
+        if (
+            not np.all(np.isfinite(y_batch))
+            or not np.all(np.isfinite(wt_batch))
+            or np.any(wt_batch <= 0)
+        ):
+            raise ValueError(
+                "EFS initial scale requires finite strictly positive weights"
+            )
+        family.initialize(y_batch, wt_batch)
+        response_sum += float(np.sum(y_batch))
+    response_mean = response_sum / n_obs
+    deviance = 0.0
+    for start in range(0, n_obs, batch_rows):
+        stop = min(start + batch_rows, n_obs)
+        y_batch = np.asarray(y[start:stop], dtype=np.float64)
+        wt_batch = np.asarray(wt[start:stop], dtype=np.float64)
+        mu_batch = np.full(y_batch.shape, response_mean, dtype=np.float64)
+        deviance += float(np.asarray(family.dev_resids(y_batch, mu_batch, wt_batch)))
+    null_scale = deviance / n_obs
     incoming_phi = null_scale / 10.0
     if not np.isfinite(incoming_phi) or incoming_phi <= 0:
         raise ValueError(
@@ -103,7 +124,7 @@ def _efs_initial_log_scale_from_arrays(y, wt, family) -> jax.Array:
 
 @dataclass(frozen=True)
 class EFSControl:
-    """Pinned ``efsudr`` controls for the known-scale dense path."""
+    """Pinned ``efsudr`` controls for the dense regular-family path."""
 
     outer_limit: int = 200
     log_lambda_max: float = 15.0
@@ -168,6 +189,7 @@ class EFSFitState:
     score_phi: jax.Array | None = None
     update_phi: jax.Array | None = None
     reported_phi: jax.Array | None = None
+    carried_phi: jax.Array | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +215,7 @@ class EFSResult:
     score_phi: jax.Array | None = None
     update_phi: jax.Array | None = None
     reported_phi: jax.Array | None = None
+    carried_phi: jax.Array | None = None
     score_phi_history: tuple[float, ...] = ()
 
 
@@ -305,6 +328,7 @@ def _fit_state(
         valid,
         inner,
         score_phi,
+        update_phi,
         update_phi,
         update_phi,
     )
@@ -504,7 +528,10 @@ def dense_efs_unknown_scale(
     replacement is the current fit's Fletcher estimate, as in pinned
     ``efsudr``.  Alternative extension/contraction fits are intentionally
     formed from the old accepted beta *and old accepted input parameter
-    state*, never from a rejected trial's reported scale.
+    state*, never from a rejected trial's reported scale.  Pinned R has one
+    deliberate exception: after a winning extension it carries the candidate
+    scale into the next score while retaining the extension scale for its next
+    EFS ratio; ``carried_phi`` records that distinct full-parameter state.
     """
     if not _unknown_scale_family_supported(fitting_data):
         raise NotImplementedError(
@@ -565,6 +592,7 @@ def dense_efs_unknown_scale(
             score_phi=accepted.score_phi,
             update_phi=accepted.update_phi,
             reported_phi=accepted.reported_phi,
+            carried_phi=accepted.carried_phi,
         )
 
     multiplier = 1.0
@@ -594,14 +622,14 @@ def dense_efs_unknown_scale(
         # scale.  The full proposal's phi component is unchanged at this
         # point, so retaining rho's maximum is the exact nonzero component.
         original_max_step = float(np.max(np.abs(np.asarray(update_residual))))
-        assert old.update_phi is not None
+        assert old.carried_phi is not None
         candidate = _fit_state(
             fitting_data,
             plan,
             raw.log_smoothing_trial,
             old.pirls_result.coefficients,
             control,
-            old.update_phi,
+            old.carried_phi,
         )
         if not candidate.valid:
             stop = "inner_failure" if not candidate.inner_converged else "invalid_trial"
@@ -618,12 +646,18 @@ def dense_efs_unknown_scale(
                     extension_rho,
                     old.pirls_result.coefficients,
                     control,
-                    old.update_phi,
+                    old.carried_phi,
                 )
                 if extension.valid and float(np.asarray(extension.score)) < float(
                     np.asarray(candidate.score)
                 ):
-                    accepted = extension
+                    # Pinned efsudr writes lsp2's scale from ``fit`` (the
+                    # first candidate), not fit2 (the extension), before it
+                    # swaps ``fit <- fit2``.  Therefore next score uses the
+                    # candidate scale while the next ratio uses extension's
+                    # Fletcher scale retained in ``accepted.update_phi``.
+                    assert candidate.update_phi is not None
+                    accepted = replace(extension, carried_phi=candidate.update_phi)
                     multiplier *= 2.0
                 else:
                     accepted = candidate
@@ -645,7 +679,7 @@ def dense_efs_unknown_scale(
                     rho,
                     old.pirls_result.coefficients,
                     control,
-                    old.update_phi,
+                    old.carried_phi,
                 )
                 if not candidate.valid:
                     stop = (
@@ -698,5 +732,6 @@ def dense_efs_unknown_scale(
         accepted.score_phi,
         accepted.update_phi,
         accepted.reported_phi,
+        accepted.carried_phi,
         tuple(score_phi_history)[-control.history_limit :],
     )
