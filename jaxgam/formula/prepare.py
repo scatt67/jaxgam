@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -87,7 +88,7 @@ def _exact_cubic_knots(
     """
     with tempfile.TemporaryDirectory(prefix="jaxgam-unique-") as directory:
         db_path = Path(directory) / "values.sqlite"
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection, connection:
             # Keep DISTINCT/ORDER BY state on the temporary database, never
             # in SQLite's in-memory temp store for a high-cardinality source.
             connection.execute("PRAGMA temp_store = FILE")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -189,9 +191,10 @@ def test_prepared_prediction_smooth_drops_penalty_cache() -> None:
 
 @pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
 @pytest.mark.parametrize(("basis", "k"), [("cr", 6), ("cs", 5)])
-def test_prepared_cubic_design_and_penalty_match_r_components(
+def test_prepared_cubic_design_and_cr_penalty_match_r_components(
     r_bridge, basis: str, k: int
 ) -> None:
+    """Both bases match R; cs retains the dense null-space orientation caveat."""
     data = _data()
     formula = f'y ~ s(x, bs="{basis}", k={k})'
     prepared = prepare_model(
@@ -216,3 +219,30 @@ def test_prepared_cubic_design_and_penalty_match_r_components(
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
         )
+
+
+@pytest.mark.parametrize("failure", [None, "unique", "nonfinite"])
+def test_exact_knots_close_database_on_success_and_failure(monkeypatch, failure):
+    """The transaction context alone does not close its SQLite connection."""
+    connections = []
+    original_connect = sqlite3.connect
+
+    def tracked_connect(*args, **kwargs):
+        connection = original_connect(*args, **kwargs)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+    x = np.linspace(0.0, 1.0, 12)
+    if failure == "nonfinite":
+        x[-1] = np.nan
+    source = ArrayRowSource({"x": x})
+    if failure is None:
+        _exact_cubic_knots(source, "x", 6)
+    else:
+        match = "unique data values" if failure == "unique" else "non-finite"
+        with pytest.raises(ValueError, match=match):
+            _exact_cubic_knots(source, "x", 20 if failure == "unique" else 6)
+    assert len(connections) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        connections[0].execute("SELECT 1")
