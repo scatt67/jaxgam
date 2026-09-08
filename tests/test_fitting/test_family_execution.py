@@ -265,20 +265,49 @@ def test_gamma_regular_fletcher_statistics_are_batch_and_padding_invariant(
     assert bool(reduced.stream_admissible)
 
 
-def test_regular_fletcher_nonfinite_correction_reports_r_fallback() -> None:
+@pytest.mark.parametrize(
+    (
+        "correction_sum",
+        "edf",
+        "input_ok",
+        "expected_scale",
+        "applied",
+        "admissible",
+    ),
+    [
+        (jnp.nan, 1.0, True, 2.5, False, False),
+        (jnp.inf, 1.0, True, 2.5, False, False),
+        (-jnp.inf, 1.0, True, 25.0, True, True),
+        (0.0, 3.0, True, jnp.inf, True, False),
+        (0.0, 1.0, False, 2.5, True, False),
+    ],
+)
+def test_regular_fletcher_edge_status_keeps_r_scalar_separate_from_stream_gate(
+    correction_sum: float,
+    edf: float,
+    input_ok: bool,
+    expected_scale: float,
+    applied: bool,
+    admissible: bool,
+) -> None:
     family = Gamma()
     context = FamilyExecutionContext.from_family(family)
     summary = RegularFletcherStatistics(
         pearson_sum=jnp.array(5.0),
-        correction_sum=jnp.array(jnp.nan),
+        correction_sum=jnp.array(correction_sum),
         n_valid_rows=jnp.array(3),
-        input_ok=jnp.array(True),
+        input_ok=jnp.array(input_ok),
     )
-    result = finalize_regular_fletcher_scale(summary, jnp.array(1.0), family, context)
-    assert float(result.scale) == 2.5
-    assert not bool(result.correction_applied)
-    assert bool(result.input_ok)
-    assert not bool(result.stream_admissible)
+    result = finalize_regular_fletcher_scale(summary, jnp.array(edf), family, context)
+    np.testing.assert_allclose(
+        result.scale,
+        expected_scale,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert bool(result.correction_applied) is applied
+    assert bool(result.input_ok) is input_ok
+    assert bool(result.stream_admissible) is admissible
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv unavailable")
