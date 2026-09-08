@@ -716,6 +716,8 @@ class RBridge:
             source_path = os.path.join(tmpdir, "efsudr_pinned.R")
             script_path = os.path.join(tmpdir, "diagnose_efs.R")
             trace_path = os.path.join(tmpdir, "trace.csv")
+            coefficient_path = os.path.join(tmpdir, "coefficient_trace.csv")
+            fitted_path = os.path.join(tmpdir, "fitted_trace.csv")
             multiplier_path = os.path.join(tmpdir, "multipliers.csv")
             branch_path = os.path.join(tmpdir, "branches.txt")
             score_path = os.path.join(tmpdir, "score.txt")
@@ -783,7 +785,7 @@ class RBridge:
                     "if (family$family[1] %in% c('poisson', 'binomial')) fit_scale <- 1",
                     "if (fit_scale <= 0) { null_fit <- mgcv:::get.null.coef(G); lsp <- c(lsp, log(null_fit$null.scale / 10)) }",
                     "trace_env <- new.env(parent=asNamespace('mgcv'))",
-                    "trace_env$trace_log <- list(); trace_env$multiplier_history <- numeric(); trace_env$branch_history <- character()",
+                    "trace_env$trace_log <- list(); trace_env$coefficient_log <- list(); trace_env$fitted_log <- list(); trace_env$multiplier_history <- numeric(); trace_env$branch_history <- character()",
                     "trace_env$efs_record_multiplier <- function(value) trace_env$multiplier_history <- c(trace_env$multiplier_history, value)",
                     "trace_env$efs_record_branch <- function(value) trace_env$branch_history <- c(trace_env$branch_history, value)",
                     "trace_env$gam.fit3 <- function(...) {",
@@ -795,12 +797,16 @@ class RBridge:
                     "  score_phi <- if (length(args$sp) > nsp) exp(tail(args$sp, 1)) else args$scale",
                     "  update_phi <- if (length(args$sp) > nsp) fit$scale else args$scale",
                     "  trace_env$trace_log[[length(trace_env$trace_log) + 1]] <- data.frame(call=rep(length(trace_env$trace_log) + 1L, nsp), parameter=seq_len(nsp), log_smoothing=as.numeric(args$sp[seq_len(nsp)]), ldetS1=as.numeric(fit$ldetS1[seq_len(nsp)]), bSb=as.numeric(bSb), trVS=as.numeric(trVS), score=rep(as.numeric(fit$REML)[1], nsp), score_phi=rep(as.numeric(score_phi)[1], nsp), update_phi=rep(as.numeric(update_phi)[1], nsp), reported_phi=rep(as.numeric(fit$scale)[1], nsp), deviance=rep(as.numeric(fit$dev)[1], nsp))",
+                    "  trace_env$coefficient_log[[length(trace_env$coefficient_log) + 1]] <- as.numeric(fit$coefficients)",
+                    "  trace_env$fitted_log[[length(trace_env$fitted_log) + 1]] <- as.numeric(fit$fitted.values)",
                     "  fit",
                     "}",
                     f"source({source_path!r}, local=trace_env)",
                     f"fit <- trace_env$efsudr(x=G$X, y=G$y, lsp=lsp, Eb=G$Eb, UrS=G$UrS, weights=G$w, family=family, offset=G$offset, U1=G$U1, intercept=G$intercept, scale=fit_scale, Mp=G$Mp, control=gam.control(efs.lspmax={resolved['efs_lspmax']!r}, efs.tol={resolved['efs_tol']!r}), n.true=G$n.true)",
                     "trace <- do.call(rbind, trace_env$trace_log)",
                     f"write.csv(trace, {trace_path!r}, row.names=FALSE)",
+                    f"write.csv(do.call(rbind, trace_env$coefficient_log), {coefficient_path!r}, row.names=FALSE)",
+                    f"write.csv(do.call(rbind, trace_env$fitted_log), {fitted_path!r}, row.names=FALSE)",
                     f"write.csv(data.frame(multiplier=trace_env$multiplier_history), {multiplier_path!r}, row.names=FALSE)",
                     f"writeLines(trace_env$branch_history, {branch_path!r})",
                     f"writeLines(format(fit$REML, digits=17), {score_path!r})",
@@ -809,12 +815,16 @@ class RBridge:
             Path(script_path).write_text(script, encoding="utf-8")
             self._run_efs_rscript(script_path)
             trace = pd.read_csv(trace_path)
+            coefficients = pd.read_csv(coefficient_path).to_numpy(dtype=np.float64)
+            fitted = pd.read_csv(fitted_path).to_numpy(dtype=np.float64)
             multipliers = pd.read_csv(multiplier_path)["multiplier"].to_numpy(
                 dtype=np.float64
             )
             branches = Path(branch_path).read_text(encoding="utf-8").splitlines()
             return {
                 "statistics": trace,
+                "coefficients": coefficients,
+                "fitted_values": fitted,
                 "multipliers": multipliers,
                 "branches": branches,
                 "final_score": float(
