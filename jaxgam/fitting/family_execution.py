@@ -201,10 +201,19 @@ class InitialBatchWorkingQuantities:
     fisher_weight: jax.Array
     fisher_response: jax.Array
     observed_weight: jax.Array
+    newton_alpha_raw: jax.Array
     newton_alpha: jax.Array
     newton_weight: jax.Array
     newton_response: jax.Array
+    input_ok: jax.Array
     domain_ok: jax.Array
+    alpha_resolution_unresolved: jax.Array
+    working_inputs_ok: jax.Array
+    informative_count: jax.Array
+    fisher_system_ok: jax.Array
+    newton_system_ok: jax.Array
+    observed_information_ok: jax.Array
+    working_system_admissible: jax.Array
 
 
 _INITIAL_BATCH_WORKING_FIELDS = [
@@ -557,88 +566,136 @@ def batch_initial_working_quantities(
         "observed_information",
         "differentiable_deviance",
     )
+    if context.capabilities.dynamic_theta:
+        raise NotImplementedError(
+            "Initial working systems with dynamic theta are deferred to PR7.5; "
+            "the current regular-family primitive must not mix static family "
+            "variance with explicit trial theta."
+        )
     valid = jnp.asarray(valid, dtype=bool)
+    normalized_y = family.execution_initial_response(y, prior_weight)
     finite_vectors = (
-        jnp.isfinite(y)
+        jnp.isfinite(normalized_y)
         & jnp.isfinite(prior_weight)
         & jnp.isfinite(offset)
         & jnp.isfinite(eta_start)
     )
-    real_input = (
-        valid & finite_vectors & (prior_weight >= 0.0) & _response_valid(family, y)
-    )
+    response_ok = _response_valid(family, normalized_y)
+    real_input = valid & finite_vectors & (prior_weight >= 0.0) & response_ok
     padding = context.padding
-    y_safe = jnp.where(real_input, y, padding.response)
+    y_safe = jnp.where(real_input, normalized_y, padding.response)
     weight_safe = jnp.where(real_input, prior_weight, 0.0)
     offset_safe = jnp.where(real_input, offset, 0.0)
     eta_safe = jnp.where(real_input, eta_start, padding.eta)
-    mu = family.link.inverse(eta_safe)
+    mu_candidate = family.link.inverse(eta_safe)
     eta_domain = family.valid_eta(eta_safe)
-    mu_domain = family.valid_mu(mu)
-    domain_rows = real_input & eta_domain & mu_domain
+    mu_domain = family.valid_mu(mu_candidate)
+    domain_rows = real_input & eta_domain & mu_domain & jnp.isfinite(mu_candidate)
 
+    variance_candidate = family.variance(mu_candidate)
+    mu_eta_candidate = family.link.mu_eta(eta_safe)
+    positive_domain = domain_rows & (weight_safe > 0.0)
+    variance_ok = jnp.isfinite(variance_candidate) & (variance_candidate != 0.0)
+    mu_eta_finite = jnp.isfinite(mu_eta_candidate)
+    # gam.fit3 excludes a finite zero mu.eta from ``good`` but treats
+    # non-finite working inputs (and a zero/non-finite variance) as errors.
+    # Keep that distinction separate from the operational row mask.
+    working_inputs_ok = jnp.all(~positive_domain | (variance_ok & mu_eta_finite))
+    informative = (
+        positive_domain & variance_ok & mu_eta_finite & (mu_eta_candidate != 0.0)
+    )
+    # mgcv forms W/z only for ``good = weights > 0 & mu.eta != 0``. Evaluate
+    # all other rows at finite family padding so undefined unused arithmetic
+    # cannot poison an otherwise informative batch.
+    y_work = jnp.where(informative, y_safe, padding.response)
+    weight_work = jnp.where(informative, weight_safe, 0.0)
+    offset_work = jnp.where(informative, offset_safe, 0.0)
+    eta_work = jnp.where(informative, eta_safe, padding.eta)
+    mu = family.link.inverse(eta_work)
     variance = family.variance(mu)
-    mu_eta = family.link.mu_eta(eta_safe)
-    fisher_weight = weight_safe * mu_eta**2 / variance
-    fisher_response = (eta_safe - offset_safe) + (y_safe - mu) / mu_eta
+    mu_eta = family.link.mu_eta(eta_work)
+    fisher_weight = weight_work * mu_eta**2 / variance
+    fisher_response = (eta_work - offset_work) + (y_work - mu) / mu_eta
 
     def _deviance_at_eta(eta_value: jax.Array) -> jax.Array:
         mu_value = family.link.inverse(eta_value)
         return jnp.sum(
             family.deviance_derivative_contributions_for_parameters(
-                y_safe,
+                y_work,
                 mu_value,
-                weight_safe,
+                weight_work,
                 parameters.log_theta,
             )
         )
 
     gradient = jax.grad(_deviance_at_eta)
-    _, second = jax.jvp(gradient, (eta_safe,), (jnp.ones_like(eta_safe),))
+    _, second = jax.jvp(gradient, (eta_work,), (jnp.ones_like(eta_work),))
     observed_weight = 0.5 * second
     d2link = family.link.second_derivative(mu)
     alpha_terms = family.dvar(mu) / variance + d2link * mu_eta
     # R evaluates this expression in separate vector operations before its
     # exact-zero replacement. Keep a materialization barrier so XLA does not
     # turn a mathematically zero alpha into a fused-roundoff residue.
-    alpha_correction = jax.lax.optimization_barrier((y_safe - mu) * alpha_terms)
+    alpha_correction = jax.lax.optimization_barrier((y_work - mu) * alpha_terms)
     alpha_raw = jax.lax.optimization_barrier(1.0 + alpha_correction)
-    # R's separate vector operations can produce an exact zero here while
-    # XLA's fused arithmetic leaves a few ulps (notably Binomial/log at
-    # y==1). Treat only a unit-scale rounding-resolution residue as that
-    # same zero, then apply gam.fit3's literal eps replacement. This neither
-    # clips a signed Newton weight nor selects a Fisher fallback.
-    alpha_roundoff_zero = jnp.abs(alpha_raw) <= (
-        8.0 * jnp.finfo(jnp.float64).eps * (1.0 + jnp.abs(alpha_correction))
-    )
-    alpha = jnp.where(
-        (alpha_raw == 0.0) | alpha_roundoff_zero,
-        jnp.finfo(jnp.float64).eps,
-        alpha_raw,
-    )
-    newton_weight = weight_safe * alpha * mu_eta**2 / variance
-    newton_response = (eta_safe - offset_safe) + (y_safe - mu) / (mu_eta * alpha)
+    # This is the literal gam.fit3 alpha==0 replacement only. A separate
+    # family-owned diagnostic reports XLA/R cancellation gaps; it never
+    # changes a small signed alpha into a positive working weight.
+    alpha = jnp.where(alpha_raw == 0.0, jnp.finfo(jnp.float64).eps, alpha_raw)
+    newton_weight = weight_work * alpha * mu_eta**2 / variance
+    newton_response = (eta_work - offset_work) + (y_work - mu) / (mu_eta * alpha)
 
     theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
-    finite_outputs = (
-        jnp.all(jnp.isfinite(fisher_weight))
-        & jnp.all(jnp.isfinite(fisher_response))
-        & jnp.all(jnp.isfinite(observed_weight))
-        & jnp.all(jnp.isfinite(alpha))
-        & jnp.all(jnp.isfinite(newton_weight))
-        & jnp.all(jnp.isfinite(newton_response))
+    input_ok = jnp.all(~valid | real_input)
+    domain_ok = input_ok & jnp.all(~valid | domain_rows) & theta_finite
+    if context.capabilities.initial_alpha_resolution == "unresolved_near_zero":
+        alpha_resolution_unresolved = (
+            informative
+            & family.initial_alpha_resolution_unresolved(y_work, mu, alpha_raw)
+        )
+    else:
+        alpha_resolution_unresolved = jnp.zeros_like(informative)
+    fisher_system_ok = jnp.all(~informative | jnp.isfinite(fisher_weight)) & jnp.all(
+        ~informative | jnp.isfinite(fisher_response)
     )
-    domain_ok = jnp.all(~valid | domain_rows) & theta_finite & finite_outputs
+    newton_system_ok = (
+        jnp.all(~informative | jnp.isfinite(alpha_raw))
+        & jnp.all(~informative | jnp.isfinite(alpha))
+        & jnp.all(~informative | jnp.isfinite(newton_weight))
+        & jnp.all(~informative | jnp.isfinite(newton_response))
+    )
+    observed_information_ok = jnp.all(~informative | jnp.isfinite(observed_weight))
+    if context.capabilities.coefficient_system == "fisher":
+        selected_system_ok = fisher_system_ok
+        selected_alpha_resolution_unresolved = jnp.zeros((), dtype=bool)
+    else:
+        selected_system_ok = newton_system_ok
+        selected_alpha_resolution_unresolved = jnp.any(alpha_resolution_unresolved)
+    working_system_admissible = (
+        domain_ok
+        & working_inputs_ok
+        & selected_system_ok
+        & ~selected_alpha_resolution_unresolved
+    )
     return InitialBatchWorkingQuantities(
         eta=eta_safe,
-        mu=mu,
-        fisher_weight=jnp.where(valid, fisher_weight, 0.0),
-        fisher_response=jnp.where(valid, fisher_response, 0.0),
-        observed_weight=jnp.where(valid, observed_weight, 0.0),
-        newton_alpha=jnp.where(valid, alpha, 0.0),
-        newton_weight=jnp.where(valid, newton_weight, 0.0),
-        newton_response=jnp.where(valid, newton_response, 0.0),
+        mu=mu_candidate,
+        fisher_weight=jnp.where(informative, fisher_weight, 0.0),
+        fisher_response=jnp.where(informative, fisher_response, 0.0),
+        observed_weight=jnp.where(informative, observed_weight, 0.0),
+        newton_alpha_raw=jnp.where(informative, alpha_raw, 0.0),
+        newton_alpha=jnp.where(informative, alpha, 0.0),
+        newton_weight=jnp.where(informative, newton_weight, 0.0),
+        newton_response=jnp.where(informative, newton_response, 0.0),
+        input_ok=input_ok,
         domain_ok=domain_ok,
+        alpha_resolution_unresolved=alpha_resolution_unresolved,
+        working_inputs_ok=working_inputs_ok,
+        informative_count=jnp.sum(informative, dtype=jnp.int32),
+        fisher_system_ok=fisher_system_ok,
+        newton_system_ok=newton_system_ok,
+        observed_information_ok=observed_information_ok,
+        working_system_admissible=working_system_admissible,
     )
 
 

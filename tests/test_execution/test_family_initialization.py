@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+from functools import partial
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +13,7 @@ import pytest
 
 from jaxgam.data.source import ArrayRowSource
 from jaxgam.execution.family_initialization import select_initial_working_state_cpu
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
@@ -21,6 +24,7 @@ from jaxgam.fitting.family_execution import (
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
+from jaxgam.jax_utils import array_module
 from jaxgam.links.links import (
     CloglogLink,
     IdentityLink,
@@ -118,10 +122,212 @@ def test_binomial_zero_weight_normalization_matches_r_initialize() -> None:
     np.testing.assert_allclose(
         state.mustart, [0.5, 0.75], rtol=STRICT.rtol, atol=STRICT.atol
     )
+    with pytest.raises(ValueError, match="read-only"):
+        state.eta[0] = 0.0
 
 
-def test_binomial_log_initial_alpha_uses_pinned_zero_to_epsilon_rule() -> None:
-    """XLA roundoff must not turn gam.fit3's alpha==0 branch into huge z."""
+def test_binomial_zero_weight_nan_is_normalized_before_jit_support_checks() -> None:
+    """stats::binomial permits an otherwise invalid response at weight zero."""
+    family = Binomial(LogitLink())
+    y = jnp.asarray([jnp.nan, 1.0])
+    weight = jnp.asarray([0.0, 1.0])
+    state = family.initial_working_state_cpu(
+        np.asarray(y), np.asarray(weight), np.ones(2, bool)
+    )
+    result = batch_initial_working_quantities(
+        y,
+        weight,
+        jnp.zeros(2),
+        jnp.ones(2, dtype=bool),
+        jnp.asarray(state.eta),
+        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
+        family,
+        FamilyExecutionContext.from_family(family),
+    )
+    assert bool(result.input_ok)
+    assert bool(result.domain_ok)
+    assert bool(result.working_system_admissible)
+    np.testing.assert_array_equal(np.asarray(result.fisher_weight[:1]), [0.0])
+    np.testing.assert_array_equal(np.asarray(result.newton_response[:1]), [0.0])
+
+
+class _ZeroMuEtaIdentity(IdentityLink):
+    """An opt-in diagnostic link whose positive rows are legitimately not good."""
+
+    def mu_eta(self, eta):
+        return array_module(eta).zeros_like(eta)
+
+
+class _InfiniteMuEtaIdentity(IdentityLink):
+    """An invalid working link used to prove positive rows fail closed."""
+
+    def mu_eta(self, eta):
+        return array_module(eta).full_like(eta, np.inf)
+
+
+class _NonfiniteD2Identity(IdentityLink):
+    """Makes only the unselected alpha/Newton diagnostic non-finite."""
+
+    def second_derivative(self, mu):
+        return array_module(mu).full_like(mu, np.inf)
+
+
+class _ZeroVarianceGaussian(Gaussian):
+    """An invalid variance contract used to prove positive rows fail closed."""
+
+    family_name = "zero_variance_gaussian"
+
+    def variance(self, mu):
+        return array_module(mu).zeros_like(mu)
+
+
+@pytest.mark.parametrize(
+    "family",
+    [Gaussian(_InfiniteMuEtaIdentity()), _ZeroVarianceGaussian(IdentityLink())],
+)
+def test_positive_rows_with_invalid_working_inputs_fail_closed(family) -> None:
+    result = batch_initial_working_quantities(
+        jnp.asarray([1.0]),
+        jnp.ones(1),
+        jnp.zeros(1),
+        jnp.ones(1, dtype=bool),
+        jnp.asarray([1.0]),
+        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
+        family,
+        FamilyExecutionContext.from_family(family),
+    )
+    assert bool(result.input_ok)
+    assert bool(result.domain_ok)
+    assert not bool(result.working_inputs_ok)
+    assert not bool(result.working_system_admissible)
+
+
+def test_zero_mu_eta_and_empty_batches_are_neutral_not_invalid() -> None:
+    """mgcv excludes finite zero mu.eta rows; a global driver owns total count."""
+    family = Gaussian(_ZeroMuEtaIdentity())
+    result = batch_initial_working_quantities(
+        jnp.asarray([1.0]),
+        jnp.ones(1),
+        jnp.zeros(1),
+        jnp.ones(1, dtype=bool),
+        jnp.asarray([1.0]),
+        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
+        family,
+        FamilyExecutionContext.from_family(family),
+    )
+    assert bool(result.working_inputs_ok)
+    assert bool(result.working_system_admissible)
+    assert int(result.informative_count) == 0
+    np.testing.assert_array_equal(np.asarray(result.fisher_weight), [0.0])
+
+
+def test_selected_fisher_system_ignores_unselected_nonfinite_newton_diagnostic() -> (
+    None
+):
+    """Retain raw diagnostics without making the selected Fisher W/z unusable."""
+    family = Gaussian(_NonfiniteD2Identity())
+    result = batch_initial_working_quantities(
+        jnp.asarray([2.0]),
+        jnp.ones(1),
+        jnp.zeros(1),
+        jnp.ones(1, dtype=bool),
+        jnp.asarray([1.0]),
+        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
+        family,
+        FamilyExecutionContext.from_family(family),
+    )
+    assert bool(result.fisher_system_ok)
+    assert not bool(result.newton_system_ok)
+    assert bool(result.observed_information_ok)
+    assert bool(result.working_system_admissible)
+    assert np.isinf(np.asarray(result.newton_alpha_raw)[0])
+    np.testing.assert_allclose(result.fisher_weight, [1.0])
+
+
+@pytest.mark.parametrize("fixed", [True, False])
+def test_nb_parameter_mutation_invalidates_initial_working_lineage(fixed) -> None:
+    """Both fixed and estimated theta snapshots reject a later theta mutation."""
+    family = NegativeBinomial(theta=2.0, fixed=fixed)
+    snapshot = family.execution_parameter_snapshot()
+    prepared = SimpleNamespace(
+        source_fingerprint="source",
+        basis_fingerprint="basis",
+        fitting=SimpleNamespace(
+            family_name=family.family_name,
+            link_name=type(family.link).__qualname__,
+            family_execution_static_config=family.execution_static_config(),
+            family_parameter_snapshot=snapshot,
+        ),
+    )
+    lineage = FamilyExecutionLineage.from_prepared(prepared, family)
+    family.put_theta(np.log(np.asarray([3.0])))
+    with pytest.raises(
+        RuntimeError, match=r"(static configuration|parameter state) changed"
+    ):
+        lineage.validate(prepared, family)
+
+
+def test_dynamic_theta_nb_initial_working_system_is_deferred_to_pr75() -> None:
+    """Do not combine static NB variance with an explicit trial-theta leaf."""
+    family = NegativeBinomial(theta=2.0, fixed=False)
+    context = FamilyExecutionContext.from_family(family)
+    with pytest.raises(NotImplementedError, match=r"PR7\.5"):
+        batch_initial_working_quantities(
+            jnp.asarray([1.0]),
+            jnp.ones(1),
+            jnp.zeros(1),
+            jnp.ones(1, dtype=bool),
+            jnp.zeros(1),
+            FamilyExecutionParameters.from_snapshot(
+                family.execution_parameter_snapshot()
+            ),
+            family,
+            context,
+        )
+
+
+def test_unclipped_second_derivative_preserves_valid_inverse_and_gamma_domains() -> (
+    None
+):
+    """The opt-in raw hooks must not inherit legacy positive-domain clipping."""
+    inverse = InverseLink()
+    np.testing.assert_allclose(inverse.second_derivative(np.array([-2.0])), [-0.25])
+    np.testing.assert_allclose(
+        inverse.second_derivative(np.array([-1e-12])), [-2e36], rtol=MODERATE.rtol
+    )
+    log = LogLink()
+    np.testing.assert_allclose(log.second_derivative(np.array([1e-12])), [-1e24])
+
+
+@pytest.mark.parametrize(
+    ("family", "y", "eta", "expected_alpha"),
+    [
+        (Gaussian(InverseLink()), -1.0, -0.5, 2.0),
+        (Gamma(LogLink()), 2e-12, np.log(1e-12), 2.0),
+    ],
+)
+def test_initial_raw_alpha_uses_unclipped_second_link_derivative(
+    family, y, eta, expected_alpha
+) -> None:
+    """Valid negative/tiny-positive domains retain the pinned-R arithmetic."""
+    result = batch_initial_working_quantities(
+        jnp.asarray([y]),
+        jnp.ones(1),
+        jnp.zeros(1),
+        jnp.ones(1, dtype=bool),
+        jnp.asarray([eta]),
+        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
+        family,
+        FamilyExecutionContext.from_family(family),
+    )
+    assert bool(result.working_system_admissible)
+    np.testing.assert_allclose(
+        result.newton_alpha_raw, [expected_alpha], rtol=MODERATE.rtol, atol=0.0
+    )
+
+
+def test_binomial_log_reports_unresolved_near_zero_alpha_without_rewriting() -> None:
+    """Keep raw alpha/sign and fail the operational parity gate near cancellation."""
     family = Binomial(LogLink())
     y = jnp.asarray([0.0, 1.0, 0.0])
     weight = jnp.asarray([1.0, 0.8, 1.3])
@@ -138,12 +344,41 @@ def test_binomial_log_initial_alpha_uses_pinned_zero_to_epsilon_rule() -> None:
         family,
         FamilyExecutionContext.from_family(family),
     )
+    assert bool(result.input_ok)
+    assert bool(result.domain_ok)
+    assert bool(result.alpha_resolution_unresolved[1])
+    assert not bool(result.working_system_admissible)
+    assert np.asarray(result.newton_alpha_raw)[1] != np.finfo(float).eps
     np.testing.assert_allclose(
-        np.asarray(result.newton_alpha)[1],
-        np.finfo(float).eps,
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
+        result.newton_alpha, result.newton_alpha_raw, rtol=STRICT.rtol, atol=STRICT.atol
     )
+
+    nextafter = batch_initial_working_quantities(
+        jnp.asarray([0.0, np.nextafter(1.0, 0.0), 0.0]),
+        weight,
+        jnp.asarray([0.1, -0.1, 0.05]),
+        jnp.ones(3, dtype=bool),
+        jnp.asarray(state.eta),
+        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
+        family,
+        FamilyExecutionContext.from_family(family),
+    )
+    assert bool(nextafter.alpha_resolution_unresolved[1])
+    assert not bool(nextafter.working_system_admissible)
+    assert np.asarray(nextafter.newton_alpha_raw)[1] > 0.0
+
+    far = batch_initial_working_quantities(
+        jnp.asarray([0.0, 1.0 - 1e-12, 0.0]),
+        weight,
+        jnp.asarray([0.1, -0.1, 0.05]),
+        jnp.ones(3, dtype=bool),
+        jnp.asarray(state.eta),
+        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
+        family,
+        FamilyExecutionContext.from_family(family),
+    )
+    assert not bool(far.alpha_resolution_unresolved[1])
+    assert bool(far.working_system_admissible)
 
 
 @pytest.mark.parametrize(
@@ -189,6 +424,7 @@ def test_initial_working_kernel_jits_and_preserves_raw_systems(family) -> None:
         )
     )(jnp.asarray(state.eta))
     assert bool(result.domain_ok)
+    assert bool(result.working_system_admissible)
     for value in (
         result.fisher_weight,
         result.fisher_response,
@@ -396,7 +632,7 @@ def _assert_r_vector(actual: np.ndarray, expected: np.ndarray) -> None:
 
 @pytest.mark.skipif(not r_available(), reason="requires pinned R 4.5.2 + mgcv 1.9-3")
 def test_first_working_kernel_matches_pinned_gam_fit3_all_regular_links() -> None:
-    """Compare actual pinned first eta/mu/raw W/z, not final fitted values."""
+    """Compare all 13 initial eta/mu and every admissible raw W/z to pinned R."""
     oracle = _pinned_first_iteration_oracle()
     weight = jnp.asarray([1.0, 0.8, 1.3])
     offset = jnp.asarray([0.1, -0.1, 0.05])
@@ -439,16 +675,41 @@ def test_first_working_kernel_matches_pinned_gam_fit3_all_regular_links() -> Non
                 result.mu, expected["mu"]
             ),
         )
-        collector.check(
-            f"{name}: raw weight",
-            lambda selected_weight=selected_weight, expected=expected: _assert_r_vector(
-                selected_weight, expected["weight"]
-            ),
-        )
-        collector.check(
-            f"{name}: raw z",
-            lambda selected_z=selected_z, expected=expected: _assert_r_vector(
-                selected_z, expected["z"]
-            ),
-        )
+        if name == "binomial_log":
+            # This cell is an explicit future 7.4 compatibility gate: pinned
+            # R and compiled JAX differ by ulps around alpha=0.  Eta/mu and
+            # raw systems remain available for diagnosis, but cannot be sent
+            # to an observed Newton solver as R-validated values.
+            assert bool(result.alpha_resolution_unresolved[1])
+            assert not bool(result.working_system_admissible)
+            admissible_rows = ~np.asarray(result.alpha_resolution_unresolved)
+            collector.check(
+                f"{name}: admissible raw weight",
+                partial(
+                    _assert_r_vector,
+                    np.asarray(selected_weight)[admissible_rows],
+                    expected["weight"][admissible_rows],
+                ),
+            )
+            collector.check(
+                f"{name}: admissible raw z",
+                partial(
+                    _assert_r_vector,
+                    np.asarray(selected_z)[admissible_rows],
+                    expected["z"][admissible_rows],
+                ),
+            )
+        else:
+            collector.check(
+                f"{name}: raw weight",
+                lambda selected_weight=selected_weight, expected=expected: (
+                    _assert_r_vector(selected_weight, expected["weight"])
+                ),
+            )
+            collector.check(
+                f"{name}: raw z",
+                lambda selected_z=selected_z, expected=expected: _assert_r_vector(
+                    selected_z, expected["z"]
+                ),
+            )
     collector.raise_if_any("pinned gam.fit3 first-working oracle")

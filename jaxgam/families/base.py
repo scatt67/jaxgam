@@ -102,6 +102,9 @@ class FamilyExecutionCapabilities:
     coefficient_system: Literal["fisher", "observed"] = "fisher"
     fisher_equals_observed_for_score: bool = False
     regular_fletcher_scale: bool = False
+    initial_alpha_resolution: Literal[
+        "no_known_resolution_gap", "unresolved_near_zero"
+    ] = "no_known_resolution_gap"
 
 
 @dataclass(frozen=True)
@@ -599,7 +602,7 @@ class ExponentialFamily(ABC):
             )
         return self._initialize_impl(y_arr, wt)
 
-    def execution_initial_response_cpu(
+    def execution_initial_response(
         self,
         y: np.ndarray,
         prior_weight: np.ndarray,  # noqa: ARG002
@@ -611,6 +614,12 @@ class ExponentialFamily(ABC):
         initializer without changing the legacy :meth:`initialize` path.
         """
         return y
+
+    def execution_initial_response_cpu(
+        self, y: np.ndarray, prior_weight: np.ndarray
+    ) -> np.ndarray:
+        """CPU adapter for the backend-agnostic initial-response hook."""
+        return np.asarray(self.execution_initial_response(y, prior_weight), dtype=float)
 
     def execution_initial_input_ok_cpu(
         self, y: np.ndarray, prior_weight: np.ndarray
@@ -662,9 +671,7 @@ class ExponentialFamily(ABC):
             raise ValueError("Initial working state expects matching 1-D batch arrays.")
 
         padding = self.execution_padding()
-        normalized_y = np.asarray(
-            self.execution_initial_response_cpu(y, prior_weight), dtype=float
-        )
+        normalized_y = self.execution_initial_response_cpu(y, prior_weight)
         row_input_ok = self.execution_initial_input_ok_cpu(normalized_y, prior_weight)
         real_input = valid & row_input_ok
         y_safe = np.where(real_input, normalized_y, padding.response)
@@ -686,6 +693,8 @@ class ExponentialFamily(ABC):
         )
         input_ok = bool(np.all(~valid | row_input_ok))
         domain_ok = input_ok and bool(np.all(~valid | domain_rows))
+        for array in (mustart, eta, mu):
+            array.setflags(write=False)
         return FamilyInitialWorkingState(
             mustart=mustart,
             eta=eta,
@@ -693,6 +702,13 @@ class ExponentialFamily(ABC):
             input_ok=input_ok,
             domain_ok=domain_ok,
         )
+
+    def initial_alpha_resolution_unresolved(
+        self, _y: np.ndarray, _mu: np.ndarray, alpha_raw: np.ndarray
+    ) -> np.ndarray:
+        """Return a family-owned diagnostic mask without changing alpha."""
+        xp = array_module(alpha_raw)
+        return xp.zeros_like(alpha_raw, dtype=bool)
 
     @abstractmethod
     def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:

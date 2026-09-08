@@ -242,8 +242,7 @@ class LogLink(Link):
         return 1.0 / xp.maximum(mu, _EPS)
 
     def second_derivative(self, mu: Array) -> Array:
-        xp = array_module(mu)
-        return -1.0 / xp.maximum(mu, _EPS) ** 2
+        return -1.0 / mu**2
 
     def mu_eta(self, eta: Array) -> Array:
         xp = array_module(eta)
@@ -278,11 +277,9 @@ class LogitLink(Link):
         return 1.0 / (mu_clipped * (1 - mu_clipped))
 
     def second_derivative(self, mu: Array) -> Array:
-        xp = array_module(mu)
-        mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
         # Keep mgcv's ``1/(1-mu)^2 - 1/mu^2`` association: it is relevant
         # to its exact ``alpha == 0`` replacement in gam.fit3.
-        return 1.0 / (1.0 - mu_clipped) ** 2 - 1.0 / mu_clipped**2
+        return 1.0 / (1.0 - mu) ** 2 - 1.0 / mu**2
 
     def mu_eta(self, eta: Array) -> Array:
         # R's C_logit_mu_eta floors dμ/dη at eps so it never returns exactly 0.
@@ -312,8 +309,7 @@ class InverseLink(Link):
         return -1.0 / xp.maximum(mu, _EPS) ** 2
 
     def second_derivative(self, mu: Array) -> Array:
-        xp = array_module(mu)
-        return 2.0 / xp.maximum(mu, _EPS) ** 3
+        return 2.0 / mu**3
 
     def mu_eta(self, eta: Array) -> Array:
         """dμ/dη = -1/η² (since μ = 1/η)."""
@@ -353,12 +349,14 @@ class ProbitLink(Link):
 
     def second_derivative(self, mu: Array) -> Array:
         xp = array_module(mu)
-        eta = self.link(mu)
         if is_jax_array(mu):
+            from jax.scipy.special import ndtri as jndtri
             from jax.scipy.stats import norm as jnorm
 
+            eta = jndtri(mu)
             density = xp.maximum(jnorm.pdf(eta), _DBL_EPS)
         else:
+            eta = ndtri(mu)
             density = xp.maximum(norm.pdf(eta), _DBL_EPS)
         return eta / density**2
 
@@ -399,12 +397,9 @@ class CloglogLink(Link):
 
     def second_derivative(self, mu: Array) -> Array:
         xp = array_module(mu)
-        mu_clipped = xp.clip(mu, _EPS, 1 - _EPS)
-        log_one_minus_mu = xp.log1p(-mu_clipped)
+        log_one_minus_mu = xp.log1p(-mu)
         return (
-            -1.0
-            / ((1.0 - mu_clipped) ** 2 * log_one_minus_mu)
-            * (1.0 + 1.0 / log_one_minus_mu)
+            -1.0 / ((1.0 - mu) ** 2 * log_one_minus_mu) * (1.0 + 1.0 / log_one_minus_mu)
         )
 
     def mu_eta(self, eta: Array) -> Array:
@@ -435,8 +430,7 @@ class SqrtLink(Link):
         return 0.5 / xp.sqrt(xp.maximum(mu, _EPS))
 
     def second_derivative(self, mu: Array) -> Array:
-        xp = array_module(mu)
-        return -0.25 * xp.maximum(mu, _EPS) ** -1.5
+        return -0.25 * mu**-1.5
 
     def mu_eta(self, eta: Array) -> Array:
         return 2.0 * eta
@@ -467,8 +461,7 @@ class InverseSquaredLink(Link):
         return -2.0 / xp.maximum(mu, _EPS) ** 3
 
     def second_derivative(self, mu: Array) -> Array:
-        xp = array_module(mu)
-        return 6.0 * xp.maximum(mu, _EPS) ** -4
+        return 6.0 * mu**-4
 
     def mu_eta(self, eta: Array) -> Array:
         """dμ/dη = -1/(2η^{3/2}) (since μ = 1/√η)."""
