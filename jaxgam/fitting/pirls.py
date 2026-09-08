@@ -69,6 +69,7 @@ _EFS_STATUS_INVALID_WORKING_FACTORS = 2
 _EFS_STATUS_THETA_FAILED = 3
 _EFS_STATUS_NONFINITE_STATIONARITY = 4
 _EFS_STATUS_ITERATION_LIMIT = 5
+_EFS_STATUS_INVALID_INPUT = 6
 
 
 def canonical_working_quantities(
@@ -817,8 +818,27 @@ def _efs_theta_pirls_loop_jit(
     _, _, compute_initial_dev = ops(log_theta_init)
     initial_dev = compute_initial_dev(mu_old_init, eta_old_init)
     initial_pdev = initial_dev + beta_old_init @ S_lambda @ beta_old_init
+    input_valid = (
+        jnp.all(jnp.isfinite(y))
+        & jnp.all(y >= 0.0)
+        & jnp.all(jnp.isfinite(wt))
+        & jnp.all(wt >= 0.0)
+        & jnp.all(jnp.isfinite(log_theta_init))
+        & jnp.isfinite(jnp.exp(log_theta_init[0]))
+        & (jnp.exp(log_theta_init[0]) > 0.0)
+        & jnp.all(count_indices >= 0)
+        & jnp.all(count_indices <= max_y)
+    )
+    integer_prefix_valid = jnp.all(y == jnp.floor(y)) & jnp.all(
+        count_indices == y.astype(count_indices.dtype)
+    )
+    input_valid = input_valid & jnp.where(
+        integer_counts, integer_prefix_valid, jnp.all(count_indices == 0)
+    )
     initial_valid = (
-        jnp.all(jnp.isfinite(beta_init))
+        input_valid
+        & jnp.all(jnp.isfinite(S_lambda))
+        & jnp.all(jnp.isfinite(beta_init))
         & jnp.all(jnp.isfinite(beta_old_init))
         & jnp.all(jnp.isfinite(mu_init))
         & jnp.all(jnp.isfinite(mu_old_init))
@@ -827,9 +847,13 @@ def _efs_theta_pirls_loop_jit(
         & jnp.isfinite(initial_pdev)
     )
     initial_status = jnp.where(
-        initial_valid,
-        jnp.array(_EFS_STATUS_CONVERGED, dtype=jnp.int32),
-        jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
+        ~input_valid,
+        jnp.array(_EFS_STATUS_INVALID_INPUT, dtype=jnp.int32),
+        jnp.where(
+            initial_valid,
+            jnp.array(_EFS_STATUS_CONVERGED, dtype=jnp.int32),
+            jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
+        ),
     )
     state = _EFSThetaPIRLSState(
         i=jnp.array(0, dtype=jnp.int32),
@@ -1068,6 +1092,16 @@ def efs_theta_pirls_loop(
 
     This internal entry point is intentionally separate from ``pirls_loop``;
     neither default joint-Newton NB nor fixed-theta EFS routes opt into it.
+
+    Shapes and dtypes are rejected before JIT dispatch: X is nonempty ``(n,p)``
+    float data, y/wt/offset/count_indices are aligned ``(n,)`` arrays,
+    beta is ``(p,)``, S_lambda is ``(p,p)``, and count indices are integral.
+    FittingData is the upstream owner of count-prefix construction and must
+    supply indices matching nonnegative integer responses (or zero indices for
+    fractional metadata). Dynamic malformed y, weights, theta, prefix values,
+    return ``INVALID_INPUT`` rather than claiming a safe/converged fit.
+    Non-finite penalty algebra is separately reported as
+    ``INVALID_WORKING_FACTORS``.
     """
     if not isinstance(family, NegativeBinomial):
         raise TypeError("EFS theta PIRLS requires NegativeBinomial")
@@ -1088,13 +1122,40 @@ def efs_theta_pirls_loop(
         raise ValueError("EFS theta PIRLS tol must be finite and positive")
     if not isinstance(integer_counts, bool):
         raise ValueError("EFS theta PIRLS integer_counts must be bool")
+    if X.ndim != 2 or X.shape[0] == 0 or X.shape[1] == 0:
+        raise ValueError("EFS theta PIRLS X must be a nonempty two-dimensional array")
+    n, p = X.shape
+    for name, value, shape in (
+        ("y", y, (n,)),
+        ("wt", wt, (n,)),
+        ("count_indices", count_indices, (n,)),
+        ("beta_init", beta_init, (p,)),
+        ("S_lambda", S_lambda, (p, p)),
+    ):
+        if value.shape != shape:
+            raise ValueError(f"EFS theta PIRLS {name} must have shape {shape}")
+    for name, value in (
+        ("X", X),
+        ("y", y),
+        ("wt", wt),
+        ("beta_init", beta_init),
+        ("S_lambda", S_lambda),
+    ):
+        if not jnp.issubdtype(value.dtype, jnp.floating):
+            raise ValueError(f"EFS theta PIRLS {name} must have floating dtype")
+    if not jnp.issubdtype(count_indices.dtype, jnp.integer):
+        raise ValueError("EFS theta PIRLS count_indices must have integer dtype")
     if log_theta_init.shape != (1,):
         raise ValueError("EFS theta PIRLS log_theta_init must have shape (1,)")
+    if not jnp.issubdtype(log_theta_init.dtype, jnp.floating):
+        raise ValueError("EFS theta PIRLS log_theta_init must have floating dtype")
     if beta_old_init is None:
         beta_old_init = beta_init
     if beta_old_init.shape != beta_init.shape:
         raise ValueError("EFS theta PIRLS beta_old_init must align with beta_init")
-    if X.ndim != 2 or y.ndim != 1 or wt.ndim != 1 or count_indices.ndim != 1:
+    if not jnp.issubdtype(beta_old_init.dtype, jnp.floating):
+        raise ValueError("EFS theta PIRLS beta_old_init must have floating dtype")
+    if y.ndim != 1 or wt.ndim != 1 or count_indices.ndim != 1:
         raise ValueError("EFS theta PIRLS requires X 2-D and aligned 1-D vectors")
     if (
         X.shape[0] != y.shape[0]
@@ -1106,6 +1167,8 @@ def efs_theta_pirls_loop(
         offset = jnp.zeros_like(y)
     if offset.shape != y.shape:
         raise ValueError("EFS theta PIRLS offset must align with y")
+    if not jnp.issubdtype(offset.dtype, jnp.floating):
+        raise ValueError("EFS theta PIRLS offset must have floating dtype")
     return _efs_theta_pirls_loop_jit(
         X,
         y,

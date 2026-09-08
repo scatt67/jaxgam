@@ -18,9 +18,15 @@ import pandas as pd
 import pytest
 
 from jaxgam.families.negative_binomial import NegativeBinomial
+from jaxgam.fitting import pirls as pirls_module
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.pirls import (
+    _EFS_STATUS_BETA_STEP_FAILED,
+    _EFS_STATUS_INVALID_INPUT,
+    _EFS_STATUS_INVALID_WORKING_FACTORS,
+    _EFS_STATUS_ITERATION_LIMIT,
     _EFS_STATUS_THETA_FAILED,
+    _BetaStepResult,
     efs_theta_pirls_loop,
 )
 from jaxgam.formula.design import ModelSetup
@@ -66,6 +72,26 @@ def _fit(fd: FittingData, S_lambda: jax.Array, **kwargs):
         integer_counts=plan.integer_counts,
         **kwargs,
     )
+
+
+def _call(fd: FittingData, S_lambda: jax.Array, **kwargs):
+    plan = fd.count_prefix_plan
+    assert plan is not None
+    defaults = {
+        "X": fd.X,
+        "y": fd.y,
+        "beta_init": fd.beta_init,
+        "S_lambda": S_lambda,
+        "family": fd.family,
+        "wt": fd.wt,
+        "offset": fd.offset,
+        "log_theta_init": jnp.asarray([np.log(0.8)]),
+        "count_indices": plan.indices,
+        "max_y": fd.max_y,
+        "integer_counts": plan.integer_counts,
+    }
+    defaults.update(kwargs)
+    return efs_theta_pirls_loop(**defaults)
 
 
 def test_efs_theta_pirls_jit_rebuilds_final_quantities_at_returned_theta():
@@ -165,6 +191,98 @@ def test_efs_theta_input_validation_is_static_before_jit():
             integer_counts=plan.integer_counts,
             max_iter=True,
         )
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("beta_init", jnp.zeros(1), "beta_init"),
+        ("S_lambda", jnp.eye(1), "S_lambda"),
+        ("count_indices", jnp.zeros(42, dtype=jnp.float64), "count_indices"),
+        ("X", jnp.zeros((0, 2)), "nonempty"),
+    ],
+)
+def test_efs_theta_pirls_rejects_static_shape_and_prefix_dtype(name, value, message):
+    fd, S_lambda = _fixture()
+    call = (
+        (lambda: _call(fd, value))
+        if name == "S_lambda"
+        else lambda: _call(fd, S_lambda, **{name: value})
+    )
+    with pytest.raises(ValueError, match=message):
+        call()
+
+
+def test_efs_theta_pirls_reports_dynamic_malformed_inputs_without_convergence():
+    fd, S_lambda = _fixture()
+    bad_weights = _call(fd, S_lambda, wt=-fd.wt)
+    bad_prefix = _call(fd, S_lambda, count_indices=jnp.full(fd.y.shape, -1))
+    for result in (bad_weights, bad_prefix):
+        assert not bool(np.asarray(result.pirls_result.converged))
+        assert int(np.asarray(result.status)) == _EFS_STATUS_INVALID_INPUT
+
+
+def test_efs_theta_pirls_reports_invalid_factor_and_iteration_limit():
+    fd, S_lambda = _fixture()
+    invalid_factor = _call(fd, jnp.full_like(S_lambda, jnp.nan))
+    limited = _call(fd, S_lambda, max_iter=1)
+    assert not bool(np.asarray(invalid_factor.pirls_result.converged))
+    assert int(np.asarray(invalid_factor.status)) == _EFS_STATUS_INVALID_WORKING_FACTORS
+    assert not bool(np.asarray(limited.pirls_result.converged))
+    assert int(np.asarray(limited.status)) == _EFS_STATUS_ITERATION_LIMIT
+
+
+def test_efs_theta_pirls_distinguishes_unrecoverable_beta_step(monkeypatch):
+    """A valid NB/log old baseline is eventually reached by binary halving.
+
+    The beta-step failure status is therefore exercised with an isolated pure
+    step double, rather than fabricating invalid NB data and mislabelling that
+    as an ordinary divergence.
+    """
+    fd, S_lambda = _fixture()
+
+    def rejected_step(**kwargs):
+        beta = kwargs["beta"]
+        X = kwargs["X"]
+        offset = kwargs["offset"]
+        return _BetaStepResult(
+            beta=beta,
+            mu=kwargs["mu"],
+            eta=X @ beta + offset,
+            penalized_deviance=kwargs["penalized_deviance"],
+            accepted=jnp.array(False),
+            factors_valid=jnp.array(True),
+            solver_valid=jnp.array(True),
+            XtWX=jnp.eye(X.shape[1]),
+            L=jnp.eye(X.shape[1]),
+            W=jnp.ones(X.shape[0]),
+        )
+
+    monkeypatch.setattr(pirls_module, "_beta_step", rejected_step)
+    pirls_module._efs_theta_pirls_loop_jit.clear_cache()
+    try:
+        result = _call(fd, S_lambda)
+    finally:
+        pirls_module._efs_theta_pirls_loop_jit.clear_cache()
+    assert not bool(np.asarray(result.pirls_result.converged))
+    assert int(np.asarray(result.status)) == _EFS_STATUS_BETA_STEP_FAILED
+
+
+def test_efs_theta_pirls_final_factor_guard_overrides_stale_convergence(monkeypatch):
+    """Final curvature failure cannot be reported as a selected-theta fit."""
+    fd, S_lambda = _fixture()
+
+    def nonfinite_factor(XtWX, _S):
+        return jnp.full_like(XtWX, jnp.nan), jnp.array(jnp.nan)
+
+    monkeypatch.setattr(pirls_module, "penalized_cholesky", nonfinite_factor)
+    pirls_module._efs_theta_pirls_loop_jit.clear_cache()
+    try:
+        result = _call(fd, S_lambda)
+    finally:
+        pirls_module._efs_theta_pirls_loop_jit.clear_cache()
+    assert not bool(np.asarray(result.pirls_result.converged))
+    assert int(np.asarray(result.status)) == _EFS_STATUS_INVALID_WORKING_FACTORS
 
 
 def _r_efs_inner_oracle(
