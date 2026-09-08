@@ -315,11 +315,32 @@ class Binomial(ExponentialFamily):
         """
         return (wt * y + 0.5) / (wt + 1.0)
 
-    def execution_initial_response_cpu(
+    def execution_initial_response(
         self, y: np.ndarray, prior_weight: np.ndarray
     ) -> np.ndarray:
         """Apply stats::binomial's zero-weight response normalization."""
-        return np.where(prior_weight == 0.0, 0.0, y)
+        xp = array_module(y)
+        return xp.where(prior_weight == 0.0, 0.0, y)
+
+    def execution_capabilities(self) -> FamilyExecutionCapabilities:
+        """Report the bounded Binomial/log alpha resolution gap honestly."""
+        capabilities = super().execution_capabilities()
+        if isinstance(self.link, LogLink):
+            return replace(
+                capabilities, initial_alpha_resolution="unresolved_near_zero"
+            )
+        return capabilities
+
+    def initial_alpha_resolution_unresolved(
+        self, _y: np.ndarray, _mu: np.ndarray, alpha_raw: np.ndarray
+    ) -> np.ndarray:
+        """Flag a cancellation-sensitive Binomial/log alpha without rewriting it."""
+        xp = array_module(alpha_raw)
+        if not isinstance(self.link, LogLink):
+            return xp.zeros_like(alpha_raw, dtype=bool)
+        correction = alpha_raw - 1.0
+        resolution = 8.0 * np.finfo(float).eps * (1.0 + xp.abs(correction))
+        return xp.abs(alpha_raw) <= resolution
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Binomial: 0 < mu < 1."""
