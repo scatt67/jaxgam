@@ -15,10 +15,12 @@ class FitControl:
     factor for exact requested-row standard errors; ``'covariance'`` also
     materializes the public dense covariance, subject to ``memory_budget_bytes``.
 
-    The current dense fitting backend is not memory-budgeted: these limits
-    apply to prediction matrices/SE workspace and explicit covariance
-    materialization only.  A future streamed execution backend will extend
-    the policy to fitting reductions.
+    The dense fitting backend is not memory-budgeted: these limits apply to
+    prediction matrices/SE workspace and explicit covariance materialization.
+    The streamed backend additionally rejects known live PIRLS workspaces
+    (coefficient reductions plus one design batch) above
+    ``memory_budget_bytes``. CPU basis preparation remains outside that
+    conservative accounting.
     """
 
     execution: Literal["dense", "stream"] = "dense"

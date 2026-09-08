@@ -144,12 +144,13 @@ class GAM:
         Parameters
         ----------
         data : pandas.DataFrame or dict
-            Data frame containing the variables in the formula.
+            Data frame containing the variables in the formula. A replayable
+            ``RowSource`` is accepted only with ``execution='stream'``.
         weights : np.ndarray, optional
             Prior weights, shape ``(n,)``.
         offset : np.ndarray, optional
             Offset vector, shape ``(n,)``.
-        result : {"full", "inference"}
+        result : {"full", "inference", "prediction"}
             Result materialization mode. ``"full"`` retains training-backed
             diagnostics; ``"inference"`` returns a lean result that is already
             directly usable for new-data prediction. No ``to_predictor()`` call
@@ -158,7 +159,8 @@ class GAM:
         Returns
         -------
         GAMResults or GAMInferenceResult
-            Frozen full-diagnostic or lean-inference result.
+            Frozen full-diagnostic or lean-inference result. Streamed fitting
+            currently requires explicit fixed ``sp`` and ``result='prediction'``.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
@@ -259,20 +261,24 @@ class GAM:
             )
         spec = parse_formula(self.formula)
         prepared = prepare_model(spec, data, family=family)
-        metadata = PreparedFittingMetadata.from_prepared(prepared, family)
+        _preflight_stream_workspace(
+            prepared.n_coef, self.control.batch_rows, self.control.memory_budget_bytes
+        )
+        jax_device = _resolve_device(self.device)
+        metadata = PreparedFittingMetadata.from_prepared(prepared, family, jax_device)
         log_lambda = _fixed_log_smoothing_parameters(self.sp, metadata.n_penalties)
         stream_state = fit_streamed_pirls(
             StreamDesign(prepared, data),
             family,
             log_lambda,
             control=StreamPIRLSControl(batch_rows=self.control.batch_rows),
+            device=jax_device,
         )
         return GAMPredictionResult._from_stream_fit(
             stream_state=stream_state,
             prepared=prepared,
             metadata=metadata,
             family=family,
-            log_lambda=log_lambda,
             formula=self.formula,
             method=self.method,
             control=self.control,
@@ -282,6 +288,29 @@ class GAM:
 # ---------------------------------------------------------------------------
 # Private module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _preflight_stream_workspace(
+    n_coef: int, batch_rows: int, memory_budget_bytes: int
+) -> None:
+    """Reject stream fits whose known live fit workspace exceeds its budget.
+
+    This covers the controller's coefficient reductions (normal matrix,
+    penalty-augmented system, and Cholesky factor) and one real batch's design,
+    masks, response vectors, and working vectors.  It intentionally does not
+    purport to cap CPU-only basis preparation, which is owned by the source's
+    prepared-model phase.
+    """
+    itemsize = np.dtype(np.float64).itemsize
+    matrix_bytes = 5 * n_coef * n_coef * itemsize
+    batch_bytes = (3 * batch_rows * n_coef + 8 * batch_rows + 4 * n_coef) * itemsize
+    required = matrix_bytes + batch_bytes
+    if required > memory_budget_bytes:
+        raise MemoryError(
+            "Known streamed PIRLS workspace requires "
+            f"{required} bytes, exceeding FitControl.memory_budget_bytes="
+            f"{memory_budget_bytes}. This budget does not cover CPU basis preparation."
+        )
 
 
 def _resolve_device(device: str | None) -> jax.Device | None:

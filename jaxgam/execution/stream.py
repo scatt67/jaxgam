@@ -20,6 +20,7 @@ from jaxgam.fitting.stream_kernels import (
     accumulate_working_statistics,
     coefficient_stationarity,
     empty_statistics,
+    positive_weight_count_reduction,
     saturated_loglik_reduction,
     solve_penalized_system,
     trial_deviance,
@@ -142,17 +143,18 @@ def _working_scan(
     beta: jax.Array,
     family: ExponentialFamily,
     control: StreamPIRLSControl,
+    device: jax.Device | None,
 ) -> tuple[tuple[jax.Array, jax.Array, jax.Array, jax.Array], int]:
-    statistics = empty_statistics(stream.prepared.n_coef)
+    statistics = jax.device_put(empty_statistics(stream.prepared.n_coef), device)
     batches = 0
     for X, y, weight, offset, valid in _fitting_batches(stream, control.batch_rows):
         statistics = accumulate_working_statistics(
             statistics,
-            jax.device_put(X),
-            jax.device_put(y),
-            jax.device_put(weight),
-            jax.device_put(offset),
-            jax.device_put(valid),
+            jax.device_put(X, device),
+            jax.device_put(y, device),
+            jax.device_put(weight, device),
+            jax.device_put(offset, device),
+            jax.device_put(valid, device),
             beta,
             family,
         )
@@ -168,17 +170,18 @@ def _trial_scan(
     beta: jax.Array,
     family: ExponentialFamily,
     control: StreamPIRLSControl,
+    device: jax.Device | None,
 ) -> tuple[jax.Array, jax.Array, int]:
     deviance = jnp.array(0.0, dtype=jnp.float64)
     domain_ok = jnp.array(True)
     batches = 0
     for X, y, weight, offset, valid in _fitting_batches(stream, control.batch_rows):
         batch_deviance, batch_domain = trial_deviance(
-            jax.device_put(X),
-            jax.device_put(y),
-            jax.device_put(weight),
-            jax.device_put(offset),
-            jax.device_put(valid),
+            jax.device_put(X, device),
+            jax.device_put(y, device),
+            jax.device_put(weight, device),
+            jax.device_put(offset, device),
+            jax.device_put(valid, device),
             beta,
             family,
         )
@@ -194,6 +197,7 @@ def _saturated_loglik_scan(
     family: ExponentialFamily,
     scale: jax.Array,
     control: StreamPIRLSControl,
+    device: jax.Device | None,
 ) -> tuple[jax.Array, int]:
     """Collect only the likelihood scalar required by later result modes."""
     saturated = jnp.array(0.0, dtype=jnp.float64)
@@ -202,15 +206,32 @@ def _saturated_loglik_scan(
         stream, control.batch_rows
     ):
         saturated = saturated + saturated_loglik_reduction(
-            jax.device_put(y),
-            jax.device_put(weight),
-            jax.device_put(valid),
+            jax.device_put(y, device),
+            jax.device_put(weight, device),
+            jax.device_put(valid, device),
             scale,
             family,
         )
         jax.block_until_ready(saturated)
         batches += 1
     return saturated, batches
+
+
+def _positive_weight_count_scan(
+    stream: StreamDesign, control: StreamPIRLSControl, device: jax.Device | None
+) -> tuple[jax.Array, int]:
+    """Reduce the REML score's effective observation count in bounded scans."""
+    count = jnp.array(0, dtype=jnp.int64)
+    batches = 0
+    for _batch, _y, weight, _offset, valid in _source_batches(
+        stream, control.batch_rows
+    ):
+        count = count + positive_weight_count_reduction(
+            jax.device_put(weight, device), jax.device_put(valid, device)
+        )
+        jax.block_until_ready(count)
+        batches += 1
+    return count, batches
 
 
 def fit_streamed_pirls(
@@ -220,6 +241,7 @@ def fit_streamed_pirls(
     *,
     control: StreamPIRLSControl | None = None,
     beta_init: np.ndarray | jax.Array | None = None,
+    device: jax.Device | None = None,
 ) -> StreamFitState:
     """Fit canonical fixed-sp GAM coefficients by bounded replayable scans.
 
@@ -231,8 +253,8 @@ def fit_streamed_pirls(
     _preflight(stream, family, control)
     prepared = stream.prepared
     assert prepared.fitting is not None
-    structure = _to_jax_structure(prepared.fitting.penalty_structure, None)
-    rho = jnp.asarray(log_lambda, dtype=jnp.float64)
+    structure = _to_jax_structure(prepared.fitting.penalty_structure, device)
+    rho = jax.device_put(jnp.asarray(log_lambda, dtype=jnp.float64), device)
     if rho.shape != prepared.fitting.log_lambda_init.shape:
         raise ValueError(
             f"Expected {len(prepared.fitting.log_lambda_init)} log smoothing "
@@ -241,7 +263,7 @@ def fit_streamed_pirls(
     if not np.all(np.isfinite(np.asarray(rho))):
         raise ValueError("log_lambda must contain only finite values.")
     beta_source = prepared.fitting.beta_init if beta_init is None else beta_init
-    beta = jnp.asarray(beta_source, dtype=jnp.float64)
+    beta = jax.device_put(jnp.asarray(beta_source, dtype=jnp.float64), device)
     if beta.shape != (prepared.n_coef,):
         raise ValueError(f"beta_init must have shape ({prepared.n_coef},).")
     if not np.all(np.isfinite(np.asarray(beta))):
@@ -258,7 +280,7 @@ def fit_streamed_pirls(
     stationarity = np.inf
 
     for iteration in range(control.max_iter):
-        statistics, batch_count = _working_scan(stream, beta, family, control)
+        statistics, batch_count = _working_scan(stream, beta, family, control, device)
         scans += 1
         batches_scanned += batch_count
         G, b, deviance, domain_ok = statistics
@@ -281,7 +303,7 @@ def fit_streamed_pirls(
             if halving:
                 candidate = beta + 0.5**halving * (proposal - beta)
             candidate_deviance, candidate_domain, trial_batches = _trial_scan(
-                stream, candidate, family, control
+                stream, candidate, family, control, device
             )
             scans += 1
             batches_scanned += trial_batches
@@ -327,7 +349,9 @@ def fit_streamed_pirls(
             and coefficient_change < control.tol
             and deviance_change < control.tol
         ):
-            final_statistics, batch_count = _working_scan(stream, beta, family, control)
+            final_statistics, batch_count = _working_scan(
+                stream, beta, family, control, device
+            )
             scans += 1
             batches_scanned += batch_count
             final_H_beta, final_factor_beta, final_H = solve_penalized_system(
@@ -349,7 +373,9 @@ def fit_streamed_pirls(
             final_factor = None
 
     if final_statistics is None:
-        final_statistics, batch_count = _working_scan(stream, beta, family, control)
+        final_statistics, batch_count = _working_scan(
+            stream, beta, family, control, device
+        )
         scans += 1
         batches_scanned += batch_count
         _unused, final_factor, final_H = solve_penalized_system(
@@ -371,6 +397,28 @@ def fit_streamed_pirls(
         scale = final_deviance / denominator
     else:
         scale = jnp.array(1.0, dtype=jnp.float64)
+    positive_weight_count, batch_count = _positive_weight_count_scan(
+        stream, control, device
+    )
+    scans += 1
+    batches_scanned += batch_count
+    if family.scale_known or structure.n_penalties == 0:
+        score_scale = scale
+    else:
+        score_denominator = int(np.asarray(positive_weight_count)) - (
+            prepared.n_coef - prepared.fitting.total_penalty_rank
+        )
+        if score_denominator <= 0:
+            raise FloatingPointError(
+                "Invalid positive-weight REML score denominator in streamed fit."
+            )
+        score_scale = final_penalized / score_denominator
+        if not bool(np.isfinite(np.asarray(score_scale))) or not bool(
+            np.asarray(score_scale) > 0
+        ):
+            raise FloatingPointError(
+                "Invalid fixed-sp REML score scale in streamed fit."
+            )
     valid_final = (
         bool(np.all(np.isfinite(np.asarray(beta))))
         and bool(np.all(np.isfinite(np.asarray(final_factor))))
@@ -384,15 +432,17 @@ def fit_streamed_pirls(
         )
     converged = converged and not line_search_failed and stationarity < control.tol
     saturated_loglik, batch_count = _saturated_loglik_scan(
-        stream, family, scale, control
+        stream, family, score_scale, control, device
     )
     scans += 1
     batches_scanned += batch_count
     return StreamFitState(
         coefficients=beta,
+        log_lambda=rho,
         deviance=final_deviance,
         penalized_deviance=final_penalized,
         scale=scale,
+        score_scale=score_scale,
         saturated_loglik=saturated_loglik,
         edf=edf,
         xtwx=G,

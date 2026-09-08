@@ -128,6 +128,15 @@ def saturated_loglik_reduction(
 
 
 @jax.jit
+def positive_weight_count_reduction(
+    prior_weight: jax.Array,
+    valid: jax.Array,
+) -> jax.Array:
+    """Count real positive-weight observations without retaining row data."""
+    return jnp.sum(jnp.asarray(valid, dtype=bool) & (prior_weight > 0.0))
+
+
+@jax.jit
 def solve_penalized_system(
     G: jax.Array,
     b: jax.Array,
