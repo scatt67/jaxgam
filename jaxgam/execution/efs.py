@@ -1,21 +1,23 @@
 """Dense regular-family extended Fellner--Schall execution adapter.
 
-This is intentionally an internal controller.  It supports known-scale
-Poisson/log and binomial/logit plus regular unknown-scale Gaussian/identity
-and Gamma inverse/log. Accepted and trial states remain separate so a rejected
-refit can never leak into the next iteration.
+This is intentionally an internal controller. It supports known-scale
+Poisson/log, binomial/logit, and fixed-theta NB/log, plus regular unknown-scale
+Gaussian/identity and Gamma inverse/log. Accepted and trial states remain
+separate so a rejected refit can never leak into the next iteration.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gamma, Gaussian
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
@@ -31,9 +33,12 @@ from jaxgam.fitting.pirls import _W_MAX, _W_MIN, PIRLSResult, pirls_loop
 from jaxgam.fitting.reml import estimate_edf, fletcher_scale, reml_criterion
 from jaxgam.links.links import IdentityLink, InverseLink, LogitLink, LogLink
 
+if TYPE_CHECKING:
+    from jaxgam.formula.design import ModelSetup
 
-def efs_initial_log_lambda(setup, family) -> jax.Array:
-    """Prepare mgcv ``initial.spg`` regular-family start only for EFS.
+
+def efs_initial_log_lambda(setup: ModelSetup, family: ExponentialFamily) -> jax.Array:
+    """Prepare mgcv ``initial.spg`` start only for supported EFS families.
 
     Regular fitting never incurs this initialized-mean/working-weight work.
     The shared initial-sp routine keeps its bounded original-coordinate
@@ -43,6 +48,14 @@ def efs_initial_log_lambda(setup, family) -> jax.Array:
     if structure is None or structure.n_penalties == 0:
         return jnp.zeros((0,), dtype=jnp.float64)
     ldxx = np.zeros(setup.X.shape[1], dtype=np.float64)
+    nb_observed_ldxx: np.ndarray | None = None
+    nb_fisher_ldxx: np.ndarray | None = None
+    nb_has_negative_observed = False
+    nb_observed_valid = True
+    nb_fisher_valid = True
+    if isinstance(family, NegativeBinomial):
+        nb_observed_ldxx = np.zeros_like(ldxx)
+        nb_fisher_ldxx = np.zeros_like(ldxx)
     batch_rows = 8192
     for start in range(0, setup.X.shape[0], batch_rows):
         stop = min(start + batch_rows, setup.X.shape[0])
@@ -51,20 +64,56 @@ def efs_initial_log_lambda(setup, family) -> jax.Array:
         mu = np.asarray(family.initialize(y, prior), dtype=np.float64)
         eta = np.asarray(family.link.link(mu), dtype=np.float64)
         mu_eta = np.asarray(family.link.mu_eta(eta), dtype=np.float64)
-        variance = np.asarray(family.variance(mu), dtype=np.float64)
-        working = prior * mu_eta**2 / variance
+        if isinstance(family, NegativeBinomial):
+            # initial.spg's extended-family branch (mgcv.r:4787-4794) uses
+            # half Dmu2 times mu.eta², falling back to expected curvature if
+            # *any* observed start weight is negative. Accumulate both
+            # bounded coordinate diagonals before selecting R's global branch;
+            # do not let the batch boundary affect this decision.
+            theta = float(family.get_theta(transformed=True)[0])
+            dmu2 = -2.0 * prior * ((y + theta) / (mu + theta) ** 2 - y / mu**2)
+            observed = 0.5 * dmu2 * mu_eta**2
+            variance = np.asarray(family.variance(mu), dtype=np.float64)
+            fisher = prior * mu_eta**2 / variance
+            nb_has_negative_observed |= bool(np.any(observed < 0))
+            nb_observed_valid &= bool(
+                np.all(np.isfinite(observed)) and np.all(observed > 0)
+            )
+            nb_fisher_valid &= bool(np.all(np.isfinite(fisher)) and np.all(fisher > 0))
+            X_batch = setup.X[start:stop]
+            assert nb_observed_ldxx is not None
+            assert nb_fisher_ldxx is not None
+            nb_observed_ldxx += np.sum(observed[:, None] * X_batch**2, axis=0)
+            nb_fisher_ldxx += np.sum(fisher[:, None] * X_batch**2, axis=0)
+            continue
+        else:
+            variance = np.asarray(family.variance(mu), dtype=np.float64)
+            working = prior * mu_eta**2 / variance
         if not np.all(np.isfinite(working)) or np.any(working <= 0):
             raise ValueError(
                 "EFS initial.spg working weights must be finite and positive"
             )
         weighted_X = np.sqrt(working)[:, None] * setup.X[start:stop]
         ldxx += np.sum(weighted_X * weighted_X, axis=0)
+    if isinstance(family, NegativeBinomial):
+        if nb_has_negative_observed:
+            valid = nb_fisher_valid
+            assert nb_fisher_ldxx is not None
+            ldxx = nb_fisher_ldxx
+        else:
+            valid = nb_observed_valid
+            assert nb_observed_ldxx is not None
+            ldxx = nb_observed_ldxx
+        if not valid:
+            raise ValueError(
+                "EFS initial.spg working weights must be finite and positive"
+            )
     return jnp.asarray(
         FittingData._initial_sp_from_crossproduct_diag(setup.X, structure, ldxx)
     )
 
 
-def efs_initial_log_scale(setup, family) -> jax.Array:
+def efs_initial_log_scale(setup: ModelSetup, family: ExponentialFamily) -> jax.Array:
     """Return mgcv EFS's incoming unknown-scale value.
 
     This is deliberately separate from the Newton scale initialization.  In
@@ -79,7 +128,9 @@ def efs_initial_log_scale(setup, family) -> jax.Array:
     return _efs_initial_log_scale_from_arrays(setup.y, setup.weights, family)
 
 
-def _efs_initial_log_scale_from_arrays(y, wt, family) -> jax.Array:
+def _efs_initial_log_scale_from_arrays(
+    y: np.ndarray, wt: np.ndarray, family: ExponentialFamily
+) -> jax.Array:
     """Array-level implementation shared by setup and dense fit adapters."""
     if y.ndim != 1 or y.size == 0 or wt.shape != y.shape:
         raise ValueError(
@@ -238,7 +289,20 @@ def _known_scale_family_supported(fd: FittingData) -> bool:
     return family.scale_known and (
         (family.family_name == "poisson" and isinstance(family.link, LogLink))
         or (family.family_name == "binomial" and isinstance(family.link, LogitLink))
+        or (
+            isinstance(family, NegativeBinomial)
+            and family.n_theta == 0
+            and isinstance(family.link, LogLink)
+        )
     )
+
+
+def _fixed_theta(fd: FittingData) -> float | None:
+    """Return a fixed NB size without changing the family instance."""
+    family = fd.family
+    if isinstance(family, NegativeBinomial) and family.n_theta == 0:
+        return float(family.get_theta(transformed=True)[0])
+    return None
 
 
 def _unknown_scale_family_supported(fd: FittingData) -> bool:
@@ -257,7 +321,17 @@ def _scalar_score(
     fd: FittingData, rho: jax.Array, pr: PIRLSResult, score_phi: jax.Array
 ) -> jax.Array:
     """Evaluate only the scalar REML criterion; no score derivatives."""
-    ls_sat = fd.family.saturated_loglik(fd.y, fd.wt, score_phi, max_y=fd.max_y)
+    if fd.family.family_name == "nb" and fd.count_prefix_plan is not None:
+        ls_sat = fd.family.saturated_loglik(
+            fd.y,
+            fd.wt,
+            score_phi,
+            max_y=fd.max_y,
+            count_indices=fd.count_prefix_plan.indices,
+            integer_counts=fd.count_prefix_plan.integer_counts,
+        )
+    else:
+        ls_sat = fd.family.saturated_loglik(fd.y, fd.wt, score_phi, max_y=fd.max_y)
     return _jit_reml_score(
         rho,
         pr.XtWX,
@@ -298,6 +372,9 @@ def _fit_state(
         fd.offset,
         max_iter=control.pirls_max_iter,
         tol=control.pirls_tolerance,
+        extended_observed=(
+            isinstance(fd.family, NegativeBinomial) and fd.family.n_theta == 0
+        ),
     )
     statistics = _jit_efs_statistics(plan, pr.coefficients, pr.L_fisher, rho)
     score = _scalar_score(fd, rho, pr, score_phi)
@@ -350,8 +427,8 @@ def dense_efs_known_scale(
     """
     if not _known_scale_family_supported(fitting_data):
         raise NotImplementedError(
-            "Dense EFS currently supports only known-scale Poisson/log and "
-            "binomial/logit."
+            "Dense EFS currently supports only known-scale Poisson/log, "
+            "binomial/logit, and fixed-theta NB/log."
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
@@ -374,6 +451,11 @@ def dense_efs_known_scale(
         if initial_log_lambda is None
         else initial_log_lambda
     )
+    if initial_log_lambda is None and isinstance(fitting_data.family, NegativeBinomial):
+        raise ValueError(
+            "Fixed-theta NB EFS requires efs_initial_log_lambda(setup, family); "
+            "its extended-family initial.spg weights differ from regular fitting"
+        )
     beta0 = fitting_data.beta_init if beta_init is None else beta_init
     if beta0 is None:
         beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
@@ -396,7 +478,7 @@ def dense_efs_known_scale(
             jnp.array(1.0),
             accepted.pirls_result,
             "inner_failure" if not accepted.inner_converged else "invalid_initial",
-            None,
+            _fixed_theta(fitting_data),
         )
 
     multiplier = 1.0
@@ -507,7 +589,7 @@ def dense_efs_known_scale(
         jnp.array(1.0),
         accepted.pirls_result,
         label,
-        None,
+        _fixed_theta(fitting_data),
         update_residual,
         tuple(history)[-control.history_limit :],
         multiplier,

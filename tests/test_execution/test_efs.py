@@ -18,8 +18,11 @@ from jaxgam.execution.efs import (
     efs_initial_log_lambda,
     efs_initial_log_scale,
 )
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.efs import EFSRawUpdate, prepare_efs_statistics
+from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.fixtures.efs_weighted_additive_cr_repro import FORMULA, make_data
@@ -56,6 +59,21 @@ def _oracle_data(family_name: str, *, seed: int = 31) -> pd.DataFrame:
     return pd.DataFrame({"y": y, "x": x, "z": z})
 
 
+def _fixed_nb_data(*, seed: int = 812, n: int = 84) -> pd.DataFrame:
+    """Deterministic positive-weight NB/log fixture for the pinned oracle."""
+    rng = np.random.default_rng(seed)
+    x = np.linspace(-1.0, 1.0, n)
+    z = rng.uniform(-1.0, 1.0, n)
+    offset = 0.12 * z
+    theta = 2.7
+    eta = offset + 0.1 + 0.5 * np.sin(2.6 * x) - 0.18 * z
+    mu = np.exp(eta)
+    y = rng.negative_binomial(theta, theta / (theta + mu))
+    return pd.DataFrame(
+        {"y": y, "x": x, "z": z, "w": 0.5 + rng.random(n), "off": offset}
+    )
+
+
 @pytest.mark.parametrize("family", [Poisson(), Binomial()])
 def test_dense_known_scale_efs_runs_from_one_time_shift(family) -> None:
     rng = np.random.default_rng(320)
@@ -73,6 +91,121 @@ def test_dense_known_scale_efs_runs_from_one_time_shift(family) -> None:
     assert result.score_history
     assert np.all(np.isfinite(np.asarray(result.smoothing_params)))
     assert result.update_residual is not None
+
+
+def test_fixed_nb_efs_requires_extended_initial_sp_and_returns_fixed_theta() -> None:
+    data = _fixed_nb_data(n=48)
+    family = NegativeBinomial(theta=2.7, fixed=True)
+    setup, fd = _build(
+        "y ~ s(x, bs='cr', k=6)",
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    with pytest.raises(ValueError, match="efs_initial_log_lambda"):
+        dense_efs_known_scale(fd, control=EFSControl(outer_limit=1))
+    result = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=efs_initial_log_lambda(setup, family),
+        control=EFSControl(outer_limit=1),
+    )
+    assert result.scale == 1.0
+    assert result.theta == pytest.approx(2.7)
+    assert result.smoothing_params.shape == (fd.n_penalties,)
+    assert np.all(np.isfinite(np.asarray(result.pirls_result.XtWX)))
+    assert np.all(np.isfinite(np.asarray(result.pirls_result.XtWX_fisher)))
+
+
+@pytest.mark.parametrize(
+    "family",
+    [
+        NegativeBinomial(theta=2.7),
+        NegativeBinomial(theta=2.7, fixed=True, link="identity"),
+    ],
+)
+def test_known_scale_efs_rejects_nonfixed_or_nonlog_nb(family) -> None:
+    data = _fixed_nb_data(n=40)
+    setup, fd = _build("y ~ s(x, bs='cr', k=5)", data, family)
+    with pytest.raises(NotImplementedError, match="fixed-theta NB/log"):
+        dense_efs_known_scale(
+            fd,
+            initial_log_lambda=efs_initial_log_lambda(setup, family),
+            control=EFSControl(outer_limit=1),
+        )
+
+
+def test_efs_bridge_fixed_nb_theta_requires_positive_nb_family() -> None:
+    bridge = RBridge(mode="subprocess")
+    assert bridge._get_efs_subprocess_family("nb", 2.7) == "nb(theta=2.7)"
+    with pytest.raises(ValueError, match="finite and positive"):
+        bridge._get_efs_subprocess_family("nb", 0.0)
+    with pytest.raises(ValueError, match="only for family='nb'"):
+        bridge._get_efs_subprocess_family("poisson", 2.7)
+
+
+def test_fixed_nb_initial_sp_uses_global_fisher_fallback_across_batches() -> None:
+    """A zero after row 8192 switches all of R's initial.spg to Fisher."""
+    n = 8193
+    x = np.linspace(-1.0, 1.0, n)
+    y = np.ones(n)
+    y[-1] = 0.0  # NB's mustart=1/6 gives a negative observed start weight.
+    weights = 0.6 + 0.2 * (x + 1.0)
+    data = pd.DataFrame({"y": y, "x": x})
+    family = NegativeBinomial(theta=2.7, fixed=True)
+    setup, _ = _build("y ~ s(x, bs='cr', k=5)", data, family, weights=weights)
+    mu = np.asarray(family.initialize(setup.y, setup.weights), dtype=np.float64)
+    eta = np.asarray(family.link.link(mu), dtype=np.float64)
+    mu_eta = np.asarray(family.link.mu_eta(eta), dtype=np.float64)
+    fisher = setup.weights * mu_eta**2 / np.asarray(family.variance(mu))
+    expected = FittingData._initial_sp_from_crossproduct_diag(
+        setup.X,
+        setup.penalties,
+        np.sum(fisher[:, None] * setup.X**2, axis=0),
+    )
+    np.testing.assert_allclose(
+        efs_initial_log_lambda(setup, family),
+        expected,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_fixed_nb_instances_reuse_dynamic_theta_pirls_compilation() -> None:
+    """Equivalent fixed-NB instances preserve the extended PIRLS cache."""
+    data = _fixed_nb_data(n=47)
+    formula = "y ~ s(x, bs='cr', k=5)"
+    first_family = NegativeBinomial(theta=2.7, fixed=True)
+    second_family = NegativeBinomial(theta=2.7, fixed=True)
+    _, first = _build(formula, data, first_family)
+    _, second = _build(formula, data, second_family)
+    penalty = jax.numpy.eye(first.n_coef) * 0.2
+    beta = jax.numpy.zeros(first.n_coef)
+    first_result = pirls_loop(
+        first.X,
+        first.y,
+        beta,
+        penalty,
+        first_family,
+        first.wt,
+        first.offset,
+        extended_observed=True,
+    )
+    cache_after_first = pirls_loop._cache_size()
+    second_result = pirls_loop(
+        second.X,
+        second.y,
+        beta,
+        penalty,
+        second_family,
+        second.wt,
+        second.offset,
+        extended_observed=True,
+    )
+    assert pirls_loop._cache_size() == cache_after_first
+    np.testing.assert_allclose(first_result.coefficients, second_result.coefficients)
+    assert first_family.get_theta(transformed=True)[0] == pytest.approx(2.7)
+    assert second_family.get_theta(transformed=True)[0] == pytest.approx(2.7)
 
 
 def test_dense_efs_rejects_out_of_scope_family_before_any_newton_dispatch() -> None:
@@ -954,3 +1087,151 @@ def test_weighted_offset_additive_cr_matches_pinned_r(family, family_name: str) 
         ),
     )
     collector.raise_if_any(f"weighted-offset additive CR EFS parity ({family_name})")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    "formula",
+    [FORMULA, "y ~ te(x, z, k=5)"],
+)
+def test_fixed_theta_nb_log_efs_matches_pinned_r_with_real_weights_and_offsets(
+    formula: str,
+) -> None:
+    """Fixed NB EFS preserves R's observed-score/Fisher-EDF split."""
+    theta = 2.7
+    data = _fixed_nb_data()
+    family = NegativeBinomial(theta=theta, fixed=True)
+    weights = data["w"].to_numpy()
+    offset = data["off"].to_numpy()
+    setup, fd = _build(formula, data, family, weights=weights, offset=offset)
+    rho = efs_initial_log_lambda(setup, family)
+    bridge = RBridge(mode="subprocess")
+    diagnostic = bridge.efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        theta=theta,
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+    )
+    initial = _fit_state(
+        fd, prepare_efs_statistics(fd), rho + 2.5, fd.beta_init, EFSControl()
+    )
+    assert (
+        float(
+            np.max(
+                np.abs(
+                    np.asarray(initial.pirls_result.XtWX)
+                    - np.asarray(initial.pirls_result.XtWX_fisher)
+                )
+            )
+        )
+        > 1e-8
+    )
+    first = diagnostic["statistics"].query("call == 1").sort_values("parameter")
+    r_fit = bridge.fit_efs(
+        formula,
+        data,
+        "nb",
+        theta=theta,
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+    )
+    j_fit = dense_efs_known_scale(fd, initial_log_lambda=rho)
+    collector = _AssertCollector()
+    collector.check(
+        "initial lsp",
+        lambda: np.testing.assert_allclose(
+            rho + 2.5, first["log_smoothing"], rtol=STRICT.rtol, atol=STRICT.atol
+        ),
+    )
+    collector.check(
+        "initial deviance",
+        lambda: np.testing.assert_allclose(
+            initial.pirls_result.deviance,
+            first["deviance"].iloc[0],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "initial determinant derivative",
+        lambda: np.testing.assert_allclose(
+            initial.statistics.determinant_derivative,
+            first["ldetS1"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "initial Fisher trace",
+        lambda: np.testing.assert_allclose(
+            initial.statistics.fisher_trace,
+            first["trVS"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "initial quadratic",
+        lambda: np.testing.assert_allclose(
+            initial.statistics.quadratic,
+            first["bSb"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "fixed theta from R",
+        lambda: np.testing.assert_allclose(
+            r_fit["theta"], theta, rtol=STRICT.rtol, atol=STRICT.atol
+        ),
+    )
+    collector.check(
+        "fixed theta result",
+        lambda: np.testing.assert_allclose(
+            j_fit.theta, theta, rtol=STRICT.rtol, atol=STRICT.atol
+        ),
+    )
+    collector.check(
+        "only smoothing parameters",
+        lambda: np.testing.assert_equal(
+            j_fit.smoothing_params.shape, (fd.n_penalties,)
+        ),
+    )
+    collector.check(
+        "fitted values",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.mu,
+            r_fit["fitted_values"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "deviance",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.deviance,
+            r_fit["deviance"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "criterion",
+        lambda: np.testing.assert_allclose(
+            j_fit.score, r_fit["reml_score"], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.check(
+        "smoothing parameters",
+        lambda: np.testing.assert_allclose(
+            j_fit.smoothing_params,
+            r_fit["smoothing_params"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.raise_if_any(f"fixed-theta NB EFS parity ({formula})")
