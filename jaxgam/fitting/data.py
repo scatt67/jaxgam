@@ -161,9 +161,6 @@ class FittingData:
     # boundary. Manual FittingData fixtures retain the compatibility fallback.
     beta_init: jax.Array | None = None
 
-    # mgcv initial.spg working-weight start, prepared before reparameterizing.
-    efs_log_lambda_init: jax.Array | None = None
-
     @property
     def n_penalties(self) -> int:
         return self.penalty_structure.n_penalties
@@ -187,9 +184,6 @@ class FittingData:
             raise ValueError(f"Expected 2-D model matrix X, got ndim={setup.X.ndim}")
         structure = setup.penalties or PenaltyStructure(setup.X.shape[1], ())
         log_sp_init = cls._initial_sp(setup.X, structure, setup.weights)
-        efs_log_sp_init = cls._initial_efs_sp(
-            setup.X, structure, setup.y, setup.weights, family
-        )
         transformed = reparameterize_structure(structure)
         X_np = apply_transforms_to_design(setup.X, transformed)
         beta_init = to_jax(
@@ -261,7 +255,6 @@ class FittingData:
             count_prefix_plan=count_prefix_plan,
             rank_deficit=cls._unpenalized_rank_deficit(transformed, X_np),
             beta_init=beta_init,
-            efs_log_lambda_init=to_jax(efs_log_sp_init, device=device),
         )
 
     @staticmethod
@@ -273,26 +266,6 @@ class FittingData:
             return np.zeros(0)
         ldxx = FittingData._weighted_crossproduct_diag(X, weights)
         return initial_log_sp_from_diagonal(ldxx, structure)
-
-    @staticmethod
-    def _initial_efs_sp(
-        X: np.ndarray,
-        structure: PenaltyStructure,
-        y: np.ndarray,
-        weights: np.ndarray,
-        family: ExponentialFamily,
-    ) -> np.ndarray:
-        """R ``initial.spg`` conventional-regression start for regular families."""
-        if structure.n_penalties == 0:
-            return np.zeros(0)
-        mu = np.asarray(family.initialize(y, weights), dtype=np.float64)
-        eta = np.asarray(family.link.link(mu), dtype=np.float64)
-        mu_eta = np.asarray(family.link.mu_eta(eta), dtype=np.float64)
-        variance = np.asarray(family.variance(mu), dtype=np.float64)
-        working_weights = weights * mu_eta**2 / variance
-        if not np.all(np.isfinite(working_weights)) or np.any(working_weights <= 0):
-            return np.zeros(structure.n_penalties)
-        return FittingData._initial_sp(X, structure, working_weights)
 
     @staticmethod
     def _weighted_crossproduct_diag(X: np.ndarray, weights: np.ndarray) -> np.ndarray:
