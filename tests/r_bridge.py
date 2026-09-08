@@ -825,6 +825,8 @@ class RBridge:
             start_path = os.path.join(tmpdir, "start_trace.csv")
             theta_path = os.path.join(tmpdir, "theta_trace.csv")
             reset_path = os.path.join(tmpdir, "start_retained_trace.csv")
+            initial_state_path = os.path.join(tmpdir, "initial_state_trace.csv")
+            prefix_path = os.path.join(tmpdir, "inner_prefix_trace.csv")
             multiplier_path = os.path.join(tmpdir, "multipliers.csv")
             branch_path = os.path.join(tmpdir, "branches.txt")
             score_path = os.path.join(tmpdir, "score.txt")
@@ -922,7 +924,7 @@ class RBridge:
                     f"initial_phi <- {initial_scale_text}",
                     "if (fit_scale <= 0) { if (is.null(initial_phi)) { null_fit <- mgcv:::get.null.coef(G); initial_phi <- null_fit$null.scale / 10 }; lsp <- c(lsp, log(initial_phi)) }",
                     "trace_env <- new.env(parent=asNamespace('mgcv'))",
-                    "trace_env$trace_log <- list(); trace_env$coefficient_log <- list(); trace_env$fitted_log <- list(); trace_env$start_log <- list(); trace_env$theta_log <- list(); trace_env$start_retained_log <- logical(); trace_env$multiplier_history <- numeric(); trace_env$branch_history <- character(); trace_env$trace_env <- trace_env",
+                    "trace_env$trace_log <- list(); trace_env$coefficient_log <- list(); trace_env$fitted_log <- list(); trace_env$start_log <- list(); trace_env$theta_log <- list(); trace_env$start_retained_log <- logical(); trace_env$initial_state_log <- list(); trace_env$inner_prefix_log <- list(); trace_env$multiplier_history <- numeric(); trace_env$branch_history <- character(); trace_env$trace_env <- trace_env",
                     "trace_env$efs_record_multiplier <- function(value) trace_env$multiplier_history <- c(trace_env$multiplier_history, value)",
                     "trace_env$efs_record_branch <- function(value) trace_env$branch_history <- c(trace_env$branch_history, value)",
                     "fit4_source <- capture.output(mgcv:::gam.fit4)",
@@ -931,6 +933,12 @@ class RBridge:
                     "fit4_anchor <- '    coefold <- null.coef'",
                     "if (sum(fit4_source == fit4_anchor) != 1L) stop('pinned gam.fit4 start-retention anchor changed')",
                     "fit4_source[fit4_source == fit4_anchor] <- paste0('    trace_env$start_retained_log[[length(trace_env$start_retained_log) + 1L]] <- !is.null(start)\\n', fit4_anchor)",
+                    "fit4_initial_anchor <- '    mu <- linkinv(eta)'",
+                    "if (sum(fit4_source == fit4_initial_anchor) != 1L) stop('pinned gam.fit4 initial-state anchor changed')",
+                    "fit4_source[fit4_source == fit4_initial_anchor] <- paste0(fit4_initial_anchor, '\\n    trace_env$initial_state_log[[length(trace_env$initial_state_log) + 1L]] <- data.frame(call=length(trace_env$trace_log) + 1L, row=seq_along(y), retained=rep(!is.null(start), length(y)), eta=as.numeric(eta), mu=as.numeric(mu), mustart=as.numeric(mustart), null_eta=as.numeric(null.eta), etaold=as.numeric(etaold), offset=as.numeric(offset), theta=rep(as.numeric(theta), length(y)))')",
+                    "fit4_prefix_anchor <- '        pdev <- dev + penalty'",
+                    "if (sum(fit4_source == fit4_prefix_anchor) != 1L) stop('pinned gam.fit4 first-pdev anchor changed')",
+                    "fit4_source[fit4_source == fit4_prefix_anchor] <- paste0(fit4_prefix_anchor, '\\n        if (iter == 1) trace_env$inner_prefix_log[[length(trace_env$inner_prefix_log) + 1L]] <- data.frame(call=length(trace_env$trace_log) + 1L, pdev=as.numeric(pdev), old_pdev=as.numeric(old.pdev), diverging=as.logical(pdev - old.pdev > 10 * (0.1 + abs(old.pdev)) * .Machine$double.eps^0.5))')",
                     "eval(parse(text=fit4_source), envir=trace_env)",
                     "fit3_source <- capture.output(mgcv:::gam.fit3)",
                     "fit3_source <- fit3_source[seq_len(tail(which(fit3_source == '}'), 1L))]",
@@ -961,6 +969,8 @@ class RBridge:
                     f"write.csv(do.call(rbind, trace_env$start_log), {start_path!r}, row.names=FALSE)",
                     f"write.csv(do.call(rbind, trace_env$theta_log), {theta_path!r}, row.names=FALSE)",
                     f"write.csv(data.frame(start_retained=trace_env$start_retained_log), {reset_path!r}, row.names=FALSE)",
+                    f"if (length(trace_env$initial_state_log)) write.csv(do.call(rbind, trace_env$initial_state_log), {initial_state_path!r}, row.names=FALSE) else write.csv(data.frame(call=integer(), row=integer(), retained=logical(), eta=double(), mu=double(), mustart=double(), null_eta=double(), etaold=double(), offset=double(), theta=double()), {initial_state_path!r}, row.names=FALSE)",
+                    f"if (length(trace_env$inner_prefix_log)) write.csv(do.call(rbind, trace_env$inner_prefix_log), {prefix_path!r}, row.names=FALSE) else write.csv(data.frame(call=integer(), pdev=double(), old_pdev=double(), diverging=logical()), {prefix_path!r}, row.names=FALSE)",
                     f"write.csv(data.frame(multiplier=trace_env$multiplier_history), {multiplier_path!r}, row.names=FALSE)",
                     f"writeLines(trace_env$branch_history, {branch_path!r})",
                     f"writeLines(format(fit$REML, digits=17), {score_path!r})",
@@ -992,6 +1002,8 @@ class RBridge:
                 "start_retained": pd.read_csv(reset_path)["start_retained"].to_numpy(
                     dtype=bool
                 ),
+                "initial_states": pd.read_csv(initial_state_path),
+                "inner_prefix": pd.read_csv(prefix_path),
                 "multipliers": multipliers,
                 "branches": branches,
                 "final_score": float(

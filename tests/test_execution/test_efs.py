@@ -130,22 +130,45 @@ def test_known_scale_efs_rejects_nonlog_nb() -> None:
         )
 
 
-def test_estimated_nb_efs_requires_explicit_staged_start_contract() -> None:
-    data = _fixed_nb_data(n=40)
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_estimated_nb_efs_default_uses_its_null_anchor_initializer() -> None:
+    data = _fixed_nb_data(n=48)
     family = NegativeBinomial(theta=2.7)
-    setup, fd = _build("y ~ s(x, bs='cr', k=5)", data, family)
+    formula = "y ~ s(x, bs='cr', k=6)"
+    setup, fd = _build(
+        formula,
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
     initial = efs_initial_log_lambda(setup, family)
-    with pytest.raises(ValueError, match="explicit beta_init"):
-        dense_efs_known_scale(
-            fd, initial_log_lambda=initial, control=EFSControl(outer_limit=1)
-        )
-    with pytest.raises(ValueError, match="beta_old_init"):
-        dense_efs_known_scale(
-            fd,
-            initial_log_lambda=initial,
-            beta_init=jax.numpy.zeros((fd.n_coef,)),
-            control=EFSControl(outer_limit=1),
-        )
+    result = dense_efs_known_scale(fd, initial_log_lambda=initial)
+    trace = RBridge(mode="subprocess").efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(initial)),
+        scale=1.0,
+        initial_log_theta=float(np.log(2.7)),
+    )
+    assert result.theta is not None
+    assert np.isfinite(result.theta)
+    assert result.scale == 1.0
+    np.testing.assert_allclose(
+        result.pirls_result.mu,
+        trace["selected_fitted_values"],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    np.testing.assert_allclose(
+        result.theta,
+        trace["selected_packed_sp"][0],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
 
 
 def test_estimated_nb_efs_keeps_theta_explicit_and_family_unchanged() -> None:
@@ -320,8 +343,8 @@ def test_estimated_nb_controller_keeps_old_beta_and_theta_for_all_trials(
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
-def test_estimated_nb_efs_rejects_the_pinned_r_start_reset_path() -> None:
-    """Do not pretend a discarded R warm start is a valid EFS5c start."""
+def test_estimated_nb_efs_matches_the_pinned_r_start_reset_path() -> None:
+    """A worse warm beta resets to R's per-row NB ``mustart`` state."""
     data = _fixed_nb_data(n=48)
     family = NegativeBinomial(theta=2.7)
     formula = "y ~ s(x, bs='cr', k=6)"
@@ -336,6 +359,29 @@ def test_estimated_nb_efs_rejects_the_pinned_r_start_reset_path() -> None:
     beta_bad = jax.numpy.full((fd.n_coef,), 30.0, dtype=fd.X.dtype)
     theta0 = jax.numpy.asarray(family.get_theta(transformed=False))
     rho = efs_initial_log_lambda(setup, family)
+    bridge = RBridge(mode="subprocess")
+    default_trace = bridge.efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+        scale=1.0,
+        initial_log_theta=float(np.asarray(theta0[0])),
+    )
+    retained_trace = bridge.efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+        scale=1.0,
+        initial_log_theta=float(np.asarray(theta0[0])),
+        initial_beta=np.asarray(beta_old),
+        beta_old_init=np.asarray(beta_old),
+    )
     r_trace = RBridge(mode="subprocess").efs_diagnostics(
         formula,
         data,
@@ -349,15 +395,82 @@ def test_estimated_nb_efs_rejects_the_pinned_r_start_reset_path() -> None:
         beta_old_init=np.asarray(beta_old),
     )
     assert not r_trace["start_retained"][0]
-    with pytest.raises(ValueError, match="would reset to mustart"):
-        dense_efs_known_scale(
-            fd,
-            initial_log_lambda=rho,
-            initial_log_theta=theta0,
-            beta_init=beta_bad,
-            beta_old_init=beta_old,
-            control=EFSControl(outer_limit=1),
-        )
+    default_initial = default_trace["initial_states"].query("call == 1")
+    retained_initial = retained_trace["initial_states"].query("call == 1")
+    initial = r_trace["initial_states"].query("call == 1")
+    assert not default_initial["retained"].iloc[0]
+    assert retained_initial["retained"].iloc[0]
+    np.testing.assert_allclose(
+        default_initial["eta"], np.log(default_initial["mustart"])
+    )
+    np.testing.assert_allclose(retained_initial["eta"], retained_initial["etaold"])
+    np.testing.assert_allclose(retained_initial["eta"], retained_initial["null_eta"])
+    np.testing.assert_allclose(initial["eta"], np.log(initial["mustart"]))
+    np.testing.assert_allclose(initial["eta"], default_initial["eta"])
+    np.testing.assert_allclose(initial["mu"], default_initial["mu"])
+    reset = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=rho,
+        initial_log_theta=theta0,
+        beta_init=beta_bad,
+        beta_old_init=beta_old,
+        control=EFSControl(outer_limit=1),
+    )
+    default = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=rho,
+        initial_log_theta=theta0,
+        beta_old_init=beta_old,
+        control=EFSControl(outer_limit=1),
+    )
+    np.testing.assert_allclose(
+        reset.pirls_result.coefficients,
+        default.pirls_result.coefficients,
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    np.testing.assert_allclose(
+        reset.pirls_result.mu,
+        default.pirls_result.mu,
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    assert reset.theta == pytest.approx(default.theta)
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_pinned_nb_first_divergence_records_null_anchor_prefix() -> None:
+    """Capture gam.fit4's first-divergence branch with weights, offset and theta."""
+    data = _fixed_nb_data(n=48)
+    formula = "y ~ s(x, bs='cr', k=6)"
+    bridge = RBridge(mode="subprocess")
+    base = bridge.efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.array([1.0]),
+        scale=1.0,
+        initial_log_theta=float(np.log(2.7)),
+    )
+    diagnostic = bridge.efs_diagnostics(
+        formula,
+        data,
+        "nb",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.array([np.exp(8.0)]),
+        scale=1.0,
+        initial_log_theta=float(np.log(2.7)),
+        beta_old_init=base["selected_coefficients"],
+    )
+    initial = diagnostic["initial_states"].query("call == 1")
+    prefix = diagnostic["inner_prefix"].query("call == 1")
+    assert not initial["retained"].iloc[0]
+    np.testing.assert_allclose(initial["eta"], np.log(initial["mustart"]))
+    assert prefix["diverging"].iloc[0]
+    assert prefix["pdev"].iloc[0] > prefix["old_pdev"].iloc[0]
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")

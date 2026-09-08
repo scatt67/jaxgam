@@ -70,6 +70,7 @@ _EFS_STATUS_THETA_FAILED = 3
 _EFS_STATUS_NONFINITE_STATIONARITY = 4
 _EFS_STATUS_ITERATION_LIMIT = 5
 _EFS_STATUS_INVALID_INPUT = 6
+_EFS_STATUS_RETAINED_START_INVALID_TRIAL = 7
 
 
 def canonical_working_quantities(
@@ -175,6 +176,7 @@ class _BetaStepResult:
     XtWX: jax.Array
     L: jax.Array
     W: jax.Array
+    proposal_valid: jax.Array | None = None
 
 
 _BETA_STEP_FIELDS = [f.name for f in fields(_BetaStepResult)]
@@ -197,6 +199,7 @@ def _beta_step(
     beta: jax.Array,
     beta_old: jax.Array,
     mu: jax.Array,
+    eta_current: jax.Array | None,
     penalized_deviance: jax.Array,
     iteration: jax.Array,
     compute_W_and_z,
@@ -215,7 +218,10 @@ def _beta_step(
     the EFS loop can change theta *after* this accepted beta step without
     duplicating the WLS or beta-halving algorithm.
     """
-    eta_cur = X @ beta + offset
+    # Ordinary PIRLS derives eta from beta exactly as before. The EFS NB
+    # initializer may instead supply R's link(mustart), which intentionally
+    # has no coefficient representation on the first iteration.
+    eta_cur = X @ beta + offset if eta_current is None else eta_current
     W, z = compute_W_and_z(mu, eta_cur)
     factors_valid = jnp.all(jnp.isfinite(W)) & jnp.all(jnp.isfinite(z))
     XtWX, XtWz = form_wls(W, z)
@@ -297,6 +303,7 @@ def _beta_step(
         accepted=halving_final.accepted,
         factors_valid=factors_valid,
         solver_valid=solver_valid,
+        proposal_valid=jnp.isfinite(pen_dev_new) & valid_new,
         XtWX=XtWX,
         L=L,
         W=W,
@@ -591,6 +598,7 @@ def _pirls_loop_jit(
             beta=state.beta,
             beta_old=state.beta,
             mu=state.mu,
+            eta_current=None,
             penalized_deviance=state.pen_dev,
             iteration=state.i,
             compute_W_and_z=_compute_W_and_z,
@@ -737,6 +745,7 @@ class _EFSThetaPIRLSState:
     i: jax.Array
     beta: jax.Array
     beta_old: jax.Array
+    eta: jax.Array
     mu: jax.Array
     log_theta: jax.Array
     baseline: jax.Array
@@ -771,6 +780,8 @@ def _efs_theta_pirls_loop_jit(
     offset: jax.Array,
     log_theta_init: jax.Array,
     beta_old_init: jax.Array,
+    initial_eta: jax.Array,
+    initial_start_retained: jax.Array,
     count_indices: jax.Array,
     *,
     max_y: int,
@@ -811,7 +822,7 @@ def _efs_theta_pirls_loop_jit(
 
         return compute_W_and_z, form_wls, compute_dev
 
-    eta_init = X @ beta_init + offset
+    eta_init = initial_eta
     mu_init = family.link.inverse(eta_init)
     eta_old_init = X @ beta_old_init + offset
     mu_old_init = family.link.inverse(eta_old_init)
@@ -859,6 +870,7 @@ def _efs_theta_pirls_loop_jit(
         i=jnp.array(0, dtype=jnp.int32),
         beta=beta_init,
         beta_old=beta_old_init,
+        eta=eta_init,
         mu=mu_init,
         log_theta=log_theta_init,
         baseline=initial_pdev,
@@ -884,6 +896,7 @@ def _efs_theta_pirls_loop_jit(
             beta=state.beta,
             beta_old=state.beta_old,
             mu=state.mu,
+            eta_current=state.eta,
             penalized_deviance=state.baseline,
             iteration=state.i,
             compute_W_and_z=compute_W_and_z,
@@ -897,15 +910,28 @@ def _efs_theta_pirls_loop_jit(
         )
 
         def beta_failed(_: None) -> _EFSThetaPIRLSState:
+            proposal_invalid = (
+                jnp.array(False)
+                if beta_step.proposal_valid is None
+                else ~beta_step.proposal_valid
+            )
+            retained_start_invalid = (
+                (state.i == 0) & initial_start_retained & proposal_invalid
+            )
             status = jnp.where(
-                ~beta_step.factors_valid | ~beta_step.solver_valid,
-                jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
-                jnp.array(_EFS_STATUS_BETA_STEP_FAILED, dtype=jnp.int32),
+                retained_start_invalid,
+                jnp.array(_EFS_STATUS_RETAINED_START_INVALID_TRIAL, dtype=jnp.int32),
+                jnp.where(
+                    ~beta_step.factors_valid | ~beta_step.solver_valid,
+                    jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
+                    jnp.array(_EFS_STATUS_BETA_STEP_FAILED, dtype=jnp.int32),
+                ),
             )
             return _EFSThetaPIRLSState(
                 i=state.i + 1,
                 beta=state.beta,
                 beta_old=state.beta_old,
+                eta=state.eta,
                 mu=state.mu,
                 log_theta=state.log_theta,
                 baseline=state.baseline,
@@ -982,6 +1008,7 @@ def _efs_theta_pirls_loop_jit(
                 i=state.i + 1,
                 beta=beta_step.beta,
                 beta_old=beta_step.beta,
+                eta=beta_step.eta,
                 mu=beta_step.mu,
                 log_theta=theta_result.log_theta,
                 baseline=post_theta_pdev,
@@ -1078,6 +1105,8 @@ def efs_theta_pirls_loop(
     count_indices: jax.Array,
     *,
     beta_old_init: jax.Array | None = None,
+    initial_eta: jax.Array | None = None,
+    initial_start_retained: bool = False,
     max_y: int,
     integer_counts: bool,
     max_iter: int = 100,
@@ -1085,10 +1114,13 @@ def efs_theta_pirls_loop(
 ) -> EFSThetaPIRLSResult:
     """Run the EFS-only NB/log in-loop conditional-theta PIRLS solver.
 
-    ``beta_old_init`` is the explicit old/null coefficient state for the first
-    R divergence comparison and halving origin. Omitting it intentionally uses
-    ``beta_init`` for both roles; callers with a distinct null state must pass
-    it rather than relying on the ordinary-PIRLS first-iteration shortcut.
+    ``beta_old_init`` is the explicit null coefficient state for the first R
+    divergence comparison. ``initial_eta`` supplies ``link(mustart)`` when R
+    starts or resets with no retained coefficient vector; it is intentionally
+    distinct from ``X @ beta_init + offset``. A retained first start whose
+    first proposal is nonfinite/domain-invalid returns the named
+    ``RETAINED_START_INVALID_TRIAL`` status rather than applying the null
+    divergence origin to R's earlier nonfinite/domain recovery phase.
 
     This internal entry point is intentionally separate from ``pirls_loop``;
     neither default joint-Newton NB nor fixed-theta EFS routes opt into it.
@@ -1169,6 +1201,14 @@ def efs_theta_pirls_loop(
         raise ValueError("EFS theta PIRLS offset must align with y")
     if not jnp.issubdtype(offset.dtype, jnp.floating):
         raise ValueError("EFS theta PIRLS offset must have floating dtype")
+    if not isinstance(initial_start_retained, bool):
+        raise ValueError("EFS theta PIRLS initial_start_retained must be bool")
+    if initial_eta is None:
+        initial_eta = X @ beta_init + offset
+    if initial_eta.shape != y.shape:
+        raise ValueError("EFS theta PIRLS initial_eta must align with y")
+    if not jnp.issubdtype(initial_eta.dtype, jnp.floating):
+        raise ValueError("EFS theta PIRLS initial_eta must have floating dtype")
     return _efs_theta_pirls_loop_jit(
         X,
         y,
@@ -1179,6 +1219,8 @@ def efs_theta_pirls_loop(
         offset,
         log_theta_init,
         beta_old_init,
+        initial_eta,
+        jnp.asarray(initial_start_retained),
         count_indices,
         max_y=max_y,
         integer_counts=integer_counts,
