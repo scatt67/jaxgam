@@ -158,8 +158,6 @@ class ArrayRowSource:
         if self._y is not None and lengths and len(self._y) != n_rows:
             raise ValueError("y and source columns must have the same length.")
         self._source_n_rows = n_rows
-        if n_rows == 0:
-            raise ValueError("RowSource cannot be empty.")
         self._columns: Mapping[str, Column] = MappingProxyType(copied)
         self._weights = _validated_vector(weights, n_rows, "weights", non_negative=True)
         self._offset = _validated_vector(offset, n_rows, "offset")
@@ -206,6 +204,11 @@ class ArrayRowSource:
     @property
     def column_names(self) -> tuple[str, ...]:
         return tuple(self._columns)
+
+    @property
+    def has_explicit_offset(self) -> bool:
+        """Whether scan offsets came from caller data rather than defaults."""
+        return self._offset is not None
 
     def scan(self, batch_rows: int) -> Iterator[RowBatch]:
         """Yield fresh batches with only batch-sized output allocations."""
