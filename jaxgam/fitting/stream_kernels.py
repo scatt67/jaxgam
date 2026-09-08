@@ -88,6 +88,53 @@ def accumulate_working_statistics(
 
 
 @jax.jit(static_argnames=("family", "context"))
+def positive_qr_working_rows(
+    X: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    valid: jax.Array,
+    beta: jax.Array,
+    parameters: FamilyExecutionParameters,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Return one positive-Fisher QR block plus separate p-sized statistics."""
+    valid = jnp.asarray(valid, dtype=bool)
+    y_safe, weight_safe, offset_safe, eta, mu, domain_per_row = sanitize_batch_inputs(
+        X, y, prior_weight, offset, valid, beta, family, context
+    )
+    X_safe = jnp.where(valid[:, None], X, 0.0)
+    theta_safe = jnp.where(
+        jnp.isfinite(parameters.log_theta), parameters.log_theta, 0.0
+    )
+    working_weight, z = canonical_working_quantities(
+        family, y_safe, mu, eta, weight_safe, offset_safe, log_theta=theta_safe
+    )
+    working_weight = jnp.where(valid, jnp.clip(working_weight, _W_MIN, _W_MAX), 0.0)
+    z = jnp.where(valid, z, 0.0)
+    sqrt_weight = jnp.sqrt(working_weight)
+    weighted_X = sqrt_weight[:, None] * X_safe
+    weighted_z = sqrt_weight * z
+    residuals = family.deviance_resids(y_safe, mu, weight_safe)
+    domain_ok = (
+        jnp.all(jnp.logical_or(~valid, domain_per_row))
+        & jnp.all(jnp.isfinite(working_weight))
+        & jnp.all(jnp.isfinite(weighted_z))
+        & jnp.all(jnp.isfinite(residuals))
+        & jnp.all(jnp.isfinite(parameters.log_theta))
+    )
+    return (
+        weighted_X,
+        weighted_z,
+        weighted_X.T @ weighted_X,
+        weighted_X.T @ weighted_z,
+        jnp.sum(jnp.where(valid, residuals**2, 0.0)),
+        domain_ok,
+    )
+
+
+@jax.jit(static_argnames=("family", "context"))
 def trial_deviance(
     X: jax.Array,
     y: jax.Array,
@@ -178,6 +225,21 @@ def coefficient_stationarity(H: jax.Array, b: jax.Array, beta: jax.Array) -> jax
     """Scale-invariant infinity-norm normal-equation residual."""
     residual = H @ beta - b
     scale = 1.0 + jnp.max(jnp.abs(b)) + jnp.max(jnp.abs(H @ beta))
+    return jnp.max(jnp.abs(residual)) / scale
+
+
+@jax.jit
+def coefficient_stationarity_from_parts(
+    G: jax.Array,
+    b: jax.Array,
+    structure: penalty_ops.JaxPenaltyStructure,
+    log_lambda: jax.Array,
+    beta: jax.Array,
+) -> jax.Array:
+    """Stationarity without materializing a normal-equation solve matrix."""
+    H_beta = G @ beta + penalty_ops.apply(structure, beta, log_lambda)
+    residual = H_beta - b
+    scale = 1.0 + jnp.max(jnp.abs(b)) + jnp.max(jnp.abs(H_beta))
     return jnp.max(jnp.abs(residual)) / scale
 
 

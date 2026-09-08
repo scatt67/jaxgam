@@ -30,6 +30,13 @@ _ACTIVITY_THRESH = np.finfo(float).eps ** 0.8
 _MAX_SP_ADJUST_ITERS = 200
 
 
+def _owned_readonly(values: npt.ArrayLike) -> npt.NDArray[np.floating]:
+    """Detach immutable CPU preparation leaves from caller-owned arrays."""
+    result = np.array(values, dtype=float, copy=True)
+    result.setflags(write=False)
+    return result
+
+
 @dataclass(frozen=True)
 class ResponseReduction:
     """Observation reductions retained by prepared fitting, never y itself."""
@@ -45,6 +52,19 @@ class ResponseReduction:
     @property
     def weighted_mean(self) -> float:
         return self.weighted_sum / self.total_weight
+
+
+@dataclass(frozen=True)
+class QRLocalPenaltyRoot:
+    """Immutable local ``E`` with ``E.T @ E = S`` for positive QR solves."""
+
+    start: int
+    stop: int
+    sp_index: int
+    root: npt.NDArray[np.floating]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "root", _owned_readonly(self.root))
 
 
 @dataclass(frozen=True)
@@ -64,6 +84,82 @@ class FittingPreparation:
     link_name: str
     family_execution_static_config: tuple[object, ...] | None
     family_parameter_snapshot: object | None
+
+
+def qr_penalty_roots(structure: PenaltyStructure) -> tuple[QRLocalPenaltyRoot, ...]:
+    """Factor all local PSD penalties once without global zero padding.
+
+    Roots retain every smoothing-parameter slot, including declared rank-zero
+    penalties.  The streamed QR route scales these roots by ``exp(rho / 2)``
+    for its actual solve while reusing the identical unscaled layout for the
+    scale-independent structural-rank system.
+    """
+    result: list[QRLocalPenaltyRoot] = []
+    for block in structure.blocks:
+        for sp_index, penalty, declared_rank in zip(
+            block.sp_indices, block.dense_penalties(), block.ranks, strict=True
+        ):
+            raw = np.asarray(penalty, dtype=float)
+            matrix = 0.5 * (raw + raw.T)
+            diagonal = np.diag(matrix)
+            if np.array_equal(matrix, np.diag(diagonal)):
+                if np.any(diagonal < 0.0):
+                    raise ValueError(
+                        "QR penalty roots require positive-semidefinite "
+                        "local penalties."
+                    )
+                if declared_rank < 0 or declared_rank > len(diagonal):
+                    raise ValueError(
+                        "QR penalty root rank is outside its local penalty dimension."
+                    )
+                selected = np.argsort(diagonal)[::-1][:declared_rank]
+                if declared_rank and np.any(diagonal[selected] <= 0.0):
+                    raise ValueError(
+                        "QR penalty metadata declares a non-positive active direction."
+                    )
+                remainder = np.argsort(diagonal)[::-1][declared_rank:]
+                tolerance = (
+                    (float(np.max(np.abs(diagonal))) if len(diagonal) else 0.0)
+                    * 100.0
+                    * np.finfo(float).eps
+                )
+                if len(remainder) and np.any(diagonal[remainder] > tolerance):
+                    raise ValueError(
+                        "QR penalty root rank disagrees with a positive "
+                        "local penalty direction."
+                    )
+                root = np.zeros((declared_rank, len(diagonal)))
+                root[np.arange(declared_rank), selected] = np.sqrt(diagonal[selected])
+                result.append(
+                    QRLocalPenaltyRoot(block.start, block.stop, sp_index, root)
+                )
+                continue
+            eigenvalues, vectors = np.linalg.eigh(matrix)
+            maximum = float(np.max(np.abs(eigenvalues))) if len(eigenvalues) else 0.0
+            tolerance = maximum * 100.0 * np.finfo(float).eps
+            if len(eigenvalues) and float(np.min(eigenvalues)) < -tolerance:
+                raise ValueError(
+                    "QR penalty roots require positive-semidefinite local penalties."
+                )
+            if declared_rank < 0 or declared_rank > len(eigenvalues):
+                raise ValueError(
+                    "QR penalty root rank is outside its local penalty dimension."
+                )
+            descending = np.argsort(eigenvalues)[::-1]
+            selected = descending[:declared_rank]
+            remainder = descending[declared_rank:]
+            if declared_rank and np.any(eigenvalues[selected] <= 0.0):
+                raise ValueError(
+                    "QR penalty metadata declares a non-positive active direction."
+                )
+            if len(remainder) and np.any(eigenvalues[remainder] > tolerance):
+                raise ValueError(
+                    "QR penalty root rank disagrees with a positive local "
+                    "penalty direction."
+                )
+            root = np.sqrt(eigenvalues[selected])[:, None] * vectors[:, selected].T
+            result.append(QRLocalPenaltyRoot(block.start, block.stop, sp_index, root))
+    return tuple(result)
 
 
 def _make_transform(D: np.ndarray) -> object:

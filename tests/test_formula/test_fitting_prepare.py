@@ -9,6 +9,7 @@ from jaxgam.formula.fitting_prepare import (
     apply_transforms_to_design,
     initial_log_sp_from_diagonal,
     penalties_non_overlapping,
+    qr_penalty_roots,
     reparameterize_structure,
 )
 from jaxgam.penalties.structure import (
@@ -73,3 +74,73 @@ def test_interleaved_supports_remain_coupled_and_zero_penalty_is_safe() -> None:
 def test_response_reduction_weighted_mean() -> None:
     reduction = ResponseReduction(3, 4.0, 1.0, 6.0, 10.0, -1.0, 2.0)
     assert reduction.weighted_mean == 2.5
+
+
+def test_qr_penalty_roots_are_local_psd_owned_and_keep_zero_layout() -> None:
+    left = np.diag([4.0, 0.0, 1.0])
+    zero = np.zeros((3, 3))
+    roots = qr_penalty_roots(_structure(left, zero))
+    assert [(root.start, root.stop, root.sp_index) for root in roots] == [
+        (0, 3, 0),
+        (0, 3, 1),
+    ]
+    np.testing.assert_allclose(roots[0].root.T @ roots[0].root, left)
+    assert roots[1].root.shape == (0, 3)
+    with np.testing.assert_raises(ValueError):
+        roots[0].root[0, 0] = 0.0
+    with np.testing.assert_raises(ValueError):
+        qr_penalty_roots(_structure(np.diag([1.0, -0.5, 0.0])))
+
+
+def test_qr_roots_honor_supplied_rank_without_global_dimension_cutoff() -> None:
+    matrix = np.diag([1.0, 1e-14])
+    structure = PenaltyStructure(
+        101,
+        (
+            PenaltyBlock(
+                0,
+                2,
+                (0,),
+                (DenseLocalPenalty(matrix),),
+                IdentityTransform(2),
+                (2,),
+            ),
+        ),
+    )
+    root = qr_penalty_roots(structure)[0]
+    assert root.root.shape == (2, 2)
+    np.testing.assert_allclose(
+        root.root.T @ root.root,
+        matrix,
+        rtol=STRICT.rtol,
+        atol=100.0 * np.finfo(float).eps,
+    )
+
+
+def test_qr_roots_honor_rotated_declared_rank() -> None:
+    """A small declared positive eigendirection is not discarded by global p."""
+    rotation, _ = np.linalg.qr(
+        np.array([[1.0, -2.0, 0.5], [2.0, 1.0, -1.0], [0.0, 1.0, 2.0]])
+    )
+    matrix = rotation @ np.diag([3.0, 1e-14, 0.0]) @ rotation.T
+    structure = PenaltyStructure(
+        137,
+        (
+            PenaltyBlock(
+                4,
+                7,
+                (0,),
+                (DenseLocalPenalty(matrix),),
+                IdentityTransform(3),
+                (2,),
+            ),
+        ),
+    )
+    root = qr_penalty_roots(structure)[0]
+    assert root.root.shape == (2, 3)
+    np.testing.assert_allclose(
+        root.root.T @ root.root,
+        matrix,
+        rtol=STRICT.rtol,
+        atol=100.0 * np.finfo(float).eps,
+    )

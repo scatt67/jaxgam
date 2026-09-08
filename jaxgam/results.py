@@ -341,18 +341,28 @@ class GAMPredictionResult:
         if self._predictor.Vp is not None:
             return self._predictor.Vp
         L = self._predictor._fisher_factor
-        if L is None:
+        qr_factor = self._predictor._fisher_qr_factor
+        if L is None and qr_factor is None:
             raise RuntimeError("No covariance provider was retained for this result.")
-        p = L.shape[0]
-        required = 3 * p * p * np.dtype(float).itemsize
+        p = L.shape[0] if L is not None else qr_factor.n_coef
+        # The legacy lower-factor path retains three p-by-p work arrays.
+        # QR covariance action additionally needs projection/permutation,
+        # triangular, reconstruction, and output buffers at the same time.
+        required_multiplier = 3 if L is not None else 12
+        required = required_multiplier * p * p * np.dtype(float).itemsize
         if required > memory_budget_bytes:
             raise MemoryError(
                 f"Vp materialization requires {required} workspace bytes, "
                 "exceeding budget "
                 f"{memory_budget_bytes} bytes."
             )
-        Z = sla.solve_triangular(L, np.eye(p), lower=True)
-        covariance = self._predictor._fisher_scale * (Z.T @ Z)
+        if L is not None:
+            Z = sla.solve_triangular(L, np.eye(p), lower=True)
+            covariance = self._predictor._fisher_scale * (Z.T @ Z)
+        else:
+            covariance = self._predictor._fisher_scale * qr_factor.hessian_inverse(
+                np.eye(p)
+            )
         for start, stop, kind, values in self._predictor._fisher_transforms:
             if kind == "dense":
                 covariance[start:stop, :] = values @ covariance[start:stop, :]
@@ -376,50 +386,100 @@ class GAMPredictionResult:
         control: FitControl,
     ) -> GAMPredictionResult:
         """Build compact prediction state directly from row-free stream state."""
-        from jaxgam.fitting.reml import reml_criterion
+        from jaxgam.fitting.reml import (
+            reml_criterion,
+            reml_criterion_with_logdet_hessian,
+        )
+        from jaxgam.fitting.state import PivotedQRCoefficientFactor
 
         coefficients_fit = to_numpy(stream_state.coefficients)
         coefficients = _prepared_transform_coefficients_cpu(prepared, coefficients_fit)
         scale = float(to_numpy(stream_state.scale))
         phi = 1.0 if family.scale_known else scale
-        score = reml_criterion(
-            stream_state.log_lambda,
-            stream_state.xtwx,
-            stream_state.coefficients,
-            stream_state.deviance,
-            stream_state.saturated_loglik,
-            metadata.penalty_structure,
-            stream_state.score_scale,
-            metadata.total_penalty_null_dim,
-            metadata.singleton_sp_indices,
-            metadata.singleton_ranks,
-            metadata.singleton_eig_constants,
-            metadata.multi_block_sp_indices,
-            metadata.multi_block_ranks,
-            metadata.multi_block_proj_S,
-            metadata.rank_deficit,
-        )
+        if isinstance(stream_state.coefficient_factor, PivotedQRCoefficientFactor):
+            score = reml_criterion_with_logdet_hessian(
+                stream_state.log_lambda,
+                stream_state.coefficients,
+                stream_state.deviance,
+                stream_state.saturated_loglik,
+                metadata.penalty_structure,
+                stream_state.score_scale,
+                metadata.total_penalty_null_dim,
+                metadata.singleton_sp_indices,
+                metadata.singleton_ranks,
+                metadata.singleton_eig_constants,
+                metadata.multi_block_sp_indices,
+                metadata.multi_block_ranks,
+                metadata.multi_block_proj_S,
+                stream_state.coefficient_factor.logdet_hessian(),
+                metadata.rank_deficit,
+            )
+        else:
+            # Preserve the legacy Cholesky/default arithmetic exactly.
+            score = reml_criterion(
+                stream_state.log_lambda,
+                stream_state.xtwx,
+                stream_state.coefficients,
+                stream_state.deviance,
+                stream_state.saturated_loglik,
+                metadata.penalty_structure,
+                stream_state.score_scale,
+                metadata.total_penalty_null_dim,
+                metadata.singleton_sp_indices,
+                metadata.singleton_ranks,
+                metadata.singleton_eig_constants,
+                metadata.multi_block_sp_indices,
+                metadata.multi_block_ranks,
+                metadata.multi_block_proj_S,
+                metadata.rank_deficit,
+            )
         factor = None
+        qr_factor = None
         transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
         covariance = None
         if control.uncertainty != "none":
-            factor = to_numpy(stream_state.fisher_factor)
+            if isinstance(
+                stream_state.fisher_coefficient_factor, PivotedQRCoefficientFactor
+            ):
+                from jaxgam.inference.predictor import PivotedQRFisherFactor
+
+                tagged = stream_state.fisher_coefficient_factor
+                qr_factor = PivotedQRFisherFactor(
+                    to_numpy(tagged.R),
+                    to_numpy(tagged.pivots),
+                    to_numpy(tagged.keep),
+                    tagged.original_n_coef,
+                )
+            else:
+                factor = to_numpy(stream_state.fisher_factor)
             transforms = _prepared_fisher_transforms(prepared)
             if control.uncertainty == "covariance":
-                p = factor.shape[0]
-                required = 3 * p * p * np.dtype(float).itemsize
+                p = factor.shape[0] if factor is not None else qr_factor.n_coef
+                # Keep the established lower-Cholesky contract exact. QR's
+                # CPU action has several simultaneous p-by-p index/solve
+                # buffers, so its compact covariance materialization needs a
+                # deliberately conservative separate budget.
+                required_multiplier = 3 if factor is not None else 12
+                required = required_multiplier * p * p * np.dtype(float).itemsize
                 if required > control.memory_budget_bytes:
                     raise MemoryError(
                         f"Vp requires {required} bytes, exceeding "
                         "FitControl.memory_budget_bytes="
                         f"{control.memory_budget_bytes}."
                     )
-                Z = sla.solve_triangular(factor, np.eye(p), lower=True)
+                if factor is not None:
+                    Z = sla.solve_triangular(factor, np.eye(p), lower=True)
+                    covariance_fit = phi * (Z.T @ Z)
+                else:
+                    covariance_fit = phi * qr_factor.hessian_inverse(np.eye(p))
                 covariance = _prepared_transform_covariance_cpu(
-                    prepared, phi * (Z.T @ Z)
+                    prepared, covariance_fit
                 )
                 factor = None
-                transforms = ()
+                # Retain the matched QR root alongside requested Vp: forming
+                # X @ Vp @ X.T loses its conditioning advantage for SEs.
+                if qr_factor is None:
+                    transforms = ()
         offset_reduction = prepared.fitting.response
         predictor = GAMPredictor(
             coefficients=coefficients,
@@ -431,6 +491,7 @@ class GAMPredictionResult:
             ),
             _predict_spec=prepared.predict_spec,
             _fisher_factor=factor,
+            _fisher_qr_factor=qr_factor,
             _fisher_transforms=transforms,
             _fisher_scale=phi,
             _output_budget_bytes=control.output_budget_bytes,
