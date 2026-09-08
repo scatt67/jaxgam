@@ -39,14 +39,26 @@ def efs_initial_log_lambda(setup, family) -> jax.Array:
     structure = setup.penalties
     if structure is None or structure.n_penalties == 0:
         return jnp.zeros((0,), dtype=jnp.float64)
-    mu = np.asarray(family.initialize(setup.y, setup.weights), dtype=np.float64)
-    eta = np.asarray(family.link.link(mu), dtype=np.float64)
-    mu_eta = np.asarray(family.link.mu_eta(eta), dtype=np.float64)
-    variance = np.asarray(family.variance(mu), dtype=np.float64)
-    working_weights = setup.weights * mu_eta**2 / variance
-    if not np.all(np.isfinite(working_weights)) or np.any(working_weights <= 0):
-        raise ValueError("EFS initial.spg working weights must be finite and positive")
-    return jnp.asarray(FittingData._initial_sp(setup.X, structure, working_weights))
+    ldxx = np.zeros(setup.X.shape[1], dtype=np.float64)
+    batch_rows = 8192
+    for start in range(0, setup.X.shape[0], batch_rows):
+        stop = min(start + batch_rows, setup.X.shape[0])
+        y = setup.y[start:stop]
+        prior = setup.weights[start:stop]
+        mu = np.asarray(family.initialize(y, prior), dtype=np.float64)
+        eta = np.asarray(family.link.link(mu), dtype=np.float64)
+        mu_eta = np.asarray(family.link.mu_eta(eta), dtype=np.float64)
+        variance = np.asarray(family.variance(mu), dtype=np.float64)
+        working = prior * mu_eta**2 / variance
+        if not np.all(np.isfinite(working)) or np.any(working <= 0):
+            raise ValueError(
+                "EFS initial.spg working weights must be finite and positive"
+            )
+        weighted_X = np.sqrt(working)[:, None] * setup.X[start:stop]
+        ldxx += np.sum(weighted_X * weighted_X, axis=0)
+    return jnp.asarray(
+        FittingData._initial_sp_from_crossproduct_diag(setup.X, structure, ldxx)
+    )
 
 
 @dataclass(frozen=True)

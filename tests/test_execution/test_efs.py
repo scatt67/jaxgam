@@ -17,15 +17,25 @@ from jaxgam.families.standard import Binomial, Gaussian, Poisson
 from jaxgam.fitting.efs import prepare_efs_statistics
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
+from tests.fixtures.efs_weighted_additive_cr_repro import FORMULA, make_data
 from tests.helpers import _AssertCollector, r_available
 from tests.r_bridge import RBridge
 from tests.tolerances import MODERATE, STRICT
 
 
-def _build(formula: str, data: pd.DataFrame, family):
+def _build(
+    formula: str,
+    data: pd.DataFrame,
+    family,
+    *,
+    weights: np.ndarray | None = None,
+    offset: np.ndarray | None = None,
+):
     from jaxgam.fitting.data import FittingData
 
-    setup = ModelSetup.build(parse_formula(formula), data)
+    setup = ModelSetup.build(
+        parse_formula(formula), data, weights=weights, offset=offset
+    )
     return setup, FittingData.from_setup(setup, family)
 
 
@@ -227,3 +237,113 @@ def test_coupled_efs_statistics_and_fit_match_pinned_r(term: str) -> None:
         ),
     )
     collector.raise_if_any(f"pinned coupled EFS parity ({term})")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("family", "family_name"), [(Poisson(), "poisson"), (Binomial(), "binomial")]
+)
+def test_weighted_offset_additive_cr_matches_pinned_r(family, family_name: str) -> None:
+    """Ordinary two-smooth case; setup must receive the same w/off as R."""
+    data = make_data()
+    if family_name == "binomial":
+        probability = 1.0 / (1.0 + np.exp(-0.3 * data["x"]))
+        data = data.assign(y=np.random.default_rng(93).binomial(1, probability))
+    setup, fd = _build(
+        FORMULA,
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    rho = efs_initial_log_lambda(setup, family)
+    bridge = RBridge(mode="subprocess")
+    r_diag = bridge.efs_diagnostics(
+        FORMULA,
+        data,
+        family_name,
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+    )
+    initial = _fit_state(
+        fd, prepare_efs_statistics(fd), rho + 2.5, fd.beta_init, EFSControl()
+    )
+    first = r_diag["statistics"].query("call == 1").sort_values("parameter")
+    r_fit = bridge.fit_efs(
+        FORMULA,
+        data,
+        family_name,
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+    )
+    j_fit = dense_efs_known_scale(fd, initial_log_lambda=rho)
+    collector = _AssertCollector()
+    collector.check(
+        "initial lsp",
+        lambda: np.testing.assert_allclose(
+            rho + 2.5, first["log_smoothing"], rtol=STRICT.rtol, atol=STRICT.atol
+        ),
+    )
+    collector.check(
+        "initial deviance",
+        lambda: np.testing.assert_allclose(
+            initial.pirls_result.deviance,
+            first["deviance"].iloc[0],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "initial d",
+        lambda: np.testing.assert_allclose(
+            initial.statistics.determinant_derivative,
+            first["ldetS1"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "initial t",
+        lambda: np.testing.assert_allclose(
+            initial.statistics.fisher_trace,
+            first["trVS"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "initial q",
+        lambda: np.testing.assert_allclose(
+            initial.statistics.quadratic,
+            first["bSb"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "final fitted",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.mu,
+            r_fit["fitted_values"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "final deviance",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.deviance,
+            r_fit["deviance"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "final score",
+        lambda: np.testing.assert_allclose(
+            j_fit.score, r_fit["reml_score"], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.raise_if_any(f"weighted-offset additive CR EFS parity ({family_name})")

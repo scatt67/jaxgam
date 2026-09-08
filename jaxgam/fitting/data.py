@@ -268,6 +268,15 @@ class FittingData:
         return initial_log_sp_from_diagonal(ldxx, structure)
 
     @staticmethod
+    def _initial_sp_from_crossproduct_diag(
+        X: np.ndarray, structure: PenaltyStructure, ldxx: np.ndarray
+    ) -> np.ndarray:
+        """Preserve the EFS adapter through shared CPU initial-sp balancing."""
+        if ldxx.shape != (X.shape[1],):
+            raise ValueError("Initial-sp diagonal must match the design columns")
+        return initial_log_sp_from_diagonal(ldxx, structure)
+
+    @staticmethod
     def _weighted_crossproduct_diag(X: np.ndarray, weights: np.ndarray) -> np.ndarray:
         """Compute diag(X' diag(weights) X) in bounded row batches."""
         diagonal = np.zeros(X.shape[1], dtype=np.float64)
