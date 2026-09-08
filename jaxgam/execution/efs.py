@@ -15,6 +15,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jaxgam.families.standard import Gamma, Gaussian
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.efs import (
@@ -26,8 +27,8 @@ from jaxgam.fitting.efs import (
     prepare_efs_statistics,
 )
 from jaxgam.fitting.pirls import _W_MAX, _W_MIN, PIRLSResult, pirls_loop
-from jaxgam.fitting.reml import estimate_edf, reml_criterion
-from jaxgam.links.links import LogitLink, LogLink
+from jaxgam.fitting.reml import estimate_edf, fletcher_scale, reml_criterion
+from jaxgam.links.links import IdentityLink, InverseLink, LogitLink, LogLink
 
 
 def efs_initial_log_lambda(setup, family) -> jax.Array:
@@ -60,6 +61,44 @@ def efs_initial_log_lambda(setup, family) -> jax.Array:
     return jnp.asarray(
         FittingData._initial_sp_from_crossproduct_diag(setup.X, structure, ldxx)
     )
+
+
+def efs_initial_log_scale(setup, family) -> jax.Array:
+    """Return mgcv EFS's incoming unknown-scale value.
+
+    This is deliberately separate from the Newton scale initialization.  In
+    pinned ``estimate.gam`` the EFS parameter starts at ``null.scale / 10``;
+    ``get.null.coef`` forms that scale from the *unweighted* response mean,
+    but evaluates the family deviance with prior weights and divides by the
+    original number of rows.  In particular it is not ``GAMResults``'s null
+    deviance and it is not an RSS/(n-p) shortcut.
+    """
+    if family.scale_known:
+        return jnp.array(0.0, dtype=jnp.float64)
+    return _efs_initial_log_scale_from_arrays(setup.y, setup.weights, family)
+
+
+def _efs_initial_log_scale_from_arrays(y, wt, family) -> jax.Array:
+    """Array-level implementation shared by setup and dense fit adapters."""
+    y = np.asarray(y, dtype=np.float64)
+    wt = np.asarray(wt, dtype=np.float64)
+    if y.ndim != 1 or y.size == 0 or wt.shape != y.shape:
+        raise ValueError(
+            "EFS initial scale requires nonempty aligned response and weights"
+        )
+    if not np.all(np.isfinite(y)) or not np.all(np.isfinite(wt)) or np.any(wt <= 0):
+        raise ValueError("EFS initial scale requires finite strictly positive weights")
+    # Retain family response validation before using the same response mean as
+    # get.null.coef().  ``initialize`` may perform support checks.
+    family.initialize(y, wt)
+    mu = np.full_like(y, np.mean(y))
+    null_scale = float(np.asarray(family.dev_resids(y, mu, wt))) / y.size
+    incoming_phi = null_scale / 10.0
+    if not np.isfinite(incoming_phi) or incoming_phi <= 0:
+        raise ValueError(
+            "EFS initial unknown scale null.scale / 10 must be finite and positive"
+        )
+    return jnp.asarray(np.log(incoming_phi), dtype=jnp.float64)
 
 
 @dataclass(frozen=True)
@@ -123,6 +162,12 @@ class EFSFitState:
     raw_update: EFSRawUpdate | None
     valid: bool
     inner_converged: bool
+    # ``efsudr`` scores a fit at the incoming scale, then writes the fit's
+    # Fletcher estimate into the next lsp.  Keeping all three names avoids a
+    # tempting, but incorrect, score re-evaluation at the reported scale.
+    score_phi: jax.Array | None = None
+    update_phi: jax.Array | None = None
+    reported_phi: jax.Array | None = None
 
 
 @dataclass(frozen=True)
@@ -145,6 +190,10 @@ class EFSResult:
     update_residual: jax.Array | None = None
     score_history: tuple[float, ...] = ()
     multiplier: float = 1.0
+    score_phi: jax.Array | None = None
+    update_phi: jax.Array | None = None
+    reported_phi: jax.Array | None = None
+    score_phi_history: tuple[float, ...] = ()
 
 
 class ConsumedFitResult(Protocol):
@@ -169,9 +218,23 @@ def _known_scale_family_supported(fd: FittingData) -> bool:
     )
 
 
-def _scalar_score(fd: FittingData, rho: jax.Array, pr: PIRLSResult) -> jax.Array:
+def _unknown_scale_family_supported(fd: FittingData) -> bool:
+    """Initial regular-family EFS scope, mirroring the validated R route."""
+    family = fd.family
+    return (not family.scale_known) and (
+        (isinstance(family, Gaussian) and isinstance(family.link, IdentityLink))
+        or (
+            isinstance(family, Gamma)
+            and isinstance(family.link, (InverseLink, LogLink))
+        )
+    )
+
+
+def _scalar_score(
+    fd: FittingData, rho: jax.Array, pr: PIRLSResult, score_phi: jax.Array
+) -> jax.Array:
     """Evaluate only the scalar REML criterion; no score derivatives."""
-    ls_sat = fd.family.saturated_loglik(fd.y, fd.wt, jnp.array(1.0), max_y=fd.max_y)
+    ls_sat = fd.family.saturated_loglik(fd.y, fd.wt, score_phi, max_y=fd.max_y)
     return _jit_reml_score(
         rho,
         pr.XtWX,
@@ -179,7 +242,7 @@ def _scalar_score(fd: FittingData, rho: jax.Array, pr: PIRLSResult) -> jax.Array
         pr.deviance,
         ls_sat,
         fd.penalty_structure,
-        jnp.array(1.0),
+        score_phi,
         fd.total_penalty_null_dim,
         fd.singleton_sp_indices,
         fd.singleton_ranks,
@@ -197,7 +260,10 @@ def _fit_state(
     rho: jax.Array,
     beta_start: jax.Array,
     control: EFSControl,
+    score_phi: jax.Array | None = None,
 ) -> EFSFitState:
+    if score_phi is None:
+        score_phi = jnp.array(1.0)
     penalty = penalty_ops.materialize(fd.penalty_structure, rho)
     pr = pirls_loop(
         fd.X,
@@ -211,14 +277,37 @@ def _fit_state(
         tol=control.pirls_tolerance,
     )
     statistics = _jit_efs_statistics(plan, pr.coefficients, pr.L_fisher, rho)
-    score = _scalar_score(fd, rho, pr)
+    score = _scalar_score(fd, rho, pr, score_phi)
     edf = estimate_edf(pr.XtWX_fisher, pr.L_fisher)
+    update_phi = (
+        jnp.array(1.0)
+        if fd.family.scale_known
+        else fletcher_scale(fd.y, pr.mu, fd.wt, fd.family, edf)
+    )
     finite = bool(
         np.asarray(jnp.isfinite(score) & jnp.all(jnp.isfinite(pr.coefficients)))
     )
     inner = bool(np.asarray(pr.converged))
-    valid = finite and inner and bool(np.asarray(statistics.input_valid))
-    return EFSFitState(rho, pr, score, edf, statistics, None, valid, inner)
+    valid = (
+        finite
+        and inner
+        and bool(np.asarray(statistics.input_valid))
+        and bool(np.asarray(jnp.isfinite(score_phi) & (score_phi > 0)))
+        and bool(np.asarray(jnp.isfinite(update_phi) & (update_phi > 0)))
+    )
+    return EFSFitState(
+        rho,
+        pr,
+        score,
+        edf,
+        statistics,
+        None,
+        valid,
+        inner,
+        score_phi,
+        update_phi,
+        update_phi,
+    )
 
 
 def dense_efs_known_scale(
@@ -398,4 +487,216 @@ def dense_efs_known_scale(
         update_residual,
         tuple(history)[-control.history_limit :],
         multiplier,
+    )
+
+
+def dense_efs_unknown_scale(
+    fitting_data: FittingData,
+    *,
+    initial_log_lambda: jax.Array | None = None,
+    initial_log_scale: jax.Array | None = None,
+    beta_init: jax.Array | None = None,
+    control: EFSControl = DEFAULT_EFS_CONTROL,
+) -> EFSResult:
+    """Run regular unknown-scale Gaussian/Gamma EFS without Newton in phi.
+
+    The scale passed to each score is an explicit input parameter.  Its
+    replacement is the current fit's Fletcher estimate, as in pinned
+    ``efsudr``.  Alternative extension/contraction fits are intentionally
+    formed from the old accepted beta *and old accepted input parameter
+    state*, never from a rejected trial's reported scale.
+    """
+    if not _unknown_scale_family_supported(fitting_data):
+        raise NotImplementedError(
+            "Dense unknown-scale EFS currently supports Gaussian/identity and "
+            "Gamma/inverse or Gamma/log."
+        )
+    if fitting_data.n_penalties == 0:
+        raise ValueError("EFS bypasses models without estimated penalties")
+    for start in range(0, fitting_data.n_obs, 8192):
+        prior_weights = np.asarray(fitting_data.wt[start : start + 8192])
+        if not np.all(np.isfinite(prior_weights)) or np.any(
+            (prior_weights < _W_MIN) | (prior_weights > _W_MAX)
+        ):
+            raise ValueError(
+                "EFS unknown-scale path requires finite positive prior weights "
+                "inside PIRLS clipping bounds"
+            )
+    if fitting_data.rank_deficit:
+        raise ValueError(
+            "EFS unknown-scale path requires an identifiable penalized system"
+        )
+    rho0 = (
+        fitting_data.log_lambda_init
+        if initial_log_lambda is None
+        else initial_log_lambda
+    )
+    rho0 = jnp.asarray(rho0) + 2.5
+    if rho0.shape != (fitting_data.n_penalties,) or not bool(
+        np.all(np.isfinite(np.asarray(rho0)))
+    ):
+        raise ValueError(
+            "EFS initial log smoothing parameters must be finite and match penalties"
+        )
+    if initial_log_scale is None:
+        initial_log_scale = _efs_initial_log_scale_from_arrays(
+            fitting_data.y, fitting_data.wt, fitting_data.family
+        )
+    score_phi0 = jnp.exp(jnp.asarray(initial_log_scale))
+    if not bool(np.asarray(jnp.isfinite(score_phi0) & (score_phi0 > 0))):
+        raise ValueError("EFS initial unknown scale must be finite and positive")
+    beta0 = fitting_data.beta_init if beta_init is None else beta_init
+    if beta0 is None:
+        beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
+
+    plan = prepare_efs_statistics(fitting_data)
+    accepted = _fit_state(fitting_data, plan, rho0, beta0, control, score_phi0)
+    if not accepted.valid:
+        return EFSResult(
+            rho0,
+            jnp.exp(rho0),
+            False,
+            0,
+            accepted.score,
+            accepted.edf,
+            accepted.reported_phi,
+            accepted.pirls_result,
+            "inner_failure" if not accepted.inner_converged else "invalid_initial",
+            score_phi=accepted.score_phi,
+            update_phi=accepted.update_phi,
+            reported_phi=accepted.reported_phi,
+        )
+
+    multiplier = 1.0
+    history: deque[float] = deque(maxlen=max(4, control.history_limit))
+    score_phi_history: deque[float] = deque(maxlen=max(4, control.history_limit))
+    old_deviance: float | None = None
+    stop = "iteration_limit"
+    update_residual: jax.Array | None = None
+    for iteration in range(1, control.outer_limit + 1):
+        # ``update_phi`` is the new Fletcher scale from the *accepted* fit,
+        # while ``score_phi`` remains the scale at which that cached score was
+        # evaluated.  The ratio specifically uses the former.
+        assert accepted.update_phi is not None
+        raw = efs_raw_update(
+            accepted.log_lambda,
+            accepted.statistics,
+            accepted.update_phi,
+            jnp.asarray(multiplier),
+            jnp.asarray(control.log_lambda_max),
+        )
+        update_residual = raw.log_smoothing_trial - accepted.log_lambda
+        if not bool(np.asarray(raw.finite_positive)):
+            stop = "invalid_update"
+            break
+        old = accepted
+        # In R this is ``max(abs(lsp1-lsp))`` before the trial returns its
+        # scale.  The full proposal's phi component is unchanged at this
+        # point, so retaining rho's maximum is the exact nonzero component.
+        original_max_step = float(np.max(np.abs(np.asarray(update_residual))))
+        assert old.update_phi is not None
+        candidate = _fit_state(
+            fitting_data,
+            plan,
+            raw.log_smoothing_trial,
+            old.pirls_result.coefficients,
+            control,
+            old.update_phi,
+        )
+        if not candidate.valid:
+            stop = "inner_failure" if not candidate.inner_converged else "invalid_trial"
+            break
+        if float(np.asarray(candidate.score)) <= float(np.asarray(old.score)):
+            if original_max_step < 0.05:
+                extension_rho = jnp.minimum(
+                    old.log_lambda + jnp.log(raw.ratio) * (multiplier * 2.0),
+                    control.log_lambda_max,
+                )
+                extension = _fit_state(
+                    fitting_data,
+                    plan,
+                    extension_rho,
+                    old.pirls_result.coefficients,
+                    control,
+                    old.update_phi,
+                )
+                if extension.valid and float(np.asarray(extension.score)) < float(
+                    np.asarray(candidate.score)
+                ):
+                    accepted = extension
+                    multiplier *= 2.0
+                else:
+                    accepted = candidate
+            else:
+                accepted = candidate
+        else:
+            while (
+                float(np.asarray(candidate.score)) > float(np.asarray(old.score))
+                and multiplier > 1.0
+            ):
+                multiplier /= 2.0
+                rho = jnp.minimum(
+                    old.log_lambda + jnp.log(raw.ratio) * multiplier,
+                    control.log_lambda_max,
+                )
+                candidate = _fit_state(
+                    fitting_data,
+                    plan,
+                    rho,
+                    old.pirls_result.coefficients,
+                    control,
+                    old.update_phi,
+                )
+                if not candidate.valid:
+                    stop = (
+                        "inner_failure"
+                        if not candidate.inner_converged
+                        else "invalid_trial"
+                    )
+                    break
+            if stop != "iteration_limit":
+                break
+            accepted = candidate
+            multiplier = max(multiplier, 1.0)
+        history.append(float(np.asarray(accepted.score)))
+        assert accepted.score_phi is not None
+        score_phi_history.append(float(np.asarray(accepted.score_phi)))
+        if (
+            iteration > 3
+            and original_max_step < 0.05
+            and max(abs(np.diff(tuple(history)[-4:]))) < control.score_tolerance
+        ):
+            stop = "score_window"
+            break
+        dev = float(np.asarray(accepted.pirls_result.deviance))
+        if old_deviance is not None and abs(
+            old_deviance - dev
+        ) < 100.0 * control.pirls_tolerance * abs(dev):
+            stop = "deviance_change"
+            break
+        old_deviance = dev
+    else:
+        iteration = control.outer_limit
+    if iteration == control.outer_limit and stop in {"score_window", "deviance_change"}:
+        stop = "iteration_limit"
+    converged = stop in {"score_window", "deviance_change"}
+    label = "iteration limit reached" if stop == "iteration_limit" else stop
+    return EFSResult(
+        accepted.log_lambda,
+        jnp.exp(accepted.log_lambda),
+        converged,
+        iteration,
+        accepted.score,
+        accepted.edf,
+        accepted.reported_phi,
+        accepted.pirls_result,
+        label,
+        None,
+        update_residual,
+        tuple(history)[-control.history_limit :],
+        multiplier,
+        accepted.score_phi,
+        accepted.update_phi,
+        accepted.reported_phi,
+        tuple(score_phi_history)[-control.history_limit :],
     )
