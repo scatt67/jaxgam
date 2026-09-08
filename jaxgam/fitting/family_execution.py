@@ -213,10 +213,12 @@ jax.tree_util.register_pytree_node(
 class RegularFletcherScale:
     """Pinned-R Fletcher scalar plus explicit stream-admissibility status.
 
-    When the correction is non-finite, pinned mgcv retains the Pearson scalar
-    and skips the correction.  ``stream_admissible`` is intentionally stricter
-    for a future streamed caller: it is false in that case, so a caller can
-    fail closed without changing dense ``fletcher_scale`` behavior.
+    When the post-clamp ``s.bar`` is non-finite, pinned mgcv retains the
+    Pearson scalar and skips the correction.  In particular raw ``-inf`` is
+    first clamped to ``-0.9`` and therefore *does* apply the correction.
+    ``stream_admissible`` is intentionally stricter for a future streamed
+    caller: it is false when the post-clamp value is non-finite, so a caller
+    can fail closed without changing dense ``fletcher_scale`` behavior.
     """
 
     scale: jax.Array
@@ -374,8 +376,9 @@ def finalize_regular_fletcher_scale(
     """Apply pinned mgcv's Fletcher finite-correction fallback.
 
     Unlike dense :func:`jaxgam.fitting.reml.fletcher_scale`, this reports the
-    R fallback when ``s.bar`` is non-finite.  It does not modify dense code;
-    callers that need a fail-closed streamed state must require
+    R fallback when post-clamp ``s.bar`` is non-finite.  Raw ``-inf`` clamps
+    to ``-0.9`` and remains a valid correction.  It does not modify dense
+    code; callers that need a fail-closed streamed state must require
     ``stream_admissible`` themselves.
     """
     _validate_context(family, context)
