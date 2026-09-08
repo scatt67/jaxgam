@@ -253,6 +253,7 @@ class EFSFitState:
     # it is never read back from a mutable family after a rejected EFS trial.
     log_theta: jax.Array | None = None
     theta_status: jax.Array | None = None
+    theta_loop_status: jax.Array | None = None
     theta_n_iter: jax.Array | None = None
     stopping_penalized_deviance: jax.Array | None = None
 
@@ -338,9 +339,9 @@ def _result_theta(state: EFSFitState, fd: FittingData) -> float | None:
 
 def _efs_fit_failure_label(state: EFSFitState) -> str:
     """Give the EFS-only retained-start recovery gap an explicit outcome."""
-    if state.theta_status is not None and int(np.asarray(state.theta_status)) == (
-        _EFS_STATUS_RETAINED_START_INVALID_TRIAL
-    ):
+    if state.theta_loop_status is not None and int(
+        np.asarray(state.theta_loop_status)
+    ) == (_EFS_STATUS_RETAINED_START_INVALID_TRIAL):
         return "retained_start_invalid_trial"
     return "inner_failure" if not state.inner_converged else "invalid_trial"
 
@@ -360,14 +361,17 @@ def _select_efs_theta_start(
     beta_start: jax.Array,
     beta_null: jax.Array,
     log_theta_start: jax.Array,
+    *,
+    start_is_absent: bool,
 ) -> _EFSThetaStart:
     """Match R's retained-start check or its ``mustart`` reset.
 
-    ``gam.fit4`` computes both penalized deviances at the incoming theta. A
-    worse supplied beta is discarded before the first WLS step; R then uses
-    ``link(initialize(y, wt))`` while retaining the explicit null coefficient
-    anchor for the first divergence comparison. Do not substitute a projected
-    coefficient initializer for that per-row state.
+    ``gam.fit4`` uses ``link(initialize(y, wt))`` immediately when its start
+    is absent. With a supplied start it computes both penalized deviances at
+    the incoming theta, discarding a worse vector before the first WLS step.
+    Both reset paths retain the explicit null coefficient anchor for the first
+    divergence comparison. Do not substitute a projected coefficient
+    initializer for that per-row state.
     """
     assert isinstance(fd.family, NegativeBinomial)
     beta_start = jnp.asarray(beta_start)
@@ -395,21 +399,24 @@ def _select_efs_theta_start(
         raise ValueError(
             "Estimated NB EFS penalty must be finite before start selection"
         )
-    deviance_fn = fd.family.deviance_fn(fd.y, fd.wt)
     offset = jnp.zeros_like(fd.y) if fd.offset is None else fd.offset
-    eta_start = fd.X @ beta_start + offset
-    eta_null = fd.X @ beta_null + offset
-    start_pdev = (
-        deviance_fn(eta_start, log_theta_start) + beta_start @ penalty @ beta_start
-    )
-    null_pdev = deviance_fn(eta_null, log_theta_start) + beta_null @ penalty @ beta_null
-    if not bool(np.asarray(jnp.isfinite(null_pdev))):
-        raise ValueError(
-            "Estimated NB EFS null-anchor penalized deviance must be finite"
+    if not start_is_absent:
+        deviance_fn = fd.family.deviance_fn(fd.y, fd.wt)
+        eta_start = fd.X @ beta_start + offset
+        eta_null = fd.X @ beta_null + offset
+        start_pdev = (
+            deviance_fn(eta_start, log_theta_start) + beta_start @ penalty @ beta_start
         )
-    reset = bool(np.asarray(~jnp.isfinite(start_pdev) | (start_pdev > null_pdev)))
-    if not reset:
-        return _EFSThetaStart(beta_start, eta_start, True)
+        null_pdev = (
+            deviance_fn(eta_null, log_theta_start) + beta_null @ penalty @ beta_null
+        )
+        if not bool(np.asarray(jnp.isfinite(null_pdev))):
+            raise ValueError(
+                "Estimated NB EFS null-anchor penalized deviance must be finite"
+            )
+        reset = bool(np.asarray(~jnp.isfinite(start_pdev) | (start_pdev > null_pdev)))
+        if not reset:
+            return _EFSThetaStart(beta_start, eta_start, True)
     mustart = fd.family.initialize(np.asarray(fd.y), np.asarray(fd.wt))
     initial_eta = jnp.asarray(fd.family.link.link(mustart), dtype=fd.X.dtype)
     if not bool(np.all(np.isfinite(np.asarray(initial_eta)))):
@@ -491,12 +498,14 @@ def _fit_state(
     *,
     log_theta_start: jax.Array | None = None,
     beta_old_init: jax.Array | None = None,
+    start_is_absent: bool = False,
 ) -> EFSFitState:
     if score_phi is None:
         score_phi = jnp.array(1.0)
     penalty = penalty_ops.materialize(fd.penalty_structure, rho)
     log_theta: jax.Array | None = None
     theta_status: jax.Array | None = None
+    theta_loop_status: jax.Array | None = None
     theta_n_iter: jax.Array | None = None
     stopping_pdev: jax.Array | None = None
     if _estimated_theta_nb(fd):
@@ -508,7 +517,12 @@ def _fit_state(
             raise ValueError("Estimated NB EFS requires count-prefix metadata")
         assert isinstance(fd.family, NegativeBinomial)
         start = _select_efs_theta_start(
-            fd, penalty, beta_start, beta_old_init, log_theta_start
+            fd,
+            penalty,
+            beta_start,
+            beta_old_init,
+            log_theta_start,
+            start_is_absent=start_is_absent,
         )
         theta_result = efs_theta_pirls_loop(
             fd.X,
@@ -531,6 +545,7 @@ def _fit_state(
         pr = theta_result.pirls_result
         log_theta = theta_result.log_theta
         theta_status = theta_result.theta_status
+        theta_loop_status = theta_result.status
         theta_n_iter = theta_result.theta_n_iter
         stopping_pdev = theta_result.stopping_penalized_deviance
     else:
@@ -595,6 +610,7 @@ def _fit_state(
         update_phi,
         log_theta,
         theta_status,
+        theta_loop_status,
         theta_n_iter,
         stopping_pdev,
     )
@@ -644,6 +660,7 @@ def dense_efs_known_scale(
         else initial_log_lambda
     )
     estimated_theta = _estimated_theta_nb(fitting_data)
+    initial_start_is_absent = estimated_theta and beta_init is None
     if initial_log_lambda is None and isinstance(fitting_data.family, NegativeBinomial):
         raise ValueError(
             "NB EFS requires efs_initial_log_lambda(setup, family); "
@@ -698,6 +715,7 @@ def dense_efs_known_scale(
             control,
             log_theta_start=theta0,
             beta_old_init=beta_old_init,
+            start_is_absent=initial_start_is_absent,
         )
     else:
         # Keep the established known-scale call signature byte-for-byte for
