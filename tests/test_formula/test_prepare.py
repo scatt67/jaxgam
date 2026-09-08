@@ -14,7 +14,8 @@ from jaxgam.formula.design_provider import DenseDesign, StreamDesign
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import _exact_cubic_knots, prepare_model
 from jaxgam.smooths.cubic import CubicRegressionSmooth
-from tests.tolerances import STRICT
+from tests.helpers import r_available
+from tests.tolerances import MODERATE, STRICT, normalize_column_signs
 
 
 def _data() -> pd.DataFrame:
@@ -163,6 +164,9 @@ def test_fitting_preparation_matches_dense_cpu_coordinate_setup() -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+    assert prepared.fitting.total_penalty_rank == dense.total_penalty_rank
+    assert prepared.fitting.total_penalty_null_dim == dense.total_penalty_null_dim
+    assert prepared.fitting.unpenalized_rank_deficit == dense.rank_deficit
 
 
 def test_prepared_basis_fingerprint_changes_with_basis_configuration() -> None:
@@ -181,3 +185,34 @@ def test_prepared_prediction_smooth_drops_penalty_cache() -> None:
         if term.term_type == "smooth"
     )
     assert smooth._S is None
+
+
+@pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
+@pytest.mark.parametrize(("basis", "k"), [("cr", 6), ("cs", 5)])
+def test_prepared_cubic_design_and_penalty_match_r_components(
+    r_bridge, basis: str, k: int
+) -> None:
+    data = _data()
+    formula = f'y ~ s(x, bs="{basis}", k={k})'
+    prepared = prepare_model(
+        parse_formula(formula), DataFrameRowSource(data, response="y")
+    )
+    r_result = r_bridge.get_smooth_components(formula, data)
+    X = DenseDesign.materialize(
+        StreamDesign(prepared, DataFrameRowSource(data, response="y")), 7
+    ).X
+    r_X = np.column_stack((np.ones(len(data)), r_result["basis_matrices"][0]))
+    np.testing.assert_allclose(
+        normalize_column_signs(X),
+        normalize_column_signs(r_X),
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    if basis == "cr":
+        assert prepared.penalties is not None
+        np.testing.assert_allclose(
+            prepared.penalties.blocks[0].dense_penalties()[0],
+            r_result["penalty_matrices"][0][0],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        )

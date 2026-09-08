@@ -27,6 +27,7 @@ from jaxgam.formula.fitting_prepare import (
     apply_transforms_to_design,
     initial_log_sp_from_diagonal,
     reparameterize_structure,
+    total_penalty_spaces,
 )
 from jaxgam.formula.terms import FormulaSpec
 from jaxgam.penalties.structure import PenaltyStructure, make_penalty_structure
@@ -176,9 +177,12 @@ def prepare_model(
         )
     try:
         first = next(source.scan(1))
-        replay_first = next(source.scan(1))
     except StopIteration as error:
         raise ValueError("RowSource advertised rows but yielded no batches.") from error
+    try:
+        replay_first = next(source.scan(1))
+    except StopIteration as error:
+        raise TypeError("Prepared setup requires a replayable RowSource.") from error
     if not np.array_equal(first.row_positions, replay_first.row_positions):
         raise TypeError(
             "Prepared setup requires replayable scans with stable row positions."
@@ -423,7 +427,8 @@ def prepare_fitting(
         target_input = np.concatenate((qr_target, target))
         Q, qr_R = linalg.qr(qr_input, mode="economic")
         qr_target = Q.T @ target_input
-        ldxx += np.sum(X_public * X_public * wt[:, None], axis=0)
+        weighted_public = np.sqrt(wt)[:, None] * X_public
+        ldxx += np.sum(weighted_public * weighted_public, axis=0)
         n_obs += len(y)
         total_weight += float(np.sum(wt))
         weighted_sum += float(np.sum(wt * y))
@@ -433,7 +438,8 @@ def prepare_fitting(
         offset_max = max(offset_max, float(np.max(offset)))
     if n_obs != prepared.n_obs or total_weight <= 0:
         raise RuntimeError("RowSource replay did not provide a valid stable row set.")
-    beta_init, _, _, _ = np.linalg.lstsq(qr_R, qr_target, rcond=None)
+    dense_rcond = max(n_obs, prepared.n_coef) * np.finfo(float).eps
+    beta_init, _, _, _ = np.linalg.lstsq(qr_R, qr_target, rcond=dense_rcond)
     # Retain the dense initializer's valid-domain fallback without retaining X.
     valid = True
     for batch in source.scan(65_536):
@@ -467,7 +473,41 @@ def prepare_fitting(
             target_input = np.concatenate((qr_target, target_batch))
             Q, qr_R = linalg.qr(qr_input, mode="economic")
             qr_target = Q.T @ target_input
-        beta_init, _, _, _ = np.linalg.lstsq(qr_R, qr_target, rcond=None)
+        beta_init, _, _, _ = np.linalg.lstsq(qr_R, qr_target, rcond=dense_rcond)
+    null_bases, range_bases = total_penalty_spaces(transformed)
+    total_penalty_rank = sum(basis.shape[1] for _, basis in range_bases)
+    covered = np.zeros(prepared.n_coef, dtype=bool)
+    for block in transformed.blocks:
+        covered[block.start : block.stop] = True
+    rank_R = np.empty((0, 0))
+    rank_columns = 0
+    for batch in source.scan(65_536):
+        if not np.all(batch.valid):
+            raise NotImplementedError(
+                "Prepared setup does not yet support padded batches."
+            )
+        X = apply_transforms_to_design(prepared.evaluate_batch(batch), transformed)
+        pieces = [X[:, ~covered]]
+        pieces.extend(
+            X[:, block.start : block.stop] @ basis
+            for block, basis in null_bases
+            if basis.shape[1]
+        )
+        null_design = np.column_stack(pieces)
+        if rank_columns == 0:
+            rank_columns = null_design.shape[1]
+            rank_R = np.empty((0, rank_columns))
+        Q, rank_R = linalg.qr(np.vstack((rank_R, null_design)), mode="economic")
+        del Q
+    singular_values = np.linalg.svd(rank_R, compute_uv=False)
+    rank_tolerance = (
+        (np.max(singular_values) if len(singular_values) else 0.0)
+        * max(n_obs, rank_columns)
+        * np.finfo(float).eps
+    )
+    unpenalized_rank_deficit = rank_columns - int(
+        np.sum(singular_values > rank_tolerance)
+    )
     fitting = FittingPreparation(
         penalty_structure=transformed,
         log_lambda_init=initial_log_sp_from_diagonal(ldxx, public),
@@ -483,6 +523,9 @@ def prepare_fitting(
             offset_min=offset_min,
             offset_max=offset_max,
         ),
+        total_penalty_rank=total_penalty_rank,
+        total_penalty_null_dim=prepared.n_coef - total_penalty_rank,
+        unpenalized_rank_deficit=unpenalized_rank_deficit,
     )
     if source.fingerprint() != prepared.source_fingerprint:
         raise RuntimeError(
