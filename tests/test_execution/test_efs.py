@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import jax
 import numpy as np
 import pandas as pd
@@ -112,12 +114,19 @@ def test_production_controller_extension_and_contraction_keep_old_warm_start(
     )
     scores = iter([10.0, 9.0, 8.0, 11.0, 10.5])
     starts: list[np.ndarray] = []
+    states = []
 
     def scripted(_fd, _plan, rho, beta, _control):
         starts.append(np.asarray(beta))
+        fit = replace(
+            base.pirls_result,
+            coefficients=jax.numpy.full_like(beta, len(starts)),
+            deviance=jax.numpy.asarray(20.0 + len(starts)),
+        )
+        states.append(fit)
         return execution_efs.EFSFitState(
             rho,
-            base.pirls_result,
+            fit,
             jax.numpy.asarray(next(scores)),
             base.edf,
             base.statistics,
@@ -141,7 +150,15 @@ def test_production_controller_extension_and_contraction_keep_old_warm_start(
     assert result.multiplier == 1.0
     # Every candidate/extension/contraction starts from the accepted beta;
     # no rejected trial can become a warm start.
-    assert all(np.array_equal(start, starts[1]) for start in starts[1:])
+    assert len(starts) == 5
+    for index in (1, 2):
+        np.testing.assert_array_equal(starts[index], states[0].coefficients)
+    for index in (3, 4):
+        np.testing.assert_array_equal(starts[index], states[2].coefficients)
+    assert result.score_history == (8.0, 10.5)  # finite worsening at the floor
+    np.testing.assert_array_equal(
+        result.pirls_result.coefficients, states[4].coefficients
+    )
 
 
 def test_production_controller_preserves_failure_at_iteration_boundary(
@@ -157,7 +174,13 @@ def test_production_controller_preserves_failure_at_iteration_boundary(
         EFSControl(),
     )
 
+    calls = 0
+
     def invalid_trial(_fd, _plan, rho, _beta, _control):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return base
         return execution_efs.EFSFitState(
             rho,
             base.pirls_result,
@@ -172,6 +195,9 @@ def test_production_controller_preserves_failure_at_iteration_boundary(
     monkeypatch.setattr(execution_efs, "_fit_state", invalid_trial)
     result = execution_efs.dense_efs_known_scale(fd, control=EFSControl(outer_limit=1))
     assert result.convergence_info == "inner_failure"
+    assert calls == 2
+    assert result.n_iter == 1
+    assert not result.converged
 
 
 def test_production_controller_losing_extension_keeps_multiplier(monkeypatch) -> None:
@@ -185,8 +211,10 @@ def test_production_controller_losing_extension_keeps_multiplier(monkeypatch) ->
         EFSControl(),
     )
     scores = iter([10.0, 9.0, 9.1])
+    calls = []
 
     def scripted(_fd, _plan, rho, _beta, _control):
+        calls.append(np.asarray(rho))
         return execution_efs.EFSFitState(
             rho,
             base.pirls_result,
@@ -199,7 +227,19 @@ def test_production_controller_losing_extension_keeps_multiplier(monkeypatch) ->
         )
 
     monkeypatch.setattr(execution_efs, "_fit_state", scripted)
+    monkeypatch.setattr(
+        execution_efs,
+        "efs_raw_update",
+        lambda rho, _stats, _phi, multiplier, _cap: EFSRawUpdate(
+            jax.numpy.ones_like(rho),
+            jax.numpy.exp(jax.numpy.full_like(rho, 0.01)),
+            rho + 0.01 * multiplier,
+            jax.numpy.array(True),
+        ),
+    )
     result = execution_efs.dense_efs_known_scale(fd, control=EFSControl(outer_limit=1))
+    assert len(calls) == 3
+    np.testing.assert_array_equal(result.log_lambda, calls[1])
     assert result.multiplier == 1.0
     assert result.convergence_info == "iteration limit reached"
 
@@ -227,6 +267,91 @@ def test_production_controller_reports_invalid_raw_update(monkeypatch) -> None:
     )
     result = execution_efs.dense_efs_known_scale(fd, control=EFSControl(outer_limit=1))
     assert result.convergence_info == "invalid_update"
+
+
+@pytest.mark.parametrize(
+    ("mode", "iterations", "reason"),
+    [
+        ("score", 4, "score_window"),
+        ("deviance", 2, "deviance_change"),
+        ("limit", 200, "iteration limit reached"),
+    ],
+)
+def test_production_controller_named_stops_and_iteration_200(
+    monkeypatch,
+    mode,
+    iterations,
+    reason,
+) -> None:
+    _, fd = _build("y ~ s(x,bs='cr',k=6)", _oracle_data("poisson"), Poisson())
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+    )
+    calls = 0
+
+    def scripted(_fd, _plan, rho, _beta, _control):
+        nonlocal calls
+        calls += 1
+        deviance = 10.0 if mode == "deviance" else float(calls)
+        # Worsening at multiplier=1 forces exactly one accepted trial per
+        # iteration; a .01 score increment stays inside the score window.
+        return replace(
+            base,
+            log_lambda=rho,
+            score=jax.numpy.asarray(10.0 + 0.01 * calls),
+            pirls_result=replace(
+                base.pirls_result, deviance=jax.numpy.asarray(deviance)
+            ),
+        )
+
+    displacement = 0.01 if mode == "score" else 0.1
+    monkeypatch.setattr(execution_efs, "_fit_state", scripted)
+    monkeypatch.setattr(
+        execution_efs,
+        "efs_raw_update",
+        lambda rho, _stats, _phi, multiplier, _cap: EFSRawUpdate(
+            jax.numpy.ones_like(rho),
+            jax.numpy.exp(jax.numpy.full_like(rho, displacement)),
+            rho + displacement * multiplier,
+            jax.numpy.array(True),
+        ),
+    )
+    result = dense_efs_known_scale(fd, control=EFSControl(history_limit=3))
+    assert result.n_iter == iterations
+    assert calls == iterations + 1
+    assert result.convergence_info == reason
+    assert result.converged == (mode != "limit")
+    assert len(result.score_history) == min(iterations, 3)
+
+
+def test_invalid_initial_fisher_factor_is_not_an_inner_failure(monkeypatch) -> None:
+    _, fd = _build("y ~ s(x,bs='cr',k=6)", _oracle_data("poisson"), Poisson())
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+    )
+    bad_fit = replace(
+        base.pirls_result,
+        L_fisher=jax.numpy.full_like(base.pirls_result.L_fisher, jax.numpy.nan),
+    )
+    monkeypatch.setattr(execution_efs, "pirls_loop", lambda *_args, **_kwargs: bad_fit)
+    result = dense_efs_known_scale(fd)
+    assert result.convergence_info == "invalid_initial"
+    assert not result.converged
+
+
+@pytest.mark.parametrize("weight", [0.0, 1e-11, 1e11, np.nan])
+def test_efs_preflight_excludes_unvalidated_prior_weight_edges(weight) -> None:
+    _, fd = _build("y ~ s(x,bs='cr',k=6)", _oracle_data("poisson"), Poisson())
+    with pytest.raises(ValueError, match="clipping bounds"):
+        dense_efs_known_scale(replace(fd, wt=fd.wt.at[0].set(weight)))
 
 
 def test_existing_efs_statistics_kernel_compiles_and_executes() -> None:
