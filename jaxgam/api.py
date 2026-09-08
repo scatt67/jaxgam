@@ -295,14 +295,14 @@ def _preflight_stream_workspace(
 ) -> None:
     """Reject stream fits whose known live fit workspace exceeds its budget.
 
-    This covers the controller's coefficient reductions (normal matrix,
-    penalty-augmented system, and Cholesky factor) and one real batch's design,
-    masks, response vectors, and working vectors.  It intentionally does not
-    purport to cap CPU-only basis preparation, which is owned by the source's
-    prepared-model phase.
+    This conservatively allows old and candidate coefficient reductions,
+    penalty/system/factor buffers, and the two triangular-solve workspaces
+    used for total Fisher EDF, alongside one real batch's design and working
+    vectors. It is an estimate of known array workspaces, not an allocator or
+    native-library hard cap. CPU-only basis preparation is separate.
     """
     itemsize = np.dtype(np.float64).itemsize
-    matrix_bytes = 5 * n_coef * n_coef * itemsize
+    matrix_bytes = 12 * n_coef * n_coef * itemsize
     batch_bytes = (3 * batch_rows * n_coef + 8 * batch_rows + 4 * n_coef) * itemsize
     required = matrix_bytes + batch_bytes
     if required > memory_budget_bytes:

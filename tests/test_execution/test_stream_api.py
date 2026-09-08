@@ -185,6 +185,19 @@ def test_public_stream_covariance_budget_and_route_guards() -> None:
         )
 
 
+def test_stream_workspace_reserves_final_edf_and_candidate_matrices() -> None:
+    """Tiny batches do not eliminate simultaneous coefficient-space buffers."""
+    from jaxgam.api import _preflight_stream_workspace
+
+    p, batch_rows = 100, 1
+    # Five coefficient matrices alone omit previous/candidate systems and
+    # final Fisher-EDF triangular solves, even with just one streamed row.
+    incomplete_budget = (5 * p * p + 3 * batch_rows * p + 8 * batch_rows + 4 * p) * 8
+    with pytest.raises(MemoryError, match="Known streamed PIRLS workspace"):
+        _preflight_stream_workspace(p, batch_rows, incomplete_budget)
+    _preflight_stream_workspace(p, batch_rows, 2_000_000)
+
+
 def test_public_stream_accepts_empty_fixed_sp_for_unpenalized_model() -> None:
     data = _data("gaussian")
     source = DataFrameRowSource(data, response="y")
