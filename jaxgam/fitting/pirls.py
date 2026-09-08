@@ -29,13 +29,18 @@ R source reference: gam.fit3() lines 296-468, gam.fit4() lines 367-564
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+from numbers import Integral, Real
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.extended import ExtendedFamily
+from jaxgam.families.negative_binomial import NegativeBinomial
+from jaxgam.fitting.efs_theta import _conditional_theta_newton_jit
 from jaxgam.jax_utils import penalized_cholesky, penalized_solve
+from jaxgam.links.links import LogLink
 
 # Working weight bounds to prevent numerical overflow/underflow.
 # R's gam.fit3 uses similar implicit bounds via sqrt(W) clamping.
@@ -49,6 +54,21 @@ _PEN_DEV_REL_TOL = 1e-7
 # Maximum step-halving iterations before giving up.
 # Matches R's gam.fit3.r step-halving limit.
 _MAX_HALVINGS = 25
+
+# ``gam.fit4`` uses a distinct divergence policy for the EFS extended-family
+# branch (lines 484-504): its threshold is 10 * (.1 + |old.pdev|) * sqrt(eps)
+# and it permits 100 halvings.  Keep the long-standing ordinary PIRLS policy
+# separate, so default Newton and fixed-theta execution is unchanged.
+_EFS_DIVERGENCE_ABS = 10.0 * 0.1 * jnp.sqrt(jnp.finfo(jnp.float64).eps)
+_EFS_DIVERGENCE_REL = 10.0 * jnp.sqrt(jnp.finfo(jnp.float64).eps)
+_EFS_MAX_HALVINGS = 100
+
+_EFS_STATUS_CONVERGED = 0
+_EFS_STATUS_BETA_STEP_FAILED = 1
+_EFS_STATUS_INVALID_WORKING_FACTORS = 2
+_EFS_STATUS_THETA_FAILED = 3
+_EFS_STATUS_NONFINITE_STATIONARITY = 4
+_EFS_STATUS_ITERATION_LIMIT = 5
 
 
 def canonical_working_quantities(
@@ -138,6 +158,155 @@ jax.tree_util.register_pytree_node(
         **dict(zip(_SH_STATE_FIELDS, children, strict=True))
     ),
 )
+
+
+@dataclass(frozen=True)
+class _BetaStepResult:
+    """One immutable PIRLS beta proposal evaluated at one fixed theta."""
+
+    beta: jax.Array
+    mu: jax.Array
+    eta: jax.Array
+    penalized_deviance: jax.Array
+    accepted: jax.Array
+    factors_valid: jax.Array
+    solver_valid: jax.Array
+    XtWX: jax.Array
+    L: jax.Array
+    W: jax.Array
+
+
+_BETA_STEP_FIELDS = [f.name for f in fields(_BetaStepResult)]
+
+jax.tree_util.register_pytree_node(
+    _BetaStepResult,
+    lambda s: ([getattr(s, f) for f in _BETA_STEP_FIELDS], None),
+    lambda _, children: _BetaStepResult(
+        **dict(zip(_BETA_STEP_FIELDS, children, strict=True))
+    ),
+)
+
+
+def _beta_step(
+    *,
+    X: jax.Array,
+    S_lambda: jax.Array,
+    offset: jax.Array,
+    family: ExponentialFamily,
+    beta: jax.Array,
+    beta_old: jax.Array,
+    mu: jax.Array,
+    penalized_deviance: jax.Array,
+    iteration: jax.Array,
+    compute_W_and_z,
+    form_wls,
+    compute_dev,
+    divergence_absolute: float,
+    divergence_relative: float,
+    max_halvings: int,
+    first_iteration_accepts_any: bool,
+    require_valid_factors: bool,
+) -> _BetaStepResult:
+    """Take one WLS proposal and beta-only step-halving at fixed theta.
+
+    The functions carrying the dynamic theta are closed over by the caller.
+    This is deliberately the only shared EFS/ordinary-PIRLS iteration piece:
+    the EFS loop can change theta *after* this accepted beta step without
+    duplicating the WLS or beta-halving algorithm.
+    """
+    eta_cur = X @ beta + offset
+    W, z = compute_W_and_z(mu, eta_cur)
+    factors_valid = jnp.all(jnp.isfinite(W)) & jnp.all(jnp.isfinite(z))
+    XtWX, XtWz = form_wls(W, z)
+    beta_new, L, _ = penalized_solve(XtWX, S_lambda, XtWz)
+    solver_valid = (
+        jnp.all(jnp.isfinite(XtWX))
+        & jnp.all(jnp.isfinite(XtWz))
+        & jnp.all(jnp.isfinite(beta_new))
+        & jnp.all(jnp.isfinite(L))
+        & jnp.all(jnp.diag(L) > 0.0)
+    )
+
+    eta_new = X @ beta_new + offset
+    mu_new = family.link.inverse(eta_new)
+    dev_new = compute_dev(mu_new, eta_new)
+    pen_dev_new = dev_new + beta_new @ S_lambda @ beta_new
+    valid_new = _is_valid_trial(family, mu_new, eta_new)
+    is_first_iter = iteration == 0
+    threshold = divergence_absolute + divergence_relative * jnp.abs(penalized_deviance)
+    decreasing = pen_dev_new <= penalized_deviance + threshold
+    valid_factors = jnp.where(
+        require_valid_factors, factors_valid & solver_valid, jnp.array(True)
+    )
+    accepted = (
+        valid_factors
+        & jnp.isfinite(pen_dev_new)
+        & valid_new
+        & ((is_first_iter & first_iteration_accepts_any) | decreasing)
+    )
+
+    halving_initial = _StepHalvingState(
+        k=jnp.int32(0),
+        beta_try=beta_new,
+        pen_dev_try=pen_dev_new,
+        mu_try=mu_new,
+        accepted=accepted,
+    )
+
+    def halving_condition(state: _StepHalvingState) -> jax.Array:
+        return (state.k < max_halvings) & ~state.accepted
+
+    def halving_body(state: _StepHalvingState) -> _StepHalvingState:
+        step = 0.5 ** (state.k + 1)
+        beta_try = beta_old + step * (beta_new - beta_old)
+        eta_try = X @ beta_try + offset
+        mu_try = family.link.inverse(eta_try)
+        dev_try = compute_dev(mu_try, eta_try)
+        pen_dev_try = dev_try + beta_try @ S_lambda @ beta_try
+        valid_try = _is_valid_trial(family, mu_try, eta_try)
+        accepted_try = (
+            valid_factors
+            & jnp.isfinite(pen_dev_try)
+            & valid_try
+            & (
+                (is_first_iter & first_iteration_accepts_any)
+                | (pen_dev_try <= penalized_deviance + threshold)
+            )
+        )
+        return _StepHalvingState(
+            k=state.k + 1,
+            beta_try=beta_try,
+            pen_dev_try=pen_dev_try,
+            mu_try=mu_try,
+            accepted=accepted_try,
+        )
+
+    halving_final = jax.lax.while_loop(halving_condition, halving_body, halving_initial)
+    beta_next = jnp.where(halving_final.accepted, halving_final.beta_try, beta)
+    mu_next = jnp.where(halving_final.accepted, halving_final.mu_try, mu)
+    eta_next = X @ beta_next + offset
+    pdev_next = jnp.where(
+        halving_final.accepted, halving_final.pen_dev_try, penalized_deviance
+    )
+    return _BetaStepResult(
+        beta=beta_next,
+        mu=mu_next,
+        eta=eta_next,
+        penalized_deviance=pdev_next,
+        accepted=halving_final.accepted,
+        factors_valid=factors_valid,
+        solver_valid=solver_valid,
+        XtWX=XtWX,
+        L=L,
+        W=W,
+    )
+
+
+def _is_valid_trial(
+    family: ExponentialFamily, mu: jax.Array, eta: jax.Array
+) -> jax.Array:
+    """JIT-safe R ``validmu``/``valideta`` counterpart for a trial."""
+    return jnp.all(family.valid_mu(mu)) & jnp.all(family.valid_eta(eta))
 
 
 @dataclass(frozen=True)
@@ -391,19 +560,6 @@ def _pirls_loop_jit(
             wx = w_sqrt[:, None] * X
             return wx.T @ wx, wx.T @ (w_sqrt * z)
 
-    def _is_valid(mu, eta):
-        """Family domain check, matching R's gam.fit3 ``validmu``/``valideta``.
-
-        A trial step is rejected unless every ``mu`` and ``eta`` lies in the
-        family's valid domain.  Without this guard the inverse-link Gamma can
-        walk into ``mu <= 0`` territory: ``dev_resids`` internally clamps
-        ``mu`` to a small positive floor, so the penalized deviance still
-        looks finite and step-halving never rejects the invalid step, and the
-        fit diverges (eta -> -inf).  R rejects such steps via
-        ``!validmu(mu) || !valideta(eta)`` (gam.fit3.r step-halving loop).
-        """
-        return jnp.all(family.valid_mu(mu)) & jnp.all(family.valid_eta(eta))
-
     # Initial mu from beta_init
     eta_init = X @ beta_init + offset
     mu_init = family.link.inverse(eta_init)
@@ -426,62 +582,28 @@ def _pirls_loop_jit(
         return (state.i < max_iter) & (~state.converged)
 
     def _body(state: _PIRLSState):
-        # ---- Working quantities ----
-        eta_cur = X @ state.beta + offset
-        W, z = _compute_W_and_z(state.mu, eta_cur)
-        XtWX, XtWz = _form_wls(W, z)
-        beta_new, L, _ = penalized_solve(XtWX, S_lambda, XtWz)
-
-        # ---- Step-halving on penalized deviance ----
-        is_first_iter = state.i == 0
-
-        eta_new = X @ beta_new + offset
-        mu_new = family.link.inverse(eta_new)
-        dev_new = _compute_dev(mu_new, eta_new)
-        pen_dev_new = dev_new + beta_new @ S_lambda @ beta_new
-
-        # A step is acceptable only if mu/eta stay in the family's valid
-        # domain (R's validmu/valideta), in addition to a finite, decreasing
-        # penalized deviance.
-        valid_new = _is_valid(mu_new, eta_new)
-
-        # First iteration: accept any finite, valid step
-        accepted = accepted_penalized_step(
-            pen_dev_new, state.pen_dev, valid_new, is_first_iter
+        beta_step = _beta_step(
+            X=X,
+            S_lambda=S_lambda,
+            offset=offset,
+            family=family,
+            beta=state.beta,
+            beta_old=state.beta,
+            mu=state.mu,
+            penalized_deviance=state.pen_dev,
+            iteration=state.i,
+            compute_W_and_z=_compute_W_and_z,
+            form_wls=_form_wls,
+            compute_dev=_compute_dev,
+            divergence_absolute=0.0,
+            divergence_relative=_PEN_DEV_REL_TOL,
+            max_halvings=_MAX_HALVINGS,
+            first_iteration_accepts_any=True,
+            require_valid_factors=False,
         )
-
-        sh_init = _StepHalvingState(
-            k=jnp.int32(0),
-            beta_try=beta_new,
-            pen_dev_try=pen_dev_new,
-            mu_try=mu_new,
-            accepted=accepted,
-        )
-
-        def _sh_cond(sh: _StepHalvingState):
-            return (sh.k < _MAX_HALVINGS) & (~sh.accepted)
-
-        def _sh_body(sh: _StepHalvingState):
-            step = 0.5 ** (sh.k + 1)  # 0.5, 0.25, 0.125, ... (R halves from 1)
-            bt = state.beta + step * (beta_new - state.beta)
-            eta_t = X @ bt + offset
-            mu_t = family.link.inverse(eta_t)
-            dev_t = _compute_dev(mu_t, eta_t)
-            pd_t = dev_t + bt @ S_lambda @ bt
-
-            valid_t = _is_valid(mu_t, eta_t)
-            ok = accepted_penalized_step(pd_t, state.pen_dev, valid_t, is_first_iter)
-
-            return _StepHalvingState(
-                k=sh.k + 1, beta_try=bt, pen_dev_try=pd_t, mu_try=mu_t, accepted=ok
-            )
-
-        sh_final = jax.lax.while_loop(_sh_cond, _sh_body, sh_init)
-
-        # If nothing was accepted (all 25 halvings failed), keep beta unchanged
-        beta_next = jnp.where(sh_final.accepted, sh_final.beta_try, state.beta)
-        pen_dev_next = jnp.where(sh_final.accepted, sh_final.pen_dev_try, state.pen_dev)
-        mu_next = jnp.where(sh_final.accepted, sh_final.mu_try, state.mu)
+        beta_next = beta_step.beta
+        pen_dev_next = beta_step.penalized_deviance
+        mu_next = beta_step.mu
 
         # Convergence check (skip first 3 iterations)
         dev_change = jnp.abs(pen_dev_next - state.pen_dev) / (
@@ -501,9 +623,9 @@ def _pirls_loop_jit(
             pen_dev=pen_dev_next,
             pen_dev_prev=state.pen_dev,
             converged=converged,
-            XtWX=XtWX,
-            L=L,
-            W=W,
+            XtWX=beta_step.XtWX,
+            L=beta_step.L,
+            W=beta_step.W,
         )
 
     final = jax.lax.while_loop(_cond, _body, init_state)
@@ -570,6 +692,435 @@ def _pirls_loop_jit(
         working_weights=W_final,
         XtWX_fisher=XtWX_fisher,
         L_fisher=L_fisher,
+    )
+
+
+@dataclass(frozen=True)
+class EFSThetaPIRLSResult:
+    """Immutable result for the NB/log EFS in-loop conditional-theta path.
+
+    ``stopping_penalized_deviance`` is the pre-theta value used by the pinned
+    R stopping test. ``pirls_result.penalized_deviance`` is deliberately
+    recomputed at ``log_theta`` so every returned fit quantity is consistent
+    with its reported theta. This is a documented stronger final-state rule,
+    not a substitution for R's stopping predicate.
+    """
+
+    pirls_result: PIRLSResult
+    log_theta: jax.Array
+    theta_status: jax.Array
+    theta_n_iter: jax.Array
+    status: jax.Array
+    stopping_penalized_deviance: jax.Array
+    post_theta_penalized_deviance: jax.Array
+
+
+_EFS_THETA_PIRLS_FIELDS = [f.name for f in fields(EFSThetaPIRLSResult)]
+
+jax.tree_util.register_pytree_node(
+    EFSThetaPIRLSResult,
+    lambda result: (
+        [getattr(result, field) for field in _EFS_THETA_PIRLS_FIELDS],
+        None,
+    ),
+    lambda _, values: EFSThetaPIRLSResult(
+        **dict(zip(_EFS_THETA_PIRLS_FIELDS, values, strict=True))
+    ),
+)
+
+
+@dataclass(frozen=True)
+class _EFSThetaPIRLSState:
+    """Pytree state carrying beta and theta together inside one compiled loop."""
+
+    i: jax.Array
+    beta: jax.Array
+    beta_old: jax.Array
+    mu: jax.Array
+    log_theta: jax.Array
+    baseline: jax.Array
+    stopping_pdev: jax.Array
+    post_theta_pdev: jax.Array
+    converged: jax.Array
+    failed: jax.Array
+    status: jax.Array
+    theta_status: jax.Array
+    theta_n_iter: jax.Array
+
+
+_EFS_THETA_STATE_FIELDS = [f.name for f in fields(_EFSThetaPIRLSState)]
+
+jax.tree_util.register_pytree_node(
+    _EFSThetaPIRLSState,
+    lambda state: ([getattr(state, field) for field in _EFS_THETA_STATE_FIELDS], None),
+    lambda _, values: _EFSThetaPIRLSState(
+        **dict(zip(_EFS_THETA_STATE_FIELDS, values, strict=True))
+    ),
+)
+
+
+@jax.jit(static_argnames=("family", "max_y", "integer_counts", "max_iter", "tol"))
+def _efs_theta_pirls_loop_jit(
+    X: jax.Array,
+    y: jax.Array,
+    beta_init: jax.Array,
+    S_lambda: jax.Array,
+    family: NegativeBinomial,
+    wt: jax.Array,
+    offset: jax.Array,
+    log_theta_init: jax.Array,
+    beta_old_init: jax.Array,
+    count_indices: jax.Array,
+    *,
+    max_y: int,
+    integer_counts: bool,
+    max_iter: int,
+    tol: float,
+) -> EFSThetaPIRLSResult:
+    """Pinned EFS NB/log beta/theta alternation in one JAX while-loop.
+
+    Each beta proposal and its divergence control are evaluated at the
+    carried, incoming theta. Only after beta is accepted is conditional theta
+    Newton run at fixed eta. The next beta iteration gets the post-theta
+    deviance baseline and working quantities, matching ``gam.fit4.r``
+    lines 486-547 without a host-side fit/update alternation.
+    """
+    dev_fn = family.deviance_fn(y, wt)
+    grad_D_eta = jax.grad(dev_fn, argnums=0)
+
+    def ops(log_theta: jax.Array):
+        def compute_W_and_z(mu: jax.Array, eta: jax.Array):  # noqa: ARG001
+            dD_deta = grad_D_eta(eta, log_theta)
+            _, d2D_deta2 = jax.jvp(
+                lambda e: grad_D_eta(e, log_theta),
+                (eta,),
+                (jnp.ones_like(eta),),
+            )
+            W = 0.5 * d2D_deta2
+            d2_safe = jnp.where(jnp.abs(d2D_deta2) > _W_MIN, d2D_deta2, _W_MIN)
+            z = (eta - offset) - dD_deta / d2_safe
+            return W, z
+
+        def form_wls(W: jax.Array, z: jax.Array):
+            Wc = jnp.clip(W, -_W_MAX, _W_MAX)
+            return (Wc[:, None] * X).T @ X, X.T @ (Wc * z)
+
+        def compute_dev(mu: jax.Array, eta: jax.Array):  # noqa: ARG001
+            return dev_fn(eta, log_theta)
+
+        return compute_W_and_z, form_wls, compute_dev
+
+    eta_init = X @ beta_init + offset
+    mu_init = family.link.inverse(eta_init)
+    eta_old_init = X @ beta_old_init + offset
+    mu_old_init = family.link.inverse(eta_old_init)
+    _, _, compute_initial_dev = ops(log_theta_init)
+    initial_dev = compute_initial_dev(mu_old_init, eta_old_init)
+    initial_pdev = initial_dev + beta_old_init @ S_lambda @ beta_old_init
+    initial_valid = (
+        jnp.all(jnp.isfinite(beta_init))
+        & jnp.all(jnp.isfinite(beta_old_init))
+        & jnp.all(jnp.isfinite(mu_init))
+        & jnp.all(jnp.isfinite(mu_old_init))
+        & _is_valid_trial(family, mu_init, eta_init)
+        & _is_valid_trial(family, mu_old_init, eta_old_init)
+        & jnp.isfinite(initial_pdev)
+    )
+    initial_status = jnp.where(
+        initial_valid,
+        jnp.array(_EFS_STATUS_CONVERGED, dtype=jnp.int32),
+        jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
+    )
+    state = _EFSThetaPIRLSState(
+        i=jnp.array(0, dtype=jnp.int32),
+        beta=beta_init,
+        beta_old=beta_old_init,
+        mu=mu_init,
+        log_theta=log_theta_init,
+        baseline=initial_pdev,
+        stopping_pdev=initial_pdev,
+        post_theta_pdev=initial_pdev,
+        converged=jnp.array(False),
+        failed=~initial_valid,
+        status=initial_status,
+        theta_status=jnp.array(0, dtype=jnp.int32),
+        theta_n_iter=jnp.array(0, dtype=jnp.int32),
+    )
+
+    def condition(state: _EFSThetaPIRLSState) -> jax.Array:
+        return (state.i < max_iter) & ~state.converged & ~state.failed
+
+    def body(state: _EFSThetaPIRLSState) -> _EFSThetaPIRLSState:
+        compute_W_and_z, form_wls, compute_dev = ops(state.log_theta)
+        beta_step = _beta_step(
+            X=X,
+            S_lambda=S_lambda,
+            offset=offset,
+            family=family,
+            beta=state.beta,
+            beta_old=state.beta_old,
+            mu=state.mu,
+            penalized_deviance=state.baseline,
+            iteration=state.i,
+            compute_W_and_z=compute_W_and_z,
+            form_wls=form_wls,
+            compute_dev=compute_dev,
+            divergence_absolute=_EFS_DIVERGENCE_ABS,
+            divergence_relative=_EFS_DIVERGENCE_REL,
+            max_halvings=_EFS_MAX_HALVINGS,
+            first_iteration_accepts_any=False,
+            require_valid_factors=True,
+        )
+
+        def beta_failed(_: None) -> _EFSThetaPIRLSState:
+            status = jnp.where(
+                ~beta_step.factors_valid | ~beta_step.solver_valid,
+                jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
+                jnp.array(_EFS_STATUS_BETA_STEP_FAILED, dtype=jnp.int32),
+            )
+            return _EFSThetaPIRLSState(
+                i=state.i + 1,
+                beta=state.beta,
+                beta_old=state.beta_old,
+                mu=state.mu,
+                log_theta=state.log_theta,
+                baseline=state.baseline,
+                stopping_pdev=state.stopping_pdev,
+                post_theta_pdev=state.post_theta_pdev,
+                converged=jnp.array(False),
+                failed=jnp.array(True),
+                status=status,
+                theta_status=state.theta_status,
+                theta_n_iter=state.theta_n_iter,
+            )
+
+        def beta_accepted(_: None) -> _EFSThetaPIRLSState:
+            theta_result = _conditional_theta_newton_jit(
+                state.log_theta,
+                beta_step.eta,
+                y,
+                wt,
+                count_indices,
+                family,
+                max_y=max_y,
+                integer_counts=integer_counts,
+                tolerance=1e-7,
+                max_iter=100,
+                max_step=4.0,
+                max_halvings=25,
+            )
+            theta_ok = theta_result.converged & (theta_result.status == 0)
+            _, _, post_theta_dev_fn = ops(theta_result.log_theta)
+            post_theta_dev = post_theta_dev_fn(beta_step.mu, beta_step.eta)
+            post_theta_pdev = (
+                post_theta_dev + beta_step.beta @ S_lambda @ beta_step.beta
+            )
+            # R rebuilds dd at the accepted theta before checking the score
+            # equations (gam.fit4.r:516-528). The pdev part remains pre-theta.
+            next_compute_W_and_z, _, _ = ops(theta_result.log_theta)
+            next_W, next_z = next_compute_W_and_z(beta_step.mu, beta_step.eta)
+            next_factors_valid = jnp.all(jnp.isfinite(next_W)) & jnp.all(
+                jnp.isfinite(next_z)
+            )
+            gradient = (
+                2.0 * X.T @ (next_W * (X @ beta_step.beta) - next_W * next_z)
+                + 2.0 * S_lambda @ beta_step.beta
+            )
+            gradient_finite = jnp.all(jnp.isfinite(gradient))
+            pdev_change = jnp.abs(beta_step.penalized_deviance - state.baseline) / (
+                0.1 + jnp.abs(beta_step.penalized_deviance)
+            )
+            pdev_small = pdev_change < tol
+            stationary = jnp.max(jnp.abs(gradient)) <= tol * (
+                jnp.abs(beta_step.penalized_deviance) + 1.0
+            )
+            valid_post_theta = (
+                theta_ok
+                & jnp.isfinite(post_theta_pdev)
+                & next_factors_valid
+                & gradient_finite
+            )
+            converged = valid_post_theta & pdev_small & stationary
+            status = jnp.where(
+                ~theta_ok,
+                jnp.array(_EFS_STATUS_THETA_FAILED, dtype=jnp.int32),
+                jnp.where(
+                    ~next_factors_valid | ~jnp.isfinite(post_theta_pdev),
+                    jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
+                    jnp.where(
+                        ~gradient_finite,
+                        jnp.array(_EFS_STATUS_NONFINITE_STATIONARITY, dtype=jnp.int32),
+                        jnp.array(_EFS_STATUS_CONVERGED, dtype=jnp.int32),
+                    ),
+                ),
+            )
+            return _EFSThetaPIRLSState(
+                i=state.i + 1,
+                beta=beta_step.beta,
+                beta_old=beta_step.beta,
+                mu=beta_step.mu,
+                log_theta=theta_result.log_theta,
+                baseline=post_theta_pdev,
+                stopping_pdev=beta_step.penalized_deviance,
+                post_theta_pdev=post_theta_pdev,
+                converged=converged,
+                failed=~valid_post_theta,
+                status=status,
+                theta_status=theta_result.status,
+                theta_n_iter=theta_result.n_iter,
+            )
+
+        return jax.lax.cond(
+            beta_step.accepted, beta_accepted, beta_failed, operand=None
+        )
+
+    final = jax.lax.while_loop(condition, body, state)
+    final_status = jnp.where(
+        ~final.converged & ~final.failed,
+        jnp.array(_EFS_STATUS_ITERATION_LIMIT, dtype=jnp.int32),
+        final.status,
+    )
+
+    # Named final-state consistency rule: R can break before its post-theta
+    # pdev refresh, leaving a stale returned deviance. Keep the exact pre-theta
+    # stopping value above, but return all fit/curvature data at final theta.
+    eta_final = X @ final.beta + offset
+    mu_final = family.link.inverse(eta_final)
+    final_compute_W_and_z, _, final_compute_dev = ops(final.log_theta)
+    W_final, _ = final_compute_W_and_z(mu_final, eta_final)
+    XtWX_final = _signed_XtWX(W_final, X)
+    L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
+    W_fisher = jnp.clip(
+        family.working_weights_fn(wt)(eta_final, final.log_theta), _W_MIN, _W_MAX
+    )
+    WX_fisher = jnp.sqrt(W_fisher)[:, None] * X
+    XtWX_fisher = WX_fisher.T @ WX_fisher
+    L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+    dev_final = final_compute_dev(mu_final, eta_final)
+    pdev_final = dev_final + final.beta @ S_lambda @ final.beta
+    final_valid = (
+        _is_valid_trial(family, mu_final, eta_final)
+        & jnp.isfinite(dev_final)
+        & jnp.isfinite(pdev_final)
+        & jnp.all(jnp.isfinite(W_final))
+        & jnp.all(jnp.isfinite(W_fisher))
+        & jnp.all(jnp.isfinite(XtWX_final))
+        & jnp.all(jnp.isfinite(XtWX_fisher))
+        & jnp.all(jnp.isfinite(L_final))
+        & jnp.all(jnp.isfinite(L_fisher))
+        & jnp.all(jnp.diag(L_final) > 0.0)
+        & jnp.all(jnp.diag(L_fisher) > 0.0)
+    )
+    final_status = jnp.where(
+        (final_status == _EFS_STATUS_CONVERGED) & ~final_valid,
+        jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
+        final_status,
+    )
+    pirls_result = PIRLSResult(
+        coefficients=final.beta,
+        mu=mu_final,
+        eta=eta_final,
+        deviance=dev_final,
+        penalized_deviance=pdev_final,
+        n_iter=final.i,
+        converged=final.converged & (final_status == _EFS_STATUS_CONVERGED),
+        scale=jnp.array(1.0),
+        XtWX=XtWX_final,
+        L=L_final,
+        working_weights=W_final,
+        XtWX_fisher=XtWX_fisher,
+        L_fisher=L_fisher,
+    )
+    return EFSThetaPIRLSResult(
+        pirls_result=pirls_result,
+        log_theta=final.log_theta,
+        theta_status=final.theta_status,
+        theta_n_iter=final.theta_n_iter,
+        status=final_status,
+        stopping_penalized_deviance=final.stopping_pdev,
+        post_theta_penalized_deviance=final.post_theta_pdev,
+    )
+
+
+def efs_theta_pirls_loop(
+    X: jax.Array,
+    y: jax.Array,
+    beta_init: jax.Array,
+    S_lambda: jax.Array,
+    family: NegativeBinomial,
+    wt: jax.Array,
+    offset: jax.Array | None,
+    log_theta_init: jax.Array,
+    count_indices: jax.Array,
+    *,
+    beta_old_init: jax.Array | None = None,
+    max_y: int,
+    integer_counts: bool,
+    max_iter: int = 100,
+    tol: float = 1e-7,
+) -> EFSThetaPIRLSResult:
+    """Run the EFS-only NB/log in-loop conditional-theta PIRLS solver.
+
+    ``beta_old_init`` is the explicit old/null coefficient state for the first
+    R divergence comparison and halving origin. Omitting it intentionally uses
+    ``beta_init`` for both roles; callers with a distinct null state must pass
+    it rather than relying on the ordinary-PIRLS first-iteration shortcut.
+
+    This internal entry point is intentionally separate from ``pirls_loop``;
+    neither default joint-Newton NB nor fixed-theta EFS routes opt into it.
+    """
+    if not isinstance(family, NegativeBinomial):
+        raise TypeError("EFS theta PIRLS requires NegativeBinomial")
+    if family.n_theta != 1:
+        raise ValueError("EFS theta PIRLS requires an estimated NB theta")
+    if not isinstance(family.link, LogLink):
+        raise NotImplementedError("EFS theta PIRLS currently supports NB/log")
+    if isinstance(max_y, bool) or not isinstance(max_y, Integral) or max_y < 0:
+        raise ValueError("EFS theta PIRLS max_y must be an integer >= 0")
+    if isinstance(max_iter, bool) or not isinstance(max_iter, Integral) or max_iter < 1:
+        raise ValueError("EFS theta PIRLS max_iter must be an integer >= 1")
+    if (
+        isinstance(tol, bool)
+        or not isinstance(tol, Real)
+        or not np.isfinite(tol)
+        or tol <= 0
+    ):
+        raise ValueError("EFS theta PIRLS tol must be finite and positive")
+    if not isinstance(integer_counts, bool):
+        raise ValueError("EFS theta PIRLS integer_counts must be bool")
+    if log_theta_init.shape != (1,):
+        raise ValueError("EFS theta PIRLS log_theta_init must have shape (1,)")
+    if beta_old_init is None:
+        beta_old_init = beta_init
+    if beta_old_init.shape != beta_init.shape:
+        raise ValueError("EFS theta PIRLS beta_old_init must align with beta_init")
+    if X.ndim != 2 or y.ndim != 1 or wt.ndim != 1 or count_indices.ndim != 1:
+        raise ValueError("EFS theta PIRLS requires X 2-D and aligned 1-D vectors")
+    if (
+        X.shape[0] != y.shape[0]
+        or y.shape != wt.shape
+        or y.shape != count_indices.shape
+    ):
+        raise ValueError("EFS theta PIRLS X/y/wt/count_indices must align")
+    if offset is None:
+        offset = jnp.zeros_like(y)
+    if offset.shape != y.shape:
+        raise ValueError("EFS theta PIRLS offset must align with y")
+    return _efs_theta_pirls_loop_jit(
+        X,
+        y,
+        beta_init,
+        S_lambda,
+        family,
+        wt,
+        offset,
+        log_theta_init,
+        beta_old_init,
+        count_indices,
+        max_y=max_y,
+        integer_counts=integer_counts,
+        max_iter=max_iter,
+        tol=tol,
     )
 
 
