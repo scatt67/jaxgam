@@ -60,6 +60,8 @@ class FittingPreparation:
     total_penalty_rank: int
     total_penalty_null_dim: int
     unpenalized_rank_deficit: int
+    family_name: str
+    link_name: str
 
 
 def _make_transform(D: np.ndarray) -> object:
