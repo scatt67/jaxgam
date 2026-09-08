@@ -297,7 +297,7 @@ def test_efs_theta_pirls_distinguishes_unrecoverable_beta_step(monkeypatch):
 
 
 def test_efs_theta_pirls_names_retained_first_start_invalid_trial(monkeypatch):
-    """Do not apply R's later null-divergence origin to an earlier failure."""
+    """A null-origin halving cannot rescue an earlier retained-start failure."""
     fd, S_lambda = _fixture()
 
     def invalid_retained_step(**kwargs):
@@ -309,7 +309,11 @@ def test_efs_theta_pirls_names_retained_first_start_invalid_trial(monkeypatch):
             mu=kwargs["mu"],
             eta=X @ beta + offset,
             penalized_deviance=kwargs["penalized_deviance"],
-            accepted=jnp.array(False),
+            # Model a shared helper that halved around the null anchor and
+            # found an acceptable point. EFS must reject it before theta is
+            # updated because gam.fit4's earlier recovery starts at retained
+            # etaold, not the later null-divergence origin.
+            accepted=jnp.array(True),
             factors_valid=jnp.array(True),
             solver_valid=jnp.array(True),
             proposal_valid=jnp.array(False),

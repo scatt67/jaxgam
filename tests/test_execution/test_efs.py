@@ -131,7 +131,7 @@ def test_known_scale_efs_rejects_nonlog_nb() -> None:
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
-def test_estimated_nb_efs_default_uses_its_null_anchor_initializer() -> None:
+def test_estimated_nb_efs_default_uses_its_null_anchor_initializer(monkeypatch) -> None:
     data = _fixed_nb_data(n=48)
     family = NegativeBinomial(theta=2.7)
     formula = "y ~ s(x, bs='cr', k=6)"
@@ -143,6 +143,19 @@ def test_estimated_nb_efs_default_uses_its_null_anchor_initializer() -> None:
         offset=data["off"].to_numpy(),
     )
     initial = efs_initial_log_lambda(setup, family)
+    initial_calls: list[tuple[np.ndarray, bool]] = []
+    actual_theta_loop = execution_efs.efs_theta_pirls_loop
+
+    def capture_initial(*args, **kwargs):
+        initial_calls.append(
+            (
+                np.asarray(kwargs["initial_eta"]),
+                bool(kwargs["initial_start_retained"]),
+            )
+        )
+        return actual_theta_loop(*args, **kwargs)
+
+    monkeypatch.setattr(execution_efs, "efs_theta_pirls_loop", capture_initial)
     result = dense_efs_known_scale(fd, initial_log_lambda=initial)
     trace = RBridge(mode="subprocess").efs_diagnostics(
         formula,
@@ -157,6 +170,13 @@ def test_estimated_nb_efs_default_uses_its_null_anchor_initializer() -> None:
     assert result.theta is not None
     assert np.isfinite(result.theta)
     assert result.scale == 1.0
+    r_initial = trace["initial_states"].query("call == 1")
+    first_eta, first_retained = initial_calls[0]
+    assert not first_retained
+    np.testing.assert_allclose(first_eta, r_initial["eta"], rtol=STRICT.rtol)
+    np.testing.assert_allclose(
+        family.link.inverse(first_eta), r_initial["mu"], rtol=STRICT.rtol
+    )
     np.testing.assert_allclose(
         result.pirls_result.mu,
         trace["selected_fitted_values"],
@@ -768,6 +788,43 @@ def test_production_controller_preserves_failure_at_iteration_boundary(
     assert calls == 2
     assert result.n_iter == 1
     assert not result.converged
+
+
+def test_estimated_nb_controller_labels_returned_loop_status(monkeypatch) -> None:
+    """The beta-loop status, not theta Newton status, owns this rejection."""
+    data = _fixed_nb_data(n=40)
+    family = NegativeBinomial(theta=2.7)
+    setup, fd = _build(
+        "y ~ s(x, bs='cr', k=6)",
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        efs_initial_log_lambda(setup, family) + 2.5,
+        jax.numpy.zeros(fd.n_coef),
+        EFSControl(),
+        log_theta_start=jax.numpy.asarray([np.log(2.7)]),
+        beta_old_init=jax.numpy.zeros(fd.n_coef),
+        start_is_absent=True,
+    )
+    failed = replace(
+        base,
+        valid=False,
+        inner_converged=False,
+        theta_status=jax.numpy.asarray(0),
+        theta_loop_status=jax.numpy.asarray(7),
+    )
+    monkeypatch.setattr(execution_efs, "_fit_state", lambda *_args, **_kwargs: failed)
+    result = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=efs_initial_log_lambda(setup, family),
+        control=EFSControl(outer_limit=1),
+    )
+    assert result.convergence_info == "retained_start_invalid_trial"
 
 
 def test_production_controller_losing_extension_keeps_multiplier(monkeypatch) -> None:

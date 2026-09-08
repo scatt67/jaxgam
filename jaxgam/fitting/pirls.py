@@ -908,16 +908,22 @@ def _efs_theta_pirls_loop_jit(
             first_iteration_accepts_any=False,
             require_valid_factors=True,
         )
+        # R's nonfinite/domain recovery (gam.fit4.r:432-477) occurs before
+        # its later first-divergence reset. For a retained first start the
+        # shared beta helper would otherwise halve around beta_old (the null
+        # anchor) and could return an accepted vector from the wrong origin.
+        # This staged EFS route deliberately fails closed until that separate
+        # sequential recovery path is implemented.
+        proposal_invalid = (
+            jnp.array(False)
+            if beta_step.proposal_valid is None
+            else ~beta_step.proposal_valid
+        )
+        retained_start_invalid = (
+            (state.i == 0) & initial_start_retained & proposal_invalid
+        )
 
         def beta_failed(_: None) -> _EFSThetaPIRLSState:
-            proposal_invalid = (
-                jnp.array(False)
-                if beta_step.proposal_valid is None
-                else ~beta_step.proposal_valid
-            )
-            retained_start_invalid = (
-                (state.i == 0) & initial_start_retained & proposal_invalid
-            )
             status = jnp.where(
                 retained_start_invalid,
                 jnp.array(_EFS_STATUS_RETAINED_START_INVALID_TRIAL, dtype=jnp.int32),
@@ -1022,7 +1028,10 @@ def _efs_theta_pirls_loop_jit(
             )
 
         return jax.lax.cond(
-            beta_step.accepted, beta_accepted, beta_failed, operand=None
+            beta_step.accepted & ~retained_start_invalid,
+            beta_accepted,
+            beta_failed,
+            operand=None,
         )
 
     final = jax.lax.while_loop(condition, body, state)
