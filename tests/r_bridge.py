@@ -379,6 +379,7 @@ class RBridge:
         controls: dict[str, float] | None = None,
         initial_smoothing: np.ndarray | None = None,
         initial_scale: float | None = None,
+        null_coef: bool = False,
         scale: float = -1.0,
     ) -> dict[str, Any]:
         """Fit pinned mgcv ``optimizer='efs'`` as an oracle-only bridge call.
@@ -397,6 +398,7 @@ class RBridge:
             controls,
             initial_smoothing,
             initial_scale,
+            null_coef,
             scale,
         )
 
@@ -411,6 +413,7 @@ class RBridge:
         controls: dict[str, float] | None = None,
         initial_smoothing: np.ndarray | None = None,
         initial_scale: float | None = None,
+        null_coef: bool = False,
         scale: float = -1.0,
     ) -> dict[str, Any]:
         """Return real per-refit EFS statistics from a private source copy."""
@@ -424,6 +427,7 @@ class RBridge:
             controls,
             initial_smoothing,
             initial_scale,
+            null_coef,
             scale,
         )
 
@@ -638,6 +642,7 @@ class RBridge:
         controls: dict[str, float] | None,
         initial_smoothing: np.ndarray | None,
         initial_scale: float | None,
+        null_coef: bool,
         scale: float,
     ) -> dict[str, Any]:
         resolved, initial = self._validate_efs_inputs(
@@ -655,6 +660,20 @@ class RBridge:
             data_path = os.path.join(tmpdir, "data.csv")
             script_path = os.path.join(tmpdir, "fit_efs.R")
             data.to_csv(data_path, index=False)
+            setup_arguments = []
+            if weights is not None:
+                setup_arguments.append(f"weights=data[[{weights!r}]]")
+            if offset is not None:
+                setup_arguments.append(f"offset=data[[{offset!r}]]")
+            setup_suffix = ", " + ", ".join(setup_arguments) if setup_arguments else ""
+            null_coef_prefix = (
+                f"G <- gam({formula}, data=data, family={r_family}, fit=FALSE{setup_suffix})"
+                if null_coef
+                else ""
+            )
+            null_coef_argument = (
+                ", null.coef=mgcv:::get.null.coef(G)$null.coef" if null_coef else ""
+            )
             outputs = {
                 "coefficients": os.path.join(tmpdir, "coefficients.csv"),
                 "fitted": os.path.join(tmpdir, "fitted_values.csv"),
@@ -676,7 +695,8 @@ class RBridge:
                 [
                     "library(mgcv)",
                     f"data <- read.csv({data_path!r})",
-                    f"model <- gam({formula}, data=data, family={r_family}, {r_arguments})",
+                    null_coef_prefix,
+                    f"model <- gam({formula}, data=data, family={r_family}, {r_arguments}{null_coef_argument})",
                     "s <- summary(model)",
                     f"write.csv(data.frame(v=as.numeric(coef(model))), {outputs['coefficients']!r}, row.names=FALSE)",
                     f"write.csv(data.frame(v=as.numeric(fitted(model))), {outputs['fitted']!r}, row.names=FALSE)",
@@ -739,6 +759,7 @@ class RBridge:
         controls: dict[str, float] | None,
         initial_smoothing: np.ndarray | None,
         initial_scale: float | None,
+        null_coef: bool,
         scale: float,
     ) -> dict[str, Any]:
         """Execute a private instrumented pinned ``efsudr`` source function."""
@@ -813,6 +834,9 @@ class RBridge:
             initial_scale_text = (
                 "NULL" if initial_scale is None else repr(float(initial_scale))
             )
+            null_coef_argument = (
+                ", null.coef=mgcv:::get.null.coef(G)$null.coef" if null_coef else ""
+            )
             script = "\n".join(
                 [
                     "library(mgcv)",
@@ -848,7 +872,7 @@ class RBridge:
                     "  fit",
                     "}",
                     f"source({source_path!r}, local=trace_env)",
-                    f"fit <- trace_env$efsudr(x=G$X, y=G$y, lsp=lsp, Eb=G$Eb, UrS=G$UrS, weights=G$w, family=family, offset=G$offset, U1=G$U1, intercept=G$intercept, scale=fit_scale, Mp=G$Mp, control=gam.control(efs.lspmax={resolved['efs_lspmax']!r}, efs.tol={resolved['efs_tol']!r}), n.true=G$n.true)",
+                    f"fit <- trace_env$efsudr(x=G$X, y=G$y, lsp=lsp, Eb=G$Eb, UrS=G$UrS, weights=G$w, family=family, offset=G$offset, U1=G$U1, intercept=G$intercept, scale=fit_scale, Mp=G$Mp, control=gam.control(efs.lspmax={resolved['efs_lspmax']!r}, efs.tol={resolved['efs_tol']!r}), n.true=G$n.true{null_coef_argument})",
                     "trace <- do.call(rbind, trace_env$trace_log)",
                     f"write.csv(trace, {trace_path!r}, row.names=FALSE)",
                     f"write.csv(do.call(rbind, trace_env$coefficient_log), {coefficient_path!r}, row.names=FALSE)",
