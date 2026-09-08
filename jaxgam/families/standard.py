@@ -13,6 +13,8 @@ R source reference: R/family.R (stats package family definitions)
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import jax.numpy as jnp
 import jax.scipy.special as jsp
 import numpy as np
@@ -24,6 +26,7 @@ from jaxgam.families.base import (
     REAL,
     UNIT_INTERVAL,
     ExponentialFamily,
+    FamilyExecutionCapabilities,
     StreamReductionPolicy,
 )
 from jaxgam.jax_utils import array_module
@@ -459,6 +462,19 @@ class Gamma(ExponentialFamily):
     def dvar(self, mu: np.ndarray) -> np.ndarray:
         """V'(mu) = 2*mu for Gamma.  Phase 2 only (JAX)."""
         return 2.0 * mu
+
+    def execution_capabilities(self) -> FamilyExecutionCapabilities:
+        """Expose Gamma's bounded regular-Fletcher reduction primitive.
+
+        This describes reported-scale arithmetic only.  It does not authorize
+        the current streamed coefficient/score route, which still rejects
+        Gamma until its observed-system policy is separately implemented.
+        """
+        return replace(super().execution_capabilities(), regular_fletcher_scale=True)
+
+    def stream_reduction_policy(self) -> StreamReductionPolicy:
+        """Declare Fletcher reporting without claiming an outer score policy."""
+        return StreamReductionPolicy("regular_fletcher", "unsupported")
 
     def saturated_loglik(
         self,

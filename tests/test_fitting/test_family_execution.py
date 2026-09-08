@@ -24,17 +24,23 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
     FamilyExecutionLineage,
     FamilyExecutionParameters,
+    RegularFletcherStatistics,
     batch_execution_summary,
+    batch_regular_fletcher_statistics,
     batch_saturated_loglikelihood,
     batch_working_quantities,
     finalize_execution_summary,
+    finalize_regular_fletcher_scale,
     merge_execution_summaries,
+    merge_regular_fletcher_statistics,
 )
 from jaxgam.fitting.pirls import canonical_working_quantities
-from jaxgam.links.links import IdentityLink, Link, LogLink
+from jaxgam.fitting.reml import fletcher_scale, pearson_rss
+from jaxgam.links.links import IdentityLink, InverseLink, Link, LogLink
 from jaxgam.links.registry import link_registry
 from tests.helpers import r_available
-from tests.tolerances import STRICT
+from tests.r_bridge import RBridge
+from tests.tolerances import MODERATE, STRICT
 
 
 class _ScaledIdentityLink(Link):
@@ -178,6 +184,157 @@ def test_generic_working_primitive_reuses_dense_fisher_arithmetic() -> None:
     np.testing.assert_allclose(
         result.working_response, dense_z, rtol=STRICT.rtol, atol=STRICT.atol
     )
+
+
+@pytest.mark.parametrize("link", [InverseLink(), LogLink(), IdentityLink()])
+def test_gamma_regular_fletcher_statistics_are_batch_and_padding_invariant(
+    link: Link,
+) -> None:
+    """All advertised Gamma links retain R's unweighted correction rows."""
+    family = Gamma(link=link)
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    X = jnp.array([[0.8], [1.0], [1.2], [1.4]])
+    y = jnp.array([0.75, 1.1, 0.9, 1.6])
+    weight = jnp.array([1.0, 0.0, 2.0, 0.5])
+    offset = jnp.zeros(4)
+    valid = jnp.ones(4, dtype=bool)
+    beta = jnp.array([1.0])
+
+    whole = batch_regular_fletcher_statistics(
+        X, y, weight, offset, valid, beta, parameters, family, context
+    )
+    tail = batch_regular_fletcher_statistics(
+        jnp.vstack((X[2:], jnp.array([[jnp.nan]]))),
+        jnp.concatenate((y[2:], jnp.array([jnp.nan]))),
+        jnp.concatenate((weight[2:], jnp.array([jnp.nan]))),
+        jnp.concatenate((offset[2:], jnp.array([jnp.nan]))),
+        jnp.array([True, True, False]),
+        beta,
+        parameters,
+        family,
+        context,
+    )
+    merged = merge_regular_fletcher_statistics(
+        batch_regular_fletcher_statistics(
+            X[:2],
+            y[:2],
+            weight[:2],
+            offset[:2],
+            valid[:2],
+            beta,
+            parameters,
+            family,
+            context,
+        ),
+        tail,
+        family,
+        context,
+    )
+    for field in ("pearson_sum", "correction_sum", "n_valid_rows", "input_ok"):
+        np.testing.assert_allclose(
+            np.asarray(getattr(merged, field)),
+            np.asarray(getattr(whole, field)),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    mu = family.link.inverse(X[:, 0])
+    expected_correction = jnp.sum(family.dvar(mu) * (y - mu) / family.variance(mu))
+    np.testing.assert_allclose(
+        whole.pearson_sum,
+        pearson_rss(y, mu, weight, family),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        whole.correction_sum,
+        expected_correction,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert int(whole.n_valid_rows) == 4
+    assert bool(whole.input_ok)
+
+    reduced = finalize_regular_fletcher_scale(whole, jnp.array(1.25), family, context)
+    dense = fletcher_scale(y, mu, weight, family, jnp.array(1.25))
+    np.testing.assert_allclose(reduced.scale, dense, rtol=STRICT.rtol, atol=STRICT.atol)
+    assert bool(reduced.correction_applied)
+    assert bool(reduced.stream_admissible)
+
+
+def test_regular_fletcher_nonfinite_correction_reports_r_fallback() -> None:
+    family = Gamma()
+    context = FamilyExecutionContext.from_family(family)
+    summary = RegularFletcherStatistics(
+        pearson_sum=jnp.array(5.0),
+        correction_sum=jnp.array(jnp.nan),
+        n_valid_rows=jnp.array(3),
+        input_ok=jnp.array(True),
+    )
+    result = finalize_regular_fletcher_scale(summary, jnp.array(1.0), family, context)
+    assert float(result.scale) == 2.5
+    assert not bool(result.correction_applied)
+    assert bool(result.input_ok)
+    assert not bool(result.stream_admissible)
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv unavailable")
+def test_regular_fletcher_scale_matches_pinned_r_and_dense_in_finite_domain() -> None:
+    """R model$scale is Fletcher, unlike the optimized REML scale."""
+    rng = np.random.default_rng(9073)
+    x = np.linspace(-1.0, 1.0, 51)
+    y = np.exp(0.2 + 0.45 * x + rng.normal(scale=0.18, size=len(x)))
+    r_fit = RBridge().fit_gam("y ~ x", pd.DataFrame({"x": x, "y": y}), "gamma")
+    family = Gamma(link=IdentityLink())
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    mu = jnp.asarray(r_fit["fitted_values"])
+    summary = batch_regular_fletcher_statistics(
+        mu[:, None],
+        jnp.asarray(y),
+        jnp.ones(len(y)),
+        jnp.zeros(len(y)),
+        jnp.ones(len(y), dtype=bool),
+        jnp.ones(1),
+        parameters,
+        family,
+        context,
+    )
+    reduced = finalize_regular_fletcher_scale(
+        summary, jnp.asarray(r_fit["edf_total"]), family, context
+    )
+    dense = fletcher_scale(
+        jnp.asarray(y), mu, jnp.ones(len(y)), family, jnp.asarray(r_fit["edf_total"])
+    )
+    np.testing.assert_allclose(reduced.scale, dense, rtol=STRICT.rtol, atol=STRICT.atol)
+    np.testing.assert_allclose(
+        reduced.scale, r_fit["scale"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+
+
+def test_regular_fletcher_primitive_rejects_family_without_explicit_policy() -> None:
+    family = Gaussian()
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    with pytest.raises(NotImplementedError, match="regular Fletcher"):
+        batch_regular_fletcher_statistics(
+            jnp.ones((1, 1)),
+            jnp.ones(1),
+            jnp.ones(1),
+            jnp.zeros(1),
+            jnp.ones(1, dtype=bool),
+            jnp.ones(1),
+            parameters,
+            family,
+            context,
+        )
 
 
 def test_dense_default_working_helper_is_bitwise_unchanged() -> None:
