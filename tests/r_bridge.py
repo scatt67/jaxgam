@@ -675,6 +675,78 @@ class RBridge:
         if not ok:
             raise RBridgeError(f"Pinned EFS oracle unavailable: {reason}")
 
+    def efs_statistics_algebra(
+        self,
+        log_smoothing: np.ndarray,
+        determinant_roots: list[np.ndarray],
+        covariance_roots: list[np.ndarray],
+        coefficients: np.ndarray,
+        fisher_factor: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned ``gam.reparam`` and covariance-root contractions.
+
+        This deliberately narrow oracle accepts only already prepared fitting-
+        coordinate roots and a lower Fisher Cholesky factor.  It is not an
+        arbitrary R evaluation interface: its sole purpose is matched-state
+        EFS d/t/q parity.
+        """
+        self._require_pinned_efs_versions()
+        rho = np.asarray(log_smoothing, dtype=np.float64)
+        beta = np.asarray(coefficients, dtype=np.float64)
+        factor = np.asarray(fisher_factor, dtype=np.float64)
+        roots = [np.asarray(root, dtype=np.float64) for root in covariance_roots]
+        det_roots = [np.asarray(root, dtype=np.float64) for root in determinant_roots]
+        if len(rho) != len(roots) or len(rho) != len(det_roots):
+            raise ValueError("EFS roots must have one entry per smoothing parameter")
+        if beta.ndim != 1 or factor.shape != (len(beta), len(beta)):
+            raise ValueError("coefficients and Fisher factor have incompatible shapes")
+        if not all(root.ndim == 2 and root.shape[0] == len(beta) for root in roots):
+            raise ValueError("covariance roots must be 2-D with coefficient rows")
+        if not all(
+            root.ndim == 2 and root.shape[0] == det_roots[0].shape[0]
+            for root in det_roots
+        ):
+            raise ValueError("determinant roots must share their range rows")
+        if not all(
+            np.all(np.isfinite(value))
+            for value in [rho, beta, factor, *roots, *det_roots]
+        ):
+            raise ValueError("EFS algebra oracle requires finite inputs")
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        r_determinant_roots = rinterface.ListSexpVector(
+            [self._to_r_matrix(root) for root in det_roots]
+        )
+        r_covariance_roots = [self._to_r_matrix(root) for root in roots]
+        r_beta = self._to_r_vector(beta)
+        r_factor = self._to_r_matrix(factor)
+        reparam = self._call_internal(
+            "gam.reparam", r_determinant_roots, self._to_r_vector(rho), deriv=1
+        )
+        square = self._ro.r["^"]
+
+        def r_square_sum(value: Any) -> float:
+            return float(np.asarray(self._base.sum(square(value, 2)))[0])
+
+        return {
+            "d": np.asarray(reparam.rx2("det1"), dtype=np.float64),
+            "t": np.asarray(
+                [
+                    r_square_sum(self._base.forwardsolve(r_factor, root))
+                    for root in r_covariance_roots
+                ],
+                dtype=np.float64,
+            ),
+            "q": np.asarray(
+                [
+                    r_square_sum(self._base.crossprod(root, r_beta))
+                    for root in r_covariance_roots
+                ],
+                dtype=np.float64,
+            ),
+        }
+
     def efs_scripted_controller_reference(
         self,
         initial_rho: np.ndarray,
