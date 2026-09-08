@@ -2,37 +2,47 @@
 
 from __future__ import annotations
 
+import pickle
 from dataclasses import fields, replace
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource, RowBatch
 from jaxgam.execution import stream as stream_execution
 from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
 from jaxgam.families.base import REAL, ExponentialFamily
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting import penalty_ops
-from jaxgam.fitting.data import FittingData, _to_jax_structure
+from jaxgam.fitting.data import FittingData, PreparedFittingMetadata, _to_jax_structure
 from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
     FamilyExecutionParameters,
 )
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import estimate_edf
-from jaxgam.fitting.state import StreamFitState
+from jaxgam.fitting.state import (
+    CholeskyCoefficientFactor,
+    PivotedQRCoefficientFactor,
+    StreamFitState,
+)
 from jaxgam.fitting.stream_kernels import (
     accumulate_working_statistics,
     empty_statistics,
+    positive_qr_working_rows,
 )
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
+from jaxgam.inference._core import finish_prediction
 from jaxgam.jax_utils import array_module
 from jaxgam.links.links import IdentityLink, Link
+from jaxgam.results import GAMPredictionResult
 from tests.helpers import r_available
 from tests.tolerances import MODERATE, STRICT
 
@@ -121,9 +131,10 @@ class _UnregisteredGaussianLike(ExponentialFamily):
 
 
 @pytest.mark.parametrize("family_name", ["gaussian", "poisson", "binomial"])
-@pytest.mark.parametrize("batch_rows", [7, 29])
+@pytest.mark.parametrize("batch_rows", [1, 7, 29])
+@pytest.mark.parametrize("solver_policy", ["cholesky", "qr"])
 def test_streamed_fixed_sp_matches_dense_with_explicit_weights_and_offsets(
-    family_name: str, batch_rows: int
+    family_name: str, batch_rows: int, solver_policy: str
 ) -> None:
     data, family = _fixture(family_name)
     spec = parse_formula('y ~ s(x, bs="cr", k=6)')
@@ -135,7 +146,7 @@ def test_streamed_fixed_sp_matches_dense_with_explicit_weights_and_offsets(
         StreamDesign(prepared, source),
         family,
         np.array([0.2]),
-        control=StreamPIRLSControl(batch_rows=batch_rows),
+        control=StreamPIRLSControl(batch_rows=batch_rows, solver_policy=solver_policy),
     )
     dense = FittingData.from_setup(
         ModelSetup.build(
@@ -167,6 +178,57 @@ def test_streamed_fixed_sp_matches_dense_with_explicit_weights_and_offsets(
         rtol=MODERATE.rtol,
         atol=MODERATE.atol,
     )
+    np.testing.assert_allclose(
+        np.asarray(streamed.edf),
+        np.asarray(estimate_edf(dense_result.XtWX_fisher, dense_result.L_fisher)),
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    if solver_policy == "qr":
+        assert isinstance(
+            streamed.fisher_coefficient_factor, PivotedQRCoefficientFactor
+        )
+        expected_inverse = np.asarray(
+            streamed.scale
+            * jnp.asarray(
+                np.linalg.solve(
+                    np.asarray(dense_result.L_fisher).T,
+                    np.linalg.solve(
+                        np.asarray(dense_result.L_fisher),
+                        np.eye(prepared.n_coef),
+                    ),
+                )
+            )
+        )
+        actual_inverse = np.asarray(
+            streamed.scale
+            * streamed.fisher_coefficient_factor.hessian_inverse(
+                jnp.eye(prepared.n_coef)
+            )
+        )
+        np.testing.assert_allclose(
+            actual_inverse,
+            expected_inverse,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        )
+        expected_se = np.linalg.norm(
+            np.linalg.solve(np.asarray(dense_result.L_fisher), np.asarray(dense.X).T),
+            axis=0,
+        )
+        actual_se = np.linalg.norm(
+            np.asarray(
+                streamed.fisher_coefficient_factor.root_transpose_inverse(
+                    jnp.asarray(dense.X).T
+                )
+            ),
+            axis=0,
+        )
+        np.testing.assert_allclose(
+            actual_se, expected_se, rtol=MODERATE.rtol, atol=MODERATE.atol
+        )
+        with np.testing.assert_raises(RuntimeError):
+            _ = streamed.fisher_factor
     assert streamed.converged
     assert not streamed.line_search_failed
     assert streamed.stationarity < 1e-7
@@ -211,7 +273,356 @@ def test_padded_nan_tail_is_sanitized_then_masked_after_weight_floor() -> None:
         np.testing.assert_allclose(
             np.asarray(got), np.asarray(expected), rtol=STRICT.rtol, atol=STRICT.atol
         )
+    qr_rows = positive_qr_working_rows(
+        X,
+        y,
+        weight,
+        offset,
+        jnp.array([True, True, False]),
+        beta,
+        parameters,
+        family,
+        context,
+    )
+    qr_reference = positive_qr_working_rows(
+        X[:2],
+        y[:2],
+        weight[:2],
+        offset[:2],
+        jnp.array([True, True]),
+        beta,
+        parameters,
+        family,
+        context,
+    )
+    np.testing.assert_allclose(
+        np.asarray(qr_rows[0][:2]),
+        np.asarray(qr_reference[0]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        np.asarray(qr_rows[1][:2]),
+        np.asarray(qr_reference[1]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_array_equal(np.asarray(qr_rows[0][2]), np.zeros(2))
+    assert qr_rows[0].shape == X.shape
+    assert positive_qr_working_rows._cache_size() >= 1
     assert accumulate_working_statistics._cache_size() >= 1
+
+
+@pytest.mark.parametrize("delta", [1e-6, 1e-8])
+def test_streamed_qr_ill_conditioned_edf_and_se_use_final_root(delta: float) -> None:
+    """QR EDF/SE remain stable where ``trace(G @ H^-1)`` is not."""
+    rng = np.random.default_rng(9272)
+    n = 503
+    x = rng.normal(size=n)
+    z = x + delta * rng.normal(size=n)
+    X = np.column_stack((np.ones(n), x, z))
+    weight = rng.uniform(0.5, 1.6, n)
+    offset = 0.1 * np.sin(x)
+    y = X @ np.array([0.3, 2.0, -1.0]) + offset + 1e-9 * rng.normal(size=n)
+    source = DataFrameRowSource(
+        pd.DataFrame({"x": x, "z": z, "y": y}),
+        response="y",
+        weights=weight,
+        offset=offset,
+    )
+    family = Gaussian()
+    prepared = prepare_model(parse_formula("y ~ x + z"), source, family=family)
+    streamed = fit_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        np.empty(0),
+        control=StreamPIRLSControl(batch_rows=13, solver_policy="qr"),
+    )
+    weighted_X = np.sqrt(weight)[:, None] * X
+    Q, R = np.linalg.qr(weighted_X)
+    expected_beta = np.linalg.solve(R, Q.T @ (np.sqrt(weight) * (y - offset)))
+    expected_se = np.linalg.norm(np.linalg.solve(R.T, X.T), axis=0)
+    actual_se = np.linalg.norm(
+        np.asarray(streamed.fisher_coefficient_factor.root_transpose_inverse(X.T)),
+        axis=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(streamed.coefficients),
+        expected_beta,
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    np.testing.assert_allclose(
+        actual_se, expected_se, rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    np.testing.assert_allclose(
+        np.asarray(streamed.edf), 3.0, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert streamed.converged
+
+
+def test_qr_penalty_roots_are_built_once_per_fixed_sp_fit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data, family = _fixture("gaussian", n=41)
+    source = DataFrameRowSource(data, response="y")
+    prepared = prepare_model(
+        parse_formula('y ~ s(x, bs="cr", k=5)'), source, family=family
+    )
+    original = stream_execution.qr_penalty_roots
+    calls = 0
+
+    def count_roots(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(stream_execution, "qr_penalty_roots", count_roots)
+    fit_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        np.array([0.1]),
+        control=StreamPIRLSControl(batch_rows=7, solver_policy="qr"),
+    )
+    assert calls == 1
+
+
+def test_qr_source_scan_accounting_matches_replayed_source_calls() -> None:
+    """QR has one source replay per recorded scan; roots add no hidden scan."""
+    data, family = _fixture("gaussian", n=41)
+    base = DataFrameRowSource(data, response="y")
+    prepared = prepare_model(
+        parse_formula('y ~ s(x, bs="cr", k=5)'), base, family=family
+    )
+
+    class CountingSource:
+        n_rows = base.n_rows
+
+        def __init__(self) -> None:
+            self.scan_calls = 0
+
+        def fingerprint(self) -> str:
+            return base.fingerprint()
+
+        def scan(self, batch_rows: int):
+            self.scan_calls += 1
+            yield from base.scan(batch_rows)
+
+    source = CountingSource()
+    state = fit_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        np.array([0.1]),
+        control=StreamPIRLSControl(batch_rows=7, solver_policy="qr"),
+    )
+    assert source.scan_calls == state.source_scans
+
+
+@pytest.mark.parametrize("n", [53, 509])
+def test_qr_retained_fit_state_is_coefficient_sized_as_source_grows(n: int) -> None:
+    """This checks retained state shape, not process peak allocation."""
+    data, family = _fixture("gaussian", n=n)
+    source = DataFrameRowSource(data, response="y")
+    prepared = prepare_model(parse_formula("y ~ x"), source, family=family)
+    state = fit_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        np.empty(0),
+        control=StreamPIRLSControl(batch_rows=11, solver_policy="qr"),
+    )
+    p = prepared.n_coef
+    assert state.coefficient_factor.R.shape == (p, p)
+    assert state.xtwx.shape == (p, p)
+    assert state.coefficients.shape == (p,)
+
+
+@pytest.mark.parametrize("uncertainty", ["none", "fisher", "covariance"])
+def test_qr_compact_result_uses_tagged_logdet_and_cpu_fisher_provider(
+    monkeypatch: pytest.MonkeyPatch, uncertainty: str
+) -> None:
+    """The result score/SE retain QR actions instead of rebuilding ``G``'s factor."""
+    rng = np.random.default_rng(9927)
+    n = 211
+    x = rng.normal(size=n)
+    z = x + 1e-8 * rng.normal(size=n)
+    X = np.column_stack((np.ones(n), x, z))
+    weight = rng.uniform(0.5, 1.5, n)
+    offset = 0.1 * np.sin(x)
+    y = X @ np.array([0.2, 1.5, -0.7]) + offset + 0.05 * rng.normal(size=n)
+    source = DataFrameRowSource(
+        pd.DataFrame({"x": x, "z": z, "y": y}),
+        response="y",
+        weights=weight,
+        offset=offset,
+    )
+    family = Gaussian()
+    formula = "y ~ x + z"
+    prepared = prepare_model(parse_formula(formula), source, family=family)
+    state = fit_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        np.empty(0),
+        control=StreamPIRLSControl(batch_rows=13, solver_policy="qr"),
+    )
+    metadata = PreparedFittingMetadata.from_prepared(prepared, family)
+    result = GAMPredictionResult._from_stream_fit(
+        stream_state=state,
+        prepared=prepared,
+        metadata=metadata,
+        family=family,
+        formula=formula,
+        method="REML",
+        control=FitControl(execution="stream", batch_rows=13, uncertainty=uncertainty),
+    )
+    weighted_X = np.sqrt(weight)[:, None] * X
+    _Q, R = np.linalg.qr(weighted_X)
+    residual = np.sqrt(weight) * (y - offset - X @ np.asarray(state.coefficients))
+    scale = np.sum(residual * residual) / (n - 3)
+    saturated = -0.5 * np.sum(np.log(2.0 * np.pi * scale / weight))
+    expected_score = (
+        np.asarray(state.deviance) / (2.0 * scale)
+        - saturated
+        + np.sum(np.log(np.abs(np.diag(R))))
+        - 3.0 / 2.0 * np.log(2.0 * np.pi * scale)
+    )
+    np.testing.assert_allclose(
+        result.score, expected_score, rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    if uncertainty == "none":
+        with pytest.raises(RuntimeError, match="uncertainty is unavailable"):
+            result.predict({"x": x[:17], "z": z[:17]}, offset=offset[:17], se_fit=True)
+        return
+    _prediction, se = result.predict(
+        {"x": x[:17], "z": z[:17]}, offset=offset[:17], se_fit=True
+    )
+    expected_se = np.sqrt(scale) * np.linalg.norm(
+        np.linalg.solve(R.T, X[:17].T), axis=0
+    )
+    np.testing.assert_allclose(se, expected_se, rtol=MODERATE.rtol, atol=MODERATE.atol)
+    restored = pickle.loads(pickle.dumps(result.to_predictor()))
+    _restored_prediction, restored_se = restored.predict(
+        {"x": x[:17], "z": z[:17]}, offset=offset[:17], se_fit=True
+    )
+    np.testing.assert_allclose(
+        restored_se, expected_se, rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    assert restored._fisher_qr_factor is not None
+    assert (restored.Vp is not None) is (uncertainty == "covariance")
+    assert not restored._fisher_qr_factor.R.flags.writeable
+    assert not restored._fisher_qr_factor.pivots.flags.writeable
+    assert not restored._fisher_qr_factor.keep.flags.writeable
+    with pytest.raises(ValueError, match="read-only"):
+        restored._fisher_qr_factor.R[0, 0] = 0.0
+    limited = replace(
+        restored, _memory_budget_bytes=6 * 17 * 3 * np.dtype(float).itemsize
+    )
+    with pytest.raises(MemoryError, match="Prediction workspace"):
+        limited.predict({"x": x[:17], "z": z[:17]}, offset=offset[:17], se_fit=True)
+    monkeypatch.setattr(
+        jax,
+        "device_put",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected JAX")
+        ),
+    )
+    _cpu_prediction, cpu_se = restored.predict(
+        {"x": x[:17], "z": z[:17]}, offset=offset[:17], se_fit=True
+    )
+    np.testing.assert_allclose(
+        cpu_se, expected_se, rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    if uncertainty == "fisher":
+        with pytest.raises(MemoryError, match="Vp materialization"):
+            result.materialize_covariance(1)
+        with pytest.raises(MemoryError, match="Vp materialization"):
+            result.materialize_covariance(3 * 3 * 3 * np.dtype(float).itemsize)
+    covariance = result.materialize_covariance(1_000_000)
+    expected_covariance = (
+        scale * np.linalg.solve(R, np.eye(3)) @ np.linalg.solve(R.T, np.eye(3))
+    )
+    np.testing.assert_allclose(
+        covariance,
+        expected_covariance,
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+
+
+def test_qr_covariance_retains_transforms_and_beats_shared_vp_precedence() -> None:
+    """QR covariance results retain transformed-factor SEs, not ``X @ Vp``."""
+    rng = np.random.default_rng(8077)
+    n = 103
+    x = rng.uniform(-1.0, 1.0, n)
+    z = rng.uniform(-1.0, 1.0, n)
+    data = pd.DataFrame(
+        {
+            "x": x,
+            "z": z,
+            "y": np.sin(2.0 * x) + 0.3 * z + rng.normal(scale=0.05, size=n),
+        }
+    )
+    family = Gaussian()
+    formula = 'y ~ s(x, bs="cr", k=6) + s(z, bs="cr", k=6)'
+    source = DataFrameRowSource(data, response="y")
+    prepared = prepare_model(parse_formula(formula), source, family=family)
+    state = fit_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        np.array([np.log(0.2), np.log(0.4)]),
+        control=StreamPIRLSControl(batch_rows=13, solver_policy="qr"),
+    )
+    metadata = PreparedFittingMetadata.from_prepared(prepared, family)
+
+    def compact(uncertainty: str) -> GAMPredictionResult:
+        return GAMPredictionResult._from_stream_fit(
+            stream_state=state,
+            prepared=prepared,
+            metadata=metadata,
+            family=family,
+            formula=formula,
+            method="REML",
+            control=FitControl(
+                execution="stream", batch_rows=13, uncertainty=uncertainty
+            ),
+        )
+
+    fisher = compact("fisher")
+    covariance = compact("covariance")
+    newdata = {"x": x[:19], "z": z[:19]}
+    _mean_fisher, se_fisher = fisher.predict(newdata, se_fit=True)
+    _mean_covariance, se_covariance = covariance.predict(newdata, se_fit=True)
+    np.testing.assert_allclose(
+        se_covariance, se_fisher, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    predictor = covariance.to_predictor()
+    assert predictor.Vp is not None
+    assert predictor._fisher_qr_factor is not None
+    assert predictor._fisher_transforms
+    X_p = predictor.predict_matrix(newdata)
+    eta = X_p @ predictor.coefficients
+    stable = finish_prediction(
+        eta,
+        X_p,
+        predictor.family.link,
+        None,
+        pred_type="response",
+        se_fit=True,
+        fisher_qr_factor=predictor._fisher_qr_factor,
+        fisher_transforms=predictor._fisher_transforms,
+        fisher_scale=predictor._fisher_scale,
+    )
+    both = finish_prediction(
+        eta,
+        X_p,
+        predictor.family.link,
+        np.zeros_like(predictor.Vp),
+        pred_type="response",
+        se_fit=True,
+        fisher_qr_factor=predictor._fisher_qr_factor,
+        fisher_transforms=predictor._fisher_transforms,
+        fisher_scale=predictor._fisher_scale,
+    )
+    np.testing.assert_allclose(both[1], stable[1], rtol=STRICT.rtol, atol=STRICT.atol)
 
 
 def test_failed_line_search_is_not_convergence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,8 +647,40 @@ def test_failed_line_search_is_not_convergence(monkeypatch: pytest.MonkeyPatch) 
     assert result.n_iter == 1
 
 
-def test_backtracking_is_recorded_before_acceptance(
+def test_final_cholesky_offdiagonal_nonfinite_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default final validity retains the legacy full-lower finiteness guard."""
+    data, family = _fixture("gaussian", n=31)
+    source = DataFrameRowSource(data, response="y")
+    prepared = prepare_model(parse_formula("y ~ x"), source, family=family)
+    original = stream_execution._working_factor_scan
+    calls = 0
+
+    def corrupt_final_factor(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        statistics, proposal, factor, H, batches, qr_state = original(*args, **kwargs)
+        if calls == 2:
+            assert isinstance(factor, CholeskyCoefficientFactor)
+            lower = np.asarray(factor.lower).copy()
+            lower[1, 0] = np.nan
+            factor = CholeskyCoefficientFactor(jnp.asarray(lower), factor.n_coef)
+        return statistics, proposal, factor, H, batches, qr_state
+
+    monkeypatch.setattr(stream_execution, "_working_factor_scan", corrupt_final_factor)
+    with pytest.raises(FloatingPointError, match="final state is non-finite"):
+        fit_streamed_pirls(
+            StreamDesign(prepared, source),
+            family,
+            np.empty(0),
+            control=StreamPIRLSControl(batch_rows=7, max_iter=1),
+        )
+
+
+@pytest.mark.parametrize("solver_policy", ["cholesky", "qr"])
+def test_backtracking_is_recorded_before_acceptance(
+    monkeypatch: pytest.MonkeyPatch, solver_policy: str
 ) -> None:
     data, family = _fixture("poisson", n=31)
     source = DataFrameRowSource(data, response="y")
@@ -259,7 +702,7 @@ def test_backtracking_is_recorded_before_acceptance(
         StreamDesign(prepared, source),
         family,
         np.array([0.0]),
-        control=StreamPIRLSControl(batch_rows=8),
+        control=StreamPIRLSControl(batch_rows=8, solver_policy=solver_policy),
     )
     assert result.converged
     assert result.backtracks >= 1
@@ -581,8 +1024,9 @@ def test_gaussian_score_scale_uses_positive_weight_count_and_no_penalty_case(
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 @pytest.mark.parametrize("family_name", ["gaussian", "poisson", "binomial"])
+@pytest.mark.parametrize("solver_policy", ["cholesky", "qr"])
 def test_streamed_fixed_sp_matches_pinned_r_with_basis_held_fixed(
-    family_name: str,
+    family_name: str, solver_policy: str
 ) -> None:
     """Use R's fitted sp as a fixed input to both frozen-basis solvers."""
     from tests.r_bridge import RBridge
@@ -597,7 +1041,7 @@ def test_streamed_fixed_sp_matches_pinned_r_with_basis_held_fixed(
         StreamDesign(prepared, source),
         family,
         np.log(r_result["smoothing_params"]),
-        control=StreamPIRLSControl(batch_rows=9),
+        control=StreamPIRLSControl(batch_rows=9, solver_policy=solver_policy),
     )
     assert prepared.fitting is not None
     public = penalty_ops.transform_coefficients(
@@ -613,7 +1057,10 @@ def test_streamed_fixed_sp_matches_pinned_r_with_basis_held_fixed(
 
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
-def test_strong_smoothing_scale_and_saturated_likelihood_match_dense_and_r() -> None:
+@pytest.mark.parametrize("solver_policy", ["cholesky", "qr"])
+def test_strong_smoothing_scale_and_saturated_likelihood_match_dense_and_r(
+    solver_policy: str,
+) -> None:
     """Unknown Gaussian scale uses n - Fisher EDF, not n - coefficient count."""
     from tests.r_bridge import RBridge
 
@@ -627,6 +1074,7 @@ def test_strong_smoothing_scale_and_saturated_likelihood_match_dense_and_r() -> 
         StreamDesign(prepared, source),
         family,
         np.log(r_result["smoothing_params"]),
+        control=StreamPIRLSControl(batch_rows=9, solver_policy=solver_policy),
     )
     dense = FittingData.from_setup(
         ModelSetup.build(parse_formula(formula), data), family
