@@ -241,6 +241,11 @@ def dense_efs_known_scale(
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
+    prior_weights = np.asarray(fitting_data.wt)
+    if not np.all(np.isfinite(prior_weights)) or np.any(prior_weights <= 0):
+        raise ValueError(
+            "EFS known-scale path requires finite strictly positive prior weights"
+        )
     if fitting_data.rank_deficit:
         raise ValueError(
             "EFS known-scale path requires an identifiable penalized system"
@@ -370,7 +375,7 @@ def dense_efs_known_scale(
         iteration = control.outer_limit
     # efsudr labels an iteration-200 return as an iteration limit even when
     # one of its stop predicates first becomes true on that final iteration.
-    if iteration == control.outer_limit:
+    if iteration == control.outer_limit and stop in {"score_window", "deviance_change"}:
         stop = "iteration_limit"
     converged = stop in {"score_window", "deviance_change"}
     label = "iteration limit reached" if stop == "iteration_limit" else stop
