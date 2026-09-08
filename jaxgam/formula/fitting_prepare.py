@@ -57,6 +57,9 @@ class FittingPreparation:
     gram: npt.NDArray[np.floating]
     rhs: npt.NDArray[np.floating]
     response: ResponseReduction
+    total_penalty_rank: int
+    total_penalty_null_dim: int
+    unpenalized_rank_deficit: int
 
 
 def _make_transform(D: np.ndarray) -> object:
@@ -186,3 +189,27 @@ def initial_log_sp_from_diagonal(
         def_sp /= 10
         ldss_s /= 10
     return np.log(np.maximum(def_sp, np.finfo(float).tiny))
+
+
+def total_penalty_spaces(
+    structure: PenaltyStructure,
+) -> tuple[
+    list[tuple[PenaltyBlock, npt.NDArray[np.floating]]],
+    list[tuple[PenaltyBlock, npt.NDArray[np.floating]]],
+]:
+    """Return local null/range bases with FittingData's relative cutoff."""
+    spectra: list[tuple[PenaltyBlock, np.ndarray, np.ndarray]] = []
+    largest = 0.0
+    for block in structure.blocks:
+        total = np.zeros((block.size, block.size))
+        for S in block.dense_penalties():
+            norm = np.linalg.norm(S, "fro")
+            if norm:
+                total += S / norm
+        eigs, vectors = np.linalg.eigh(total)
+        spectra.append((block, eigs, vectors))
+        largest = max(largest, float(np.max(eigs)) if len(eigs) else 0.0)
+    cutoff = largest * _EPS_TWO_THIRDS
+    nulls = [(block, vectors[:, eigs <= cutoff]) for block, eigs, vectors in spectra]
+    ranges = [(block, vectors[:, eigs > cutoff]) for block, eigs, vectors in spectra]
+    return nulls, ranges
