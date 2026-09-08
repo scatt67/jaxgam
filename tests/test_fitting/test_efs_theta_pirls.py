@@ -25,6 +25,7 @@ from jaxgam.fitting.pirls import (
     _EFS_STATUS_INVALID_INPUT,
     _EFS_STATUS_INVALID_WORKING_FACTORS,
     _EFS_STATUS_ITERATION_LIMIT,
+    _EFS_STATUS_RETAINED_START_INVALID_TRIAL,
     _EFS_STATUS_THETA_FAILED,
     _BetaStepResult,
     efs_theta_pirls_loop,
@@ -124,7 +125,14 @@ def test_efs_theta_pirls_jit_rebuilds_final_quantities_at_returned_theta():
     # The wrapped route is itself JIT-safe and theta remains a dynamic input.
     compiled = jax.jit(
         efs_theta_pirls_loop,
-        static_argnames=("family", "max_y", "integer_counts", "max_iter", "tol"),
+        static_argnames=(
+            "family",
+            "max_y",
+            "integer_counts",
+            "max_iter",
+            "tol",
+            "initial_start_retained",
+        ),
     )
     plan = fd.count_prefix_plan
     assert plan is not None
@@ -142,6 +150,26 @@ def test_efs_theta_pirls_jit_rebuilds_final_quantities_at_returned_theta():
         integer_counts=plan.integer_counts,
     )
     assert np.all(np.isfinite(np.asarray(compiled_result.log_theta)))
+    # A default/reset EFS start supplies link(mustart), which need not equal
+    # the projected coefficient predictor. It remains dynamic JIT input.
+    mustart = fd.family.initialize(fd.y, fd.wt)
+    mustart_eta = fd.family.link.link(mustart)
+    reset_result = compiled(
+        fd.X,
+        fd.y,
+        fd.beta_init,
+        S_lambda,
+        fd.family,
+        fd.wt,
+        fd.offset,
+        jnp.asarray([np.log(1.7)]),
+        plan.indices,
+        initial_eta=mustart_eta,
+        initial_start_retained=False,
+        max_y=fd.max_y,
+        integer_counts=plan.integer_counts,
+    )
+    assert np.all(np.isfinite(np.asarray(reset_result.log_theta)))
 
 
 def test_efs_theta_pirls_rejects_fractional_response_before_convergence():
@@ -266,6 +294,44 @@ def test_efs_theta_pirls_distinguishes_unrecoverable_beta_step(monkeypatch):
         pirls_module._efs_theta_pirls_loop_jit.clear_cache()
     assert not bool(np.asarray(result.pirls_result.converged))
     assert int(np.asarray(result.status)) == _EFS_STATUS_BETA_STEP_FAILED
+
+
+def test_efs_theta_pirls_names_retained_first_start_invalid_trial(monkeypatch):
+    """Do not apply R's later null-divergence origin to an earlier failure."""
+    fd, S_lambda = _fixture()
+
+    def invalid_retained_step(**kwargs):
+        beta = kwargs["beta"]
+        X = kwargs["X"]
+        offset = kwargs["offset"]
+        return _BetaStepResult(
+            beta=beta,
+            mu=kwargs["mu"],
+            eta=X @ beta + offset,
+            penalized_deviance=kwargs["penalized_deviance"],
+            accepted=jnp.array(False),
+            factors_valid=jnp.array(True),
+            solver_valid=jnp.array(True),
+            proposal_valid=jnp.array(False),
+            XtWX=jnp.eye(X.shape[1]),
+            L=jnp.eye(X.shape[1]),
+            W=jnp.ones(X.shape[0]),
+        )
+
+    monkeypatch.setattr(pirls_module, "_beta_step", invalid_retained_step)
+    pirls_module._efs_theta_pirls_loop_jit.clear_cache()
+    try:
+        result = _call(
+            fd,
+            S_lambda,
+            beta_old_init=jnp.zeros_like(fd.beta_init),
+            initial_eta=fd.X @ fd.beta_init + fd.offset,
+            initial_start_retained=True,
+        )
+    finally:
+        pirls_module._efs_theta_pirls_loop_jit.clear_cache()
+    assert not bool(np.asarray(result.pirls_result.converged))
+    assert int(np.asarray(result.status)) == _EFS_STATUS_RETAINED_START_INVALID_TRIAL
 
 
 def test_efs_theta_pirls_final_factor_guard_overrides_stale_convergence(monkeypatch):
