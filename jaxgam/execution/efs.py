@@ -7,6 +7,7 @@ states separate so a rejected refit can never leak into the next iteration.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -24,7 +25,7 @@ from jaxgam.fitting.efs import (
     efs_statistics,
     prepare_efs_statistics,
 )
-from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
+from jaxgam.fitting.pirls import _W_MAX, _W_MIN, PIRLSResult, pirls_loop
 from jaxgam.fitting.reml import estimate_edf, reml_criterion
 from jaxgam.links.links import LogitLink, LogLink
 
@@ -241,11 +242,15 @@ def dense_efs_known_scale(
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
-    prior_weights = np.asarray(fitting_data.wt)
-    if not np.all(np.isfinite(prior_weights)) or np.any(prior_weights <= 0):
-        raise ValueError(
-            "EFS known-scale path requires finite strictly positive prior weights"
-        )
+    for start in range(0, fitting_data.n_obs, 8192):
+        prior_weights = np.asarray(fitting_data.wt[start : start + 8192])
+        if not np.all(np.isfinite(prior_weights)) or np.any(
+            (prior_weights < _W_MIN) | (prior_weights > _W_MAX)
+        ):
+            raise ValueError(
+                "EFS known-scale path requires finite positive prior weights "
+                "inside PIRLS clipping bounds"
+            )
     if fitting_data.rank_deficit:
         raise ValueError(
             "EFS known-scale path requires an identifiable penalized system"
@@ -277,12 +282,12 @@ def dense_efs_known_scale(
             accepted.edf,
             jnp.array(1.0),
             accepted.pirls_result,
-            "inner_failure",
+            "inner_failure" if not accepted.inner_converged else "invalid_initial",
             None,
         )
 
     multiplier = 1.0
-    history: list[float] = []
+    history: deque[float] = deque(maxlen=max(4, control.history_limit))
     old_deviance: float | None = None
     stop = "iteration_limit"
     update_residual: jax.Array | None = None
@@ -360,7 +365,7 @@ def dense_efs_known_scale(
         if (
             iteration > 3
             and original_max_step < 0.05
-            and max(abs(np.diff(history[-4:]))) < control.score_tolerance
+            and max(abs(np.diff(tuple(history)[-4:]))) < control.score_tolerance
         ):
             stop = "score_window"
             break
@@ -391,6 +396,6 @@ def dense_efs_known_scale(
         label,
         None,
         update_residual,
-        tuple(history[-control.history_limit :]),
+        tuple(history)[-control.history_limit :],
         multiplier,
     )
