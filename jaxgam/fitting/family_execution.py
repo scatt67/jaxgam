@@ -184,6 +184,59 @@ jax.tree_util.register_pytree_node(
 )
 
 
+@dataclass(frozen=True)
+class RegularFletcherStatistics:
+    """Bounded sufficient statistics for one regular-family scale reduction.
+
+    ``correction_sum`` and ``n_valid_rows`` deliberately do not use prior
+    weights.  This is the ``mean(...)`` and ``n.true`` convention in pinned
+    ``gam.fit3.r``; real zero-weight rows remain in both quantities.
+    """
+
+    pearson_sum: jax.Array
+    correction_sum: jax.Array
+    n_valid_rows: jax.Array
+    input_ok: jax.Array
+
+
+_FLETCHER_STAT_FIELDS = [field.name for field in fields(RegularFletcherStatistics)]
+jax.tree_util.register_pytree_node(
+    RegularFletcherStatistics,
+    lambda result: ([getattr(result, name) for name in _FLETCHER_STAT_FIELDS], None),
+    lambda _, children: RegularFletcherStatistics(
+        **dict(zip(_FLETCHER_STAT_FIELDS, children, strict=True))
+    ),
+)
+
+
+@dataclass(frozen=True)
+class RegularFletcherScale:
+    """Pinned-R Fletcher scalar plus explicit stream-admissibility status.
+
+    When the correction is non-finite, pinned mgcv retains the Pearson scalar
+    and skips the correction.  ``stream_admissible`` is intentionally stricter
+    for a future streamed caller: it is false in that case, so a caller can
+    fail closed without changing dense ``fletcher_scale`` behavior.
+    """
+
+    scale: jax.Array
+    pearson_scale: jax.Array
+    s_bar: jax.Array
+    correction_applied: jax.Array
+    input_ok: jax.Array
+    stream_admissible: jax.Array
+
+
+_FLETCHER_SCALE_FIELDS = [field.name for field in fields(RegularFletcherScale)]
+jax.tree_util.register_pytree_node(
+    RegularFletcherScale,
+    lambda result: ([getattr(result, name) for name in _FLETCHER_SCALE_FIELDS], None),
+    lambda _, children: RegularFletcherScale(
+        **dict(zip(_FLETCHER_SCALE_FIELDS, children, strict=True))
+    ),
+)
+
+
 def _response_valid(family: ExponentialFamily, y: jax.Array) -> jax.Array:
     """JIT counterpart to the static response-support descriptor."""
     support = family.response_support
@@ -241,6 +294,119 @@ def sanitize_batch_inputs(
     mu = family.link.inverse(eta_safe)
     domain_per_row = real_ok & eta_ok & family.valid_mu(mu)
     return y_safe, weight_safe, offset_safe, eta_safe, mu, domain_per_row
+
+
+def _require_regular_fletcher_policy(context: FamilyExecutionContext) -> None:
+    """Reject a scale formula unless the family explicitly owns it."""
+    if (
+        not context.capabilities.regular_fletcher_scale
+        or context.reduction_policy.reported_scale != "regular_fletcher"
+    ):
+        raise NotImplementedError(
+            "Family execution context does not provide regular Fletcher "
+            "reported-scale reductions."
+        )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def batch_regular_fletcher_statistics(
+    X: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    valid: jax.Array,
+    beta: jax.Array,
+    parameters: FamilyExecutionParameters,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> RegularFletcherStatistics:
+    """Reduce one sanitized batch for a regular-family Fletcher scale.
+
+    This primitive evaluates padding through the family-owned safe eta, then
+    masks it from all three statistics.  It is intentionally independent of
+    the current streamed PIRLS host route; Gamma remains unreleased there.
+    """
+    _validate_context(family, context)
+    _require_capabilities(context, "row_separable")
+    _require_regular_fletcher_policy(context)
+    y_safe, weight_safe, _offset_safe, _eta, mu, domain_per_row = sanitize_batch_inputs(
+        X, y, prior_weight, offset, valid, beta, family, context
+    )
+    valid = jnp.asarray(valid, dtype=bool)
+    real = valid & domain_per_row
+    pearson, correction, n_valid_rows = family.regular_fletcher_statistics_from_batch(
+        y_safe, mu, weight_safe, real
+    )
+    theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
+    return RegularFletcherStatistics(
+        pearson_sum=pearson,
+        correction_sum=correction,
+        n_valid_rows=n_valid_rows,
+        input_ok=jnp.all(~valid | domain_per_row) & theta_finite,
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def merge_regular_fletcher_statistics(
+    left: RegularFletcherStatistics,
+    right: RegularFletcherStatistics,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> RegularFletcherStatistics:
+    """Merge regular Fletcher summaries without retaining source rows."""
+    _validate_context(family, context)
+    _require_regular_fletcher_policy(context)
+    return RegularFletcherStatistics(
+        pearson_sum=left.pearson_sum + right.pearson_sum,
+        correction_sum=left.correction_sum + right.correction_sum,
+        n_valid_rows=left.n_valid_rows + right.n_valid_rows,
+        input_ok=left.input_ok & right.input_ok,
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def finalize_regular_fletcher_scale(
+    statistics: RegularFletcherStatistics,
+    edf: jax.Array,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> RegularFletcherScale:
+    """Apply pinned mgcv's Fletcher finite-correction fallback.
+
+    Unlike dense :func:`jaxgam.fitting.reml.fletcher_scale`, this reports the
+    R fallback when ``s.bar`` is non-finite.  It does not modify dense code;
+    callers that need a fail-closed streamed state must require
+    ``stream_admissible`` themselves.
+    """
+    _validate_context(family, context)
+    _require_regular_fletcher_policy(context)
+    denominator = statistics.n_valid_rows - edf
+    pearson_scale = statistics.pearson_sum / denominator
+    correction_mean = statistics.correction_sum / statistics.n_valid_rows
+    s_bar = jnp.maximum(-0.9, correction_mean)
+    correction_applied = jnp.isfinite(s_bar)
+    scale = jnp.where(
+        correction_applied,
+        pearson_scale / (1.0 + s_bar),
+        pearson_scale,
+    )
+    denominator_ok = jnp.isfinite(denominator) & (denominator > 0.0)
+    stream_admissible = (
+        statistics.input_ok
+        & correction_applied
+        & denominator_ok
+        & jnp.isfinite(statistics.pearson_sum)
+        & jnp.isfinite(scale)
+        & (scale > 0.0)
+    )
+    return RegularFletcherScale(
+        scale=scale,
+        pearson_scale=pearson_scale,
+        s_bar=s_bar,
+        correction_applied=correction_applied,
+        input_ok=statistics.input_ok,
+        stream_admissible=stream_admissible,
+    )
 
 
 @partial(jax.jit, static_argnames=("family", "context"))

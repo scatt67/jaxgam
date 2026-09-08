@@ -101,6 +101,7 @@ class FamilyExecutionCapabilities:
     dynamic_phi: bool
     coefficient_system: Literal["fisher", "observed"] = "fisher"
     fisher_equals_observed_for_score: bool = False
+    regular_fletcher_scale: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,12 @@ class StreamReductionPolicy:
     instead of borrowing Gaussian's formula for Gamma or a future family.
     """
 
-    reported_scale: Literal["known_one", "gaussian_fisher_edf_deviance", "unsupported"]
+    reported_scale: Literal[
+        "known_one",
+        "gaussian_fisher_edf_deviance",
+        "regular_fletcher",
+        "unsupported",
+    ]
     score_scale: Literal["reported_scale", "gaussian_fixed_sp", "unsupported"]
 
 
@@ -801,6 +807,30 @@ class ExponentialFamily(ABC):
                 "execution_summary_input_ok() for its summary pytree."
             )
         return bool(summary[3])
+
+    def regular_fletcher_statistics_from_batch(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        wt: np.ndarray,
+        valid: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return bounded Pearson/Fletcher sufficient statistics.
+
+        This is the family-owned arithmetic used by the regular-family
+        reported-scale reducer.  ``valid`` excludes padded rows only; it does
+        not exclude real zero-weight observations, because mgcv's Fletcher
+        correction and ``n.true`` are both unweighted (``gam.fit3.r``
+        lines 596--604).  Families whose scale estimator differs must expose
+        a different reduction policy rather than reuse this formula.
+        """
+        xp = array_module(y)
+        valid = xp.asarray(valid, dtype=bool)
+        variance = self.variance(mu)
+        residual = y - mu
+        pearson = xp.sum(xp.where(valid, wt * residual**2 / variance, 0.0))
+        correction = xp.sum(xp.where(valid, self.dvar(mu) * residual / variance, 0.0))
+        return pearson, correction, xp.sum(valid)
 
     def scale_estimate(
         self,

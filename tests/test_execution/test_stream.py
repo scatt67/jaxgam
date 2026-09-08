@@ -725,15 +725,27 @@ def test_preflight_rejects_noncanonical_or_missing_fitting_preparation() -> None
         fit_streamed_pirls(prepared, noncanonical, np.array([0.0]))
 
 
-def test_preflight_rejects_unknown_scale_and_noncanonical_score_policies() -> None:
+def test_preflight_rejects_unknown_scale_and_noncanonical_score_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     data, _ = _fixture("gaussian", n=25)
     data = data.copy()
     data["y"] = np.exp(data["y"])
     source = DataFrameRowSource(data, response="y")
     spec = parse_formula('y ~ s(x, bs="cr", k=5)')
     gamma_stream = StreamDesign(prepare_model(spec, source, family=Gamma()), source)
-    with pytest.raises(NotImplementedError, match="reported-scale/score reduction"):
+    source_scans = 0
+    original_scan = source.scan
+
+    def count_scan(batch_rows: int):
+        nonlocal source_scans
+        source_scans += 1
+        yield from original_scan(batch_rows)
+
+    monkeypatch.setattr(source, "scan", count_scan)
+    with pytest.raises(NotImplementedError, match="not released"):
         fit_streamed_pirls(gamma_stream, Gamma(), np.array([0.0]))
+    assert source_scans == 0
 
     poisson_data, _ = _fixture("poisson", n=25)
     poisson_source = DataFrameRowSource(poisson_data, response="y")
