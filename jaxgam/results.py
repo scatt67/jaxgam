@@ -12,6 +12,7 @@ Design doc reference: docs/refactor_gam_api/design.md §3.4, §4.1, §7
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -19,6 +20,7 @@ import numpy as np
 import numpy.typing as npt
 import scipy.linalg as sla
 
+from jaxgam.control import FitControl
 from jaxgam.inference._core import finish_prediction, predict_core
 from jaxgam.inference.predictor import GAMPredictor
 from jaxgam.jax_utils import to_numpy
@@ -27,10 +29,12 @@ if TYPE_CHECKING:
     import matplotlib.figure
     import pandas as pd
 
+    from jaxgam.data.source import RowSource
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.fitting.data import FittingData
     from jaxgam.fitting.newton import NewtonResult
     from jaxgam.formula.design import ModelSetup, SmoothInfo
+    from jaxgam.formula.predict_matrix import Data
     from jaxgam.formula.terms import FormulaSpec
     from jaxgam.smooths.constraints import CoefficientMap
     from jaxgam.summary.summary import GAMSummary
@@ -188,6 +192,123 @@ class GAMInferenceResult(_FitDiagnostics):
 
 
 @dataclass(frozen=True)
+class GAMPredictionResult:
+    """Small, picklable result surface for bounded new-data prediction.
+
+    This deliberately has no training rows, setup, EDF vectors, or mandatory
+    covariance.  It retains only scalar convergence diagnostics and a frozen
+    :class:`GAMPredictor`.
+    """
+
+    _predictor: GAMPredictor
+    deviance: float
+    score: float
+    scale: float
+    theta: float | None
+    smoothing_params: np.ndarray
+    converged: bool
+    n_iter: int
+    convergence_info: str
+    method: str
+    lambda_strategy: str
+    execution_path: str
+    n: int
+    _batch_rows: int = 65_536
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "smoothing_params", np.array(self.smoothing_params))
+        self.smoothing_params.setflags(write=False)
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self.smoothing_params.setflags(write=False)
+
+    @property
+    def coefficients(self) -> np.ndarray:
+        return self._predictor.coefficients
+
+    @property
+    def family(self) -> ExponentialFamily:
+        return self._predictor.family
+
+    @property
+    def formula(self) -> str:
+        return self._predictor.formula
+
+    def predict(
+        self,
+        newdata: pd.DataFrame | dict,
+        pred_type: str = "response",
+        se_fit: bool = False,
+        offset: np.ndarray | None = None,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        """Predict a concrete new-data batch from compact retained state."""
+        return self._predictor._predict(
+            newdata,
+            pred_type=pred_type,
+            se_fit=se_fit,
+            offset=offset,
+            warning_stacklevel=4,
+        )
+
+    def predict_iter(
+        self,
+        source: RowSource,
+        batch_rows: int | None = None,
+        *,
+        pred_type: str = "response",
+        se_fit: bool = False,
+    ) -> Iterator[tuple[np.ndarray, np.ndarray | tuple[np.ndarray, np.ndarray]]]:
+        """Yield ordered bounded prediction batches from a replayable source."""
+        return self._predictor.predict_iter(
+            source,
+            self._batch_rows if batch_rows is None else batch_rows,
+            pred_type=pred_type,
+            se_fit=se_fit,
+        )
+
+    def predict_matrix(self, newdata: Data) -> np.ndarray:
+        """Build a budgeted constrained prediction matrix for a concrete batch."""
+        return self._predictor.predict_matrix(newdata)
+
+    def to_predictor(self) -> GAMPredictor:
+        return self._predictor
+
+    def materialize_covariance(self, memory_budget_bytes: int) -> np.ndarray:
+        """Explicitly build public ``Vp`` only after a caller budgets it."""
+        if (
+            isinstance(memory_budget_bytes, bool)
+            or not isinstance(memory_budget_bytes, int)
+            or memory_budget_bytes <= 0
+        ):
+            raise ValueError("memory_budget_bytes must be a positive integer.")
+        if self._predictor.Vp is not None:
+            return self._predictor.Vp
+        L = self._predictor._fisher_factor
+        if L is None:
+            raise RuntimeError("No covariance provider was retained for this result.")
+        p = L.shape[0]
+        required = 3 * p * p * np.dtype(float).itemsize
+        if required > memory_budget_bytes:
+            raise MemoryError(
+                f"Vp materialization requires {required} workspace bytes, "
+                "exceeding budget "
+                f"{memory_budget_bytes} bytes."
+            )
+        Z = sla.solve_triangular(L, np.eye(p), lower=True)
+        covariance = self._predictor._fisher_scale * (Z.T @ Z)
+        for start, stop, kind, values in self._predictor._fisher_transforms:
+            if kind == "dense":
+                covariance[start:stop, :] = values @ covariance[start:stop, :]
+                covariance[:, start:stop] = covariance[:, start:stop] @ values.T
+            elif kind == "diagonal":
+                covariance[start:stop, :] *= values[:, None]
+                covariance[:, start:stop] *= values[None, :]
+        covariance.setflags(write=False)
+        return covariance
+
+
+@dataclass(frozen=True)
 class GAMResults(_FitDiagnostics):
     """Results from a fitted GAM.
 
@@ -230,8 +351,9 @@ class GAMResults(_FitDiagnostics):
         lambda_strategy: str,
         formula: str,
         method: str,
-        result_mode: Literal["full", "inference"],
-    ) -> GAMResults | GAMInferenceResult:
+        result_mode: Literal["full", "inference", "prediction"],
+        control: FitControl | None = None,
+    ) -> GAMResults | GAMInferenceResult | GAMPredictionResult:
         """Construct the requested result materialization from raw fit output.
 
         Computes derived quantities (covariance, EDF, null deviance),
@@ -265,6 +387,7 @@ class GAMResults(_FitDiagnostics):
             state only.
         """
         pr = fit_result.pirls_result
+        control = FitControl() if control is None else control
 
         # Snapshot after Newton has synchronized any fitted family parameters
         # (notably NB theta) into the fitting family instance.
@@ -273,13 +396,80 @@ class GAMResults(_FitDiagnostics):
         # Phase 2→3: transfer to NumPy
         coefficients = to_numpy(pr.coefficients)
         scale = float(to_numpy(fit_result.scale))
-        edf_total = float(to_numpy(fit_result.edf))
+
+        # This must precede every dense covariance/EDF and row-output transfer.
+        # The optimizer already computed total Fisher EDF for unknown-scale
+        # reporting; retain that scalar only, not diagnostic vectors.
+        if result_mode == "prediction":
+            coefficients = _transform_coefficients_cpu(fd, coefficients)
+            phi = 1.0 if family_snapshot.scale_known else scale
+            factor = None
+            transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
+            covariance = None
+            if control.uncertainty != "none":
+                factor = to_numpy(pr.L_fisher)
+                transforms = tuple(
+                    (
+                        block.start,
+                        block.stop,
+                        block.transform.kind,
+                        to_numpy(block.transform.values),
+                    )
+                    for block in fd.penalty_structure.blocks
+                    if block.transform.kind != "identity"
+                )
+                if control.uncertainty == "covariance":
+                    p = factor.shape[0]
+                    required = 3 * p * p * np.dtype(float).itemsize
+                    if required > control.memory_budget_bytes:
+                        raise MemoryError(
+                            f"Vp requires {required} bytes, exceeding "
+                            "FitControl.memory_budget_bytes="
+                            f"{control.memory_budget_bytes}."
+                        )
+                    Z = sla.solve_triangular(factor, np.eye(p), lower=True)
+                    covariance = phi * (Z.T @ Z)
+                    covariance = _transform_covariance_cpu(fd, covariance)
+                    # Dense covariance is the provider in this explicit mode;
+                    # do not retain its factor or local transforms as well.
+                    factor = None
+                    transforms = ()
+            predictor = GAMPredictor(
+                coefficients=coefficients,
+                Vp=covariance,
+                family=family_snapshot,
+                formula=formula,
+                offset_was_nonzero=_offset_was_nonzero(setup),
+                _predict_spec=setup._lazy_predict_spec(),
+                _fisher_factor=factor,
+                _fisher_transforms=transforms,
+                _fisher_scale=phi,
+                _output_budget_bytes=control.output_budget_bytes,
+                _memory_budget_bytes=control.memory_budget_bytes,
+            )
+            return GAMPredictionResult(
+                _predictor=predictor,
+                deviance=float(to_numpy(pr.deviance)),
+                score=float(to_numpy(fit_result.score)),
+                scale=scale,
+                theta=fit_result.theta,
+                smoothing_params=to_numpy(fit_result.smoothing_params),
+                converged=fit_result.converged,
+                n_iter=fit_result.n_iter,
+                convergence_info=fit_result.convergence_info,
+                method=method,
+                lambda_strategy=lambda_strategy,
+                execution_path="jax",
+                n=setup.n_obs,
+                _batch_rows=control.batch_rows,
+            )
 
         # Use Fisher-weighted quantities for EDF and Bayesian covariance.
         # For standard families Fisher = Newton; for extended families (NB)
         # these are recomputed post-convergence with expected weights
         # (R's gdi2, gdi.c:2262-2294, gam.fit4.r:564).
         L = to_numpy(pr.L_fisher)
+        edf_total = float(to_numpy(fit_result.edf))
         XtWX = to_numpy(pr.XtWX_fisher)
 
         # Compute H^{-1} via Cholesky solve (matches R's chol2inv).
