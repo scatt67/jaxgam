@@ -17,9 +17,11 @@ class StreamFitState:
     """Final coefficient-space state for a fixed-smoothing streamed fit."""
 
     coefficients: jax.Array
+    log_lambda: jax.Array
     deviance: jax.Array
     penalized_deviance: jax.Array
     scale: jax.Array
+    score_scale: jax.Array
     saturated_loglik: jax.Array
     edf: jax.Array
     xtwx: jax.Array

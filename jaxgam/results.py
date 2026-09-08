@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -31,10 +31,12 @@ if TYPE_CHECKING:
 
     from jaxgam.data.source import RowSource
     from jaxgam.families.base import ExponentialFamily
-    from jaxgam.fitting.data import FittingData
+    from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.newton import NewtonResult
+    from jaxgam.fitting.state import StreamFitState
     from jaxgam.formula.design import ModelSetup, SmoothInfo
     from jaxgam.formula.predict_matrix import Data
+    from jaxgam.formula.prepare import PreparedModel
     from jaxgam.formula.terms import FormulaSpec
     from jaxgam.smooths.constraints import CoefficientMap
     from jaxgam.summary.summary import GAMSummary
@@ -156,8 +158,8 @@ class _FitDiagnostics:
     method: str
     lambda_strategy: str
     execution_path: str
-    execution_route: str
-    execution_fallback_reason: str | None
+    execution_route: str = field(default="dense", kw_only=True)
+    execution_fallback_reason: str | None = field(default=None, kw_only=True)
     n: int
 
 
@@ -264,8 +266,8 @@ class GAMPredictionResult:
     method: str
     lambda_strategy: str
     execution_path: str
-    execution_route: str
-    execution_fallback_reason: str | None
+    execution_route: str = field(default="dense", kw_only=True)
+    execution_fallback_reason: str | None = field(default=None, kw_only=True)
     n: int
     _batch_rows: int = 65_536
 
@@ -365,11 +367,10 @@ class GAMPredictionResult:
     def _from_stream_fit(
         cls,
         *,
-        stream_state,
-        prepared,
-        metadata,
+        stream_state: StreamFitState,
+        prepared: PreparedModel,
+        metadata: PreparedFittingMetadata,
         family: ExponentialFamily,
-        log_lambda,
         formula: str,
         method: str,
         control: FitControl,
@@ -382,13 +383,13 @@ class GAMPredictionResult:
         scale = float(to_numpy(stream_state.scale))
         phi = 1.0 if family.scale_known else scale
         score = reml_criterion(
-            log_lambda,
+            stream_state.log_lambda,
             stream_state.xtwx,
             stream_state.coefficients,
             stream_state.deviance,
             stream_state.saturated_loglik,
             metadata.penalty_structure,
-            stream_state.scale,
+            stream_state.score_scale,
             metadata.total_penalty_null_dim,
             metadata.singleton_sp_indices,
             metadata.singleton_ranks,
@@ -441,7 +442,7 @@ class GAMPredictionResult:
             score=float(to_numpy(score)),
             scale=scale,
             theta=None,
-            smoothing_params=np.exp(to_numpy(log_lambda)),
+            smoothing_params=np.exp(to_numpy(stream_state.log_lambda)),
             converged=stream_state.converged,
             n_iter=stream_state.n_iter,
             convergence_info=(

@@ -335,6 +335,46 @@ def test_stream_fit_state_contains_no_observation_aligned_fields() -> None:
     assert not {"X", "y", "eta", "mu", "working_weights", "offset"} & names
 
 
+@pytest.mark.parametrize(
+    ("formula", "log_lambda"),
+    [
+        ('y ~ s(x, bs="cr", k=6)', np.array([np.log(0.2)])),
+        ("y ~ x", np.array([])),
+    ],
+)
+def test_gaussian_score_scale_uses_positive_weight_count_and_no_penalty_case(
+    formula: str, log_lambda: np.ndarray
+) -> None:
+    """Fletcher reporting scale is distinct from fixed-sp REML score scale."""
+    data, family = _fixture("gaussian", n=49)
+    weights = data.w.to_numpy().copy()
+    weights[::9] = 0.0
+    source = DataFrameRowSource(data, response="y", weights=weights)
+    prepared = prepare_model(parse_formula(formula), source, family=family)
+    result = fit_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        log_lambda,
+        control=StreamPIRLSControl(batch_rows=7),
+    )
+    assert prepared.fitting is not None
+    if len(log_lambda) == 0:
+        expected_score_scale = result.scale
+    else:
+        score_denominator = np.count_nonzero(weights > 0.0) - (
+            prepared.n_coef - prepared.fitting.total_penalty_rank
+        )
+        expected_score_scale = result.penalized_deviance / score_denominator
+    np.testing.assert_allclose(
+        np.asarray(result.score_scale),
+        np.asarray(expected_score_scale),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    if len(log_lambda):
+        assert not np.isclose(float(result.scale), float(result.score_scale))
+
+
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
 @pytest.mark.parametrize("family_name", ["gaussian", "poisson", "binomial"])
 def test_streamed_fixed_sp_matches_pinned_r_with_basis_held_fixed(
@@ -398,8 +438,14 @@ def test_strong_smoothing_scale_and_saturated_likelihood_match_dense_and_r() -> 
     )
     dense_edf = estimate_edf(dense_result.XtWX_fisher, dense_result.L_fisher)
     dense_scale = dense_result.deviance / (len(data) - dense_edf)
+    dense_score_scale = (
+        dense_result.deviance
+        + dense_result.coefficients
+        @ dense.S_lambda(jnp.log(jnp.asarray(r_result["smoothing_params"])))
+        @ dense_result.coefficients
+    ) / (np.count_nonzero(np.asarray(dense.wt) > 0.0) - dense.total_penalty_null_dim)
     dense_saturated = family.saturated_loglik(
-        dense.y, dense.wt, dense_scale, max_y=dense.max_y
+        dense.y, dense.wt, dense_score_scale, max_y=dense.max_y
     )
     assert float(r_result["edf_total"]) < dense.n_coef - 1
     np.testing.assert_allclose(
@@ -419,6 +465,12 @@ def test_strong_smoothing_scale_and_saturated_likelihood_match_dense_and_r() -> 
         r_result["scale"],
         rtol=MODERATE.rtol,
         atol=MODERATE.atol,
+    )
+    np.testing.assert_allclose(
+        np.asarray(result.score_scale),
+        dense_score_scale,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
     )
     np.testing.assert_allclose(
         np.asarray(result.saturated_loglik),
