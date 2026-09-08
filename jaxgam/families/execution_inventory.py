@@ -107,6 +107,13 @@ _DENSE_EVIDENCE: dict[tuple[str, str, str], tuple[EvidenceScope, tuple[str, ...]
         "free_reml_deviance_theta_loose",
         ("tests/test_fitting/test_nb_fitting.py::TestNBNonCanonicalLink",),
     ),
+    ("nb", "log", "fixed_theta"): (
+        "dense_invariants_only",
+        (
+            "tests/test_fitting/test_nb_fitting.py::TestNBFixedTheta",
+            "tests/test_fitting/test_nb_fitting.py::TestNBHardGateInvariants",
+        ),
+    ),
 }
 
 
@@ -119,9 +126,7 @@ def _entry(
     evidence_scope, evidence = _DENSE_EVIDENCE.get(
         key,
         (
-            "dense_invariants_only"
-            if family == "nb" and parameter_mode == "fixed_theta"
-            else "unverified",
+            "unverified",
             ("constructor accepts every registered Link via ExponentialFamily",),
         ),
     )
