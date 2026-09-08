@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam.execution import efs as execution_efs
 from jaxgam.execution.efs import (
     EFSControl,
     _fit_state,
@@ -14,7 +15,7 @@ from jaxgam.execution.efs import (
     efs_initial_log_lambda,
 )
 from jaxgam.families.standard import Binomial, Gaussian, Poisson
-from jaxgam.fitting.efs import prepare_efs_statistics
+from jaxgam.fitting.efs import EFSRawUpdate, prepare_efs_statistics
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.fixtures.efs_weighted_additive_cr_repro import FORMULA, make_data
@@ -94,6 +95,83 @@ def test_dense_efs_rejects_out_of_scope_family_before_any_newton_dispatch() -> N
 def test_efs_control_rejects_invalid_values(kwargs) -> None:
     with pytest.raises(ValueError, match="EFS"):
         EFSControl(**kwargs)
+
+
+def test_production_controller_extension_and_contraction_keep_old_warm_start(
+    monkeypatch,
+) -> None:
+    """The actual host controller, not the EFS1 oracle, owns trial state."""
+    data = _oracle_data("poisson")
+    _, fd = _build("y ~ s(x, bs='cr', k=6)", data, Poisson())
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+    )
+    scores = iter([10.0, 9.0, 8.0, 11.0, 10.5])
+    starts: list[np.ndarray] = []
+
+    def scripted(_fd, _plan, rho, beta, _control):
+        starts.append(np.asarray(beta))
+        return execution_efs.EFSFitState(
+            rho,
+            base.pirls_result,
+            jax.numpy.asarray(next(scores)),
+            base.edf,
+            base.statistics,
+            None,
+            True,
+            True,
+        )
+
+    def update(rho, statistics, phi, multiplier, cap):
+        del statistics, phi
+        ratio = jax.numpy.exp(jax.numpy.ones_like(rho) * 0.01)
+        trial = jax.numpy.minimum(rho + 0.01 * multiplier, cap)
+        return EFSRawUpdate(
+            jax.numpy.ones_like(rho), ratio, trial, jax.numpy.array(True)
+        )
+
+    monkeypatch.setattr(execution_efs, "_fit_state", scripted)
+    monkeypatch.setattr(execution_efs, "efs_raw_update", update)
+    result = execution_efs.dense_efs_known_scale(fd, control=EFSControl(outer_limit=2))
+    assert result.convergence_info == "iteration limit reached"
+    assert result.multiplier == 1.0
+    # Every candidate/extension/contraction starts from the accepted beta;
+    # no rejected trial can become a warm start.
+    assert all(np.array_equal(start, starts[1]) for start in starts[1:])
+
+
+def test_production_controller_preserves_failure_at_iteration_boundary(
+    monkeypatch,
+) -> None:
+    data = _oracle_data("poisson")
+    _, fd = _build("y ~ s(x, bs='cr', k=6)", data, Poisson())
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+    )
+
+    def invalid_trial(_fd, _plan, rho, _beta, _control):
+        return execution_efs.EFSFitState(
+            rho,
+            base.pirls_result,
+            base.score,
+            base.edf,
+            base.statistics,
+            None,
+            False,
+            False,
+        )
+
+    monkeypatch.setattr(execution_efs, "_fit_state", invalid_trial)
+    result = execution_efs.dense_efs_known_scale(fd, control=EFSControl(outer_limit=1))
+    assert result.convergence_info == "inner_failure"
 
 
 def test_existing_efs_statistics_kernel_compiles_and_executes() -> None:
