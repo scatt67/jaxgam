@@ -62,6 +62,8 @@ class FittingPreparation:
     unpenalized_rank_deficit: int
     family_name: str
     link_name: str
+    family_execution_static_config: tuple[object, ...] | None
+    family_parameter_snapshot: object | None
 
 
 def _make_transform(D: np.ndarray) -> object:
