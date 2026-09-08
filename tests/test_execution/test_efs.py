@@ -174,6 +174,61 @@ def test_production_controller_preserves_failure_at_iteration_boundary(
     assert result.convergence_info == "inner_failure"
 
 
+def test_production_controller_losing_extension_keeps_multiplier(monkeypatch) -> None:
+    data = _oracle_data("poisson")
+    _, fd = _build("y ~ s(x, bs='cr', k=6)", data, Poisson())
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+    )
+    scores = iter([10.0, 9.0, 9.1])
+
+    def scripted(_fd, _plan, rho, _beta, _control):
+        return execution_efs.EFSFitState(
+            rho,
+            base.pirls_result,
+            jax.numpy.asarray(next(scores)),
+            base.edf,
+            base.statistics,
+            None,
+            True,
+            True,
+        )
+
+    monkeypatch.setattr(execution_efs, "_fit_state", scripted)
+    result = execution_efs.dense_efs_known_scale(fd, control=EFSControl(outer_limit=1))
+    assert result.multiplier == 1.0
+    assert result.convergence_info == "iteration limit reached"
+
+
+def test_production_controller_reports_invalid_raw_update(monkeypatch) -> None:
+    data = _oracle_data("poisson")
+    _, fd = _build("y ~ s(x, bs='cr', k=6)", data, Poisson())
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+    )
+    monkeypatch.setattr(execution_efs, "_fit_state", lambda *_: base)
+    monkeypatch.setattr(
+        execution_efs,
+        "efs_raw_update",
+        lambda rho, *_: EFSRawUpdate(
+            jax.numpy.ones_like(rho),
+            jax.numpy.ones_like(rho),
+            rho,
+            jax.numpy.array(False),
+        ),
+    )
+    result = execution_efs.dense_efs_known_scale(fd, control=EFSControl(outer_limit=1))
+    assert result.convergence_info == "invalid_update"
+
+
 def test_existing_efs_statistics_kernel_compiles_and_executes() -> None:
     # This regression belongs near the execution adapter because every outer
     # proposal consumes its JIT statistics kernel.
