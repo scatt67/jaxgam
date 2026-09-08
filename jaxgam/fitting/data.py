@@ -17,6 +17,7 @@ from jaxgam.formula.fitting_prepare import (
     apply_transforms_to_design,
     initial_log_sp_from_diagonal,
     reparameterize_structure,
+    total_penalty_spaces,
 )
 from jaxgam.jax_utils import to_jax
 from jaxgam.penalties.structure import (
@@ -192,6 +193,8 @@ class FittingData:
         X: np.ndarray, structure: PenaltyStructure, weights: np.ndarray
     ) -> np.ndarray:
         """R ``initial.sp`` scaling, retaining its old global-padding cutoff."""
+        if structure.n_penalties == 0:
+            return np.zeros(0)
         ldxx = FittingData._weighted_crossproduct_diag(X, weights)
         return initial_log_sp_from_diagonal(ldxx, structure)
 
@@ -297,22 +300,8 @@ def _total_penalty_spaces(
 ) -> tuple[
     list[tuple[PenaltyBlock, np.ndarray]], list[tuple[PenaltyBlock, np.ndarray]]
 ]:
-    """Range/null spaces with the original global relative eigen cutoff."""
-    spectra: list[tuple[PenaltyBlock, np.ndarray, np.ndarray]] = []
-    largest = 0.0
-    for block in structure.blocks:
-        total = np.zeros((block.size, block.size))
-        for S in block.dense_penalties():
-            norm = np.linalg.norm(S, "fro")
-            if norm:
-                total += S / norm
-        eigs, vectors = np.linalg.eigh(total)
-        spectra.append((block, eigs, vectors))
-        largest = max(largest, float(np.max(eigs)) if len(eigs) else 0.0)
-    cutoff = largest * _EPS_TWO_THIRDS
-    nulls = [(block, vectors[:, eigs <= cutoff]) for block, eigs, vectors in spectra]
-    ranges = [(block, vectors[:, eigs > cutoff]) for block, eigs, vectors in spectra]
-    return nulls, ranges
+    """Compatibility wrapper for the shared CPU penalty-space routine."""
+    return total_penalty_spaces(structure)
 
 
 def _total_penalty_rank(structure: PenaltyStructure) -> int:
