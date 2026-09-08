@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -10,6 +11,7 @@ import numpy as np
 import numpy.typing as npt
 
 import jaxgam
+from jaxgam.data.source import RowSource
 from jaxgam.formula.predict_matrix import PredictSpec
 from jaxgam.inference._core import predict_core
 
@@ -102,3 +104,38 @@ class GAMPredictor:
     def predict_matrix(self, newdata: Data) -> npt.NDArray[np.floating]:
         """Build the constrained linear-predictor matrix for new data."""
         return self._predict_spec.build_predict_matrix(newdata)
+
+    def predict_iter(
+        self,
+        source: RowSource,
+        batch_rows: int,
+        *,
+        pred_type: str = "response",
+        se_fit: bool = False,
+    ) -> Iterator[npt.NDArray[Any] | tuple[npt.NDArray[Any], npt.NDArray[np.floating]]]:
+        """Yield bounded predictions for a replayable :class:`RowSource`.
+
+        Source offsets are applied positionally for every batch.  This adapter
+        deliberately delegates matrix construction and response/SE finishing
+        to the normal prediction core, preserving factor and link semantics.
+        """
+        if not isinstance(source, RowSource):
+            raise TypeError("predict_iter requires a replayable RowSource.")
+        source_has_offset = bool(getattr(source, "has_explicit_offset", True))
+        warned_missing_offset = False
+        for batch in source.scan(batch_rows):
+            if not np.all(batch.valid):
+                raise NotImplementedError(
+                    "predict_iter does not support padded batches."
+                )
+            offset = batch.offset
+            if not source_has_offset and not warned_missing_offset:
+                offset = None
+                warned_missing_offset = True
+            yield self._predict(
+                dict(batch.columns),
+                pred_type=pred_type,
+                se_fit=se_fit,
+                offset=offset,
+                warning_stacklevel=4,
+            )
