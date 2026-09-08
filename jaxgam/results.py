@@ -156,6 +156,8 @@ class _FitDiagnostics:
     method: str
     lambda_strategy: str
     execution_path: str
+    execution_route: str
+    execution_fallback_reason: str | None
     n: int
 
 
@@ -262,6 +264,8 @@ class GAMPredictionResult:
     method: str
     lambda_strategy: str
     execution_path: str
+    execution_route: str
+    execution_fallback_reason: str | None
     n: int
     _batch_rows: int = 65_536
 
@@ -500,6 +504,8 @@ class GAMResults(_FitDiagnostics):
         method: str,
         result_mode: Literal["full", "inference", "prediction"],
         control: FitControl | None = None,
+        execution_route: str = "dense",
+        execution_fallback_reason: str | None = None,
     ) -> GAMResults | GAMInferenceResult | GAMPredictionResult:
         """Construct the requested result materialization from raw fit output.
 
@@ -607,6 +613,8 @@ class GAMResults(_FitDiagnostics):
                 method=method,
                 lambda_strategy=lambda_strategy,
                 execution_path="jax",
+                execution_route=execution_route,
+                execution_fallback_reason=execution_fallback_reason,
                 n=setup.n_obs,
                 _batch_rows=control.batch_rows,
             )
@@ -669,6 +677,8 @@ class GAMResults(_FitDiagnostics):
             "method": method,
             "lambda_strategy": lambda_strategy,
             "execution_path": "jax",
+            "execution_route": execution_route,
+            "execution_fallback_reason": execution_fallback_reason,
             "n": setup.n_obs,
         }
 
