@@ -13,6 +13,11 @@ import numpy as np
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.initialization import initialize_beta_cpu
+from jaxgam.formula.fitting_prepare import (
+    apply_transforms_to_design,
+    initial_log_sp_from_diagonal,
+    reparameterize_structure,
+)
 from jaxgam.jax_utils import to_jax
 from jaxgam.penalties.structure import (
     DenseLocalPenalty,
@@ -31,8 +36,6 @@ if TYPE_CHECKING:
 
 _EPS_TWO_THIRDS = np.finfo(float).eps ** (2.0 / 3.0)
 _LOG_FLOOR = 1e-30
-_ACTIVITY_THRESH = np.finfo(float).eps ** 0.8
-_MAX_SP_ADJUST_ITERS = 200
 
 # Keep initial-sp reductions bounded without changing its dense result.
 _INITIAL_SP_BATCH_ROWS = 8192
@@ -111,8 +114,8 @@ class FittingData:
             raise ValueError(f"Expected 2-D model matrix X, got ndim={setup.X.ndim}")
         structure = setup.penalties or PenaltyStructure(setup.X.shape[1], ())
         log_sp_init = cls._initial_sp(setup.X, structure, setup.weights)
-        transformed = _reparameterize_structure(structure)
-        X_np = _apply_transforms_to_design(setup.X, transformed)
+        transformed = reparameterize_structure(structure)
+        X_np = apply_transforms_to_design(setup.X, transformed)
         beta_init = to_jax(
             initialize_beta_cpu(X_np, setup.y, setup.weights, family, setup.offset),
             device=device,
@@ -189,45 +192,8 @@ class FittingData:
         X: np.ndarray, structure: PenaltyStructure, weights: np.ndarray
     ) -> np.ndarray:
         """R ``initial.sp`` scaling, retaining its old global-padding cutoff."""
-        if structure.n_penalties == 0:
-            return np.zeros(0)
         ldxx = FittingData._weighted_crossproduct_diag(X, weights)
-        def_sp = np.zeros(structure.n_penalties)
-        ldss = np.zeros_like(ldxx)
-        pen = np.zeros(len(ldxx), dtype=bool)
-        for block in structure.blocks:
-            for sp, S in zip(block.sp_indices, block.dense_penalties(), strict=True):
-                if S.size == 0:
-                    continue
-                maS = np.max(np.abs(S))
-                if maS == 0:
-                    continue
-                active = (
-                    (np.sum(np.abs(S), axis=1) / X.shape[1] > _ACTIVITY_THRESH * maS)
-                    & (np.sum(np.abs(S), axis=0) / X.shape[1] > _ACTIVITY_THRESH * maS)
-                    & (np.abs(np.diag(S)) > _ACTIVITY_THRESH * maS)
-                )
-                xx, ss = ldxx[block.start : block.stop][active], np.diag(S)[active]
-                if len(xx) == 0 or np.mean(xx) <= 0 or np.mean(ss) <= 0:
-                    continue
-                def_sp[sp] = np.mean(xx) / np.mean(ss)
-                pen[block.start : block.stop] |= active
-                ldss[block.start : block.stop] += def_sp[sp] * np.diag(S)
-        index = (ldss > 0) & pen & (ldxx > 0)
-        if not np.any(index):
-            return np.zeros(structure.n_penalties)
-        ldxx_s, ldss_s = ldxx[index].copy(), ldss[index].copy()
-        for _ in range(_MAX_SP_ADJUST_ITERS):
-            if np.mean(ldxx_s / (ldxx_s + ldss_s)) <= 0.4:
-                break
-            def_sp *= 10
-            ldss_s *= 10
-        for _ in range(_MAX_SP_ADJUST_ITERS):
-            if np.mean(ldxx_s / (ldxx_s + ldss_s)) >= 0.4:
-                break
-            def_sp /= 10
-            ldss_s /= 10
-        return np.log(np.maximum(def_sp, np.finfo(float).tiny))
+        return initial_log_sp_from_diagonal(ldxx, structure)
 
     @staticmethod
     def _weighted_crossproduct_diag(X: np.ndarray, weights: np.ndarray) -> np.ndarray:
@@ -262,80 +228,6 @@ class FittingData:
                 ]
             )
         return design_null.shape[1] - int(np.linalg.matrix_rank(design_null))
-
-
-def _make_transform(D: np.ndarray) -> object:
-    diagonal = np.diag(D)
-    if np.array_equal(D, np.eye(len(D))):
-        return IdentityTransform(len(D))
-    if np.array_equal(D, np.diag(diagonal)):
-        return DiagonalTransform(diagonal)
-    return DenseTransform(D)
-
-
-def _make_penalty(S: np.ndarray) -> object:
-    diagonal = np.diag(S)
-    if np.array_equal(S, np.diag(diagonal)):
-        if len(diagonal) and np.all(diagonal == diagonal[0]):
-            return IdentityPenalty(len(diagonal), float(diagonal[0]))
-        return DiagonalPenalty(diagonal)
-    return DenseLocalPenalty(0.5 * (S + S.T))
-
-
-def _reparameterize_structure(structure: PenaltyStructure) -> PenaltyStructure:
-    """Local port of the Sl.setup singleton, disjoint, and coupled branches."""
-    result: list[PenaltyBlock] = []
-    for block in structure.blocks:
-        penalties = block.dense_penalties()
-        k = block.size
-        if k == 0:
-            result.append(block)
-            continue
-        if len(penalties) == 1:
-            eigs, U = np.linalg.eigh(penalties[0])
-            active = eigs > max(float(np.max(eigs)), 0.0) * _EPS_TWO_THIRDS
-            scale = np.ones(k)
-            scale[active] = 1.0 / np.sqrt(eigs[active])
-            D = U * scale
-        elif _penalties_non_overlapping(list(penalties)):
-            D = np.eye(k)
-            for S in penalties:
-                rows = np.flatnonzero(np.sum(np.abs(S), axis=1) > 0)
-                if not len(rows):
-                    continue
-                first, last = int(rows[0]), int(rows[-1]) + 1
-                eigs, U = np.linalg.eigh(S[first:last, first:last])
-                active = eigs > max(float(np.max(eigs)), 0.0) * _EPS_TWO_THIRDS
-                scale = np.ones(last - first)
-                scale[active] = 1.0 / np.sqrt(eigs[active])
-                D[first:last, first:last] = U * scale
-        else:
-            # Coupled tensor penalties must have one shared rotation.
-            D = np.linalg.eigh(np.add.reduce(penalties))[1]
-        local = tuple(D.T @ S @ D for S in penalties)
-        result.append(
-            PenaltyBlock(
-                block.start,
-                block.stop,
-                block.sp_indices,
-                tuple(_make_penalty(S) for S in local),
-                _make_transform(D),
-                block.ranks,
-            )
-        )
-    return PenaltyStructure(structure.n_coef, tuple(result))
-
-
-def _apply_transforms_to_design(
-    X: np.ndarray, structure: PenaltyStructure
-) -> np.ndarray:
-    result = X.copy()
-    for block in structure.blocks:
-        if not isinstance(block.transform, IdentityTransform):
-            result[:, block.start : block.stop] = (
-                result[:, block.start : block.stop] @ block.transform.dense()
-            )
-    return result
 
 
 def _to_jax_penalty(

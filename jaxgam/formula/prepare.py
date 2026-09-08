@@ -7,10 +7,12 @@ global reductions and never routes through ``ModelSetup.build``.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -19,6 +21,13 @@ from scipy import linalg
 from jaxgam.data.source import RowBatch, RowSource
 from jaxgam.formula import predict_matrix
 from jaxgam.formula.design import ModelSetup, SmoothInfo
+from jaxgam.formula.fitting_prepare import (
+    FittingPreparation,
+    ResponseReduction,
+    apply_transforms_to_design,
+    initial_log_sp_from_diagonal,
+    reparameterize_structure,
+)
 from jaxgam.formula.terms import FormulaSpec
 from jaxgam.penalties.structure import PenaltyStructure, make_penalty_structure
 from jaxgam.smooths.constraints import CoefficientMap, TermBlock
@@ -33,8 +42,10 @@ class PreparedModel:
     predict_spec: predict_matrix.PredictSpec
     penalties: PenaltyStructure | None
     source_fingerprint: str
+    basis_fingerprint: str
     n_obs: int
     response: str
+    fitting: FittingPreparation | None = None
 
     @property
     def n_coef(self) -> int:
@@ -45,6 +56,14 @@ class PreparedModel:
         if not batch.columns and self.predict_spec.has_intercept:
             return np.ones((len(batch.row_positions), self.n_coef))
         return self.predict_spec.build_predict_matrix(dict(batch.columns))
+
+    def evaluate_fitting_batch(self, batch: RowBatch) -> npt.NDArray[np.floating]:
+        """Evaluate one batch in frozen local-D fitting coordinates."""
+        if self.fitting is None:
+            raise RuntimeError("Fitting preparation has not been completed.")
+        return apply_transforms_to_design(
+            self.evaluate_batch(batch), self.fitting.penalty_structure
+        )
 
 
 def _exact_cubic_knots(
@@ -135,12 +154,18 @@ def _batch_parametric(
     )
 
 
-def prepare_model(formula_spec: FormulaSpec, source: RowSource) -> PreparedModel:
+def prepare_model(
+    formula_spec: FormulaSpec, source: RowSource, *, family: Any | None = None
+) -> PreparedModel:
     """Prepare exact cubic/numeric metadata using dependency-ordered scans.
 
     Unsupported by-variables, tensors, factors, and rank-deficient parametric
     blocks fail before a training design is materialized.
     """
+    if not isinstance(source, RowSource):
+        raise TypeError("Prepared setup requires a restartable RowSource.")
+    if source.n_rows <= 0:
+        raise ValueError("Prepared setup requires at least one row.")
     start_fingerprint = source.fingerprint()
     if any(
         term.by is not None or term.smooth_type != "s"
@@ -149,7 +174,17 @@ def prepare_model(formula_spec: FormulaSpec, source: RowSource) -> PreparedModel
         raise NotImplementedError(
             "Prepared setup does not yet support by-variable or tensor smooths."
         )
-    first = next(source.scan(1))
+    try:
+        first = next(source.scan(1))
+        replay_first = next(source.scan(1))
+    except StopIteration as error:
+        raise ValueError("RowSource advertised rows but yielded no batches.") from error
+    if not np.array_equal(first.row_positions, replay_first.row_positions):
+        raise TypeError(
+            "Prepared setup requires replayable scans with stable row positions."
+        )
+    if source.fingerprint() != start_fingerprint:
+        raise RuntimeError("RowSource changed during replayability preflight.")
     if first.y is None:
         raise ValueError("Prepared fitting requires a response in the RowSource.")
     required = [term.name for term in formula_spec.parametric_terms]
@@ -246,6 +281,17 @@ def prepare_model(formula_spec: FormulaSpec, source: RowSource) -> PreparedModel
                 Z,
             )
         )
+        prediction_smooth = smooth.copy_for_prediction()
+        term_blocks[-1] = TermBlock(
+            label,
+            offset,
+            smooth.n_coefs - 1,
+            smooth.n_coefs,
+            "smooth",
+            prediction_smooth,
+            (penalty_offset,),
+            Z,
+        )
         smooth_info.append(
             SmoothInfo(
                 label,
@@ -286,10 +332,160 @@ def prepare_model(formula_spec: FormulaSpec, source: RowSource) -> PreparedModel
         dropped_param_names=(),
         total_coefs=offset,
     )
-    return PreparedModel(
+    basis_fingerprint = hashlib.sha256(
+        repr(
+            (
+                formula_spec.response,
+                formula_spec.has_intercept,
+                tuple(
+                    (
+                        term.variables,
+                        term.bs,
+                        term.k,
+                        term.by,
+                        term.smooth_type,
+                        term.extra_args,
+                    )
+                    for term in formula_spec.smooth_terms
+                ),
+                tuple(term.name for term in formula_spec.parametric_terms),
+                tuple(
+                    np.asarray(term.smooth._knots).tobytes()
+                    for term in term_blocks
+                    if term.smooth is not None
+                ),
+            )
+        ).encode()
+    ).hexdigest()
+    prepared = PreparedModel(
         predict_spec,
         penalties,
         source.fingerprint(),
+        basis_fingerprint,
         source.n_rows,
         formula_spec.response,
     )
+    return prepare_fitting(prepared, source, family) if family is not None else prepared
+
+
+def prepare_fitting(
+    prepared: PreparedModel, source: RowSource, family: Any
+) -> PreparedModel:
+    """Freeze CPU fitting metadata by bounded replayable reductions.
+
+    ``family`` is intentionally duck typed: family implementations may be
+    Phase-2-aware, but this Phase-1 module never imports JAX.  It only uses
+    their established NumPy-compatible initialization/link/domain methods.
+    """
+    if source.fingerprint() != prepared.source_fingerprint:
+        raise RuntimeError("RowSource changed after preparation; prepare again.")
+    public = prepared.penalties or PenaltyStructure(prepared.n_coef, ())
+    transformed = reparameterize_structure(public)
+    gram = np.zeros((prepared.n_coef, prepared.n_coef))
+    rhs = np.zeros(prepared.n_coef)
+    qr_R = np.empty((0, prepared.n_coef))
+    qr_target = np.empty(0)
+    ldxx = np.zeros(prepared.n_coef)
+    n_obs = 0
+    total_weight = 0.0
+    weighted_sum = 0.0
+    response_min = np.inf
+    response_max = -np.inf
+    offset_min = np.inf
+    offset_max = -np.inf
+    for batch in source.scan(65_536):
+        if batch.y is None:
+            raise ValueError("Prepared fitting requires a response in the RowSource.")
+        y = np.asarray(batch.y, dtype=float)
+        wt = np.asarray(batch.weight, dtype=float)
+        offset = np.asarray(batch.offset, dtype=float)
+        if not np.all(np.isfinite(y)):
+            raise ValueError("Response contains non-finite values (NaN or Inf).")
+        if not np.all(batch.valid):
+            raise NotImplementedError(
+                "Prepared setup does not yet support padded batches."
+            )
+        X_public = prepared.evaluate_batch(batch)
+        X = apply_transforms_to_design(X_public, transformed)
+        # Calling initialize is also the family-owned response-domain check.
+        mu = np.asarray(family.initialize(y, wt), dtype=float)
+        eta = np.asarray(family.link.link(mu), dtype=float)
+        if not np.all(np.isfinite(eta)):
+            raise ValueError(
+                "Family initialization produced non-finite linear predictors."
+            )
+        target = eta - offset
+        # initialize_beta_cpu is intentionally unweighted.  Keep only its
+        # p-by-p normal-equation reductions here; no n-row design is retained.
+        gram += X.T @ X
+        rhs += X.T @ target
+        qr_input = np.vstack((qr_R, X))
+        target_input = np.concatenate((qr_target, target))
+        Q, qr_R = linalg.qr(qr_input, mode="economic")
+        qr_target = Q.T @ target_input
+        ldxx += np.sum(X_public * X_public * wt[:, None], axis=0)
+        n_obs += len(y)
+        total_weight += float(np.sum(wt))
+        weighted_sum += float(np.sum(wt * y))
+        response_min = min(response_min, float(np.min(y)))
+        response_max = max(response_max, float(np.max(y)))
+        offset_min = min(offset_min, float(np.min(offset)))
+        offset_max = max(offset_max, float(np.max(offset)))
+    if n_obs != prepared.n_obs or total_weight <= 0:
+        raise RuntimeError("RowSource replay did not provide a valid stable row set.")
+    beta_init, _, _, _ = np.linalg.lstsq(qr_R, qr_target, rcond=None)
+    # Retain the dense initializer's valid-domain fallback without retaining X.
+    valid = True
+    for batch in source.scan(65_536):
+        if not np.all(batch.valid):
+            raise NotImplementedError(
+                "Prepared setup does not yet support padded batches."
+            )
+        eta = prepared.evaluate_batch(batch)
+        eta = apply_transforms_to_design(eta, transformed) @ beta_init + batch.offset
+        mu = np.asarray(family.link.inverse(eta), dtype=float)
+        if not (
+            np.all(np.asarray(family.valid_mu(mu)))
+            and np.all(np.asarray(family.valid_eta(eta)))
+        ):
+            valid = False
+            break
+    if not valid:
+        target = float(family.link.link(np.asarray(weighted_sum / total_weight)))
+        rhs_null = np.zeros(prepared.n_coef)
+        qr_R = np.empty((0, prepared.n_coef))
+        qr_target = np.empty(0)
+        for batch in source.scan(65_536):
+            if not np.all(batch.valid):
+                raise NotImplementedError(
+                    "Prepared setup does not yet support padded batches."
+                )
+            X = apply_transforms_to_design(prepared.evaluate_batch(batch), transformed)
+            target_batch = target - batch.offset
+            rhs_null += X.T @ target_batch
+            qr_input = np.vstack((qr_R, X))
+            target_input = np.concatenate((qr_target, target_batch))
+            Q, qr_R = linalg.qr(qr_input, mode="economic")
+            qr_target = Q.T @ target_input
+        beta_init, _, _, _ = np.linalg.lstsq(qr_R, qr_target, rcond=None)
+    fitting = FittingPreparation(
+        penalty_structure=transformed,
+        log_lambda_init=initial_log_sp_from_diagonal(ldxx, public),
+        beta_init=beta_init,
+        gram=gram,
+        rhs=rhs,
+        response=ResponseReduction(
+            n_obs=n_obs,
+            total_weight=total_weight,
+            response_min=response_min,
+            response_max=response_max,
+            weighted_sum=weighted_sum,
+            offset_min=offset_min,
+            offset_max=offset_max,
+        ),
+    )
+    if source.fingerprint() != prepared.source_fingerprint:
+        raise RuntimeError(
+            "RowSource changed during fitting preparation; prepare again."
+        )
+    return replace(prepared, fitting=fitting)

@@ -7,6 +7,8 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
+from jaxgam.families.standard import Gaussian
+from jaxgam.fitting.data import FittingData
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.design_provider import DenseDesign, StreamDesign
 from jaxgam.formula.parser import parse_formula
@@ -121,3 +123,61 @@ def test_exact_sqlite_knots_match_dense_unique_rank_interpolation() -> None:
     np.testing.assert_allclose(knots, expected, rtol=STRICT.rtol, atol=STRICT.atol)
     assert knots[0] == x.min()
     assert knots[-1] == x.max()
+
+
+def test_fitting_preparation_matches_dense_cpu_coordinate_setup() -> None:
+    data = _data()
+    weights = np.linspace(0.5, 2.0, len(data))
+    offset = np.linspace(-0.2, 0.3, len(data))
+    spec = parse_formula('y ~ z + s(x, bs="cr", k=6)')
+    family = Gaussian()
+    source = DataFrameRowSource(data, response="y", weights=weights, offset=offset)
+    prepared = prepare_model(spec, source, family=family)
+    dense = FittingData.from_setup(
+        ModelSetup.build(spec, data, weights=weights, offset=offset), family
+    )
+
+    assert prepared.fitting is not None
+    np.testing.assert_allclose(
+        prepared.fitting.log_lambda_init,
+        np.asarray(dense.log_lambda_init),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        prepared.fitting.beta_init,
+        np.asarray(dense.beta_init),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    reduction = prepared.fitting.response
+    assert reduction.n_obs == len(data)
+    assert reduction.total_weight == pytest.approx(float(weights.sum()))
+    assert reduction.weighted_mean == pytest.approx(
+        np.average(data["y"], weights=weights)
+    )
+    X_fit = prepared.evaluate_fitting_batch(next(source.scan(len(data))))
+    np.testing.assert_allclose(
+        X_fit,
+        np.asarray(dense.X),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_prepared_basis_fingerprint_changes_with_basis_configuration() -> None:
+    source = DataFrameRowSource(_data(), response="y")
+    a = prepare_model(parse_formula('y ~ s(x, bs="cr", k=5)'), source)
+    b = prepare_model(parse_formula('y ~ s(x, bs="cr", k=6)'), source)
+    assert a.basis_fingerprint != b.basis_fingerprint
+
+
+def test_prepared_prediction_smooth_drops_penalty_cache() -> None:
+    source = DataFrameRowSource(_data(), response="y")
+    prepared = prepare_model(parse_formula('y ~ s(x, bs="cr", k=6)'), source)
+    smooth = next(
+        term.smooth
+        for term in prepared.predict_spec.coef_map.terms
+        if term.term_type == "smooth"
+    )
+    assert smooth._S is None
