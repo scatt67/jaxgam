@@ -99,6 +99,22 @@ class FamilyExecutionCapabilities:
     saturated_loglikelihood: bool
     dynamic_theta: bool
     dynamic_phi: bool
+    coefficient_system: Literal["fisher", "observed"] = "fisher"
+    fisher_equals_observed_for_score: bool = False
+
+
+@dataclass(frozen=True)
+class StreamReductionPolicy:
+    """Family-owned policy for the bounded streamed fixed-sp reductions.
+
+    A family being constructible, or merely having an unknown scale, is not
+    enough to select a reported-scale or REML-score formula.  These names are
+    intentionally narrow: a stream controller must reject ``unsupported``
+    instead of borrowing Gaussian's formula for Gamma or a future family.
+    """
+
+    reported_scale: Literal["known_one", "gaussian_fisher_edf_deviance", "unsupported"]
+    score_scale: Literal["reported_scale", "gaussian_fixed_sp", "unsupported"]
 
 
 @dataclass(frozen=True)
@@ -233,7 +249,20 @@ class ExponentialFamily(ABC):
             saturated_loglikelihood=True,
             dynamic_theta=False,
             dynamic_phi=not self.scale_known,
+            fisher_equals_observed_for_score=self.is_canonical,
         )
+
+    def stream_reduction_policy(self) -> StreamReductionPolicy:
+        """Return this family's explicitly supported streamed scale policy.
+
+        Known-scale families use the mathematical constant one.  Unknown
+        scale is deliberately unsupported by the base class: Fletcher and
+        observed-information families require family-specific policy, not an
+        inference from ``scale_known``.
+        """
+        if self.scale_known:
+            return StreamReductionPolicy("known_one", "reported_scale")
+        return StreamReductionPolicy("unsupported", "unsupported")
 
     def execution_padding(self) -> FamilyPadding:
         """Return a finite response/eta pair for masked padded rows.
@@ -295,6 +324,7 @@ class ExponentialFamily(ABC):
             attributes,
             self.execution_capabilities(),
             self.execution_padding(),
+            self.stream_reduction_policy(),
         )
 
     def execution_dynamic_config_attributes(self) -> frozenset[str]:
@@ -739,9 +769,10 @@ class ExponentialFamily(ABC):
             raise ValueError("Family execution summaries have incompatible shapes.")
         if len(left) < 1:
             raise ValueError("Family execution summary must include input validity.")
+        xp = array_module(left[-1])
         return (
             *tuple(a + b for a, b in zip(left[:-1], right[:-1], strict=True)),
-            np.logical_and(left[-1], right[-1]),
+            xp.logical_and(left[-1], right[-1]),
         )
 
     def finalize_execution_summary(

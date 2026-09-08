@@ -60,7 +60,7 @@ class _UnregisteredQuadraticFamily(ExponentialFamily):
     family_name = "unregistered_quadratic"
     response_support = REAL
     scale_known = True
-    canonical_link_cls = None
+    canonical_link_cls = _ScaledIdentityLink
 
     def __init__(self, scale: float = 1.0) -> None:
         super().__init__(_ScaledIdentityLink(scale))
@@ -321,7 +321,20 @@ def test_noncanonical_gamma_observed_hessian_matches_nearby_finite_difference() 
 
 def test_unregistered_family_executes_and_mutation_invalidates_lineage() -> None:
     family = _UnregisteredQuadraticFamily(scale=1.0)
-    prepared = SimpleNamespace(source_fingerprint="source", basis_fingerprint="basis")
+
+    def prepared_for(current_family):
+        return SimpleNamespace(
+            source_fingerprint="source",
+            basis_fingerprint="basis",
+            fitting=SimpleNamespace(
+                family_name=current_family.family_name,
+                link_name=type(current_family.link).__qualname__,
+                family_execution_static_config=current_family.execution_static_config(),
+                family_parameter_snapshot=current_family.execution_parameter_snapshot(),
+            ),
+        )
+
+    prepared = prepared_for(family)
     lineage = FamilyExecutionLineage.from_prepared(prepared, family)
     context = lineage.context
     parameters = FamilyExecutionParameters.from_snapshot(lineage.parameters)
@@ -339,7 +352,7 @@ def test_unregistered_family_executes_and_mutation_invalidates_lineage() -> None
     family.link.scale = 2.0
     with pytest.raises(RuntimeError, match="static configuration changed"):
         lineage.validate(prepared, family)
-    refreshed = FamilyExecutionLineage.from_prepared(prepared, family)
+    refreshed = FamilyExecutionLineage.from_prepared(prepared_for(family), family)
     after = batch_working_quantities(*args, refreshed.context).deviance
     assert float(before) != float(after)
 

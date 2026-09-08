@@ -15,6 +15,7 @@ from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.standard import Binomial, Poisson
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import PreparedFittingMetadata
+from jaxgam.fitting.family_execution import FamilyExecutionLineage
 from jaxgam.fitting.state import StreamFitState
 from jaxgam.fitting.stream_reml import (
     batch_is_adjoint_interior,
@@ -114,7 +115,7 @@ def _preflight(
     rho: np.ndarray | jax.Array,
     warm_start: StreamREMLTrial | None,
     device: jax.Device | None,
-) -> tuple[jax.Array, PreparedFittingMetadata]:
+) -> tuple[jax.Array, PreparedFittingMetadata, FamilyExecutionLineage]:
     """Reject derivative regimes not covered by the initial exact proof."""
     if not isinstance(family, (Poisson, Binomial)) or not family.is_canonical:
         raise NotImplementedError(
@@ -143,6 +144,7 @@ def _preflight(
         )
     if stream.source.fingerprint() != stream.prepared.source_fingerprint:
         raise RuntimeError("RowSource changed after preparation; prepare again.")
+    lineage = FamilyExecutionLineage.from_prepared(stream.prepared, family)
     rho_array = jnp.asarray(rho, dtype=jnp.float64)
     if rho_array.shape != (metadata.n_penalties,):
         raise ValueError(
@@ -160,19 +162,23 @@ def _preflight(
         or warm_start.link_name != type(family.link).__qualname__
     ):
         raise ValueError("Warm-start trial is not a finite compatible stream state.")
-    return rho_array, metadata
+    return rho_array, metadata, lineage
 
 
 def _check_interior(
     stream: StreamDesign,
     beta: jax.Array,
     family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
     batch_rows: int,
     device: jax.Device | None,
 ) -> tuple[int, int]:
     """Replay rows to reject active working-weight clipping before a VJP."""
     batches = 0
-    for X, _y, weight, offset, _valid in _fitting_batches(stream, batch_rows):
+    for X, _y, weight, offset, _valid in _fitting_batches(
+        stream, family, lineage, batch_rows
+    ):
+        lineage.validate(stream.prepared, family)
         interior = batch_is_adjoint_interior(
             beta,
             jax.device_put(X, device),
@@ -210,7 +216,7 @@ def evaluate_stream_reml(
         if control is None
         else replace(control, tol=min(control.tol, 1e-9))
     )
-    rho_array, metadata = _preflight(stream, family, rho, warm_start, device)
+    rho_array, metadata, lineage = _preflight(stream, family, rho, warm_start, device)
     rho_device = jax.device_put(rho_array, device)
     beta_init = None if warm_start is None else warm_start.fit_state.coefficients
     state = fit_streamed_pirls(
@@ -237,7 +243,7 @@ def evaluate_stream_reml(
         )
 
     interior_scans, interior_batches = _check_interior(
-        stream, state.coefficients, family, control.batch_rows, device
+        stream, state.coefficients, family, lineage, control.batch_rows, device
     )
     score, (rho_bar, xtwx_bar, beta_bar, deviance_bar) = reml_score_cotangents(
         rho_device,
@@ -263,7 +269,10 @@ def evaluate_stream_reml(
             "Streamed REML core score or cotangents are non-finite."
         )
     vjp_batches = 0
-    for X, y, weight, offset, _valid in _fitting_batches(stream, control.batch_rows):
+    for X, y, weight, offset, _valid in _fitting_batches(
+        stream, family, lineage, control.batch_rows
+    ):
+        lineage.validate(stream.prepared, family)
         beta_bar = beta_bar + batch_statistics_beta_vjp(
             state.coefficients,
             jax.device_put(X, device),
@@ -299,6 +308,9 @@ def evaluate_stream_reml(
         raise FloatingPointError(
             "Streamed REML adjoint produced a non-finite score, cotangent, or solve."
         )
+    lineage.validate(stream.prepared, family)
+    if stream.source.fingerprint() != lineage.source_fingerprint:
+        raise RuntimeError("RowSource changed during streamed REML evaluation.")
     return StreamREMLTrial(
         rho=rho_device,
         score=score,

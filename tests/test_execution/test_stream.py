@@ -12,9 +12,14 @@ import pytest
 from jaxgam.data.source import DataFrameRowSource, RowBatch
 from jaxgam.execution import stream as stream_execution
 from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
-from jaxgam.families.standard import Binomial, Gaussian, Poisson
+from jaxgam.families.base import REAL, ExponentialFamily
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData, _to_jax_structure
+from jaxgam.fitting.family_execution import (
+    FamilyExecutionContext,
+    FamilyExecutionParameters,
+)
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import estimate_edf
 from jaxgam.fitting.state import StreamFitState
@@ -26,6 +31,8 @@ from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
+from jaxgam.jax_utils import array_module
+from jaxgam.links.links import IdentityLink, Link
 from tests.helpers import r_available
 from tests.tolerances import MODERATE, STRICT
 
@@ -46,6 +53,71 @@ def _fixture(family_name: str, *, n: int = 83) -> tuple[pd.DataFrame, object]:
         y = rng.binomial(1, 1.0 / (1.0 + np.exp(-eta)))
         family = Binomial()
     return pd.DataFrame({"x": x, "y": y, "w": weights, "off": offset}), family
+
+
+class _UnregisteredGaussianLike(ExponentialFamily):
+    """A truthful Gaussian-like custom family, absent from all registries."""
+
+    family_name = "test_unregistered_gaussian_like"
+    scale_known = True
+    response_support = REAL
+    canonical_link_cls = IdentityLink
+
+    @property
+    def default_link(self) -> Link:
+        return IdentityLink()
+
+    def variance(self, mu):
+        return array_module(mu).ones_like(mu)
+
+    def dvar(self, mu):
+        return array_module(mu).zeros_like(mu)
+
+    def saturated_loglik(self, y, wt, scale, *, max_y: int = 0):  # noqa: ARG002
+        return jnp.sum(
+            jnp.where(wt > 0, -0.5 * jnp.log(2.0 * jnp.pi * scale / wt), 0.0)
+        )
+
+    def deviance_resids(self, y, mu, wt):
+        xp = array_module(y)
+        return xp.sign(y - mu) * xp.sqrt(wt * (y - mu) ** 2)
+
+    def deviance_contributions(self, y, mu, wt):
+        return wt * (y - mu) ** 2
+
+    def deviance_derivative_contributions(self, y, mu, wt):
+        return wt * (y - mu) ** 2
+
+    def aic(self, y, mu, wt, scale):  # noqa: ARG002
+        return float(np.sum(wt * (y - mu) ** 2))
+
+    def _initialize_impl(self, y, wt):  # noqa: ARG002
+        return y.copy()
+
+    def valid_mu(self, mu):
+        return array_module(mu).isfinite(mu)
+
+    def valid_eta(self, eta):
+        return array_module(eta).isfinite(eta)
+
+    def execution_summary_from_batch(self, y, wt, valid):
+        """Append a vector leaf to prove the host scanner is pytree-generic."""
+        base = super().execution_summary_from_batch(y, wt, valid)
+        return (*base, jnp.array([jnp.sum(jnp.where(valid, y, 0.0))]))
+
+    def merge_execution_summaries(self, left, right):
+        return (
+            left[0] + right[0],
+            left[1] + right[1],
+            left[2] + right[2],
+            jnp.logical_and(left[3], right[3]),
+            left[4] + right[4],
+        )
+
+    def finalize_execution_summary(self, summary):
+        result = super().finalize_execution_summary(summary[:4])
+        result["custom_response_sum"] = float(summary[4][0])
+        return result
 
 
 @pytest.mark.parametrize("family_name", ["gaussian", "poisson", "binomial"])
@@ -102,6 +174,10 @@ def test_streamed_fixed_sp_matches_dense_with_explicit_weights_and_offsets(
 
 def test_padded_nan_tail_is_sanitized_then_masked_after_weight_floor() -> None:
     family = Poisson()
+    context = FamilyExecutionContext.from_family(family)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
     X = jnp.array([[1.0, 0.0], [1.0, 1.0], [jnp.nan, jnp.nan]])
     y = jnp.array([2.0, 3.0, jnp.nan])
     weight = jnp.array([1.0, 0.0, jnp.nan])
@@ -115,7 +191,9 @@ def test_padded_nan_tail_is_sanitized_then_masked_after_weight_floor() -> None:
         offset,
         jnp.array([True, True, False]),
         beta,
+        parameters,
         family,
+        context,
     )
     reference = accumulate_working_statistics(
         empty_statistics(2),
@@ -125,7 +203,9 @@ def test_padded_nan_tail_is_sanitized_then_masked_after_weight_floor() -> None:
         offset[:2],
         jnp.array([True, True]),
         beta,
+        parameters,
         family,
+        context,
     )
     for got, expected in zip(padded, reference, strict=True):
         np.testing.assert_allclose(
@@ -196,9 +276,133 @@ def test_preflight_rejects_noncanonical_or_missing_fitting_preparation() -> None
 
     from jaxgam.links.links import LogLink
 
-    prepared = StreamDesign(prepare_model(spec, source, family=Gaussian()), source)
-    with pytest.raises(NotImplementedError, match="canonical"):
-        fit_streamed_pirls(prepared, Gaussian(link=LogLink()), np.array([0.0]))
+    noncanonical = Gaussian(link=LogLink())
+    prepared = StreamDesign(prepare_model(spec, source, family=noncanonical), source)
+    with pytest.raises(NotImplementedError, match="Fisher and observed"):
+        fit_streamed_pirls(prepared, noncanonical, np.array([0.0]))
+
+
+def test_preflight_rejects_unknown_scale_and_noncanonical_score_policies() -> None:
+    data, _ = _fixture("gaussian", n=25)
+    data = data.copy()
+    data["y"] = np.exp(data["y"])
+    source = DataFrameRowSource(data, response="y")
+    spec = parse_formula('y ~ s(x, bs="cr", k=5)')
+    gamma_stream = StreamDesign(prepare_model(spec, source, family=Gamma()), source)
+    with pytest.raises(NotImplementedError, match="reported-scale/score reduction"):
+        fit_streamed_pirls(gamma_stream, Gamma(), np.array([0.0]))
+
+    poisson_data, _ = _fixture("poisson", n=25)
+    poisson_source = DataFrameRowSource(poisson_data, response="y")
+    poisson = Poisson(link=IdentityLink())
+    poisson_stream = StreamDesign(
+        prepare_model(spec, poisson_source, family=poisson), poisson_source
+    )
+    with pytest.raises(NotImplementedError, match="Fisher and observed"):
+        fit_streamed_pirls(poisson_stream, poisson, np.array([0.0]))
+
+
+def test_preflight_rejects_family_link_mutated_after_preparation() -> None:
+    data, _ = _fixture("poisson", n=25)
+    source = DataFrameRowSource(data, response="y")
+    family = Poisson()
+    prepared = StreamDesign(
+        prepare_model(parse_formula('y ~ s(x, bs="cr", k=5)'), source, family=family),
+        source,
+    )
+    family.link = IdentityLink()
+    with pytest.raises(RuntimeError, match="static configuration changed"):
+        fit_streamed_pirls(prepared, family, np.array([0.0]))
+
+
+@pytest.mark.parametrize("mutation", ["source", "family", "basis"])
+def test_scanner_rejects_runtime_source_basis_and_family_mutation(
+    mutation: str,
+) -> None:
+    data, _ = _fixture("poisson", n=25)
+    base = DataFrameRowSource(data, response="y")
+    family = Poisson()
+    prepared = prepare_model(
+        parse_formula('y ~ s(x, bs="cr", k=5)'), base, family=family
+    )
+    stream: StreamDesign | None = None
+
+    class MutatingSource:
+        n_rows = base.n_rows
+
+        def __init__(self) -> None:
+            self.changed = False
+
+        def fingerprint(self) -> str:
+            if self.changed and mutation == "source":
+                return "changed-source"
+            return base.fingerprint()
+
+        def scan(self, batch_rows: int):
+            for index, batch in enumerate(base.scan(batch_rows)):
+                if index == 1:
+                    self.changed = True
+                    if mutation == "family":
+                        family.link = IdentityLink()
+                    elif mutation == "basis":
+                        assert stream is not None
+                        object.__setattr__(
+                            stream,
+                            "prepared",
+                            replace(prepared, basis_fingerprint="changed-basis"),
+                        )
+                yield batch
+
+    source = MutatingSource()
+    stream = StreamDesign(prepared, source)
+    with pytest.raises(RuntimeError, match="changed"):
+        fit_streamed_pirls(
+            stream,
+            family,
+            np.array([0.0]),
+            control=StreamPIRLSControl(batch_rows=5),
+        )
+
+
+def test_unregistered_gaussian_like_family_uses_the_stream_scanner() -> None:
+    data, _ = _fixture("gaussian", n=47)
+    source = DataFrameRowSource(
+        data, response="y", weights=data.w.to_numpy(), offset=data.off.to_numpy()
+    )
+    family = _UnregisteredGaussianLike()
+    spec = parse_formula('y ~ s(x, bs="cr", k=5)')
+    prepared = prepare_model(spec, source, family=family)
+    streamed = fit_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        np.array([0.1]),
+        control=StreamPIRLSControl(batch_rows=9),
+    )
+    dense = FittingData.from_setup(
+        ModelSetup.build(
+            spec,
+            data,
+            weights=data.w.to_numpy(),
+            offset=data.off.to_numpy(),
+        ),
+        family,
+    )
+    dense_result = pirls_loop(
+        dense.X,
+        dense.y,
+        dense.beta_init,
+        dense.S_lambda(jnp.array([0.1])),
+        family,
+        dense.wt,
+        dense.offset,
+    )
+    np.testing.assert_allclose(
+        np.asarray(streamed.coefficients),
+        np.asarray(dense_result.coefficients),
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    assert streamed.converged
 
 
 @pytest.mark.parametrize(

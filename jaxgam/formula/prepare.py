@@ -394,6 +394,19 @@ def prepare_fitting(
     """
     if source.fingerprint() != prepared.source_fingerprint:
         raise RuntimeError("RowSource changed after preparation; prepare again.")
+    static_config_method = getattr(family, "execution_static_config", None)
+    parameter_snapshot_method = getattr(family, "execution_parameter_snapshot", None)
+    if callable(static_config_method) != callable(parameter_snapshot_method):
+        raise TypeError(
+            "Family execution contract must provide both static configuration "
+            "and parameter snapshot hooks."
+        )
+    family_static_config = (
+        static_config_method() if callable(static_config_method) else None
+    )
+    family_parameter_snapshot = (
+        parameter_snapshot_method() if callable(parameter_snapshot_method) else None
+    )
     public = prepared.penalties or PenaltyStructure(prepared.n_coef, ())
     transformed = reparameterize_structure(public)
     gram = np.zeros((prepared.n_coef, prepared.n_coef))
@@ -539,9 +552,19 @@ def prepare_fitting(
         unpenalized_rank_deficit=unpenalized_rank_deficit,
         family_name=str(family.family_name),
         link_name=type(family.link).__qualname__,
+        family_execution_static_config=family_static_config,
+        family_parameter_snapshot=family_parameter_snapshot,
     )
     if source.fingerprint() != prepared.source_fingerprint:
         raise RuntimeError(
             "RowSource changed during fitting preparation; prepare again."
+        )
+    if callable(static_config_method) and (
+        static_config_method() != family_static_config
+        or parameter_snapshot_method() != family_parameter_snapshot
+    ):
+        raise RuntimeError(
+            "Family or link execution configuration changed during fitting "
+            "preparation; prepare again."
         )
     return replace(prepared, fitting=fitting)

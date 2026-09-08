@@ -148,6 +148,8 @@ class NegativeBinomial(ExtendedFamily):
             saturated_loglikelihood=True,
             dynamic_theta=self.n_theta > 0,
             dynamic_phi=False,
+            coefficient_system="observed",
+            fisher_equals_observed_for_score=False,
         )
 
     def execution_parameter_snapshot(self) -> FamilyParameterSnapshot:
