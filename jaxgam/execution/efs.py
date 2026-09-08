@@ -29,6 +29,26 @@ from jaxgam.fitting.reml import estimate_edf, reml_criterion
 from jaxgam.links.links import LogitLink, LogLink
 
 
+def efs_initial_log_lambda(setup, family) -> jax.Array:
+    """Prepare mgcv ``initial.spg`` regular-family start only for EFS.
+
+    Regular fitting never incurs this initialized-mean/working-weight work.
+    The shared initial-sp routine keeps its bounded original-coordinate
+    weighted-crossproduct reduction.
+    """
+    structure = setup.penalties
+    if structure is None or structure.n_penalties == 0:
+        return jnp.zeros((0,), dtype=jnp.float64)
+    mu = np.asarray(family.initialize(setup.y, setup.weights), dtype=np.float64)
+    eta = np.asarray(family.link.link(mu), dtype=np.float64)
+    mu_eta = np.asarray(family.link.mu_eta(eta), dtype=np.float64)
+    variance = np.asarray(family.variance(mu), dtype=np.float64)
+    working_weights = setup.weights * mu_eta**2 / variance
+    if not np.all(np.isfinite(working_weights)) or np.any(working_weights <= 0):
+        raise ValueError("EFS initial.spg working weights must be finite and positive")
+    return jnp.asarray(FittingData._initial_sp(setup.X, structure, working_weights))
+
+
 @dataclass(frozen=True)
 class EFSControl:
     """Pinned ``efsudr`` controls for the known-scale dense path."""
@@ -41,15 +61,41 @@ class EFSControl:
     history_limit: int = 200
 
     def __post_init__(self) -> None:
-        if self.outer_limit < 1 or self.pirls_max_iter < 1 or self.history_limit < 1:
-            raise ValueError("EFS iteration and history limits must be positive")
+        for name, value in (
+            ("outer_limit", self.outer_limit),
+            ("pirls_max_iter", self.pirls_max_iter),
+            ("history_limit", self.history_limit),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"EFS {name} must be a positive integer")
         if not np.isfinite(self.log_lambda_max):
             raise ValueError("EFS log_lambda_max must be finite")
-        if self.score_tolerance < 0 or self.pirls_tolerance <= 0:
-            raise ValueError("EFS tolerances must be positive")
+        if (
+            not np.isfinite(self.score_tolerance)
+            or not np.isfinite(self.pirls_tolerance)
+            or self.score_tolerance < 0
+            or self.pirls_tolerance <= 0
+        ):
+            raise ValueError("EFS tolerances must be finite and positive")
 
 
 DEFAULT_EFS_CONTROL = EFSControl()
+
+# Module-level compiled kernels deliberately avoid constructing a fresh closure
+# for every accepted/trial refit.  The statistics plan is a dynamic pytree;
+# only family/range metadata keys the scalar-score executable.
+_jit_efs_statistics = jax.jit(efs_statistics)
+_jit_reml_score = jax.jit(
+    reml_criterion,
+    static_argnames=(
+        "Mp",
+        "rank_deficit",
+        "singleton_sp_indices",
+        "singleton_ranks",
+        "multi_block_sp_indices",
+        "multi_block_ranks",
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -113,7 +159,7 @@ def _known_scale_family_supported(fd: FittingData) -> bool:
 def _scalar_score(fd: FittingData, rho: jax.Array, pr: PIRLSResult) -> jax.Array:
     """Evaluate only the scalar REML criterion; no score derivatives."""
     ls_sat = fd.family.saturated_loglik(fd.y, fd.wt, jnp.array(1.0), max_y=fd.max_y)
-    return reml_criterion(
+    return _jit_reml_score(
         rho,
         pr.XtWX,
         pr.coefficients,
@@ -151,7 +197,7 @@ def _fit_state(
         max_iter=control.pirls_max_iter,
         tol=control.pirls_tolerance,
     )
-    statistics = efs_statistics(plan, pr.coefficients, pr.L_fisher, rho)
+    statistics = _jit_efs_statistics(plan, pr.coefficients, pr.L_fisher, rho)
     score = _scalar_score(fd, rho, pr)
     edf = estimate_edf(pr.XtWX_fisher, pr.L_fisher)
     finite = bool(
@@ -188,11 +234,11 @@ def dense_efs_known_scale(
             "EFS known-scale path requires an identifiable penalized system"
         )
     plan = prepare_efs_statistics(fitting_data)
-    rho0 = initial_log_lambda
-    if rho0 is None:
-        rho0 = fitting_data.efs_log_lambda_init
-    if rho0 is None:  # Compatibility for manually constructed test fixtures.
-        rho0 = fitting_data.log_lambda_init
+    rho0 = (
+        fitting_data.log_lambda_init
+        if initial_log_lambda is None
+        else initial_log_lambda
+    )
     beta0 = fitting_data.beta_init if beta_init is None else beta_init
     if beta0 is None:
         beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
@@ -310,6 +356,10 @@ def dense_efs_known_scale(
         old_deviance = dev
     else:
         iteration = control.outer_limit
+    # efsudr labels an iteration-200 return as an iteration limit even when
+    # one of its stop predicates first becomes true on that final iteration.
+    if iteration == control.outer_limit:
+        stop = "iteration_limit"
     converged = stop in {"score_window", "deviance_change"}
     label = "iteration limit reached" if stop == "iteration_limit" else stop
     return EFSResult(
