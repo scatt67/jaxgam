@@ -21,6 +21,8 @@ Tolerance rationale (from AGENTS.md §Common Pitfalls, MEMORY.md):
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -29,6 +31,7 @@ import pytest
 from jax import clear_caches
 
 from jaxgam.api import GAM
+from jaxgam.fitting.newton import NewtonOptimizer
 from tests.helpers import SEED, _AssertCollector, r_available
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
@@ -556,6 +559,69 @@ def _cell_id(val):
     return f"{val[0]}-{val[1]}"
 
 
+def _fit_matrix_model(smooth_key, family_name, config, data):
+    """Retain exact optimizer diagnostics for the intermittent native GP gate."""
+    if (smooth_key, family_name) != ("gp_2d", "gaussian"):
+        return GAM(config.py_formula, family=family_name).fit(data)
+
+    trace = []
+    original_fit = NewtonOptimizer._fit_and_score
+    original_check = NewtonOptimizer._check_convergence
+    original_step = NewtonOptimizer._step_halve_gaussian
+
+    def traced_fit(optimizer, params, beta_warm):
+        result = original_fit(optimizer, params, beta_warm)
+        trace.append(
+            {
+                "event": "trial",
+                "params": np.asarray(params).tolist(),
+                "score": float(result[1]),
+                "inner_converged": bool(result[0].converged),
+            }
+        )
+        return result
+
+    def traced_check(optimizer, criterion, params, score, score_old, **kwargs):
+        result = original_check(
+            optimizer, criterion, params, score, score_old, **kwargs
+        )
+        gradient, hessian, score_scale, converged = result
+        trace.append(
+            {
+                "event": "check",
+                "params": np.asarray(params).tolist(),
+                "score": float(score),
+                "previous_score": float(score_old),
+                "gradient": np.asarray(gradient).tolist(),
+                "hessian": np.asarray(hessian).tolist(),
+                "score_scale": float(score_scale),
+                "tol": optimizer._tol,
+                "converged": bool(converged),
+                "design_sha256": hashlib.sha256(
+                    np.asarray(optimizer._fd.X).tobytes()
+                ).hexdigest(),
+            }
+        )
+        return result
+
+    def traced_step(optimizer, params, step, score, beta_warm, score_scale):
+        trace.append({"event": "step", "step": np.asarray(step).tolist()})
+        result = original_step(optimizer, params, step, score, beta_warm, score_scale)
+        trace.append({"event": "outcome", "outcome": result[3].name})
+        return result
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(NewtonOptimizer, "_fit_and_score", traced_fit)
+        patch.setattr(NewtonOptimizer, "_check_convergence", traced_check)
+        patch.setattr(NewtonOptimizer, "_step_halve_gaussian", traced_step)
+        try:
+            return GAM(config.py_formula, family=family_name).fit(data)
+        finally:
+            print(  # noqa: T201 - retain native CI failure diagnostics
+                "GP_GAUSSIAN_TRACE " + json.dumps(trace), flush=True
+            )
+
+
 # ---------------------------------------------------------------------------
 # A. TestValidationMatrix — R comparison (75 cells)
 # ---------------------------------------------------------------------------
@@ -574,7 +640,7 @@ class TestValidationMatrix:
         config = SMOOTH_CONFIGS[smooth_key]
         data = _get_data(config, family_name)
 
-        model = GAM(config.py_formula, family=family_name).fit(data)
+        model = _fit_matrix_model(smooth_key, family_name, config, data)
         bridge = RBridge()
         r_result = bridge.fit_gam(config.r_formula, data, family=family_name)
 
@@ -717,7 +783,7 @@ class TestHardGateInvariants:
         smooth_key, family_name = request.param
         config = SMOOTH_CONFIGS[smooth_key]
         data = _get_data(config, family_name)
-        model = GAM(config.py_formula, family=family_name).fit(data)
+        model = _fit_matrix_model(smooth_key, family_name, config, data)
         return smooth_key, family_name, model
 
     def test_all_invariants(self, fitted_model):
