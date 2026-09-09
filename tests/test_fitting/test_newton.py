@@ -39,6 +39,7 @@ from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import (
+    _MAX_HALVINGS_GAUSSIAN,
     NewtonOptimizer,
     _safe_newton_step,
     newton_optimize,
@@ -58,7 +59,96 @@ from tests.tolerances import LOOSE, MODERATE, STRICT
 jax.config.update("jax_enable_x64", True)
 
 
+class _GaussianLineSearchProbe(NewtonOptimizer):
+    """Deterministic score probe for fast-REML line-search semantics."""
+
+    def __init__(self, scores: list[float]) -> None:
+        self._scores = iter(scores)
+        self.calls: list[jax.Array] = []
+        self._tol = 1e-6
+
+    def _clamp_params(self, params: jax.Array) -> jax.Array:
+        return params
+
+    def _fit_and_score(
+        self, params: jax.Array, _beta_init: jax.Array
+    ) -> tuple[object, jax.Array]:
+        self.calls.append(params)
+        return object(), jnp.asarray(next(self._scores))
+
+
 # ---- A. Safe Newton step tests ----
+
+
+class TestGaussianStepHalving:
+    """Pinned fast-REML acceptance and representability semantics."""
+
+    @staticmethod
+    def _run(
+        scores: list[float], step: float
+    ) -> tuple[_GaussianLineSearchProbe, jax.Array, object]:
+        probe = _GaussianLineSearchProbe(scores)
+        params, _pirls, _score, outcome = probe._step_halve_gaussian(
+            jnp.array([1.0]),
+            jnp.array([step]),
+            1.0,
+            jnp.array([0.0]),
+            1.0,
+        )
+        return probe, params, outcome
+
+    def test_equal_finite_score_is_accepted_without_halving(self):
+        probe, params, outcome = self._run([1.0], 0.25)
+        assert outcome.name == "ACCEPTED"
+        assert len(probe.calls) == 1
+        np.testing.assert_allclose(
+            params, jnp.array([1.25]), rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+    def test_representable_half_step_is_tried_after_one_ulp_worse_trial(self):
+        ulp = np.nextafter(1.0, 2.0) - 1.0
+        probe, params, outcome = self._run(
+            [np.nextafter(1.0, np.inf), np.nextafter(1.0, -np.inf)], 2.0 * ulp
+        )
+        assert outcome.name == "ACCEPTED"
+        assert len(probe.calls) == 2
+        assert float(params[0]) == np.nextafter(1.0, 2.0)
+
+    @pytest.mark.parametrize("invalid_score", [np.nan, np.inf, -np.inf])
+    def test_nonfinite_trial_is_never_accepted(self, invalid_score: float):
+        probe, params, outcome = self._run([invalid_score, 0.9], 0.25)
+        assert outcome.name == "ACCEPTED"
+        assert len(probe.calls) == 2
+        np.testing.assert_allclose(
+            params, jnp.array([1.125]), rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+    @pytest.mark.parametrize("invalid_score", [np.nan, np.inf, -np.inf])
+    def test_persistent_nonfinite_trials_exhaust_the_bounded_search(
+        self, invalid_score: float
+    ) -> None:
+        probe, _params, outcome = self._run(
+            [invalid_score] * (_MAX_HALVINGS_GAUSSIAN + 1), 0.25
+        )
+        assert outcome.name == "FAILED"
+        assert len(probe.calls) == _MAX_HALVINGS_GAUSSIAN + 1
+
+    def test_four_consecutive_insignificant_increases_fail(self):
+        probe, _params, outcome = self._run([np.nextafter(1.0, np.inf)] * 4, 0.25)
+        assert outcome.name == "FAILED"
+        assert len(probe.calls) == 4
+
+    def test_exact_unrepresentable_step_fails_without_a_second_trial(self):
+        half_ulp = (np.nextafter(1.0, 2.0) - 1.0) / 2.0
+        probe, params, outcome = self._run([1.1], half_ulp)
+        assert outcome.name == "FAILED"
+        assert len(probe.calls) == 1
+        assert float(params[0]) == 1.0
+
+    def test_halving_cap_remains_source_matched(self):
+        probe, _params, outcome = self._run([2.0] * (_MAX_HALVINGS_GAUSSIAN + 1), 0.25)
+        assert outcome.name == "FAILED"
+        assert len(probe.calls) == _MAX_HALVINGS_GAUSSIAN + 1
 
 
 class TestSafeNewtonStep:
