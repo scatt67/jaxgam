@@ -937,7 +937,8 @@ class NewtonOptimizer:
 
         Simpler than ``newton()``'s step acceptance: no quadratic-error
         check, no steepest-descent fallback, and step failure immediately
-        ends the optimization. Just halves until score decreases.
+        ends the optimization. Just halves while a finite trial is strictly
+        worse; a finite equal-score trial is accepted as in ``fast.REML.fit``.
 
         Returns
         -------
@@ -948,16 +949,21 @@ class NewtonOptimizer:
         log_lambda_new = self._clamp_params(log_lambda + step)
         pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
 
-        # Accept immediately if score decreased (R line 1827)
-        if jnp.isfinite(score_new) and float(score_new) < score:
+        # ``fast.REML.fit`` only halves a strictly worse trial.  A finite
+        # equal-score trial is therefore accepted; treating equality as a
+        # failure changes the selected representable rho at flat optima.
+        if bool(jnp.isfinite(score_new)) and float(score_new) <= score:
             return log_lambda_new, pirls_new, score_new, _StepOutcome.ACCEPTED
 
         # Step-halving (R lines 1827-1839)
         k = 0
         not_moved = 0
-        while float(score_new) >= score:
+        while not bool(jnp.isfinite(score_new)) or float(score_new) > score:
             # Count steps with no numerically significant change (R line 1831)
-            if float(score_new) - score < tol * score_scale:
+            if (
+                bool(jnp.isfinite(score_new))
+                and float(score_new) - score < tol * score_scale
+            ):
                 not_moved += 1
             else:
                 not_moved = 0
@@ -965,7 +971,9 @@ class NewtonOptimizer:
             # Break conditions (R line 1832)
             if k == _MAX_HALVINGS_GAUSSIAN or not_moved > 3:
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
-            if bool(jnp.allclose(log_lambda, log_lambda + step)):
+            # R checks exact floating-point representability, not a relative
+            # closeness heuristic: `sum(rho != rho + step) == 0`.
+            if bool(jnp.all(log_lambda == log_lambda + step)):
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
 
             step = step / 2
