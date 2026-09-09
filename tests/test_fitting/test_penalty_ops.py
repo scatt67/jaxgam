@@ -14,6 +14,7 @@ from jaxgam.fitting.penalty_ops import (
     add_to_dense,
     apply,
     log_pdet,
+    materialize_difference,
     parameter_vjp,
     quadratic,
     transform_covariance,
@@ -97,6 +98,21 @@ def test_parameter_vjp_matches_autodiff() -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+
+
+def test_penalty_difference_preserves_tiny_signed_changes_under_jit() -> None:
+    structure = _structure()
+    base = jnp.array([0.3, -0.2, 0.7])
+    trial = base + jnp.array([1e-12, -1e-12, 2e-12])
+    multipliers = np.exp(np.asarray(base)) * np.expm1(np.asarray(trial - base))
+    expected = np.zeros((5, 5))
+    expected[1:3, 1:3] = multipliers[0] * np.diag([2.0, 3.0])
+    expected[3:5, 3:5] = multipliers[1] * np.array(
+        [[1.0, 0.2], [0.2, 2.0]]
+    ) + multipliers[2] * 0.5 * np.eye(2)
+    actual = jax.jit(materialize_difference)(structure, base, trial)
+    np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=0.0)
+    np.testing.assert_array_equal(materialize_difference(structure, base, base), 0.0)
 
 
 def test_log_pdet_uses_multi_block_singularity_sentinel() -> None:
