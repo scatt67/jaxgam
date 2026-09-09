@@ -23,7 +23,13 @@ from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.efs import EFSRawUpdate, prepare_efs_statistics
-from jaxgam.fitting.pirls import pirls_loop
+from jaxgam.fitting.pirls import (
+    _EFS_STATUS_DIVERGENCE_RECOVERY_FAILED,
+    _EFS_STATUS_DOMAIN_RECOVERY_FAILED,
+    _EFS_STATUS_NONFINITE_RECOVERY_FAILED,
+    _EFS_STATUS_THETA_FAILED,
+    pirls_loop,
+)
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.fixtures.efs_weighted_additive_cr_repro import FORMULA, make_data
@@ -790,8 +796,18 @@ def test_production_controller_preserves_failure_at_iteration_boundary(
     assert not result.converged
 
 
-def test_estimated_nb_controller_labels_returned_loop_status(monkeypatch) -> None:
-    """The beta-loop status, not theta Newton status, owns this rejection."""
+@pytest.mark.parametrize(
+    ("loop_status", "expected_label"),
+    [
+        (_EFS_STATUS_NONFINITE_RECOVERY_FAILED, "nonfinite_recovery_failed"),
+        (_EFS_STATUS_DOMAIN_RECOVERY_FAILED, "domain_recovery_failed"),
+        (_EFS_STATUS_DIVERGENCE_RECOVERY_FAILED, "divergence_recovery_failed"),
+    ],
+)
+def test_estimated_nb_controller_labels_recovery_loop_status(
+    monkeypatch, loop_status: int, expected_label: str
+) -> None:
+    """Each compiled beta-recovery status reaches the controller unchanged."""
     data = _fixed_nb_data(n=40)
     family = NegativeBinomial(theta=2.7)
     setup, fd = _build(
@@ -816,7 +832,7 @@ def test_estimated_nb_controller_labels_returned_loop_status(monkeypatch) -> Non
         valid=False,
         inner_converged=False,
         theta_status=jax.numpy.asarray(0),
-        theta_loop_status=jax.numpy.asarray(7),
+        theta_loop_status=jax.numpy.asarray(loop_status),
     )
     monkeypatch.setattr(execution_efs, "_fit_state", lambda *_args, **_kwargs: failed)
     result = dense_efs_known_scale(
@@ -824,7 +840,44 @@ def test_estimated_nb_controller_labels_returned_loop_status(monkeypatch) -> Non
         initial_log_lambda=efs_initial_log_lambda(setup, family),
         control=EFSControl(outer_limit=1),
     )
-    assert result.convergence_info == "retained_start_invalid_trial"
+    assert result.convergence_info == expected_label
+
+
+def test_estimated_nb_controller_keeps_theta_failure_distinct(monkeypatch) -> None:
+    """A theta Newton failure cannot collide with a beta-recovery label."""
+    data = _fixed_nb_data(n=40)
+    family = NegativeBinomial(theta=2.7)
+    setup, fd = _build(
+        "y ~ s(x, bs='cr', k=6)",
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        efs_initial_log_lambda(setup, family) + 2.5,
+        jax.numpy.zeros(fd.n_coef),
+        EFSControl(),
+        log_theta_start=jax.numpy.asarray([np.log(2.7)]),
+        beta_old_init=jax.numpy.zeros(fd.n_coef),
+        start_is_absent=True,
+    )
+    failed = replace(
+        base,
+        valid=False,
+        inner_converged=False,
+        theta_status=jax.numpy.asarray(6),
+        theta_loop_status=jax.numpy.asarray(_EFS_STATUS_THETA_FAILED),
+    )
+    monkeypatch.setattr(execution_efs, "_fit_state", lambda *_args, **_kwargs: failed)
+    result = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=efs_initial_log_lambda(setup, family),
+        control=EFSControl(outer_limit=1),
+    )
+    assert result.convergence_info == "inner_failure"
 
 
 def test_production_controller_losing_extension_keeps_multiplier(monkeypatch) -> None:
