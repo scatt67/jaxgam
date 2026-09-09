@@ -321,22 +321,76 @@ def _is_valid_trial(
     return jnp.all(family.valid_mu(mu)) & jnp.all(family.valid_eta(eta))
 
 
-def _efs_nb_observed_working_quantities(
+@dataclass(frozen=True)
+class _EFSObservedWorkingFactors:
+    """Observed EFS WLS factors, including mgcv's direct-RHS fallback."""
+
+    weight: jax.Array
+    response: jax.Array
+    weighted_response: jax.Array
+    use_weighted_response: jax.Array
+    valid: jax.Array
+
+
+_EFS_OBSERVED_FACTOR_FIELDS = [
+    field.name for field in fields(_EFSObservedWorkingFactors)
+]
+jax.tree_util.register_pytree_node(
+    _EFSObservedWorkingFactors,
+    lambda factors: (
+        [getattr(factors, field) for field in _EFS_OBSERVED_FACTOR_FIELDS],
+        None,
+    ),
+    lambda _, values: _EFSObservedWorkingFactors(
+        **dict(zip(_EFS_OBSERVED_FACTOR_FIELDS, values, strict=True))
+    ),
+)
+
+
+def _efs_observed_working_factors(
+    weight: jax.Array,
+    response: jax.Array,
+    weighted_response: jax.Array,
+) -> _EFSObservedWorkingFactors:
+    """Apply the supported finite-factor subset of ``gam.fit4``'s ``use.wy``.
+
+    Pinned ``gam.fit4`` switches the whole WLS right side to ``wz`` whenever
+    any ``z`` or ``w`` is nonfinite, then can drop individual bad rows. This
+    dense NB slice preserves the existing all-row factor contract instead:
+    it accepts that global direct-RHS branch only when every ``w`` and ``wz``
+    is finite. Its existing W upper cap is not source-equivalent to raw R, so
+    fallback also fails closed when a finite ``w`` would be clipped. A later
+    reviewed change may add source row dropping or a different clipped-RHS
+    policy; neither is implied here.
+    """
+    normal_valid = jnp.all(jnp.isfinite(weight)) & jnp.all(jnp.isfinite(response))
+    has_nonfinite_response = jnp.any(~jnp.isfinite(response))
+    fallback_valid = (
+        has_nonfinite_response
+        & jnp.all(jnp.isfinite(weight))
+        & jnp.all(jnp.isfinite(weighted_response))
+        & jnp.all(jnp.abs(weight) <= _W_MAX)
+    )
+    return _EFSObservedWorkingFactors(
+        weight=weight,
+        response=response,
+        weighted_response=weighted_response,
+        use_weighted_response=fallback_valid,
+        valid=normal_valid | fallback_valid,
+    )
+
+
+def _efs_nb_observed_working_factors(
     eta: jax.Array,
     log_theta: jax.Array,
     y: jax.Array,
     wt: jax.Array,
     offset: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    """Return EFS NB/log observed WLS quantities at dynamic theta.
+) -> _EFSObservedWorkingFactors:
+    """Return EFS NB/log observed WLS factors at dynamic theta.
 
-    ``gam.fit4`` divides by its observed second deviance derivative directly.
-    Preserve every finite nonzero derivative here; the generic PIRLS floor
-    would materially perturb a valid retained-start recovery at small
-    curvature. Pinned R can instead use its finite ``wz`` representation when
-    z is nonfinite. That direct-wz route is not yet ported: a positive-weight
-    exact-zero curvature is therefore made explicitly invalid. A zero prior
-    weight remains a finite zero-information row.
+    The direct ``wz`` fallback is EFS-only. Ordinary PIRLS remains on its
+    established working-response path.
     """
 
     def dev_fn(current_eta: jax.Array) -> jax.Array:
@@ -345,22 +399,20 @@ def _efs_nb_observed_working_quantities(
     gradient = jax.grad(dev_fn)
     d1 = gradient(eta)
     _, d2 = jax.jvp(gradient, (eta,), (jnp.ones_like(eta),))
-    z = _efs_nb_observed_working_response(eta, offset, wt, d1, d2)
-    return 0.5 * d2, z
+    return _efs_observed_working_factors_from_derivatives(eta, offset, d1, d2)
 
 
-def _efs_nb_observed_working_response(
+def _efs_observed_working_factors_from_derivatives(
     eta: jax.Array,
     offset: jax.Array,
-    wt: jax.Array,
     d1: jax.Array,
     d2: jax.Array,
-) -> jax.Array:
-    """Form observed z while rejecting unported positive-weight zero curvature."""
-    d2_safe = jnp.where(d2 != 0.0, d2, 1.0)
-    z = (eta - offset) - d1 / d2_safe
-    zero_positive_curvature = (d2 == 0.0) & (wt > 0.0)
-    return jnp.where(zero_positive_curvature, jnp.nan, z)
+) -> _EFSObservedWorkingFactors:
+    """Translate observed deviance derivatives using ``gam.fit4`` algebra."""
+    weight = 0.5 * d2
+    weighted_response = weight * (eta - offset) - 0.5 * d1
+    response = (eta - offset) - d1 / d2
+    return _efs_observed_working_factors(weight, response, weighted_response)
 
 
 @dataclass(frozen=True)
@@ -428,7 +480,7 @@ def _efs_beta_step_with_recovery(
     initial_start_retained: jax.Array,
     iteration: jax.Array,
     baseline: jax.Array,
-    compute_W_and_z,
+    compute_working_factors,
     form_wls,
     compute_dev,
     max_recovery_halvings: int,
@@ -442,9 +494,9 @@ def _efs_beta_step_with_recovery(
     anchor.  Both beta and eta are retained in every midpoint because a
     ``mustart`` eta need not have a projected beta representation.
     """
-    W, z = compute_W_and_z(mu, eta)
-    factors_valid = jnp.all(jnp.isfinite(W)) & jnp.all(jnp.isfinite(z))
-    XtWX, XtWz = form_wls(W, z)
+    working_factors = compute_working_factors(mu, eta)
+    factors_valid = working_factors.valid
+    XtWX, XtWz = form_wls(working_factors)
     # EFS recovery follows ``gam.fit4``'s unregularized WLS proposal. The
     # shared solve intentionally adds scale-relative jitter for ordinary
     # PIRLS, but at a valid tiny observed curvature that can shift a raw beta
@@ -1128,8 +1180,10 @@ def _efs_theta_pirls_loop_jit(
         return _efs_nb_log_deviance(eta, log_theta, y, wt)
 
     def ops(log_theta: jax.Array):
-        def compute_W_and_z(mu: jax.Array, eta: jax.Array):  # noqa: ARG001
-            return _efs_nb_observed_working_quantities(
+        def compute_working_factors(
+            _mu: jax.Array, eta: jax.Array
+        ) -> _EFSObservedWorkingFactors:
+            return _efs_nb_observed_working_factors(
                 eta,
                 log_theta,
                 y,
@@ -1137,14 +1191,21 @@ def _efs_theta_pirls_loop_jit(
                 offset,
             )
 
-        def form_wls(W: jax.Array, z: jax.Array):
-            Wc = jnp.clip(W, -_W_MAX, _W_MAX)
-            return (Wc[:, None] * X).T @ X, X.T @ (Wc * z)
+        def form_wls(
+            factors: _EFSObservedWorkingFactors,
+        ) -> tuple[jax.Array, jax.Array]:
+            Wc = jnp.clip(factors.weight, -_W_MAX, _W_MAX)
+            rhs = jnp.where(
+                factors.use_weighted_response,
+                factors.weighted_response,
+                Wc * factors.response,
+            )
+            return (Wc[:, None] * X).T @ X, X.T @ rhs
 
         def compute_dev(mu: jax.Array, eta: jax.Array):  # noqa: ARG001
             return dev_fn(eta, log_theta)
 
-        return compute_W_and_z, form_wls, compute_dev
+        return compute_working_factors, form_wls, compute_dev
 
     eta_init = initial_eta
     mu_init = family.link.inverse(eta_init)
@@ -1212,7 +1273,7 @@ def _efs_theta_pirls_loop_jit(
         return (state.i < max_iter) & ~state.converged & ~state.failed
 
     def body(state: _EFSThetaPIRLSState) -> _EFSThetaPIRLSState:
-        compute_W_and_z, form_wls, compute_dev = ops(state.log_theta)
+        compute_working_factors, form_wls, compute_dev = ops(state.log_theta)
         beta_step = _efs_beta_step_with_recovery(
             X=X,
             S_lambda=S_lambda,
@@ -1228,7 +1289,7 @@ def _efs_theta_pirls_loop_jit(
             initial_start_retained=initial_start_retained,
             iteration=state.i,
             baseline=state.baseline,
-            compute_W_and_z=compute_W_and_z,
+            compute_working_factors=compute_working_factors,
             form_wls=form_wls,
             compute_dev=compute_dev,
             max_recovery_halvings=max_iter,
@@ -1286,13 +1347,15 @@ def _efs_theta_pirls_loop_jit(
             )
             # R rebuilds dd at the accepted theta before checking the score
             # equations (gam.fit4.r:516-528). The pdev part remains pre-theta.
-            next_compute_W_and_z, _, _ = ops(theta_result.log_theta)
-            next_W, next_z = next_compute_W_and_z(beta_step.mu, beta_step.eta)
-            next_factors_valid = jnp.all(jnp.isfinite(next_W)) & jnp.all(
-                jnp.isfinite(next_z)
+            next_compute_working_factors, _, _ = ops(theta_result.log_theta)
+            next_factors = next_compute_working_factors(beta_step.mu, beta_step.eta)
+            next_rhs = jnp.where(
+                next_factors.use_weighted_response,
+                next_factors.weighted_response,
+                next_factors.weight * next_factors.response,
             )
             gradient = (
-                2.0 * X.T @ (next_W * (X @ beta_step.beta) - next_W * next_z)
+                2.0 * X.T @ (next_factors.weight * (X @ beta_step.beta) - next_rhs)
                 + 2.0 * S_lambda @ beta_step.beta
             )
             gradient_finite = jnp.all(jnp.isfinite(gradient))
@@ -1306,7 +1369,7 @@ def _efs_theta_pirls_loop_jit(
             valid_post_theta = (
                 theta_ok
                 & jnp.isfinite(post_theta_pdev)
-                & next_factors_valid
+                & next_factors.valid
                 & gradient_finite
             )
             converged = valid_post_theta & pdev_small & stationary
@@ -1314,7 +1377,7 @@ def _efs_theta_pirls_loop_jit(
                 ~theta_ok,
                 jnp.array(_EFS_STATUS_THETA_FAILED, dtype=jnp.int32),
                 jnp.where(
-                    ~next_factors_valid | ~jnp.isfinite(post_theta_pdev),
+                    ~next_factors.valid | ~jnp.isfinite(post_theta_pdev),
                     jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
                     jnp.where(
                         ~gradient_finite,
@@ -1360,8 +1423,9 @@ def _efs_theta_pirls_loop_jit(
     # stopping value above, but return all fit/curvature data at final theta.
     eta_final = X @ final.beta + offset
     mu_final = family.link.inverse(eta_final)
-    final_compute_W_and_z, _, final_compute_dev = ops(final.log_theta)
-    W_final, _ = final_compute_W_and_z(mu_final, eta_final)
+    final_compute_working_factors, _, final_compute_dev = ops(final.log_theta)
+    final_factors = final_compute_working_factors(mu_final, eta_final)
+    W_final = final_factors.weight
     XtWX_final = _signed_XtWX(W_final, X)
     L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
     W_fisher = jnp.clip(

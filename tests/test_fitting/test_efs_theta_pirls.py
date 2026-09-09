@@ -29,8 +29,9 @@ from jaxgam.fitting.pirls import (
     _EFS_STATUS_NONFINITE_RECOVERY_FAILED,
     _EFS_STATUS_THETA_FAILED,
     _efs_beta_step_with_recovery,
-    _efs_nb_observed_working_quantities,
-    _efs_nb_observed_working_response,
+    _efs_nb_observed_working_factors,
+    _efs_observed_working_factors,
+    _efs_observed_working_factors_from_derivatives,
     _EFSBetaRecoveryResult,
     efs_theta_pirls_loop,
 )
@@ -368,10 +369,12 @@ def _fake_recovery_step(
     offset = jnp.asarray([10.0])
     family = NegativeBinomial(theta=0.8)
 
-    def compute_W_and_z(_mu, _eta):
-        return jnp.ones((1,)), jnp.zeros((1,))
+    def compute_working_factors(_mu, _eta):
+        return _efs_observed_working_factors(
+            jnp.ones((1,)), jnp.zeros((1,)), jnp.zeros((1,))
+        )
 
-    def form_wls(_weight, _z):
+    def form_wls(_factors):
         # With X=0, this deliberately supplies the raw WLS right side.  The
         # penalty makes the proposal beta=10 while eta remains offset=10.
         return jnp.zeros((1, 1)), jnp.asarray([10.0])
@@ -391,7 +394,7 @@ def _fake_recovery_step(
         initial_start_retained=jnp.asarray(retained),
         iteration=jnp.asarray(iteration, dtype=jnp.int32),
         baseline=jnp.asarray(baseline),
-        compute_W_and_z=compute_W_and_z,
+        compute_working_factors=compute_working_factors,
         form_wls=form_wls,
         compute_dev=lambda _mu, current_eta: dev_fn(current_eta),
         max_recovery_halvings=max_recovery_halvings,
@@ -522,14 +525,8 @@ def test_efs_beta_recovery_rejects_nonfinite_post_divergence_state():
     )
 
 
-def test_efs_observed_zero_curvature_rejects_only_positive_weight_rows_under_jit():
-    """Keep zero prior weights finite while failing the unported ``wz`` case.
-
-    Pinned ``gam.fit4`` can pass a finite ``wz`` directly to its solver when
-    observed ``z`` is nonfinite. This route currently forms ``W * z`` after
-    the response, so a positive-weight exact-zero curvature must fail through
-    ``INVALID_WORKING_FACTORS`` until that direct-``wz`` path is reviewed.
-    """
+def test_efs_observed_finite_wz_fallback_is_jitted_and_fails_closed():
+    """Use finite ``wz`` directly, preserving zero rows and invalid rejection."""
     X = jnp.eye(2)
     S_lambda = jnp.eye(2)
     eta = jnp.zeros(2)
@@ -537,14 +534,20 @@ def test_efs_observed_zero_curvature_rejects_only_positive_weight_rows_under_jit
     beta = jnp.zeros(2)
     family = NegativeBinomial(theta=0.8)
 
-    def run(wt, d1, d2):
-        z = _efs_nb_observed_working_response(eta, offset, wt, d1, d2)
+    def run(d1, d2):
+        factors = _efs_observed_working_factors_from_derivatives(eta, offset, d1, d2)
 
-        def compute_W_and_z(_mu, _eta):
-            return 0.5 * d2, z
+        def compute_working_factors(_mu, _eta):
+            return factors
 
-        def form_wls(weight, response):
-            return (weight[:, None] * X).T @ X, X.T @ (weight * response)
+        def form_wls(current_factors):
+            weight = jnp.clip(current_factors.weight, -1e10, 1e10)
+            rhs = jnp.where(
+                current_factors.use_weighted_response,
+                current_factors.weighted_response,
+                weight * current_factors.response,
+            )
+            return (weight[:, None] * X).T @ X, X.T @ rhs
 
         return _efs_beta_step_with_recovery(
             X=X,
@@ -561,29 +564,35 @@ def test_efs_observed_zero_curvature_rejects_only_positive_weight_rows_under_jit
             initial_start_retained=jnp.asarray(False),
             iteration=jnp.asarray(0, dtype=jnp.int32),
             baseline=jnp.asarray(0.0),
-            compute_W_and_z=compute_W_and_z,
+            compute_working_factors=compute_working_factors,
             form_wls=form_wls,
-            compute_dev=lambda _mu, _eta: jnp.asarray(0.0),
+            compute_dev=lambda _mu, current_eta: -current_eta @ current_eta,
             max_recovery_halvings=1,
         )
 
-    positive_weight = jax.jit(run)(
-        jnp.asarray([1.0, 0.0]),
+    direct_wz = jax.jit(run)(
         jnp.asarray([0.25, 0.0]),
         jnp.asarray([0.0, 0.0]),
     )
-    zero_prior_weight = jax.jit(run)(jnp.zeros(2), jnp.zeros(2), jnp.zeros(2))
+    zero_prior_weight = jax.jit(run)(jnp.zeros(2), jnp.zeros(2))
+    invalid_wz = jax.jit(run)(jnp.asarray([jnp.nan, 0.0]), jnp.zeros(2))
+    clipped_fallback = jax.jit(_efs_observed_working_factors)(
+        jnp.asarray([2e10]), jnp.asarray([jnp.nan]), jnp.asarray([1.0])
+    )
 
-    assert not bool(positive_weight.factors_valid)
-    assert not bool(positive_weight.accepted)
+    assert bool(direct_wz.factors_valid)
+    assert bool(direct_wz.accepted)
+    np.testing.assert_allclose(direct_wz.beta, [-0.125, 0.0])
     assert (
-        int(np.asarray(positive_weight.failure_status))
+        int(np.asarray(invalid_wz.failure_status))
         == _EFS_STATUS_INVALID_WORKING_FACTORS
     )
     assert bool(zero_prior_weight.factors_valid)
     assert bool(zero_prior_weight.solver_valid)
     assert bool(zero_prior_weight.accepted)
     np.testing.assert_allclose(zero_prior_weight.beta, beta)
+    assert not bool(clipped_fallback.valid)
+    assert not bool(clipped_fallback.use_weighted_response)
 
 
 def _r_efs_inner_oracle(
@@ -617,6 +626,8 @@ def _r_efs_inner_oracle(
         raw_eta_path = root / "raw_eta.csv"
         raw_deviance_path = root / "raw_deviance.csv"
         halving_path = root / "halvings.csv"
+        initial_factors_path = root / "initial_factors.csv"
+        use_wy_path = root / "use_wy.csv"
         np.savetxt(
             data_path,
             np.column_stack((X, y, wt, offset)),
@@ -653,6 +664,10 @@ trace$raw_eta <- matrix(numeric(), 0, length(y))
 trace$raw_deviance <- numeric(); trace$nonfinite_halvings <- integer()
 trace$domain_halvings <- integer(); trace$divergence_halvings <- integer()
 trace$start_retained <- logical()
+trace$initial_w <- numeric()
+trace$initial_wz <- numeric()
+trace$initial_z <- numeric()
+trace$use_wy <- logical()
 source_lines <- capture.output(mgcv:::gam.fit4)
 source_lines <- source_lines[!grepl("^<", source_lines)]
 source_lines[1] <- sub("^function", "gam.fit4.trace <- function", source_lines[1])
@@ -700,6 +715,18 @@ source_lines[source_lines == retained_anchor] <- paste0(
   "    trace$start_retained <- c(trace$start_retained, !is.null(start))\\n",
   retained_anchor
 )
+factor_anchor <- "    good <- is.finite(z) & is.finite(w)"
+factor_positions <- which(source_lines == factor_anchor)
+if (length(factor_positions) < 1L) stop("factor anchor changed")
+source_lines[factor_positions[1]] <- paste0(
+  "   trace$initial_w <- w; trace$initial_wz <- wz; trace$initial_z <- z\\n",
+  factor_anchor
+)
+use_wy_positions <- grep("use.wy <- TRUE", source_lines, fixed=TRUE)
+if (length(use_wy_positions) != 2L) stop("use.wy anchor changed")
+source_lines[use_wy_positions] <- paste0(
+  source_lines[use_wy_positions], "; trace$use_wy <- c(trace$use_wy, TRUE)"
+)
 replace_once(
   'old.pdev <- pdev <- dev + penalty',
   'old.pdev <- pdev <- dev + penalty; trace$post <- c(trace$post, pdev)'
@@ -735,6 +762,9 @@ write.csv(data.frame(
   first_domain=sum(trace$domain_halvings == 1L),
   first_divergence=sum(trace$divergence_halvings == 1L)
 ), {str(halving_path)!r}, row.names=FALSE)
+write.csv(data.frame(w=trace$initial_w, wz=trace$initial_wz, z=trace$initial_z),
+          {str(initial_factors_path)!r}, row.names=FALSE)
+write.csv(data.frame(value=trace$use_wy), {str(use_wy_path)!r}, row.names=FALSE)
 """
         script_path = root / "oracle.R"
         script_path.write_text(script, encoding="utf-8")
@@ -755,6 +785,10 @@ write.csv(data.frame(
                 dtype=np.float64
             ),
             "halvings": pd.read_csv(halving_path).iloc[0].to_dict(),
+            "initial_factors": pd.read_csv(initial_factors_path).to_numpy(
+                dtype=np.float64
+            ),
+            "use_wy": pd.read_csv(use_wy_path)["value"].to_numpy(dtype=bool),
         }
 
 
@@ -846,6 +880,160 @@ def test_efs_theta_pirls_matches_pinned_fixed_penalty_inner_ordering():
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_efs_positive_weight_finite_wz_fallback_matches_pinned_first_beta():
+    """Exercise the actual NB/log cancellation that sends ``gam.fit4`` to wy."""
+    X = jnp.eye(2)
+    y = jnp.asarray([1.0, 2.0])
+    wt = jnp.ones(2)
+    offset = jnp.zeros(2)
+    retained_start = jnp.asarray([37.0, 0.0])
+    null_beta = jnp.asarray([50.0, 0.0])
+    log_theta = jnp.asarray([np.log(0.8)])
+    penalty = jnp.eye(2) * 0.2
+    oracle = _r_efs_inner_oracle(
+        np.asarray(X),
+        np.asarray(y),
+        np.asarray(wt),
+        np.asarray(offset),
+        penalty=0.2,
+        log_theta=float(log_theta[0]),
+        start=np.asarray(retained_start),
+        null_coef=np.asarray(null_beta),
+        maxit=1,
+    )
+    zero_weight_oracle = _r_efs_inner_oracle(
+        np.asarray(X),
+        np.asarray(y),
+        np.asarray([0.0, 1.0]),
+        np.asarray(offset),
+        penalty=0.2,
+        log_theta=float(log_theta[0]),
+        start=np.zeros(2),
+        null_coef=np.zeros(2),
+        maxit=1,
+    )
+    family = NegativeBinomial(theta=0.8)
+
+    def run_prefix():
+        def dev_fn(current_eta):
+            return _efs_nb_log_deviance(current_eta, log_theta, y, wt)
+
+        def compute_working_factors(_mu, current_eta):
+            return _efs_nb_observed_working_factors(
+                current_eta, log_theta, y, wt, offset
+            )
+
+        def form_wls(factors):
+            weight = jnp.clip(factors.weight, -1e10, 1e10)
+            rhs = jnp.where(
+                factors.use_weighted_response,
+                factors.weighted_response,
+                weight * factors.response,
+            )
+            return (weight[:, None] * X).T @ X, X.T @ rhs
+
+        return _efs_beta_step_with_recovery(
+            X=X,
+            S_lambda=penalty,
+            offset=offset,
+            family=family,
+            beta=retained_start,
+            eta=retained_start,
+            mu=family.link.inverse(retained_start),
+            beta_old=null_beta,
+            eta_old=null_beta,
+            null_beta=null_beta,
+            null_eta=null_beta,
+            initial_start_retained=jnp.asarray(True),
+            iteration=jnp.asarray(0, dtype=jnp.int32),
+            baseline=dev_fn(null_beta),
+            compute_working_factors=compute_working_factors,
+            form_wls=form_wls,
+            compute_dev=lambda _mu, current_eta: dev_fn(current_eta),
+            max_recovery_halvings=200,
+        )
+
+    factors = jax.jit(_efs_nb_observed_working_factors)(
+        retained_start, log_theta, y, wt, offset
+    )
+    zero_weight_factors = jax.jit(_efs_nb_observed_working_factors)(
+        jnp.zeros(2), log_theta, y, jnp.asarray([0.0, 1.0]), offset
+    )
+    prefix = jax.jit(run_prefix)()
+    loop = efs_theta_pirls_loop(
+        X,
+        y,
+        retained_start,
+        penalty,
+        family,
+        wt,
+        offset,
+        log_theta,
+        y.astype(jnp.int64),
+        beta_old_init=null_beta,
+        initial_eta=retained_start,
+        initial_start_retained=True,
+        max_y=2,
+        integer_counts=True,
+        max_iter=1,
+    )
+    collector = _AssertCollector()
+    collector.check(
+        "source finite-wz fallback",
+        lambda: check_that(
+            bool(np.any(oracle["use_wy"])),
+            f"source did not set use.wy: {oracle['use_wy']}",
+        ),
+    )
+    collector.check(
+        "source positive-weight cancellation",
+        lambda: np.testing.assert_allclose(
+            oracle["initial_factors"][0], [0.0, -0.8, -np.inf]
+        ),
+    )
+    collector.check(
+        "JAX finite-wz factors",
+        lambda: check_that(
+            bool(factors.valid) and bool(factors.use_weighted_response),
+            f"unexpected factors: {factors}",
+        ),
+    )
+    collector.check(
+        "source zero-prior-weight fallback",
+        lambda: check_that(
+            bool(np.any(zero_weight_oracle["use_wy"])),
+            f"source did not set use.wy: {zero_weight_oracle['use_wy']}",
+        ),
+    )
+    collector.check(
+        "zero prior weight stays finite direct RHS",
+        lambda: check_that(
+            bool(zero_weight_factors.valid)
+            and bool(zero_weight_factors.use_weighted_response)
+            and float(zero_weight_factors.weighted_response[0]) == 0.0
+            and np.isclose(zero_weight_oracle["initial_factors"][0, 0], 0.0)
+            and np.isclose(zero_weight_oracle["initial_factors"][0, 1], 0.0),
+            f"unexpected zero-weight factors: {zero_weight_factors}",
+        ),
+    )
+    collector.check(
+        "first beta from source wy branch",
+        lambda: np.testing.assert_allclose(
+            prefix.beta, oracle["beta"][0], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.check(
+        "compiled EFS loop retains direct-wz result",
+        lambda: check_that(
+            int(np.asarray(loop.status)) != _EFS_STATUS_INVALID_WORKING_FACTORS
+            and bool(np.all(np.isfinite(np.asarray(loop.pirls_result.coefficients)))),
+            f"unexpected loop status {loop.status}",
+        ),
+    )
+    collector.raise_if_any("positive-weight finite-wz fallback")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 def test_efs_retained_start_recovery_matches_pinned_source_once():
     """One pinned I2 trace covers source counters, prefix, and full loop."""
     X = jnp.eye(2)
@@ -873,14 +1061,19 @@ def test_efs_retained_start_recovery_matches_pinned_source_once():
         def dev_fn(current_eta):
             return _efs_nb_log_deviance(current_eta, log_theta, y, wt)
 
-        def compute_W_and_z(_mu, current_eta):
-            return _efs_nb_observed_working_quantities(
+        def compute_working_factors(_mu, current_eta):
+            return _efs_nb_observed_working_factors(
                 current_eta, log_theta, y, wt, offset
             )
 
-        def form_wls(weight, z):
-            bounded_weight = jnp.clip(weight, -1e10, 1e10)
-            return (bounded_weight[:, None] * X).T @ X, X.T @ (bounded_weight * z)
+        def form_wls(factors):
+            bounded_weight = jnp.clip(factors.weight, -1e10, 1e10)
+            rhs = jnp.where(
+                factors.use_weighted_response,
+                factors.weighted_response,
+                bounded_weight * factors.response,
+            )
+            return (bounded_weight[:, None] * X).T @ X, X.T @ rhs
 
         return _efs_beta_step_with_recovery(
             X=X,
@@ -897,7 +1090,7 @@ def test_efs_retained_start_recovery_matches_pinned_source_once():
             initial_start_retained=jnp.asarray(True),
             iteration=jnp.asarray(0, dtype=jnp.int32),
             baseline=dev_fn(jnp.zeros(2)),
-            compute_W_and_z=compute_W_and_z,
+            compute_working_factors=compute_working_factors,
             form_wls=form_wls,
             compute_dev=lambda _mu, current_eta: dev_fn(current_eta),
             max_recovery_halvings=200,
@@ -1078,14 +1271,19 @@ def test_efs_production_observed_prefix_matches_pinned_recovery(
         def dev_fn(current_eta):
             return _efs_nb_log_deviance(current_eta, log_theta, y, wt)
 
-        def compute_W_and_z(_mu, current_eta):
-            return _efs_nb_observed_working_quantities(
+        def compute_working_factors(_mu, current_eta):
+            return _efs_nb_observed_working_factors(
                 current_eta, log_theta, y, wt, offset_array
             )
 
-        def form_wls(weight, z):
-            bounded_weight = jnp.clip(weight, -1e10, 1e10)
-            return (bounded_weight[:, None] * X).T @ X, X.T @ (bounded_weight * z)
+        def form_wls(factors):
+            bounded_weight = jnp.clip(factors.weight, -1e10, 1e10)
+            rhs = jnp.where(
+                factors.use_weighted_response,
+                factors.weighted_response,
+                bounded_weight * factors.response,
+            )
+            return (bounded_weight[:, None] * X).T @ X, X.T @ rhs
 
         return _efs_beta_step_with_recovery(
             X=X,
@@ -1102,7 +1300,7 @@ def test_efs_production_observed_prefix_matches_pinned_recovery(
             initial_start_retained=jnp.asarray(True),
             iteration=jnp.asarray(0, dtype=jnp.int32),
             baseline=dev_fn(offset_array),
-            compute_W_and_z=compute_W_and_z,
+            compute_working_factors=compute_working_factors,
             form_wls=form_wls,
             compute_dev=lambda _mu, current_eta: dev_fn(current_eta),
             max_recovery_halvings=200,
