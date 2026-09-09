@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 import jax
@@ -15,7 +16,11 @@ import pytest
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting import efs_theta
 from jaxgam.fitting.data import FittingData
-from jaxgam.fitting.efs_theta import conditional_theta_newton, conditional_theta_nll
+from jaxgam.fitting.efs_theta import (
+    _efs_nb_log_deviance,
+    conditional_theta_newton,
+    conditional_theta_nll,
+)
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import r_available
@@ -150,6 +155,279 @@ write.csv(
             "trace_nll": trace["nll"].to_numpy(),
             "final": pd.read_csv(final_path).iloc[0].to_numpy(),
         }
+
+
+def _r_nb_log_deviance_oracle(
+    y: np.ndarray, eta: np.ndarray, wt: np.ndarray, log_theta: float
+) -> dict[str, np.ndarray | float]:
+    """Pinned ``nb()$dev.resids`` and ``Dd`` in eta/log-theta coordinates."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        directory = Path(tmpdir)
+        data_path = directory / "data.csv"
+        output_path = directory / "output.csv"
+        pd.DataFrame({"y": y, "eta": eta, "wt": wt}).to_csv(data_path, index=False)
+        script = f"""
+library(mgcv)
+if (as.character(getRversion()) != "4.5.2" ||
+    packageVersion("mgcv") != package_version("1.9.3")) {{
+  stop("NB deviance oracle requires R 4.5.2 and mgcv 1.9-3")
+}}
+d <- read.csv({str(data_path)!r})
+theta <- {float(log_theta)!r}
+mu <- exp(d$eta)
+family <- nb(theta=-exp(theta))
+value <- sum(family$dev.resids(d$y, mu, d$wt, theta))
+Dd <- family$Dd(d$y, mu, theta, wt=d$wt, level=2)
+d_eta <- Dd$Dmu * mu
+h_eta <- Dd$Dmu2 * mu^2 + Dd$Dmu * mu
+mixed <- Dd$Dmuth * mu
+write.csv(data.frame(
+  value=rep(value, length(d$y)), d_eta=d_eta, h_eta=h_eta,
+  mixed=mixed, d_theta=rep(sum(Dd$Dth), length(d$y)),
+  h_theta=rep(sum(Dd$Dth2), length(d$y))
+), {str(output_path)!r}, row.names=FALSE)
+"""
+        script_path = directory / "nb_deviance.R"
+        script_path.write_text(script, encoding="utf-8")
+        completed = subprocess.run(
+            ["Rscript", str(script_path)], capture_output=True, text=True, timeout=30
+        )
+        if completed.returncode:
+            raise RuntimeError(completed.stderr)
+        output = pd.read_csv(output_path)
+        return {
+            "value": float(output["value"].iloc[0]),
+            "d_eta": output["d_eta"].to_numpy(),
+            "h_eta": output["h_eta"].to_numpy(),
+            "mixed": output["mixed"].to_numpy(),
+            "d_theta": float(output["d_theta"].iloc[0]),
+            "h_theta": float(output["h_theta"].iloc[0]),
+        }
+
+
+def _r_nb_log_deviance_is_finite(
+    y: float, eta: float, theta: float, wt: float = 1.0
+) -> bool:
+    """Whether literal pinned ``dev.resids`` remains a finite scalar."""
+    script = f"""
+library(mgcv)
+if (as.character(getRversion()) != "4.5.2" ||
+    packageVersion("mgcv") != package_version("1.9.3")) {{
+  stop("NB deviance oracle requires R 4.5.2 and mgcv 1.9-3")
+}}
+family <- nb(theta=-{theta!r})
+value <- sum(family$dev.resids({y!r}, exp({eta!r}), {wt!r}, log({theta!r})))
+write(as.character(is.finite(value)), stdout())
+"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script_path = Path(tmpdir) / "nb_deviance_is_finite.R"
+        script_path.write_text(script, encoding="utf-8")
+        completed = subprocess.run(
+            ["Rscript", str(script_path)], capture_output=True, text=True, timeout=30
+        )
+    if completed.returncode:
+        raise RuntimeError(completed.stderr)
+    return completed.stdout.strip() == "TRUE"
+
+
+def _zero_count_tail_oracle(eta: float, theta: float) -> tuple[float, ...]:
+    """100-digit analytic NB/log tail value, gradient, and full Hessian."""
+    with localcontext() as context:
+        context.prec = 100
+        eta_decimal = Decimal(str(eta))
+        theta_decimal = Decimal(str(theta))
+        mu = eta_decimal.exp()
+        ratio = mu / (mu + theta_decimal)
+        value = 2 * theta_decimal * (1 + mu / theta_decimal).ln()
+        d_eta = 2 * theta_decimal * ratio
+        d_log_theta = 2 * theta_decimal * ((1 + mu / theta_decimal).ln() - ratio)
+        d_eta2 = 2 * theta_decimal * ratio * (1 - ratio)
+        mixed = 2 * theta_decimal * ratio * ratio
+        d_log_theta2 = d_log_theta - mixed
+    return tuple(
+        float(item) for item in (value, d_eta, d_log_theta, d_eta2, mixed, d_log_theta2)
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize("theta", [1e-3, 0.8, 10.0, 1e6])
+def test_efs_nb_log_deviance_matches_pinned_r_value_and_derivatives(theta: float):
+    """Stable EFS algebra agrees with ``nb()$dev.resids`` and ``Dd``."""
+    y = np.array([0.0, 1.0, 7.0, 20.0, 1e6])
+    eta = np.array([-20.0, 20.0, 40.0, 60.0, 350.0])
+    wt = np.array([0.0, 0.7, 1.3, 0.9, 2.1])
+    log_theta = jnp.array([np.log(theta)])
+    eta_jax = jnp.asarray(eta)
+    y_jax = jnp.asarray(y)
+    wt_jax = jnp.asarray(wt)
+    oracle = _r_nb_log_deviance_oracle(y, eta, wt, float(log_theta[0]))
+
+    def objective(e, t):
+        return _efs_nb_log_deviance(e, t, y_jax, wt_jax)
+
+    eta_gradient = jax.grad(objective, argnums=0)(eta_jax, log_theta)
+    eta_hessian = jax.hessian(objective, argnums=0)(eta_jax, log_theta)
+    theta_gradient = jax.grad(objective, argnums=1)(eta_jax, log_theta)
+    theta_hessian = jax.hessian(objective, argnums=1)(eta_jax, log_theta)
+    mixed = jax.jacrev(jax.grad(objective, argnums=1), argnums=0)(eta_jax, log_theta)
+
+    np.testing.assert_allclose(
+        objective(eta_jax, log_theta),
+        oracle["value"],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    np.testing.assert_allclose(
+        eta_gradient, oracle["d_eta"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    np.testing.assert_allclose(
+        jnp.diag(eta_hessian),
+        oracle["h_eta"],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    np.testing.assert_allclose(
+        eta_hessian - jnp.diag(jnp.diag(eta_hessian)), 0.0, atol=MODERATE.atol
+    )
+    np.testing.assert_allclose(
+        theta_gradient[0],
+        oracle["d_theta"],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    np.testing.assert_allclose(
+        theta_hessian[0, 0],
+        oracle["h_theta"],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    np.testing.assert_allclose(
+        mixed[0], oracle["mixed"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_efs_nb_log_deviance_near_mean_and_branch_boundary_match_pinned_r():
+    """Exercise exact/nextafter mean and the safe-log1p branch boundary."""
+    theta = 0.8
+    y = np.array([1.0, 5.0, 11.0])
+    boundary = np.log(2.0 * y[2] + theta)
+    eta = np.array(
+        [
+            np.log(y[0]),
+            np.nextafter(np.log(y[1]), np.inf),
+            np.nextafter(boundary, -np.inf),
+            boundary,
+            np.nextafter(boundary, np.inf),
+        ]
+    )
+    y = np.array([y[0], y[1], y[2], y[2], y[2]])
+    wt = np.array([1.0, 0.4, 1.7, 0.9, 1.1])
+    log_theta = jnp.array([np.log(theta)])
+    oracle = _r_nb_log_deviance_oracle(y, eta, wt, float(log_theta[0]))
+    actual = _efs_nb_log_deviance(
+        jnp.asarray(eta), log_theta, jnp.asarray(y), jnp.asarray(wt)
+    )
+    np.testing.assert_allclose(
+        actual, oracle["value"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("y", "eta", "theta", "expected_finite"),
+    [
+        (1.0, 350.0, 0.8, True),
+        (1.0, 709.0, 0.8, True),
+        (0.0, 709.0, 0.8, True),
+        (1.0, -720.0, 0.8, False),
+        (0.0, -720.0, 0.8, False),
+        (1.0, -744.0, 0.8, False),
+        (0.0, -744.0, 0.8, False),
+        (1e308, 350.0, 1e-3, False),
+    ],
+)
+def test_efs_nb_log_deviance_preserves_pinned_literal_validity_domain(
+    y: float, eta: float, theta: float, expected_finite: bool
+):
+    """The stable tail keeps the literal R representability recovery signal."""
+    oracle_finite = _r_nb_log_deviance_is_finite(y, eta, theta)
+    assert oracle_finite is expected_finite
+    actual = _efs_nb_log_deviance(
+        jnp.array([eta]),
+        jnp.array([np.log(theta)]),
+        jnp.array([y]),
+        jnp.array([1.0]),
+    )
+    assert bool(jnp.isfinite(actual)) is oracle_finite
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize("y", [0.0, 1.0])
+def test_efs_nb_log_deviance_fails_closed_for_flushed_subnormal_mean(y: float):
+    """XLA flushes ``exp(-709)`` unlike R; retain the recovery signal."""
+    assert _r_nb_log_deviance_is_finite(y, -709.0, 0.8)
+    actual = _efs_nb_log_deviance(
+        jnp.array([-709.0]),
+        jnp.array([np.log(0.8)]),
+        jnp.array([y]),
+        jnp.array([1.0]),
+    )
+    assert jnp.isinf(actual)
+
+
+@pytest.mark.parametrize("eta", [708.0, 709.0])
+def test_efs_nb_log_deviance_tail_hessian_is_finite_after_inactive_branch_sanitize(
+    eta: float,
+):
+    """A normal mean with an FTZ quotient must not poison inactive AD paths."""
+    theta = 0.8
+    y = jnp.array([0.0])
+    wt = jnp.array([1.0])
+
+    def objective(values):
+        return _efs_nb_log_deviance(values[:1], values[1:], y, wt)
+
+    values = jnp.array([eta, np.log(theta)])
+    compiled_value_gradient = jax.jit(jax.value_and_grad(objective))
+    compiled_hessian = jax.jit(jax.hessian(objective))
+    value, gradient = compiled_value_gradient(values)
+    hessian = compiled_hessian(values)
+    expected = _zero_count_tail_oracle(eta, theta)
+    expected_gradient = np.array(expected[1:3])
+    expected_hessian = np.array(
+        [[expected[3], expected[4]], [expected[4], expected[5]]]
+    )
+    assert np.all(np.isfinite(value))
+    assert np.all(np.isfinite(gradient))
+    assert np.all(np.isfinite(hessian))
+    np.testing.assert_allclose(
+        value, expected[0], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    np.testing.assert_allclose(
+        gradient, expected_gradient, rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    np.testing.assert_allclose(
+        hessian, expected_hessian, rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+
+
+def test_efs_nb_log_deviance_preserves_invalid_log_link_recovery_signal_and_jits():
+    """Log-space tails never turn overflowing or underflowing means valid."""
+    log_theta = jnp.array([np.log(0.8)])
+    y = jnp.array([1.0])
+    wt = jnp.array([1.0])
+    compiled = jax.jit(_efs_nb_log_deviance)
+    finite = compiled(jnp.array([350.0]), log_theta, y, wt)
+    overflow = compiled(jnp.array([710.0]), log_theta, y, wt)
+    underflow = compiled(jnp.array([-750.0]), log_theta, y, wt)
+    literal_overflow = compiled(jnp.array([-720.0]), log_theta, y, wt)
+    zero_weight = compiled(jnp.array([60.0]), log_theta, y, jnp.array([0.0]))
+    assert np.isfinite(finite)
+    assert np.isinf(overflow)
+    assert np.isinf(underflow)
+    assert np.isinf(literal_overflow)
+    assert zero_weight == pytest.approx(0.0)
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
