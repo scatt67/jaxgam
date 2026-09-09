@@ -159,6 +159,22 @@ def materialize(structure: JaxPenaltyStructure, rho: jax.Array) -> jax.Array:
     return add_to_dense(structure, jnp.zeros((structure.n_coef, structure.n_coef)), rho)
 
 
+def materialize_difference(
+    structure: JaxPenaltyStructure, rho_base: jax.Array, rho_trial: jax.Array
+) -> jax.Array:
+    """Form S_trial - S_base without subtracting nearly equal penalties."""
+    multipliers = jnp.exp(rho_base) * jnp.expm1(rho_trial - rho_base)
+    result = jnp.zeros((structure.n_coef, structure.n_coef), dtype=rho_base.dtype)
+    for block in structure.blocks:
+        local = jnp.zeros((block.stop - block.start,) * 2, dtype=rho_base.dtype)
+        for sp, penalty in zip(block.sp_indices, block.penalties, strict=True):
+            local = local + multipliers[sp] * _dense_local(penalty)
+        result = result.at[block.start : block.stop, block.start : block.stop].add(
+            local
+        )
+    return result
+
+
 def parameter_vjp(
     structure: JaxPenaltyStructure,
     beta: jax.Array,
