@@ -54,6 +54,11 @@ jobs:
           tags: jaxgam-test:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Trace native Gaussian GP convergence
+        continue-on-error: true
+        run: >-
+          make -o docker-build test-file DOCKER_TAG=ci
+          FILE='tests/test_validation_matrix.py -k gp_2d-gaussian -s'
       - name: Run tests with coverage
         run: make test-cov-ci DOCKER_TAG=ci
       - name: Upload to Codecov
