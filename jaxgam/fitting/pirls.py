@@ -33,6 +33,7 @@ from numbers import Integral, Real
 
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg as jsla
 import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
@@ -71,6 +72,9 @@ _EFS_STATUS_NONFINITE_STATIONARITY = 4
 _EFS_STATUS_ITERATION_LIMIT = 5
 _EFS_STATUS_INVALID_INPUT = 6
 _EFS_STATUS_RETAINED_START_INVALID_TRIAL = 7
+_EFS_STATUS_NONFINITE_RECOVERY_FAILED = 8
+_EFS_STATUS_DOMAIN_RECOVERY_FAILED = 9
+_EFS_STATUS_DIVERGENCE_RECOVERY_FAILED = 10
 
 
 def canonical_working_quantities(
@@ -315,6 +319,325 @@ def _is_valid_trial(
 ) -> jax.Array:
     """JIT-safe R ``validmu``/``valideta`` counterpart for a trial."""
     return jnp.all(family.valid_mu(mu)) & jnp.all(family.valid_eta(eta))
+
+
+def _efs_nb_observed_working_quantities(
+    eta: jax.Array,
+    log_theta: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    offset: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Return EFS NB/log observed WLS quantities at dynamic theta.
+
+    ``gam.fit4`` divides by its observed second deviance derivative directly.
+    Preserve every finite nonzero derivative here; the generic PIRLS floor
+    would materially perturb a valid retained-start recovery at small
+    curvature. Pinned R can instead use its finite ``wz`` representation when
+    z is nonfinite. That direct-wz route is not yet ported: a positive-weight
+    exact-zero curvature is therefore made explicitly invalid. A zero prior
+    weight remains a finite zero-information row.
+    """
+
+    def dev_fn(current_eta: jax.Array) -> jax.Array:
+        return _efs_nb_log_deviance(current_eta, log_theta, y, wt)
+
+    gradient = jax.grad(dev_fn)
+    d1 = gradient(eta)
+    _, d2 = jax.jvp(gradient, (eta,), (jnp.ones_like(eta),))
+    z = _efs_nb_observed_working_response(eta, offset, wt, d1, d2)
+    return 0.5 * d2, z
+
+
+def _efs_nb_observed_working_response(
+    eta: jax.Array,
+    offset: jax.Array,
+    wt: jax.Array,
+    d1: jax.Array,
+    d2: jax.Array,
+) -> jax.Array:
+    """Form observed z while rejecting unported positive-weight zero curvature."""
+    d2_safe = jnp.where(d2 != 0.0, d2, 1.0)
+    z = (eta - offset) - d1 / d2_safe
+    zero_positive_curvature = (d2 == 0.0) & (wt > 0.0)
+    return jnp.where(zero_positive_curvature, jnp.nan, z)
+
+
+@dataclass(frozen=True)
+class _EFSRecoveryState:
+    """One bounded EFS beta recovery stage with explicit eta midpoints."""
+
+    beta: jax.Array
+    eta: jax.Array
+    mu: jax.Array
+    deviance: jax.Array
+    penalized_deviance: jax.Array
+    n_halvings: jax.Array
+
+
+_EFS_RECOVERY_FIELDS = [field.name for field in fields(_EFSRecoveryState)]
+jax.tree_util.register_pytree_node(
+    _EFSRecoveryState,
+    lambda state: ([getattr(state, field) for field in _EFS_RECOVERY_FIELDS], None),
+    lambda _, values: _EFSRecoveryState(
+        **dict(zip(_EFS_RECOVERY_FIELDS, values, strict=True))
+    ),
+)
+
+
+@dataclass(frozen=True)
+class _EFSBetaRecoveryResult:
+    """EFS-only raw WLS proposal after R's three sequential recoveries."""
+
+    beta: jax.Array
+    eta: jax.Array
+    mu: jax.Array
+    penalized_deviance: jax.Array
+    accepted: jax.Array
+    factors_valid: jax.Array
+    solver_valid: jax.Array
+    failure_status: jax.Array
+
+
+_EFS_BETA_RECOVERY_FIELDS = [field.name for field in fields(_EFSBetaRecoveryResult)]
+jax.tree_util.register_pytree_node(
+    _EFSBetaRecoveryResult,
+    lambda result: (
+        [getattr(result, field) for field in _EFS_BETA_RECOVERY_FIELDS],
+        None,
+    ),
+    lambda _, values: _EFSBetaRecoveryResult(
+        **dict(zip(_EFS_BETA_RECOVERY_FIELDS, values, strict=True))
+    ),
+)
+
+
+def _efs_beta_step_with_recovery(
+    *,
+    X: jax.Array,
+    S_lambda: jax.Array,
+    offset: jax.Array,
+    family: NegativeBinomial,
+    beta: jax.Array,
+    eta: jax.Array,
+    mu: jax.Array,
+    beta_old: jax.Array,
+    eta_old: jax.Array,
+    null_beta: jax.Array,
+    null_eta: jax.Array,
+    initial_start_retained: jax.Array,
+    iteration: jax.Array,
+    baseline: jax.Array,
+    compute_W_and_z,
+    form_wls,
+    compute_dev,
+    max_recovery_halvings: int,
+) -> _EFSBetaRecoveryResult:
+    """Apply EFS-only ``gam.fit4`` recovery in its source order.
+
+    The standard PIRLS beta helper remains unchanged.  Here nonfinite and
+    domain recovery each move to the accepted start for the current iteration;
+    only an initially retained start has a distinct beta/eta origin.  A first
+    iteration pdev divergence then resets independently to the explicit null
+    anchor.  Both beta and eta are retained in every midpoint because a
+    ``mustart`` eta need not have a projected beta representation.
+    """
+    W, z = compute_W_and_z(mu, eta)
+    factors_valid = jnp.all(jnp.isfinite(W)) & jnp.all(jnp.isfinite(z))
+    XtWX, XtWz = form_wls(W, z)
+    # EFS recovery follows ``gam.fit4``'s unregularized WLS proposal. The
+    # shared solve intentionally adds scale-relative jitter for ordinary
+    # PIRLS, but at a valid tiny observed curvature that can shift a raw beta
+    # enough to change the bounded midpoint sequence. This exact EFS-only
+    # factorization fails closed if the current observed system is not SPD.
+    H = XtWX + S_lambda
+    L = jnp.linalg.cholesky(H)
+    beta_raw = jsla.cho_solve((L, True), XtWz)
+    solver_valid = (
+        jnp.all(jnp.isfinite(XtWX))
+        & jnp.all(jnp.isfinite(XtWz))
+        & jnp.all(jnp.isfinite(beta_raw))
+        & jnp.all(jnp.isfinite(L))
+        & jnp.all(jnp.diag(L) > 0.0)
+    )
+    solve_valid = factors_valid & solver_valid
+
+    def solve(_: None) -> _EFSBetaRecoveryResult:
+        eta_raw = X @ beta_raw + offset
+        mu_raw = family.link.inverse(eta_raw)
+        dev_raw = compute_dev(mu_raw, eta_raw)
+        pdev_raw = dev_raw + beta_raw @ S_lambda @ beta_raw
+        raw = _EFSRecoveryState(
+            beta=beta_raw,
+            eta=eta_raw,
+            mu=mu_raw,
+            deviance=dev_raw,
+            penalized_deviance=pdev_raw,
+            n_halvings=jnp.array(0, dtype=jnp.int32),
+        )
+        first_iteration = iteration == 0
+        first_recovery_beta = jnp.where(
+            first_iteration & initial_start_retained, beta, beta_old
+        )
+        first_recovery_eta = jnp.where(
+            first_iteration & initial_start_retained, eta, eta_old
+        )
+
+        def nonfinite_condition(state: _EFSRecoveryState) -> jax.Array:
+            return ~jnp.isfinite(state.deviance) & (
+                state.n_halvings < max_recovery_halvings
+            )
+
+        def midpoint(
+            state: _EFSRecoveryState, anchor_beta: jax.Array, anchor_eta: jax.Array
+        ) -> _EFSRecoveryState:
+            beta_next = (state.beta + anchor_beta) / 2.0
+            eta_next = (state.eta + anchor_eta) / 2.0
+            mu_next = family.link.inverse(eta_next)
+            dev_next = compute_dev(mu_next, eta_next)
+            return _EFSRecoveryState(
+                beta=beta_next,
+                eta=eta_next,
+                mu=mu_next,
+                deviance=dev_next,
+                penalized_deviance=dev_next + beta_next @ S_lambda @ beta_next,
+                n_halvings=state.n_halvings + 1,
+            )
+
+        def nonfinite_body(state: _EFSRecoveryState) -> _EFSRecoveryState:
+            return midpoint(state, first_recovery_beta, first_recovery_eta)
+
+        after_nonfinite = jax.lax.while_loop(nonfinite_condition, nonfinite_body, raw)
+        nonfinite_failed = ~jnp.isfinite(after_nonfinite.deviance)
+
+        def recover_domain(_: None) -> _EFSRecoveryState:
+            domain_initial = _EFSRecoveryState(
+                beta=after_nonfinite.beta,
+                eta=after_nonfinite.eta,
+                mu=after_nonfinite.mu,
+                deviance=after_nonfinite.deviance,
+                penalized_deviance=after_nonfinite.penalized_deviance,
+                n_halvings=jnp.array(0, dtype=jnp.int32),
+            )
+
+            def domain_condition(state: _EFSRecoveryState) -> jax.Array:
+                return ~_is_valid_trial(family, state.mu, state.eta) & (
+                    state.n_halvings < max_recovery_halvings
+                )
+
+            def domain_body(state: _EFSRecoveryState) -> _EFSRecoveryState:
+                return midpoint(state, first_recovery_beta, first_recovery_eta)
+
+            return jax.lax.while_loop(domain_condition, domain_body, domain_initial)
+
+        after_domain = jax.lax.cond(
+            nonfinite_failed,
+            lambda _: after_nonfinite,
+            recover_domain,
+            operand=None,
+        )
+        domain_nonfinite = ~jnp.isfinite(after_domain.deviance) | ~jnp.isfinite(
+            after_domain.penalized_deviance
+        )
+        domain_failed = ~_is_valid_trial(family, after_domain.mu, after_domain.eta)
+
+        # ``gam.fit4`` overwrites coefold/etaold with null state only when its
+        # first iteration diverges.  Retained-start recovery above must not
+        # leak into this later, independent divergence stage.
+        divergence_beta = jnp.where(first_iteration, null_beta, beta_old)
+        divergence_eta = jnp.where(first_iteration, null_eta, eta_old)
+        divergence_threshold = _EFS_DIVERGENCE_ABS + _EFS_DIVERGENCE_REL * jnp.abs(
+            baseline
+        )
+
+        def recover_divergence(_: None) -> _EFSRecoveryState:
+            divergence_initial = _EFSRecoveryState(
+                beta=after_domain.beta,
+                eta=after_domain.eta,
+                mu=after_domain.mu,
+                deviance=after_domain.deviance,
+                penalized_deviance=after_domain.penalized_deviance,
+                n_halvings=jnp.array(0, dtype=jnp.int32),
+            )
+
+            def divergence_condition(state: _EFSRecoveryState) -> jax.Array:
+                return (state.penalized_deviance - baseline > divergence_threshold) & (
+                    state.n_halvings < _EFS_MAX_HALVINGS
+                )
+
+            def divergence_body(state: _EFSRecoveryState) -> _EFSRecoveryState:
+                return midpoint(state, divergence_beta, divergence_eta)
+
+            return jax.lax.while_loop(
+                divergence_condition, divergence_body, divergence_initial
+            )
+
+        after_divergence = jax.lax.cond(
+            nonfinite_failed | domain_nonfinite | domain_failed,
+            lambda _: after_domain,
+            recover_divergence,
+            operand=None,
+        )
+        final_finite = (
+            jnp.all(jnp.isfinite(after_divergence.beta))
+            & jnp.all(jnp.isfinite(after_divergence.eta))
+            & jnp.all(jnp.isfinite(after_divergence.mu))
+            & jnp.isfinite(after_divergence.deviance)
+            & jnp.isfinite(after_divergence.penalized_deviance)
+        )
+        final_domain_valid = _is_valid_trial(
+            family, after_divergence.mu, after_divergence.eta
+        )
+        divergence_failed = (
+            after_divergence.penalized_deviance - baseline > divergence_threshold
+        )
+        recovered = (
+            ~nonfinite_failed
+            & ~domain_nonfinite
+            & ~domain_failed
+            & final_finite
+            & final_domain_valid
+            & ~divergence_failed
+        )
+        failure_status = jnp.where(
+            ~final_finite | nonfinite_failed | domain_nonfinite,
+            jnp.array(_EFS_STATUS_NONFINITE_RECOVERY_FAILED, dtype=jnp.int32),
+            jnp.where(
+                ~final_domain_valid | domain_failed,
+                jnp.array(_EFS_STATUS_DOMAIN_RECOVERY_FAILED, dtype=jnp.int32),
+                jnp.where(
+                    divergence_failed,
+                    jnp.array(_EFS_STATUS_DIVERGENCE_RECOVERY_FAILED, dtype=jnp.int32),
+                    jnp.array(_EFS_STATUS_CONVERGED, dtype=jnp.int32),
+                ),
+            ),
+        )
+        return _EFSBetaRecoveryResult(
+            beta=after_divergence.beta,
+            eta=after_divergence.eta,
+            mu=after_divergence.mu,
+            penalized_deviance=after_divergence.penalized_deviance,
+            accepted=recovered,
+            factors_valid=factors_valid,
+            solver_valid=solver_valid,
+            failure_status=failure_status,
+        )
+
+    def invalid(_: None) -> _EFSBetaRecoveryResult:
+        return _EFSBetaRecoveryResult(
+            beta=beta,
+            eta=eta,
+            mu=mu,
+            penalized_deviance=baseline,
+            accepted=jnp.array(False),
+            factors_valid=factors_valid,
+            solver_valid=solver_valid,
+            failure_status=jnp.array(
+                _EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32
+            ),
+        )
+
+    return jax.lax.cond(solve_valid, solve, invalid, operand=None)
 
 
 @dataclass(frozen=True)
@@ -745,6 +1068,7 @@ class _EFSThetaPIRLSState:
     i: jax.Array
     beta: jax.Array
     beta_old: jax.Array
+    eta_old: jax.Array
     eta: jax.Array
     mu: jax.Array
     log_theta: jax.Array
@@ -803,20 +1127,15 @@ def _efs_theta_pirls_loop_jit(
     def dev_fn(eta: jax.Array, log_theta: jax.Array) -> jax.Array:
         return _efs_nb_log_deviance(eta, log_theta, y, wt)
 
-    grad_D_eta = jax.grad(dev_fn, argnums=0)
-
     def ops(log_theta: jax.Array):
         def compute_W_and_z(mu: jax.Array, eta: jax.Array):  # noqa: ARG001
-            dD_deta = grad_D_eta(eta, log_theta)
-            _, d2D_deta2 = jax.jvp(
-                lambda e: grad_D_eta(e, log_theta),
-                (eta,),
-                (jnp.ones_like(eta),),
+            return _efs_nb_observed_working_quantities(
+                eta,
+                log_theta,
+                y,
+                wt,
+                offset,
             )
-            W = 0.5 * d2D_deta2
-            d2_safe = jnp.where(jnp.abs(d2D_deta2) > _W_MIN, d2D_deta2, _W_MIN)
-            z = (eta - offset) - dD_deta / d2_safe
-            return W, z
 
         def form_wls(W: jax.Array, z: jax.Array):
             Wc = jnp.clip(W, -_W_MAX, _W_MAX)
@@ -875,6 +1194,7 @@ def _efs_theta_pirls_loop_jit(
         i=jnp.array(0, dtype=jnp.int32),
         beta=beta_init,
         beta_old=beta_old_init,
+        eta_old=eta_old_init,
         eta=eta_init,
         mu=mu_init,
         log_theta=log_theta_init,
@@ -893,55 +1213,43 @@ def _efs_theta_pirls_loop_jit(
 
     def body(state: _EFSThetaPIRLSState) -> _EFSThetaPIRLSState:
         compute_W_and_z, form_wls, compute_dev = ops(state.log_theta)
-        beta_step = _beta_step(
+        beta_step = _efs_beta_step_with_recovery(
             X=X,
             S_lambda=S_lambda,
             offset=offset,
             family=family,
             beta=state.beta,
-            beta_old=state.beta_old,
+            eta=state.eta,
             mu=state.mu,
-            eta_current=state.eta,
-            penalized_deviance=state.baseline,
+            beta_old=state.beta_old,
+            eta_old=state.eta_old,
+            null_beta=beta_old_init,
+            null_eta=eta_old_init,
+            initial_start_retained=initial_start_retained,
             iteration=state.i,
+            baseline=state.baseline,
             compute_W_and_z=compute_W_and_z,
             form_wls=form_wls,
             compute_dev=compute_dev,
-            divergence_absolute=_EFS_DIVERGENCE_ABS,
-            divergence_relative=_EFS_DIVERGENCE_REL,
-            max_halvings=_EFS_MAX_HALVINGS,
-            first_iteration_accepts_any=False,
-            require_valid_factors=True,
-        )
-        # R's nonfinite/domain recovery (gam.fit4.r:432-477) occurs before
-        # its later first-divergence reset. For a retained first start the
-        # shared beta helper would otherwise halve around beta_old (the null
-        # anchor) and could return an accepted vector from the wrong origin.
-        # This staged EFS route deliberately fails closed until that separate
-        # sequential recovery path is implemented.
-        proposal_invalid = (
-            jnp.array(False)
-            if beta_step.proposal_valid is None
-            else ~beta_step.proposal_valid
-        )
-        retained_start_invalid = (
-            (state.i == 0) & initial_start_retained & proposal_invalid
+            max_recovery_halvings=max_iter,
         )
 
         def beta_failed(_: None) -> _EFSThetaPIRLSState:
             status = jnp.where(
-                retained_start_invalid,
-                jnp.array(_EFS_STATUS_RETAINED_START_INVALID_TRIAL, dtype=jnp.int32),
+                ~beta_step.factors_valid | ~beta_step.solver_valid,
+                jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
                 jnp.where(
-                    ~beta_step.factors_valid | ~beta_step.solver_valid,
-                    jnp.array(_EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32),
+                    beta_step.failure_status
+                    == jnp.array(_EFS_STATUS_CONVERGED, dtype=jnp.int32),
                     jnp.array(_EFS_STATUS_BETA_STEP_FAILED, dtype=jnp.int32),
+                    beta_step.failure_status,
                 ),
             )
             return _EFSThetaPIRLSState(
                 i=state.i + 1,
                 beta=state.beta,
                 beta_old=state.beta_old,
+                eta_old=state.eta_old,
                 eta=state.eta,
                 mu=state.mu,
                 log_theta=state.log_theta,
@@ -1019,6 +1327,7 @@ def _efs_theta_pirls_loop_jit(
                 i=state.i + 1,
                 beta=beta_step.beta,
                 beta_old=beta_step.beta,
+                eta_old=beta_step.eta,
                 eta=beta_step.eta,
                 mu=beta_step.mu,
                 log_theta=theta_result.log_theta,
@@ -1033,7 +1342,7 @@ def _efs_theta_pirls_loop_jit(
             )
 
         return jax.lax.cond(
-            beta_step.accepted & ~retained_start_invalid,
+            beta_step.accepted,
             beta_accepted,
             beta_failed,
             operand=None,
@@ -1131,10 +1440,10 @@ def efs_theta_pirls_loop(
     ``beta_old_init`` is the explicit null coefficient state for the first R
     divergence comparison. ``initial_eta`` supplies ``link(mustart)`` when R
     starts or resets with no retained coefficient vector; it is intentionally
-    distinct from ``X @ beta_init + offset``. A retained first start whose
-    first proposal is nonfinite/domain-invalid returns the named
-    ``RETAINED_START_INVALID_TRIAL`` status rather than applying the null
-    divergence origin to R's earlier nonfinite/domain recovery phase.
+    distinct from ``X @ beta_init + offset``. A retained first start first
+    recovers nonfinite/domain proposals toward its retained beta/eta state;
+    an ensuing first-iteration pdev divergence instead moves toward the null
+    beta/eta anchor, as in ``gam.fit4``.
 
     This internal entry point is intentionally separate from ``pirls_loop``;
     neither default joint-Newton NB nor fixed-theta EFS routes opt into it.
