@@ -568,6 +568,7 @@ def _fit_matrix_model(smooth_key, family_name, config, data):
     original_fit = NewtonOptimizer._fit_and_score
     original_check = NewtonOptimizer._check_convergence
     original_step = NewtonOptimizer._step_halve_gaussian
+    original_change = NewtonOptimizer._gaussian_trial_score_change
 
     def traced_fit(optimizer, params, beta_warm):
         result = original_fit(optimizer, params, beta_warm)
@@ -610,10 +611,22 @@ def _fit_matrix_model(smooth_key, family_name, config, data):
         trace.append({"event": "outcome", "outcome": result[3].name})
         return result
 
+    def traced_change(
+        optimizer, params, params_trial, beta, trial, score, score_trial, scale
+    ):
+        result = original_change(
+            optimizer, params, params_trial, beta, trial, score, score_trial, scale
+        )
+        trace.append(
+            {"event": "score_change", "raw": score_trial - score, "compared": result}
+        )
+        return result
+
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(NewtonOptimizer, "_fit_and_score", traced_fit)
         patch.setattr(NewtonOptimizer, "_check_convergence", traced_check)
         patch.setattr(NewtonOptimizer, "_step_halve_gaussian", traced_step)
+        patch.setattr(NewtonOptimizer, "_gaussian_trial_score_change", traced_change)
         try:
             return GAM(config.py_formula, family=family_name).fit(data)
         finally:
