@@ -33,7 +33,7 @@ from jaxgam.fitting.pirls import (
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.fixtures.efs_weighted_additive_cr_repro import FORMULA, make_data
-from tests.helpers import _AssertCollector, r_available
+from tests.helpers import _AssertCollector, check_that, r_available
 from tests.r_bridge import RBridge, RBridgeError
 from tests.tolerances import MODERATE, STRICT
 
@@ -79,6 +79,25 @@ def _fixed_nb_data(*, seed: int = 812, n: int = 84) -> pd.DataFrame:
     return pd.DataFrame(
         {"y": y, "x": x, "z": z, "w": 0.5 + rng.random(n), "off": offset}
     )
+
+
+def _interior_nb_tensor_data(*, seed: int = 981, n: int = 160) -> pd.DataFrame:
+    """Overdispersed, positive-weight NB/log tensor fixture with interior theta."""
+    rng = np.random.default_rng(seed)
+    x = np.linspace(-1.0, 1.0, n)
+    z = rng.uniform(-1.0, 1.0, n)
+    offset = 0.1 * z
+    theta = 0.8
+    eta = offset + 0.3 + 0.75 * np.sin(2.4 * x) - 0.45 * z + 0.25 * x * z
+    mu = np.exp(eta)
+    y = rng.negative_binomial(theta, theta / (theta + mu))
+    return pd.DataFrame(
+        {"y": y, "x": x, "z": z, "w": 0.6 + rng.random(n), "off": offset}
+    )
+
+
+class _NearPoissonThetaBoundaryMismatch(AssertionError):
+    """The selected theta is on the known finite-precision boundary profile."""
 
 
 @pytest.mark.parametrize("family", [Poisson(), Binomial()])
@@ -500,11 +519,32 @@ def test_pinned_nb_first_divergence_records_null_anchor_prefix() -> None:
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
-def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> None:
-    """Internal EFS5d parity is only claimed for the explicit admitted start."""
-    data = _fixed_nb_data(n=48)
+@pytest.mark.parametrize(
+    ("formula", "data", "near_poisson_theta_boundary"),
+    [
+        ("y ~ s(x, bs='cr', k=6)", _fixed_nb_data(n=48), False),
+        ("y ~ te(x, z, k=5)", _interior_nb_tensor_data(), False),
+        pytest.param(
+            "y ~ te(x, z, k=5)",
+            _fixed_nb_data(n=48),
+            True,
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=_NearPoissonThetaBoundaryMismatch,
+                reason=(
+                    "near-Poisson estimated-theta boundary: "
+                    "selected theta differs by 2.89e-4 relative"
+                ),
+            ),
+            id="tensor48-near-poisson-boundary-diagnostic",
+        ),
+    ],
+)
+def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace(
+    formula: str, data: pd.DataFrame, near_poisson_theta_boundary: bool
+) -> None:
+    """Selected estimated-NB final state matches pinned EFS by model profile."""
     family = NegativeBinomial(theta=2.7)
-    formula = "y ~ s(x, bs='cr', k=6)"
     setup, fd = _build(
         formula,
         data,
@@ -576,15 +616,6 @@ def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> Non
         ),
     )
     collector.check(
-        "selected theta",
-        lambda: np.testing.assert_allclose(
-            j_fit.theta,
-            selected_sp[0],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-        ),
-    )
-    collector.check(
         "smoothing parameters",
         lambda: np.testing.assert_allclose(
             j_fit.smoothing_params,
@@ -593,7 +624,102 @@ def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> Non
             atol=MODERATE.atol,
         ),
     )
-    collector.raise_if_any("estimated-NB EFS matched-start parity")
+    assert j_fit.theta is not None
+    python_theta = float(j_fit.theta)
+    python_mu = np.asarray(j_fit.pirls_result.mu)
+    python_observed_weight = (
+        data["w"].to_numpy()
+        * python_mu
+        * python_theta
+        * (data["y"].to_numpy() + python_theta)
+        / (python_mu + python_theta) ** 2
+    )
+    python_fisher_weight = (
+        data["w"].to_numpy() * python_mu * python_theta / (python_mu + python_theta)
+    )
+    collector.check(
+        "selected observed curvature from Python state",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX,
+            (python_observed_weight[:, None] * fd.X).T @ fd.X,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "selected Fisher curvature from Python state",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX_fisher,
+            (np.clip(python_fisher_weight, 1e-10, 1e10)[:, None] * fd.X).T @ fd.X,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    r_theta = float(selected_sp[0])
+    r_mu = r_trace["selected_fitted_values"]
+    r_observed_weight = (
+        data["w"].to_numpy()
+        * r_mu
+        * r_theta
+        * (data["y"].to_numpy() + r_theta)
+        / (r_mu + r_theta) ** 2
+    )
+    r_fisher_weight = data["w"].to_numpy() * r_mu * r_theta / (r_mu + r_theta)
+    collector.check(
+        "selected observed curvature from R state",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX,
+            (r_observed_weight[:, None] * fd.X).T @ fd.X,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "selected Fisher curvature from R state",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX_fisher,
+            (np.clip(r_fisher_weight, 1e-10, 1e10)[:, None] * fd.X).T @ fd.X,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "finite selected state",
+        lambda: check_that(
+            bool(
+                np.all(
+                    np.isfinite(
+                        np.concatenate(
+                            [
+                                np.asarray(j_fit.pirls_result.coefficients),
+                                np.asarray(j_fit.pirls_result.eta),
+                                np.asarray(j_fit.pirls_result.mu),
+                                np.asarray(j_fit.pirls_result.XtWX).ravel(),
+                                np.asarray(j_fit.pirls_result.XtWX_fisher).ravel(),
+                            ]
+                        )
+                    )
+                )
+            )
+            and float(j_fit.pirls_result.deviance) >= 0.0
+            and float(j_fit.theta) > 0.0,
+            "selected estimated-NB state is not finite/valid",
+        ),
+    )
+    collector.raise_if_any(f"estimated-NB EFS matched-start parity ({formula})")
+    try:
+        np.testing.assert_allclose(
+            j_fit.theta,
+            selected_sp[0],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        )
+    except AssertionError as error:
+        if near_poisson_theta_boundary:
+            raise _NearPoissonThetaBoundaryMismatch(
+                "known near-Poisson selected-theta boundary"
+            ) from error
+        raise
 
 
 def test_efs_bridge_fixed_nb_theta_requires_positive_nb_family() -> None:
@@ -1032,6 +1158,14 @@ def test_efs_preflight_excludes_unvalidated_prior_weight_edges(weight) -> None:
     _, fd = _build("y ~ s(x,bs='cr',k=6)", _oracle_data("poisson"), Poisson())
     with pytest.raises(ValueError, match="clipping bounds"):
         dense_efs_known_scale(replace(fd, wt=fd.wt.at[0].set(weight)))
+
+
+def test_efs_preflight_rejects_actual_unpenalized_rank_deficit() -> None:
+    """EFS rejects the real GP linear-null duplication before any fit kernel."""
+    _, fd = _build("y ~ x + s(x, bs='gp', k=6)", _oracle_data("poisson"), Poisson())
+    assert fd.rank_deficit > 0
+    with pytest.raises(ValueError, match="identifiable penalized system"):
+        dense_efs_known_scale(fd)
 
 
 def test_existing_efs_statistics_kernel_compiles_and_executes() -> None:
@@ -1820,6 +1954,39 @@ def test_fixed_theta_nb_log_efs_matches_pinned_r_with_real_weights_and_offsets(
             r_fit["smoothing_params"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
+        ),
+    )
+    final_mu = np.asarray(j_fit.pirls_result.mu)
+    observed_weight = (
+        weights
+        * final_mu
+        * theta
+        * (data["y"].to_numpy() + theta)
+        / (final_mu + theta) ** 2
+    )
+    fisher_weight = weights * final_mu * theta / (final_mu + theta)
+    collector.check(
+        "final observed curvature",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX,
+            (observed_weight[:, None] * fd.X).T @ fd.X,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "final Fisher curvature",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX_fisher,
+            (np.clip(fisher_weight, 1e-10, 1e10)[:, None] * fd.X).T @ fd.X,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "final Fisher EDF",
+        lambda: np.testing.assert_allclose(
+            j_fit.edf, r_fit["edf_total"], rtol=MODERATE.rtol, atol=MODERATE.atol
         ),
     )
     collector.raise_if_any(f"fixed-theta NB EFS parity ({formula})")

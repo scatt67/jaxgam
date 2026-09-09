@@ -792,6 +792,222 @@ write.csv(data.frame(value=trace$use_wy), {str(use_wy_path)!r}, row.names=FALSE)
         }
 
 
+def _r_efs_nonsaturated_inner_oracle(
+    X: np.ndarray,
+    y: np.ndarray,
+    wt: np.ndarray,
+    offset: np.ndarray,
+    penalty_diagonal: np.ndarray,
+    log_theta: float,
+    *,
+    mp: int,
+) -> dict[str, np.ndarray | float]:
+    """Return one pinned-R final inner state for a diagonal penalty profile."""
+    _, p = X.shape
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        data_path = root / "data.csv"
+        penalty_path = root / "penalty.csv"
+        output_path = root / "output.csv"
+        np.savetxt(
+            data_path,
+            np.column_stack((X, y, wt, offset)),
+            delimiter=",",
+            header=",".join([*(f"x{i}" for i in range(p)), "y", "wt", "off"]),
+            comments="",
+        )
+        np.savetxt(penalty_path, penalty_diagonal, delimiter=",")
+        x_columns = ", ".join(f"d[, {i + 1}]" for i in range(p))
+        script = f"""
+suppressPackageStartupMessages(library(mgcv))
+if (as.character(getRversion()) != "4.5.2" ||
+    packageVersion("mgcv") != package_version("1.9.3")) {{
+  stop("EFS nonsaturated inner oracle requires R 4.5.2 and mgcv 1.9-3")
+}}
+d <- as.matrix(read.csv({str(data_path)!r}, check.names=FALSE))
+x <- cbind({x_columns})
+y <- d[, {p + 1}]
+w <- d[, {p + 2}]
+off <- d[, {p + 3}]
+pd <- as.numeric(read.csv({str(penalty_path)!r}, header=FALSE)[, 1])
+root <- diag(sqrt(pd))
+keep <- which(pd > 0)
+U1 <- diag({p})[, c(keep, which(pd == 0)), drop=FALSE]
+compact_root <- diag(sqrt(pd[keep]), nrow=length(keep))
+f <- nb(theta=-exp({float(log_theta)!r}))
+f <- mgcv:::fix.family.ls(mgcv:::fix.family.var(mgcv:::fix.family.link(f)))
+fit <- mgcv:::gam.fit4(
+  x=x, y=y, sp=c({float(log_theta)!r}, 0), Eb=root,
+  UrS=list(compact_root), weights=w, offset=off, U1=U1, Mp={mp},
+  family=f, control=gam.control(epsilon=1e-7, maxit=100), deriv=0,
+  scoreType="EFS", scale=1, start=rep(0, {p}), null.coef=rep(0, {p})
+)
+log_theta_out <- f$getTheta(FALSE)
+eta <- drop(x %*% fit$coefficients) + off
+mu <- exp(eta)
+deviance <- sum(f$dev.resids(y, mu, w, log_theta_out))
+write.csv(as.data.frame(t(c(
+  fit$coefficients, log_theta_out, deviance, fit$deviance
+))), {str(output_path)!r}, row.names=FALSE)
+"""
+        script_path = root / "oracle.R"
+        script_path.write_text(script, encoding="utf-8")
+        completed = subprocess.run(
+            ["Rscript", str(script_path)], capture_output=True, text=True, timeout=30
+        )
+        if completed.returncode:
+            raise RuntimeError(completed.stderr)
+        output = pd.read_csv(output_path).iloc[0].to_numpy(dtype=np.float64)
+    return {
+        "coefficients": output[:p],
+        "log_theta": float(output[p]),
+        "deviance": float(output[p + 1]),
+        "fit_deviance": float(output[p + 2]),
+    }
+
+
+def _nonsaturated_inner_profile(
+    label: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, int]:
+    """Construct the three independent, well-conditioned EFS inner profiles."""
+    profiles = {
+        "weighted_ridge": (93, 3, 0.65, 0.08, True),
+        "zero_weight_unpenalized_intercept": (107, 5, 1.3, 8.0, False),
+        "multiple_penalty_directions": (81, 4, 3.1, 0.8, False),
+    }
+    rng = np.random.default_rng(909506)
+    for name, (n, p, generating_theta, starting_theta, ridge) in profiles.items():
+        x = np.linspace(-1.5, 1.5, n)
+        X = np.column_stack([np.ones(n), x, np.sin(2 * x), np.cos(3 * x), x * x])[:, :p]
+        offset = 0.17 * np.cos(x)
+        wt = rng.uniform(0.35, 1.8, n)
+        if name == "zero_weight_unpenalized_intercept":
+            wt[::9] = 0.0
+        mu = np.exp(offset + 0.25 + 0.5 * np.sin(2 * x))
+        y = rng.negative_binomial(
+            generating_theta, generating_theta / (generating_theta + mu)
+        ).astype(np.float64)
+        penalty_diagonal = np.linspace(0.3, 1.2, p)
+        if not ridge:
+            penalty_diagonal[0] = 0.0
+        if name == label:
+            return (
+                X,
+                y,
+                wt,
+                offset,
+                penalty_diagonal,
+                float(np.log(starting_theta)),
+                0 if ridge else 1,
+            )
+    raise ValueError(f"unknown nonsaturated inner profile {label!r}")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    "label",
+    [
+        "weighted_ridge",
+        "zero_weight_unpenalized_intercept",
+        "multiple_penalty_directions",
+    ],
+)
+def test_efs_theta_pirls_nonsaturated_inner_contract_matches_pinned_r(label: str):
+    """Keep one pinned final-state contract for each non-saturated inner profile."""
+    X, y, wt, offset, penalty_diagonal, log_theta, mp = _nonsaturated_inner_profile(
+        label
+    )
+    oracle = _r_efs_nonsaturated_inner_oracle(
+        X, y, wt, offset, penalty_diagonal, log_theta, mp=mp
+    )
+    penalty = np.diag(penalty_diagonal)
+    result = efs_theta_pirls_loop(
+        jnp.asarray(X),
+        jnp.asarray(y),
+        jnp.zeros(X.shape[1]),
+        jnp.asarray(penalty),
+        NegativeBinomial(theta=float(np.exp(log_theta))),
+        jnp.asarray(wt),
+        jnp.asarray(offset),
+        jnp.asarray([log_theta]),
+        jnp.asarray(y, dtype=jnp.int64),
+        beta_old_init=jnp.zeros(X.shape[1]),
+        max_y=int(np.max(y)),
+        integer_counts=True,
+        max_iter=100,
+        tol=1e-7,
+    )
+    pr = result.pirls_result
+    theta = float(np.exp(np.asarray(result.log_theta)[0]))
+    mu = np.asarray(pr.mu)
+    observed_weight = wt * mu * theta * (y + theta) / (mu + theta) ** 2
+    fisher_weight = wt * mu * theta / (mu + theta)
+    score_equations = 2 * X.T @ (wt * theta * (mu - y) / (mu + theta)) + 2 * (
+        penalty @ np.asarray(pr.coefficients)
+    )
+    collector = _AssertCollector()
+    collector.check(
+        "converged",
+        lambda: check_that(
+            bool(np.asarray(pr.converged)), f"status={int(np.asarray(result.status))}"
+        ),
+    )
+    collector.check(
+        "coefficients",
+        lambda: np.testing.assert_allclose(
+            pr.coefficients,
+            oracle["coefficients"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "log theta",
+        lambda: np.testing.assert_allclose(
+            result.log_theta[0],
+            oracle["log_theta"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "deviance",
+        lambda: np.testing.assert_allclose(
+            pr.deviance,
+            oracle["deviance"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "observed curvature",
+        lambda: np.testing.assert_allclose(
+            pr.XtWX,
+            X.T @ (observed_weight[:, None] * X),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "Fisher curvature",
+        lambda: np.testing.assert_allclose(
+            pr.XtWX_fisher,
+            X.T @ (np.clip(fisher_weight, 1e-10, 1e10)[:, None] * X),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "score equations",
+        lambda: check_that(
+            np.max(np.abs(score_equations))
+            <= 1e-7 * (abs(float(np.asarray(result.stopping_penalized_deviance))) + 1),
+            f"max residual={np.max(np.abs(score_equations))}",
+        ),
+    )
+    collector.raise_if_any(f"nonsaturated EFS inner contract ({label})")
+
+
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 def test_efs_theta_pirls_matches_pinned_fixed_penalty_inner_ordering():
     """Compare the dedicated loop to real pinned ``gam.fit4`` EFS internals."""
