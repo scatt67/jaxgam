@@ -764,6 +764,58 @@ class RBridge:
             "final": final,
         }
 
+    def efs_nb_log_deviance_derivatives(
+        self, y: np.ndarray, eta: np.ndarray, weights: np.ndarray, log_theta: float
+    ) -> dict[str, np.ndarray | float]:
+        """Reduce pinned NB ``dev.resids`` and ``Dd`` in R coordinates."""
+        self._require_rpy2()
+        r_y = self._to_r_vector(np.asarray(y, dtype=np.float64))
+        r_eta = self._to_r_vector(np.asarray(eta, dtype=np.float64))
+        r_weights = self._to_r_vector(np.asarray(weights, dtype=np.float64))
+        r_theta = self._to_r_vector(np.asarray([log_theta], dtype=np.float64))
+        r_mu = self._base.exp(r_eta)
+        family = self._mgcv.nb(theta=self._ro.r["-"](self._base.exp(r_theta)))
+        derivatives = family.rx2("Dd")(r_y, r_mu, r_theta, wt=r_weights, level=2)
+        multiply = self._ro.r["*"]
+        add = self._ro.r["+"]
+        square = self._ro.r["^"]
+        value = self._base.sum(family.rx2("dev.resids")(r_y, r_mu, r_weights, r_theta))
+        return {
+            "value": float(np.asarray(value)[0]),
+            "d_eta": np.asarray(
+                multiply(derivatives.rx2("Dmu"), r_mu), dtype=np.float64
+            ).copy(),
+            "h_eta": np.asarray(
+                add(
+                    multiply(derivatives.rx2("Dmu2"), square(r_mu, 2)),
+                    multiply(derivatives.rx2("Dmu"), r_mu),
+                ),
+                dtype=np.float64,
+            ).copy(),
+            "mixed": np.asarray(
+                multiply(derivatives.rx2("Dmuth"), r_mu), dtype=np.float64
+            ).copy(),
+            "d_theta": float(np.asarray(self._base.sum(derivatives.rx2("Dth")))[0]),
+            "h_theta": float(np.asarray(self._base.sum(derivatives.rx2("Dth2")))[0]),
+        }
+
+    def efs_nb_deviance_is_finite(
+        self, y: float, eta: float, theta: float, weight: float = 1.0
+    ) -> bool:
+        """Check finiteness of the literal pinned NB deviance reduction."""
+        self._require_rpy2()
+        r_theta = self._to_r_vector(np.asarray([theta], dtype=np.float64))
+        family = self._mgcv.nb(theta=self._ro.r["-"](r_theta))
+        value = self._base.sum(
+            family.rx2("dev.resids")(
+                self._to_r_vector(np.asarray([y], dtype=np.float64)),
+                self._base.exp(self._to_r_vector(np.asarray([eta], dtype=np.float64))),
+                self._to_r_vector(np.asarray([weight], dtype=np.float64)),
+                self._base.log(r_theta),
+            )
+        )
+        return bool(self._base.is_finite(value)[0])
+
     def efs_nb_inner_trace_reference(
         self,
         X: np.ndarray,

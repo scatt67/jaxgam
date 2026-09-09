@@ -38,7 +38,7 @@ import numpy as np
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.extended import ExtendedFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.fitting.efs_theta import _conditional_theta_newton_jit
+from jaxgam.fitting.efs_theta import _conditional_theta_newton_jit, _efs_nb_log_deviance
 from jaxgam.jax_utils import penalized_cholesky, penalized_solve
 from jaxgam.links.links import LogLink
 
@@ -797,7 +797,12 @@ def _efs_theta_pirls_loop_jit(
     deviance baseline and working quantities, matching ``gam.fit4.r``
     lines 486-547 without a host-side fit/update alternation.
     """
-    dev_fn = family.deviance_fn(y, wt)
+
+    # Estimated-theta NB EFS deliberately uses its own stable eta-space
+    # deviance. Ordinary/default and fixed-theta NB retain the family helper.
+    def dev_fn(eta: jax.Array, log_theta: jax.Array) -> jax.Array:
+        return _efs_nb_log_deviance(eta, log_theta, y, wt)
+
     grad_D_eta = jax.grad(dev_fn, argnums=0)
 
     def ops(log_theta: jax.Array):
