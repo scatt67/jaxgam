@@ -816,6 +816,85 @@ class RBridge:
         )
         return bool(self._base.is_finite(value)[0])
 
+    def efs_nb_nonsaturated_inner_reference(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        penalty_diagonal: np.ndarray,
+        log_theta: float,
+        *,
+        mp: int,
+    ) -> dict[str, np.ndarray | float]:
+        """Run pinned ``gam.fit4`` for one diagonal-penalty NB inner fit."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        weights = np.asarray(weights, dtype=np.float64)
+        offset = np.asarray(offset, dtype=np.float64)
+        penalty_diagonal = np.asarray(penalty_diagonal, dtype=np.float64)
+        n, p = X.shape
+        if any(
+            value.shape != (n,) for value in (y, weights, offset)
+        ) or penalty_diagonal.shape != (p,):
+            raise ValueError("Nonsaturated NB oracle arrays have incompatible shapes")
+        r_x = self._to_r_matrix(X)
+        r_y = self._to_r_vector(y)
+        r_weights = self._to_r_vector(weights)
+        r_offset = self._to_r_vector(offset)
+        r_penalty = self._to_r_vector(penalty_diagonal)
+        bracket = self._ro.r["["]
+        positive = self._base.which(self._ro.r[">"](r_penalty, 0))
+        null = self._base.which(self._ro.r["=="](r_penalty, 0))
+        indices = self._base.c(positive, null)
+        r_u1 = bracket(self._base.diag(p), rinterface.MissingArg, indices, drop=False)
+        compact_root = self._base.diag(
+            self._base.sqrt(bracket(r_penalty, positive)), nrow=len(positive)
+        )
+        r_theta = self._to_r_vector(np.asarray([log_theta], dtype=np.float64))
+        r_family = self._mgcv.nb(theta=self._ro.r["-"](self._base.exp(r_theta)))
+        for name in ("fix.family.link", "fix.family.var", "fix.family.ls"):
+            r_family = self._call_internal(name, r_family)
+        fit = self._call_internal(
+            "gam.fit4",
+            x=r_x,
+            y=r_y,
+            sp=self._base.c(r_theta, 0.0),
+            Eb=self._base.diag(self._base.sqrt(r_penalty)),
+            UrS=rinterface.ListSexpVector([compact_root]),
+            weights=r_weights,
+            offset=r_offset,
+            U1=r_u1,
+            Mp=mp,
+            family=r_family,
+            control=self._mgcv.gam_control(epsilon=1e-7, maxit=100),
+            deriv=0,
+            scoreType="EFS",
+            scale=1,
+            start=self._base.rep(0.0, p),
+            **{"null.coef": self._base.rep(0.0, p)},
+        )
+        theta_out = r_family.rx2("getTheta")(False)
+        r_eta = self._ro.r["+"](
+            self._base.drop(self._ro.r["%*%"](r_x, fit.rx2("coefficients"))),
+            r_offset,
+        )
+        r_mu = self._base.exp(r_eta)
+        deviance = self._base.sum(
+            r_family.rx2("dev.resids")(r_y, r_mu, r_weights, theta_out)
+        )
+        return {
+            "coefficients": np.asarray(
+                fit.rx2("coefficients"), dtype=np.float64
+            ).copy(),
+            "log_theta": float(np.asarray(theta_out)[0]),
+            "deviance": float(np.asarray(deviance)[0]),
+            "fit_deviance": float(np.asarray(fit.rx2("deviance"))[0]),
+        }
+
     def efs_nb_inner_trace_reference(
         self,
         X: np.ndarray,
