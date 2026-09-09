@@ -57,6 +57,11 @@ test-cov-ci: ## run CI coverage using an already-built Docker image
 		uv run pytest --tb=short --cov=jaxgam --cov-branch \
 		--cov-report=xml:/coverage/coverage.xml
 
+.PHONY: test-gaussian-ci
+test-gaussian-ci: ## run focused Gaussian CI diagnostics using a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_validation_matrix.py -k gp_2d-gaussian -s -x --tb=short
+
 .PHONY: colima-start
 colima-start: ## start colima VM (no-op if already running)
 	@colima status 2>/dev/null || colima start --cpu $(COLIMA_CPU) --memory $(COLIMA_MEMORY)
