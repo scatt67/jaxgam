@@ -24,7 +24,7 @@ from jaxgam.fitting.efs_theta import (
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import r_available
-from tests.tolerances import MODERATE
+from tests.tolerances import MODERATE, STRICT
 
 
 def _inputs(
@@ -85,7 +85,12 @@ def _solve(family, fitting_data, eta, log_theta, **kwargs):
 
 
 def _r_conditional_oracle(
-    y: np.ndarray, eta: np.ndarray, wt: np.ndarray, start: float
+    y: np.ndarray,
+    eta: np.ndarray,
+    wt: np.ndarray,
+    start: float,
+    *,
+    mu: np.ndarray | None = None,
 ) -> dict[str, np.ndarray | float]:
     """Evaluate and instrument pinned ``estimate.theta`` without patching mgcv."""
     start = float(start)
@@ -95,9 +100,8 @@ def _r_conditional_oracle(
         derivative_path = directory / "derivatives.csv"
         trace_path = directory / "trace.csv"
         final_path = directory / "final.csv"
-        pd.DataFrame({"y": y, "mu": np.exp(eta), "wt": wt}).to_csv(
-            data_path, index=False
-        )
+        oracle_mu = np.exp(eta) if mu is None else np.asarray(mu)
+        pd.DataFrame({"y": y, "mu": oracle_mu, "wt": wt}).to_csv(data_path, index=False)
         script = f"""
 library(mgcv)
 if (as.character(getRversion()) != "4.5.2" ||
@@ -709,6 +713,26 @@ def test_conditional_theta_rejects_fixed_or_non_nb_family() -> None:
 
 
 @pytest.mark.parametrize(
+    "link", ["logit", "probit", "cloglog", "inverse", "inverse_squared"]
+)
+def test_conditional_theta_rejects_links_rejected_by_pinned_nb(link: str) -> None:
+    _, fitting_data, eta, start, _, _ = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+    with pytest.raises(NotImplementedError, match="links log, identity, and sqrt"):
+        conditional_theta_newton(
+            start,
+            eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices,
+            NegativeBinomial(theta=1.0, link=link),
+            max_y=fitting_data.max_y,
+            integer_counts=plan.integer_counts,
+        )
+
+
+@pytest.mark.parametrize(
     ("kwargs", "message"),
     [
         ({"max_y": True}, "max_y"),
@@ -770,18 +794,41 @@ def test_conditional_theta_rejects_invalid_static_shapes(
         )
 
 
-def test_conditional_theta_rejects_nonlog_nb() -> None:
-    _, fitting_data, eta, start, _, _ = _inputs()
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize("link", ["identity", "sqrt"])
+def test_conditional_theta_nonlog_links_match_pinned_r_strict(link: str) -> None:
+    _, fitting_data, _, start, y, weights = _inputs()
     plan = fitting_data.count_prefix_plan
     assert plan is not None
-    with pytest.raises(NotImplementedError, match="NB/log"):
-        conditional_theta_newton(
-            start,
-            eta,
-            fitting_data.y,
-            fitting_data.wt,
-            plan.indices,
-            NegativeBinomial(theta=1.0, link="identity"),
-            max_y=fitting_data.max_y,
-            integer_counts=plan.integer_counts,
-        )
+    family = NegativeBinomial(theta=1.0, link=link)
+    mu = 2.0 + 0.4 * np.sin(np.linspace(-1.0, 1.0, len(y)))
+    eta = jnp.asarray(family.link.link(mu))
+    result = conditional_theta_newton(
+        start,
+        eta,
+        fitting_data.y,
+        fitting_data.wt,
+        plan.indices,
+        family,
+        max_y=fitting_data.max_y,
+        integer_counts=plan.integer_counts,
+    )
+    oracle = _r_conditional_oracle(
+        y,
+        np.asarray(eta),
+        weights,
+        float(start[0]),
+        mu=mu,
+    )
+    np.testing.assert_allclose(
+        result.nll_history[: result.n_history],
+        np.concatenate(([oracle["initial"][0]], oracle["trace_nll"])),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        result.log_theta[0],
+        oracle["final"][0],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )

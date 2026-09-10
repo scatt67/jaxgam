@@ -139,16 +139,31 @@ def test_fixed_nb_efs_requires_extended_initial_sp_and_returns_fixed_theta() -> 
     assert np.all(np.isfinite(np.asarray(result.pirls_result.XtWX_fisher)))
 
 
-def test_known_scale_efs_rejects_nonlog_nb() -> None:
+def test_known_scale_efs_runs_fixed_identity_nb() -> None:
     data = _fixed_nb_data(n=40)
     family = NegativeBinomial(theta=2.7, fixed=True, link="identity")
     setup, fd = _build("y ~ s(x, bs='cr', k=5)", data, family)
-    with pytest.raises(NotImplementedError, match="NB/log"):
-        dense_efs_known_scale(
-            fd,
-            initial_log_lambda=efs_initial_log_lambda(setup, family),
-            control=EFSControl(outer_limit=1),
-        )
+    result = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=efs_initial_log_lambda(setup, family),
+        control=EFSControl(outer_limit=1),
+    )
+    assert result.theta == pytest.approx(2.7)
+    assert np.all(np.isfinite(np.asarray(result.pirls_result.mu)))
+
+
+@pytest.mark.parametrize("fixed", [True, False], ids=["fixed", "estimated"])
+@pytest.mark.parametrize(
+    "link", ["logit", "probit", "cloglog", "inverse", "inverse_squared"]
+)
+def test_known_scale_efs_rejects_links_rejected_by_pinned_nb(
+    fixed: bool, link: str
+) -> None:
+    data = _fixed_nb_data(n=40)
+    family = NegativeBinomial(theta=2.7, fixed=fixed, link=link)
+    _, fd = _build("y ~ s(x, bs='cr', k=5)", data, family)
+    with pytest.raises(NotImplementedError, match="NB log/identity/sqrt"):
+        dense_efs_known_scale(fd, initial_log_lambda=jax.numpy.zeros(fd.n_penalties))
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")

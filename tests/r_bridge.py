@@ -321,11 +321,22 @@ class RBridge:
         historical ``nb()`` mapping when callers do not request a size.
         """
         if theta is not None:
-            if family != "nb":
-                raise ValueError("EFS theta is supported only for family='nb'")
             if not np.isfinite(theta) or theta <= 0:
                 raise ValueError("EFS NB theta must be finite and positive")
-            return f"nb(theta={float(theta)!r})"
+            nb_links = {
+                "nb": "log",
+                "nb_identity": "identity",
+                "nb_sqrt": "sqrt",
+            }
+            try:
+                link = nb_links[family]
+            except KeyError:
+                raise ValueError(
+                    "EFS theta is supported only for family='nb' or its named link keys"
+                ) from None
+            if family == "nb":
+                return f"nb(theta={float(theta)!r})"
+            return f"nb(theta={float(theta)!r}, link={link!r})"
         regular_constructors = {
             "gaussian": "gaussian",
             "binomial": "binomial",
@@ -661,6 +672,116 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
             scale,
             theta,
         )
+
+    def efs_nb_working_factors(
+        self,
+        link: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weights: np.ndarray,
+        theta: float,
+        offset: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned ``dDeta`` observed W and Wz for NB links."""
+        self._require_pinned_efs_versions()
+        if link not in {"identity", "sqrt"}:
+            raise ValueError("NB working-factor oracle link must be identity or sqrt")
+        arrays = [
+            np.asarray(value, dtype=np.float64) for value in (y, mu, weights, offset)
+        ]
+        if (
+            any(value.ndim != 1 for value in arrays)
+            or len({len(value) for value in arrays}) != 1
+        ):
+            raise ValueError("NB working-factor oracle inputs must be aligned vectors")
+        if not np.isfinite(theta) or theta <= 0.0:
+            raise ValueError(
+                "NB working-factor oracle theta must be finite and positive"
+            )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            output_path = os.path.join(tmpdir, "factors.csv")
+            script_path = os.path.join(tmpdir, "factors.R")
+            pd.DataFrame(
+                {
+                    "y": arrays[0],
+                    "mu": arrays[1],
+                    "wt": arrays[2],
+                    "offset": arrays[3],
+                }
+            ).to_csv(data_path, index=False)
+            Path(script_path).write_text(
+                "\n".join(
+                    [
+                        "library(mgcv)",
+                        f"data <- read.csv({data_path!r})",
+                        f"family <- mgcv::nb(link={link!r})",
+                        "family <- mgcv:::fix.family.link(family)",
+                        "eta <- family$linkfun(data$mu)",
+                        f"d <- mgcv:::dDeta(data$y, data$mu, data$wt, log({theta!r}), family, deriv=0)",
+                        "w <- 0.5 * d$Deta2",
+                        "wz <- w * (eta - data$offset) - 0.5 * d$Deta",
+                        f"write.csv(data.frame(weight=w, weighted_response=wz), {output_path!r}, row.names=FALSE)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self._run_efs_rscript(script_path)
+            result = pd.read_csv(output_path)
+        return {
+            "weight": result["weight"].to_numpy(dtype=np.float64),
+            "weighted_response": result["weighted_response"].to_numpy(dtype=np.float64),
+        }
+
+    def efs_nb_deviance_derivatives(
+        self,
+        link: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weights: np.ndarray,
+        theta: float,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned NB deviance and its first two eta derivatives."""
+        self._require_pinned_efs_versions()
+        if link not in {"identity", "sqrt"}:
+            raise ValueError("NB deviance oracle link must be identity or sqrt")
+        arrays = [np.asarray(value, dtype=np.float64) for value in (y, mu, weights)]
+        if (
+            any(value.ndim != 1 for value in arrays)
+            or len({len(value) for value in arrays}) != 1
+        ):
+            raise ValueError("NB deviance oracle inputs must be aligned vectors")
+        if not np.isfinite(theta) or theta <= 0.0:
+            raise ValueError("NB deviance oracle theta must be finite and positive")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            output_path = os.path.join(tmpdir, "deviance.csv")
+            script_path = os.path.join(tmpdir, "deviance.R")
+            pd.DataFrame({"y": arrays[0], "mu": arrays[1], "wt": arrays[2]}).to_csv(
+                data_path, index=False
+            )
+            Path(script_path).write_text(
+                "\n".join(
+                    [
+                        "options(digits=17)",
+                        "library(mgcv)",
+                        f"data <- read.csv({data_path!r})",
+                        f"family <- mgcv::nb(link={link!r})",
+                        "family <- mgcv:::fix.family.link(family)",
+                        f"d <- mgcv:::dDeta(data$y, data$mu, data$wt, log({theta!r}), family, deriv=0)",
+                        "dev <- family$dev.resids(data$y, data$mu, data$wt, log("
+                        f"{theta!r}))",
+                        f"write.csv(data.frame(deviance=dev, deta=d$Deta, deta2=d$Deta2), {output_path!r}, row.names=FALSE)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self._run_efs_rscript(script_path)
+            result = pd.read_csv(output_path)
+        return {
+            name: result[name].to_numpy(dtype=np.float64)
+            for name in ("deviance", "deta", "deta2")
+        }
 
     def efs_diagnostics(
         self,

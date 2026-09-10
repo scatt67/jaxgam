@@ -625,6 +625,9 @@ def test_saturated_likelihood_and_inventory_are_jittable_complete() -> None:
     assert len(nb) == 16
     assert sum(entry.r_constructor_status == "accepted" for entry in nb) == 6
     assert sum(entry.efs_status == "r_rejected" for entry in nb) == 10
+    assert (
+        sum(entry.efs_status.startswith("internal_pinned_parity") for entry in nb) == 6
+    )
     assert all(
         entry.r_advertised for entry in nb if entry.r_constructor_status == "accepted"
     )
@@ -642,6 +645,16 @@ def test_saturated_likelihood_and_inventory_are_jittable_complete() -> None:
     assert "near_poisson_selected_theta_loose_exception" in (
         nb_log.numerical_boundaries
     )
+    for entry in nb:
+        if entry.r_constructor_status == "accepted":
+            assert any(evidence.startswith("tests/") for evidence in entry.evidence)
+        else:
+            assert any(
+                evidence.endswith(
+                    "test_known_scale_efs_rejects_links_rejected_by_pinned_nb"
+                )
+                for evidence in entry.evidence
+            )
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")

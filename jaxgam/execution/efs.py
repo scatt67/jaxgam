@@ -1,10 +1,9 @@
 """Dense regular-family extended Fellner--Schall execution adapter.
 
-This is intentionally an internal controller. It supports known-scale
-Poisson/log, binomial/logit, and NB/log (fixed theta or an explicitly staged
-conditional-theta route), plus regular unknown-scale Gaussian/identity and
-Gamma inverse/log. Accepted and trial states remain separate so a rejected
-refit can never leak into the next iteration.
+This is intentionally an internal controller. It supports the pinned regular
+family/link inventory and NB log/identity/sqrt (fixed theta or an explicitly
+staged conditional-theta route). Accepted and trial states remain separate so
+a rejected refit can never leak into the next iteration.
 """
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ from jaxgam.fitting.reml import (
     reml_criterion,
     reml_criterion_from_penalized_deviance,
 )
-from jaxgam.links.links import LogLink
+from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
 
 if TYPE_CHECKING:
     from jaxgam.formula.design import ModelSetup
@@ -340,7 +339,7 @@ def _known_scale_family_supported(fd: FittingData) -> bool:
         or (
             isinstance(family, NegativeBinomial)
             and family.n_theta in (0, 1)
-            and isinstance(family.link, LogLink)
+            and isinstance(family.link, (LogLink, IdentityLink, SqrtLink))
         )
     )
 
@@ -356,11 +355,7 @@ def _fixed_theta(fd: FittingData) -> float | None:
 def _estimated_theta_nb(fd: FittingData) -> bool:
     """Whether this fit uses the staged, EFS-only conditional NB theta loop."""
     family = fd.family
-    return (
-        isinstance(family, NegativeBinomial)
-        and family.n_theta == 1
-        and isinstance(family.link, LogLink)
-    )
+    return isinstance(family, NegativeBinomial) and family.n_theta == 1
 
 
 def _result_theta(state: EFSFitState, fd: FittingData) -> float | None:
@@ -653,6 +648,35 @@ def _fit_state(
         theta_loop_status = theta_result.status
         theta_n_iter = theta_result.theta_n_iter
         stopping_pdev = theta_result.stopping_penalized_deviance
+    elif isinstance(fd.family, NegativeBinomial) and fd.family.n_theta == 0:
+        if fd.count_prefix_plan is None:
+            raise ValueError("Fixed NB EFS requires count-prefix metadata")
+        fixed_log_theta = jnp.asarray(fd.family.get_theta(transformed=False))
+        fixed_beta_old = beta_start if beta_old_init is None else beta_old_init
+        offset = jnp.zeros_like(fd.y) if fd.offset is None else fd.offset
+        theta_result = efs_theta_pirls_loop(
+            fd.X,
+            fd.y,
+            beta_start,
+            penalty,
+            fd.family,
+            fd.wt,
+            fd.offset,
+            fixed_log_theta,
+            fd.count_prefix_plan.indices,
+            beta_old_init=fixed_beta_old,
+            initial_eta=fd.X @ beta_start + offset,
+            initial_start_retained=True,
+            estimate_theta=False,
+            max_y=fd.max_y,
+            integer_counts=fd.count_prefix_plan.integer_counts,
+            max_iter=control.pirls_max_iter,
+            tol=control.pirls_tolerance,
+        )
+        pr = theta_result.pirls_result
+        theta_loop_status = theta_result.status
+        theta_n_iter = theta_result.theta_n_iter
+        stopping_pdev = theta_result.stopping_penalized_deviance
     elif _uses_regular_source_loop(fd.family):
         null_beta, null_eta, initial_eta = _efs_regular_start(
             fd, beta_start, start_present=regular_start_present
@@ -786,10 +810,23 @@ def dense_efs_known_scale(
     """
     if not _known_scale_family_supported(fitting_data):
         raise NotImplementedError(
-            "Dense EFS supports regular Poisson/Binomial links and NB/log."
+            "Dense EFS supports regular Poisson/Binomial links, fixed-theta "
+            "NB log/identity/sqrt, and estimated-theta NB log/identity/sqrt."
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
+    if (
+        isinstance(fitting_data.family, NegativeBinomial)
+        and fitting_data.family.n_theta == 0
+        and bool(
+            np.any(
+                (np.asarray(fitting_data.y) > 0.0) & (np.asarray(fitting_data.y) < 1.0)
+            )
+        )
+    ):
+        raise ValueError(
+            "Fixed-theta NB EFS does not support fractional responses below one"
+        )
     for start in range(0, fitting_data.n_obs, 8192):
         prior_weights = np.asarray(fitting_data.wt[start : start + 8192])
         if not np.all(np.isfinite(prior_weights)) or np.any(
