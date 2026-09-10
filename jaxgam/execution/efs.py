@@ -19,7 +19,7 @@ import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.families.standard import Gamma, Gaussian
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.efs import (
@@ -57,7 +57,7 @@ from jaxgam.fitting.reml import (
     reml_criterion,
     reml_criterion_from_penalized_deviance,
 )
-from jaxgam.links.links import IdentityLink, InverseLink, LogitLink, LogLink
+from jaxgam.links.links import LogLink
 
 if TYPE_CHECKING:
     from jaxgam.formula.design import ModelSetup
@@ -336,8 +336,7 @@ class ConsumedFitResult(Protocol):
 def _known_scale_family_supported(fd: FittingData) -> bool:
     family = fd.family
     return family.scale_known and (
-        (family.family_name == "poisson" and isinstance(family.link, LogLink))
-        or (family.family_name == "binomial" and isinstance(family.link, LogitLink))
+        isinstance(family, (Poisson, Binomial))
         or (
             isinstance(family, NegativeBinomial)
             and family.n_theta in (0, 1)
@@ -479,15 +478,13 @@ def _select_efs_theta_start(
 def _unknown_scale_family_supported(fd: FittingData) -> bool:
     """Initial regular-family EFS scope, mirroring the validated R route."""
     family = fd.family
-    return (not family.scale_known) and (
-        (
-            isinstance(family, Gaussian)
-            and isinstance(family.link, (IdentityLink, LogLink))
-        )
-        or (
-            isinstance(family, Gamma)
-            and isinstance(family.link, (InverseLink, LogLink))
-        )
+    return (not family.scale_known) and isinstance(family, (Gaussian, Gamma))
+
+
+def _uses_regular_source_loop(family: ExponentialFamily) -> bool:
+    """Whether EFS needs ``gam.fit3``'s observed noncanonical coefficient loop."""
+    return isinstance(family, (Gaussian, Binomial, Poisson, Gamma)) and not (
+        family.is_canonical
     )
 
 
@@ -656,7 +653,7 @@ def _fit_state(
         theta_loop_status = theta_result.status
         theta_n_iter = theta_result.theta_n_iter
         stopping_pdev = theta_result.stopping_penalized_deviance
-    elif isinstance(fd.family, Gaussian) and isinstance(fd.family.link, LogLink):
+    elif _uses_regular_source_loop(fd.family):
         null_beta, null_eta, initial_eta = _efs_regular_start(
             fd, beta_start, start_present=regular_start_present
         )
@@ -789,8 +786,7 @@ def dense_efs_known_scale(
     """
     if not _known_scale_family_supported(fitting_data):
         raise NotImplementedError(
-            "Dense EFS currently supports only known-scale Poisson/log, "
-            "binomial/logit, and NB/log."
+            "Dense EFS supports regular Poisson/Binomial links and NB/log."
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
@@ -824,6 +820,11 @@ def dense_efs_known_scale(
     if beta0 is None:
         beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
     theta0: jax.Array | None = None
+    regular_absent_start = (
+        _uses_regular_source_loop(fitting_data.family) and beta_init is None
+    )
+    if regular_absent_start:
+        beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
     if estimated_theta:
         assert isinstance(fitting_data.family, NegativeBinomial)
         # efsudr reaches gam.fit4 without get.null.coef in this pinned route,
@@ -870,6 +871,15 @@ def dense_efs_known_scale(
             log_theta_start=theta0,
             beta_old_init=beta_old_init,
             start_is_absent=initial_start_is_absent,
+        )
+    elif regular_absent_start:
+        accepted = _fit_state(
+            fitting_data,
+            plan,
+            rho0,
+            beta0,
+            control,
+            regular_start_present=False,
         )
     else:
         # Keep the established known-scale call signature byte-for-byte for
@@ -1036,9 +1046,7 @@ def dense_efs_unknown_scale(
     """
     if not _unknown_scale_family_supported(fitting_data):
         raise NotImplementedError(
-            "Dense unknown-scale EFS currently supports Gaussian/identity or "
-            "Gaussian/log, and "
-            "Gamma/inverse or Gamma/log."
+            "Dense unknown-scale EFS supports regular Gaussian and Gamma links."
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
@@ -1074,12 +1082,10 @@ def dense_efs_unknown_scale(
     score_phi0 = jnp.exp(jnp.asarray(initial_log_scale))
     if not bool(np.asarray(jnp.isfinite(score_phi0) & (score_phi0 > 0))):
         raise ValueError("EFS initial unknown scale must be finite and positive")
-    gaussian_log = isinstance(fitting_data.family, Gaussian) and isinstance(
-        fitting_data.family.link, LogLink
-    )
+    regular_source_loop = _uses_regular_source_loop(fitting_data.family)
     regular_start_present = beta_init is not None
     beta0 = fitting_data.beta_init if beta_init is None else beta_init
-    if gaussian_log and not regular_start_present:
+    if regular_source_loop and not regular_start_present:
         # R's first efsudr -> gam.fit3 call has no coefficient start: retain
         # per-row link(mustart) separately instead of projecting it into beta.
         beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
@@ -1087,7 +1093,7 @@ def dense_efs_unknown_scale(
         beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
 
     plan = prepare_efs_statistics(fitting_data)
-    if gaussian_log and not regular_start_present:
+    if regular_source_loop and not regular_start_present:
         accepted = _fit_state(
             fitting_data,
             plan,

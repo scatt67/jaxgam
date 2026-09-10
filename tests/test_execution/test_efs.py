@@ -784,7 +784,7 @@ def test_dense_efs_rejects_out_of_scope_family_before_any_newton_dispatch() -> N
         pd.DataFrame({"x": x, "y": x}),
         Gaussian(),
     )
-    with pytest.raises(NotImplementedError, match="Poisson/log"):
+    with pytest.raises(NotImplementedError, match="regular Poisson/Binomial"):
         dense_efs_known_scale(fd)
 
 

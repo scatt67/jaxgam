@@ -326,6 +326,29 @@ class RBridge:
             if not np.isfinite(theta) or theta <= 0:
                 raise ValueError("EFS NB theta must be finite and positive")
             return f"nb(theta={float(theta)!r})"
+        regular_constructors = {
+            "gaussian": "gaussian",
+            "binomial": "binomial",
+            "poisson": "poisson",
+            "gamma": "Gamma",
+        }
+        r_links = {
+            "identity": "identity",
+            "log": "log",
+            "logit": "logit",
+            "inverse": "inverse",
+            "probit": "probit",
+            "cloglog": "cloglog",
+            "sqrt": "sqrt",
+            "inverse_squared": "1/mu^2",
+        }
+        for family_name, constructor in regular_constructors.items():
+            prefix = f"{family_name}_"
+            if family.startswith(prefix):
+                link = family.removeprefix(prefix)
+                if link not in r_links:
+                    break
+                return f"{constructor}(link={r_links[link]!r})"
         return self._get_subprocess_family(family)
 
     # ------------------------------------------------------------------ #
