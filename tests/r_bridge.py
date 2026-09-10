@@ -414,6 +414,90 @@ class RBridge:
         if not ok:
             raise RBridgeError(f"Pinned EFS oracle unavailable: {reason}")
 
+    def efs_statistics_algebra(
+        self,
+        log_smoothing: np.ndarray,
+        determinant_roots: list[np.ndarray],
+        covariance_roots: list[np.ndarray],
+        coefficients: np.ndarray,
+        fisher_factor: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned ``gam.reparam`` and covariance-root contractions.
+
+        This deliberately narrow oracle accepts only already prepared fitting-
+        coordinate roots and a lower Fisher Cholesky factor.  It is not an
+        arbitrary R evaluation interface: its sole purpose is matched-state
+        EFS d/t/q parity.
+        """
+        self._require_pinned_efs_versions()
+        rho = np.asarray(log_smoothing, dtype=np.float64)
+        beta = np.asarray(coefficients, dtype=np.float64)
+        factor = np.asarray(fisher_factor, dtype=np.float64)
+        roots = [np.asarray(root, dtype=np.float64) for root in covariance_roots]
+        det_roots = [np.asarray(root, dtype=np.float64) for root in determinant_roots]
+        if len(rho) != len(roots) or len(rho) != len(det_roots):
+            raise ValueError("EFS roots must have one entry per smoothing parameter")
+        if beta.ndim != 1 or factor.shape != (len(beta), len(beta)):
+            raise ValueError("coefficients and Fisher factor have incompatible shapes")
+        if not all(root.ndim == 2 and root.shape[0] == len(beta) for root in roots):
+            raise ValueError("covariance roots must be 2-D with coefficient rows")
+        if not all(
+            root.ndim == 2 and root.shape[0] == det_roots[0].shape[0]
+            for root in det_roots
+        ):
+            raise ValueError("determinant roots must share their range rows")
+        if not all(
+            np.all(np.isfinite(value))
+            for value in [rho, beta, factor, *roots, *det_roots]
+        ):
+            raise ValueError("EFS algebra oracle requires finite inputs")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            np.savetxt(base / "rho.csv", rho, delimiter=",")
+            np.savetxt(base / "beta.csv", beta, delimiter=",")
+            np.savetxt(base / "factor.csv", factor, delimiter=",")
+            for index, root in enumerate(roots):
+                np.savetxt(base / f"root_{index}.csv", root, delimiter=",")
+            for index, root in enumerate(det_roots):
+                np.savetxt(base / f"det_{index}.csv", root, delimiter=",")
+            shapes = ";".join(f"{root.shape[0]},{root.shape[1]}" for root in roots)
+            det_shapes = ";".join(
+                f"{root.shape[0]},{root.shape[1]}" for root in det_roots
+            )
+            output = base / "statistics.csv"
+            script = "\n".join(
+                [
+                    "library(mgcv)",
+                    f"base <- {str(base)!r}",
+                    f"nsp <- {len(rho)}L",
+                    f"shapes <- strsplit({shapes!r}, ';', fixed=TRUE)[[1]]",
+                    f"det.shapes <- strsplit({det_shapes!r}, ';', fixed=TRUE)[[1]]",
+                    "read.root <- function(prefix, i, shape) { d <- as.integer(strsplit(shape, ',', fixed=TRUE)[[1]]); matrix(scan(file.path(base, sprintf(paste0(prefix, '_%d.csv'), i-1L)), sep=',', quiet=TRUE), d[1], d[2], byrow=TRUE) }",
+                    "rho <- scan(file.path(base, 'rho.csv'), sep=',', quiet=TRUE); beta <- scan(file.path(base, 'beta.csv'), sep=',', quiet=TRUE)",
+                    "L <- as.matrix(read.csv(file.path(base, 'factor.csv'), header=FALSE))",
+                    "rS <- lapply(seq_len(nsp), function(i) read.root('det', i, det.shapes[i]))",
+                    "roots <- lapply(seq_len(nsp), function(i) read.root('root', i, shapes[i]))",
+                    "d <- mgcv:::gam.reparam(rS, rho, deriv=1)$det1",
+                    "q <- vapply(roots, function(B) sum((crossprod(B, beta))^2), 0.0)",
+                    "t <- vapply(roots, function(B) sum(forwardsolve(L, B)^2), 0.0)",
+                    f"write.csv(data.frame(d=d,t=t,q=q), {str(output)!r}, row.names=FALSE)",
+                ]
+            )
+            script_path = base / "efs_statistics.R"
+            script_path.write_text(script, encoding="utf-8")
+            proc = subprocess.run(
+                ["Rscript", str(script_path)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if proc.returncode != 0:
+                raise RBridgeError(f"R EFS algebra oracle failed: {proc.stderr}")
+            result = pd.read_csv(output)
+            return {
+                key: result[key].to_numpy(dtype=np.float64) for key in ("d", "t", "q")
+            }
+
     @staticmethod
     def _validate_efs_inputs(
         data: pd.DataFrame,
