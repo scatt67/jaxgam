@@ -117,6 +117,7 @@ def _diff_score(
     penalty_structure: penalty_ops.JaxPenaltyStructure,
     singleton_eig_constants: jax.Array,
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    count_indices: jax.Array,
     # Static args (JIT cache keys, not traced)
     family: ExponentialFamily,
     pirls_tol: float,
@@ -130,6 +131,7 @@ def _diff_score(
     multi_block_ranks: tuple[int, ...],
     p: int,
     max_y: int = 0,
+    integer_counts: bool = True,
     rank_deficit: int = 0,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
@@ -198,9 +200,27 @@ def _diff_score(
 
     # ---- Saturated log-likelihood ----
     if joint_theta:
-        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta, max_y=max_y)
+        ls_sat = family.saturated_loglik_theta(
+            y,
+            wt,
+            phi,
+            log_theta,
+            max_y=max_y,
+            count_indices=count_indices,
+            integer_counts=integer_counts,
+        )
     else:
-        ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
+        if family.family_name == "nb":
+            ls_sat = family.saturated_loglik(
+                y,
+                wt,
+                phi,
+                max_y=max_y,
+                count_indices=count_indices,
+                integer_counts=integer_counts,
+            )
+        else:
+            ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
     S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
 
@@ -376,6 +396,7 @@ _DIFF_STATIC = (
     "multi_block_ranks",
     "p",
     "max_y",
+    "integer_counts",
 )
 
 # Module-level JIT'd gradient and Hessian — compiled ONCE per
@@ -432,6 +453,7 @@ def _fit_and_score_impl(
     penalty_structure: penalty_ops.JaxPenaltyStructure,
     singleton_eig_constants: jax.Array,
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    count_indices: jax.Array,
     # Static args (JIT cache keys)
     family: ExponentialFamily,
     pirls_tol: float,
@@ -445,6 +467,7 @@ def _fit_and_score_impl(
     multi_block_ranks: tuple[int, ...],
     p: int,
     max_y: int = 0,
+    integer_counts: bool = True,
     rank_deficit: int = 0,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
@@ -480,9 +503,27 @@ def _fit_and_score_impl(
 
     # Saturated log-likelihood
     if joint_theta:
-        ls_sat = family.saturated_loglik_theta(y, wt, phi, log_theta, max_y=max_y)
+        ls_sat = family.saturated_loglik_theta(
+            y,
+            wt,
+            phi,
+            log_theta,
+            max_y=max_y,
+            count_indices=count_indices,
+            integer_counts=integer_counts,
+        )
     else:
-        ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
+        if family.family_name == "nb":
+            ls_sat = family.saturated_loglik(
+                y,
+                wt,
+                phi,
+                max_y=max_y,
+                count_indices=count_indices,
+                integer_counts=integer_counts,
+            )
+        else:
+            ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
     S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
     pirls_result = pirls_loop(
@@ -767,6 +808,11 @@ class NewtonOptimizer:
             "penalty_structure": fd.penalty_structure,
             "singleton_eig_constants": fd.singleton_eig_constants,
             "multi_block_proj_S": fd.multi_block_proj_S,
+            "count_indices": (
+                fd.count_prefix_plan.indices
+                if fd.count_prefix_plan is not None
+                else jnp.zeros(0, dtype=jnp.int64)
+            ),
             "family": fd.family,
             "pirls_tol": self._pirls_tol,
             "joint_theta": self._joint_theta,
@@ -780,6 +826,11 @@ class NewtonOptimizer:
             "multi_block_ranks": fd.multi_block_ranks,
             "p": fd.n_coef,
             "max_y": fd.max_y,
+            "integer_counts": (
+                fd.count_prefix_plan.integer_counts
+                if fd.count_prefix_plan is not None
+                else True
+            ),
         }
 
         # Build custom_jvp-based differentiable score for all families.
