@@ -90,6 +90,7 @@ class RBridge:
         "binomial": "binomial()",
         "poisson": "poisson()",
         "gamma": "Gamma()",
+        "gamma_log": "Gamma(link='log')",
         "nb": "nb()",
     }
 
@@ -377,6 +378,8 @@ class RBridge:
         offset: str | None = None,
         controls: dict[str, float] | None = None,
         initial_smoothing: np.ndarray | None = None,
+        initial_scale: float | None = None,
+        null_coef: bool = False,
         scale: float = -1.0,
     ) -> dict[str, Any]:
         """Fit pinned mgcv ``optimizer='efs'`` as an oracle-only bridge call.
@@ -387,7 +390,16 @@ class RBridge:
         """
         self._require_pinned_efs_versions()
         return self._fit_efs_subprocess(
-            formula, data, family, weights, offset, controls, initial_smoothing, scale
+            formula,
+            data,
+            family,
+            weights,
+            offset,
+            controls,
+            initial_smoothing,
+            initial_scale,
+            null_coef,
+            scale,
         )
 
     def efs_diagnostics(
@@ -400,12 +412,23 @@ class RBridge:
         offset: str | None = None,
         controls: dict[str, float] | None = None,
         initial_smoothing: np.ndarray | None = None,
+        initial_scale: float | None = None,
+        null_coef: bool = False,
         scale: float = -1.0,
     ) -> dict[str, Any]:
         """Return real per-refit EFS statistics from a private source copy."""
         self._require_pinned_efs_versions()
         return self._efs_diagnostics_subprocess(
-            formula, data, family, weights, offset, controls, initial_smoothing, scale
+            formula,
+            data,
+            family,
+            weights,
+            offset,
+            controls,
+            initial_smoothing,
+            initial_scale,
+            null_coef,
+            scale,
         )
 
     @staticmethod
@@ -584,6 +607,7 @@ class RBridge:
         offset: str | None,
         controls: dict[str, float],
         initial_smoothing: np.ndarray | None,
+        initial_scale: float | None,
         scale: float,
     ) -> str:
         arguments = [
@@ -596,9 +620,16 @@ class RBridge:
             arguments.append(f"weights=data[[{weights!r}]]")
         if offset is not None:
             arguments.append(f"offset=data[[{offset!r}]]")
-        if initial_smoothing is not None:
+        # Unknown-scale ``in.out`` must carry both starting values.  Supplying
+        # only sp made mgcv silently use an unrelated phi=1 and changed the
+        # EFS branch trace.  Retain the historical phi=1 fallback for the
+        # known-scale callers that supplied only smoothing values.
+        if initial_smoothing is not None and (scale > 0 or initial_scale is not None):
             smoothing = ", ".join(repr(float(value)) for value in initial_smoothing)
-            arguments.append(f"in.out=list(sp=c({smoothing}), scale=1)")
+            initial_scale_r = 1.0 if initial_scale is None else float(initial_scale)
+            arguments.append(
+                f"in.out=list(sp=c({smoothing}), scale={initial_scale_r!r})"
+            )
         return ", ".join(arguments)
 
     def _fit_efs_subprocess(
@@ -610,17 +641,39 @@ class RBridge:
         offset: str | None,
         controls: dict[str, float] | None,
         initial_smoothing: np.ndarray | None,
+        initial_scale: float | None,
+        null_coef: bool,
         scale: float,
     ) -> dict[str, Any]:
         resolved, initial = self._validate_efs_inputs(
             data, weights, offset, controls, initial_smoothing
         )
         r_family = self._get_subprocess_family(family)
-        r_arguments = self._efs_r_arguments(weights, offset, resolved, initial, scale)
+        if initial_scale is not None and (
+            not np.isfinite(initial_scale) or initial_scale <= 0
+        ):
+            raise ValueError("EFS initial_scale must be finite and positive")
+        r_arguments = self._efs_r_arguments(
+            weights, offset, resolved, initial, initial_scale, scale
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
             script_path = os.path.join(tmpdir, "fit_efs.R")
             data.to_csv(data_path, index=False)
+            setup_arguments = []
+            if weights is not None:
+                setup_arguments.append(f"weights=data[[{weights!r}]]")
+            if offset is not None:
+                setup_arguments.append(f"offset=data[[{offset!r}]]")
+            setup_suffix = ", " + ", ".join(setup_arguments) if setup_arguments else ""
+            null_coef_prefix = (
+                f"G <- gam({formula}, data=data, family={r_family}, fit=FALSE{setup_suffix})"
+                if null_coef
+                else ""
+            )
+            null_coef_argument = (
+                ", null.coef=mgcv:::get.null.coef(G)$null.coef" if null_coef else ""
+            )
             outputs = {
                 "coefficients": os.path.join(tmpdir, "coefficients.csv"),
                 "fitted": os.path.join(tmpdir, "fitted_values.csv"),
@@ -642,7 +695,8 @@ class RBridge:
                 [
                     "library(mgcv)",
                     f"data <- read.csv({data_path!r})",
-                    f"model <- gam({formula}, data=data, family={r_family}, {r_arguments})",
+                    null_coef_prefix,
+                    f"model <- gam({formula}, data=data, family={r_family}, {r_arguments}{null_coef_argument})",
                     "s <- summary(model)",
                     f"write.csv(data.frame(v=as.numeric(coef(model))), {outputs['coefficients']!r}, row.names=FALSE)",
                     f"write.csv(data.frame(v=as.numeric(fitted(model))), {outputs['fitted']!r}, row.names=FALSE)",
@@ -704,12 +758,18 @@ class RBridge:
         offset: str | None,
         controls: dict[str, float] | None,
         initial_smoothing: np.ndarray | None,
+        initial_scale: float | None,
+        null_coef: bool,
         scale: float,
     ) -> dict[str, Any]:
         """Execute a private instrumented pinned ``efsudr`` source function."""
         resolved, initial = self._validate_efs_inputs(
             data, weights, offset, controls, initial_smoothing
         )
+        if initial_scale is not None and (
+            not np.isfinite(initial_scale) or initial_scale <= 0
+        ):
+            raise ValueError("EFS initial_scale must be finite and positive")
         r_family = self._get_subprocess_family(family)
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
@@ -763,10 +823,19 @@ class RBridge:
             if offset is not None:
                 setup_arguments.append(f"offset=data[[{offset!r}]]")
             setup_suffix = ", " + ", ".join(setup_arguments) if setup_arguments else ""
+            matched_initial = initial is not None and (
+                scale > 0 or initial_scale is not None
+            )
             initial_text = (
                 "NULL"
-                if initial is None
+                if not matched_initial
                 else "c(" + ", ".join(repr(float(value)) for value in initial) + ")"
+            )
+            initial_scale_text = (
+                "NULL" if initial_scale is None else repr(float(initial_scale))
+            )
+            null_coef_argument = (
+                ", null.coef=mgcv:::get.null.coef(G)$null.coef" if null_coef else ""
             )
             script = "\n".join(
                 [
@@ -783,7 +852,8 @@ class RBridge:
                     "lsp <- log(initial_sp)",
                     f"fit_scale <- {float(scale)!r}",
                     "if (family$family[1] %in% c('poisson', 'binomial')) fit_scale <- 1",
-                    "if (fit_scale <= 0) { null_fit <- mgcv:::get.null.coef(G); lsp <- c(lsp, log(null_fit$null.scale / 10)) }",
+                    f"initial_phi <- {initial_scale_text}",
+                    "if (fit_scale <= 0) { if (is.null(initial_phi)) { null_fit <- mgcv:::get.null.coef(G); initial_phi <- null_fit$null.scale / 10 }; lsp <- c(lsp, log(initial_phi)) }",
                     "trace_env <- new.env(parent=asNamespace('mgcv'))",
                     "trace_env$trace_log <- list(); trace_env$coefficient_log <- list(); trace_env$fitted_log <- list(); trace_env$multiplier_history <- numeric(); trace_env$branch_history <- character()",
                     "trace_env$efs_record_multiplier <- function(value) trace_env$multiplier_history <- c(trace_env$multiplier_history, value)",
@@ -802,7 +872,7 @@ class RBridge:
                     "  fit",
                     "}",
                     f"source({source_path!r}, local=trace_env)",
-                    f"fit <- trace_env$efsudr(x=G$X, y=G$y, lsp=lsp, Eb=G$Eb, UrS=G$UrS, weights=G$w, family=family, offset=G$offset, U1=G$U1, intercept=G$intercept, scale=fit_scale, Mp=G$Mp, control=gam.control(efs.lspmax={resolved['efs_lspmax']!r}, efs.tol={resolved['efs_tol']!r}), n.true=G$n.true)",
+                    f"fit <- trace_env$efsudr(x=G$X, y=G$y, lsp=lsp, Eb=G$Eb, UrS=G$UrS, weights=G$w, family=family, offset=G$offset, U1=G$U1, intercept=G$intercept, scale=fit_scale, Mp=G$Mp, control=gam.control(efs.lspmax={resolved['efs_lspmax']!r}, efs.tol={resolved['efs_tol']!r}), n.true=G$n.true{null_coef_argument})",
                     "trace <- do.call(rbind, trace_env$trace_log)",
                     f"write.csv(trace, {trace_path!r}, row.names=FALSE)",
                     f"write.csv(do.call(rbind, trace_env$coefficient_log), {coefficient_path!r}, row.names=FALSE)",

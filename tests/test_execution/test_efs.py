@@ -14,15 +14,17 @@ from jaxgam.execution.efs import (
     EFSControl,
     _fit_state,
     dense_efs_known_scale,
+    dense_efs_unknown_scale,
     efs_initial_log_lambda,
+    efs_initial_log_scale,
 )
-from jaxgam.families.standard import Binomial, Gaussian, Poisson
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.efs import EFSRawUpdate, prepare_efs_statistics
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.fixtures.efs_weighted_additive_cr_repro import FORMULA, make_data
 from tests.helpers import _AssertCollector, r_available
-from tests.r_bridge import RBridge
+from tests.r_bridge import RBridge, RBridgeError
 from tests.tolerances import MODERATE, STRICT
 
 
@@ -374,6 +376,353 @@ def test_existing_efs_statistics_kernel_compiles_and_executes() -> None:
         jax.numpy.array(15.0),
     )
     assert bool(result.finite_positive)
+
+
+def test_unknown_scale_initialization_uses_unweighted_mean_and_original_n() -> None:
+    """``get.null.coef`` is not the public weighted null-deviance path."""
+    data = pd.DataFrame({"x": [0.0, 1.0, 2.0], "y": [0.0, 2.0, 9.0]})
+    weights = np.array([1.0, 3.0, 2.0])
+    setup = ModelSetup.build(parse_formula("y ~ s(x, k=3)"), data, weights=weights)
+    observed = float(np.exp(efs_initial_log_scale(setup, Gaussian())))
+    mean = float(np.mean(data["y"]))
+    expected = float(np.sum(weights * (data["y"] - mean) ** 2) / len(data) / 10.0)
+    np.testing.assert_allclose(observed, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+
+    constant = data.assign(y=2.0)
+    constant_setup = ModelSetup.build(
+        parse_formula("y ~ s(x, k=3)"), constant, weights=weights
+    )
+    with pytest.raises(ValueError, match=r"null\.scale / 10"):
+        efs_initial_log_scale(constant_setup, Gaussian())
+
+
+def test_unknown_scale_extension_uses_old_accepted_phi(monkeypatch) -> None:
+    """A losing extension cannot leak its Fletcher scale into the next fit."""
+    data = _oracle_data("poisson").assign(y=lambda frame: frame["x"] ** 2)
+    _, fd = _build("y ~ s(x, bs='cr', k=6)", data, Gaussian())
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+        jax.numpy.array(0.05),
+    )
+    calls: list[float] = []
+    ratio_phi: list[float] = []
+    outcomes = iter([(10.0, 0.2), (9.0, 0.3), (9.1, 99.0), (8.0, 0.4), (8.1, 98.0)])
+
+    def scripted(_fd, _plan, rho, _beta, _control, score_phi=None):
+        calls.append(float(np.asarray(score_phi)))
+        score, update_phi = next(outcomes)
+        return replace(
+            base,
+            log_lambda=rho,
+            score=jax.numpy.asarray(score),
+            score_phi=jax.numpy.asarray(score_phi),
+            update_phi=jax.numpy.asarray(update_phi),
+            reported_phi=jax.numpy.asarray(update_phi),
+            carried_phi=jax.numpy.asarray(update_phi),
+            valid=True,
+            inner_converged=True,
+        )
+
+    def raw(rho, _statistics, phi, multiplier, cap):
+        ratio_phi.append(float(np.asarray(phi)))
+        ratio = jax.numpy.exp(jax.numpy.full_like(rho, 0.01))
+        return EFSRawUpdate(
+            jax.numpy.ones_like(rho),
+            ratio,
+            jax.numpy.minimum(rho + 0.01 * multiplier, cap),
+            jax.numpy.array(True),
+        )
+
+    monkeypatch.setattr(execution_efs, "_fit_state", scripted)
+    monkeypatch.setattr(execution_efs, "efs_raw_update", raw)
+    result = dense_efs_unknown_scale(
+        fd,
+        initial_log_scale=jax.numpy.log(jax.numpy.array(0.05)),
+        control=EFSControl(outer_limit=2),
+    )
+    assert result.convergence_info == "iteration limit reached"
+    # Initial, candidate, losing extension, then next candidate/extension.
+    np.testing.assert_allclose(calls, [0.05, 0.2, 0.2, 0.3, 0.3])
+    np.testing.assert_allclose(ratio_phi, [0.2, 0.3])
+
+
+def test_unknown_scale_contraction_reuses_old_phi_and_rejects_invalid_input(
+    monkeypatch,
+) -> None:
+    """Contraction starts from accepted nuisance state, never a trial's scale."""
+    data = _oracle_data("poisson").assign(y=lambda frame: frame["x"] ** 2)
+    _, fd = _build("y ~ s(x, bs='cr', k=6)", data, Gaussian())
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+        jax.numpy.array(0.05),
+    )
+    calls: list[float] = []
+    ratio_phi: list[float] = []
+    # First extension wins (multiplier becomes 2). Pinned R carries the first
+    # candidate's phi=.3 into the next score, but the next EFS ratio uses the
+    # selected extension's phi=.4. Its contraction starts from that carried
+    # candidate phi, rather than the rejected trial's .5.
+    outcomes = iter([(10.0, 0.2), (9.0, 0.3), (8.0, 0.4), (11.0, 0.5), (12.0, 77.0)])
+
+    def scripted(_fd, _plan, rho, _beta, _control, score_phi=None):
+        calls.append(float(np.asarray(score_phi)))
+        score, update_phi = next(outcomes)
+        return replace(
+            base,
+            log_lambda=rho,
+            score=jax.numpy.asarray(score),
+            score_phi=jax.numpy.asarray(score_phi),
+            update_phi=jax.numpy.asarray(update_phi),
+            reported_phi=jax.numpy.asarray(update_phi),
+            carried_phi=jax.numpy.asarray(update_phi),
+            valid=True,
+            inner_converged=True,
+        )
+
+    def raw(rho, _statistics, phi, multiplier, cap):
+        ratio_phi.append(float(np.asarray(phi)))
+        ratio = jax.numpy.exp(jax.numpy.full_like(rho, 0.01))
+        return EFSRawUpdate(
+            jax.numpy.ones_like(rho),
+            ratio,
+            jax.numpy.minimum(rho + 0.01 * multiplier, cap),
+            jax.numpy.array(True),
+        )
+
+    monkeypatch.setattr(execution_efs, "_fit_state", scripted)
+    monkeypatch.setattr(execution_efs, "efs_raw_update", raw)
+    result = dense_efs_unknown_scale(
+        fd,
+        initial_log_scale=jax.numpy.log(jax.numpy.array(0.05)),
+        control=EFSControl(outer_limit=2),
+    )
+    assert result.multiplier == 1.0
+    np.testing.assert_allclose(calls, [0.05, 0.2, 0.2, 0.3, 0.3])
+    np.testing.assert_allclose(ratio_phi, [0.2, 0.4])
+    with pytest.raises(ValueError, match="initial unknown scale"):
+        dense_efs_unknown_scale(fd, initial_log_scale=jax.numpy.array(np.nan))
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_pinned_unknown_scale_winning_extension_has_split_phi_timing() -> None:
+    """Record the pinned efsudr candidate/extension full-lsp quirk directly."""
+    rng = np.random.default_rng(3)
+    x = np.linspace(-1.0, 1.0, 50)
+    data = pd.DataFrame(
+        {"x": x, "y": 0.2 + 0.5 * np.sin(2.0 * x) + rng.normal(0.0, 0.15, len(x))}
+    )
+    trace = RBridge(mode="subprocess").efs_diagnostics(
+        "y ~ s(x, bs='cr', k=6)",
+        data,
+        "gaussian",
+        controls={"efs_tol": 1e-20},
+    )["statistics"]
+    # Calls 13/14 are the first-candidate/extension pair. efsudr accepts 14,
+    # but call 15 carries call 13's update scale (not call 14's) into scoring.
+    candidate = trace.query("call == 13").iloc[0]
+    extension = trace.query("call == 14").iloc[0]
+    next_fit = trace.query("call == 15").iloc[0]
+    np.testing.assert_allclose(extension["score_phi"], candidate["score_phi"])
+    assert extension["update_phi"] != candidate["update_phi"]
+    np.testing.assert_allclose(next_fit["score_phi"], candidate["update_phi"])
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_gamma_inverse_pinned_default_requires_valid_null_coef() -> None:
+    """Pin mgcv 1.9-3's EFS null-coefficient omission and supported override."""
+    rng = np.random.default_rng(0)
+    x = np.linspace(-1.0, 1.0, 50)
+    data = pd.DataFrame(
+        {"x": x, "y": rng.gamma(50.0, (2.0 + 0.2 * np.sin(3.0 * x)) / 50.0)}
+    )
+    family = Gamma()
+    formula = "y ~ s(x, bs='cr', k=5)"
+    setup, _ = _build(formula, data, family)
+    rho = efs_initial_log_lambda(setup, family)
+    phi = float(np.exp(efs_initial_log_scale(setup, family)))
+    bridge = RBridge(mode="subprocess")
+    with pytest.raises(RBridgeError, match=r"pdev - old\.pdev"):
+        bridge.fit_efs(
+            formula,
+            data,
+            "gamma",
+            initial_smoothing=np.exp(np.asarray(rho)),
+            initial_scale=phi,
+        )
+    fit = bridge.fit_efs(
+        formula,
+        data,
+        "gamma",
+        initial_smoothing=np.exp(np.asarray(rho)),
+        initial_scale=phi,
+        null_coef=True,
+    )
+    assert np.isfinite(fit["reml_score"])
+    assert fit["scale"] > 0
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_unknown_scale_gaussian_efs_keeps_score_phi_separate_from_fletcher() -> None:
+    """Pinned EFS trial scale timing with real weights and offsets."""
+    rng = np.random.default_rng(911)
+    x = np.linspace(-1.0, 1.0, 70)
+    z = rng.uniform(-1.0, 1.0, len(x))
+    offset = 0.15 * z
+    weights = 0.5 + rng.uniform(size=len(x))
+    y = (
+        offset
+        + 0.3
+        + 0.4 * np.sin(2.4 * x)
+        + 0.15 * z
+        + rng.normal(scale=0.12, size=len(x))
+    )
+    data = pd.DataFrame({"x": x, "z": z, "y": y, "w": weights, "off": offset})
+    formula = "y ~ s(x, bs='cr', k=6) + s(z, bs='cr', k=5)"
+    setup, fd = _build(formula, data, Gaussian(), weights=weights, offset=offset)
+    rho = efs_initial_log_lambda(setup, Gaussian())
+    log_phi = efs_initial_log_scale(setup, Gaussian())
+    bridge = RBridge(mode="subprocess")
+    diagnostic = bridge.efs_diagnostics(
+        formula,
+        data,
+        "gaussian",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+        initial_scale=float(np.exp(log_phi)),
+    )
+    r_fit = bridge.fit_efs(
+        formula,
+        data,
+        "gaussian",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(rho)),
+        initial_scale=float(np.exp(log_phi)),
+    )
+    j_fit = dense_efs_unknown_scale(
+        fd, initial_log_lambda=rho, initial_log_scale=log_phi
+    )
+    first = diagnostic["statistics"].query("call == 1").sort_values("parameter")
+    collector = _AssertCollector()
+    collector.check(
+        "initial score phi",
+        lambda: np.testing.assert_allclose(
+            np.exp(log_phi),
+            first["score_phi"].iloc[0],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "initial update phi",
+        lambda: np.testing.assert_allclose(
+            _fit_state(
+                fd,
+                prepare_efs_statistics(fd),
+                rho + 2.5,
+                fd.beta_init,
+                EFSControl(),
+                np.exp(log_phi),
+            ).update_phi,
+            first["update_phi"].iloc[0],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "fitted values",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.mu,
+            r_fit["fitted_values"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "deviance",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.deviance,
+            r_fit["deviance"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "criterion at incoming phi",
+        lambda: np.testing.assert_allclose(
+            j_fit.score, r_fit["reml_score"], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.check(
+        "reported Fletcher scale",
+        lambda: np.testing.assert_allclose(
+            j_fit.scale, r_fit["scale"], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.raise_if_any("unknown-scale Gaussian EFS parity")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("family", "family_name", "null_coef"),
+    [(Gamma(), "gamma", True), (Gamma("log"), "gamma_log", False)],
+)
+def test_unknown_scale_gamma_efs_matches_pinned_r(
+    family, family_name: str, null_coef: bool
+) -> None:
+    """Gamma/inverse needs R's valid null coefficient; Gamma/log needs neither."""
+    rng = np.random.default_rng(4)
+    x = np.linspace(-1.0, 1.0, 60)
+    eta = 0.5 + 0.2 * np.sin(3.0 * x)
+    data = pd.DataFrame({"x": x, "y": rng.gamma(15.0, np.exp(eta) / 15.0)})
+    formula = "y ~ s(x, bs='cr', k=6)"
+    setup, fd = _build(formula, data, family)
+    rho = efs_initial_log_lambda(setup, family)
+    j_fit = dense_efs_unknown_scale(
+        fd,
+        initial_log_lambda=rho,
+        initial_log_scale=efs_initial_log_scale(setup, family),
+    )
+    r_fit = RBridge(mode="subprocess").fit_efs(
+        formula,
+        data,
+        family_name,
+        initial_smoothing=np.exp(np.asarray(rho)),
+        initial_scale=float(np.exp(efs_initial_log_scale(setup, family))),
+        null_coef=null_coef,
+    )
+    collector = _AssertCollector()
+    collector.check(
+        "smoothing parameters",
+        lambda: np.testing.assert_allclose(
+            j_fit.smoothing_params,
+            r_fit["smoothing_params"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "criterion",
+        lambda: np.testing.assert_allclose(
+            j_fit.score, r_fit["reml_score"], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.check(
+        "reported scale",
+        lambda: np.testing.assert_allclose(
+            j_fit.scale, r_fit["scale"], rtol=MODERATE.rtol, atol=MODERATE.atol
+        ),
+    )
+    collector.raise_if_any(f"unknown-scale {family_name} EFS parity")
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
