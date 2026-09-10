@@ -78,6 +78,10 @@ class PreparedFittingMetadata:
     multi_block_sp_indices: tuple[tuple[int, ...], ...]
     multi_block_ranks: tuple[int, ...]
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...]
+    source_fingerprint: str
+    basis_fingerprint: str
+    family_name: str
+    link_name: str
     rank_deficit: int = 0
 
     @property
@@ -113,6 +117,10 @@ class PreparedFittingMetadata:
             multi_block_sp_indices=metadata["multi_block_sp_indices"],
             multi_block_ranks=metadata["multi_block_ranks"],
             multi_block_proj_S=metadata["multi_block_proj_S"],
+            source_fingerprint=prepared.source_fingerprint,
+            basis_fingerprint=prepared.basis_fingerprint,
+            family_name=fitting.family_name,
+            link_name=fitting.link_name,
             rank_deficit=fitting.unpenalized_rank_deficit,
         )
 

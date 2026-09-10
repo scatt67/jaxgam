@@ -274,6 +274,9 @@ def stable_log_pseudo_det(S: jax.Array, U_range: jax.Array) -> jax.Array:
     return jnp.where(sign > 0, logdet, -1e10)
 
 
+_CHOLESKY_SMALL_RELATIVE_JITTER = 1e-12
+
+
 @jax.jit
 def cho_factor(
     H: jax.Array,
@@ -305,7 +308,7 @@ def cho_factor(
     I_p = jnp.eye(p)
     trace_H = jnp.trace(H)
 
-    eps_small = jnp.maximum(1e-12 * trace_H / p, 1e-14)
+    eps_small = jnp.maximum(_CHOLESKY_SMALL_RELATIVE_JITTER * trace_H / p, 1e-14)
     eps_large = jnp.maximum(1e-6 * trace_H / p, 1e-10)
 
     L_small = jnp.linalg.cholesky(H + eps_small * I_p)

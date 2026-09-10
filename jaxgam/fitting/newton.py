@@ -49,9 +49,10 @@ from enum import Enum, auto
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.scipy.linalg import cho_solve
+from jax.scipy.linalg import cho_solve, solve_triangular
 
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.standard import Gaussian
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
@@ -65,7 +66,7 @@ from jaxgam.fitting.reml import (
     estimate_edf,
     fletcher_scale,
 )
-from jaxgam.jax_utils import cho_factor
+from jaxgam.jax_utils import _CHOLESKY_SMALL_RELATIVE_JITTER, cho_factor
 
 # R's default Newton convergence tolerance (gam.control()$newton$conv.tol).
 # This is ~67x looser than sqrt(eps) ≈ 1.5e-8, matching R's deliberate
@@ -567,6 +568,127 @@ _jit_fit_and_score = jax.jit(
 )
 
 
+def _logdet_change(
+    base: jax.Array, change: jax.Array, *, relative_diagonal_jitter: float = 0.0
+) -> jax.Array:
+    """log|base + change| - log|base| without subtracting large logdets.
+
+    Both matrices must be positive definite on the same retained space.
+    Optional jitter matches the criterion's existing diagonal-relative
+    regularization; no larger-jitter fallback or rank repair is introduced.
+    A nonfinite result makes the host retain its original score comparison.
+    """
+    base = base + relative_diagonal_jitter * jnp.diag(jnp.diag(base))
+    change = change + relative_diagonal_jitter * jnp.diag(jnp.diag(change))
+    diagonal = jnp.sqrt(jnp.diag(base))
+    scaling = 1.0 / (diagonal[:, None] * diagonal[None, :])
+    factor = jnp.linalg.cholesky(base * scaling)
+    left = solve_triangular(factor, change * scaling, lower=True)
+    whitened = solve_triangular(factor, left.T, lower=True).T
+    eigenvalues = jnp.linalg.eigvalsh((whitened + whitened.T) * 0.5)
+    trial_factor = jnp.linalg.cholesky((base + change) * scaling)
+    return jnp.where(
+        jnp.all(jnp.isfinite(trial_factor)), jnp.sum(jnp.log1p(eigenvalues)), jnp.nan
+    )
+
+
+def _gaussian_score_change(
+    params_base: jax.Array,
+    params_trial: jax.Array,
+    beta_base: jax.Array,
+    beta_trial: jax.Array,
+    X: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    offset: jax.Array,
+    XtWX: jax.Array,
+    structure: penalty_ops.JaxPenaltyStructure,
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    *,
+    n_lambda: int,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+) -> jax.Array:
+    """Stable change in full-rank identity-Gaussian joint REML.
+
+    This is the difference of mgcv's ``Sl.fit`` criterion (fast-REML.r
+    1714), not a quadratic approximation or a relaxed acceptance test.
+    It retains the exact residual-gradient term even when beta_base is
+    not stationary. Exp/log differences cancel shared large terms before
+    rounding, allowing strict descent comparisons near a flat optimum.
+    """
+    rho_base, rho_trial = params_base[:n_lambda], params_trial[:n_lambda]
+    delta_rho = rho_trial - rho_base
+    S_base = penalty_ops.materialize(structure, rho_base)
+    delta_S = penalty_ops.materialize_difference(structure, rho_base, rho_trial)
+    delta_beta = beta_trial - beta_base
+    residual = y - (X @ beta_base + offset)
+    delta_prediction = X @ delta_beta
+    residual_gradient = S_base @ beta_base - X.T @ (wt * residual)
+    base_quadratic = jnp.sum(wt * residual**2) + beta_base @ S_base @ beta_base
+    delta_quadratic = (
+        2.0 * delta_beta @ residual_gradient
+        + jnp.sum(wt * delta_prediction**2)
+        + delta_beta @ S_base @ delta_beta
+        + beta_trial @ delta_S @ beta_trial
+    )
+
+    # _criterion_core normalizes H to unit diagonal, then cho_factor adds
+    # its small relative jitter. In original coordinates this is precisely
+    # jitter * diag(H). Preserve that same regularized determinant in both
+    # states; comparisons requiring the larger fallback remain unsupported.
+    delta_log_H = _logdet_change(
+        XtWX + S_base,
+        delta_S,
+        relative_diagonal_jitter=_CHOLESKY_SMALL_RELATIVE_JITTER,
+    )
+    delta_log_S = jnp.array(0.0)
+    for index, rank in zip(singleton_sp_indices, singleton_ranks, strict=True):
+        delta_log_S = delta_log_S + rank * delta_rho[index]
+    for indices, projections in zip(
+        multi_block_sp_indices, multi_block_proj_S, strict=True
+    ):
+        if projections[0].shape[0] == 0:
+            continue
+        local_rho = jnp.stack([rho_base[index] for index in indices])
+        multipliers = jnp.exp(local_rho - jnp.max(local_rho))
+        base = jnp.zeros_like(projections[0])
+        change = jnp.zeros_like(base)
+        for multiplier, index, projection in zip(
+            multipliers, indices, projections, strict=True
+        ):
+            base = base + multiplier * projection
+            change = change + multiplier * jnp.expm1(delta_rho[index]) * projection
+        delta_log_S = delta_log_S + _logdet_change(base, change)
+
+    delta_log_phi = params_trial[n_lambda] - params_base[n_lambda]
+    inverse_phi = jnp.exp(-params_base[n_lambda])
+    scaled_quadratic = base_quadratic * inverse_phi
+    residual_df = jnp.sum(wt > 0) - Mp
+    # Separate first-order cancellation in phi from its second-order term.
+    # expm1(-d) + d remains accurate on the small steps used by this path.
+    delta_scaled_quadratic = (
+        jnp.exp(-delta_log_phi) * delta_quadratic * inverse_phi
+        + scaled_quadratic * (jnp.expm1(-delta_log_phi) + delta_log_phi)
+        + (residual_df - scaled_quadratic) * delta_log_phi
+    )
+    return 0.5 * (delta_scaled_quadratic + delta_log_H - delta_log_S)
+
+
+_jit_gaussian_score_change = jax.jit(
+    _gaussian_score_change,
+    static_argnames=(
+        "n_lambda",
+        "Mp",
+        "singleton_sp_indices",
+        "singleton_ranks",
+        "multi_block_sp_indices",
+    ),
+)
+
+
 # ---------------------------------------------------------------------------
 # Result dataclass
 # ---------------------------------------------------------------------------
@@ -924,6 +1046,50 @@ class NewtonOptimizer:
         )
         return pirls_result, score
 
+    def _gaussian_trial_score_change(
+        self,
+        params: jax.Array,
+        params_trial: jax.Array,
+        beta_base: jax.Array,
+        trial: PIRLSResult,
+        score: float,
+        score_trial: float,
+        score_scale: float,
+    ) -> float:
+        """Refine only small, finite full-rank identity-Gaussian comparisons."""
+        change = score_trial - score
+        fd = self._fd
+        if (
+            not np.isfinite(change)
+            or abs(change) >= self._tol * score_scale
+            or type(fd.family) is not Gaussian
+            or not fd.family.is_canonical
+            or not self._joint_scale
+            or fd.rank_deficit != 0
+        ):
+            return change
+        stable_change = float(
+            _jit_gaussian_score_change(
+                params,
+                params_trial,
+                beta_base,
+                trial.coefficients,
+                fd.X,
+                fd.y,
+                fd.wt,
+                self._jit_kwargs["offset"],
+                trial.XtWX,
+                fd.penalty_structure,
+                fd.multi_block_proj_S,
+                n_lambda=fd.n_penalties,
+                Mp=fd.total_penalty_null_dim,
+                singleton_sp_indices=fd.singleton_sp_indices,
+                singleton_ranks=fd.singleton_ranks,
+                multi_block_sp_indices=fd.multi_block_sp_indices,
+            )
+        )
+        return stable_change if np.isfinite(stable_change) else change
+
     def _step_halve_gaussian(
         self,
         log_lambda: jax.Array,
@@ -937,7 +1103,8 @@ class NewtonOptimizer:
 
         Simpler than ``newton()``'s step acceptance: no quadratic-error
         check, no steepest-descent fallback, and step failure immediately
-        ends the optimization. Just halves until score decreases.
+        ends the optimization. Just halves while a finite trial is strictly
+        worse; a finite equal-score trial is accepted as in ``fast.REML.fit``.
 
         Returns
         -------
@@ -947,17 +1114,28 @@ class NewtonOptimizer:
 
         log_lambda_new = self._clamp_params(log_lambda + step)
         pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
+        score_change = self._gaussian_trial_score_change(
+            log_lambda,
+            log_lambda_new,
+            beta_warm,
+            pirls_new,
+            score,
+            float(score_new),
+            score_scale,
+        )
 
-        # Accept immediately if score decreased (R line 1827)
-        if jnp.isfinite(score_new) and float(score_new) < score:
+        # ``fast.REML.fit`` only halves a strictly worse trial.  A finite
+        # equal-score trial is therefore accepted; treating equality as a
+        # failure changes the selected representable rho at flat optima.
+        if bool(jnp.isfinite(score_new)) and score_change <= 0.0:
             return log_lambda_new, pirls_new, score_new, _StepOutcome.ACCEPTED
 
         # Step-halving (R lines 1827-1839)
         k = 0
         not_moved = 0
-        while float(score_new) >= score:
+        while not bool(jnp.isfinite(score_new)) or score_change > 0.0:
             # Count steps with no numerically significant change (R line 1831)
-            if float(score_new) - score < tol * score_scale:
+            if bool(jnp.isfinite(score_new)) and score_change < tol * score_scale:
                 not_moved += 1
             else:
                 not_moved = 0
@@ -965,13 +1143,24 @@ class NewtonOptimizer:
             # Break conditions (R line 1832)
             if k == _MAX_HALVINGS_GAUSSIAN or not_moved > 3:
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
-            if bool(jnp.allclose(log_lambda, log_lambda + step)):
+            # R checks exact floating-point representability, not a relative
+            # closeness heuristic: `sum(rho != rho + step) == 0`.
+            if bool(jnp.all(log_lambda == log_lambda + step)):
                 return log_lambda_new, pirls_new, score_new, _StepOutcome.FAILED
 
             step = step / 2
             k += 1
             log_lambda_new = self._clamp_params(log_lambda + step)
             pirls_new, score_new = self._fit_and_score(log_lambda_new, beta_warm)
+            score_change = self._gaussian_trial_score_change(
+                log_lambda,
+                log_lambda_new,
+                beta_warm,
+                pirls_new,
+                score,
+                float(score_new),
+                score_scale,
+            )
 
         return log_lambda_new, pirls_new, score_new, _StepOutcome.ACCEPTED
 

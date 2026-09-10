@@ -537,6 +537,8 @@ def prepare_fitting(
         total_penalty_rank=total_penalty_rank,
         total_penalty_null_dim=prepared.n_coef - total_penalty_rank,
         unpenalized_rank_deficit=unpenalized_rank_deficit,
+        family_name=str(family.family_name),
+        link_name=type(family.link).__qualname__,
     )
     if source.fingerprint() != prepared.source_fingerprint:
         raise RuntimeError(
