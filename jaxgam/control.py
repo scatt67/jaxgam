@@ -2,8 +2,38 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
+from numbers import Real
 from typing import Literal
+
+
+@dataclass(frozen=True)
+class EFSControl:
+    """Pinned dense Fellner--Schall controller limits and tolerances."""
+
+    outer_limit: int = 200
+    log_lambda_max: float = 15.0
+    score_tolerance: float = 0.1
+    pirls_tolerance: float = 1e-7
+    pirls_max_iter: int = 200
+    history_limit: int = 200
+
+    def __post_init__(self) -> None:
+        for name in ("outer_limit", "pirls_max_iter", "history_limit"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"EFS {name} must be a positive integer")
+        for name in ("log_lambda_max", "score_tolerance", "pirls_tolerance"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise ValueError(f"EFS {name} must be a real number")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"EFS {name} must be finite")
+        if self.score_tolerance < 0:
+            raise ValueError("EFS score_tolerance must be nonnegative")
+        if self.pirls_tolerance <= 0:
+            raise ValueError("EFS pirls_tolerance must be positive")
 
 
 @dataclass(frozen=True)
@@ -30,6 +60,7 @@ class FitControl:
     uncertainty: Literal["none", "fisher", "covariance"] = "none"
     linear_solver: Literal["cholesky", "qr"] = "cholesky"
     gaussian_compression: bool = False
+    efs: EFSControl = field(default_factory=EFSControl)
 
     def __post_init__(self) -> None:
         if self.execution not in ("dense", "stream"):
@@ -44,6 +75,8 @@ class FitControl:
             raise ValueError("linear_solver must be 'cholesky' or 'qr'.")
         if not isinstance(self.gaussian_compression, bool):
             raise ValueError("gaussian_compression must be a boolean.")
+        if not isinstance(self.efs, EFSControl):
+            raise ValueError("efs must be an EFSControl instance.")
         if self.gaussian_compression:
             raise NotImplementedError(
                 "gaussian_compression=True is not available for this execution path."

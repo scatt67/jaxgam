@@ -65,10 +65,10 @@ class GAM:
         Target device: ``'cpu'``, ``'gpu'``, or ``None`` (auto-detect).
         GPU requires ``jax[cuda12]`` (NVIDIA) or ``jax-metal`` (Apple).
     **kwargs
-        Additional arguments. Only the scope-guard keys ``device``,
-        ``backend``, ``optimizer``, ``select``, ``gamma``, ``knots`` are
-        accepted; any other keyword raises ``TypeError`` rather than being
-        silently ignored (so typos like ``tol=`` or ``max_iter=`` are caught).
+        Additional arguments. ``optimizer`` accepts ``"newton"`` (default)
+        or the dense ``"efs"`` route. The remaining accepted scope-guard keys
+        are ``device``, ``backend``, ``select``, ``gamma``, and ``knots``;
+        other keywords raise ``TypeError``.
 
     Examples
     --------
@@ -97,6 +97,7 @@ class GAM:
         self.method = method.upper()
         self.sp = sp
         self.device = kwargs.get("device")
+        self.optimizer = kwargs.get("optimizer") or "newton"
         if control is not None and not isinstance(control, FitControl):
             raise TypeError("control must be a FitControl instance or None.")
         self.control = FitControl() if control is None else control
@@ -201,13 +202,83 @@ class GAM:
         jax_device = _resolve_device(self.device)
         fd = FittingData.from_setup(setup, family_obj, device=jax_device)
 
-        # Phase 2: fit
+        # Phase 2: fit. Explicit fixed smoothing parameters and parametric
+        # models preserve their established routes before optimizer dispatch.
         if self.sp is not None:
             fit_result = _fit_fixed_sp(fd, self.sp, self.method)
             lambda_strategy = "fixed"
+        elif fd.n_penalties == 0:
+            fit_result = newton_optimize(fd, self.method)
+            lambda_strategy = f"newton_{self.method.lower()}"
+        elif self.optimizer == "efs":
+            from jaxgam.execution.efs import (
+                _known_scale_family_supported,
+                _unknown_scale_family_supported,
+                dense_efs_known_scale,
+                dense_efs_unknown_scale,
+                efs_initial_log_lambda,
+                efs_initial_log_scale,
+            )
+            from jaxgam.families.negative_binomial import NegativeBinomial
+            from jaxgam.links.links import IdentityLink, SqrtLink
+
+            if (
+                isinstance(family_obj, NegativeBinomial)
+                and family_obj.n_theta > 0
+                and isinstance(family_obj.link, (IdentityLink, SqrtLink))
+            ):
+                null_eta = (
+                    np.zeros(fd.n_obs, dtype=np.float64)
+                    if fd.offset is None
+                    else np.asarray(fd.offset, dtype=np.float64)
+                )
+                null_mu = np.asarray(family_obj.link.inverse(null_eta))
+                if not (
+                    np.all(family_obj.valid_eta(null_eta))
+                    and np.all(family_obj.valid_mu(null_mu))
+                ):
+                    raise ValueError(
+                        "Estimated NB identity/sqrt EFS has no valid default "
+                        "zero-coefficient recovery anchor for this offset; pinned "
+                        "mgcv rejects the same input. Supply an offset whose "
+                        "zero-coefficient means are positive."
+                    )
+
+            if family_obj.scale_known and not _known_scale_family_supported(fd):
+                raise NotImplementedError(
+                    "optimizer='efs' does not support this known-scale family/link"
+                )
+            if not family_obj.scale_known and not _unknown_scale_family_supported(fd):
+                raise NotImplementedError(
+                    "optimizer='efs' does not support this unknown-scale family/link"
+                )
+            initial_log_lambda = efs_initial_log_lambda(setup, family_obj)
+            if family_obj.scale_known:
+                fit_result = dense_efs_known_scale(
+                    fd,
+                    initial_log_lambda=initial_log_lambda,
+                    control=self.control.efs,
+                )
+            else:
+                fit_result = dense_efs_unknown_scale(
+                    fd,
+                    initial_log_lambda=initial_log_lambda,
+                    initial_log_scale=efs_initial_log_scale(setup, family_obj),
+                    control=self.control.efs,
+                )
+            lambda_strategy = "efs_reml"
         else:
             fit_result = newton_optimize(fd, self.method)
             lambda_strategy = f"newton_{self.method.lower()}"
+
+        if (
+            self.optimizer == "efs"
+            and self.sp is None
+            and fd.n_penalties > 0
+            and fit_result.theta is not None
+            and family_obj.n_theta > 0
+        ):
+            family_obj.put_theta(np.log(np.asarray([fit_result.theta])))
 
         # Phase 2→3: construct the selected result materialization
         return GAMResults._from_fit(
@@ -245,6 +316,11 @@ class GAM:
             raise ValueError(
                 "weights and offset must be owned by the RowSource for "
                 "execution='stream'; do not pass separate arrays."
+            )
+        if self.optimizer == "efs" and self.sp is None:
+            raise NotImplementedError(
+                "optimizer='efs' does not support estimated smoothing from a "
+                "RowSource; use dense execution or explicit fixed sp"
             )
         if result != "prediction":
             raise NotImplementedError(
@@ -416,11 +492,13 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
         )
 
     optimizer = kwargs.get("optimizer")
-    if optimizer is not None and optimizer != "newton":
-        raise NotImplementedError(
-            f"optimizer={optimizer!r} is not supported in v1.0. "
-            "Only 'newton' optimizer is available."
-        )
+    if optimizer is not None:
+        if not isinstance(optimizer, str):
+            raise ValueError("optimizer must be 'newton', 'efs', or None.")
+        if optimizer not in ("newton", "efs"):
+            raise NotImplementedError(
+                f"optimizer={optimizer!r} is not supported. Use 'newton' or 'efs'."
+            )
 
     if kwargs.get("select", False):
         raise NotImplementedError(

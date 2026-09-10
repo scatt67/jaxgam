@@ -31,9 +31,15 @@ import pytest
 from jax import clear_caches
 
 from jaxgam.api import GAM
+from jaxgam.execution.efs import efs_initial_log_lambda, efs_initial_log_scale
+from jaxgam.families.negative_binomial import NegativeBinomial
+from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.fitting.newton import NewtonOptimizer
+from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.parser import parse_formula
 from tests.helpers import SEED, _AssertCollector, r_available
-from tests.tolerances import LOOSE, MODERATE, STRICT
+from tests.r_bridge import RBridge
+from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 
 # ---------------------------------------------------------------------------
 # JAX cache teardown
@@ -774,6 +780,197 @@ class TestValidationMatrix:
 # ---------------------------------------------------------------------------
 # B. TestHardGateInvariants — structural invariants (no R required)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_public_dense_efs_gaussian_inverse_result_matches_pinned_r(r_bridge) -> None:
+    """Broad public-result parity belongs in the optimizer-aware matrix."""
+    rng = np.random.default_rng(7712)
+    x = np.linspace(-1.0, 1.0, 120)
+    wave = np.sin(5.0 * x) + 0.3 * np.cos(8.0 * x)
+    mu = 1.0 / (1.0 + 0.22 * wave)
+    data = pd.DataFrame(
+        {"x": x, "y": np.maximum(mu + rng.normal(0.0, 0.06, len(x)), 0.05)}
+    )
+    formula = "y ~ s(x, bs='cr', k=7)"
+    family = Gaussian("inverse")
+    setup = ModelSetup.build(parse_formula(formula), data)
+    initial = efs_initial_log_lambda(setup, family)
+    initial_scale = efs_initial_log_scale(setup, family)
+    result = GAM(formula, family=family, optimizer="efs").fit(data)
+    reference = r_bridge.fit_efs(
+        formula,
+        data,
+        "gaussian_inverse",
+        initial_smoothing=np.exp(np.asarray(initial)),
+        initial_scale=float(np.exp(initial_scale)),
+        null_coef=True,
+    )
+    collector = _AssertCollector()
+    for label, actual, expected in (
+        ("coefficients", result.coefficients, reference["coefficients"]),
+        ("fitted values", result.fitted_values, reference["fitted_values"]),
+        ("deviance", result.deviance, reference["deviance"]),
+        ("score", result.score, reference["reml_score"]),
+        ("smoothing", result.smoothing_params, reference["smoothing_params"]),
+        ("edf", result.edf, reference["edf"]),
+        ("edf total", result.edf_total, reference["edf_total"]),
+        ("covariance", result.Vp, reference["Vp"]),
+        ("null deviance", result.null_deviance, reference["null_deviance"]),
+        ("scale", result.scale, reference["scale"]),
+    ):
+        collector.check(
+            label,
+            lambda a=actual, e=expected: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.check(
+        "strategy",
+        lambda: np.testing.assert_equal(result.lambda_strategy, "efs_reml"),
+    )
+    collector.check(
+        "convergence", lambda: np.testing.assert_equal(result.converged, True)
+    )
+    collector.raise_if_any("public dense Gaussian/inverse EFS")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("link", "selected_tolerance"),
+    [("identity", MODERATE), ("sqrt", STRICT)],
+)
+def test_estimated_nb_nonlog_positive_offset_public_efs_matches_pinned_r(
+    link: str, selected_tolerance: ToleranceClass
+) -> None:
+    """Exercise the source-valid default anchor and positive-curvature retry.
+
+    Identity's selected coefficient/smoothing residual uses the reviewed
+    four-pass MODERATE proposal recorded in
+    ``docs/scale_jaxgam/efs5_1_public_numerical_review.md``. Its
+    deviance, score, theta, and outer count remain STRICT; sqrt is STRICT for
+    every fitted quantity. No explicit coefficient or theta start is supplied.
+    """
+    rng = np.random.default_rng(901)
+    n = 160
+    x = np.linspace(-1.0, 1.0, n)
+    theta = 2.7
+    mu = np.exp(1.2 + np.sin(3.2 * x) + 0.35 * np.cos(6.0 * x))
+    data = pd.DataFrame(
+        {
+            "x": x,
+            "y": rng.negative_binomial(theta, theta / (theta + mu)),
+            "off": np.ones(n),
+        }
+    )
+    formula = "y ~ s(x, bs='cr', k=7)"
+    family = NegativeBinomial(theta=theta, link=link)
+    setup = ModelSetup.build(
+        parse_formula(formula), data, offset=data["off"].to_numpy()
+    )
+    initial_log_lambda = efs_initial_log_lambda(setup, family)
+    result = GAM(formula, family=family, optimizer="efs").fit(
+        data, offset=data["off"].to_numpy()
+    )
+    reference = RBridge(mode="subprocess").fit_efs(
+        formula,
+        data,
+        f"nb_{link}",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(initial_log_lambda)),
+        scale=1.0,
+    )
+
+    for actual, expected in (
+        (result.coefficients, reference["coefficients"]),
+        (result.fitted_values, reference["fitted_values"]),
+        (result.smoothing_params, reference["smoothing_params"]),
+    ):
+        np.testing.assert_allclose(
+            actual,
+            expected,
+            rtol=selected_tolerance.rtol,
+            atol=selected_tolerance.atol,
+        )
+    for actual, expected in (
+        (result.deviance, reference["deviance"]),
+        (result.score, reference["reml_score"]),
+        (result.theta, reference["theta"]),
+    ):
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+    assert result.converged
+    assert result.n_iter == reference["outer_iterations"]
+    assert result.optimizer_diagnostics is not None
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_public_dense_efs_poisson_log_seed1033_result_matches_pinned_r(
+    r_bridge,
+) -> None:
+    """Preserve the reviewed seed-1033 public Poisson default-profile gate.
+
+    Four source/adapter/stopping diagnostics are recorded in
+    ``docs/scale_jaxgam/efs5_1_public_numerical_review.md``. The public
+    and direct controller agree at STRICT, while the pinned R terminal fit has
+    coefficient/mean residuals below 4.1e-10. Those fitted quantities use the
+    reviewed MODERATE gate; scalar score/deviance/scale checks remain STRICT.
+    """
+    data = _make_single_data("poisson", seed=SEED + 991).iloc[:96].copy()
+    formula = "y ~ s(x, bs='cr', k=6)"
+    family = Poisson()
+    setup = ModelSetup.build(parse_formula(formula), data)
+    initial = efs_initial_log_lambda(setup, family)
+    result = GAM(formula, family=family, optimizer="efs").fit(data)
+    reference = r_bridge.fit_efs(
+        formula,
+        data,
+        "poisson",
+        initial_smoothing=np.exp(np.asarray(initial)),
+        scale=1.0,
+        null_coef=True,
+    )
+    collector = _AssertCollector()
+    for label, actual, expected in (
+        ("coefficients", result.coefficients, reference["coefficients"]),
+        ("fitted values", result.fitted_values, reference["fitted_values"]),
+        ("smoothing", result.smoothing_params, reference["smoothing_params"]),
+        ("edf", result.edf, reference["edf"]),
+        ("edf total", result.edf_total, reference["edf_total"]),
+        ("covariance", result.Vp, reference["Vp"]),
+    ):
+        collector.check(
+            label,
+            lambda a=actual, e=expected: np.testing.assert_allclose(
+                a, e, rtol=MODERATE.rtol, atol=MODERATE.atol
+            ),
+        )
+    for label, actual, expected in (
+        ("deviance", result.deviance, reference["deviance"]),
+        ("score", result.score, reference["reml_score"]),
+        ("null deviance", result.null_deviance, reference["null_deviance"]),
+        ("scale", result.scale, reference["scale"]),
+    ):
+        collector.check(
+            label,
+            lambda a=actual, e=expected: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.check(
+        "outer iterations",
+        lambda: np.testing.assert_equal(result.n_iter, reference["outer_iterations"]),
+    )
+    collector.check(
+        "strategy",
+        lambda: np.testing.assert_equal(result.lambda_strategy, "efs_reml"),
+    )
+    collector.check(
+        "compact diagnostics",
+        lambda: np.testing.assert_equal(
+            result.optimizer_diagnostics.outer_iterations, result.n_iter
+        ),
+    )
+    collector.raise_if_any("public dense Poisson/log EFS seed1033")
 
 
 class TestHardGateInvariants:
