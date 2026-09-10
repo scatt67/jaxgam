@@ -160,9 +160,20 @@ def _efs_cell_status(
     link: str,
     parameter_mode: Literal["none", "fixed_theta", "estimated_theta"],
 ) -> EFSCellStatus:
-    del parameter_mode
     if _r_constructor_status(family, link) == "rejected":
         return "r_rejected"
+    completed = {
+        ("gaussian", "identity", "none"),
+        ("gamma", "inverse", "none"),
+        ("gamma", "log", "none"),
+        ("poisson", "log", "none"),
+        ("binomial", "logit", "none"),
+        ("nb", "log", "fixed_theta"),
+    }
+    if (family, link, parameter_mode) in completed:
+        return "internal_pinned_parity"
+    if (family, link, parameter_mode) == ("nb", "log", "estimated_theta"):
+        return "internal_pinned_parity_with_named_boundary"
     return "implementation_missing"
 
 
@@ -171,7 +182,8 @@ def _numerical_boundaries(
     link: str,
     parameter_mode: Literal["none", "fixed_theta", "estimated_theta"],
 ) -> tuple[str, ...]:
-    del family, link, parameter_mode
+    if (family, link, parameter_mode) == ("nb", "log", "estimated_theta"):
+        return ("near_poisson_selected_theta_loose_exception",)
     return ()
 
 
@@ -226,6 +238,39 @@ _DENSE_EVIDENCE: dict[tuple[str, str, str], tuple[EvidenceScope, tuple[str, ...]
     ),
 }
 
+# ``internal_pinned_parity`` is intentionally narrower than constructor
+# acceptance. These identifiers exercise EFS under the input profile documented
+# below; they do not certify every family/link input admitted by R.
+_EFS_EVIDENCE: dict[tuple[str, str, str], tuple[str, ...]] = {
+    ("gaussian", "identity", "none"): (
+        "tests/test_execution/test_efs.py::test_unknown_scale_gaussian_efs_keeps_score_phi_separate_from_fletcher",
+    ),
+    ("binomial", "logit", "none"): (
+        "tests/test_execution/test_efs.py::test_known_scale_efs_matches_pinned_r_from_matched_initial_state",
+    ),
+    ("poisson", "log", "none"): (
+        "tests/test_execution/test_efs.py::test_known_scale_efs_matches_pinned_r_from_matched_initial_state",
+        "tests/test_execution/test_efs.py::test_coupled_efs_statistics_and_fit_match_pinned_r",
+    ),
+    ("gamma", "inverse", "none"): (
+        "tests/test_execution/test_efs.py::test_unknown_scale_gamma_efs_matches_pinned_r",
+    ),
+    ("gamma", "log", "none"): (
+        "tests/test_execution/test_efs.py::test_unknown_scale_gamma_efs_matches_pinned_r",
+    ),
+    ("nb", "log", "fixed_theta"): (
+        "tests/test_execution/test_efs.py::test_fixed_theta_nb_log_efs_matches_pinned_r_with_real_weights_and_offsets",
+    ),
+    ("nb", "log", "estimated_theta"): (
+        "tests/test_execution/test_efs.py::test_estimated_nb_efs_controller_matches_pinned_matched_start_trace",
+    ),
+}
+
+_EFS_FIXTURE_PROFILE = (
+    "EFS evidence profile: dense identifiable design, positive prior weights and "
+    "working weights within clipping bounds, and the named basis/scale fixture"
+)
+
 
 def _entry(
     family: str,
@@ -275,6 +320,14 @@ def _entry(
         stream_status=stream,
         evidence=(
             *evidence,
+            *_EFS_EVIDENCE.get(key, ()),
+            *(
+                (_EFS_FIXTURE_PROFILE,)
+                if _efs_cell_status(family, link, parameter_mode).startswith(
+                    "internal_pinned_parity"
+                )
+                else ()
+            ),
             *(("pinned mgcv 1.9-3 R/efam.r:160-168",) if family == "nb" else ()),
         ),
     )
