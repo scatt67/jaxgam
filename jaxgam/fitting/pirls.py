@@ -34,6 +34,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.extended import ExtendedFamily
 from jaxgam.jax_utils import penalized_cholesky, penalized_solve
 
 # Working weight bounds to prevent numerical overflow/underflow.
@@ -249,7 +250,7 @@ def _signed_XtWX(w_signed: jax.Array, X: jax.Array) -> jax.Array:
     return (w[:, None] * X).T @ X
 
 
-@jax.jit(static_argnames=("family", "max_iter", "tol"))
+@jax.jit(static_argnames=("family", "max_iter", "tol", "extended_observed"))
 def _pirls_loop_jit(
     X: jax.Array,
     y: jax.Array,
@@ -261,6 +262,7 @@ def _pirls_loop_jit(
     max_iter: int = 100,
     tol: float = 1e-7,
     log_theta: jax.Array | None = None,
+    extended_observed: bool = False,
 ) -> PIRLSResult:
     """Run the PIRLS inner loop to convergence.
 
@@ -303,6 +305,12 @@ def _pirls_loop_jit(
         argument.  This avoids baking theta into the JIT cache as a
         static constant, so a single compiled kernel handles all
         theta values without recompilation.
+    extended_observed : bool
+        Static EFS-only opt-in for a fixed extended-family parameter. The
+        default preserves the established ``n_theta > 0`` PIRLS/Newton route;
+        EFS uses this only for fixed-theta NB to mirror ``gam.fit4``'s
+        observed scoring and Fisher EDF split without adding a theta
+        optimization coordinate.
 
     Returns
     -------
@@ -320,7 +328,7 @@ def _pirls_loop_jit(
         offset = jnp.zeros(n)
 
     # ---- Theta-aware compute functions ----
-    # Python ``if`` on ``family.n_theta`` is resolved at trace time
+    # Python ``if`` on this static controller mode is resolved at trace time
     # (``family`` is a static JIT arg).  For extended families the
     # pure-function factories take ``log_theta`` as a dynamic JAX
     # vector of shape ``(n_theta,)`` — generic over NB (1), Tweedie (2), etc.
@@ -330,7 +338,8 @@ def _pirls_loop_jit(
     # matching R's ``gam.fit4`` (gam.fit4.r lines 367-370).  Standard
     # families use Fisher weights via ``family.working_weights``,
     # matching R's ``gam.fit3``.
-    if family.n_theta > 0 and log_theta is not None:
+    use_extended_observed = family.n_theta > 0 or extended_observed
+    if use_extended_observed and log_theta is not None:
         _dev_fn = family.deviance_fn(y, wt)
         _grad_D_eta = jax.grad(_dev_fn, argnums=0)
 
@@ -507,7 +516,7 @@ def _pirls_loop_jit(
     # Fisher. The converged beta is identical under either weighting.
     eta_final = X @ final.beta + offset
 
-    if family.n_theta > 0 and log_theta is not None:
+    if use_extended_observed and log_theta is not None:
         # Extended families (NB): observed (signed) weights for the REML log|H|.
         W_final, _ = _compute_W_and_z(final.mu, eta_final)  # 0.5 d²D/dη², signed
         XtWX_final = _signed_XtWX(W_final, X)
@@ -575,16 +584,20 @@ def pirls_loop(
     max_iter: int = 100,
     tol: float = 1e-7,
     log_theta: jax.Array | None = None,
+    extended_observed: bool = False,
 ) -> PIRLSResult:
-    """Run PIRLS, passing estimated-family theta as dynamic JAX data.
+    """Run PIRLS, passing estimated theta as dynamic JAX data.
 
     ``family`` is a JIT static argument, so any mutable family state read by
     the jitted implementation is baked into the compiled executable. For
-    estimated extended families, default ``log_theta`` from the family state
-    here, before JIT dispatch, so theta participates in the cache as a
-    regular array argument instead of as static Python object state.
+    estimated extended families default ``log_theta`` from the family state
+    here, before JIT dispatch, so theta participates in the cache as a regular
+    array argument instead of as static Python object state. ``extended_observed``
+    is an EFS-only fixed-theta NB opt-in; default fitting behavior is unchanged.
     """
-    if family.n_theta > 0 and log_theta is None:
+    if extended_observed and not isinstance(family, ExtendedFamily):
+        raise ValueError("extended_observed requires an ExtendedFamily")
+    if (family.n_theta > 0 or extended_observed) and log_theta is None:
         log_theta = jnp.asarray(family.get_theta(transformed=False))
 
     return _pirls_loop_jit(
@@ -598,6 +611,7 @@ def pirls_loop(
         max_iter=max_iter,
         tol=tol,
         log_theta=log_theta,
+        extended_observed=extended_observed,
     )
 
 
