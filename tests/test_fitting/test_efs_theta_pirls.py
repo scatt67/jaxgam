@@ -46,6 +46,62 @@ from tests.r_bridge import RBridge
 from tests.tolerances import MODERATE, STRICT
 
 
+def test_efs_indefinite_observed_system_retries_positive_curvature_under_jit() -> None:
+    """Match gam.fit4's positive-row retry after an indefinite Newton system."""
+    X = jnp.eye(2)
+    penalty = 0.1 * jnp.eye(2)
+    observed_weight = jnp.asarray([-2.0, 3.0])
+    observed_response = jnp.asarray([4.0, 5.0])
+
+    def run():
+        def factors(_mu, _eta):
+            return _efs_observed_working_factors(
+                observed_weight,
+                observed_response,
+                observed_weight * observed_response,
+            )
+
+        def form_wls(current):
+            rhs = jnp.where(
+                current.use_weighted_response,
+                current.weighted_response,
+                current.weight * current.response,
+            )
+            return (current.weight[:, None] * X).T @ X, X.T @ rhs
+
+        return _efs_beta_step_with_recovery(
+            X=X,
+            S_lambda=penalty,
+            offset=jnp.zeros(2),
+            family=NegativeBinomial(theta=0.8),
+            beta=jnp.zeros(2),
+            eta=jnp.zeros(2),
+            mu=jnp.ones(2),
+            beta_old=jnp.zeros(2),
+            eta_old=jnp.zeros(2),
+            null_beta=jnp.zeros(2),
+            null_eta=jnp.zeros(2),
+            initial_start_retained=jnp.asarray(False),
+            iteration=jnp.asarray(0, dtype=jnp.int32),
+            baseline=jnp.asarray(100.0),
+            compute_working_factors=factors,
+            form_wls=form_wls,
+            compute_dev=lambda _mu, _eta: jnp.asarray(0.0),
+            max_recovery_halvings=100,
+        )
+
+    result = jax.jit(run)()
+    expected = np.linalg.solve(
+        np.diag([0.0, 3.0]) + 0.1 * np.eye(2), np.asarray([0.0, 15.0])
+    )
+    assert bool(result.accepted)
+    assert bool(result.factors_valid)
+    assert bool(result.solver_valid)
+    np.testing.assert_allclose(
+        result.beta, expected, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 def test_nonlog_nb_near_boundary_observed_factors_match_pinned_r_strict() -> None:
     """Raw valid eta keeps source derivatives below the family reporting floor."""

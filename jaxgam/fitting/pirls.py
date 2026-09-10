@@ -508,11 +508,53 @@ def _efs_beta_step_with_recovery(
     # EFS recovery follows ``gam.fit4``'s unregularized WLS proposal. The
     # shared solve intentionally adds scale-relative jitter for ordinary
     # PIRLS, but at a valid tiny observed curvature that can shift a raw beta
-    # enough to change the bounded midpoint sequence. This exact EFS-only
-    # factorization fails closed if the current observed system is not SPD.
-    H = XtWX + S_lambda
-    L = jnp.linalg.cholesky(H)
-    beta_raw = jsla.cho_solve((L, True), XtWz)
+    # enough to change the bounded midpoint sequence. ``gam.fit4`` retries an
+    # indefinite observed system after dropping its nonpositive-curvature rows
+    # (gam.fit4.r:391-416). Preserve its direct weighted-response algebra for
+    # that retry; the ordinary PIRLS solve remains unchanged.
+    H_observed = XtWX + S_lambda
+    L_observed = jnp.linalg.cholesky(H_observed)
+    beta_observed = jsla.cho_solve((L_observed, True), XtWz)
+    observed_solver_valid = (
+        jnp.all(jnp.isfinite(beta_observed))
+        & jnp.all(jnp.isfinite(L_observed))
+        & jnp.all(jnp.diag(L_observed) > 0.0)
+    )
+
+    def retry_with_positive_curvature(_):
+        positive = working_factors.weight > 0.0
+        positive_weight = jnp.where(positive, working_factors.weight, 0.0)
+        positive_factors = _EFSObservedWorkingFactors(
+            weight=positive_weight,
+            response=jnp.where(positive, working_factors.response, 0.0),
+            weighted_response=(
+                working_factors.weighted_response
+                + (positive_weight - working_factors.weight) * (eta - offset)
+            ),
+            use_weighted_response=working_factors.use_weighted_response,
+            valid=working_factors.valid & jnp.any(positive),
+        )
+        XtWX_positive, XtWz_positive = form_wls(positive_factors)
+        H_positive = XtWX_positive + S_lambda
+        L_positive = jnp.linalg.cholesky(H_positive)
+        beta_positive = jsla.cho_solve((L_positive, True), XtWz_positive)
+        return (
+            XtWX_positive,
+            XtWz_positive,
+            L_positive,
+            beta_positive,
+            positive_factors.valid,
+        )
+
+    def retain_observed_solve(_):
+        return XtWX, XtWz, L_observed, beta_observed, working_factors.valid
+
+    XtWX, XtWz, L, beta_raw, factors_valid = jax.lax.cond(
+        ~observed_solver_valid,
+        retry_with_positive_curvature,
+        retain_observed_solve,
+        operand=None,
+    )
     solver_valid = (
         jnp.all(jnp.isfinite(XtWX))
         & jnp.all(jnp.isfinite(XtWz))
@@ -1091,11 +1133,12 @@ def _pirls_loop_jit(
 class EFSThetaPIRLSResult:
     """Immutable result for the NB/log EFS in-loop conditional-theta path.
 
-    ``stopping_penalized_deviance`` is the pre-theta value used by the pinned
-    R stopping test. ``pirls_result.penalized_deviance`` is deliberately
-    recomputed at ``log_theta`` so every returned fit quantity is consistent
-    with its reported theta. This is a documented stronger final-state rule,
-    not a substitution for R's stopping predicate.
+    ``theta_n_iter`` counts all conditional-theta iterations across accepted
+    beta steps. ``stopping_penalized_deviance`` is the pre-theta value used by
+    the pinned R stopping test. ``pirls_result.penalized_deviance`` is
+    deliberately recomputed at ``log_theta`` so every returned fit quantity
+    is consistent with its reported theta. This is a documented stronger
+    final-state rule, not a substitution for R's stopping predicate.
     """
 
     pirls_result: PIRLSResult
@@ -1433,7 +1476,7 @@ def _efs_theta_pirls_loop_jit(
                 failed=~valid_post_theta,
                 status=status,
                 theta_status=theta_result.status,
-                theta_n_iter=theta_result.n_iter,
+                theta_n_iter=state.theta_n_iter + theta_result.n_iter,
             )
 
         return jax.lax.cond(

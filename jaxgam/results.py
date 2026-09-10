@@ -21,6 +21,7 @@ import numpy.typing as npt
 import scipy.linalg as sla
 
 from jaxgam.control import FitControl
+from jaxgam.fitting.state import EFSOptimizerDiagnostics
 from jaxgam.inference._core import finish_prediction, predict_core
 from jaxgam.inference.predictor import GAMPredictor
 from jaxgam.jax_utils import to_numpy
@@ -32,8 +33,7 @@ if TYPE_CHECKING:
     from jaxgam.data.source import RowSource
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
-    from jaxgam.fitting.newton import NewtonResult
-    from jaxgam.fitting.state import StreamFitState
+    from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
     from jaxgam.formula.design import ModelSetup, SmoothInfo
     from jaxgam.formula.predict_matrix import Data
     from jaxgam.formula.prepare import PreparedModel
@@ -160,6 +160,9 @@ class _FitDiagnostics:
     execution_path: str
     execution_route: str = field(default="dense", kw_only=True)
     execution_fallback_reason: str | None = field(default=None, kw_only=True)
+    optimizer_diagnostics: EFSOptimizerDiagnostics | None = field(
+        default=None, kw_only=True
+    )
     n: int
 
 
@@ -268,6 +271,9 @@ class GAMPredictionResult:
     execution_path: str
     execution_route: str = field(default="dense", kw_only=True)
     execution_fallback_reason: str | None = field(default=None, kw_only=True)
+    optimizer_diagnostics: EFSOptimizerDiagnostics | None = field(
+        default=None, kw_only=True
+    )
     n: int
     _batch_rows: int = 65_536
 
@@ -556,7 +562,7 @@ class GAMResults(_FitDiagnostics):
     @classmethod
     def _from_fit(
         cls,
-        fit_result: NewtonResult,
+        fit_result: ConsumedFitResult,
         setup: ModelSetup,
         spec: FormulaSpec,
         data: pd.DataFrame | dict,
@@ -580,8 +586,8 @@ class GAMResults(_FitDiagnostics):
 
         Parameters
         ----------
-        fit_result : NewtonResult
-            Raw output from Newton optimization or fixed-sp PIRLS.
+        fit_result : ConsumedFitResult
+            Optimizer-neutral output from smoothing selection or fixed-sp PIRLS.
         setup : ModelSetup
             Phase 1 model setup.
         spec : FormulaSpec
@@ -604,6 +610,7 @@ class GAMResults(_FitDiagnostics):
         """
         pr = fit_result.pirls_result
         control = FitControl() if control is None else control
+        optimizer_diagnostics = getattr(fit_result, "optimizer_diagnostics", None)
 
         # Snapshot after Newton has synchronized any fitted family parameters
         # (notably NB theta) into the fitting family instance.
@@ -678,6 +685,7 @@ class GAMResults(_FitDiagnostics):
                 execution_path="jax",
                 execution_route=execution_route,
                 execution_fallback_reason=execution_fallback_reason,
+                optimizer_diagnostics=optimizer_diagnostics,
                 n=setup.n_obs,
                 _batch_rows=control.batch_rows,
             )
@@ -742,6 +750,7 @@ class GAMResults(_FitDiagnostics):
             "execution_path": "jax",
             "execution_route": execution_route,
             "execution_fallback_reason": execution_fallback_reason,
+            "optimizer_diagnostics": optimizer_diagnostics,
             "n": setup.n_obs,
         }
 
