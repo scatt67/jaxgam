@@ -152,6 +152,12 @@ def _r_start_validity_notes(family: str, link: str) -> str:
             "Gaussian/1/mu^2 NULL start needs nonzero response; negative y gives "
             "finite positive eta"
         )
+    elif family == "poisson" and link in {"logit", "probit", "cloglog"}:
+        start = (
+            "Poisson bounded-link NULL start uses y + 0.1; an integer y=1 "
+            "leaves the inverse-link domain, so that profile needs an explicit "
+            "valid coefficient start"
+        )
     return f"{start}; selected eta note: {_eta_domain(family, link)}"
 
 
@@ -162,15 +168,7 @@ def _efs_cell_status(
 ) -> EFSCellStatus:
     if _r_constructor_status(family, link) == "rejected":
         return "r_rejected"
-    completed = {
-        ("gaussian", "identity", "none"),
-        ("gamma", "inverse", "none"),
-        ("gamma", "log", "none"),
-        ("poisson", "log", "none"),
-        ("binomial", "logit", "none"),
-        ("nb", "log", "fixed_theta"),
-    }
-    if (family, link, parameter_mode) in completed:
+    if family != "nb" or (link, parameter_mode) == ("log", "fixed_theta"):
         return "internal_pinned_parity"
     if (family, link, parameter_mode) == ("nb", "log", "estimated_theta"):
         return "internal_pinned_parity_with_named_boundary"
@@ -182,9 +180,21 @@ def _numerical_boundaries(
     link: str,
     parameter_mode: Literal["none", "fixed_theta", "estimated_theta"],
 ) -> tuple[str, ...]:
+    boundaries: list[str] = []
     if (family, link, parameter_mode) == ("nb", "log", "estimated_theta"):
-        return ("near_poisson_selected_theta_loose_exception",)
-    return ()
+        boundaries.append("near_poisson_selected_theta_loose_exception")
+    if family == "binomial" and link == "log":
+        boundaries.append("initial_alpha_near_zero_resolution_unresolved")
+    if family == "poisson" and link in {"logit", "probit", "cloglog"}:
+        boundaries.append("integer_one_response_requires_explicit_valid_start")
+    if family == "nb" and link in {"identity", "sqrt"}:
+        boundaries.extend(
+            (
+                "signed_observed_curvature_requires_EFS_only_policy",
+                "direct_wz_and_weight_clipping_policy_not_yet_gated_for_link",
+            )
+        )
+    return tuple(boundaries)
 
 
 _DENSE_EVIDENCE: dict[tuple[str, str, str], tuple[EvidenceScope, tuple[str, ...]]] = {
@@ -245,18 +255,44 @@ _EFS_EVIDENCE: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("gaussian", "identity", "none"): (
         "tests/test_execution/test_efs.py::test_unknown_scale_gaussian_efs_keeps_score_phi_separate_from_fletcher",
     ),
+    ("gaussian", "log", "none"): (
+        "tests/test_execution/test_efs_regular_links.py::test_advertised_regular_link_efs_matches_pinned_r_strict",
+        "tests/test_fitting/test_efs_regular_pirls.py::test_final_gdi1_provenance_matches_live_pinned_r",
+    ),
+    ("gaussian", "inverse", "none"): (
+        "tests/test_execution/test_efs_regular_links.py::test_advertised_regular_link_efs_matches_pinned_r_strict",
+    ),
     ("binomial", "logit", "none"): (
         "tests/test_execution/test_efs.py::test_known_scale_efs_matches_pinned_r_from_matched_initial_state",
+    ),
+    ("binomial", "probit", "none"): (
+        "tests/test_execution/test_efs_regular_links.py::test_advertised_regular_link_efs_matches_pinned_r_strict",
+    ),
+    ("binomial", "cloglog", "none"): (
+        "tests/test_execution/test_efs_regular_links.py::test_advertised_regular_link_efs_matches_pinned_r_strict",
+    ),
+    ("binomial", "log", "none"): (
+        "tests/test_execution/test_efs_regular_links.py::test_advertised_regular_link_efs_matches_pinned_r_strict",
     ),
     ("poisson", "log", "none"): (
         "tests/test_execution/test_efs.py::test_known_scale_efs_matches_pinned_r_from_matched_initial_state",
         "tests/test_execution/test_efs.py::test_coupled_efs_statistics_and_fit_match_pinned_r",
+    ),
+    ("poisson", "identity", "none"): (
+        "tests/test_execution/test_efs_regular_links.py::test_advertised_regular_link_efs_matches_pinned_r_strict",
+        "tests/test_fitting/test_efs_regular_pirls.py::test_invalid_gdi1_candidate_returns_pre_gdi1_feasible_state",
+    ),
+    ("poisson", "sqrt", "none"): (
+        "tests/test_execution/test_efs_regular_links.py::test_advertised_regular_link_efs_matches_pinned_r_strict",
     ),
     ("gamma", "inverse", "none"): (
         "tests/test_execution/test_efs.py::test_unknown_scale_gamma_efs_matches_pinned_r",
     ),
     ("gamma", "log", "none"): (
         "tests/test_execution/test_efs.py::test_unknown_scale_gamma_efs_matches_pinned_r",
+    ),
+    ("gamma", "identity", "none"): (
+        "tests/test_execution/test_efs_regular_links.py::test_advertised_regular_link_efs_matches_pinned_r_strict",
     ),
     ("nb", "log", "fixed_theta"): (
         "tests/test_execution/test_efs.py::test_fixed_theta_nb_log_efs_matches_pinned_r_with_real_weights_and_offsets",
@@ -265,6 +301,41 @@ _EFS_EVIDENCE: dict[tuple[str, str, str], tuple[str, ...]] = {
         "tests/test_execution/test_efs.py::test_estimated_nb_efs_controller_matches_pinned_matched_start_trace",
     ),
 }
+
+_CONSTRUCTOR_EXTENSION_GATE = (
+    "tests/test_execution/test_efs_regular_links.py::"
+    "test_constructor_extension_regular_link_efs_matches_pinned_r_strict"
+)
+for _key in (
+    *(
+        ("gaussian", link, "none")
+        for link in ("logit", "probit", "cloglog", "sqrt", "inverse_squared")
+    ),
+    *(
+        ("binomial", link, "none")
+        for link in ("identity", "inverse", "sqrt", "inverse_squared")
+    ),
+    *(
+        ("gamma", link, "none")
+        for link in ("logit", "probit", "cloglog", "sqrt", "inverse_squared")
+    ),
+):
+    _EFS_EVIDENCE[_key] = (_CONSTRUCTOR_EXTENSION_GATE,)
+
+_POISSON_EXPLICIT_START_GATE = (
+    "tests/test_execution/test_efs_regular_links.py::"
+    "test_nonadvertised_poisson_efs_valid_explicit_start_matches_pinned_r_strict"
+)
+for _link in ("logit", "inverse", "probit", "cloglog", "inverse_squared"):
+    _key = ("poisson", _link, "none")
+    _EFS_EVIDENCE[_key] = (_POISSON_EXPLICIT_START_GATE,)
+for _link in ("logit", "probit", "cloglog"):
+    _key = ("poisson", _link, "none")
+    _EFS_EVIDENCE[_key] = (
+        *_EFS_EVIDENCE[_key],
+        "tests/test_execution/test_efs_regular_links.py::"
+        "test_bounded_poisson_efs_default_start_failure_matches_pinned_r",
+    )
 
 _EFS_FIXTURE_PROFILE = (
     "EFS evidence profile: dense identifiable design, positive prior weights and "

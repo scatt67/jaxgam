@@ -614,7 +614,12 @@ def test_saturated_likelihood_and_inventory_are_jittable_complete() -> None:
     )
     assert inverse_squared.r_constructor_link == "1/mu^2"
     assert not inverse_squared.r_advertised
-    assert inverse_squared.efs_status == "implementation_missing"
+    assert inverse_squared.efs_status == "internal_pinned_parity"
+    assert all(entry.efs_status == "internal_pinned_parity" for entry in regular)
+    assert all(
+        any(evidence.startswith("tests/") for evidence in entry.evidence)
+        for entry in regular
+    )
 
     nb = [entry for entry in FAMILY_EXECUTION_INVENTORY if entry.family == "nb"]
     assert len(nb) == 16
