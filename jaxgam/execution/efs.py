@@ -1,25 +1,25 @@
 """Dense regular-family extended Fellner--Schall execution adapter.
 
-This is intentionally an internal controller. It supports known-scale
-Poisson/log, binomial/logit, and NB/log (fixed theta or an explicitly staged
-conditional-theta route), plus regular unknown-scale Gaussian/identity and
-Gamma inverse/log. Accepted and trial states remain separate so a rejected
-refit can never leak into the next iteration.
+This is intentionally an internal controller. It supports the pinned regular
+family/link inventory and NB log/identity/sqrt (fixed theta or an explicitly
+staged conditional-theta route). Accepted and trial states remain separate so
+a rejected refit can never leak into the next iteration.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jaxgam.control import EFSControl
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.families.standard import Gamma, Gaussian
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.efs import (
@@ -29,6 +29,17 @@ from jaxgam.fitting.efs import (
     efs_raw_update,
     efs_statistics,
     prepare_efs_statistics,
+)
+from jaxgam.fitting.efs_regular_pirls import (
+    EFS_REGULAR_STATUS_CONVERGED,
+    EFS_REGULAR_STATUS_DIVERGENCE_RECOVERY_FAILED,
+    EFS_REGULAR_STATUS_DOMAIN_RECOVERY_FAILED,
+    EFS_REGULAR_STATUS_INVALID_START,
+    EFS_REGULAR_STATUS_INVALID_WORKING_FACTORS,
+    EFS_REGULAR_STATUS_NONFINITE_COEFFICIENTS,
+    EFS_REGULAR_STATUS_NONFINITE_RECOVERY_FAILED,
+    EFS_REGULAR_STATUS_RANK_BOUNDARY_UNSUPPORTED,
+    efs_regular_pirls_loop,
 )
 from jaxgam.fitting.pirls import (
     _EFS_STATUS_DIVERGENCE_RECOVERY_FAILED,
@@ -40,8 +51,14 @@ from jaxgam.fitting.pirls import (
     efs_theta_pirls_loop,
     pirls_loop,
 )
-from jaxgam.fitting.reml import estimate_edf, fletcher_scale, reml_criterion
-from jaxgam.links.links import IdentityLink, InverseLink, LogitLink, LogLink
+from jaxgam.fitting.reml import (
+    estimate_edf,
+    fletcher_scale,
+    reml_criterion,
+    reml_criterion_from_penalized_deviance,
+)
+from jaxgam.fitting.state import EFSOptimizerDiagnostics
+from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
 
 if TYPE_CHECKING:
     from jaxgam.formula.design import ModelSetup
@@ -183,36 +200,6 @@ def _efs_initial_log_scale_from_arrays(
     return jnp.asarray(np.log(incoming_phi), dtype=jnp.float64)
 
 
-@dataclass(frozen=True)
-class EFSControl:
-    """Pinned ``efsudr`` controls for the dense regular-family path."""
-
-    outer_limit: int = 200
-    log_lambda_max: float = 15.0
-    score_tolerance: float = 0.1
-    pirls_tolerance: float = 1e-7
-    pirls_max_iter: int = 200
-    history_limit: int = 200
-
-    def __post_init__(self) -> None:
-        for name, value in (
-            ("outer_limit", self.outer_limit),
-            ("pirls_max_iter", self.pirls_max_iter),
-            ("history_limit", self.history_limit),
-        ):
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                raise ValueError(f"EFS {name} must be a positive integer")
-        if not np.isfinite(self.log_lambda_max):
-            raise ValueError("EFS log_lambda_max must be finite")
-        if (
-            not np.isfinite(self.score_tolerance)
-            or not np.isfinite(self.pirls_tolerance)
-            or self.score_tolerance < 0
-            or self.pirls_tolerance <= 0
-        ):
-            raise ValueError("EFS tolerances must be finite and positive")
-
-
 DEFAULT_EFS_CONTROL = EFSControl()
 
 # Module-level compiled kernels deliberately avoid constructing a fresh closure
@@ -221,6 +208,17 @@ DEFAULT_EFS_CONTROL = EFSControl()
 _jit_efs_statistics = jax.jit(efs_statistics)
 _jit_reml_score = jax.jit(
     reml_criterion,
+    static_argnames=(
+        "Mp",
+        "rank_deficit",
+        "singleton_sp_indices",
+        "singleton_ranks",
+        "multi_block_sp_indices",
+        "multi_block_ranks",
+    ),
+)
+_jit_reml_score_from_penalized_deviance = jax.jit(
+    reml_criterion_from_penalized_deviance,
     static_argnames=(
         "Mp",
         "rank_deficit",
@@ -258,6 +256,14 @@ class EFSFitState:
     theta_loop_status: jax.Array | None = None
     theta_n_iter: jax.Array | None = None
     stopping_penalized_deviance: jax.Array | None = None
+    regular_loop_status: jax.Array | None = None
+    pre_gdi1_deviance: jax.Array | None = None
+    pre_gdi1_penalized_deviance: jax.Array | None = None
+    gdi1_penalty: jax.Array | None = None
+    gdi1_candidate_valid: jax.Array | None = None
+    # Count is bounded by the EFS-only PIRLS iteration limit and is collapsed
+    # to the public stabilized-solve indicator by the host accumulator.
+    positive_curvature_retry_count: jax.Array | None = None
 
 
 @dataclass(frozen=True)
@@ -285,31 +291,125 @@ class EFSResult:
     reported_phi: jax.Array | None = None
     carried_phi: jax.Array | None = None
     score_phi_history: tuple[float, ...] = ()
+    optimizer_diagnostics: EFSOptimizerDiagnostics | None = None
 
 
-class ConsumedFitResult(Protocol):
-    """The subset of an optimizer result used by ``GAMResults._from_fit``."""
+@dataclass
+class _EFSDiagnosticsAccumulator:
+    """Host-only counters for the compact public EFS trace."""
 
-    smoothing_params: jax.Array
-    converged: bool
-    n_iter: int
-    score: jax.Array
-    edf: jax.Array
-    scale: jax.Array
-    pirls_result: PIRLSResult
-    convergence_info: str
-    theta: float | None
+    max_proposed_movement: float = 0.0
+    max_accepted_movement: float = 0.0
+    inner_iterations: int = 0
+    theta_iterations: int = 0
+    numerator_clamp_count: int = 0
+    ratio_replacement_count: int = 0
+    log_lambda_cap_count: int = 0
+    invalid_fit_seen: bool = False
+    gdi1_fallback_seen: bool = False
+    positive_curvature_retry_count: int = 0
+
+    def observe_fit(self, state: EFSFitState) -> None:
+        self.inner_iterations += int(np.asarray(state.pirls_result.n_iter))
+        if state.theta_n_iter is not None:
+            self.theta_iterations += int(np.asarray(state.theta_n_iter))
+        self.invalid_fit_seen |= not state.valid
+        if state.gdi1_candidate_valid is not None:
+            self.gdi1_fallback_seen |= not bool(np.asarray(state.gdi1_candidate_valid))
+        if state.positive_curvature_retry_count is not None:
+            self.positive_curvature_retry_count += int(
+                np.asarray(state.positive_curvature_retry_count)
+            )
+
+    def observe_update(
+        self,
+        state: EFSFitState,
+        phi_update: jax.Array,
+        multiplier: float,
+        log_lambda_max: float,
+        raw: EFSRawUpdate,
+    ) -> None:
+        rho = np.asarray(state.log_lambda)
+        determinant = np.asarray(state.statistics.determinant_derivative)
+        fisher_trace = np.asarray(state.statistics.fisher_trace)
+        quadratic = np.asarray(state.statistics.quadratic)
+        unclamped_numerator = np.exp(-rho) * determinant - fisher_trace
+        self.numerator_clamp_count += int(np.count_nonzero(unclamped_numerator < 0.0))
+        numerator = np.maximum(0.0, unclamped_numerator)
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            ratio = (
+                float(np.asarray(phi_update)) * numerator / np.maximum(0.0, quadratic)
+            )
+        ratio = np.where((numerator == 0.0) & (quadratic == 0.0), 1.0, ratio)
+        self.ratio_replacement_count += int(np.count_nonzero(~np.isfinite(ratio)))
+        self.observe_trial(rho, np.asarray(raw.ratio), multiplier, log_lambda_max)
+
+    def observe_trial(
+        self,
+        rho: jax.Array | np.ndarray,
+        ratio: jax.Array | np.ndarray,
+        multiplier: float,
+        log_lambda_max: float,
+    ) -> None:
+        rho = np.asarray(rho)
+        unbounded = rho + np.log(np.asarray(ratio)) * multiplier
+        self.log_lambda_cap_count += int(np.count_nonzero(unbounded > log_lambda_max))
+        proposed = float(np.max(np.abs(unbounded - rho)))
+        self.max_proposed_movement = max(self.max_proposed_movement, proposed)
+
+    def observe_accepted(self, old: EFSFitState, accepted: EFSFitState) -> None:
+        movement = float(
+            np.max(np.abs(np.asarray(accepted.log_lambda - old.log_lambda)))
+        )
+        self.max_accepted_movement = max(self.max_accepted_movement, movement)
+
+    def finish(
+        self,
+        *,
+        stop_reason: str,
+        outer_iterations: int,
+        history: tuple[float, ...],
+        score_phi_history: tuple[float, ...],
+        multiplier: float,
+        update_residual: jax.Array | None,
+    ) -> EFSOptimizerDiagnostics:
+        residual = (
+            ()
+            if update_residual is None
+            else tuple(float(value) for value in np.ravel(np.asarray(update_residual)))
+        )
+        return EFSOptimizerDiagnostics(
+            reference_profile="mgcv-1.9-3-efsudr-dense",
+            trace_method="exact-dense-fisher",
+            step_policy="efsudr-extension-contraction",
+            stop_reason=stop_reason,
+            outer_iterations=outer_iterations,
+            inner_iterations=self.inner_iterations,
+            theta_iterations=self.theta_iterations,
+            accepted_score_history=history,
+            accepted_score_phi_history=score_phi_history,
+            multiplier=float(multiplier),
+            final_update_residual=residual,
+            max_proposed_movement=self.max_proposed_movement,
+            max_accepted_movement=self.max_accepted_movement,
+            numerator_clamp_count=self.numerator_clamp_count,
+            ratio_replacement_count=self.ratio_replacement_count,
+            log_lambda_cap_count=self.log_lambda_cap_count,
+            invalid_fit_seen=self.invalid_fit_seen,
+            stabilized_solve_seen=(
+                self.gdi1_fallback_seen or self.positive_curvature_retry_count > 0
+            ),
+        )
 
 
 def _known_scale_family_supported(fd: FittingData) -> bool:
     family = fd.family
     return family.scale_known and (
-        (family.family_name == "poisson" and isinstance(family.link, LogLink))
-        or (family.family_name == "binomial" and isinstance(family.link, LogitLink))
+        isinstance(family, (Poisson, Binomial))
         or (
             isinstance(family, NegativeBinomial)
             and family.n_theta in (0, 1)
-            and isinstance(family.link, LogLink)
+            and isinstance(family.link, (LogLink, IdentityLink, SqrtLink))
         )
     )
 
@@ -325,11 +425,7 @@ def _fixed_theta(fd: FittingData) -> float | None:
 def _estimated_theta_nb(fd: FittingData) -> bool:
     """Whether this fit uses the staged, EFS-only conditional NB theta loop."""
     family = fd.family
-    return (
-        isinstance(family, NegativeBinomial)
-        and family.n_theta == 1
-        and isinstance(family.link, LogLink)
-    )
+    return isinstance(family, NegativeBinomial) and family.n_theta == 1
 
 
 def _result_theta(state: EFSFitState, fd: FittingData) -> float | None:
@@ -341,6 +437,19 @@ def _result_theta(state: EFSFitState, fd: FittingData) -> float | None:
 
 def _efs_fit_failure_label(state: EFSFitState) -> str:
     """Expose EFS beta-loop recovery failures without masking theta status."""
+    if state.regular_loop_status is not None:
+        regular_labels = {
+            EFS_REGULAR_STATUS_INVALID_START: "invalid_start",
+            EFS_REGULAR_STATUS_NONFINITE_COEFFICIENTS: "nonfinite_coefficients",
+            EFS_REGULAR_STATUS_NONFINITE_RECOVERY_FAILED: "nonfinite_recovery_failed",
+            EFS_REGULAR_STATUS_DOMAIN_RECOVERY_FAILED: "domain_recovery_failed",
+            EFS_REGULAR_STATUS_DIVERGENCE_RECOVERY_FAILED: "divergence_recovery_failed",
+            EFS_REGULAR_STATUS_INVALID_WORKING_FACTORS: "invalid_working_factors",
+            EFS_REGULAR_STATUS_RANK_BOUNDARY_UNSUPPORTED: "rank_boundary_unsupported",
+        }
+        label = regular_labels.get(int(np.asarray(state.regular_loop_status)))
+        if label is not None:
+            return label
     if state.theta_loop_status is not None:
         recovery_labels = {
             _EFS_STATUS_NONFINITE_RECOVERY_FAILED: "nonfinite_recovery_failed",
@@ -434,13 +543,53 @@ def _select_efs_theta_start(
 def _unknown_scale_family_supported(fd: FittingData) -> bool:
     """Initial regular-family EFS scope, mirroring the validated R route."""
     family = fd.family
-    return (not family.scale_known) and (
-        (isinstance(family, Gaussian) and isinstance(family.link, IdentityLink))
-        or (
-            isinstance(family, Gamma)
-            and isinstance(family.link, (InverseLink, LogLink))
-        )
+    return (not family.scale_known) and isinstance(family, (Gaussian, Gamma))
+
+
+def _uses_regular_source_loop(family: ExponentialFamily) -> bool:
+    """Whether EFS needs ``gam.fit3``'s observed noncanonical coefficient loop."""
+    return isinstance(family, (Gaussian, Binomial, Poisson, Gamma)) and not (
+        family.is_canonical
     )
+
+
+def _efs_regular_start(
+    fd: FittingData,
+    beta_start: jax.Array,
+    *,
+    start_present: bool,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Build ``gam.fit3``'s explicit start/null coefficient coordinates.
+
+    The null anchor is always the unweighted response-mean projection from
+    ``get.null.coef``.  It remains distinct from a retained coefficient start
+    on every refit.
+    """
+    family = fd.family
+    y = np.asarray(fd.y, dtype=np.float64)
+    X = np.asarray(fd.X, dtype=np.float64)
+    response_mean = float(np.mean(y))
+    eta_mean = float(
+        np.asarray(family.link.initial_link_cpu(np.asarray([response_mean])))[0]
+    )
+    if not np.isfinite(eta_mean):
+        raise ValueError("EFS regular null coefficient requires a finite link mean")
+    null_beta = jnp.asarray(
+        np.linalg.lstsq(X, np.full(fd.n_obs, eta_mean), rcond=None)[0],
+        dtype=fd.X.dtype,
+    )
+    offset = jnp.zeros_like(fd.y) if fd.offset is None else fd.offset
+    null_eta = fd.X @ null_beta + offset
+    if start_present:
+        initial_eta = fd.X @ beta_start + offset
+    else:
+        initial = family.initial_working_state_cpu(
+            y, np.asarray(fd.wt, dtype=np.float64), np.ones(fd.n_obs, dtype=bool)
+        )
+        if not initial.input_ok:
+            raise ValueError("EFS regular initial response is invalid in pinned R")
+        initial_eta = jnp.asarray(initial.eta, dtype=fd.X.dtype)
+    return null_beta, null_eta, initial_eta
 
 
 def _scalar_score(
@@ -449,6 +598,8 @@ def _scalar_score(
     pr: PIRLSResult,
     score_phi: jax.Array,
     log_theta: jax.Array | None = None,
+    *,
+    penalized_deviance: jax.Array | None = None,
 ) -> jax.Array:
     """Evaluate only the scalar REML criterion; no score derivatives."""
     if fd.family.family_name == "nb" and fd.count_prefix_plan is not None:
@@ -476,11 +627,11 @@ def _scalar_score(
             )
     else:
         ls_sat = fd.family.saturated_loglik(fd.y, fd.wt, score_phi, max_y=fd.max_y)
-    return _jit_reml_score(
+    common = (
         rho,
         pr.XtWX,
-        pr.coefficients,
-        pr.deviance,
+    )
+    metadata = (
         ls_sat,
         fd.penalty_structure,
         score_phi,
@@ -493,6 +644,11 @@ def _scalar_score(
         fd.multi_block_proj_S,
         fd.rank_deficit,
     )
+    if penalized_deviance is not None:
+        return _jit_reml_score_from_penalized_deviance(
+            *common, penalized_deviance, *metadata
+        )
+    return _jit_reml_score(*common, pr.coefficients, pr.deviance, *metadata)
 
 
 def _fit_state(
@@ -506,6 +662,7 @@ def _fit_state(
     log_theta_start: jax.Array | None = None,
     beta_old_init: jax.Array | None = None,
     start_is_absent: bool = False,
+    regular_start_present: bool = True,
 ) -> EFSFitState:
     if score_phi is None:
         score_phi = jnp.array(1.0)
@@ -515,6 +672,13 @@ def _fit_state(
     theta_loop_status: jax.Array | None = None
     theta_n_iter: jax.Array | None = None
     stopping_pdev: jax.Array | None = None
+    regular_loop_status: jax.Array | None = None
+    pre_gdi1_deviance: jax.Array | None = None
+    pre_gdi1_pdev: jax.Array | None = None
+    gdi1_penalty: jax.Array | None = None
+    gdi1_candidate_valid: jax.Array | None = None
+    positive_curvature_retry_count: jax.Array | None = None
+    score_pdev: jax.Array | None = None
     if _estimated_theta_nb(fd):
         if log_theta_start is None or beta_old_init is None:
             raise ValueError(
@@ -554,7 +718,66 @@ def _fit_state(
         theta_status = theta_result.theta_status
         theta_loop_status = theta_result.status
         theta_n_iter = theta_result.theta_n_iter
+        positive_curvature_retry_count = theta_result.positive_curvature_retry_count
         stopping_pdev = theta_result.stopping_penalized_deviance
+    elif isinstance(fd.family, NegativeBinomial) and fd.family.n_theta == 0:
+        if fd.count_prefix_plan is None:
+            raise ValueError("Fixed NB EFS requires count-prefix metadata")
+        fixed_log_theta = jnp.asarray(fd.family.get_theta(transformed=False))
+        fixed_beta_old = beta_start if beta_old_init is None else beta_old_init
+        offset = jnp.zeros_like(fd.y) if fd.offset is None else fd.offset
+        theta_result = efs_theta_pirls_loop(
+            fd.X,
+            fd.y,
+            beta_start,
+            penalty,
+            fd.family,
+            fd.wt,
+            fd.offset,
+            fixed_log_theta,
+            fd.count_prefix_plan.indices,
+            beta_old_init=fixed_beta_old,
+            initial_eta=fd.X @ beta_start + offset,
+            initial_start_retained=True,
+            estimate_theta=False,
+            max_y=fd.max_y,
+            integer_counts=fd.count_prefix_plan.integer_counts,
+            max_iter=control.pirls_max_iter,
+            tol=control.pirls_tolerance,
+        )
+        pr = theta_result.pirls_result
+        theta_loop_status = theta_result.status
+        theta_n_iter = theta_result.theta_n_iter
+        positive_curvature_retry_count = theta_result.positive_curvature_retry_count
+        stopping_pdev = theta_result.stopping_penalized_deviance
+    elif _uses_regular_source_loop(fd.family):
+        null_beta, null_eta, initial_eta = _efs_regular_start(
+            fd, beta_start, start_present=regular_start_present
+        )
+        regular_result = efs_regular_pirls_loop(
+            fd.X,
+            fd.y,
+            beta_start,
+            initial_eta,
+            null_beta,
+            null_eta,
+            penalty,
+            fd.family,
+            fd.wt,
+            fd.offset,
+            score_phi,
+            start_present=regular_start_present,
+            max_iter=control.pirls_max_iter,
+            tol=control.pirls_tolerance,
+        )
+        pr = regular_result.pirls_result
+        regular_loop_status = regular_result.status
+        pre_gdi1_deviance = regular_result.pre_gdi1_deviance
+        pre_gdi1_pdev = regular_result.pre_gdi1_penalized_deviance
+        gdi1_penalty = regular_result.gdi1_penalty
+        gdi1_candidate_valid = regular_result.gdi1_candidate_valid
+        score_pdev = pre_gdi1_deviance + gdi1_penalty
+        stopping_pdev = pre_gdi1_pdev
     else:
         pr = pirls_loop(
             fd.X,
@@ -571,7 +794,14 @@ def _fit_state(
             ),
         )
     statistics = _jit_efs_statistics(plan, pr.coefficients, pr.L_fisher, rho)
-    score = _scalar_score(fd, rho, pr, score_phi, log_theta)
+    score = _scalar_score(
+        fd,
+        rho,
+        pr,
+        score_phi,
+        log_theta,
+        penalized_deviance=score_pdev,
+    )
     edf = estimate_edf(pr.XtWX_fisher, pr.L_fisher)
     update_phi = (
         jnp.array(1.0)
@@ -582,6 +812,11 @@ def _fit_state(
         np.asarray(jnp.isfinite(score) & jnp.all(jnp.isfinite(pr.coefficients)))
     )
     inner = bool(np.asarray(pr.converged))
+    regular_ok = (
+        True
+        if regular_loop_status is None
+        else bool(np.asarray(regular_loop_status == EFS_REGULAR_STATUS_CONVERGED))
+    )
     theta_ok = (
         True
         if theta_status is None or log_theta is None
@@ -597,6 +832,7 @@ def _fit_state(
     valid = (
         finite
         and inner
+        and regular_ok
         and theta_ok
         and bool(np.asarray(statistics.input_valid))
         and bool(np.asarray(jnp.isfinite(score_phi) & (score_phi > 0)))
@@ -620,6 +856,12 @@ def _fit_state(
         theta_loop_status,
         theta_n_iter,
         stopping_pdev,
+        regular_loop_status,
+        pre_gdi1_deviance,
+        pre_gdi1_pdev,
+        gdi1_penalty,
+        gdi1_candidate_valid,
+        positive_curvature_retry_count,
     )
 
 
@@ -634,7 +876,7 @@ def dense_efs_known_scale(
 ) -> EFSResult:
     """Run the pinned EFS accepted/trial policy for known-scale families.
 
-    The routine is opt-in and internal; it never dispatches from ``GAM.fit``.
+    ``GAM.fit`` dispatches here only after fixed-sp and zero-penalty precedence.
     A caller may pass a matched retained beta/null anchor for R-parity tests.
     Estimated NB otherwise starts at R EFS's zero null anchor with a separate
     per-row ``link(mustart)`` state; it never repurposes the ordinary projected
@@ -642,11 +884,23 @@ def dense_efs_known_scale(
     """
     if not _known_scale_family_supported(fitting_data):
         raise NotImplementedError(
-            "Dense EFS currently supports only known-scale Poisson/log, "
-            "binomial/logit, and NB/log."
+            "Dense EFS supports regular Poisson/Binomial links, fixed-theta "
+            "NB log/identity/sqrt, and estimated-theta NB log/identity/sqrt."
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
+    if (
+        isinstance(fitting_data.family, NegativeBinomial)
+        and fitting_data.family.n_theta == 0
+        and bool(
+            np.any(
+                (np.asarray(fitting_data.y) > 0.0) & (np.asarray(fitting_data.y) < 1.0)
+            )
+        )
+    ):
+        raise ValueError(
+            "Fixed-theta NB EFS does not support fractional responses below one"
+        )
     for start in range(0, fitting_data.n_obs, 8192):
         prior_weights = np.asarray(fitting_data.wt[start : start + 8192])
         if not np.all(np.isfinite(prior_weights)) or np.any(
@@ -677,6 +931,11 @@ def dense_efs_known_scale(
     if beta0 is None:
         beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
     theta0: jax.Array | None = None
+    regular_absent_start = (
+        _uses_regular_source_loop(fitting_data.family) and beta_init is None
+    )
+    if regular_absent_start:
+        beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
     if estimated_theta:
         assert isinstance(fitting_data.family, NegativeBinomial)
         # efsudr reaches gam.fit4 without get.null.coef in this pinned route,
@@ -724,11 +983,37 @@ def dense_efs_known_scale(
             beta_old_init=beta_old_init,
             start_is_absent=initial_start_is_absent,
         )
+    elif regular_absent_start:
+        accepted = _fit_state(
+            fitting_data,
+            plan,
+            rho0,
+            beta0,
+            control,
+            regular_start_present=False,
+        )
     else:
         # Keep the established known-scale call signature byte-for-byte for
         # Poisson, binomial, and fixed-theta NB scripted/default paths.
         accepted = _fit_state(fitting_data, plan, rho0, beta0, control)
+    diagnostics = _EFSDiagnosticsAccumulator()
+    diagnostics.observe_fit(accepted)
     if not accepted.valid:
+        failure_label = (
+            _efs_fit_failure_label(accepted)
+            if accepted.theta_status is not None
+            else "inner_failure"
+            if not accepted.inner_converged
+            else "invalid_initial"
+        )
+        optimizer_diagnostics = diagnostics.finish(
+            stop_reason=failure_label,
+            outer_iterations=0,
+            history=(),
+            score_phi_history=(),
+            multiplier=1.0,
+            update_residual=None,
+        )
         return EFSResult(
             rho0,
             jnp.exp(rho0),
@@ -738,14 +1023,9 @@ def dense_efs_known_scale(
             accepted.edf,
             jnp.array(1.0),
             accepted.pirls_result,
-            (
-                _efs_fit_failure_label(accepted)
-                if accepted.theta_status is not None
-                else "inner_failure"
-                if not accepted.inner_converged
-                else "invalid_initial"
-            ),
+            failure_label,
             _result_theta(accepted, fitting_data),
+            optimizer_diagnostics=optimizer_diagnostics,
         )
 
     multiplier = 1.0
@@ -784,6 +1064,9 @@ def dense_efs_known_scale(
             jnp.asarray(multiplier),
             jnp.asarray(control.log_lambda_max),
         )
+        diagnostics.observe_update(
+            accepted, jnp.array(1.0), multiplier, control.log_lambda_max, raw
+        )
         update_residual = raw.log_smoothing_trial - accepted.log_lambda
         if not bool(np.asarray(raw.finite_positive)):
             stop = "invalid_update"
@@ -791,6 +1074,7 @@ def dense_efs_known_scale(
         old = accepted
         original_max_step = float(np.max(np.abs(np.asarray(update_residual))))
         candidate = refit(raw.log_smoothing_trial, old)
+        diagnostics.observe_fit(candidate)
         if not candidate.valid:
             stop = _efs_fit_failure_label(candidate)
             break
@@ -800,7 +1084,11 @@ def dense_efs_known_scale(
                     old.log_lambda + jnp.log(raw.ratio) * (multiplier * 2.0),
                     control.log_lambda_max,
                 )
+                diagnostics.observe_trial(
+                    old.log_lambda, raw.ratio, multiplier * 2.0, control.log_lambda_max
+                )
                 extension = refit(extension_rho, old)
+                diagnostics.observe_fit(extension)
                 if extension.valid and float(np.asarray(extension.score)) < float(
                     np.asarray(candidate.score)
                 ):
@@ -820,7 +1108,11 @@ def dense_efs_known_scale(
                     old.log_lambda + jnp.log(raw.ratio) * multiplier,
                     control.log_lambda_max,
                 )
+                diagnostics.observe_trial(
+                    old.log_lambda, raw.ratio, multiplier, control.log_lambda_max
+                )
                 candidate = refit(rho, old)
+                diagnostics.observe_fit(candidate)
                 if not candidate.valid:
                     stop = _efs_fit_failure_label(candidate)
                     break
@@ -828,6 +1120,7 @@ def dense_efs_known_scale(
                 break
             accepted = candidate
             multiplier = max(multiplier, 1.0)
+        diagnostics.observe_accepted(old, accepted)
         history.append(float(np.asarray(accepted.score)))
         if (
             iteration > 3
@@ -851,6 +1144,14 @@ def dense_efs_known_scale(
         stop = "iteration_limit"
     converged = stop in {"score_window", "deviance_change"}
     label = "iteration limit reached" if stop == "iteration_limit" else stop
+    optimizer_diagnostics = diagnostics.finish(
+        stop_reason=stop,
+        outer_iterations=iteration,
+        history=tuple(history)[-control.history_limit :],
+        score_phi_history=(),
+        multiplier=multiplier,
+        update_residual=update_residual,
+    )
     return EFSResult(
         accepted.log_lambda,
         jnp.exp(accepted.log_lambda),
@@ -865,6 +1166,7 @@ def dense_efs_known_scale(
         update_residual,
         tuple(history)[-control.history_limit :],
         multiplier,
+        optimizer_diagnostics=optimizer_diagnostics,
     )
 
 
@@ -889,8 +1191,7 @@ def dense_efs_unknown_scale(
     """
     if not _unknown_scale_family_supported(fitting_data):
         raise NotImplementedError(
-            "Dense unknown-scale EFS currently supports Gaussian/identity and "
-            "Gamma/inverse or Gamma/log."
+            "Dense unknown-scale EFS supports regular Gaussian and Gamma links."
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
@@ -926,13 +1227,52 @@ def dense_efs_unknown_scale(
     score_phi0 = jnp.exp(jnp.asarray(initial_log_scale))
     if not bool(np.asarray(jnp.isfinite(score_phi0) & (score_phi0 > 0))):
         raise ValueError("EFS initial unknown scale must be finite and positive")
+    regular_source_loop = _uses_regular_source_loop(fitting_data.family)
+    regular_start_present = beta_init is not None
     beta0 = fitting_data.beta_init if beta_init is None else beta_init
+    if regular_source_loop and not regular_start_present:
+        # R's first efsudr -> gam.fit3 call has no coefficient start: retain
+        # per-row link(mustart) separately instead of projecting it into beta.
+        beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
     if beta0 is None:
         beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
 
     plan = prepare_efs_statistics(fitting_data)
-    accepted = _fit_state(fitting_data, plan, rho0, beta0, control, score_phi0)
+    if regular_source_loop and not regular_start_present:
+        accepted = _fit_state(
+            fitting_data,
+            plan,
+            rho0,
+            beta0,
+            control,
+            score_phi0,
+            regular_start_present=False,
+        )
+    else:
+        # Preserve the established adapter call shape for scripted controller
+        # tests and all regular paths with a coefficient-representable start.
+        accepted = _fit_state(
+            fitting_data,
+            plan,
+            rho0,
+            beta0,
+            control,
+            score_phi0,
+        )
+    diagnostics = _EFSDiagnosticsAccumulator()
+    diagnostics.observe_fit(accepted)
     if not accepted.valid:
+        failure_label = (
+            "inner_failure" if not accepted.inner_converged else "invalid_initial"
+        )
+        optimizer_diagnostics = diagnostics.finish(
+            stop_reason=failure_label,
+            outer_iterations=0,
+            history=(),
+            score_phi_history=(),
+            multiplier=1.0,
+            update_residual=None,
+        )
         return EFSResult(
             rho0,
             jnp.exp(rho0),
@@ -942,11 +1282,12 @@ def dense_efs_unknown_scale(
             accepted.edf,
             accepted.reported_phi,
             accepted.pirls_result,
-            "inner_failure" if not accepted.inner_converged else "invalid_initial",
+            failure_label,
             score_phi=accepted.score_phi,
             update_phi=accepted.update_phi,
             reported_phi=accepted.reported_phi,
             carried_phi=accepted.carried_phi,
+            optimizer_diagnostics=optimizer_diagnostics,
         )
 
     multiplier = 1.0
@@ -967,6 +1308,9 @@ def dense_efs_unknown_scale(
             jnp.asarray(multiplier),
             jnp.asarray(control.log_lambda_max),
         )
+        diagnostics.observe_update(
+            accepted, accepted.update_phi, multiplier, control.log_lambda_max, raw
+        )
         update_residual = raw.log_smoothing_trial - accepted.log_lambda
         if not bool(np.asarray(raw.finite_positive)):
             stop = "invalid_update"
@@ -985,6 +1329,7 @@ def dense_efs_unknown_scale(
             control,
             old.carried_phi,
         )
+        diagnostics.observe_fit(candidate)
         if not candidate.valid:
             stop = "inner_failure" if not candidate.inner_converged else "invalid_trial"
             break
@@ -994,6 +1339,9 @@ def dense_efs_unknown_scale(
                     old.log_lambda + jnp.log(raw.ratio) * (multiplier * 2.0),
                     control.log_lambda_max,
                 )
+                diagnostics.observe_trial(
+                    old.log_lambda, raw.ratio, multiplier * 2.0, control.log_lambda_max
+                )
                 extension = _fit_state(
                     fitting_data,
                     plan,
@@ -1002,6 +1350,7 @@ def dense_efs_unknown_scale(
                     control,
                     old.carried_phi,
                 )
+                diagnostics.observe_fit(extension)
                 if extension.valid and float(np.asarray(extension.score)) < float(
                     np.asarray(candidate.score)
                 ):
@@ -1027,6 +1376,9 @@ def dense_efs_unknown_scale(
                     old.log_lambda + jnp.log(raw.ratio) * multiplier,
                     control.log_lambda_max,
                 )
+                diagnostics.observe_trial(
+                    old.log_lambda, raw.ratio, multiplier, control.log_lambda_max
+                )
                 candidate = _fit_state(
                     fitting_data,
                     plan,
@@ -1035,6 +1387,7 @@ def dense_efs_unknown_scale(
                     control,
                     old.carried_phi,
                 )
+                diagnostics.observe_fit(candidate)
                 if not candidate.valid:
                     stop = (
                         "inner_failure"
@@ -1046,6 +1399,7 @@ def dense_efs_unknown_scale(
                 break
             accepted = candidate
             multiplier = max(multiplier, 1.0)
+        diagnostics.observe_accepted(old, accepted)
         history.append(float(np.asarray(accepted.score)))
         assert accepted.score_phi is not None
         score_phi_history.append(float(np.asarray(accepted.score_phi)))
@@ -1069,6 +1423,14 @@ def dense_efs_unknown_scale(
         stop = "iteration_limit"
     converged = stop in {"score_window", "deviance_change"}
     label = "iteration limit reached" if stop == "iteration_limit" else stop
+    optimizer_diagnostics = diagnostics.finish(
+        stop_reason=stop,
+        outer_iterations=iteration,
+        history=tuple(history)[-control.history_limit :],
+        score_phi_history=tuple(score_phi_history)[-control.history_limit :],
+        multiplier=multiplier,
+        update_residual=update_residual,
+    )
     return EFSResult(
         accepted.log_lambda,
         jnp.exp(accepted.log_lambda),
@@ -1088,4 +1450,5 @@ def dense_efs_unknown_scale(
         accepted.reported_phi,
         accepted.carried_phi,
         tuple(score_phi_history)[-control.history_limit :],
+        optimizer_diagnostics,
     )

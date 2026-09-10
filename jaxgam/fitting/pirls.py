@@ -39,9 +39,14 @@ import numpy as np
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.extended import ExtendedFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.fitting.efs_theta import _conditional_theta_newton_jit, _efs_nb_log_deviance
+from jaxgam.fitting.efs_theta import (
+    EFSThetaResult,
+    _conditional_theta_newton_jit,
+    _efs_nb_deviance,
+    _efs_nb_log_deviance,
+)
 from jaxgam.jax_utils import penalized_cholesky, penalized_solve
-from jaxgam.links.links import LogLink
+from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
 
 # Working weight bounds to prevent numerical overflow/underflow.
 # R's gam.fit3 uses similar implicit bounds via sqrt(W) clamping.
@@ -386,15 +391,18 @@ def _efs_nb_observed_working_factors(
     y: jax.Array,
     wt: jax.Array,
     offset: jax.Array,
+    family: NegativeBinomial | None = None,
 ) -> _EFSObservedWorkingFactors:
-    """Return EFS NB/log observed WLS factors at dynamic theta.
+    """Return EFS NB observed WLS factors at dynamic theta.
 
     The direct ``wz`` fallback is EFS-only. Ordinary PIRLS remains on its
     established working-response path.
     """
 
     def dev_fn(current_eta: jax.Array) -> jax.Array:
-        return _efs_nb_log_deviance(current_eta, log_theta, y, wt)
+        if family is None:
+            return _efs_nb_log_deviance(current_eta, log_theta, y, wt)
+        return _efs_nb_deviance(current_eta, log_theta, y, wt, family)
 
     gradient = jax.grad(dev_fn)
     d1 = gradient(eta)
@@ -449,6 +457,7 @@ class _EFSBetaRecoveryResult:
     factors_valid: jax.Array
     solver_valid: jax.Array
     failure_status: jax.Array
+    positive_curvature_retry: jax.Array
 
 
 _EFS_BETA_RECOVERY_FIELDS = [field.name for field in fields(_EFSBetaRecoveryResult)]
@@ -500,11 +509,53 @@ def _efs_beta_step_with_recovery(
     # EFS recovery follows ``gam.fit4``'s unregularized WLS proposal. The
     # shared solve intentionally adds scale-relative jitter for ordinary
     # PIRLS, but at a valid tiny observed curvature that can shift a raw beta
-    # enough to change the bounded midpoint sequence. This exact EFS-only
-    # factorization fails closed if the current observed system is not SPD.
-    H = XtWX + S_lambda
-    L = jnp.linalg.cholesky(H)
-    beta_raw = jsla.cho_solve((L, True), XtWz)
+    # enough to change the bounded midpoint sequence. ``gam.fit4`` retries an
+    # indefinite observed system after dropping its nonpositive-curvature rows
+    # (gam.fit4.r:391-416). Preserve its direct weighted-response algebra for
+    # that retry; the ordinary PIRLS solve remains unchanged.
+    H_observed = XtWX + S_lambda
+    L_observed = jnp.linalg.cholesky(H_observed)
+    beta_observed = jsla.cho_solve((L_observed, True), XtWz)
+    observed_solver_valid = (
+        jnp.all(jnp.isfinite(beta_observed))
+        & jnp.all(jnp.isfinite(L_observed))
+        & jnp.all(jnp.diag(L_observed) > 0.0)
+    )
+
+    def retry_with_positive_curvature(_):
+        positive = working_factors.weight > 0.0
+        positive_weight = jnp.where(positive, working_factors.weight, 0.0)
+        positive_factors = _EFSObservedWorkingFactors(
+            weight=positive_weight,
+            response=jnp.where(positive, working_factors.response, 0.0),
+            weighted_response=(
+                working_factors.weighted_response
+                + (positive_weight - working_factors.weight) * (eta - offset)
+            ),
+            use_weighted_response=working_factors.use_weighted_response,
+            valid=working_factors.valid & jnp.any(positive),
+        )
+        XtWX_positive, XtWz_positive = form_wls(positive_factors)
+        H_positive = XtWX_positive + S_lambda
+        L_positive = jnp.linalg.cholesky(H_positive)
+        beta_positive = jsla.cho_solve((L_positive, True), XtWz_positive)
+        return (
+            XtWX_positive,
+            XtWz_positive,
+            L_positive,
+            beta_positive,
+            positive_factors.valid,
+        )
+
+    def retain_observed_solve(_):
+        return XtWX, XtWz, L_observed, beta_observed, working_factors.valid
+
+    XtWX, XtWz, L, beta_raw, factors_valid = jax.lax.cond(
+        ~observed_solver_valid,
+        retry_with_positive_curvature,
+        retain_observed_solve,
+        operand=None,
+    )
     solver_valid = (
         jnp.all(jnp.isfinite(XtWX))
         & jnp.all(jnp.isfinite(XtWz))
@@ -673,6 +724,7 @@ def _efs_beta_step_with_recovery(
             factors_valid=factors_valid,
             solver_valid=solver_valid,
             failure_status=failure_status,
+            positive_curvature_retry=~observed_solver_valid,
         )
 
     def invalid(_: None) -> _EFSBetaRecoveryResult:
@@ -687,6 +739,7 @@ def _efs_beta_step_with_recovery(
             failure_status=jnp.array(
                 _EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32
             ),
+            positive_curvature_retry=~observed_solver_valid,
         )
 
     return jax.lax.cond(solve_valid, solve, invalid, operand=None)
@@ -1083,8 +1136,11 @@ def _pirls_loop_jit(
 class EFSThetaPIRLSResult:
     """Immutable result for the NB/log EFS in-loop conditional-theta path.
 
-    ``stopping_penalized_deviance`` is the pre-theta value used by the pinned
-    R stopping test. ``pirls_result.penalized_deviance`` is deliberately
+    ``theta_n_iter`` counts all conditional-theta iterations across accepted
+    beta steps. ``positive_curvature_retry_count`` counts the bounded
+    ``gam.fit4`` observed-solve fallbacks across all attempted beta steps.
+    ``stopping_penalized_deviance`` is the pre-theta value used by the pinned R
+    stopping test. ``pirls_result.penalized_deviance`` is deliberately
     recomputed at ``log_theta`` so every returned fit quantity is consistent
     with its reported theta. This is a documented stronger final-state rule,
     not a substitution for R's stopping predicate.
@@ -1097,6 +1153,7 @@ class EFSThetaPIRLSResult:
     status: jax.Array
     stopping_penalized_deviance: jax.Array
     post_theta_penalized_deviance: jax.Array
+    positive_curvature_retry_count: jax.Array
 
 
 _EFS_THETA_PIRLS_FIELDS = [f.name for f in fields(EFSThetaPIRLSResult)]
@@ -1132,6 +1189,7 @@ class _EFSThetaPIRLSState:
     status: jax.Array
     theta_status: jax.Array
     theta_n_iter: jax.Array
+    positive_curvature_retry_count: jax.Array
 
 
 _EFS_THETA_STATE_FIELDS = [f.name for f in fields(_EFSThetaPIRLSState)]
@@ -1145,7 +1203,16 @@ jax.tree_util.register_pytree_node(
 )
 
 
-@jax.jit(static_argnames=("family", "max_y", "integer_counts", "max_iter", "tol"))
+@jax.jit(
+    static_argnames=(
+        "family",
+        "max_y",
+        "integer_counts",
+        "estimate_theta",
+        "max_iter",
+        "tol",
+    )
+)
 def _efs_theta_pirls_loop_jit(
     X: jax.Array,
     y: jax.Array,
@@ -1162,10 +1229,11 @@ def _efs_theta_pirls_loop_jit(
     *,
     max_y: int,
     integer_counts: bool,
+    estimate_theta: bool,
     max_iter: int,
     tol: float,
 ) -> EFSThetaPIRLSResult:
-    """Pinned EFS NB/log beta/theta alternation in one JAX while-loop.
+    """Pinned EFS NB beta/theta alternation in one JAX while-loop.
 
     Each beta proposal and its divergence control are evaluated at the
     carried, incoming theta. Only after beta is accepted is conditional theta
@@ -1174,10 +1242,10 @@ def _efs_theta_pirls_loop_jit(
     lines 486-547 without a host-side fit/update alternation.
     """
 
-    # Estimated-theta NB EFS deliberately uses its own stable eta-space
-    # deviance. Ordinary/default and fixed-theta NB retain the family helper.
+    # EFS NB uses its own stable eta-space deviance for both estimated and
+    # fixed theta. Ordinary/default NB retains the family helper.
     def dev_fn(eta: jax.Array, log_theta: jax.Array) -> jax.Array:
-        return _efs_nb_log_deviance(eta, log_theta, y, wt)
+        return _efs_nb_deviance(eta, log_theta, y, wt, family)
 
     def ops(log_theta: jax.Array):
         def compute_working_factors(
@@ -1189,6 +1257,7 @@ def _efs_theta_pirls_loop_jit(
                 y,
                 wt,
                 offset,
+                family,
             )
 
         def form_wls(
@@ -1267,6 +1336,7 @@ def _efs_theta_pirls_loop_jit(
         status=initial_status,
         theta_status=jnp.array(0, dtype=jnp.int32),
         theta_n_iter=jnp.array(0, dtype=jnp.int32),
+        positive_curvature_retry_count=jnp.array(0, dtype=jnp.int32),
     )
 
     def condition(state: _EFSThetaPIRLSState) -> jax.Array:
@@ -1322,23 +1392,40 @@ def _efs_theta_pirls_loop_jit(
                 status=status,
                 theta_status=state.theta_status,
                 theta_n_iter=state.theta_n_iter,
+                positive_curvature_retry_count=(
+                    state.positive_curvature_retry_count
+                    + beta_step.positive_curvature_retry.astype(jnp.int32)
+                ),
             )
 
         def beta_accepted(_: None) -> _EFSThetaPIRLSState:
-            theta_result = _conditional_theta_newton_jit(
-                state.log_theta,
-                beta_step.eta,
-                y,
-                wt,
-                count_indices,
-                family,
-                max_y=max_y,
-                integer_counts=integer_counts,
-                tolerance=1e-7,
-                max_iter=100,
-                max_step=4.0,
-                max_halvings=25,
-            )
+            if estimate_theta:
+                theta_result = _conditional_theta_newton_jit(
+                    state.log_theta,
+                    beta_step.eta,
+                    y,
+                    wt,
+                    count_indices,
+                    family,
+                    max_y=max_y,
+                    integer_counts=integer_counts,
+                    tolerance=1e-7,
+                    max_iter=100,
+                    max_step=4.0,
+                    max_halvings=25,
+                )
+            else:
+                theta_result = EFSThetaResult(
+                    log_theta=state.log_theta,
+                    nll=jnp.array(0.0),
+                    gradient=jnp.array(0.0),
+                    hessian=jnp.array(1.0),
+                    n_iter=jnp.array(0, dtype=jnp.int32),
+                    converged=jnp.array(True),
+                    status=jnp.array(0, dtype=jnp.int32),
+                    nll_history=jnp.zeros((1,), dtype=state.log_theta.dtype),
+                    n_history=jnp.array(0, dtype=jnp.int32),
+                )
             theta_ok = theta_result.converged & (theta_result.status == 0)
             _, _, post_theta_dev_fn = ops(theta_result.log_theta)
             post_theta_dev = post_theta_dev_fn(beta_step.mu, beta_step.eta)
@@ -1401,7 +1488,11 @@ def _efs_theta_pirls_loop_jit(
                 failed=~valid_post_theta,
                 status=status,
                 theta_status=theta_result.status,
-                theta_n_iter=theta_result.n_iter,
+                theta_n_iter=state.theta_n_iter + theta_result.n_iter,
+                positive_curvature_retry_count=(
+                    state.positive_curvature_retry_count
+                    + beta_step.positive_curvature_retry.astype(jnp.int32)
+                ),
             )
 
         return jax.lax.cond(
@@ -1477,6 +1568,7 @@ def _efs_theta_pirls_loop_jit(
         status=final_status,
         stopping_penalized_deviance=final.stopping_pdev,
         post_theta_penalized_deviance=final.post_theta_pdev,
+        positive_curvature_retry_count=final.positive_curvature_retry_count,
     )
 
 
@@ -1494,12 +1586,13 @@ def efs_theta_pirls_loop(
     beta_old_init: jax.Array | None = None,
     initial_eta: jax.Array | None = None,
     initial_start_retained: bool = False,
+    estimate_theta: bool = True,
     max_y: int,
     integer_counts: bool,
     max_iter: int = 100,
     tol: float = 1e-7,
 ) -> EFSThetaPIRLSResult:
-    """Run the EFS-only NB/log in-loop conditional-theta PIRLS solver.
+    """Run the EFS-only NB in-loop conditional/fixed-theta PIRLS solver.
 
     ``beta_old_init`` is the explicit null coefficient state for the first R
     divergence comparison. ``initial_eta`` supplies ``link(mustart)`` when R
@@ -1510,7 +1603,8 @@ def efs_theta_pirls_loop(
     beta/eta anchor, as in ``gam.fit4``.
 
     This internal entry point is intentionally separate from ``pirls_loop``;
-    neither default joint-Newton NB nor fixed-theta EFS routes opt into it.
+    default joint-Newton NB does not opt into it. EFS calls it for estimated
+    theta and for fixed theta with ``estimate_theta=False``.
 
     Shapes and dtypes are rejected before JIT dispatch: X is nonempty ``(n,p)``
     float data, y/wt/offset/count_indices are aligned ``(n,)`` arrays,
@@ -1524,10 +1618,14 @@ def efs_theta_pirls_loop(
     """
     if not isinstance(family, NegativeBinomial):
         raise TypeError("EFS theta PIRLS requires NegativeBinomial")
-    if family.n_theta != 1:
-        raise ValueError("EFS theta PIRLS requires an estimated NB theta")
-    if not isinstance(family.link, LogLink):
-        raise NotImplementedError("EFS theta PIRLS currently supports NB/log")
+    expected_n_theta = 1 if estimate_theta else 0
+    if family.n_theta != expected_n_theta:
+        mode = "estimated" if estimate_theta else "fixed"
+        raise ValueError(f"EFS theta PIRLS requires {mode} NB theta")
+    if not isinstance(family.link, (LogLink, IdentityLink, SqrtLink)):
+        raise NotImplementedError(
+            "EFS theta PIRLS supports the pinned NB links log, identity, and sqrt"
+        )
     if isinstance(max_y, bool) or not isinstance(max_y, Integral) or max_y < 0:
         raise ValueError("EFS theta PIRLS max_y must be an integer >= 0")
     if isinstance(max_iter, bool) or not isinstance(max_iter, Integral) or max_iter < 1:
@@ -1541,6 +1639,8 @@ def efs_theta_pirls_loop(
         raise ValueError("EFS theta PIRLS tol must be finite and positive")
     if not isinstance(integer_counts, bool):
         raise ValueError("EFS theta PIRLS integer_counts must be bool")
+    if not isinstance(estimate_theta, bool):
+        raise ValueError("EFS theta PIRLS estimate_theta must be bool")
     if X.ndim != 2 or X.shape[0] == 0 or X.shape[1] == 0:
         raise ValueError("EFS theta PIRLS X must be a nonempty two-dimensional array")
     n, p = X.shape
@@ -1611,6 +1711,7 @@ def efs_theta_pirls_loop(
         count_indices,
         max_y=max_y,
         integer_counts=integer_counts,
+        estimate_theta=estimate_theta,
         max_iter=max_iter,
         tol=tol,
     )

@@ -19,7 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.links.links import LogLink
+from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
 
 _EPS_075 = np.finfo(np.float64).eps ** 0.75
 _CURVATURE_FLOOR_RELATIVE = 1e-5
@@ -86,8 +86,10 @@ def _require_estimated_nb(family: NegativeBinomial) -> None:
         raise TypeError("EFS conditional theta requires NegativeBinomial")
     if family.n_theta != 1:
         raise ValueError("EFS conditional theta requires an estimated NB theta")
-    if not isinstance(family.link, LogLink):
-        raise NotImplementedError("EFS conditional theta currently supports NB/log")
+    if not isinstance(family.link, (LogLink, IdentityLink, SqrtLink)):
+        raise NotImplementedError(
+            "EFS conditional theta supports the pinned NB links log, identity, and sqrt"
+        )
 
 
 def _validate_static_inputs(
@@ -260,6 +262,48 @@ def _efs_nb_log_deviance(
     )
 
 
+def _efs_nb_deviance(
+    eta: jax.Array,
+    log_theta: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+    family: NegativeBinomial,
+) -> jax.Array:
+    """Evaluate pinned NB deviance for any constructor-supported link.
+
+    The log link keeps its range-safe eta-space implementation. Identity and
+    square-root links use the same explicit-theta deviance expression after a
+    strict eta/mu domain check, matching ``nb()$dev.resids`` while retaining
+    nonfinite values as recovery signals for ``gam.fit4``.
+    """
+    if isinstance(family.link, LogLink):
+        return _efs_nb_log_deviance(eta, log_theta, y, wt)
+    mu_raw = family.link.inverse(eta)
+    valid = (
+        jnp.all(jnp.isfinite(eta))
+        & jnp.all(jnp.isfinite(mu_raw))
+        & jnp.all(family.valid_eta(eta))
+        & jnp.all(family.valid_mu(mu_raw))
+    )
+    mu = jnp.where(jnp.isfinite(mu_raw) & (mu_raw > 0.0), mu_raw, 1.0)
+    theta = jnp.exp(log_theta[0])
+    # Source uses ``pmax(1, y)`` in the first log term, including 0 < y < 1.
+    y_safe = jnp.maximum(1.0, y)
+    # Keep the source expression as separated logarithms.  Rewriting the
+    # second ratio with log1p makes its argument round to -1 for large finite
+    # mu, while ``log(y + theta) - log(mu + theta)`` remains representable.
+    contributions = (
+        2.0
+        * wt
+        * (
+            y * (jnp.log(y_safe) - jnp.log(mu))
+            - (y + theta) * (jnp.log(y + theta) - jnp.log(mu + theta))
+        )
+    )
+    deviance = jnp.sum(contributions)
+    return jnp.where(valid & jnp.isfinite(deviance), deviance, jnp.inf)
+
+
 @partial(
     jax.jit,
     static_argnames=("family", "max_y", "integer_counts"),
@@ -282,7 +326,7 @@ def _conditional_theta_nll_jit(
     convention differs from mgcv for ``0 < y < 1``; the controller rejects
     that domain rather than claiming R-compatible convergence there.
     """
-    deviance = _efs_nb_log_deviance(eta, log_theta, y, wt)
+    deviance = _efs_nb_deviance(eta, log_theta, y, wt, family)
     saturated = family.saturated_loglik_theta(
         y,
         wt,
