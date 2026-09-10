@@ -27,6 +27,8 @@ R source reference: fast-REML.r lines 1740-1875
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -41,6 +43,7 @@ from jaxgam.fitting.newton import (
     _safe_newton_step,
     newton_optimize,
 )
+from jaxgam.fitting.penalty_ops import JaxPenaltyStructure
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.jax_utils import to_jax
 from tests.helpers import (
@@ -425,14 +428,14 @@ class TestDiagnostics:
             y=to_jax(y),
             wt=jnp.ones(n),
             offset=None,
-            S_list=(),
+            penalty_structure=JaxPenaltyStructure(p, ()),
             log_lambda_init=jnp.zeros(0),
             family=Gaussian(),
             n_obs=n,
             n_coef=p,
             penalty_ranks=(),
             penalty_null_dims=(),
-            penalty_range_basis=None,
+            total_penalty_rank=0,
             singleton_sp_indices=(),
             singleton_ranks=(),
             singleton_eig_constants=jnp.array([]),
@@ -440,7 +443,6 @@ class TestDiagnostics:
             multi_block_ranks=(),
             multi_block_proj_S=(),
             multi_block_S_local=(),
-            repara_D=None,
             max_y=0,
         )
         result = newton_optimize(fd)
@@ -465,29 +467,7 @@ class TestDiagnostics:
         # Manually add an offset to FittingData
         n = fd_no_offset.n_obs
         offset = jnp.full(n, 0.5)
-        fd_offset = FittingData(
-            X=fd_no_offset.X,
-            y=fd_no_offset.y,
-            wt=fd_no_offset.wt,
-            offset=offset,
-            S_list=fd_no_offset.S_list,
-            log_lambda_init=fd_no_offset.log_lambda_init,
-            family=fd_no_offset.family,
-            n_obs=fd_no_offset.n_obs,
-            n_coef=fd_no_offset.n_coef,
-            penalty_ranks=fd_no_offset.penalty_ranks,
-            penalty_null_dims=fd_no_offset.penalty_null_dims,
-            penalty_range_basis=fd_no_offset.penalty_range_basis,
-            singleton_sp_indices=fd_no_offset.singleton_sp_indices,
-            singleton_ranks=fd_no_offset.singleton_ranks,
-            singleton_eig_constants=fd_no_offset.singleton_eig_constants,
-            multi_block_sp_indices=fd_no_offset.multi_block_sp_indices,
-            multi_block_ranks=fd_no_offset.multi_block_ranks,
-            multi_block_proj_S=fd_no_offset.multi_block_proj_S,
-            multi_block_S_local=fd_no_offset.multi_block_S_local,
-            repara_D=fd_no_offset.repara_D,
-            max_y=fd_no_offset.max_y,
-        )
+        fd_offset = dataclasses.replace(fd_no_offset, offset=offset)
         result_offset = newton_optimize(fd_offset)
 
         assert result_offset.converged

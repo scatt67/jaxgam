@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import numpy.typing as npt
 import scipy.linalg as sla
 
 from jaxgam.inference._core import finish_prediction, predict_core
@@ -38,6 +39,43 @@ if TYPE_CHECKING:
 def _offset_was_nonzero(setup: ModelSetup) -> bool:
     """Whether fitting used an external offset that prediction cannot recover."""
     return setup.offset is not None and not np.allclose(setup.offset, 0.0)
+
+
+def _transform_coefficients_cpu(
+    fitting_data: FittingData, coefficients: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """Map fitting coefficients to public coordinates without device transfer."""
+    result = coefficients.copy()
+    for block in fitting_data.penalty_structure.blocks:
+        transform = block.transform
+        if transform.kind == "identity":
+            continue
+        values = to_numpy(transform.values)
+        local = result[block.start : block.stop]
+        result[block.start : block.stop] = (
+            values @ local if transform.kind == "dense" else values * local
+        )
+    return result
+
+
+def _transform_covariance_cpu(
+    fitting_data: FittingData, covariance: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """Apply each local transform on both covariance sides on the CPU."""
+    result = covariance.copy()
+    for block in fitting_data.penalty_structure.blocks:
+        transform = block.transform
+        if transform.kind == "identity":
+            continue
+        values = to_numpy(transform.values)
+        start, stop = block.start, block.stop
+        if transform.kind == "dense":
+            result[start:stop, :] = values @ result[start:stop, :]
+            result[:, start:stop] = result[:, start:stop] @ values.T
+        else:
+            result[start:stop, :] = values[:, None] * result[start:stop, :]
+            result[:, start:stop] = result[:, start:stop] * values[None, :]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -258,11 +296,10 @@ class GAMResults(_FitDiagnostics):
         # (R's gam.fit3.post.proc, mgcv.r line 966)
         per_smooth_edf1 = _compute_per_smooth_edf1(F, setup.smooth_info)
 
-        # Back-transform from Sl.setup reparameterized space
-        if fd.repara_D is not None:
-            D = to_numpy(fd.repara_D)
-            coefficients = D @ coefficients
-            H_inv = D @ H_inv @ D.T
+        # Phase 3 stays on CPU. Block transforms retain covariance cross-blocks
+        # without moving a p-by-p matrix back to the accelerator.
+        coefficients = _transform_coefficients_cpu(fd, coefficients)
+        H_inv = _transform_covariance_cpu(fd, H_inv)
 
         # Bayesian covariance
         phi = 1.0 if family_snapshot.scale_known else scale

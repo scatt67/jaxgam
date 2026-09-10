@@ -14,6 +14,8 @@ Design doc reference: docs/design.md §1.3, §4.4
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -21,17 +23,107 @@ import pandas as pd
 import pytest
 
 from jaxgam.families.standard import Gaussian
-from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.data import FittingData, _build_block_metadata
 from jaxgam.fitting.initialization import initialize_beta
+from jaxgam.fitting.penalty_ops import (
+    JaxLocalPenalty,
+    JaxPenaltyBlock,
+    JaxPenaltyStructure,
+    JaxTransform,
+)
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion, reml_criterion
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.jax_utils import build_S_lambda, to_jax, to_numpy
+from jaxgam.penalties.structure import (
+    DenseLocalPenalty,
+    IdentityTransform,
+    PenaltyBlock,
+    PenaltyStructure,
+)
 from tests.helpers import SEED, N
 from tests.tolerances import MODERATE, STRICT
 
 jax.config.update("jax_enable_x64", True)
+
+
+@dataclass(frozen=True)
+class _CompatibilityPenalty:
+    """Explicit test-only global view of one local penalty."""
+
+    S: np.ndarray
+    rank: int
+    null_space_dim: int
+
+
+def _setup_penalties(setup: ModelSetup) -> tuple[_CompatibilityPenalty, ...]:
+    """Explicitly pad local setup penalties for legacy algebra comparisons."""
+    if setup.penalties is None:
+        return ()
+    result: list[_CompatibilityPenalty | None] = [None] * setup.penalties.n_penalties
+    for block in setup.penalties.blocks:
+        for sp, penalty, rank in zip(
+            block.sp_indices, block.local_penalties, block.ranks, strict=True
+        ):
+            S = np.zeros((setup.X.shape[1], setup.X.shape[1]))
+            S[block.start : block.stop, block.start : block.stop] = penalty.dense()
+            result[sp] = _CompatibilityPenalty(S, rank, setup.X.shape[1] - rank)
+    return tuple(item for item in result if item is not None)
+
+
+def _materialize_s_list(fd: FittingData) -> tuple[jax.Array, ...]:
+    """Explicit test-only padded view in fitting coordinates."""
+    result: list[jax.Array | None] = [None] * fd.n_penalties
+    for block in fd.penalty_structure.blocks:
+        for sp, penalty in zip(block.sp_indices, block.penalties, strict=True):
+            S = jnp.zeros((fd.n_coef, fd.n_coef))
+            if penalty.kind == "dense":
+                local = penalty.values
+            elif penalty.kind == "diagonal":
+                local = jnp.diag(penalty.values)
+            else:
+                local = jnp.eye(penalty.size) * penalty.values
+            S = S.at[block.start : block.stop, block.start : block.stop].set(local)
+            result[sp] = S
+    return tuple(item for item in result if item is not None)
+
+
+def _materialize_D(fd: FittingData) -> np.ndarray | None:
+    """Explicit test-only global view of local fitting transforms."""
+    if not fd.penalty_structure.blocks:
+        return None
+    D = np.eye(fd.n_coef)
+    for block in fd.penalty_structure.blocks:
+        transform = block.transform
+        if transform.kind == "dense":
+            D[block.start : block.stop, block.start : block.stop] = np.asarray(
+                transform.values
+            )
+        elif transform.kind == "diagonal":
+            D[block.start : block.stop, block.start : block.stop] = np.diag(
+                np.asarray(transform.values)
+            )
+    return D
+
+
+def _global_test_structure(S_list: tuple[jax.Array, ...]) -> JaxPenaltyStructure:
+    """Test-only adapter for original-coordinate REML invariance algebra."""
+    p = S_list[0].shape[0] if S_list else 0
+    return JaxPenaltyStructure(
+        p,
+        (
+            JaxPenaltyBlock(
+                0,
+                p,
+                tuple(range(len(S_list))),
+                tuple(JaxLocalPenalty("dense", S, p) for S in S_list),
+                JaxTransform("identity", jnp.array(1.0), p),
+            ),
+        )
+        if S_list
+        else (),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +214,9 @@ class TestFromSetupBasic:
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
 
-        if fd.repara_D is not None:
+        if _materialize_D(fd) is not None:
             # X_repara = X_orig @ D, so X_orig = X_repara @ D^{-1}
-            D = to_numpy(fd.repara_D)
+            D = to_numpy(_materialize_D(fd))
             # Condition number must be bounded for the inverse to be reliable
             cond = np.linalg.cond(D)
             assert cond < 1e10, f"D condition number {cond:.2e} exceeds 1e10"
@@ -197,7 +289,7 @@ class TestPenaltyMetadata:
         assert len(fd.penalty_null_dims) == fd.n_penalties
 
         # Cross-check against CompositePenalty
-        for j, penalty in enumerate(gaussian_setup.penalties.penalties):
+        for j, penalty in enumerate(_setup_penalties(gaussian_setup)):
             assert fd.penalty_ranks[j] == penalty.rank
             assert fd.penalty_null_dims[j] == penalty.null_space_dim
 
@@ -206,7 +298,7 @@ class TestPenaltyMetadata:
         fd = FittingData.from_setup(two_smooth_setup, family)
 
         assert len(fd.penalty_ranks) == fd.n_penalties
-        for j, penalty in enumerate(two_smooth_setup.penalties.penalties):
+        for j, penalty in enumerate(_setup_penalties(two_smooth_setup)):
             assert fd.penalty_ranks[j] == penalty.rank
             assert fd.penalty_null_dims[j] == penalty.null_space_dim
 
@@ -217,8 +309,8 @@ class TestPenaltyMetadata:
 
         # te() should have >1 penalty (one per marginal)
         assert fd.n_penalties >= 2
-        assert len(fd.S_list) == fd.n_penalties
-        for j, penalty in enumerate(tensor_setup.penalties.penalties):
+        assert len(_materialize_s_list(fd)) == fd.n_penalties
+        for j, penalty in enumerate(_setup_penalties(tensor_setup)):
             assert fd.penalty_ranks[j] == penalty.rank
             assert fd.penalty_null_dims[j] == penalty.null_space_dim
 
@@ -239,7 +331,7 @@ class TestSLambdaSinglePenalty:
         S_combined = fd.S_lambda(log_lam)
 
         # Manual: exp(2.0) * S_list[0]
-        expected = jnp.exp(2.0) * fd.S_list[0]
+        expected = jnp.exp(2.0) * _materialize_s_list(fd)[0]
         np.testing.assert_allclose(
             to_numpy(S_combined),
             to_numpy(expected),
@@ -262,7 +354,7 @@ class TestSLambdaMultiPenalty:
 
         # Manual sum
         expected = jnp.zeros((fd.n_coef, fd.n_coef))
-        for j, S_j in enumerate(fd.S_list):
+        for j, S_j in enumerate(_materialize_s_list(fd)):
             expected = expected + jnp.exp(log_lam[j]) * S_j
 
         np.testing.assert_allclose(
@@ -291,7 +383,7 @@ class TestSLambdaJAXTraceable:
         assert jnp.all(jnp.isfinite(grad))
         # Gradient should be sum of S_j elements times exp(log_lam_j)
         for j in range(fd.n_penalties):
-            expected_j = jnp.exp(log_lam[j]) * jnp.sum(fd.S_list[j])
+            expected_j = jnp.exp(log_lam[j]) * jnp.sum(_materialize_s_list(fd)[j])
             np.testing.assert_allclose(
                 float(grad[j]),
                 float(expected_j),
@@ -327,7 +419,7 @@ class TestNPenalties:
     def test_matches_s_list(self, gaussian_setup):
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
-        assert fd.n_penalties == len(fd.S_list)
+        assert fd.n_penalties == len(_materialize_s_list(fd))
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +472,7 @@ class TestDevicePlacement:
         assert fd.X.devices() == {default_device}
         assert fd.y.devices() == {default_device}
         assert fd.wt.devices() == {default_device}
-        for S_j in fd.S_list:
+        for S_j in _materialize_s_list(fd):
             assert S_j.devices() == {default_device}
 
 
@@ -426,10 +518,10 @@ class TestComputeReparaD:
         """After singleton repara, non-zero eigenvalues of S are 1.0."""
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
-        assert fd.repara_D is not None
+        assert _materialize_D(fd) is not None
 
         si = gaussian_setup.smooth_info[0]
-        S_repara = to_numpy(fd.S_list[0])
+        S_repara = to_numpy(_materialize_s_list(fd)[0])
         S_local = S_repara[si.first_coef : si.last_coef, si.first_coef : si.last_coef]
         eigs = np.linalg.eigvalsh(S_local)
 
@@ -449,17 +541,17 @@ class TestComputeReparaD:
         """D^T S D is a partial identity for singleton penalties."""
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
-        assert fd.repara_D is not None
+        assert _materialize_D(fd) is not None
 
-        D = to_numpy(fd.repara_D)
+        D = to_numpy(_materialize_D(fd))
         si = gaussian_setup.smooth_info[0]
-        S_orig = gaussian_setup.penalties.penalties[0].S
+        S_orig = _setup_penalties(gaussian_setup)[0].S
         S_local = S_orig[si.first_coef : si.last_coef, si.first_coef : si.last_coef]
         D_block = D[si.first_coef : si.last_coef, si.first_coef : si.last_coef]
 
         DtSD = D_block.T @ S_local @ D_block
         eigs = np.sort(np.linalg.eigvalsh(DtSD))[::-1]
-        rank = gaussian_setup.penalties.penalties[0].rank
+        rank = _setup_penalties(gaussian_setup)[0].rank
 
         np.testing.assert_allclose(
             eigs[:rank],
@@ -479,10 +571,10 @@ class TestComputeReparaD:
         """Factor-by: each sub-block satisfies D^T S D = I_r."""
         family = Gaussian()
         fd = FittingData.from_setup(factor_by_setup, family)
-        assert fd.repara_D is not None
+        assert _materialize_D(fd) is not None
 
         eps_23 = np.finfo(float).eps ** (2.0 / 3.0)
-        D = to_numpy(fd.repara_D)
+        D = to_numpy(_materialize_D(fd))
 
         for si in factor_by_setup.smooth_info:
             if si.n_penalties <= 1:
@@ -490,7 +582,7 @@ class TestComputeReparaD:
 
             for p_offset in range(si.n_penalties):
                 p_idx = si.first_penalty + p_offset
-                S_full = factor_by_setup.penalties.penalties[p_idx].S
+                S_full = _setup_penalties(factor_by_setup)[p_idx].S
                 S_local = S_full[
                     si.first_coef : si.last_coef, si.first_coef : si.last_coef
                 ]
@@ -527,9 +619,9 @@ class TestComputeReparaD:
         """Tensor product: D block is orthogonal (D^T D = I)."""
         family = Gaussian()
         fd = FittingData.from_setup(tensor_setup, family)
-        assert fd.repara_D is not None
+        assert _materialize_D(fd) is not None
 
-        D = to_numpy(fd.repara_D)
+        D = to_numpy(_materialize_D(fd))
         si = tensor_setup.smooth_info[0]
         D_block = D[si.first_coef : si.last_coef, si.first_coef : si.last_coef]
 
@@ -546,9 +638,9 @@ class TestComputeReparaD:
         """D is block-diagonal: no mixing between smooth column ranges."""
         family = Gaussian()
         fd = FittingData.from_setup(two_smooth_setup, family)
-        assert fd.repara_D is not None
+        assert _materialize_D(fd) is not None
 
-        D = to_numpy(fd.repara_D)
+        D = to_numpy(_materialize_D(fd))
         infos = two_smooth_setup.smooth_info
 
         for i, si_i in enumerate(infos):
@@ -570,16 +662,16 @@ class TestComputeReparaD:
         """No penalties → repara_D is None."""
         family = Gaussian()
         fd = FittingData.from_setup(parametric_setup, family)
-        assert fd.repara_D is None
+        assert _materialize_D(fd) is None
 
     def test_condition_number_bounded(self, gaussian_setup):
         """D condition number should be reasonable for a typical model."""
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
-        if fd.repara_D is None:
+        if _materialize_D(fd) is None:
             pytest.skip("No reparameterization")
 
-        D = to_numpy(fd.repara_D)
+        D = to_numpy(_materialize_D(fd))
         cond = np.linalg.cond(D)
         assert cond < 1e10, f"D condition number {cond:.2e} exceeds 1e10"
 
@@ -600,7 +692,7 @@ class TestREMLInvariance:
         """pirls_loop produces the same mu in both coordinate spaces."""
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
-        if fd.repara_D is None:
+        if _materialize_D(fd) is None:
             pytest.skip("No reparameterization")
 
         log_lambda = jnp.array([2.0])
@@ -622,7 +714,7 @@ class TestREMLInvariance:
 
         # Original space: production pirls_loop with setup arrays
         X_orig = to_jax(gaussian_setup.X)
-        S_orig_list = tuple(to_jax(p.S) for p in gaussian_setup.penalties.penalties)
+        S_orig_list = tuple(to_jax(p.S) for p in _setup_penalties(gaussian_setup))
         n_coef = gaussian_setup.X.shape[1]
         S_lam_orig = build_S_lambda(log_lambda, S_orig_list, n_coef)
         beta_init_orig = initialize_beta(
@@ -662,7 +754,7 @@ class TestREMLInvariance:
         """
         family = Gaussian()
         fd = FittingData.from_setup(gaussian_setup, family)
-        if fd.repara_D is None:
+        if _materialize_D(fd) is None:
             pytest.skip("No reparameterization")
 
         log_lambda = jnp.array([2.0])
@@ -686,7 +778,7 @@ class TestREMLInvariance:
 
         # -- Original space: production pirls + reml_criterion() --
         X_orig = to_jax(gaussian_setup.X)
-        S_orig_list = tuple(to_jax(p.S) for p in gaussian_setup.penalties.penalties)
+        S_orig_list = tuple(to_jax(p.S) for p in _setup_penalties(gaussian_setup))
         n_coef = gaussian_setup.X.shape[1]
         S_lam_orig = build_S_lambda(log_lambda, S_orig_list, n_coef)
         beta_init_orig = initialize_beta(
@@ -712,7 +804,7 @@ class TestREMLInvariance:
         # block metadata, so no production path exists for original
         # space metadata.
         si = gaussian_setup.smooth_info[0]
-        S_np = gaussian_setup.penalties.penalties[0].S
+        S_np = _setup_penalties(gaussian_setup)[0].S
         S_local = S_np[si.first_coef : si.last_coef, si.first_coef : si.last_coef]
         eig_vals = np.linalg.eigvalsh(S_local)
         eps_23 = np.finfo(float).eps ** (2.0 / 3.0)
@@ -729,7 +821,7 @@ class TestREMLInvariance:
                 beta=pirls_orig.coefficients,
                 deviance=pirls_orig.deviance,
                 ls_sat=family.saturated_loglik(fd.y, fd.wt, criterion_repara.scale),
-                S_list=S_orig_list,
+                penalty_structure=_global_test_structure(S_orig_list),
                 phi=criterion_repara.scale,
                 Mp=fd.total_penalty_null_dim,
                 singleton_sp_indices=(0,),
@@ -748,3 +840,45 @@ class TestREMLInvariance:
             atol=STRICT.atol,
             err_msg="REML score must be invariant under reparameterization",
         )
+
+
+def test_coupled_metadata_retains_zero_penalty_without_nan() -> None:
+    """A zero member of a coupled block preserves its lambda slot safely."""
+    structure = PenaltyStructure(
+        3,
+        (
+            PenaltyBlock(
+                0,
+                3,
+                (0, 1, 2),
+                (
+                    DenseLocalPenalty(np.zeros((3, 3))),
+                    DenseLocalPenalty(np.diag([1.0, 0.0, 1.0])),
+                    DenseLocalPenalty(np.diag([2.0, 1.0, 0.0])),
+                ),
+                IdentityTransform(3),
+                (0, 2, 2),
+            ),
+        ),
+    )
+    metadata = _build_block_metadata(structure, None)
+
+    assert metadata["multi_block_sp_indices"] == ((0, 1, 2),)
+    assert metadata["multi_block_ranks"] == (3,)
+    for projected in metadata["multi_block_proj_S"][0]:
+        assert np.all(np.isfinite(np.asarray(projected)))
+    from jaxgam.fitting import penalty_ops
+
+    gradient = jax.grad(
+        lambda rho: penalty_ops.log_pdet(
+            rho,
+            metadata["singleton_sp_indices"],
+            metadata["singleton_ranks"],
+            metadata["singleton_eig_constants"],
+            metadata["multi_block_sp_indices"],
+            metadata["multi_block_ranks"],
+            metadata["multi_block_proj_S"],
+        )
+    )(jnp.zeros(3))
+    assert np.all(np.isfinite(np.asarray(gradient)))
+    np.testing.assert_allclose(gradient[0], 0.0, rtol=STRICT.rtol, atol=STRICT.atol)

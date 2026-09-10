@@ -29,6 +29,7 @@ from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
+from jaxgam.fitting.penalty_ops import JaxPenaltyStructure
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import (
     REMLCriterion,
@@ -99,7 +100,7 @@ def _reml_args(fd, pirls_result, log_lambda):
         "beta": pirls_result.coefficients,
         "deviance": deviance,
         "ls_sat": ls_sat,
-        "S_list": fd.S_list,
+        "penalty_structure": fd.penalty_structure,
         "phi": phi,
         "Mp": Mp,
         "singleton_sp_indices": fd.singleton_sp_indices,
@@ -387,7 +388,7 @@ class TestPurelyParametric:
             result.coefficients,
             deviance,
             ls_sat,
-            (),
+            JaxPenaltyStructure(p, ()),
             result.scale,
             Mp,
             singleton_sp_indices=(),

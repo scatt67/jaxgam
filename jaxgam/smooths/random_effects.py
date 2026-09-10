@@ -56,7 +56,7 @@ class RandomEffectSmooth(Smooth):
         self._levels: dict[str, list[Any]] | None = None
         self._is_factor: dict[str, bool] | None = None
         self._X: npt.NDArray[np.floating] | None = None
-        self._S: npt.NDArray[np.floating] | None = None
+        self._penalty_scale: float | None = None
 
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
         """Construct RE basis from data.
@@ -92,10 +92,20 @@ class RandomEffectSmooth(Smooth):
         self.null_space_dim = 0
         self.rank = k
 
-        # Penalty = identity, then normalize
-        S = np.eye(k)
-        [S], self._s_scale = self._smoothcon_normalize(X, [S])
-        self._S = S
+        # Penalty = identity, then apply smoothCon normalization.  Although
+        # ||I||_1 is one, smoothCon divides it by ||X||_inf^2 and then divides
+        # S by that scale: the retained symbolic identity therefore has scale
+        # ||X||_inf^2.  This is one for ordinary factor effects but is not one
+        # for numeric-by-factor interactions.
+        max_x_sq = np.linalg.norm(X, ord=np.inf) ** 2
+        if max_x_sq > 0:
+            self._s_scale = 1.0 / max_x_sq
+            self._penalty_scale = max_x_sq
+        else:
+            # smoothCon returns the unscaled penalty when the design has no
+            # magnitude. Keep its symbolic identity representation finite.
+            self._s_scale = 1.0
+            self._penalty_scale = 1.0
 
         self._is_setup = True
 
@@ -235,7 +245,14 @@ class RandomEffectSmooth(Smooth):
             Single-element list with the identity penalty.
         """
         self._require_setup()
-        return [Penalty(self._S, rank=self.rank, null_space_dim=0)]
+        assert self._penalty_scale is not None
+        return [
+            Penalty(
+                np.eye(self.n_coefs) * self._penalty_scale,
+                rank=self.rank,
+                null_space_dim=0,
+            )
+        ]
 
     def __repr__(self) -> str:
         vars_str = ",".join(self.spec.variables)
