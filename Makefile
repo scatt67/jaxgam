@@ -45,6 +45,12 @@ test-file: docker-build ## run Docker tests for one file: make test-file FILE=te
 	@test -n "$(FILE)" || (echo "Usage: make test-file FILE=tests/test_smooths/test_tprs.py" && exit 1)
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest $(FILE) -x --tb=short -v
 
+.PHONY: test-discrete
+test-discrete: docker-build ## run exact discrete representation/operator tests in Docker
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_data/test_discretize.py tests/test_formula/test_discrete_design.py \
+		tests/test_fitting/test_discrete_ops.py -x --tb=short -v
+
 .PHONY: test-cov
 test-cov: docker-build ## run tests with coverage in Docker
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \

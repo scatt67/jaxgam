@@ -20,6 +20,7 @@ import hashlib
 import os
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -73,6 +74,79 @@ def gp_config_to_mgcv_m(spec: SmoothSpec, rho: float | None = None) -> list[floa
 
 class RBridgeError(Exception):
     """Error communicating with R via subprocess mode."""
+
+
+@dataclass(frozen=True)
+class DiscreteOperatorLayout:
+    """Zero-based translation of mgcv's compact discrete operator metadata.
+
+    ``marginal_tables``/``row_indices`` correspond to mgcv ``Xd``/``kd``;
+    ``index_spans`` is its half-open Python form of ``ks``; ``term_starts``
+    and ``term_dimensions`` translate ``ts``/``dt``.  Constraints, dropped
+    columns and an R-to-public coefficient permutation are explicit.  The
+    operator gate exercises a constrained tensor with a dropped coordinate
+    and a different compact/public term order.
+    """
+
+    marginal_tables: tuple[np.ndarray, ...]
+    row_indices: np.ndarray
+    index_spans: np.ndarray
+    term_starts: tuple[int, ...]
+    term_dimensions: tuple[int, ...]
+    constraint_vectors: tuple[np.ndarray, ...]
+    constraint_codes: np.ndarray
+    drop: np.ndarray | None = None
+    r_to_public: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        tables = tuple(np.asarray(table, dtype=float) for table in self.marginal_tables)
+        kd = np.asarray(self.row_indices)
+        ks = np.asarray(self.index_spans)
+        qc = np.asarray(self.constraint_codes)
+        if not tables or any(table.ndim != 2 for table in tables):
+            raise ValueError(
+                "discrete layout needs non-empty two-dimensional Xd tables"
+            )
+        if kd.ndim != 2 or kd.dtype.kind not in "iu" or kd.shape[1] == 0:
+            raise ValueError("discrete layout kd must be a non-empty integer matrix")
+        if ks.shape != (len(tables), 2) or ks.dtype.kind not in "iu":
+            raise ValueError("discrete layout ks must be an integer (n_Xd, 2) matrix")
+        if len(self.term_starts) != len(self.term_dimensions) or len(qc) != len(
+            self.term_starts
+        ):
+            raise ValueError("discrete layout ts/dt/qc lengths are incompatible")
+        if self.constraint_vectors and len(self.constraint_vectors) != len(
+            self.term_starts
+        ):
+            raise ValueError(
+                "discrete layout v entries must match term count when supplied"
+            )
+        if any(
+            start < 0 or width <= 0 or start + width > len(tables)
+            for start, width in zip(self.term_starts, self.term_dimensions, strict=True)
+        ):
+            raise ValueError("discrete layout ts/dt reference invalid Xd tables")
+        if (
+            np.any(ks[:, 0] < 0)
+            or np.any(ks[:, 1] <= ks[:, 0])
+            or np.any(ks[:, 1] > kd.shape[1])
+        ):
+            raise ValueError("discrete layout ks has invalid half-open selector spans")
+        for table, span in zip(tables, ks, strict=True):
+            selectors = kd[:, span[0] : span[1]]
+            if np.any(selectors < 0) or np.any(selectors >= table.shape[0]):
+                raise ValueError("discrete layout kd selector is out of bounds")
+        object.__setattr__(self, "marginal_tables", tables)
+        object.__setattr__(self, "row_indices", kd.astype(np.int32, copy=True))
+        object.__setattr__(self, "index_spans", ks.astype(np.int32, copy=True))
+        object.__setattr__(self, "constraint_codes", qc.astype(np.int32, copy=True))
+        if self.drop is not None:
+            object.__setattr__(self, "drop", np.asarray(self.drop, dtype=np.int32))
+        if self.r_to_public is not None:
+            permutation = np.asarray(self.r_to_public, dtype=np.int32)
+            if not np.array_equal(np.sort(permutation), np.arange(len(permutation))):
+                raise ValueError("r_to_public must be a coefficient permutation")
+            object.__setattr__(self, "r_to_public", permutation)
 
 
 class RBridge:
@@ -310,6 +384,151 @@ class RBridge:
         if self.mode == "rpy2":
             return self._fix_dependence_rpy2(X1, X2, tol, rank_def)
         return self._fix_dependence_subprocess(X1, X2, tol, rank_def)
+
+    def discrete_operators(
+        self,
+        layout: DiscreteOperatorLayout,
+        weights: np.ndarray,
+        response: np.ndarray,
+        beta: np.ndarray,
+        covariance: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Run pinned mgcv compact ``XW*`` actions on explicit metadata.
+
+        This deliberately calls the unexported operation wrappers directly;
+        it is not a ``bam(discrete=TRUE)`` comparison and therefore does not
+        ask R to construct a different unique-row basis or constraint setup.
+        """
+        ok, reason = self.check_versions()
+        if not ok:
+            raise RBridgeError(f"Pinned discrete oracle unavailable: {reason}")
+        weights = np.asarray(weights, dtype=float)
+        response = np.asarray(response, dtype=float)
+        beta = np.asarray(beta, dtype=float)
+        covariance = np.asarray(covariance, dtype=float)
+        if weights.ndim != 1 or response.shape != weights.shape:
+            raise ValueError("discrete weights and response must be matching vectors")
+        p = covariance.shape[0]
+        if covariance.shape != (p, p) or beta.shape != (p,):
+            raise ValueError("discrete beta/covariance shapes are incompatible")
+        if layout.r_to_public is not None:
+            if len(layout.r_to_public) != p:
+                raise ValueError(
+                    "discrete permutation does not match coefficient width"
+                )
+            beta_r = beta[layout.r_to_public]
+            covariance_r = covariance[np.ix_(layout.r_to_public, layout.r_to_public)]
+        else:
+            beta_r = beta
+            covariance_r = covariance
+        result = self._discrete_operators_subprocess(
+            layout, weights, response, beta_r, covariance_r
+        )
+        if layout.r_to_public is not None:
+            permutation = layout.r_to_public
+            public_xwyd = np.empty_like(result["xwyd"])
+            public_xwyd[permutation] = result["xwyd"]
+            public_xwxd = np.empty_like(result["xwxd"])
+            public_xwxd[np.ix_(permutation, permutation)] = result["xwxd"]
+            result["xwyd"] = public_xwyd
+            result["xwxd"] = public_xwxd
+        return result
+
+    @staticmethod
+    def _discrete_operators_subprocess(
+        layout: DiscreteOperatorLayout,
+        weights: np.ndarray,
+        response: np.ndarray,
+        beta: np.ndarray,
+        covariance: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Serialize one compact layout for the pinned R operation wrappers."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            table_paths = []
+            for index, table in enumerate(layout.marginal_tables):
+                path = directory / f"Xd_{index}.csv"
+                np.savetxt(path, table, delimiter=",")
+                table_paths.append(str(path))
+            paths = {
+                "kd": directory / "kd.csv",
+                "ks": directory / "ks.csv",
+                "w": directory / "w.csv",
+                "y": directory / "y.csv",
+                "beta": directory / "beta.csv",
+                "V": directory / "V.csv",
+                "xbd": directory / "xbd.csv",
+                "xwyd": directory / "xwyd.csv",
+                "xwxd": directory / "xwxd.csv",
+                "diag": directory / "diag.csv",
+                "script": directory / "discrete_ops.R",
+            }
+            np.savetxt(paths["kd"], layout.row_indices + 1, delimiter=",", fmt="%d")
+            np.savetxt(paths["ks"], layout.index_spans + 1, delimiter=",", fmt="%d")
+            np.savetxt(paths["w"], weights, delimiter=",")
+            np.savetxt(paths["y"], response, delimiter=",")
+            np.savetxt(paths["beta"], beta, delimiter=",")
+            np.savetxt(paths["V"], covariance, delimiter=",")
+            r_paths = ", ".join(repr(path) for path in table_paths)
+            r_ts = ", ".join(str(value + 1) for value in layout.term_starts)
+            r_dt = ", ".join(str(value) for value in layout.term_dimensions)
+            r_qc = ", ".join(str(value) for value in layout.constraint_codes)
+            r_v = ", ".join(
+                repr(float(value))
+                for vector in layout.constraint_vectors
+                for value in np.asarray(vector, dtype=float)
+            )
+            drop = (
+                "NULL"
+                if layout.drop is None
+                else "c(" + ", ".join(str(value + 1) for value in layout.drop) + ")"
+            )
+            script = f"""
+library(mgcv)
+read_matrix <- function(path) as.matrix(read.csv(path, header=FALSE))
+Xd <- lapply(c({r_paths}), read_matrix)
+kd <- read_matrix({str(paths["kd"])!r})
+ks <- read_matrix({str(paths["ks"])!r})
+w <- as.numeric(read.csv({str(paths["w"])!r}, header=FALSE)[,1])
+y <- as.numeric(read.csv({str(paths["y"])!r}, header=FALSE)[,1])
+beta <- as.numeric(read.csv({str(paths["beta"])!r}, header=FALSE)[,1])
+V <- read_matrix({str(paths["V"])!r})
+ts <- c({r_ts})
+dt <- c({r_dt})
+qc <- c({r_qc})
+drop <- {drop}
+v <- c({r_v})
+xbd <- mgcv:::Xbd(Xd, beta, kd, ks, ts, dt, v, qc, drop=drop)
+xwyd <- mgcv:::XWyd(Xd, w, y, kd, ks, ts, dt, v, qc, drop=drop)
+xwxd <- mgcv:::XWXd(Xd, w, kd, ks, ts, dt, v, qc, drop=drop)
+diag <- mgcv:::diagXVXd(Xd, V, kd, ks, ts, dt, v, qc, drop=drop)
+write.csv(xbd, {str(paths["xbd"])!r}, row.names=FALSE)
+write.csv(xwyd, {str(paths["xwyd"])!r}, row.names=FALSE)
+write.csv(xwxd, {str(paths["xwxd"])!r}, row.names=FALSE)
+write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
+"""
+            paths["script"].write_text(script)
+            proc = subprocess.run(
+                ["Rscript", str(paths["script"])],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if proc.returncode != 0:
+                raise RBridgeError(f"Pinned discrete R operation failed: {proc.stderr}")
+            xwxd = np.asarray(pd.read_csv(paths["xwxd"], header=0), dtype=float)
+            return {
+                "xbd": np.asarray(
+                    pd.read_csv(paths["xbd"], header=0).iloc[:, 0], dtype=float
+                ),
+                "xwyd": np.asarray(
+                    pd.read_csv(paths["xwyd"], header=0).iloc[:, 0], dtype=float
+                ),
+                "xwxd": xwxd,
+                "diag_xvxd": np.asarray(
+                    pd.read_csv(paths["diag"], header=0).iloc[:, 0], dtype=float
+                ),
+            }
 
     def _fix_dependence_rpy2(
         self, X1: np.ndarray, X2: np.ndarray, tol: float, rank_def: int
