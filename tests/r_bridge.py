@@ -827,6 +827,86 @@ class RBridge:
                     accepted[(name, link)] = True
         return accepted
 
+    def efs_nb_working_factors(
+        self,
+        link: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weights: np.ndarray,
+        theta: float,
+        offset: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned ``dDeta`` observed W and Wz for NB links."""
+        self._require_pinned_efs_versions()
+        if link not in {"identity", "sqrt"}:
+            raise ValueError("NB working-factor oracle link must be identity or sqrt")
+        arrays = [
+            np.asarray(value, dtype=np.float64) for value in (y, mu, weights, offset)
+        ]
+        if (
+            any(value.ndim != 1 for value in arrays)
+            or len({len(value) for value in arrays}) != 1
+        ):
+            raise ValueError("NB working-factor oracle inputs must be aligned vectors")
+        if not np.isfinite(theta) or theta <= 0.0:
+            raise ValueError(
+                "NB working-factor oracle theta must be finite and positive"
+            )
+        self._require_rpy2()
+        r_y, r_mu, r_weights, r_offset = map(self._to_r_vector, arrays)
+        r_family = self._call_internal("fix.family.link", self._mgcv.nb(link=link))
+        derivatives = self._call_internal(
+            "dDeta", r_y, r_mu, r_weights, self._base.log(theta), r_family, deriv=0
+        )
+        multiply = self._ro.r["*"]
+        subtract = self._ro.r["-"]
+        half = self._ro.FloatVector([0.5])
+        r_weight = multiply(half, derivatives.rx2("Deta2"))
+        r_response = subtract(
+            multiply(r_weight, subtract(r_family.rx2("linkfun")(r_mu), r_offset)),
+            multiply(half, derivatives.rx2("Deta")),
+        )
+        return {
+            "weight": np.asarray(r_weight, dtype=np.float64).copy(),
+            "weighted_response": np.asarray(r_response, dtype=np.float64).copy(),
+        }
+
+    def efs_nb_deviance_derivatives(
+        self,
+        link: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weights: np.ndarray,
+        theta: float,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned NB deviance and its first two eta derivatives."""
+        self._require_pinned_efs_versions()
+        if link not in {"identity", "sqrt"}:
+            raise ValueError("NB deviance oracle link must be identity or sqrt")
+        arrays = [np.asarray(value, dtype=np.float64) for value in (y, mu, weights)]
+        if (
+            any(value.ndim != 1 for value in arrays)
+            or len({len(value) for value in arrays}) != 1
+        ):
+            raise ValueError("NB deviance oracle inputs must be aligned vectors")
+        if not np.isfinite(theta) or theta <= 0.0:
+            raise ValueError("NB deviance oracle theta must be finite and positive")
+        self._require_rpy2()
+        r_y, r_mu, r_weights = map(self._to_r_vector, arrays)
+        r_theta = self._base.log(theta)
+        r_family = self._call_internal("fix.family.link", self._mgcv.nb(link=link))
+        derivatives = self._call_internal(
+            "dDeta", r_y, r_mu, r_weights, r_theta, r_family, deriv=0
+        )
+        return {
+            "deviance": np.asarray(
+                r_family.rx2("dev.resids")(r_y, r_mu, r_weights, r_theta),
+                dtype=np.float64,
+            ).copy(),
+            "deta": np.asarray(derivatives.rx2("Deta"), dtype=np.float64).copy(),
+            "deta2": np.asarray(derivatives.rx2("Deta2"), dtype=np.float64).copy(),
+        }
+
     def efs_diagnostics(
         self,
         formula: str,
