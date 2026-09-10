@@ -389,6 +389,34 @@ class RBridge:
             dtype=np.float64,
         )
 
+    def family_constructor_acceptance(
+        self, links: tuple[str, ...]
+    ) -> dict[tuple[str, str], bool]:
+        """Ask pinned R constructors which named family/link pairs they accept."""
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        self._require_rpy2()
+        constructors = {
+            "gaussian": self._stats.gaussian,
+            "binomial": self._stats.binomial,
+            "poisson": self._stats.poisson,
+            "gamma": self._stats.Gamma,
+            "nb": self._mgcv.nb,
+        }
+        accepted: dict[tuple[str, str], bool] = {}
+        for name, constructor in constructors.items():
+            for link in links:
+                try:
+                    if name == "nb":
+                        constructor(theta=1.2, link=link)
+                    else:
+                        constructor(link=link)
+                except RRuntimeError:
+                    accepted[(name, link)] = False
+                else:
+                    accepted[(name, link)] = True
+        return accepted
+
     def _fit_rpy2(
         self,
         formula: str,
