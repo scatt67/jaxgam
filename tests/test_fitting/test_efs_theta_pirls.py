@@ -20,7 +20,7 @@ import pytest
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting import pirls as pirls_module
 from jaxgam.fitting.data import FittingData
-from jaxgam.fitting.efs_theta import _efs_nb_log_deviance
+from jaxgam.fitting.efs_theta import _efs_nb_log_deviance, conditional_theta_nll
 from jaxgam.fitting.pirls import (
     _EFS_STATUS_BETA_STEP_FAILED,
     _EFS_STATUS_INVALID_INPUT,
@@ -628,6 +628,7 @@ def _r_efs_inner_oracle(
         halving_path = root / "halvings.csv"
         initial_factors_path = root / "initial_factors.csv"
         use_wy_path = root / "use_wy.csv"
+        theta_state_path = root / "theta_state.csv"
         np.savetxt(
             data_path,
             np.column_stack((X, y, wt, offset)),
@@ -765,6 +766,22 @@ write.csv(data.frame(
 write.csv(data.frame(w=trace$initial_w, wz=trace$initial_wz, z=trace$initial_z),
           {str(initial_factors_path)!r}, row.names=FALSE)
 write.csv(data.frame(value=trace$use_wy), {str(use_wy_path)!r}, row.names=FALSE)
+theta.final <- tail(trace$theta_out, 1L)
+mu.final <- as.numeric(fit$fitted.values)
+dev.final <- sum(family$dev.resids(y, mu.final, wt, theta.final))
+Dd.final <- family$Dd(y, mu.final, theta.final, wt=wt, level=2)
+ls.final <- family$ls(y, w=wt, theta=theta.final, scale=1)
+nll.final <- dev.final / 2 - ls.final$ls
+gradient.final <- sum(as.matrix(Dd.final$Dth)) / 2 - ls.final$lsth1[1]
+write.csv(data.frame(
+  log_theta=theta.final,
+  nll=nll.final,
+  gradient=gradient.final,
+  threshold=1e-7 * (abs(nll.final) + 1),
+  deviance=dev.final,
+  eta_min=min(fit$linear.predictors),
+  eta_max=max(fit$linear.predictors)
+), {str(theta_state_path)!r}, row.names=FALSE)
 """
         script_path = root / "oracle.R"
         script_path.write_text(script, encoding="utf-8")
@@ -789,6 +806,7 @@ write.csv(data.frame(value=trace$use_wy), {str(use_wy_path)!r}, row.names=FALSE)
                 dtype=np.float64
             ),
             "use_wy": pd.read_csv(use_wy_path)["value"].to_numpy(dtype=bool),
+            "theta_state": pd.read_csv(theta_state_path).iloc[0].to_dict(),
         }
 
 
@@ -1347,6 +1365,20 @@ def test_efs_retained_start_recovery_matches_pinned_source_once():
         integer_counts=True,
         max_iter=200,
     )
+    full_eta = np.asarray(full.pirls_result.eta)
+    full_nll, full_gradient = jax.value_and_grad(
+        lambda current_theta: conditional_theta_nll(
+            current_theta,
+            full.pirls_result.eta,
+            y,
+            wt,
+            y.astype(jnp.int64),
+            family,
+            max_y=100,
+            integer_counts=True,
+        )
+    )(full.log_theta)
+    full_threshold = 1e-7 * (abs(float(full_nll)) + 1.0)
 
     halvings = oracle["halvings"]
     collector = _AssertCollector()
@@ -1418,21 +1450,58 @@ def test_efs_retained_start_recovery_matches_pinned_source_once():
             f"nonfinite returned theta {full.log_theta[0]}",
         ),
     )
-    # At saturated mu=y this theta coordinate has no finite interior optimum:
-    # R stops at 18.73346404 while the JAX conditional kernel stops at
-    # 18.77111128, with both gradients below their shared 5.22e-7 threshold.
-    # Keep this source state visible without claiming unique-theta parity.
+    # At saturated mu=y this theta coordinate has no finite interior optimum.
+    # Its terminal coordinate depends on floating-point reductions, so prove
+    # the actual pinned-source and JAX stopping states instead of fixing an
+    # architecture-specific theta snapshot.
+    theta_state = oracle["theta_state"]
     collector.check(
         "saturated source theta-limit state",
-        lambda: np.testing.assert_allclose(
-            oracle["theta"][-1], 18.73346404, rtol=MODERATE.rtol, atol=MODERATE.atol
+        lambda: check_that(
+            np.isfinite(theta_state["nll"])
+            and np.isfinite(theta_state["gradient"])
+            and theta_state["log_theta"] > 15.0
+            and abs(theta_state["gradient"]) <= theta_state["threshold"],
+            f"source theta state did not satisfy its stopping rule: {theta_state}",
         ),
     )
     collector.check(
         "saturated JAX theta-limit state",
         lambda: check_that(
-            float(np.asarray(full.log_theta[0])) > 15.0,
-            f"unexpected finite-theta limit {full.log_theta[0]}",
+            np.isfinite(float(full_nll))
+            and np.isfinite(float(full_gradient[0]))
+            and float(np.asarray(full.log_theta[0])) > 15.0
+            and abs(float(full_gradient[0])) <= full_threshold,
+            "JAX theta state did not satisfy its stopping rule: "
+            f"theta={full.log_theta[0]}, nll={full_nll}, "
+            f"gradient={full_gradient[0]}, threshold={full_threshold}",
+        ),
+    )
+    collector.check(
+        "saturated source/JAX conditional score",
+        lambda: np.testing.assert_allclose(
+            full_nll,
+            theta_state["nll"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "saturated source/JAX predictor",
+        lambda: np.testing.assert_allclose(
+            full_eta,
+            oracle["coefficients"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "saturated source/JAX deviance",
+        lambda: np.testing.assert_allclose(
+            full.pirls_result.deviance,
+            theta_state["deviance"],
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
         ),
     )
     collector.raise_if_any("retained-start recovery parity")
