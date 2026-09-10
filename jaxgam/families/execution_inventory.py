@@ -168,11 +168,9 @@ def _efs_cell_status(
 ) -> EFSCellStatus:
     if _r_constructor_status(family, link) == "rejected":
         return "r_rejected"
-    if family != "nb" or (link, parameter_mode) == ("log", "fixed_theta"):
-        return "internal_pinned_parity"
     if (family, link, parameter_mode) == ("nb", "log", "estimated_theta"):
         return "internal_pinned_parity_with_named_boundary"
-    return "implementation_missing"
+    return "internal_pinned_parity"
 
 
 def _numerical_boundaries(
@@ -190,8 +188,8 @@ def _numerical_boundaries(
     if family == "nb" and link in {"identity", "sqrt"}:
         boundaries.extend(
             (
-                "signed_observed_curvature_requires_EFS_only_policy",
-                "direct_wz_and_weight_clipping_policy_not_yet_gated_for_link",
+                "signed_observed_curvature_uses_EFS_only_policy",
+                "selected_fit_moderate_after_four_correction_passes",
             )
         )
     return tuple(boundaries)
@@ -301,6 +299,29 @@ _EFS_EVIDENCE: dict[tuple[str, str, str], tuple[str, ...]] = {
         "tests/test_execution/test_efs.py::test_estimated_nb_efs_controller_matches_pinned_matched_start_trace",
     ),
 }
+
+_NB_NONCANONICAL_SELECTED_GATE = (
+    "tests/test_execution/test_efs_nb_links.py::"
+    "test_nb_noncanonical_efs_matched_start_default_controller_profile_matches_pinned_r"
+)
+_NB_CONDITIONAL_STRICT_GATE = (
+    "tests/test_fitting/test_efs_theta.py::"
+    "test_conditional_theta_nonlog_links_match_pinned_r_strict"
+)
+for _link in ("identity", "sqrt"):
+    _EFS_EVIDENCE[("nb", _link, "fixed_theta")] = (_NB_NONCANONICAL_SELECTED_GATE,)
+    _EFS_EVIDENCE[("nb", _link, "estimated_theta")] = (
+        _NB_NONCANONICAL_SELECTED_GATE,
+        _NB_CONDITIONAL_STRICT_GATE,
+    )
+
+_NB_REJECTED_LINK_GATE = (
+    "tests/test_execution/test_efs.py::"
+    "test_known_scale_efs_rejects_links_rejected_by_pinned_nb"
+)
+for _link in ("logit", "inverse", "probit", "cloglog", "inverse_squared"):
+    for _mode in ("fixed_theta", "estimated_theta"):
+        _EFS_EVIDENCE[("nb", _link, _mode)] = (_NB_REJECTED_LINK_GATE,)
 
 _CONSTRUCTOR_EXTENSION_GATE = (
     "tests/test_execution/test_efs_regular_links.py::"

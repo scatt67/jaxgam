@@ -39,9 +39,14 @@ import numpy as np
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.extended import ExtendedFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.fitting.efs_theta import _conditional_theta_newton_jit, _efs_nb_log_deviance
+from jaxgam.fitting.efs_theta import (
+    EFSThetaResult,
+    _conditional_theta_newton_jit,
+    _efs_nb_deviance,
+    _efs_nb_log_deviance,
+)
 from jaxgam.jax_utils import penalized_cholesky, penalized_solve
-from jaxgam.links.links import LogLink
+from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
 
 # Working weight bounds to prevent numerical overflow/underflow.
 # R's gam.fit3 uses similar implicit bounds via sqrt(W) clamping.
@@ -386,15 +391,18 @@ def _efs_nb_observed_working_factors(
     y: jax.Array,
     wt: jax.Array,
     offset: jax.Array,
+    family: NegativeBinomial | None = None,
 ) -> _EFSObservedWorkingFactors:
-    """Return EFS NB/log observed WLS factors at dynamic theta.
+    """Return EFS NB observed WLS factors at dynamic theta.
 
     The direct ``wz`` fallback is EFS-only. Ordinary PIRLS remains on its
     established working-response path.
     """
 
     def dev_fn(current_eta: jax.Array) -> jax.Array:
-        return _efs_nb_log_deviance(current_eta, log_theta, y, wt)
+        if family is None:
+            return _efs_nb_log_deviance(current_eta, log_theta, y, wt)
+        return _efs_nb_deviance(current_eta, log_theta, y, wt, family)
 
     gradient = jax.grad(dev_fn)
     d1 = gradient(eta)
@@ -1145,7 +1153,16 @@ jax.tree_util.register_pytree_node(
 )
 
 
-@jax.jit(static_argnames=("family", "max_y", "integer_counts", "max_iter", "tol"))
+@jax.jit(
+    static_argnames=(
+        "family",
+        "max_y",
+        "integer_counts",
+        "estimate_theta",
+        "max_iter",
+        "tol",
+    )
+)
 def _efs_theta_pirls_loop_jit(
     X: jax.Array,
     y: jax.Array,
@@ -1162,10 +1179,11 @@ def _efs_theta_pirls_loop_jit(
     *,
     max_y: int,
     integer_counts: bool,
+    estimate_theta: bool,
     max_iter: int,
     tol: float,
 ) -> EFSThetaPIRLSResult:
-    """Pinned EFS NB/log beta/theta alternation in one JAX while-loop.
+    """Pinned EFS NB beta/theta alternation in one JAX while-loop.
 
     Each beta proposal and its divergence control are evaluated at the
     carried, incoming theta. Only after beta is accepted is conditional theta
@@ -1174,10 +1192,10 @@ def _efs_theta_pirls_loop_jit(
     lines 486-547 without a host-side fit/update alternation.
     """
 
-    # Estimated-theta NB EFS deliberately uses its own stable eta-space
-    # deviance. Ordinary/default and fixed-theta NB retain the family helper.
+    # EFS NB uses its own stable eta-space deviance for both estimated and
+    # fixed theta. Ordinary/default NB retains the family helper.
     def dev_fn(eta: jax.Array, log_theta: jax.Array) -> jax.Array:
-        return _efs_nb_log_deviance(eta, log_theta, y, wt)
+        return _efs_nb_deviance(eta, log_theta, y, wt, family)
 
     def ops(log_theta: jax.Array):
         def compute_working_factors(
@@ -1189,6 +1207,7 @@ def _efs_theta_pirls_loop_jit(
                 y,
                 wt,
                 offset,
+                family,
             )
 
         def form_wls(
@@ -1325,20 +1344,33 @@ def _efs_theta_pirls_loop_jit(
             )
 
         def beta_accepted(_: None) -> _EFSThetaPIRLSState:
-            theta_result = _conditional_theta_newton_jit(
-                state.log_theta,
-                beta_step.eta,
-                y,
-                wt,
-                count_indices,
-                family,
-                max_y=max_y,
-                integer_counts=integer_counts,
-                tolerance=1e-7,
-                max_iter=100,
-                max_step=4.0,
-                max_halvings=25,
-            )
+            if estimate_theta:
+                theta_result = _conditional_theta_newton_jit(
+                    state.log_theta,
+                    beta_step.eta,
+                    y,
+                    wt,
+                    count_indices,
+                    family,
+                    max_y=max_y,
+                    integer_counts=integer_counts,
+                    tolerance=1e-7,
+                    max_iter=100,
+                    max_step=4.0,
+                    max_halvings=25,
+                )
+            else:
+                theta_result = EFSThetaResult(
+                    log_theta=state.log_theta,
+                    nll=jnp.array(0.0),
+                    gradient=jnp.array(0.0),
+                    hessian=jnp.array(1.0),
+                    n_iter=jnp.array(0, dtype=jnp.int32),
+                    converged=jnp.array(True),
+                    status=jnp.array(0, dtype=jnp.int32),
+                    nll_history=jnp.zeros((1,), dtype=state.log_theta.dtype),
+                    n_history=jnp.array(0, dtype=jnp.int32),
+                )
             theta_ok = theta_result.converged & (theta_result.status == 0)
             _, _, post_theta_dev_fn = ops(theta_result.log_theta)
             post_theta_dev = post_theta_dev_fn(beta_step.mu, beta_step.eta)
@@ -1494,12 +1526,13 @@ def efs_theta_pirls_loop(
     beta_old_init: jax.Array | None = None,
     initial_eta: jax.Array | None = None,
     initial_start_retained: bool = False,
+    estimate_theta: bool = True,
     max_y: int,
     integer_counts: bool,
     max_iter: int = 100,
     tol: float = 1e-7,
 ) -> EFSThetaPIRLSResult:
-    """Run the EFS-only NB/log in-loop conditional-theta PIRLS solver.
+    """Run the EFS-only NB in-loop conditional/fixed-theta PIRLS solver.
 
     ``beta_old_init`` is the explicit null coefficient state for the first R
     divergence comparison. ``initial_eta`` supplies ``link(mustart)`` when R
@@ -1510,7 +1543,8 @@ def efs_theta_pirls_loop(
     beta/eta anchor, as in ``gam.fit4``.
 
     This internal entry point is intentionally separate from ``pirls_loop``;
-    neither default joint-Newton NB nor fixed-theta EFS routes opt into it.
+    default joint-Newton NB does not opt into it. EFS calls it for estimated
+    theta and for fixed theta with ``estimate_theta=False``.
 
     Shapes and dtypes are rejected before JIT dispatch: X is nonempty ``(n,p)``
     float data, y/wt/offset/count_indices are aligned ``(n,)`` arrays,
@@ -1524,10 +1558,14 @@ def efs_theta_pirls_loop(
     """
     if not isinstance(family, NegativeBinomial):
         raise TypeError("EFS theta PIRLS requires NegativeBinomial")
-    if family.n_theta != 1:
-        raise ValueError("EFS theta PIRLS requires an estimated NB theta")
-    if not isinstance(family.link, LogLink):
-        raise NotImplementedError("EFS theta PIRLS currently supports NB/log")
+    expected_n_theta = 1 if estimate_theta else 0
+    if family.n_theta != expected_n_theta:
+        mode = "estimated" if estimate_theta else "fixed"
+        raise ValueError(f"EFS theta PIRLS requires {mode} NB theta")
+    if not isinstance(family.link, (LogLink, IdentityLink, SqrtLink)):
+        raise NotImplementedError(
+            "EFS theta PIRLS supports the pinned NB links log, identity, and sqrt"
+        )
     if isinstance(max_y, bool) or not isinstance(max_y, Integral) or max_y < 0:
         raise ValueError("EFS theta PIRLS max_y must be an integer >= 0")
     if isinstance(max_iter, bool) or not isinstance(max_iter, Integral) or max_iter < 1:
@@ -1541,6 +1579,8 @@ def efs_theta_pirls_loop(
         raise ValueError("EFS theta PIRLS tol must be finite and positive")
     if not isinstance(integer_counts, bool):
         raise ValueError("EFS theta PIRLS integer_counts must be bool")
+    if not isinstance(estimate_theta, bool):
+        raise ValueError("EFS theta PIRLS estimate_theta must be bool")
     if X.ndim != 2 or X.shape[0] == 0 or X.shape[1] == 0:
         raise ValueError("EFS theta PIRLS X must be a nonempty two-dimensional array")
     n, p = X.shape
@@ -1611,6 +1651,7 @@ def efs_theta_pirls_loop(
         count_indices,
         max_y=max_y,
         integer_counts=integer_counts,
+        estimate_theta=estimate_theta,
         max_iter=max_iter,
         tol=tol,
     )
