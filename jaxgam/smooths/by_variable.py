@@ -153,6 +153,29 @@ class FactorBySmooth:
 
         return X
 
+    def consume_training_design_matrix(
+        self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame
+    ) -> npt.NDArray[np.floating]:
+        """Compose the factor blocks from the base training basis once."""
+        by_col = get_col(data, self.by_variable)
+        X_base = self.base_smooth.consume_training_design_matrix()
+        self._base_constraint = X_base.sum(axis=0)
+
+        for level in self.levels:
+            if not np.any(np.asarray(by_col == level)):
+                raise ValueError(
+                    f"Factor level '{level}' of by-variable "
+                    f"'{self.by_variable}' has zero observations. "
+                    "Remove empty levels or subset data before fitting."
+                )
+
+        X = np.zeros((len(by_col), self.n_coefs))
+        for level_idx, level in enumerate(self.levels):
+            mask = np.asarray(by_col == level)
+            col_start = level_idx * self.k_per_level
+            X[mask, col_start : col_start + self.k_per_level] = X_base[mask]
+        return X
+
     def predict_matrix(
         self, new_data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame
     ) -> npt.NDArray[np.floating]:
@@ -333,6 +356,14 @@ class NumericBySmooth:
         """
         by_col = np.asarray(get_col(data, self.by_variable), dtype=float)
         X_base = self.base_smooth.build_design_matrix(data)
+        return by_col[:, np.newaxis] * X_base
+
+    def consume_training_design_matrix(
+        self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame
+    ) -> npt.NDArray[np.floating]:
+        """Multiply the known base training basis by the fit-time by column."""
+        by_col = np.asarray(get_col(data, self.by_variable), dtype=float)
+        X_base = self.base_smooth.consume_training_design_matrix()
         return by_col[:, np.newaxis] * X_base
 
     def predict_matrix(

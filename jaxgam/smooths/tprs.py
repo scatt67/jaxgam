@@ -23,6 +23,7 @@ from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
 from jaxgam.smooths.utils import (
+    DISTANCE_BATCH_ROWS,
     _compute_distance_matrix,
     _get_unique_rows,
     _slanczos,
@@ -436,8 +437,6 @@ class TPRSSmooth(Smooth):
         if n_unique > max_knots:
             Xu = _subsample_knots(Xu, max_knots, seed=1)
             n_unique = max_knots
-            # Recompute inverse mapping for subsampled knots
-            inverse = _nearest_knot_indices(X_centered, Xu)
 
         self._Xu = Xu
         nk = n_unique
@@ -477,14 +476,7 @@ class TPRSSmooth(Smooth):
             X_full_knots = np.column_stack([X_wiggly, T])  # (nk, k)
             X_design = X_full_knots[inverse]
         else:
-            # Build E from data to knots, then T from data
-            E_data = tps_semi_kernel(
-                _compute_distance_matrix(X_centered, Xu), self._m, d
-            )
-            T_data = compute_polynomial_basis(X_centered, self._m)
-            # X = [E_data | T_data] @ UZ
-            ET = np.column_stack([E_data, T_data])  # (n, nk+M)
-            X_design = ET @ UZ  # (n, k)
+            X_design = self._project_design_rows(X_centered, Xu, UZ)
 
         # Step 12: Build S (penalty matrix)
         # S = Z' @ diag(D_k) @ Z, padded to kxk with zeros for null space
@@ -525,26 +517,10 @@ class TPRSSmooth(Smooth):
     ) -> npt.NDArray[np.floating]:
         """Return the design matrix for the given data.
 
-        If ``data`` matches the setup data, returns the stored matrix.
-        Otherwise builds a new prediction matrix.
+        The setup-owned training matrix is consumed by model assembly, so this
+        always evaluates the supplied data through the prediction transform.
         """
         self._require_setup()
-        # For the training data, return stored X
-        # For new data, use predict_matrix
-        cols = [np.asarray(data[v], dtype=float) for v in self.spec.variables]
-        raw = np.column_stack(cols)
-
-        if self._X is not None and raw.shape[0] == self._X.shape[0]:
-            X_centered = raw - self._shift
-            # Check if this is the same data (fast approximate check)
-            E_data = tps_semi_kernel(
-                _compute_distance_matrix(X_centered, self._Xu), self._m, self._d
-            )
-            T_data = compute_polynomial_basis(X_centered, self._m)
-            ET = np.column_stack([E_data, T_data])
-            X_new = ET @ self._UZ
-            return X_new
-
         return self.predict_matrix(data)
 
     def build_penalty_matrices(self) -> list[Penalty]:
@@ -587,16 +563,26 @@ class TPRSSmooth(Smooth):
         # Centre by stored shift
         X_centered = raw - self._shift
 
-        # E_new = kernel(new_data, knots)
-        E_new = tps_semi_kernel(
-            _compute_distance_matrix(X_centered, self._Xu), self._m, self._d
-        )
-        # T_new = polynomial basis at new data
-        T_new = compute_polynomial_basis(X_centered, self._m)
+        return self._project_design_rows(X_centered, self._Xu, self._UZ)
 
-        # [E_new | T_new] @ UZ
-        ET = np.column_stack([E_new, T_new])
-        return ET @ self._UZ
+    def _project_design_rows(
+        self,
+        X_centered: npt.NDArray[np.floating],
+        knots: npt.NDArray[np.floating],
+        UZ: npt.NDArray[np.floating],
+    ) -> npt.NDArray[np.floating]:
+        """Evaluate and project TPS rows without retaining an n-by-r-by-d array."""
+        n_rows = X_centered.shape[0]
+        X_design = np.empty((n_rows, UZ.shape[1]), dtype=float)
+        for start in range(0, n_rows, DISTANCE_BATCH_ROWS):
+            stop = min(start + DISTANCE_BATCH_ROWS, n_rows)
+            rows = X_centered[start:stop]
+            E_rows = tps_semi_kernel(
+                _compute_distance_matrix(rows, knots), self._m, self._d
+            )
+            T_rows = compute_polynomial_basis(rows, self._m)
+            X_design[start:stop] = np.column_stack([E_rows, T_rows]) @ UZ
+        return X_design
 
 
 def _nearest_knot_indices(

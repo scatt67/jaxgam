@@ -49,6 +49,7 @@ class TensorProductSmooth(Smooth):
         self._marginals: list[Smooth] = []
         self._penalties: list[Penalty] = []
         self._XP_list: list[npt.NDArray[np.floating] | None] = []
+        self._X: npt.NDArray[np.floating] | None = None
 
     def copy_for_prediction(self) -> TensorProductSmooth:
         """Drop tensor penalties and fitting caches on nested marginals."""
@@ -211,7 +212,7 @@ class TensorProductSmooth(Smooth):
             smooth_cls = get_smooth_class(self.spec.bs)
             marginal = smooth_cls(marginal_spec)
             marginal.setup(data)
-            X_j = marginal.build_design_matrix(data)
+            X_j = marginal.consume_training_design_matrix()
             # Get the normalized penalty and undo smoothCon normalization
             S_normalized = marginal.build_penalty_matrices()[0].S
             S_raw = S_normalized * marginal._s_scale
@@ -328,6 +329,7 @@ class TensorProductSmooth(Smooth):
 
         # Build tensor design matrix
         X_tensor = self._build_tensor_design(X_list)
+        self._X = X_tensor
 
         # Build tensor penalty matrices
         self._penalties = self._build_tensor_penalties(
@@ -479,6 +481,7 @@ class TensorInteractionSmooth(TensorProductSmooth):
 
         # Build tensor design matrix from constrained marginals
         X_tensor = self._build_tensor_design(X_list)
+        self._X = X_tensor
 
         # Build tensor penalties from constrained marginals
         constrained_ranks = [

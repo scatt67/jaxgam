@@ -284,6 +284,7 @@ class ModelSetup:
             has_intercept=formula_spec.has_intercept,
             n_parametric=n_parametric,
             X_parametric=X_parametric,
+            copy_inputs=False,
         )
 
         # 2e. Assemble full X
@@ -681,8 +682,14 @@ class ModelSetup:
             # Resolve by-variable
             smooth = resolve_by_variable(spec, original_data, smooth)
 
-            # Build design matrix and penalty matrices
-            X_s = smooth.build_design_matrix(data_dict)
+            # ``setup`` has already built this exact training basis. Transfer
+            # ownership explicitly so equal-length new data never act as a
+            # cache key and the smooth does not retain a second dense matrix.
+            X_s = (
+                smooth.consume_training_design_matrix(data_dict)
+                if isinstance(smooth, (FactorBySmooth, NumericBySmooth))
+                else smooth.consume_training_design_matrix()
+            )
             penalties = smooth.build_penalty_matrices()
             S_s = [p.S for p in penalties]
 
