@@ -11,6 +11,7 @@ import scipy.linalg as sla
 
 if TYPE_CHECKING:
     from jaxgam.formula.predict_matrix import Data, PredictSpec
+    from jaxgam.inference.predictor import PivotedQRFisherFactor
     from jaxgam.links.links import Link
 
 
@@ -23,6 +24,7 @@ def finish_prediction(
     pred_type: str,
     se_fit: bool,
     fisher_factor: npt.NDArray[np.floating] | None = None,
+    fisher_qr_factor: PivotedQRFisherFactor | None = None,
     fisher_transforms: tuple[tuple[int, int, str, npt.NDArray[np.floating]], ...] = (),
     fisher_scale: float = 1.0,
 ) -> npt.NDArray[Any] | tuple[npt.NDArray[Any], npt.NDArray[np.floating]]:
@@ -31,17 +33,21 @@ def finish_prediction(
     if not se_fit:
         return pred
 
-    if Vp is not None:
+    if Vp is not None and fisher_qr_factor is None:
         # Preserve the exact operation order used by GAMResults.predict.
         se = np.sqrt(np.sum((X_p @ Vp) * X_p, axis=1))
-    elif fisher_factor is not None:
+    elif fisher_factor is not None or fisher_qr_factor is not None:
         X_fit = X_p.copy()
         for start, stop, kind, values in fisher_transforms:
             if kind == "dense":
                 X_fit[:, start:stop] = X_fit[:, start:stop] @ values
             elif kind == "diagonal":
                 X_fit[:, start:stop] *= values
-        Z = sla.solve_triangular(fisher_factor, X_fit.T, lower=True)
+        Z = (
+            sla.solve_triangular(fisher_factor, X_fit.T, lower=True)
+            if fisher_factor is not None
+            else fisher_qr_factor.root_transpose_inverse(X_fit.T)
+        )
         se = np.sqrt(fisher_scale * np.sum(Z * Z, axis=0))
     else:  # defensive: callers normally reject before reaching here.
         raise RuntimeError(
