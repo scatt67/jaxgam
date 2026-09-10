@@ -901,6 +901,7 @@ def test_estimated_nb_nonlog_positive_offset_public_efs_matches_pinned_r(
     assert result.converged
     assert result.n_iter == reference["outer_iterations"]
     assert result.optimizer_diagnostics is not None
+    assert not result.optimizer_diagnostics.stabilized_solve_seen
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")

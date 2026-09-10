@@ -261,6 +261,9 @@ class EFSFitState:
     pre_gdi1_penalized_deviance: jax.Array | None = None
     gdi1_penalty: jax.Array | None = None
     gdi1_candidate_valid: jax.Array | None = None
+    # Count is bounded by the EFS-only PIRLS iteration limit and is collapsed
+    # to the public stabilized-solve indicator by the host accumulator.
+    positive_curvature_retry_count: jax.Array | None = None
 
 
 @dataclass(frozen=True)
@@ -304,6 +307,7 @@ class _EFSDiagnosticsAccumulator:
     log_lambda_cap_count: int = 0
     invalid_fit_seen: bool = False
     gdi1_fallback_seen: bool = False
+    positive_curvature_retry_count: int = 0
 
     def observe_fit(self, state: EFSFitState) -> None:
         self.inner_iterations += int(np.asarray(state.pirls_result.n_iter))
@@ -312,6 +316,10 @@ class _EFSDiagnosticsAccumulator:
         self.invalid_fit_seen |= not state.valid
         if state.gdi1_candidate_valid is not None:
             self.gdi1_fallback_seen |= not bool(np.asarray(state.gdi1_candidate_valid))
+        if state.positive_curvature_retry_count is not None:
+            self.positive_curvature_retry_count += int(
+                np.asarray(state.positive_curvature_retry_count)
+            )
 
     def observe_update(
         self,
@@ -388,7 +396,9 @@ class _EFSDiagnosticsAccumulator:
             ratio_replacement_count=self.ratio_replacement_count,
             log_lambda_cap_count=self.log_lambda_cap_count,
             invalid_fit_seen=self.invalid_fit_seen,
-            stabilized_solve_seen=self.gdi1_fallback_seen,
+            stabilized_solve_seen=(
+                self.gdi1_fallback_seen or self.positive_curvature_retry_count > 0
+            ),
         )
 
 
@@ -667,6 +677,7 @@ def _fit_state(
     pre_gdi1_pdev: jax.Array | None = None
     gdi1_penalty: jax.Array | None = None
     gdi1_candidate_valid: jax.Array | None = None
+    positive_curvature_retry_count: jax.Array | None = None
     score_pdev: jax.Array | None = None
     if _estimated_theta_nb(fd):
         if log_theta_start is None or beta_old_init is None:
@@ -707,6 +718,7 @@ def _fit_state(
         theta_status = theta_result.theta_status
         theta_loop_status = theta_result.status
         theta_n_iter = theta_result.theta_n_iter
+        positive_curvature_retry_count = theta_result.positive_curvature_retry_count
         stopping_pdev = theta_result.stopping_penalized_deviance
     elif isinstance(fd.family, NegativeBinomial) and fd.family.n_theta == 0:
         if fd.count_prefix_plan is None:
@@ -736,6 +748,7 @@ def _fit_state(
         pr = theta_result.pirls_result
         theta_loop_status = theta_result.status
         theta_n_iter = theta_result.theta_n_iter
+        positive_curvature_retry_count = theta_result.positive_curvature_retry_count
         stopping_pdev = theta_result.stopping_penalized_deviance
     elif _uses_regular_source_loop(fd.family):
         null_beta, null_eta, initial_eta = _efs_regular_start(
@@ -848,6 +861,7 @@ def _fit_state(
         pre_gdi1_pdev,
         gdi1_penalty,
         gdi1_candidate_valid,
+        positive_curvature_retry_count,
     )
 
 
