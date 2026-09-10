@@ -61,8 +61,7 @@ def test_fisher_standard_errors_and_batched_positions_match_full() -> None:
 def test_control_rejects_unimplemented_routes_and_budgets_covariance() -> None:
     with pytest.raises(NotImplementedError, match="gaussian_compression"):
         FitControl(gaussian_compression=True)
-    with pytest.raises(NotImplementedError, match="execution"):
-        FitControl(execution="stream")  # type: ignore[arg-type]
+    assert FitControl(execution="stream").execution == "stream"
     data = _data()
     result = GAM(
         "y ~ s(x, bs='cr', k=6)", sp=[0.2], control=FitControl(uncertainty="fisher")

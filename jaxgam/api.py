@@ -18,15 +18,18 @@ from typing import TYPE_CHECKING, Literal, overload
 import numpy as np
 
 from jaxgam.control import FitControl
+from jaxgam.data.source import RowSource
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.registry import get_family
-from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import NewtonResult, newton_optimize
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion
 from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
+from jaxgam.formula.prepare import prepare_model
 from jaxgam.results import GAMInferenceResult, GAMPredictionResult, GAMResults
 
 if TYPE_CHECKING:
@@ -101,7 +104,7 @@ class GAM:
     @overload
     def fit(
         self,
-        data: pd.DataFrame | dict,
+        data: pd.DataFrame | dict | RowSource,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
         *,
@@ -111,7 +114,7 @@ class GAM:
     @overload
     def fit(
         self,
-        data: pd.DataFrame | dict,
+        data: pd.DataFrame | dict | RowSource,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
         *,
@@ -121,7 +124,7 @@ class GAM:
     @overload
     def fit(
         self,
-        data: pd.DataFrame | dict,
+        data: pd.DataFrame | dict | RowSource,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
         *,
@@ -130,7 +133,7 @@ class GAM:
 
     def fit(
         self,
-        data: pd.DataFrame | dict,
+        data: pd.DataFrame | dict | RowSource,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
         *,
@@ -141,12 +144,13 @@ class GAM:
         Parameters
         ----------
         data : pandas.DataFrame or dict
-            Data frame containing the variables in the formula.
+            Data frame containing the variables in the formula. A replayable
+            ``RowSource`` is accepted only with ``execution='stream'``.
         weights : np.ndarray, optional
             Prior weights, shape ``(n,)``.
         offset : np.ndarray, optional
             Offset vector, shape ``(n,)``.
-        result : {"full", "inference"}
+        result : {"full", "inference", "prediction"}
             Result materialization mode. ``"full"`` retains training-backed
             diagnostics; ``"inference"`` returns a lean result that is already
             directly usable for new-data prediction. No ``to_predictor()`` call
@@ -155,7 +159,8 @@ class GAM:
         Returns
         -------
         GAMResults or GAMInferenceResult
-            Frozen full-diagnostic or lean-inference result.
+            Frozen full-diagnostic or lean-inference result. Streamed fitting
+            currently requires explicit fixed ``sp`` and ``result='prediction'``.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
@@ -173,6 +178,16 @@ class GAM:
             import copy
 
             family_obj = copy.deepcopy(family_obj)
+
+        if self.control.execution == "stream":
+            return self._fit_stream(
+                data, weights, offset, result=result, family=family_obj
+            )
+        if isinstance(data, RowSource):
+            raise TypeError(
+                "A RowSource requires FitControl(execution='stream'); the dense "
+                "route accepts only a DataFrame or dict."
+            )
 
         # Phase 1: parse + build model setup
         spec = parse_formula(self.formula)
@@ -205,10 +220,97 @@ class GAM:
             control=self.control,
         )
 
+    def _fit_stream(
+        self,
+        data: pd.DataFrame | dict | RowSource,
+        weights: np.ndarray | None,
+        offset: np.ndarray | None,
+        *,
+        result: Literal["full", "inference", "prediction"],
+        family: ExponentialFamily,
+    ) -> GAMPredictionResult:
+        """Run the narrow fixed-sp replayable-source execution route."""
+        from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
+        from jaxgam.families.standard import Binomial, Gaussian, Poisson
+
+        if not isinstance(data, RowSource):
+            raise TypeError(
+                "FitControl(execution='stream') requires a replayable RowSource."
+            )
+        if weights is not None or offset is not None:
+            raise ValueError(
+                "weights and offset must be owned by the RowSource for "
+                "execution='stream'; do not pass separate arrays."
+            )
+        if result != "prediction":
+            raise NotImplementedError(
+                "Streamed fitting initially supports result='prediction' only; "
+                "full and inference results retain unsupported row diagnostics."
+            )
+        if self.sp is None:
+            raise NotImplementedError(
+                "Streamed fitting currently requires explicit fixed sp; "
+                "streamed smoothing-parameter optimization is not implemented."
+            )
+        if not family.is_canonical or not isinstance(
+            family, (Gaussian, Poisson, Binomial)
+        ):
+            raise NotImplementedError(
+                "Streamed fixed-sp fitting currently supports canonical Gaussian "
+                "identity, Poisson log, and Binomial logit families only."
+            )
+        spec = parse_formula(self.formula)
+        prepared = prepare_model(spec, data, family=family)
+        _preflight_stream_workspace(
+            prepared.n_coef, self.control.batch_rows, self.control.memory_budget_bytes
+        )
+        jax_device = _resolve_device(self.device)
+        metadata = PreparedFittingMetadata.from_prepared(prepared, family, jax_device)
+        log_lambda = _fixed_log_smoothing_parameters(self.sp, metadata.n_penalties)
+        stream_state = fit_streamed_pirls(
+            StreamDesign(prepared, data),
+            family,
+            log_lambda,
+            control=StreamPIRLSControl(batch_rows=self.control.batch_rows),
+            device=jax_device,
+        )
+        return GAMPredictionResult._from_stream_fit(
+            stream_state=stream_state,
+            prepared=prepared,
+            metadata=metadata,
+            family=family,
+            formula=self.formula,
+            method=self.method,
+            control=self.control,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Private module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _preflight_stream_workspace(
+    n_coef: int, batch_rows: int, memory_budget_bytes: int
+) -> None:
+    """Reject stream fits whose known live fit workspace exceeds its budget.
+
+    This conservatively allows old and candidate coefficient reductions,
+    penalty/system/factor buffers, and the two triangular-solve workspaces
+    used for total Fisher EDF, alongside one real batch's design and working
+    vectors. It is an estimate of known array workspaces, not an allocator or
+    native-library hard cap. CPU-only basis preparation is separate.
+    """
+    itemsize = np.dtype(np.float64).itemsize
+    matrix_bytes = 12 * n_coef * n_coef * itemsize
+    batch_bytes = (3 * batch_rows * n_coef + 8 * batch_rows + 4 * n_coef) * itemsize
+    required = matrix_bytes + batch_bytes
+    if required > memory_budget_bytes:
+        raise MemoryError(
+            "Known streamed PIRLS workspace requires "
+            f"{required} bytes, exceeding FitControl.memory_budget_bytes="
+            f"{memory_budget_bytes}. This budget does not cover CPU basis preparation."
+        )
 
 
 def _resolve_device(device: str | None) -> jax.Device | None:
@@ -308,6 +410,26 @@ def _check_scope_guards(method: str, kwargs: dict) -> None:
         )
 
 
+def _fixed_log_smoothing_parameters(sp: np.ndarray | list, n_penalties: int):
+    """Validate natural-scale fixed smoothing parameters and log-transform."""
+    import jax.numpy as jnp
+
+    sp_arr = np.atleast_1d(np.asarray(sp, dtype=np.float64))
+    if sp_arr.shape[0] != n_penalties:
+        raise ValueError(
+            f"sp has {sp_arr.shape[0]} elements but model has "
+            f"{n_penalties} penalty terms."
+        )
+    if np.any(sp_arr <= 0.0) or not np.all(np.isfinite(sp_arr)):
+        bad = sp_arr[(sp_arr <= 0.0) | ~np.isfinite(sp_arr)]
+        raise ValueError(
+            f"sp must contain strictly positive, finite values (smoothing "
+            f"parameters are on the natural scale and are log-transformed "
+            f"internally); got invalid value(s) {bad.tolist()}."
+        )
+    return jnp.log(jnp.array(sp_arr))
+
+
 def _fit_fixed_sp(
     fd: FittingData, sp: np.ndarray | list, method: str = "REML"
 ) -> NewtonResult:
@@ -340,27 +462,7 @@ def _fit_fixed_sp(
     """
     import jax.numpy as jnp
 
-    sp_arr = np.atleast_1d(np.asarray(sp, dtype=np.float64))
-    if sp_arr.shape[0] != fd.n_penalties:
-        raise ValueError(
-            f"sp has {sp_arr.shape[0]} elements but model has "
-            f"{fd.n_penalties} penalty terms."
-        )
-
-    # jaxgam treats fixed sp as natural-scale positive values and log-transforms
-    # them internally (unlike mgcv's "negative sp means estimate"). Validate
-    # eagerly here so sp<=0/non-finite raises a clear error naming the bad value,
-    # rather than the cryptic "array must not contain infs or NaNs" that log(-1)
-    # / log(0) trigger deep inside PIRLS.
-    if np.any(sp_arr <= 0.0) or not np.all(np.isfinite(sp_arr)):
-        bad = sp_arr[(sp_arr <= 0.0) | ~np.isfinite(sp_arr)]
-        raise ValueError(
-            f"sp must contain strictly positive, finite values (smoothing "
-            f"parameters are on the natural scale and are log-transformed "
-            f"internally); got invalid value(s) {bad.tolist()}."
-        )
-
-    log_lambda = jnp.log(jnp.array(sp_arr))
+    log_lambda = _fixed_log_smoothing_parameters(sp, fd.n_penalties)
 
     # Families with an estimated dispersion parameter still co-optimize it with
     # the smoothing parameters held fixed, matching mgcv (gam.outer keeps theta
