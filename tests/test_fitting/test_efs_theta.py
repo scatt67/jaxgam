@@ -1,0 +1,509 @@
+"""Conditional NB theta Newton kernel tests against pinned mgcv."""
+
+from __future__ import annotations
+
+import subprocess
+import tempfile
+from pathlib import Path
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pandas as pd
+import pytest
+
+from jaxgam.families.negative_binomial import NegativeBinomial
+from jaxgam.fitting import efs_theta
+from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.efs_theta import conditional_theta_newton, conditional_theta_nll
+from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.parser import parse_formula
+from tests.helpers import r_available
+from tests.tolerances import MODERATE
+
+
+def _inputs(
+    *,
+    fractional: bool = False,
+    fractional_above_one: bool = False,
+    large_counts: bool = False,
+):
+    rng = np.random.default_rng(5051)
+    n = 48
+    x = np.linspace(-1.0, 1.0, n)
+    offset = 0.08 * np.cos(2.0 * x)
+    weights = 0.6 + rng.random(n)
+    eta = offset + 0.2 + 0.35 * np.sin(2.3 * x)
+    mu = np.exp(eta)
+    theta = 2.4
+    y = rng.negative_binomial(theta, theta / (theta + mu)).astype(np.float64)
+    if large_counts:
+        y += 20 + 7 * (np.arange(n) % 13)
+    if fractional:
+        y += np.where(np.arange(n) % 2, 0.25, 0.5) + (
+            1.0 if fractional_above_one else 0.0
+        )
+    data = pd.DataFrame({"y": y, "x": x, "w": weights, "off": offset})
+    family = NegativeBinomial(theta=1.1)
+    setup = ModelSetup.build(
+        parse_formula("y ~ s(x, bs='cr', k=6)"),
+        data,
+        weights=weights,
+        offset=offset,
+    )
+    fitting_data = FittingData.from_setup(setup, family)
+    assert fitting_data.count_prefix_plan is not None
+    return (
+        family,
+        fitting_data,
+        jnp.asarray(eta),
+        jnp.asarray(np.array([np.log(0.7)])),
+        y,
+        weights,
+    )
+
+
+def _solve(family, fitting_data, eta, log_theta, **kwargs):
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+    return conditional_theta_newton(
+        log_theta,
+        eta,
+        fitting_data.y,
+        fitting_data.wt,
+        plan.indices,
+        family,
+        max_y=fitting_data.max_y,
+        integer_counts=plan.integer_counts,
+        **kwargs,
+    )
+
+
+def _r_conditional_oracle(
+    y: np.ndarray, eta: np.ndarray, wt: np.ndarray, start: float
+) -> dict[str, np.ndarray | float]:
+    """Evaluate and instrument pinned ``estimate.theta`` without patching mgcv."""
+    start = float(start)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        directory = Path(tmpdir)
+        data_path = directory / "data.csv"
+        derivative_path = directory / "derivatives.csv"
+        trace_path = directory / "trace.csv"
+        final_path = directory / "final.csv"
+        pd.DataFrame({"y": y, "mu": np.exp(eta), "wt": wt}).to_csv(
+            data_path, index=False
+        )
+        script = f"""
+library(mgcv)
+if (as.character(getRversion()) != "4.5.2" ||
+    packageVersion("mgcv") != package_version("1.9.3")) {{
+  stop("conditional theta oracle requires R 4.5.2 and mgcv 1.9-3")
+}}
+d <- read.csv({str(data_path)!r})
+family <- nb(theta=-exp({start!r}))
+nlogl <- function(theta, deriv=2) {{
+  dev <- sum(family$dev.resids(d$y, d$mu, d$wt, theta))
+  ls <- family$ls(d$y, w=d$wt, theta=theta, scale=1)
+  nll <- dev/2 - ls$ls
+  if (deriv == 0) return(c(nll=nll))
+  Dd <- family$Dd(d$y, d$mu, theta, wt=d$wt, level=deriv)
+  g <- colSums(as.matrix(Dd$Dth))/2 - ls$lsth1[1]
+  h <- colSums(as.matrix(Dd$Dth2))/2 - as.matrix(ls$lsth2)[1,1]
+  c(nll=nll, gradient=g, hessian=h)
+}}
+source_lines <- capture.output(mgcv:::estimate.theta)
+source_lines <- source_lines[!grepl("^<", source_lines)]
+source_lines[1] <- sub("^function", "estimate.theta.trace <- function", source_lines[1])
+anchor <- "theta <- theta + step"
+if (sum(grepl(anchor, source_lines, fixed=TRUE)) != 1) stop("trace anchor changed")
+source_lines <- sub(
+  anchor, paste0(anchor, "; theta_trace <<- c(theta_trace, theta)"),
+  source_lines, fixed=TRUE
+)
+eval(parse(text=source_lines))
+initial <- nlogl(c({start!r}), deriv=2)
+theta_trace <- numeric()
+final_theta <- estimate.theta.trace(c({start!r}), family, d$y, d$mu, scale=1, wt=d$wt)
+final <- nlogl(final_theta, deriv=2)
+write.csv(as.data.frame(t(initial)), {str(derivative_path)!r}, row.names=FALSE)
+trace_nll <- vapply(theta_trace, function(theta) nlogl(theta, deriv=0)[1], 0.0)
+write.csv(
+  data.frame(log_theta=theta_trace, nll=trace_nll), {str(trace_path)!r},
+  row.names=FALSE
+)
+write.csv(
+  as.data.frame(t(c(log_theta=final_theta, final))), {str(final_path)!r},
+  row.names=FALSE
+)
+"""
+        script_path = directory / "conditional_theta.R"
+        script_path.write_text(script, encoding="utf-8")
+        completed = subprocess.run(
+            ["Rscript", str(script_path)], capture_output=True, text=True, timeout=30
+        )
+        if completed.returncode:
+            raise RuntimeError(completed.stderr)
+        trace = pd.read_csv(trace_path)
+        return {
+            "initial": pd.read_csv(derivative_path).iloc[0].to_numpy(),
+            "trace": trace["log_theta"].to_numpy(),
+            "trace_nll": trace["nll"].to_numpy(),
+            "final": pd.read_csv(final_path).iloc[0].to_numpy(),
+        }
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_conditional_theta_derivatives_and_iterations_match_pinned_r() -> None:
+    family, fitting_data, eta, start, y, weights = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+
+    def objective(theta):
+        return conditional_theta_nll(
+            theta,
+            eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices,
+            family,
+            max_y=fitting_data.max_y,
+            integer_counts=plan.integer_counts,
+        )
+
+    result = _solve(family, fitting_data, eta, start)
+    oracle = _r_conditional_oracle(y, np.asarray(eta), weights, float(start[0]))
+    initial = np.array(
+        [
+            objective(start),
+            jax.grad(objective)(start)[0],
+            jax.hessian(objective)(start)[0, 0],
+        ]
+    )
+    np.testing.assert_allclose(
+        initial, oracle["initial"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    assert int(result.n_iter) == len(oracle["trace"])
+    history = np.asarray(result.nll_history[: result.n_history])
+    assert len(history) == len(oracle["trace_nll"]) + 1
+    np.testing.assert_allclose(
+        history[1:], oracle["trace_nll"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    np.testing.assert_allclose(
+        result.log_theta[0], oracle["final"][0], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    assert np.all(
+        np.diff(history) <= np.finfo(np.float64).eps ** 0.75 * np.abs(history[:-1])
+    )
+    assert bool(result.converged)
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("fractional_above_one", "large_counts", "start"),
+    [(False, True, np.log(0.03)), (True, False, np.log(1e4))],
+)
+def test_conditional_theta_matches_pinned_r_on_supported_count_modes(
+    fractional_above_one: bool, large_counts: bool, start: float
+) -> None:
+    family, fitting_data, eta, _, y, weights = _inputs(
+        fractional=fractional_above_one,
+        fractional_above_one=fractional_above_one,
+        large_counts=large_counts,
+    )
+    theta = jnp.array([start])
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+
+    def objective(log_theta):
+        return conditional_theta_nll(
+            log_theta,
+            eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices,
+            family,
+            max_y=fitting_data.max_y,
+            integer_counts=plan.integer_counts,
+        )
+
+    result = _solve(family, fitting_data, eta, theta)
+    oracle = _r_conditional_oracle(y, np.asarray(eta), weights, start)
+    initial = np.array(
+        [
+            objective(theta),
+            jax.grad(objective)(theta)[0],
+            jax.hessian(objective)(theta)[0, 0],
+        ]
+    )
+    np.testing.assert_allclose(
+        initial, oracle["initial"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    history = np.asarray(result.nll_history[: result.n_history])
+    assert len(history) == len(oracle["trace_nll"]) + 1
+    np.testing.assert_allclose(
+        history[1:], oracle["trace_nll"], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    np.testing.assert_allclose(
+        result.log_theta[0], oracle["final"][0], rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+    assert plan.integer_counts is (not fractional_above_one)
+    if large_counts:
+        assert fitting_data.max_y > 100
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_conditional_theta_rejects_fractional_response_nll_offset() -> None:
+    """Keep the inherited fractional-NB convention visible, not R-supported."""
+    family, fitting_data, eta, _, y, weights = _inputs(fractional=True)
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+    theta = jnp.array([np.log(1e4)])
+    result = _solve(family, fitting_data, eta, theta)
+    oracle = _r_conditional_oracle(y, np.asarray(eta), weights, float(theta[0]))
+    raw_nll = conditional_theta_nll(
+        theta,
+        eta,
+        fitting_data.y,
+        fitting_data.wt,
+        plan.indices,
+        family,
+        max_y=fitting_data.max_y,
+        integer_counts=plan.integer_counts,
+    )
+    fractional = (y > 0.0) & (y < 1.0)
+    r_nll_offset = -np.sum(weights[fractional] * y[fractional] * np.log(y[fractional]))
+    np.testing.assert_allclose(
+        raw_nll + r_nll_offset,
+        oracle["initial"][0],
+        rtol=MODERATE.rtol,
+        atol=MODERATE.atol,
+    )
+    assert int(result.status) == efs_theta._STATUS_UNSUPPORTED_FRACTIONAL_RESPONSE
+    assert not bool(result.converged)
+    assert int(result.n_iter) == 0
+    assert int(result.n_history) == 1
+
+
+def test_conditional_theta_kernel_jits_with_dynamic_theta() -> None:
+    family, fitting_data, eta, start, _, _ = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+    compiled = jax.jit(
+        lambda theta: conditional_theta_newton(
+            theta,
+            eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices,
+            family,
+            max_y=fitting_data.max_y,
+            integer_counts=plan.integer_counts,
+        )
+    )
+    first = compiled(start)
+    second = compiled(start + 0.2)
+    assert np.isfinite(first.nll)
+    assert np.isfinite(second.nll)
+    assert first.log_theta.shape == second.log_theta.shape == (1,)
+
+
+def test_conditional_theta_reports_zero_curvature_and_nonfinite_objective(
+    monkeypatch,
+) -> None:
+    family, fitting_data, eta, start, _, _ = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+
+    def linear_objective(theta, *args, **kwargs):
+        del args, kwargs
+        return theta[0]
+
+    monkeypatch.setattr(efs_theta, "_conditional_theta_nll_jit", linear_objective)
+    efs_theta._conditional_theta_newton_jit.clear_cache()
+    zero = _solve(family, fitting_data, eta, start)
+    assert int(zero.status) == efs_theta._STATUS_ZERO_CURVATURE
+    monkeypatch.undo()
+    efs_theta._conditional_theta_newton_jit.clear_cache()
+
+    nonfinite = _solve(family, fitting_data, jnp.full_like(eta, jnp.nan), start)
+    assert int(nonfinite.status) == efs_theta._STATUS_INITIAL_NONFINITE
+
+
+def test_conditional_theta_recovers_an_infinite_trial_by_halving(monkeypatch) -> None:
+    family, fitting_data, eta, _, _, _ = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+
+    def recoverable_infinite_trial(theta, *args, **kwargs):
+        del args, kwargs
+        finite_value = theta[0] ** 2 - 2.0 * theta[0]
+        return jnp.where(theta[0] >= 0.75, jnp.inf, finite_value)
+
+    monkeypatch.setattr(
+        efs_theta, "_conditional_theta_nll_jit", recoverable_infinite_trial
+    )
+    efs_theta._conditional_theta_newton_jit.clear_cache()
+    result = _solve(
+        family,
+        fitting_data,
+        eta,
+        jnp.array([0.0]),
+        max_iter=1,
+    )
+    assert int(result.status) == efs_theta._STATUS_ITERATION_LIMIT
+    assert int(result.n_history) == 2
+    assert result.nll_history[1] == pytest.approx(-0.75)
+    monkeypatch.undo()
+    efs_theta._conditional_theta_newton_jit.clear_cache()
+
+
+def test_conditional_theta_reports_line_search_failure() -> None:
+    y = jnp.array(
+        [0, 1, 2, 1, 6, 0, 3, 2, 1, 2, 3, 2, 2, 1, 4, 4, 2, 4, 1, 2],
+        dtype=jnp.float64,
+    )
+    eta = jnp.array(
+        [
+            -3.9166786485581433,
+            -5.636708018382006,
+            1.7488353066002702,
+            3.740833789167816,
+            -1.9353286523100799,
+            3.270792451256682,
+            2.22856993753366,
+            -7.632976698625011,
+            7.914303751098403,
+            7.5543545985734095,
+            -1.5240893122791217,
+            -3.043881295304381,
+            1.8139513845075435,
+            -7.604154899194157,
+            -0.1430485889146258,
+            0.7774680457331158,
+            5.567537211500943,
+            5.027848840219194,
+            1.4554000106541576,
+            -5.699305319353627,
+        ]
+    )
+    family = NegativeBinomial(theta=1.0)
+    result = conditional_theta_newton(
+        jnp.array([-4.207454150261791]),
+        eta,
+        y,
+        jnp.ones_like(y),
+        y.astype(jnp.int64),
+        family,
+        max_y=6,
+        integer_counts=True,
+        max_halvings=0,
+        max_iter=3,
+    )
+    assert int(result.status) == efs_theta._STATUS_LINE_SEARCH_FAILED
+
+
+def test_conditional_theta_rejects_fixed_or_non_nb_family() -> None:
+    _, fitting_data, eta, start, _, _ = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+    with pytest.raises(ValueError, match="estimated NB theta"):
+        conditional_theta_newton(
+            start,
+            eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices,
+            NegativeBinomial(theta=1.0, fixed=True),
+            max_y=fitting_data.max_y,
+            integer_counts=plan.integer_counts,
+        )
+    with pytest.raises(TypeError, match="NegativeBinomial"):
+        conditional_theta_newton(
+            start,
+            eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices,
+            family=None,  # type: ignore[arg-type]
+            max_y=fitting_data.max_y,
+            integer_counts=plan.integer_counts,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_y": True}, "max_y"),
+        ({"max_y": -1}, "max_y"),
+        ({"max_iter": 1.5}, "max_iter"),
+        ({"max_halvings": -1}, "max_halvings"),
+        ({"integer_counts": 1}, "integer_counts"),
+        ({"tolerance": np.nan}, "tolerance"),
+        ({"max_step": False}, "max_step"),
+    ],
+)
+def test_conditional_theta_rejects_invalid_static_controls(
+    kwargs, message: str
+) -> None:
+    family, fitting_data, eta, start, _, _ = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+    arguments = {
+        "max_y": fitting_data.max_y,
+        "integer_counts": plan.integer_counts,
+        **kwargs,
+    }
+    with pytest.raises(ValueError, match=message):
+        conditional_theta_newton(
+            start,
+            eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices,
+            family,
+            **arguments,
+        )
+
+
+@pytest.mark.parametrize(
+    ("log_theta", "eta", "count_indices", "message"),
+    [
+        (jnp.zeros(2), None, None, "log_theta"),
+        (None, jnp.zeros(3), None, "must align"),
+        (None, None, jnp.zeros(3, dtype=jnp.int64), "must align"),
+    ],
+)
+def test_conditional_theta_rejects_invalid_static_shapes(
+    log_theta, eta, count_indices, message: str
+) -> None:
+    family, fitting_data, default_eta, start, _, _ = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+    with pytest.raises(ValueError, match=message):
+        conditional_theta_newton(
+            start if log_theta is None else log_theta,
+            default_eta if eta is None else eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices if count_indices is None else count_indices,
+            family,
+            max_y=fitting_data.max_y,
+            integer_counts=plan.integer_counts,
+        )
+
+
+def test_conditional_theta_rejects_nonlog_nb() -> None:
+    _, fitting_data, eta, start, _, _ = _inputs()
+    plan = fitting_data.count_prefix_plan
+    assert plan is not None
+    with pytest.raises(NotImplementedError, match="NB/log"):
+        conditional_theta_newton(
+            start,
+            eta,
+            fitting_data.y,
+            fitting_data.wt,
+            plan.indices,
+            NegativeBinomial(theta=1.0, link="identity"),
+            max_y=fitting_data.max_y,
+            integer_counts=plan.integer_counts,
+        )
