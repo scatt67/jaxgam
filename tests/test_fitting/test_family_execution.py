@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import ast
+import subprocess
+import tempfile
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 import pytest
 
 from jaxgam.families.base import REAL, ExponentialFamily
 from jaxgam.families.execution_inventory import FAMILY_EXECUTION_INVENTORY
 from jaxgam.families.negative_binomial import NegativeBinomial
+from jaxgam.families.registry import family_registry
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
@@ -26,6 +32,8 @@ from jaxgam.fitting.family_execution import (
 )
 from jaxgam.fitting.pirls import canonical_working_quantities
 from jaxgam.links.links import IdentityLink, Link, LogLink
+from jaxgam.links.registry import link_registry
+from tests.helpers import r_available
 from tests.tolerances import STRICT
 
 
@@ -397,11 +405,24 @@ def test_saturated_likelihood_and_inventory_are_jittable_complete() -> None:
     assert bool(jnp.isfinite(value))
     assert len(FAMILY_EXECUTION_INVENTORY) == 48
     assert all(entry.dense_status for entry in FAMILY_EXECUTION_INVENTORY)
-    assert any(
-        entry.family == "binomial"
-        and entry.link == "log"
-        and entry.r_link_status == "allowed"
-        for entry in FAMILY_EXECUTION_INVENTORY
+    regular = [entry for entry in FAMILY_EXECUTION_INVENTORY if entry.family != "nb"]
+    assert len(regular) == 32
+    assert all(entry.r_constructor_status == "accepted" for entry in regular)
+    inverse_squared = next(
+        entry
+        for entry in regular
+        if entry.family == "gaussian" and entry.link == "inverse_squared"
+    )
+    assert inverse_squared.r_constructor_link == "1/mu^2"
+    assert not inverse_squared.r_advertised
+    assert inverse_squared.efs_status == "implementation_missing"
+
+    nb = [entry for entry in FAMILY_EXECUTION_INVENTORY if entry.family == "nb"]
+    assert len(nb) == 16
+    assert sum(entry.r_constructor_status == "accepted" for entry in nb) == 6
+    assert sum(entry.efs_status == "r_rejected" for entry in nb) == 10
+    assert all(
+        entry.r_advertised for entry in nb if entry.r_constructor_status == "accepted"
     )
     nb_log = next(
         entry
@@ -413,3 +434,110 @@ def test_saturated_likelihood_and_inventory_are_jittable_complete() -> None:
     assert nb_log.default_link
     assert not nb_log.mathematical_canonical
     assert not nb_log.legacy_route_is_canonical
+    assert nb_log.efs_status == "implementation_missing"
+    assert not nb_log.numerical_boundaries
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_execution_inventory_matches_pinned_r_constructors_and_evidence() -> None:
+    """Tie registered cells to pinned R construction and checked-in tests."""
+    links = link_registry.available
+    families = family_registry.available
+    expected_cells: set[tuple[str, str, str]] = set()
+    for family in families:
+        modes = ("fixed_theta", "estimated_theta") if family == "nb" else ("none",)
+        expected_cells.update((family, link, mode) for link in links for mode in modes)
+    entries = {
+        (entry.family, entry.link, entry.parameter_mode): entry
+        for entry in FAMILY_EXECUTION_INVENTORY
+    }
+    assert set(entries) == expected_cells
+
+    for entry in FAMILY_EXECUTION_INVENTORY:
+        family_cls = family_registry.get_class(entry.family)
+        if entry.family == "nb":
+            instance = family_cls(
+                theta=1.2,
+                fixed=entry.parameter_mode == "fixed_theta",
+                link=entry.link,
+            )
+        else:
+            instance = family_cls(link=entry.link)
+        assert instance.family_name.lower() == entry.family
+
+    with tempfile.TemporaryDirectory() as root_text:
+        root = Path(root_text)
+        output = root / "constructors.csv"
+        script = root / "constructors.R"
+        script.write_text(
+            f"""suppressPackageStartupMessages(library(mgcv))
+if (as.character(getRversion()) != "4.5.2" ||
+    packageVersion("mgcv") != package_version("1.9.3")) stop("pinned R/mgcv required")
+links <- c("identity", "log", "logit", "inverse", "probit", "cloglog", "sqrt", "1/mu^2")
+regular <- c(gaussian="gaussian", binomial="binomial", poisson="poisson", gamma="Gamma")
+rows <- list(); i <- 0L
+for (family_name in names(regular)) for (link_name in links) {{
+  i <- i + 1L
+  accepted <- !inherits(
+    try(do.call(regular[[family_name]], list(link=link_name)), silent=TRUE),
+    "try-error"
+  )
+  rows[[i]] <- data.frame(family=family_name, link=link_name, accepted=accepted)
+}}
+for (link_name in links) {{
+  i <- i + 1L
+  accepted <- !inherits(
+    try(
+      eval(parse(text=sprintf("mgcv::nb(theta=1.2, link=%s)", shQuote(link_name)))),
+      silent=TRUE
+    ),
+    "try-error"
+  )
+  rows[[i]] <- data.frame(family="nb", link=link_name, accepted=accepted)
+}}
+write.csv(do.call(rbind, rows), {str(output)!r}, row.names=FALSE)
+"""
+        )
+        subprocess.run(
+            ["Rscript", str(script)], check=True, capture_output=True, text=True
+        )
+        r_rows = pd.read_csv(output)
+
+    r_accepts = {
+        (str(row.family), str(row.link)): bool(row.accepted)
+        for row in r_rows.itertuples(index=False)
+    }
+    assert len(r_accepts) == 40
+    for entry in FAMILY_EXECUTION_INVENTORY:
+        assert r_accepts[(entry.family, entry.r_constructor_link)] == (
+            entry.r_constructor_status == "accepted"
+        )
+
+    repository = Path(__file__).resolve().parents[2]
+    for entry in FAMILY_EXECUTION_INVENTORY:
+        for evidence in entry.evidence:
+            if not evidence.startswith("tests/"):
+                continue
+            test_path, qualified_name = evidence.split("::", maxsplit=1)
+            parts = qualified_name.split("::")
+            tree = ast.parse((repository / test_path).read_text())
+            if len(parts) == 1:
+                found = any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == parts[0]
+                    for node in tree.body
+                )
+            elif len(parts) == 2:
+                found = any(
+                    isinstance(node, ast.ClassDef)
+                    and node.name == parts[0]
+                    and any(
+                        isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and method.name == parts[1]
+                        for method in node.body
+                    )
+                    for node in tree.body
+                )
+            else:
+                found = False
+            assert found, evidence

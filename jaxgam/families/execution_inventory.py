@@ -11,7 +11,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 InventoryStatus = Literal["dense_r_parity_partial", "dense_generic_unverified"]
-RLinkStatus = Literal["allowed", "not_advertised_by_r"]
+RConstructorStatus = Literal["accepted", "rejected"]
+EFSCellStatus = Literal[
+    "internal_pinned_parity",
+    "internal_pinned_parity_with_named_boundary",
+    "implementation_missing",
+    "r_rejected",
+]
 EvidenceScope = Literal[
     "fixed_sp_pirls_coefficients_deviance_mu_moderate",
     "free_reml_score_edf_loose",
@@ -31,7 +37,12 @@ class FamilyExecutionInventoryEntry:
     default_link: bool
     mathematical_canonical: bool
     legacy_route_is_canonical: bool
-    r_link_status: RLinkStatus
+    r_constructor_status: RConstructorStatus
+    r_advertised: bool
+    r_constructor_link: str
+    r_start_validity_notes: str
+    efs_status: EFSCellStatus
+    numerical_boundaries: tuple[str, ...]
     dense_status: InventoryStatus
     evidence_scope: EvidenceScope
     stream_status: str
@@ -49,15 +60,21 @@ _LINKS = (
     "inverse_squared",
 )
 
-# Pinned base-R family constructors own the standard-family allowed link sets.
-# NB's set is explicitly checked in mgcv 1.9-3 R/efam.r:160-168.
-_R_LINKS = {
+# These are the link sets advertised by the pinned family constructors.  The
+# base R constructors subsequently call ``make.link`` for a character link
+# outside this set, so all eight registered links are *constructed* even when
+# they are not an advertised family contract.  ``inverse_squared`` maps to
+# R's spelling ``1/mu^2``. NB differs: its
+# constructor explicitly rejects a non-listed link (R/efam.r:160-168).
+_R_ADVERTISED_LINKS = {
     "gaussian": frozenset({"identity", "log", "inverse"}),
     "binomial": frozenset({"logit", "probit", "cloglog", "log"}),
     "poisson": frozenset({"log", "identity", "sqrt"}),
     "gamma": frozenset({"inverse", "log", "identity"}),
     "nb": frozenset({"log", "identity", "sqrt"}),
 }
+_R_CONSTRUCTOR_LINK = {link: link for link in _LINKS}
+_R_CONSTRUCTOR_LINK["inverse_squared"] = "1/mu^2"
 _CANONICAL = {
     "gaussian": "identity",
     "binomial": "logit",
@@ -71,6 +88,93 @@ _DEFAULT_LINK = {
     "gamma": "inverse",
     "nb": "log",
 }
+
+# These are deliberately notes, not an executable predicate or a statement of
+# every R-supported data domain.  ``family$initialize`` is allowed to depend
+# on prior weights, binomial trial encoding and a supplied start.  The pinned
+# sources are the authority for those details (stats/R/family.R and
+# mgcv/R/efam.r); EFS fixtures record the narrower input profile actually
+# exercised below.
+_R_START_VALIDITY_NOTES = {
+    "gaussian": "NULL start comes from stats::gaussian()$initialize (mu <- y)",
+    "binomial": "initialize depends on binomial response/trial encoding and weights",
+    "poisson": "NULL start comes from stats::poisson()$initialize",
+    "gamma": "NULL start requires the positive Gamma initialization path",
+    "nb": "mgcv::nb() uses its count-family initialization path",
+}
+
+
+def _eta_domain(family: str, link: str) -> str:
+    if link == "identity":
+        if family == "gaussian":
+            return "finite eta"
+        if family == "binomial":
+            return "0 < eta < 1"
+        return "eta > 0"
+    if link == "log":
+        return "eta < 0" if family == "binomial" else "finite eta"
+    if link in {"logit", "probit", "cloglog"}:
+        return "finite eta; link inverse must remain finite and valid"
+    if link == "inverse":
+        if family == "binomial":
+            return "eta > 1"
+        return "finite eta != 0" if family == "gaussian" else "eta > 0"
+    if link == "sqrt":
+        if family == "binomial":
+            return "0 < eta < 1"
+        return "finite eta > 0"
+    assert link == "inverse_squared"
+    return "eta > 1" if family == "binomial" else "finite eta > 0"
+
+
+def _r_constructor_status(family: str, link: str) -> RConstructorStatus:
+    if family == "nb":
+        return "accepted" if link in _R_ADVERTISED_LINKS[family] else "rejected"
+    return "accepted"
+
+
+def _r_start_validity_notes(family: str, link: str) -> str:
+    if _r_constructor_status(family, link) == "rejected":
+        return "not applicable: pinned R constructor rejects this registered link"
+    start = _R_START_VALIDITY_NOTES[family]
+    if family == "gaussian" and link == "log":
+        start = "Gaussian/log NULL start needs positive response for finite linkfun(y)"
+    elif family == "gaussian" and link == "inverse":
+        start = (
+            "Gaussian/inverse NULL start needs nonzero response for finite linkfun(y)"
+        )
+    elif family == "gaussian" and link == "sqrt":
+        start = (
+            "Gaussian/sqrt NULL start needs nonnegative response for finite linkfun(y)"
+        )
+    elif family == "gaussian" and link == "inverse_squared":
+        start = (
+            "Gaussian/1/mu^2 NULL start needs nonzero response; negative y gives "
+            "finite positive eta"
+        )
+    return f"{start}; selected eta note: {_eta_domain(family, link)}"
+
+
+def _efs_cell_status(
+    family: str,
+    link: str,
+    parameter_mode: Literal["none", "fixed_theta", "estimated_theta"],
+) -> EFSCellStatus:
+    del parameter_mode
+    if _r_constructor_status(family, link) == "rejected":
+        return "r_rejected"
+    return "implementation_missing"
+
+
+def _numerical_boundaries(
+    family: str,
+    link: str,
+    parameter_mode: Literal["none", "fixed_theta", "estimated_theta"],
+) -> tuple[str, ...]:
+    del family, link, parameter_mode
+    return ()
+
+
 _DENSE_EVIDENCE: dict[tuple[str, str, str], tuple[EvidenceScope, tuple[str, ...]]] = {
     ("gaussian", "identity", "none"): (
         "fixed_sp_pirls_coefficients_deviance_mu_moderate",
@@ -97,21 +201,27 @@ _DENSE_EVIDENCE: dict[tuple[str, str, str], tuple[EvidenceScope, tuple[str, ...]
     ),
     ("nb", "log", "estimated_theta"): (
         "free_reml_deviance_theta_loose",
-        ("tests/test_fitting/test_nb_fitting.py::TestNBNonCanonicalLink",),
+        (
+            "tests/test_fitting/test_nb_fitting.py::TestNBNonCanonicalLink::test_nb_noncanonical_link_matches_r",
+        ),
     ),
     ("nb", "identity", "estimated_theta"): (
         "free_reml_deviance_theta_loose",
-        ("tests/test_fitting/test_nb_fitting.py::TestNBNonCanonicalLink",),
+        (
+            "tests/test_fitting/test_nb_fitting.py::TestNBNonCanonicalLink::test_nb_noncanonical_link_matches_r",
+        ),
     ),
     ("nb", "sqrt", "estimated_theta"): (
         "free_reml_deviance_theta_loose",
-        ("tests/test_fitting/test_nb_fitting.py::TestNBNonCanonicalLink",),
+        (
+            "tests/test_fitting/test_nb_fitting.py::TestNBNonCanonicalLink::test_nb_noncanonical_link_matches_r",
+        ),
     ),
     ("nb", "log", "fixed_theta"): (
         "dense_invariants_only",
         (
-            "tests/test_fitting/test_nb_fitting.py::TestNBFixedTheta",
-            "tests/test_fitting/test_nb_fitting.py::TestNBHardGateInvariants",
+            "tests/test_fitting/test_nb_fitting.py::TestNBFixedTheta::test_converges",
+            "tests/test_fitting/test_nb_fitting.py::TestNBHardGateInvariants::test_deviance_non_negative",
         ),
     ),
 }
@@ -150,9 +260,12 @@ def _entry(
         # false even for its default log link.  This records legacy behavior;
         # it is not a mathematical-information claim.
         legacy_route_is_canonical=family != "nb" and link == _CANONICAL[family],
-        r_link_status=(
-            "allowed" if link in _R_LINKS[family] else "not_advertised_by_r"
-        ),
+        r_constructor_status=_r_constructor_status(family, link),
+        r_advertised=link in _R_ADVERTISED_LINKS[family],
+        r_constructor_link=_R_CONSTRUCTOR_LINK[link],
+        r_start_validity_notes=_r_start_validity_notes(family, link),
+        efs_status=_efs_cell_status(family, link, parameter_mode),
+        numerical_boundaries=_numerical_boundaries(family, link, parameter_mode),
         dense_status=(
             "dense_r_parity_partial"
             if evidence_scope not in {"dense_invariants_only", "unverified"}
