@@ -31,6 +31,7 @@ from jaxgam.fitting.efs import (
     prepare_efs_statistics,
 )
 from jaxgam.fitting.pirls import (
+    _EFS_STATUS_RETAINED_START_INVALID_TRIAL,
     _W_MAX,
     _W_MIN,
     PIRLSResult,
@@ -252,6 +253,7 @@ class EFSFitState:
     # it is never read back from a mutable family after a rejected EFS trial.
     log_theta: jax.Array | None = None
     theta_status: jax.Array | None = None
+    theta_loop_status: jax.Array | None = None
     theta_n_iter: jax.Array | None = None
     stopping_penalized_deviance: jax.Array | None = None
 
@@ -335,43 +337,91 @@ def _result_theta(state: EFSFitState, fd: FittingData) -> float | None:
     return _fixed_theta(fd)
 
 
-def _check_efs_theta_warm_start(
+def _efs_fit_failure_label(state: EFSFitState) -> str:
+    """Give the EFS-only retained-start recovery gap an explicit outcome."""
+    if state.theta_loop_status is not None and int(
+        np.asarray(state.theta_loop_status)
+    ) == (_EFS_STATUS_RETAINED_START_INVALID_TRIAL):
+        return "retained_start_invalid_trial"
+    return "inner_failure" if not state.inner_converged else "invalid_trial"
+
+
+@dataclass(frozen=True)
+class _EFSThetaStart:
+    """One immutable R ``gam.fit4`` coefficient/eta initialization choice."""
+
+    beta: jax.Array
+    initial_eta: jax.Array
+    retained: bool
+
+
+def _select_efs_theta_start(
     fd: FittingData,
     penalty: jax.Array,
     beta_start: jax.Array,
-    beta_old_init: jax.Array,
+    beta_null: jax.Array,
     log_theta_start: jax.Array,
-) -> None:
-    """Reject an R ``gam.fit4`` start that it would discard for ``mustart``.
+    *,
+    start_is_absent: bool,
+) -> _EFSThetaStart:
+    """Match R's retained-start check or its ``mustart`` reset.
 
-    The staged controller deliberately does not implement the separate R
-    ``start <- NULL`` / family-initialize path yet.  Accepting such a vector
-    as though it were a retained warm start would silently diverge from the
-    pinned optimizer.  Compare the exact pre-PIRLS penalized deviances used by
-    ``gam.fit4.r`` lines 340--345 instead and require a separately reviewed
-    initializer before widening this internal route.
+    ``gam.fit4`` uses ``link(initialize(y, wt))`` immediately when its start
+    is absent. With a supplied start it computes both penalized deviances at
+    the incoming theta, discarding a worse vector before the first WLS step.
+    Both reset paths retain the explicit null coefficient anchor for the first
+    divergence comparison. Do not substitute a projected coefficient
+    initializer for that per-row state.
     """
     assert isinstance(fd.family, NegativeBinomial)
-    deviance_fn = fd.family.deviance_fn(fd.y, fd.wt)
-    eta_start = fd.X @ beta_start + fd.offset
-    eta_old = fd.X @ beta_old_init + fd.offset
-    start_pdev = (
-        deviance_fn(eta_start, log_theta_start) + beta_start @ penalty @ beta_start
-    )
-    old_pdev = (
-        deviance_fn(eta_old, log_theta_start) + beta_old_init @ penalty @ beta_old_init
-    )
-    admissible = bool(
-        np.asarray(
-            jnp.isfinite(start_pdev) & jnp.isfinite(old_pdev) & (start_pdev <= old_pdev)
-        )
-    )
-    if not admissible:
+    beta_start = jnp.asarray(beta_start)
+    beta_null = jnp.asarray(beta_null)
+    log_theta_start = jnp.asarray(log_theta_start)
+    expected_beta_shape = (fd.n_coef,)
+    if (
+        beta_start.shape != expected_beta_shape
+        or beta_null.shape != expected_beta_shape
+    ):
         raise ValueError(
-            "Estimated NB EFS warm start is worse than its beta_old_init "
-            "null anchor; pinned gam.fit4 would reset to mustart, which this "
-            "staged route does not yet implement"
+            "Estimated NB EFS beta start and null anchor must match n_coef"
         )
+    if log_theta_start.shape != (1,):
+        raise ValueError("Estimated NB EFS initial log theta must have shape (1,)")
+    if not bool(
+        np.all(np.isfinite(np.asarray(beta_start)))
+        and np.all(np.isfinite(np.asarray(beta_null)))
+        and np.all(np.isfinite(np.asarray(log_theta_start)))
+        and np.all(np.exp(np.asarray(log_theta_start)) > 0.0)
+    ):
+        raise ValueError("Estimated NB EFS beta starts and log theta must be finite")
+    # Validate all host-visible inputs before the dense pdev matrix products.
+    if not bool(np.all(np.isfinite(np.asarray(penalty)))):
+        raise ValueError(
+            "Estimated NB EFS penalty must be finite before start selection"
+        )
+    offset = jnp.zeros_like(fd.y) if fd.offset is None else fd.offset
+    if not start_is_absent:
+        deviance_fn = fd.family.deviance_fn(fd.y, fd.wt)
+        eta_start = fd.X @ beta_start + offset
+        eta_null = fd.X @ beta_null + offset
+        start_pdev = (
+            deviance_fn(eta_start, log_theta_start) + beta_start @ penalty @ beta_start
+        )
+        null_pdev = (
+            deviance_fn(eta_null, log_theta_start) + beta_null @ penalty @ beta_null
+        )
+        if not bool(np.asarray(jnp.isfinite(null_pdev))):
+            raise ValueError(
+                "Estimated NB EFS null-anchor penalized deviance must be finite"
+            )
+        reset = bool(np.asarray(~jnp.isfinite(start_pdev) | (start_pdev > null_pdev)))
+        if not reset:
+            return _EFSThetaStart(beta_start, eta_start, True)
+    mustart = fd.family.initialize(np.asarray(fd.y), np.asarray(fd.wt))
+    initial_eta = jnp.asarray(fd.family.link.link(mustart), dtype=fd.X.dtype)
+    if not bool(np.all(np.isfinite(np.asarray(initial_eta)))):
+        raise ValueError("Estimated NB EFS mustart initialization must be finite")
+    return _EFSThetaStart(beta_null, initial_eta, False)
 
 
 def _unknown_scale_family_supported(fd: FittingData) -> bool:
@@ -448,12 +498,14 @@ def _fit_state(
     *,
     log_theta_start: jax.Array | None = None,
     beta_old_init: jax.Array | None = None,
+    start_is_absent: bool = False,
 ) -> EFSFitState:
     if score_phi is None:
         score_phi = jnp.array(1.0)
     penalty = penalty_ops.materialize(fd.penalty_structure, rho)
     log_theta: jax.Array | None = None
     theta_status: jax.Array | None = None
+    theta_loop_status: jax.Array | None = None
     theta_n_iter: jax.Array | None = None
     stopping_pdev: jax.Array | None = None
     if _estimated_theta_nb(fd):
@@ -464,13 +516,18 @@ def _fit_state(
         if fd.count_prefix_plan is None:
             raise ValueError("Estimated NB EFS requires count-prefix metadata")
         assert isinstance(fd.family, NegativeBinomial)
-        _check_efs_theta_warm_start(
-            fd, penalty, beta_start, beta_old_init, log_theta_start
+        start = _select_efs_theta_start(
+            fd,
+            penalty,
+            beta_start,
+            beta_old_init,
+            log_theta_start,
+            start_is_absent=start_is_absent,
         )
         theta_result = efs_theta_pirls_loop(
             fd.X,
             fd.y,
-            beta_start,
+            start.beta,
             penalty,
             fd.family,
             fd.wt,
@@ -478,6 +535,8 @@ def _fit_state(
             log_theta_start,
             fd.count_prefix_plan.indices,
             beta_old_init=beta_old_init,
+            initial_eta=start.initial_eta,
+            initial_start_retained=start.retained,
             max_y=fd.max_y,
             integer_counts=fd.count_prefix_plan.integer_counts,
             max_iter=control.pirls_max_iter,
@@ -486,6 +545,7 @@ def _fit_state(
         pr = theta_result.pirls_result
         log_theta = theta_result.log_theta
         theta_status = theta_result.theta_status
+        theta_loop_status = theta_result.status
         theta_n_iter = theta_result.theta_n_iter
         stopping_pdev = theta_result.stopping_penalized_deviance
     else:
@@ -550,6 +610,7 @@ def _fit_state(
         update_phi,
         log_theta,
         theta_status,
+        theta_loop_status,
         theta_n_iter,
         stopping_pdev,
     )
@@ -567,12 +628,10 @@ def dense_efs_known_scale(
     """Run the pinned EFS accepted/trial policy for known-scale families.
 
     The routine is opt-in and internal; it never dispatches from ``GAM.fit``.
-    A caller may pass a matched initial state for R-parity tests.  In ordinary
-    use the existing fitting-boundary start is used, then EFS applies its
-    required one-time +2.5 smoothing shift. Estimated NB/theta is deliberately
-    more explicit: it is an internal staged route requiring caller-supplied
-    warm beta and null-anchor vectors, rather than silently treating ordinary
-    ``FittingData.beta_init`` as mgcv's ``mustart``/``null.coef`` contract.
+    A caller may pass a matched retained beta/null anchor for R-parity tests.
+    Estimated NB otherwise starts at R EFS's zero null anchor with a separate
+    per-row ``link(mustart)`` state; it never repurposes the ordinary projected
+    ``FittingData.beta_init`` as a ``gam.fit4`` initializer.
     """
     if not _known_scale_family_supported(fitting_data):
         raise NotImplementedError(
@@ -601,34 +660,43 @@ def dense_efs_known_scale(
         else initial_log_lambda
     )
     estimated_theta = _estimated_theta_nb(fitting_data)
+    initial_start_is_absent = estimated_theta and beta_init is None
     if initial_log_lambda is None and isinstance(fitting_data.family, NegativeBinomial):
         raise ValueError(
             "NB EFS requires efs_initial_log_lambda(setup, family); "
             "its extended-family initial.spg weights differ from regular fitting"
         )
-    if estimated_theta and beta_init is None:
-        raise ValueError(
-            "Estimated NB EFS requires explicit beta_init until its mgcv "
-            "mustart initialization is separately staged"
-        )
-    if estimated_theta and beta_old_init is None:
-        raise ValueError("Estimated NB EFS requires explicit beta_old_init null anchor")
     beta0 = fitting_data.beta_init if beta_init is None else beta_init
     if beta0 is None:
         beta0 = jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
     theta0: jax.Array | None = None
     if estimated_theta:
         assert isinstance(fitting_data.family, NegativeBinomial)
+        # efsudr reaches gam.fit4 without get.null.coef in this pinned route,
+        # so the actual default null anchor is exactly the zero vector.
+        beta0 = (
+            jnp.zeros((fitting_data.n_coef,), dtype=fitting_data.X.dtype)
+            if beta_init is None
+            else jnp.asarray(beta_init)
+        )
+        beta_old_init = (
+            jnp.zeros_like(beta0)
+            if beta_old_init is None
+            else jnp.asarray(beta_old_init)
+        )
         theta0 = (
             jnp.asarray(fitting_data.family.get_theta(transformed=False))
             if initial_log_theta is None
             else jnp.asarray(initial_log_theta)
         )
-        if theta0.shape != (1,) or not bool(np.all(np.isfinite(np.asarray(theta0)))):
+        if theta0.shape != (1,) or not bool(
+            np.all(np.isfinite(np.asarray(theta0)))
+            and np.all(np.isfinite(np.exp(np.asarray(theta0))))
+            and np.all(np.exp(np.asarray(theta0)) > 0.0)
+        ):
             raise ValueError(
                 "Estimated NB EFS initial log theta must be finite with shape (1,)"
             )
-        assert beta_old_init is not None
         if beta_old_init.shape != beta0.shape:
             raise ValueError("Estimated NB EFS beta_old_init must align with beta_init")
     rho0 = jnp.asarray(rho0) + 2.5
@@ -647,6 +715,7 @@ def dense_efs_known_scale(
             control,
             log_theta_start=theta0,
             beta_old_init=beta_old_init,
+            start_is_absent=initial_start_is_absent,
         )
     else:
         # Keep the established known-scale call signature byte-for-byte for
@@ -662,7 +731,13 @@ def dense_efs_known_scale(
             accepted.edf,
             jnp.array(1.0),
             accepted.pirls_result,
-            "inner_failure" if not accepted.inner_converged else "invalid_initial",
+            (
+                _efs_fit_failure_label(accepted)
+                if accepted.theta_status is not None
+                else "inner_failure"
+                if not accepted.inner_converged
+                else "invalid_initial"
+            ),
             _result_theta(accepted, fitting_data),
         )
 
@@ -710,7 +785,7 @@ def dense_efs_known_scale(
         original_max_step = float(np.max(np.abs(np.asarray(update_residual))))
         candidate = refit(raw.log_smoothing_trial, old)
         if not candidate.valid:
-            stop = "inner_failure" if not candidate.inner_converged else "invalid_trial"
+            stop = _efs_fit_failure_label(candidate)
             break
         if float(np.asarray(candidate.score)) <= float(np.asarray(old.score)):
             if original_max_step < 0.05:
@@ -740,11 +815,7 @@ def dense_efs_known_scale(
                 )
                 candidate = refit(rho, old)
                 if not candidate.valid:
-                    stop = (
-                        "inner_failure"
-                        if not candidate.inner_converged
-                        else "invalid_trial"
-                    )
+                    stop = _efs_fit_failure_label(candidate)
                     break
             if stop != "iteration_limit":
                 break
