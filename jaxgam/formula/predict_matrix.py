@@ -286,12 +286,13 @@ def _build_parametric_matrix(
                 # treating them as the reference level.
                 known = set(levels)
                 col_obj = np.asarray(col, dtype=object)
-                # Mask NA before np.unique: mixed strings and NaN cannot be
-                # ordered, and NA is not a new factor level.
+                # Mask NA before membership validation.  Factor levels may be
+                # mixed Python scalar types, which are valid categorical
+                # values but cannot be sorted by ``np.unique``.
                 na_mask = pd.isna(col_obj)
-                observed = np.unique(col_obj[~na_mask]).tolist()
                 unseen = sorted(
-                    {value for value in observed if value not in known}, key=str
+                    {value for value in col_obj[~na_mask] if value not in known},
+                    key=str,
                 )
                 if unseen:
                     raise ValueError(
