@@ -25,6 +25,38 @@ def _data() -> pd.DataFrame:
     return pd.DataFrame({"x": x, "z": x**2, "y": np.sin(2 * np.pi * x)})
 
 
+class _CappedSource(DataFrameRowSource):
+    """Force preparation through a chosen physical batch partition."""
+
+    def __init__(self, data: pd.DataFrame, cap: int) -> None:
+        super().__init__(data, response="y")
+        self._cap = cap
+
+    def scan(self, batch_rows: int):
+        return super().scan(min(batch_rows, self._cap))
+
+
+def _coefficient_map_signature(coef_map) -> tuple:
+    return (
+        coef_map.total_coefs,
+        coef_map.total_coefs_raw,
+        coef_map.has_intercept,
+        tuple(
+            (
+                term.label,
+                term.col_start,
+                term.n_coefs,
+                term.n_coefs_raw,
+                term.term_type,
+                term.penalty_indices,
+                term.del_index,
+                term.Z_centering is None,
+            )
+            for term in coef_map.terms
+        ),
+    )
+
+
 def test_prepared_cubic_matches_dense_setup_and_batch_boundaries() -> None:
     data = _data()
     spec = parse_formula('y ~ z + s(x, bs="cr", k=6)')
@@ -44,6 +76,36 @@ def test_prepared_cubic_matches_dense_setup_and_batch_boundaries() -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+
+
+def test_prepared_numeric_alias_uses_dense_coefficient_map_contract() -> None:
+    spec = parse_formula("y ~ x + z")
+    for seed in (881, 882, 883):
+        x = np.random.default_rng(seed).normal(size=83)
+        for scale in (-1.0, 1.0, 2.0):
+            data = pd.DataFrame({"x": x, "z": scale * x, "y": 1.0 + 0.3 * x})
+            dense = ModelSetup.build(spec, data)
+            for cap in (1, 7, 100):
+                source = _CappedSource(data, cap)
+                prepared = prepare_model(spec, source, family=Gaussian())
+                assert prepared.predict_spec.parametric_keep_cols == tuple(
+                    dense.parametric_keep_cols
+                )
+                assert prepared.predict_spec.dropped_param_names == tuple(
+                    dense.dropped_param_names
+                )
+                assert prepared.predict_spec.term_names == tuple(dense.term_names)
+                assert _coefficient_map_signature(
+                    prepared.predict_spec.coef_map
+                ) == _coefficient_map_signature(dense.coef_map)
+                streamed_X = DenseDesign.materialize(
+                    StreamDesign(prepared, source), 113
+                ).X
+                np.testing.assert_allclose(
+                    streamed_X, dense.X, rtol=STRICT.rtol, atol=STRICT.atol
+                )
+                assert prepared.fitting is not None
+                assert prepared.fitting.unpenalized_rank_deficit == 0
 
 
 def test_two_cubics_with_distinct_k_and_ranges_match_dense_metadata() -> None:
