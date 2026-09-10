@@ -18,6 +18,38 @@ lean: GAMInferenceResult = model.fit(data, result="inference")
 lean.predict(newdata)
 ```
 
+### Streamed QR coefficient solves
+
+Fixed-sp streamed fits can request the positive-weight QR/TSQR solver
+explicitly:
+
+```python
+from jaxgam import FitControl, GAM
+
+result = GAM(
+    'y ~ x + s(z, bs="cr", k=8)',
+    family="poisson",
+    sp=[0.4],
+    control=FitControl(
+        execution="stream", linear_solver="qr", batch_rows=4096
+    ),
+).fit(source, result="prediction")
+```
+
+This route is currently released for the canonical Gaussian/identity,
+Poisson/log, and Binomial/logit families. It factors the positive Fisher
+working rows and local penalty roots without forming the coefficient normal
+equations used by the Cholesky route. Signed working curvature belongs to the
+separate signed-system solver and is rejected here.
+
+Model preparation fixes the identifiable coefficient subspace before fitting.
+Exactly aliased numeric parametric columns follow the same retained-column and
+`CoefficientMap` convention as dense setup, independent of source batch
+boundaries. Remaining coupled rank deficiency between parametric and smooth
+null-space directions is rejected explicitly; it is not resolved by QR pivot
+choice or numerical jitter. Successful fits report
+`execution_route="stream_qr"`.
+
 ::: jaxgam.api.GAM
     options:
       members:

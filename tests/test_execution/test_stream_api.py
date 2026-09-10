@@ -12,6 +12,17 @@ from tests.helpers import _AssertCollector, r_available
 from tests.tolerances import MODERATE, STRICT
 
 
+class _CappedSource(DataFrameRowSource):
+    """Force preparation through a chosen physical batch partition."""
+
+    def __init__(self, data: pd.DataFrame, cap: int) -> None:
+        super().__init__(data, response="y")
+        self._cap = cap
+
+    def scan(self, batch_rows: int):
+        return super().scan(min(batch_rows, self._cap))
+
+
 def _data(family: str, *, zero_weights: bool = False) -> pd.DataFrame:
     rng = np.random.default_rng(918)
     x = np.linspace(-0.8, 1.1, 67)
@@ -82,6 +93,74 @@ def test_public_stream_fixed_sp_matches_dense_with_source_weights_and_offsets(
         ),
     )
     collector.raise_if_any("public streamed fixed-sp dense parity")
+
+
+def test_public_qr_solver_is_explicit_and_matches_dense() -> None:
+    """The public policy selects QR and reports the route it actually ran."""
+    family = "gaussian"
+    data = _data(family)
+    source = DataFrameRowSource(
+        data,
+        response="y",
+        weights=data.weight.to_numpy(),
+        offset=data.offset.to_numpy(),
+    )
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    result = GAM(
+        formula,
+        family=family,
+        sp=[0.3],
+        control=FitControl(execution="stream", linear_solver="qr", batch_rows=7),
+    ).fit(source, result="prediction")
+    dense = GAM(formula, family=family, sp=[0.3]).fit(
+        data,
+        weights=data.weight.to_numpy(),
+        offset=data.offset.to_numpy(),
+        result="prediction",
+    )
+    assert result.execution_route == "stream_qr"
+    assert result.execution_fallback_reason is None
+    np.testing.assert_allclose(
+        result.predict(data[["x"]], offset=data.offset.to_numpy()),
+        dense.predict(data[["x"]], offset=data.offset.to_numpy()),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+@pytest.mark.parametrize(
+    ("seed", "scale", "batch_cap"),
+    [(881, -1.0, 1), (882, 1.0, 7), (883, -1.0, 100), (881, 2.0, 1)],
+)
+def test_public_qr_uses_preparation_owned_parametric_alias_map(
+    seed: int, scale: float, batch_cap: int
+) -> None:
+    rng = np.random.default_rng(seed)
+    x = rng.normal(size=83)
+    data = pd.DataFrame(
+        {"x": x, "z": scale * x, "y": 1.0 + 0.3 * x + rng.normal(scale=0.1, size=83)}
+    )
+    source = _CappedSource(data, batch_cap)
+    result = GAM(
+        "y ~ x + z",
+        sp=[],
+        control=FitControl(execution="stream", linear_solver="qr", batch_rows=7),
+    ).fit(source, result="prediction")
+    dense = GAM("y ~ x + z", sp=[]).fit(data, result="prediction")
+    assert result.execution_route == "stream_qr"
+    assert len(result.coefficients) == 2
+    np.testing.assert_allclose(
+        result.coefficients,
+        dense.coefficients,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        result.predict(data[["x", "z"]]),
+        dense.predict(data[["x", "z"]]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
 
 
 def assert_is_prediction(result: object) -> None:
@@ -183,6 +262,8 @@ def test_public_stream_covariance_budget_and_route_guards() -> None:
         GAM(formula, family="nb", sp=[0.2], control=FitControl(execution="stream")).fit(
             source, result="prediction"
         )
+    with pytest.raises(NotImplementedError, match="requires execution='stream'"):
+        GAM(formula, sp=[0.2], control=FitControl(linear_solver="qr")).fit(data)
 
 
 def test_stream_workspace_reserves_final_edf_and_candidate_matrices() -> None:
@@ -196,6 +277,18 @@ def test_stream_workspace_reserves_final_edf_and_candidate_matrices() -> None:
     with pytest.raises(MemoryError, match="Known streamed PIRLS workspace"):
         _preflight_stream_workspace(p, batch_rows, incomplete_budget)
     _preflight_stream_workspace(p, batch_rows, 2_000_000)
+
+
+def test_stream_qr_workspace_counts_live_merge_arrays() -> None:
+    from jaxgam.api import _preflight_stream_workspace
+
+    p, batch_rows = 20, 2048
+    cholesky_budget = (12 * p * p + 3 * batch_rows * p + 8 * batch_rows + 4 * p) * 8
+    _preflight_stream_workspace(p, batch_rows, cholesky_budget)
+    with pytest.raises(MemoryError, match="Known streamed QR PIRLS workspace"):
+        _preflight_stream_workspace(p, batch_rows, cholesky_budget, linear_solver="qr")
+    qr_budget = (14 * p * p + 4 * batch_rows * p + 12 * batch_rows + 6 * p) * 8
+    _preflight_stream_workspace(p, batch_rows, qr_budget, linear_solver="qr")
 
 
 def test_public_stream_accepts_empty_fixed_sp_for_unpenalized_model() -> None:

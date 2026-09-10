@@ -43,7 +43,7 @@ from jaxgam.formula.fitting_prepare import qr_penalty_roots
 
 @dataclass(frozen=True)
 class StreamPIRLSControl:
-    """Internal fixed-sp stream controls pending public ``FitControl`` wiring."""
+    """Internal fixed-sp stream controls selected by public ``FitControl``."""
 
     batch_rows: int = 8192
     max_iter: int = 100
