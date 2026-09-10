@@ -457,6 +457,7 @@ class _EFSBetaRecoveryResult:
     factors_valid: jax.Array
     solver_valid: jax.Array
     failure_status: jax.Array
+    positive_curvature_retry: jax.Array
 
 
 _EFS_BETA_RECOVERY_FIELDS = [field.name for field in fields(_EFSBetaRecoveryResult)]
@@ -723,6 +724,7 @@ def _efs_beta_step_with_recovery(
             factors_valid=factors_valid,
             solver_valid=solver_valid,
             failure_status=failure_status,
+            positive_curvature_retry=~observed_solver_valid,
         )
 
     def invalid(_: None) -> _EFSBetaRecoveryResult:
@@ -737,6 +739,7 @@ def _efs_beta_step_with_recovery(
             failure_status=jnp.array(
                 _EFS_STATUS_INVALID_WORKING_FACTORS, dtype=jnp.int32
             ),
+            positive_curvature_retry=~observed_solver_valid,
         )
 
     return jax.lax.cond(solve_valid, solve, invalid, operand=None)
@@ -1134,11 +1137,13 @@ class EFSThetaPIRLSResult:
     """Immutable result for the NB/log EFS in-loop conditional-theta path.
 
     ``theta_n_iter`` counts all conditional-theta iterations across accepted
-    beta steps. ``stopping_penalized_deviance`` is the pre-theta value used by
-    the pinned R stopping test. ``pirls_result.penalized_deviance`` is
-    deliberately recomputed at ``log_theta`` so every returned fit quantity
-    is consistent with its reported theta. This is a documented stronger
-    final-state rule, not a substitution for R's stopping predicate.
+    beta steps. ``positive_curvature_retry_count`` counts the bounded
+    ``gam.fit4`` observed-solve fallbacks across all attempted beta steps.
+    ``stopping_penalized_deviance`` is the pre-theta value used by the pinned R
+    stopping test. ``pirls_result.penalized_deviance`` is deliberately
+    recomputed at ``log_theta`` so every returned fit quantity is consistent
+    with its reported theta. This is a documented stronger final-state rule,
+    not a substitution for R's stopping predicate.
     """
 
     pirls_result: PIRLSResult
@@ -1148,6 +1153,7 @@ class EFSThetaPIRLSResult:
     status: jax.Array
     stopping_penalized_deviance: jax.Array
     post_theta_penalized_deviance: jax.Array
+    positive_curvature_retry_count: jax.Array
 
 
 _EFS_THETA_PIRLS_FIELDS = [f.name for f in fields(EFSThetaPIRLSResult)]
@@ -1183,6 +1189,7 @@ class _EFSThetaPIRLSState:
     status: jax.Array
     theta_status: jax.Array
     theta_n_iter: jax.Array
+    positive_curvature_retry_count: jax.Array
 
 
 _EFS_THETA_STATE_FIELDS = [f.name for f in fields(_EFSThetaPIRLSState)]
@@ -1329,6 +1336,7 @@ def _efs_theta_pirls_loop_jit(
         status=initial_status,
         theta_status=jnp.array(0, dtype=jnp.int32),
         theta_n_iter=jnp.array(0, dtype=jnp.int32),
+        positive_curvature_retry_count=jnp.array(0, dtype=jnp.int32),
     )
 
     def condition(state: _EFSThetaPIRLSState) -> jax.Array:
@@ -1384,6 +1392,10 @@ def _efs_theta_pirls_loop_jit(
                 status=status,
                 theta_status=state.theta_status,
                 theta_n_iter=state.theta_n_iter,
+                positive_curvature_retry_count=(
+                    state.positive_curvature_retry_count
+                    + beta_step.positive_curvature_retry.astype(jnp.int32)
+                ),
             )
 
         def beta_accepted(_: None) -> _EFSThetaPIRLSState:
@@ -1477,6 +1489,10 @@ def _efs_theta_pirls_loop_jit(
                 status=status,
                 theta_status=theta_result.status,
                 theta_n_iter=state.theta_n_iter + theta_result.n_iter,
+                positive_curvature_retry_count=(
+                    state.positive_curvature_retry_count
+                    + beta_step.positive_curvature_retry.astype(jnp.int32)
+                ),
             )
 
         return jax.lax.cond(
@@ -1552,6 +1568,7 @@ def _efs_theta_pirls_loop_jit(
         status=final_status,
         stopping_penalized_deviance=final.stopping_pdev,
         post_theta_penalized_deviance=final.post_theta_pdev,
+        positive_curvature_retry_count=final.positive_curvature_retry_count,
     )
 
 

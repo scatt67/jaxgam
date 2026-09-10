@@ -53,15 +53,17 @@ unit offset, and mean
    positive offset 0.25, 0.5, 1, 2, and 4. Before correction, Python
    square-root succeeded while identity stopped with `inner_failure` before
    the first outer update.
-3. At the first identity divergence, the observed Hessian was indefinite.
-   The implementation was corrected to follow `gam.fit4.r:391-416`: retry the
-   WLS solve after zeroing nonpositive-curvature rows. A JIT regression checks
-   that algebra at STRICT.
+3. A separate source-valid sparse identity fixture (seed 883, 96 rows, theta
+   0.8, five-column cubic basis, unit offset) reaches an indefinite observed
+   Hessian. The implementation follows `gam.fit4.r:391-416`: retry the WLS
+   solve after zeroing nonpositive-curvature rows. A JIT regression checks that
+   algebra at STRICT, and its public result reports the stabilization.
 4. Four nonlinear seeds were compared after the source correction. For seed
    901 the outer counts match. Square-root passes STRICT for every selected
    field. Identity has maximum absolute residuals of 1.678e-9 for
    coefficients, 1.939e-9 for fitted means, and 7.343e-9 for smoothing;
    deviance (1.424e-10), score (5.946e-11), and theta (8.953e-11) pass STRICT.
+   Neither seed-901 link uses the positive-curvature retry.
 
 The identity gate uses MODERATE only for coefficients, fitted means, and
 smoothing. Identity deviance, score, theta, outer count, convergence, and

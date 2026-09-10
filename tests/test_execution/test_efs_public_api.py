@@ -58,6 +58,7 @@ def test_compact_efs_diagnostics_count_failure_and_stabilization_events() -> Non
         gdi1_candidate_valid=np.array(False),
         pirls_result=SimpleNamespace(n_iter=np.array(3)),
         theta_n_iter=np.array(2),
+        positive_curvature_retry_count=np.array(0),
     )
     accepted = SimpleNamespace(log_lambda=np.array([0.2, -0.1, 0.0]))
     raw = SimpleNamespace(ratio=np.array([1.0, 1e6, 1.0]))
@@ -371,6 +372,19 @@ def test_estimated_nb_nonlog_public_efs_rejects_pinned_default_start_boundary(
             family=NegativeBinomial(theta=0.8, link=link),
             optimizer="efs",
         ).fit(_nb_data(n=72))
+
+
+def test_nb_identity_public_diagnostics_report_positive_curvature_retry() -> None:
+    data = _nb_data(seed=883, n=96)
+    result = GAM(
+        "y ~ s(x, bs='cr', k=5)",
+        family=NegativeBinomial(theta=0.8, link="identity"),
+        optimizer="efs",
+    ).fit(data, offset=np.ones(len(data)))
+
+    assert result.converged
+    assert result.optimizer_diagnostics is not None
+    assert result.optimizer_diagnostics.stabilized_solve_seen
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")

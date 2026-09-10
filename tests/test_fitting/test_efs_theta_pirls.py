@@ -97,6 +97,63 @@ def test_efs_indefinite_observed_system_retries_positive_curvature_under_jit() -
     assert bool(result.accepted)
     assert bool(result.factors_valid)
     assert bool(result.solver_valid)
+    assert bool(result.positive_curvature_retry)
+    np.testing.assert_allclose(
+        result.beta, expected, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+def test_efs_observed_spd_skips_curvature_retry_under_jit() -> None:
+    """A valid observed solve does not report source fallback stabilization."""
+    X = jnp.eye(2)
+    penalty = 0.1 * jnp.eye(2)
+    observed_weight = jnp.asarray([2.0, 3.0])
+    observed_response = jnp.asarray([4.0, 5.0])
+
+    def run():
+        def factors(_mu, _eta):
+            return _efs_observed_working_factors(
+                observed_weight,
+                observed_response,
+                observed_weight * observed_response,
+            )
+
+        def form_wls(current):
+            rhs = jnp.where(
+                current.use_weighted_response,
+                current.weighted_response,
+                current.weight * current.response,
+            )
+            return (current.weight[:, None] * X).T @ X, X.T @ rhs
+
+        return _efs_beta_step_with_recovery(
+            X=X,
+            S_lambda=penalty,
+            offset=jnp.zeros(2),
+            family=NegativeBinomial(theta=0.8),
+            beta=jnp.zeros(2),
+            eta=jnp.zeros(2),
+            mu=jnp.ones(2),
+            beta_old=jnp.zeros(2),
+            eta_old=jnp.zeros(2),
+            null_beta=jnp.zeros(2),
+            null_eta=jnp.zeros(2),
+            initial_start_retained=jnp.asarray(False),
+            iteration=jnp.asarray(0, dtype=jnp.int32),
+            baseline=jnp.asarray(100.0),
+            compute_working_factors=factors,
+            form_wls=form_wls,
+            compute_dev=lambda _mu, _eta: jnp.asarray(0.0),
+            max_recovery_halvings=100,
+        )
+
+    result = jax.jit(run)()
+    expected = np.linalg.solve(
+        np.diag(np.asarray(observed_weight)) + 0.1 * np.eye(2),
+        np.asarray(observed_weight * observed_response),
+    )
+    assert bool(result.accepted)
+    assert not bool(result.positive_curvature_retry)
     np.testing.assert_allclose(
         result.beta, expected, rtol=STRICT.rtol, atol=STRICT.atol
     )
@@ -452,6 +509,7 @@ def test_efs_theta_pirls_distinguishes_unrecoverable_beta_step(monkeypatch):
             factors_valid=jnp.array(True),
             solver_valid=jnp.array(True),
             failure_status=jnp.array(0, dtype=jnp.int32),
+            positive_curvature_retry=jnp.array(False),
         )
 
     monkeypatch.setattr(pirls_module, "_efs_beta_step_with_recovery", rejected_step)
@@ -481,6 +539,7 @@ def test_efs_theta_pirls_names_nonfinite_recovery_exhaustion(monkeypatch):
             failure_status=jnp.array(
                 _EFS_STATUS_NONFINITE_RECOVERY_FAILED, dtype=jnp.int32
             ),
+            positive_curvature_retry=jnp.array(False),
         )
 
     monkeypatch.setattr(
