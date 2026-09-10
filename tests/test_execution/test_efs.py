@@ -23,13 +23,19 @@ from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.efs import EFSRawUpdate, prepare_efs_statistics
-from jaxgam.fitting.pirls import pirls_loop
+from jaxgam.fitting.pirls import (
+    _EFS_STATUS_DIVERGENCE_RECOVERY_FAILED,
+    _EFS_STATUS_DOMAIN_RECOVERY_FAILED,
+    _EFS_STATUS_NONFINITE_RECOVERY_FAILED,
+    _EFS_STATUS_THETA_FAILED,
+    pirls_loop,
+)
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.fixtures.efs_weighted_additive_cr_repro import FORMULA, make_data
-from tests.helpers import _AssertCollector, r_available
+from tests.helpers import _AssertCollector, check_that, r_available
 from tests.r_bridge import RBridge, RBridgeError
-from tests.tolerances import MODERATE, STRICT
+from tests.tolerances import LOOSE, MODERATE, STRICT
 
 
 def _build(
@@ -72,6 +78,21 @@ def _fixed_nb_data(*, seed: int = 812, n: int = 84) -> pd.DataFrame:
     y = rng.negative_binomial(theta, theta / (theta + mu))
     return pd.DataFrame(
         {"y": y, "x": x, "z": z, "w": 0.5 + rng.random(n), "off": offset}
+    )
+
+
+def _interior_nb_tensor_data(*, seed: int = 981, n: int = 160) -> pd.DataFrame:
+    """Overdispersed, positive-weight NB/log tensor fixture with interior theta."""
+    rng = np.random.default_rng(seed)
+    x = np.linspace(-1.0, 1.0, n)
+    z = rng.uniform(-1.0, 1.0, n)
+    offset = 0.1 * z
+    theta = 0.8
+    eta = offset + 0.3 + 0.75 * np.sin(2.4 * x) - 0.45 * z + 0.25 * x * z
+    mu = np.exp(eta)
+    y = rng.negative_binomial(theta, theta / (theta + mu))
+    return pd.DataFrame(
+        {"y": y, "x": x, "z": z, "w": 0.6 + rng.random(n), "off": offset}
     )
 
 
@@ -494,11 +515,24 @@ def test_pinned_nb_first_divergence_records_null_anchor_prefix() -> None:
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
-def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> None:
-    """Internal EFS5d parity is only claimed for the explicit admitted start."""
-    data = _fixed_nb_data(n=48)
+@pytest.mark.parametrize(
+    ("formula", "data", "near_poisson_theta_boundary"),
+    [
+        ("y ~ s(x, bs='cr', k=6)", _fixed_nb_data(n=48), False),
+        ("y ~ te(x, z, k=5)", _interior_nb_tensor_data(), False),
+        pytest.param(
+            "y ~ te(x, z, k=5)",
+            _fixed_nb_data(n=48),
+            True,
+            id="tensor48-near-poisson-boundary-diagnostic",
+        ),
+    ],
+)
+def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace(
+    formula: str, data: pd.DataFrame, near_poisson_theta_boundary: bool
+) -> None:
+    """Selected estimated-NB final state matches pinned EFS by model profile."""
     family = NegativeBinomial(theta=2.7)
-    formula = "y ~ s(x, bs='cr', k=6)"
     setup, fd = _build(
         formula,
         data,
@@ -570,15 +604,6 @@ def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> Non
         ),
     )
     collector.check(
-        "selected theta",
-        lambda: np.testing.assert_allclose(
-            j_fit.theta,
-            selected_sp[0],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-        ),
-    )
-    collector.check(
         "smoothing parameters",
         lambda: np.testing.assert_allclose(
             j_fit.smoothing_params,
@@ -587,7 +612,96 @@ def test_estimated_nb_efs_controller_matches_pinned_matched_start_trace() -> Non
             atol=MODERATE.atol,
         ),
     )
-    collector.raise_if_any("estimated-NB EFS matched-start parity")
+    assert j_fit.theta is not None
+    python_theta = float(j_fit.theta)
+    python_mu = np.asarray(j_fit.pirls_result.mu)
+    python_observed_weight = (
+        data["w"].to_numpy()
+        * python_mu
+        * python_theta
+        * (data["y"].to_numpy() + python_theta)
+        / (python_mu + python_theta) ** 2
+    )
+    python_fisher_weight = (
+        data["w"].to_numpy() * python_mu * python_theta / (python_mu + python_theta)
+    )
+    collector.check(
+        "selected observed curvature from Python state",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX,
+            (python_observed_weight[:, None] * fd.X).T @ fd.X,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "selected Fisher curvature from Python state",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX_fisher,
+            (np.clip(python_fisher_weight, 1e-10, 1e10)[:, None] * fd.X).T @ fd.X,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    r_theta = float(selected_sp[0])
+    r_mu = r_trace["selected_fitted_values"]
+    r_observed_weight = (
+        data["w"].to_numpy()
+        * r_mu
+        * r_theta
+        * (data["y"].to_numpy() + r_theta)
+        / (r_mu + r_theta) ** 2
+    )
+    r_fisher_weight = data["w"].to_numpy() * r_mu * r_theta / (r_mu + r_theta)
+    collector.check(
+        "selected observed curvature from R state",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX,
+            (r_observed_weight[:, None] * fd.X).T @ fd.X,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "selected Fisher curvature from R state",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX_fisher,
+            (np.clip(r_fisher_weight, 1e-10, 1e10)[:, None] * fd.X).T @ fd.X,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+        ),
+    )
+    collector.check(
+        "finite selected state",
+        lambda: check_that(
+            bool(
+                np.all(
+                    np.isfinite(
+                        np.concatenate(
+                            [
+                                np.asarray(j_fit.pirls_result.coefficients),
+                                np.asarray(j_fit.pirls_result.eta),
+                                np.asarray(j_fit.pirls_result.mu),
+                                np.asarray(j_fit.pirls_result.XtWX).ravel(),
+                                np.asarray(j_fit.pirls_result.XtWX_fisher).ravel(),
+                            ]
+                        )
+                    )
+                )
+            )
+            and float(j_fit.pirls_result.deviance) >= 0.0
+            and float(j_fit.theta) > 0.0,
+            "selected estimated-NB state is not finite/valid",
+        ),
+    )
+    collector.raise_if_any(f"estimated-NB EFS matched-start parity ({formula})")
+    theta_tolerance = LOOSE if near_poisson_theta_boundary else MODERATE
+    np.testing.assert_allclose(
+        j_fit.theta,
+        selected_sp[0],
+        rtol=theta_tolerance.rtol,
+        atol=theta_tolerance.atol,
+    )
 
 
 def test_efs_bridge_fixed_nb_theta_requires_positive_nb_family() -> None:
@@ -790,8 +904,18 @@ def test_production_controller_preserves_failure_at_iteration_boundary(
     assert not result.converged
 
 
-def test_estimated_nb_controller_labels_returned_loop_status(monkeypatch) -> None:
-    """The beta-loop status, not theta Newton status, owns this rejection."""
+@pytest.mark.parametrize(
+    ("loop_status", "expected_label"),
+    [
+        (_EFS_STATUS_NONFINITE_RECOVERY_FAILED, "nonfinite_recovery_failed"),
+        (_EFS_STATUS_DOMAIN_RECOVERY_FAILED, "domain_recovery_failed"),
+        (_EFS_STATUS_DIVERGENCE_RECOVERY_FAILED, "divergence_recovery_failed"),
+    ],
+)
+def test_estimated_nb_controller_labels_recovery_loop_status(
+    monkeypatch, loop_status: int, expected_label: str
+) -> None:
+    """Each compiled beta-recovery status reaches the controller unchanged."""
     data = _fixed_nb_data(n=40)
     family = NegativeBinomial(theta=2.7)
     setup, fd = _build(
@@ -816,7 +940,7 @@ def test_estimated_nb_controller_labels_returned_loop_status(monkeypatch) -> Non
         valid=False,
         inner_converged=False,
         theta_status=jax.numpy.asarray(0),
-        theta_loop_status=jax.numpy.asarray(7),
+        theta_loop_status=jax.numpy.asarray(loop_status),
     )
     monkeypatch.setattr(execution_efs, "_fit_state", lambda *_args, **_kwargs: failed)
     result = dense_efs_known_scale(
@@ -824,7 +948,44 @@ def test_estimated_nb_controller_labels_returned_loop_status(monkeypatch) -> Non
         initial_log_lambda=efs_initial_log_lambda(setup, family),
         control=EFSControl(outer_limit=1),
     )
-    assert result.convergence_info == "retained_start_invalid_trial"
+    assert result.convergence_info == expected_label
+
+
+def test_estimated_nb_controller_keeps_theta_failure_distinct(monkeypatch) -> None:
+    """A theta Newton failure cannot collide with a beta-recovery label."""
+    data = _fixed_nb_data(n=40)
+    family = NegativeBinomial(theta=2.7)
+    setup, fd = _build(
+        "y ~ s(x, bs='cr', k=6)",
+        data,
+        family,
+        weights=data["w"].to_numpy(),
+        offset=data["off"].to_numpy(),
+    )
+    base = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        efs_initial_log_lambda(setup, family) + 2.5,
+        jax.numpy.zeros(fd.n_coef),
+        EFSControl(),
+        log_theta_start=jax.numpy.asarray([np.log(2.7)]),
+        beta_old_init=jax.numpy.zeros(fd.n_coef),
+        start_is_absent=True,
+    )
+    failed = replace(
+        base,
+        valid=False,
+        inner_converged=False,
+        theta_status=jax.numpy.asarray(6),
+        theta_loop_status=jax.numpy.asarray(_EFS_STATUS_THETA_FAILED),
+    )
+    monkeypatch.setattr(execution_efs, "_fit_state", lambda *_args, **_kwargs: failed)
+    result = dense_efs_known_scale(
+        fd,
+        initial_log_lambda=efs_initial_log_lambda(setup, family),
+        control=EFSControl(outer_limit=1),
+    )
+    assert result.convergence_info == "inner_failure"
 
 
 def test_production_controller_losing_extension_keeps_multiplier(monkeypatch) -> None:
@@ -979,6 +1140,14 @@ def test_efs_preflight_excludes_unvalidated_prior_weight_edges(weight) -> None:
     _, fd = _build("y ~ s(x,bs='cr',k=6)", _oracle_data("poisson"), Poisson())
     with pytest.raises(ValueError, match="clipping bounds"):
         dense_efs_known_scale(replace(fd, wt=fd.wt.at[0].set(weight)))
+
+
+def test_efs_preflight_rejects_actual_unpenalized_rank_deficit() -> None:
+    """EFS rejects the real GP linear-null duplication before any fit kernel."""
+    _, fd = _build("y ~ x + s(x, bs='gp', k=6)", _oracle_data("poisson"), Poisson())
+    assert fd.rank_deficit > 0
+    with pytest.raises(ValueError, match="identifiable penalized system"):
+        dense_efs_known_scale(fd)
 
 
 def test_existing_efs_statistics_kernel_compiles_and_executes() -> None:
@@ -1767,6 +1936,39 @@ def test_fixed_theta_nb_log_efs_matches_pinned_r_with_real_weights_and_offsets(
             r_fit["smoothing_params"],
             rtol=MODERATE.rtol,
             atol=MODERATE.atol,
+        ),
+    )
+    final_mu = np.asarray(j_fit.pirls_result.mu)
+    observed_weight = (
+        weights
+        * final_mu
+        * theta
+        * (data["y"].to_numpy() + theta)
+        / (final_mu + theta) ** 2
+    )
+    fisher_weight = weights * final_mu * theta / (final_mu + theta)
+    collector.check(
+        "final observed curvature",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX,
+            (observed_weight[:, None] * fd.X).T @ fd.X,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "final Fisher curvature",
+        lambda: np.testing.assert_allclose(
+            j_fit.pirls_result.XtWX_fisher,
+            (np.clip(fisher_weight, 1e-10, 1e10)[:, None] * fd.X).T @ fd.X,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "final Fisher EDF",
+        lambda: np.testing.assert_allclose(
+            j_fit.edf, r_fit["edf_total"], rtol=MODERATE.rtol, atol=MODERATE.atol
         ),
     )
     collector.raise_if_any(f"fixed-theta NB EFS parity ({formula})")

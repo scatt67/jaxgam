@@ -38,6 +38,14 @@ _STATUS_ITERATION_LIMIT = 6
 _STATUS_POST_ACCEPT_NONFINITE = 7
 _STATUS_UNSUPPORTED_FRACTIONAL_RESPONSE = 8
 
+# ``log1p((y - mu) / (mu + theta))`` is accurate near the mean, but the
+# quotient rounds to exactly -1 when ``mu`` is much larger than ``theta``.
+# Keep it a full half-unit away from that singular boundary. The tail uses
+# the literal mgcv log-ratio in log space instead.
+_NEAR_LOG1P_MINIMUM = -0.5
+_LOG_MIN_SUBNORMAL = np.log(np.nextafter(np.float64(0.0), np.float64(1.0)))
+_LOG_MAX_FLOAT = np.log(np.finfo(np.float64).max)
+
 
 @dataclass(frozen=True)
 class EFSThetaResult:
@@ -127,6 +135,131 @@ def _validate_static_inputs(
             raise ValueError(f"conditional theta {name} must be finite and positive")
 
 
+def _efs_nb_log_deviance(
+    eta: jax.Array,
+    log_theta: jax.Array,
+    y: jax.Array,
+    wt: jax.Array,
+) -> jax.Array:
+    """EFS-only NB/log deviance with the pinned mgcv validity contract.
+
+    This is ``efam.r``'s ``nb()$dev.resids`` in eta coordinates. Around the
+    mean it retains the stable ``log1p`` identity; for the large-mu tail it
+    evaluates the literal log ratio as ``log(y + theta) - logaddexp(eta,
+    log_theta)``. The latter avoids the inherited family's cancellation to
+    ``log1p(-1)`` while preserving R's non-finite recovery trigger whenever
+    the actual log-link mean is non-finite or non-positive. XLA flushes
+    subnormal link means on the supported accelerator path, so those remain a
+    deliberately fail-closed boundary rather than claimed R parity.
+
+    It is intentionally private to estimated-theta EFS. Default Newton and
+    fixed-theta NB continue to use :meth:`NegativeBinomial.deviance_fn`.
+    """
+    fractional_below_one = jnp.any((y > 0.0) & (y < 1.0))
+
+    def inherited(_: None) -> jax.Array:
+        """Existing family expression retained under the status-8 guard."""
+        theta = jnp.exp(log_theta[0])
+        mu_safe = jnp.maximum(jnp.exp(eta), 1e-10)
+        y_safe = jnp.where(y > 0.0, y, 1.0)
+        return jnp.sum(
+            2.0
+            * wt
+            * (
+                y * jnp.log(y_safe / mu_safe)
+                - (y + theta) * jnp.log1p((y - mu_safe) / (mu_safe + theta))
+            )
+        )
+
+    def supported(_: None) -> jax.Array:
+        theta_raw = jnp.exp(log_theta[0])
+        theta_valid = jnp.isfinite(theta_raw) & (theta_raw > 0.0)
+        theta = jnp.where(theta_valid, theta_raw, 1.0)
+        log_theta_safe = jnp.where(theta_valid, log_theta[0], 0.0)
+
+        eta_finite = jnp.isfinite(eta)
+        eta_safe = jnp.where(eta_finite, eta, 0.0)
+        mu_raw = jnp.exp(eta_safe)
+        mu_valid = eta_finite & jnp.isfinite(mu_raw) & (mu_raw > 0.0)
+        mu = jnp.where(mu_valid, mu_raw, 1.0)
+        eta_for_value = jnp.where(mu_valid, eta_safe, 0.0)
+
+        y_valid = jnp.isfinite(y) & (y >= 0.0)
+        wt_valid = jnp.isfinite(wt) & (wt >= 0.0)
+        y_safe = jnp.where(y_valid, y, 0.0)
+        wt_safe = jnp.where(wt_valid, wt, 0.0)
+
+        y_theta_raw = y_safe + theta
+        denominator_raw = mu + theta
+        y_theta_valid = jnp.isfinite(y_theta_raw) & (y_theta_raw > 0.0)
+        denominator_valid = jnp.isfinite(denominator_raw) & (denominator_raw > 0.0)
+        y_theta = jnp.where(y_theta_valid, y_theta_raw, 1.0)
+        denominator = jnp.where(denominator_valid, denominator_raw, 1.0)
+
+        # R evaluates both ratios literally before applying log. Test those
+        # machine operations after replacing invalid inputs with finite,
+        # positive placeholders. XLA can flush a *subnormal quotient* to zero
+        # despite retaining its normal mean, so additionally admit a
+        # log-domain representable quotient. A flushed/non-finite mean itself
+        # is never rescued: it remains a recovery signal.
+        literal_first_ratio = jnp.maximum(1.0, y_safe) / mu
+        literal_second_ratio = y_theta / denominator
+        literal_ratio_representable = (
+            jnp.isfinite(literal_first_ratio)
+            & (literal_first_ratio > 0.0)
+            & jnp.isfinite(literal_second_ratio)
+            & (literal_second_ratio > 0.0)
+        )
+        first_log_ratio = jnp.log(jnp.maximum(1.0, y_safe)) - eta_for_value
+        second_log_ratio = jnp.log(y_theta) - jnp.logaddexp(
+            eta_for_value, log_theta_safe
+        )
+        log_ratio_representable = (
+            jnp.isfinite(first_log_ratio)
+            & (first_log_ratio >= _LOG_MIN_SUBNORMAL)
+            & (first_log_ratio <= _LOG_MAX_FLOAT)
+            & jnp.isfinite(second_log_ratio)
+            & (second_log_ratio >= _LOG_MIN_SUBNORMAL)
+            & (second_log_ratio <= _LOG_MAX_FLOAT)
+        )
+        ratio_representable = literal_ratio_representable | log_ratio_representable
+        # ``(y - mu) / (mu + theta) > -.5`` iff ``mu < 2*y + theta``.
+        # Determine the branch without differentiating a tail quotient: at a
+        # finite eta near 709 its quotient derivatives form ``mu**2`` and
+        # overflow even though that inactive branch is not selected. Only the
+        # near branch receives its real numerator and denominator.
+        near_threshold = y_safe + y_theta
+        use_near_log1p = ratio_representable & (mu < near_threshold)
+        near_numerator = jnp.where(use_near_log1p, y_safe - mu, 0.0)
+        near_denominator = jnp.where(use_near_log1p, denominator, 1.0)
+        near_log_ratio = jnp.log1p(near_numerator / near_denominator)
+        tail_log_ratio = second_log_ratio
+        stable_log_ratio = jnp.where(
+            use_near_log1p,
+            near_log_ratio,
+            tail_log_ratio,
+        )
+        first_term = y_safe * (jnp.log(jnp.maximum(1.0, y_safe)) - eta_for_value)
+        deviance = jnp.sum(2.0 * wt_safe * (first_term - y_theta * stable_log_ratio))
+        input_valid = (
+            theta_valid
+            & jnp.all(mu_valid)
+            & jnp.all(y_valid)
+            & jnp.all(wt_valid)
+            & jnp.all(y_theta_valid)
+            & jnp.all(denominator_valid)
+            & jnp.all(ratio_representable)
+        )
+        return jnp.where(input_valid, deviance, jnp.array(jnp.inf, dtype=eta.dtype))
+
+    return jax.lax.cond(
+        fractional_below_one,
+        inherited,
+        supported,
+        operand=None,
+    )
+
+
 @partial(
     jax.jit,
     static_argnames=("family", "max_y", "integer_counts"),
@@ -149,7 +282,7 @@ def _conditional_theta_nll_jit(
     convention differs from mgcv for ``0 < y < 1``; the controller rejects
     that domain rather than claiming R-compatible convergence there.
     """
-    deviance = family.deviance_fn(y, wt)(eta, log_theta)
+    deviance = _efs_nb_log_deviance(eta, log_theta, y, wt)
     saturated = family.saturated_loglik_theta(
         y,
         wt,
