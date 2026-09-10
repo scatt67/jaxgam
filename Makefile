@@ -76,3 +76,8 @@ pre-commit-install: ## install pre-commit hooks
 .PHONY: benchmark-nb-lgamma
 benchmark-nb-lgamma: ## benchmark NB lgamma derivative prefix kernel
 	$(UV) run python scripts/benchmark_nb_lgamma_derivatives.py
+
+.PHONY: efs-fixture
+efs-fixture: ## generate a reproducible pinned EFS oracle fixture (OUTPUT=path.csv)
+	@test -n "$(OUTPUT)" || (echo "Usage: make efs-fixture OUTPUT=/tmp/efs.csv" && exit 1)
+	$(UV) run python -m tests.efs_oracle --output $(OUTPUT)

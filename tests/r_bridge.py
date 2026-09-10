@@ -16,9 +16,11 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
@@ -28,6 +30,7 @@ from jaxgam.formula.terms import SmoothSpec
 
 _REQUIRED_R_VERSION = "4.5.2"
 _REQUIRED_MGCV_VERSION = "1.9.3"
+_PINNED_MGCV_SOURCE_COMMIT = "fb7e8e718377513e78ba6c6bf7e60757fc6a32a9"
 
 _KERNEL_TO_MGCV_TYPE = {
     "spherical": 1,
@@ -359,6 +362,385 @@ class RBridge:
                 if not f.read().strip():
                     return None
             return (pd.read_csv(result_path)["index"].astype(int) - 1).tolist()
+
+    # ------------------------------------------------------------------ #
+    #  pinned extended Fellner--Schall oracle                            #
+    # ------------------------------------------------------------------ #
+
+    def fit_efs(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str = "gaussian",
+        *,
+        weights: str | None = None,
+        offset: str | None = None,
+        controls: dict[str, float] | None = None,
+        initial_smoothing: np.ndarray | None = None,
+        scale: float = -1.0,
+    ) -> dict[str, Any]:
+        """Fit pinned mgcv ``optimizer='efs'`` as an oracle-only bridge call.
+
+        This uses ``Rscript`` in either bridge mode so the separate diagnostic
+        can use identical pinned local-source instrumentation. Existing
+        :meth:`fit_gam` mode selection and defaults are unchanged.
+        """
+        self._require_pinned_efs_versions()
+        return self._fit_efs_subprocess(
+            formula, data, family, weights, offset, controls, initial_smoothing, scale
+        )
+
+    def efs_diagnostics(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str = "gaussian",
+        *,
+        weights: str | None = None,
+        offset: str | None = None,
+        controls: dict[str, float] | None = None,
+        initial_smoothing: np.ndarray | None = None,
+        scale: float = -1.0,
+    ) -> dict[str, Any]:
+        """Return real per-refit EFS statistics from a private source copy."""
+        self._require_pinned_efs_versions()
+        return self._efs_diagnostics_subprocess(
+            formula, data, family, weights, offset, controls, initial_smoothing, scale
+        )
+
+    @staticmethod
+    def _require_pinned_efs_versions() -> None:
+        ok, reason = RBridge.check_versions()
+        if not ok:
+            raise RBridgeError(f"Pinned EFS oracle unavailable: {reason}")
+
+    @staticmethod
+    def _validate_efs_inputs(
+        data: pd.DataFrame,
+        weights: str | None,
+        offset: str | None,
+        controls: dict[str, float] | None,
+        initial_smoothing: np.ndarray | None,
+    ) -> tuple[dict[str, float], np.ndarray | None]:
+        for column_name, label in ((weights, "weights"), (offset, "offset")):
+            if column_name is not None and column_name not in data.columns:
+                raise ValueError(
+                    f"{label} column {column_name!r} is not present in data"
+                )
+        allowed = {"efs_lspmax", "efs_tol"}
+        resolved = {"efs_lspmax": 15.0, "efs_tol": 0.1}
+        if controls is not None:
+            unknown = set(controls) - allowed
+            if unknown:
+                raise ValueError(f"Unsupported EFS controls: {sorted(unknown)}")
+            resolved.update({key: float(value) for key, value in controls.items()})
+        if (
+            not all(np.isfinite(value) for value in resolved.values())
+            or resolved["efs_tol"] <= 0
+        ):
+            raise ValueError("EFS controls must be finite and efs_tol must be positive")
+        if initial_smoothing is None:
+            return resolved, None
+        initial = np.asarray(initial_smoothing, dtype=np.float64)
+        if (
+            initial.ndim != 1
+            or not np.all(np.isfinite(initial))
+            or np.any(initial <= 0)
+        ):
+            raise ValueError("initial_smoothing must be a finite positive vector")
+        return resolved, initial
+
+    @staticmethod
+    def _pinned_efsudr_source() -> str:
+        """Deparse the installed, version-gated function into private source."""
+        try:
+            source = subprocess.check_output(
+                [
+                    "Rscript",
+                    "-e",
+                    "library(mgcv); cat('efsudr <- ', deparse(mgcv:::efsudr), sep='\\n')",
+                ],
+                text=True,
+                timeout=20,
+            )
+        except (
+            OSError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
+            raise RBridgeError("Cannot deparse installed pinned mgcv efsudr") from exc
+        if "efsudr <-" not in source:
+            raise RBridgeError("Installed pinned mgcv does not expose efsudr")
+        return source
+
+    @staticmethod
+    def _run_efs_rscript(script_path: str) -> None:
+        proc = subprocess.run(
+            ["Rscript", script_path], capture_output=True, text=True, timeout=120
+        )
+        if proc.returncode != 0:
+            raise RBridgeError(
+                f"Pinned EFS Rscript failed (exit {proc.returncode}):\\n{proc.stderr}"
+            )
+
+    @staticmethod
+    def _efs_provenance(data: pd.DataFrame) -> dict[str, str]:
+        """Return the source/version/data identity recorded with EFS oracle output."""
+        payload = data.to_csv(index=False, float_format="%.17g", lineterminator="\n")
+        return {
+            "r_version": _REQUIRED_R_VERSION,
+            "mgcv_version": _REQUIRED_MGCV_VERSION,
+            "source_commit": _PINNED_MGCV_SOURCE_COMMIT,
+            "data_hash": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        }
+
+    def _efs_r_arguments(
+        self,
+        weights: str | None,
+        offset: str | None,
+        controls: dict[str, float],
+        initial_smoothing: np.ndarray | None,
+        scale: float,
+    ) -> str:
+        arguments = [
+            'method="REML"',
+            'optimizer="efs"',
+            f"control=gam.control(efs.lspmax={controls['efs_lspmax']!r}, efs.tol={controls['efs_tol']!r})",
+            f"scale={float(scale)!r}",
+        ]
+        if weights is not None:
+            arguments.append(f"weights=data[[{weights!r}]]")
+        if offset is not None:
+            arguments.append(f"offset=data[[{offset!r}]]")
+        if initial_smoothing is not None:
+            smoothing = ", ".join(repr(float(value)) for value in initial_smoothing)
+            arguments.append(f"in.out=list(sp=c({smoothing}), scale=1)")
+        return ", ".join(arguments)
+
+    def _fit_efs_subprocess(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        weights: str | None,
+        offset: str | None,
+        controls: dict[str, float] | None,
+        initial_smoothing: np.ndarray | None,
+        scale: float,
+    ) -> dict[str, Any]:
+        resolved, initial = self._validate_efs_inputs(
+            data, weights, offset, controls, initial_smoothing
+        )
+        r_family = self._get_subprocess_family(family)
+        r_arguments = self._efs_r_arguments(weights, offset, resolved, initial, scale)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            script_path = os.path.join(tmpdir, "fit_efs.R")
+            data.to_csv(data_path, index=False)
+            outputs = {
+                "coefficients": os.path.join(tmpdir, "coefficients.csv"),
+                "fitted": os.path.join(tmpdir, "fitted_values.csv"),
+                "sp": os.path.join(tmpdir, "smoothing_params.csv"),
+                "edf": os.path.join(tmpdir, "edf.csv"),
+                "history": os.path.join(tmpdir, "score_history.csv"),
+                "iterations": os.path.join(tmpdir, "outer_iterations.txt"),
+                "convergence": os.path.join(tmpdir, "convergence.txt"),
+                "edf_total": os.path.join(tmpdir, "edf_total.txt"),
+                "deviance": os.path.join(tmpdir, "deviance.txt"),
+                "scale": os.path.join(tmpdir, "scale.txt"),
+                "vp": os.path.join(tmpdir, "Vp.csv"),
+                "score": os.path.join(tmpdir, "reml_score.txt"),
+                "null_deviance": os.path.join(tmpdir, "null_deviance.txt"),
+                "reml_scale": os.path.join(tmpdir, "reml_scale.txt"),
+                "theta": os.path.join(tmpdir, "theta.txt"),
+            }
+            script = "\n".join(
+                [
+                    "library(mgcv)",
+                    f"data <- read.csv({data_path!r})",
+                    f"model <- gam({formula}, data=data, family={r_family}, {r_arguments})",
+                    "s <- summary(model)",
+                    f"write.csv(data.frame(v=as.numeric(coef(model))), {outputs['coefficients']!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(v=as.numeric(fitted(model))), {outputs['fitted']!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(v=as.numeric(model$sp)), {outputs['sp']!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(v=as.numeric(s$edf)), {outputs['edf']!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(v=as.numeric(model$outer.info$score.hist)), {outputs['history']!r}, row.names=FALSE)",
+                    f"writeLines(as.character(model$outer.info$iter), {outputs['iterations']!r})",
+                    f"writeLines(as.character(model$outer.info$conv), {outputs['convergence']!r})",
+                    f"writeLines(format(sum(model$edf), digits=17), {outputs['edf_total']!r})",
+                    f"writeLines(format(deviance(model), digits=17), {outputs['deviance']!r})",
+                    f"writeLines(format(model$scale, digits=17), {outputs['scale']!r})",
+                    f"write.csv(as.data.frame(model$Vp), {outputs['vp']!r}, row.names=FALSE)",
+                    f"writeLines(format(model$gcv.ubre, digits=17), {outputs['score']!r})",
+                    f"writeLines(format(model$null.deviance, digits=17), {outputs['null_deviance']!r})",
+                    f"if (!is.null(model$reml.scale)) writeLines(format(model$reml.scale, digits=17), {outputs['reml_scale']!r})",
+                    f"if (!is.null(model$family$getTheta)) writeLines(format(model$family$getTheta(TRUE), digits=17), {outputs['theta']!r})",
+                ]
+            )
+            Path(script_path).write_text(script, encoding="utf-8")
+            self._run_efs_rscript(script_path)
+
+            def vector(key: str) -> np.ndarray:
+                return pd.read_csv(outputs[key])["v"].to_numpy(dtype=np.float64)
+
+            def scalar(key: str) -> float:
+                return float(Path(outputs[key]).read_text(encoding="utf-8").strip())
+
+            return {
+                "coefficients": vector("coefficients"),
+                "fitted_values": vector("fitted"),
+                "smoothing_params": vector("sp"),
+                "edf": vector("edf"),
+                "edf_total": scalar("edf_total"),
+                "deviance": scalar("deviance"),
+                "null_deviance": scalar("null_deviance"),
+                "scale": scalar("scale"),
+                "reml_scale": scalar("reml_scale")
+                if Path(outputs["reml_scale"]).exists()
+                else scalar("scale"),
+                "Vp": pd.read_csv(outputs["vp"]).to_numpy(dtype=np.float64),
+                "reml_score": scalar("score"),
+                "theta": scalar("theta") if Path(outputs["theta"]).exists() else None,
+                "outer_iterations": int(scalar("iterations")),
+                "score_history": vector("history"),
+                "convergence": Path(outputs["convergence"])
+                .read_text(encoding="utf-8")
+                .strip(),
+                "optimizer": "efs",
+                "controls": resolved,
+                "provenance": self._efs_provenance(data),
+            }
+
+    def _efs_diagnostics_subprocess(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        weights: str | None,
+        offset: str | None,
+        controls: dict[str, float] | None,
+        initial_smoothing: np.ndarray | None,
+        scale: float,
+    ) -> dict[str, Any]:
+        """Execute a private instrumented pinned ``efsudr`` source function."""
+        resolved, initial = self._validate_efs_inputs(
+            data, weights, offset, controls, initial_smoothing
+        )
+        r_family = self._get_subprocess_family(family)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            source_path = os.path.join(tmpdir, "efsudr_pinned.R")
+            script_path = os.path.join(tmpdir, "diagnose_efs.R")
+            trace_path = os.path.join(tmpdir, "trace.csv")
+            multiplier_path = os.path.join(tmpdir, "multipliers.csv")
+            branch_path = os.path.join(tmpdir, "branches.txt")
+            score_path = os.path.join(tmpdir, "score.txt")
+            data.to_csv(data_path, index=False)
+            source = self._pinned_efsudr_source()
+
+            def instrument(old: str, new: str) -> None:
+                nonlocal source
+                if source.count(old) != 1:
+                    raise RBridgeError(
+                        f"Pinned efsudr instrumentation anchor changed: {old!r}"
+                    )
+                source = source.replace(old, new)
+
+            instrument(
+                "    mult <- 1\n    fit <- gam.fit3",
+                "    mult <- 1; efs_record_multiplier(mult)\n    fit <- gam.fit3",
+            )
+            instrument(
+                "if (fit$REML <= old.reml) {",
+                "if (fit$REML <= old.reml) { efs_record_branch('improvement')",
+            )
+            instrument(
+                "if (fit2$REML < fit$REML) {",
+                "if (fit2$REML < fit$REML) { efs_record_branch('extension_won')",
+            )
+            instrument(
+                "else {\n                  lsp <- lsp1",
+                "else {\n                  efs_record_branch('extension_lost'); lsp <- lsp1",
+            )
+            instrument(
+                "else {\n            while",
+                "else {\n            efs_record_branch('worsening'); while",
+            )
+            instrument(
+                "mult <- mult * 2", "mult <- mult * 2; efs_record_multiplier(mult)"
+            )
+            instrument("mult <- mult/2", "mult <- mult/2; efs_record_multiplier(mult)")
+            Path(source_path).write_text(source, encoding="utf-8")
+            setup_arguments = []
+            if weights is not None:
+                setup_arguments.append(f"weights=data[[{weights!r}]]")
+            if offset is not None:
+                setup_arguments.append(f"offset=data[[{offset!r}]]")
+            setup_suffix = ", " + ", ".join(setup_arguments) if setup_arguments else ""
+            initial_text = (
+                "NULL"
+                if initial is None
+                else "c(" + ", ".join(repr(float(value)) for value in initial) + ")"
+            )
+            script = "\n".join(
+                [
+                    "library(mgcv)",
+                    f"data <- read.csv({data_path!r})",
+                    f"G <- gam({formula}, data=data, family={r_family}, fit=FALSE{setup_suffix})",
+                    "family <- mgcv:::fix.family.ls(mgcv:::fix.family.var(mgcv:::fix.family.link(G$family)))",
+                    "G$rS <- mgcv:::mini.roots(G$S, G$off, ncol(G$X), G$rank)",
+                    "Ssp <- mgcv:::totalPenaltySpace(G$S, G$H, G$off, ncol(G$X))",
+                    "G$Eb <- Ssp$E; G$U1 <- cbind(Ssp$Y, Ssp$Z); G$Mp <- ncol(Ssp$Z)",
+                    "G$UrS <- lapply(G$rS, function(root) t(Ssp$Y) %*% root)",
+                    f"initial_sp <- {initial_text}",
+                    "if (is.null(initial_sp)) initial_sp <- mgcv:::initial.spg(G$X, G$y, G$w, family, G$S, G$rank, G$off, offset=G$offset, E=G$Eb)",
+                    "lsp <- log(initial_sp)",
+                    f"fit_scale <- {float(scale)!r}",
+                    "if (family$family[1] %in% c('poisson', 'binomial')) fit_scale <- 1",
+                    "if (fit_scale <= 0) { null_fit <- mgcv:::get.null.coef(G); lsp <- c(lsp, log(null_fit$null.scale / 10)) }",
+                    "trace_env <- new.env(parent=asNamespace('mgcv'))",
+                    "trace_env$trace_log <- list(); trace_env$multiplier_history <- numeric(); trace_env$branch_history <- character()",
+                    "trace_env$efs_record_multiplier <- function(value) trace_env$multiplier_history <- c(trace_env$multiplier_history, value)",
+                    "trace_env$efs_record_branch <- function(value) trace_env$branch_history <- c(trace_env$branch_history, value)",
+                    "trace_env$gam.fit3 <- function(...) {",
+                    "  args <- list(...); fit <- do.call(get('gam.fit3', envir=asNamespace('mgcv')), args)",
+                    "  nsp <- length(args$UrS); Y <- args$U1[, seq_len(ncol(args$U1) - args$Mp), drop=FALSE]",
+                    "  Yb <- drop(t(Y) %*% fit$coefficients); rVY <- t(fit$rV) %*% Y",
+                    "  bSb <- trVS <- rep(NA_real_, nsp)",
+                    "  if (nsp > 0) for (i in seq_len(nsp)) { bSb[i] <- sum((Yb %*% args$UrS[[i]])^2); trVS[i] <- sum((rVY %*% args$UrS[[i]])^2) }",
+                    "  score_phi <- if (length(args$sp) > nsp) exp(tail(args$sp, 1)) else args$scale",
+                    "  update_phi <- if (length(args$sp) > nsp) fit$scale else args$scale",
+                    "  trace_env$trace_log[[length(trace_env$trace_log) + 1]] <- data.frame(call=rep(length(trace_env$trace_log) + 1L, nsp), parameter=seq_len(nsp), log_smoothing=as.numeric(args$sp[seq_len(nsp)]), ldetS1=as.numeric(fit$ldetS1[seq_len(nsp)]), bSb=as.numeric(bSb), trVS=as.numeric(trVS), score=rep(as.numeric(fit$REML)[1], nsp), score_phi=rep(as.numeric(score_phi)[1], nsp), update_phi=rep(as.numeric(update_phi)[1], nsp), reported_phi=rep(as.numeric(fit$scale)[1], nsp), deviance=rep(as.numeric(fit$dev)[1], nsp))",
+                    "  fit",
+                    "}",
+                    f"source({source_path!r}, local=trace_env)",
+                    f"fit <- trace_env$efsudr(x=G$X, y=G$y, lsp=lsp, Eb=G$Eb, UrS=G$UrS, weights=G$w, family=family, offset=G$offset, U1=G$U1, intercept=G$intercept, scale=fit_scale, Mp=G$Mp, control=gam.control(efs.lspmax={resolved['efs_lspmax']!r}, efs.tol={resolved['efs_tol']!r}), n.true=G$n.true)",
+                    "trace <- do.call(rbind, trace_env$trace_log)",
+                    f"write.csv(trace, {trace_path!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(multiplier=trace_env$multiplier_history), {multiplier_path!r}, row.names=FALSE)",
+                    f"writeLines(trace_env$branch_history, {branch_path!r})",
+                    f"writeLines(format(fit$REML, digits=17), {score_path!r})",
+                ]
+            )
+            Path(script_path).write_text(script, encoding="utf-8")
+            self._run_efs_rscript(script_path)
+            trace = pd.read_csv(trace_path)
+            multipliers = pd.read_csv(multiplier_path)["multiplier"].to_numpy(
+                dtype=np.float64
+            )
+            branches = Path(branch_path).read_text(encoding="utf-8").splitlines()
+            return {
+                "statistics": trace,
+                "multipliers": multipliers,
+                "branches": branches,
+                "final_score": float(
+                    Path(score_path).read_text(encoding="utf-8").strip()
+                ),
+                "initial_shift": 2.5,
+                "source_commit": _PINNED_MGCV_SOURCE_COMMIT,
+                "controls": resolved,
+                "provenance": self._efs_provenance(data),
+            }
 
     def _fit_rpy2(
         self,
