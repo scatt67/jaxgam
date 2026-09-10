@@ -104,10 +104,13 @@ def _preflight(
             "explicitly declares Fisher and observed information equivalent."
         )
     policy = lineage.context.reduction_policy
-    if policy.reported_scale == "unsupported" or policy.score_scale == "unsupported":
+    if (
+        policy.reported_scale not in {"known_one", "gaussian_fisher_edf_deviance"}
+        or policy.score_scale == "unsupported"
+    ):
         raise NotImplementedError(
             "This family's reported-scale/score reduction policy is not "
-            "implemented for streamed fixed-sp PIRLS."
+            "released for streamed fixed-sp PIRLS."
         )
     if stream.source.fingerprint() != prepared.source_fingerprint:
         raise RuntimeError("RowSource changed after preparation; prepare again.")
