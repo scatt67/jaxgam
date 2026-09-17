@@ -18,7 +18,7 @@ from dataclasses import replace
 import jax.numpy as jnp
 import jax.scipy.special as jsp
 import numpy as np
-from scipy.special import gammaln
+from scipy.special import gammaln, xlog1py, xlogy
 
 from jaxgam.families.base import (
     NON_NEGATIVE,
@@ -204,19 +204,12 @@ class Binomial(ExponentialFamily):
     ) -> float:
         """Saturated log-likelihood for Binomial.  Phase 2 only (JAX).
 
-        R: ``-binomial()$aic(y, n, y, w, 0) / 2`` which, at saturation mu=y,
-        equals ``sum(wt * [y*log(y) + (1-y)*log(1-y)]) + sum(lchoose(m, m*y))``.
+        R: ``-binomial()$aic(y, n, y, w, 0) / 2``. The single-column
+        response convention uses ``dbinom(round(w*y), round(w), prob=y)``.
         The binomial-coefficient term ``lchoose`` is zero for Bernoulli (wt=1)
         but a large nonzero constant for grouped/trial-count binomial (wt>1);
         omitting it makes the reported REML score wrong by that constant.
         """
-        y_safe = jnp.clip(y, _MU_EPS, 1.0 - _MU_EPS)
-        interior = (y > 0) & (y < 1)
-        ll = jnp.where(
-            interior,
-            y * jnp.log(y_safe) + (1.0 - y) * jnp.log(1.0 - y_safe),
-            0.0,
-        )
         # Binomial-coefficient term (R binomial()$aic via fix.family.ls):
         # m = trial count = prior weight wt; k = successes = round(m*y);
         # lchoose(m, k) = lgamma(m+1) - lgamma(k+1) - lgamma(m-k+1).
@@ -224,8 +217,9 @@ class Binomial(ExponentialFamily):
         m = jnp.round(wt)
         k = jnp.round(wt * y)
         lchoose = jsp.gammaln(m + 1.0) - jsp.gammaln(k + 1.0) - jsp.gammaln(m - k + 1.0)
-        lchoose = jnp.where(wt > 0, lchoose, 0.0)
-        return jnp.sum(wt * ll) + jnp.sum(lchoose)
+        probability = jnp.where(wt > 0, y, 0.5)
+        ll = lchoose + jsp.xlogy(k, probability) + jsp.xlog1py(m - k, -probability)
+        return jnp.sum(jnp.where(wt > 0, ll, 0.0))
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -238,7 +232,9 @@ class Binomial(ExponentialFamily):
         Matches R's binomial()$dev.resids.
         """
         xp = array_module(y)
-        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        mu_safe = xp.where(
+            (mu > 0.0) & (mu < 1.0), mu, xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        )
 
         y_pos = xp.where(y > 0, y, 1.0)
         y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
@@ -254,7 +250,9 @@ class Binomial(ExponentialFamily):
     ) -> np.ndarray:
         """Direct Binomial deviance with the same boundary arithmetic as PIRLS."""
         xp = array_module(y)
-        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        mu_safe = xp.where(
+            (mu > 0.0) & (mu < 1.0), mu, xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        )
         y_pos = xp.where(y > 0, y, 1.0)
         y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
         contribution = (
@@ -270,9 +268,14 @@ class Binomial(ExponentialFamily):
     def deviance_derivative_contributions(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
     ) -> np.ndarray:
-        """Interior Binomial deviance; unlike reporting it has no max kink."""
+        """Interior Binomial deviance with no clipping of valid means.
+
+        Clipping a valid mean near one flattens its observed AD curvature.
+        Invalid means use neutral operands; the execution domain check owns
+        rejection of those rows rather than differentiating that fallback.
+        """
         xp = array_module(y)
-        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        mu_safe = xp.where((mu > 0.0) & (mu < 1.0), mu, 0.5)
         y_pos = xp.where(y > 0, y, 1.0)
         y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
         return (
@@ -298,11 +301,14 @@ class Binomial(ExponentialFamily):
         with single-column trial count ``m = wt``. Expanding the binomial pmf
         gives the ``lchoose(m, m*y)`` term (zero for Bernoulli, wt=1).
         """
-        mu_safe = np.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
-        ll = wt * (y * np.log(mu_safe) + (1.0 - y) * np.log(1.0 - mu_safe))
+        # dbinom accepts actual probabilities through the closed interval.
+        # Clipping valid tail means changes public AIC; xlogy handles the
+        # source's zero-count endpoint terms without 0 * log(0) NaNs.
+        probability = np.where(wt > 0, mu, 0.5)
         m = np.round(wt)
         k = np.round(wt * y)
         lchoose = gammaln(m + 1.0) - gammaln(k + 1.0) - gammaln(m - k + 1.0)
+        ll = xlogy(k, probability) + xlog1py(m - k, -probability)
         lchoose = np.where(wt > 0, lchoose, 0.0)
         return float(-2.0 * (np.sum(ll) + np.sum(lchoose)))
 
