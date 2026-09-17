@@ -1,8 +1,8 @@
 """Observation-independent preparation for the initial streamed design path.
 
 The initial exact path is intentionally narrow: additive univariate cubic
-smooths and full-rank numeric parametric terms.  It scans rows repeatedly for
-global reductions and never routes through ``ModelSetup.build``.
+smooths and numeric parametric terms.  It scans rows repeatedly for global
+reductions and never routes through ``ModelSetup.build``.
 """
 
 from __future__ import annotations
@@ -166,13 +166,72 @@ def _batch_parametric(
     )
 
 
+def _update_exact_parametric_aliases(
+    values: np.ndarray, scales: np.ndarray, possible: np.ndarray
+) -> None:
+    """Track exact proportional numeric columns with coefficient-size state."""
+    n_columns = values.shape[1]
+    for left in range(n_columns):
+        x = values[:, left]
+        for right in range(left + 1, n_columns):
+            if not possible[left, right]:
+                continue
+            z = values[:, right]
+            nonzero = x != 0.0
+            if np.any((~nonzero) & (z != 0.0)):
+                possible[left, right] = False
+                continue
+            if not np.any(nonzero):
+                continue
+            ratios = z[nonzero] / x[nonzero]
+            scale = scales[left, right]
+            if np.isnan(scale):
+                scale = float(ratios[0])
+                scales[left, right] = scale
+            if not np.all(ratios == scale):
+                possible[left, right] = False
+
+
+def _canonicalize_exact_parametric_aliases(
+    keep_cols: list[int],
+    scales: np.ndarray,
+    possible: np.ndarray,
+    has_intercept: bool,
+) -> list[int]:
+    """Match dense pivot ties for exact proportional source columns.
+
+    Re-QR of a bounded sequential R factor preserves rank but can reverse an
+    equal-norm alias on last-bit differences that depend on batch partition.
+    Dense LAPACK keeps the earlier equal-norm column, while a larger-norm
+    proportional column wins the pivot. Record that source-level decision
+    directly; no row array is retained and the shared dense policy is unchanged.
+    """
+    retained = set(keep_cols)
+    for left in range(scales.shape[0]):
+        for right in range(left + 1, scales.shape[1]):
+            if not possible[left, right] or np.isnan(scales[left, right]):
+                continue
+            selected = retained.intersection((left, right))
+            if len(selected) != 1:
+                continue
+            if (has_intercept and left == 0) or abs(scales[left, right]) <= 1.0:
+                preferred = left
+            else:
+                preferred = right
+            if preferred not in selected:
+                retained.remove(next(iter(selected)))
+                retained.add(preferred)
+    return sorted(retained)
+
+
 def prepare_model(
     formula_spec: FormulaSpec, source: RowSource, *, family: Any | None = None
 ) -> PreparedModel:
     """Prepare exact cubic/numeric metadata using dependency-ordered scans.
 
-    Unsupported by-variables, tensors, factors, and rank-deficient parametric
-    blocks fail before a training design is materialized.
+    Unsupported by-variables, tensors, and factors fail before a training
+    design is materialized. Exactly aliased numeric parametric columns are
+    reduced through the same fixed ``CoefficientMap`` contract as dense setup.
     """
     if not isinstance(source, RowSource):
         raise TypeError("Prepared setup requires a restartable RowSource.")
@@ -233,6 +292,10 @@ def prepare_model(
     param_first, param_names = _batch_parametric(formula_spec, dict(first.columns), 1)
     n_parametric = param_first.shape[1]
     param_R = np.empty((0, n_parametric))
+    exact_alias_scales = np.full((n_parametric, n_parametric), np.nan)
+    exact_alias_possible = np.triu(
+        np.ones((n_parametric, n_parametric), dtype=bool), k=1
+    )
     smooth_sums = [np.zeros(smooth.n_coefs) for smooth in smooths]
     smooth_norms = [0.0 for _ in smooths]
     for batch in _scan_valid(source, 65_536):
@@ -243,6 +306,9 @@ def prepare_model(
         if not np.all(np.isfinite(parametric)):
             raise ValueError("Parametric covariates contain non-finite values.")
         if n_parametric:
+            _update_exact_parametric_aliases(
+                parametric, exact_alias_scales, exact_alias_possible
+            )
             param_R = linalg.qr(np.vstack((param_R, parametric)), mode="economic")[1]
         for index, smooth in enumerate(smooths):
             raw = smooth.predict_matrix(columns)
@@ -250,18 +316,32 @@ def prepare_model(
             smooth_norms[index] = max(
                 smooth_norms[index], float(np.max(np.sum(np.abs(raw), axis=1)))
             )
+    parametric_keep_cols = list(range(n_parametric))
+    dropped_param_names: list[str] = []
     if n_parametric:
-        _q, r, _piv = linalg.qr(param_R, pivoting=True, mode="economic")
-        diagonal = np.abs(np.diag(r))
-        rank = (
-            int(np.sum(diagonal > diagonal[0] * np.finfo(float).eps ** 0.9))
-            if len(diagonal)
-            else 0
+        # A sequential thin QR has the same column Gram matrix as the original
+        # row design. Reusing the dense helper on its bounded R factor preserves
+        # the established pivot tolerance, intercept rule, public names and
+        # prediction-time CoefficientMap deletion without retaining training X.
+        full_param_names = list(param_names)
+        (
+            _reduced_param_R,
+            _reduced_param_names,
+            _initial_dropped_param_names,
+            parametric_keep_cols,
+        ) = ModelSetup._drop_aliased_parametric_columns(
+            param_R, full_param_names, formula_spec.has_intercept
         )
-        if rank < n_parametric:
-            raise NotImplementedError(
-                "Prepared setup does not yet support aliased parametric columns."
-            )
+        parametric_keep_cols = _canonicalize_exact_parametric_aliases(
+            parametric_keep_cols,
+            exact_alias_scales,
+            exact_alias_possible,
+            formula_spec.has_intercept,
+        )
+        dropped = sorted(set(range(n_parametric)) - set(parametric_keep_cols))
+        dropped_param_names = [full_param_names[index] for index in dropped]
+        param_names = [full_param_names[index] for index in parametric_keep_cols]
+        n_parametric = len(parametric_keep_cols)
     constrained_penalties: list[list[np.ndarray]] = []
     term_blocks: list[TermBlock] = []
     smooth_info: list[SmoothInfo] = []
@@ -343,8 +423,8 @@ def prepare_model(
         factor_info={},
         ordered_factors=frozenset(),
         has_intercept=formula_spec.has_intercept,
-        parametric_keep_cols=(),
-        dropped_param_names=(),
+        parametric_keep_cols=tuple(parametric_keep_cols),
+        dropped_param_names=tuple(dropped_param_names),
         total_coefs=offset,
     )
     basis_fingerprint = hashlib.sha256(

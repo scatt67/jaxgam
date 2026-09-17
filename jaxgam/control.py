@@ -28,6 +28,7 @@ class FitControl:
     memory_budget_bytes: int = 512 * 1024 * 1024
     output_budget_bytes: int = 512 * 1024 * 1024
     uncertainty: Literal["none", "fisher", "covariance"] = "none"
+    linear_solver: Literal["cholesky", "qr"] = "cholesky"
     gaussian_compression: bool = False
 
     def __post_init__(self) -> None:
@@ -39,6 +40,8 @@ class FitControl:
                 raise ValueError(f"{name} must be a positive integer.")
         if self.uncertainty not in ("none", "fisher", "covariance"):
             raise ValueError("uncertainty must be 'none', 'fisher', or 'covariance'.")
+        if self.linear_solver not in ("cholesky", "qr"):
+            raise ValueError("linear_solver must be 'cholesky' or 'qr'.")
         if not isinstance(self.gaussian_compression, bool):
             raise ValueError("gaussian_compression must be a boolean.")
         if self.gaussian_compression:

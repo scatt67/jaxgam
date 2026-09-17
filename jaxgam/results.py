@@ -384,6 +384,7 @@ class GAMPredictionResult:
         formula: str,
         method: str,
         control: FitControl,
+        execution_route: str = "stream",
     ) -> GAMPredictionResult:
         """Build compact prediction state directly from row-free stream state."""
         from jaxgam.fitting.reml import (
@@ -514,7 +515,7 @@ class GAMPredictionResult:
             method=method,
             lambda_strategy="fixed",
             execution_path="jax",
-            execution_route="stream",
+            execution_route=execution_route,
             execution_fallback_reason=None,
             n=prepared.n_obs,
             _batch_rows=control.batch_rows,

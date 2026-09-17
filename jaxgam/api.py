@@ -188,6 +188,10 @@ class GAM:
                 "A RowSource requires FitControl(execution='stream'); the dense "
                 "route accepts only a DataFrame or dict."
             )
+        if self.control.linear_solver != "cholesky":
+            raise NotImplementedError(
+                "linear_solver='qr' currently requires execution='stream'."
+            )
 
         # Phase 1: parse + build model setup
         spec = parse_formula(self.formula)
@@ -262,7 +266,10 @@ class GAM:
         spec = parse_formula(self.formula)
         prepared = prepare_model(spec, data, family=family)
         _preflight_stream_workspace(
-            prepared.n_coef, self.control.batch_rows, self.control.memory_budget_bytes
+            prepared.n_coef,
+            self.control.batch_rows,
+            self.control.memory_budget_bytes,
+            linear_solver=self.control.linear_solver,
         )
         jax_device = _resolve_device(self.device)
         metadata = PreparedFittingMetadata.from_prepared(prepared, family, jax_device)
@@ -271,7 +278,10 @@ class GAM:
             StreamDesign(prepared, data),
             family,
             log_lambda,
-            control=StreamPIRLSControl(batch_rows=self.control.batch_rows),
+            control=StreamPIRLSControl(
+                batch_rows=self.control.batch_rows,
+                solver_policy=self.control.linear_solver,
+            ),
             device=jax_device,
         )
         return GAMPredictionResult._from_stream_fit(
@@ -282,6 +292,9 @@ class GAM:
             formula=self.formula,
             method=self.method,
             control=self.control,
+            execution_route=(
+                "stream_qr" if self.control.linear_solver == "qr" else "stream"
+            ),
         )
 
 
@@ -291,7 +304,11 @@ class GAM:
 
 
 def _preflight_stream_workspace(
-    n_coef: int, batch_rows: int, memory_budget_bytes: int
+    n_coef: int,
+    batch_rows: int,
+    memory_budget_bytes: int,
+    *,
+    linear_solver: Literal["cholesky", "qr"] = "cholesky",
 ) -> None:
     """Reject stream fits whose known live fit workspace exceeds its budget.
 
@@ -302,12 +319,26 @@ def _preflight_stream_workspace(
     native-library hard cap. CPU-only basis preparation is separate.
     """
     itemsize = np.dtype(np.float64).itemsize
-    matrix_bytes = 12 * n_coef * n_coef * itemsize
-    batch_bytes = (3 * batch_rows * n_coef + 8 * batch_rows + 4 * n_coef) * itemsize
+    if linear_solver not in ("cholesky", "qr"):
+        raise ValueError("linear_solver must be 'cholesky' or 'qr'.")
+    if linear_solver == "qr":
+        # During a noninitial merge the source design, weighted design,
+        # [old R; weighted X], and SciPy's packed reflector copy coexist.
+        # The two stacked arrays each add p rows. Coefficient-space reporting,
+        # factors, penalty roots, and final Fisher actions retain the same
+        # conservative twelve-matrix allowance as the Cholesky route.
+        matrix_bytes = 14 * n_coef * n_coef * itemsize
+        batch_bytes = (
+            4 * batch_rows * n_coef + 12 * batch_rows + 6 * n_coef
+        ) * itemsize
+    else:
+        matrix_bytes = 12 * n_coef * n_coef * itemsize
+        batch_bytes = (3 * batch_rows * n_coef + 8 * batch_rows + 4 * n_coef) * itemsize
     required = matrix_bytes + batch_bytes
     if required > memory_budget_bytes:
+        solver_label = " QR" if linear_solver == "qr" else ""
         raise MemoryError(
-            "Known streamed PIRLS workspace requires "
+            f"Known streamed{solver_label} PIRLS workspace requires "
             f"{required} bytes, exceeding FitControl.memory_budget_bytes="
             f"{memory_budget_bytes}. This budget does not cover CPU basis preparation."
         )
