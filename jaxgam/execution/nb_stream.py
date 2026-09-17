@@ -1,19 +1,26 @@
 """Bounded fixed/trial-theta NB coefficient fitting from gam.fit4.
 
-This internal controller does not optimize theta or enable public streaming.
-Source iteration stays on the host; explicit-parameter batch mathematics is
+This internal controller optionally estimates theta conditionally inside PIRLS;
+it does not enable public streaming. Source iteration stays on the host;
+explicit-parameter batch mathematics is
 compiled independently. Positive-observed recovery is separate from Fisher
 reporting and never changes the accepted family object.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 
 import jax
 import numpy as np
 
+from jaxgam.execution.nb_theta_stream import (
+    NBStreamThetaResult,
+    NBThetaStreamControl,
+    conditional_theta_stream,
+)
+from jaxgam.execution.null_coefficient import project_null_coefficients
 from jaxgam.execution.qr import PositiveQRState, qr_update, solve_augmented_qr
 from jaxgam.execution.regular_stream import (
     EtaFactory,
@@ -216,6 +223,15 @@ class NBStreamResult:
     score_penalized_deviance: float
     reml_score: float
     source_deviance: float
+    initial_start_retained: bool = False
+    theta_n_iter: int = 0
+    theta_status: int = 0
+    theta_source_scans: int = 0
+    stopping_penalized_deviance: float | None = None
+    final_theta_deviance: float | None = None
+    theta_history: tuple[float, ...] = ()
+    last_theta_result: NBStreamThetaResult | None = None
+    source_deviance_log_theta: tuple[float, ...] = ()
 
 
 def fit_nb_streamed_pirls(
@@ -227,18 +243,49 @@ def fit_nb_streamed_pirls(
     parameters: FamilyExecutionParameters | None = None,
     control: StreamPIRLSControl | None = None,
     device: jax.Device | None = None,
+    beta_start: np.ndarray | None = None,
+    beta_old_init: np.ndarray | None = None,
+    start_is_absent: bool | None = None,
+    estimate_theta: bool = False,
+    theta_control: NBThetaStreamControl | None = None,
 ) -> NBStreamResult:
     """Fit coefficients at supplied fixed/trial theta, leaving family untouched.
 
-    Estimated-family callers must explicitly supply trial parameters. This
-    is a coefficient subproblem, not a requested estimated-theta public fit,
-    exact REML driver or conditional EFS theta optimizer.
+    Estimated-family callers explicitly supply trial parameters. With
+    estimate_theta=True, conditional theta Newton runs inside each accepted
+    coefficient iteration. This is an internal EFS provider component, not a
+    public estimated-theta route or exact REML joint-theta driver.
     """
     control = StreamPIRLSControl(solver_policy="qr") if control is None else control
     if control.solver_policy != "qr":
         raise ValueError("NB source controller requires solver_policy='qr'")
     _link_name(family)
+    if not isinstance(estimate_theta, bool) or (
+        start_is_absent is not None and not isinstance(start_is_absent, bool)
+    ):
+        raise ValueError("NB start and conditional theta flags must be bool")
+    if estimate_theta and family.n_theta != 1:
+        raise ValueError("conditional theta requires an estimated NB family")
+    if theta_control is not None and not isinstance(
+        theta_control, NBThetaStreamControl
+    ):
+        raise TypeError("NB theta_control must be NBThetaStreamControl")
+    theta_control = NBThetaStreamControl() if theta_control is None else theta_control
     ledger = preflight_regular_stream_workspace(stream, control, maximum_bytes)
+    if estimate_theta:
+        # Stage one: count capacity is unknown until the bounded summary pass.
+        # Charge batch AD arrays and both scalar histories before that pass.
+        ledger = replace(
+            ledger,
+            device_visible_bytes=ledger.device_visible_bytes
+            + 8 * 64 * ledger.batch_rows,
+            history_bytes=ledger.history_bytes
+            + 128 * (theta_control.max_iter + control.max_iter + 2),
+        )
+        if ledger.required_bytes > maximum_bytes:
+            raise MemoryError(
+                "NB conditional theta known workspace exceeds maximum_bytes"
+            )
     lineage = FamilyExecutionLineage.from_prepared(stream.prepared, family)
     if parameters is None:
         if family.n_theta:
@@ -288,6 +335,8 @@ def fit_nb_streamed_pirls(
     for batch, y, weight, _offset, valid in _source_batches(
         stream, family, lineage, control.batch_rows
     ):
+        if len(y) > ledger.batch_rows:
+            raise ValueError("NB initial source exceeds prospective batch cap")
         X = prepared.evaluate_fitting_batch(batch) if len(y) else np.empty((0, p))
         if (
             prepared.predict_spec.has_intercept
@@ -298,7 +347,10 @@ def fit_nb_streamed_pirls(
                 "NB null anchor requires literal intercept coordinate"
             )
         if not prepared.predict_spec.has_intercept:
-            null_projection = qr_update(null_projection, X, np.ones(len(y)), n_coef=p)
+            public_X = prepared.evaluate_batch(batch) if len(y) else np.empty((0, p))
+            null_projection = qr_update(
+                null_projection, public_X, np.ones(len(y)), n_coef=p
+            )
         initial = family.initial_working_state_cpu(y, weight, valid)
         if not initial.input_ok or not initial.domain_ok:
             raise ValueError("NB initial mustart predictor is invalid")
@@ -329,7 +381,45 @@ def fit_nb_streamed_pirls(
     else:
         # get.null.coef projects link(mean(y)) without weights or offsets;
         # its null anchor stays distinct from the per-row mustart predictor.
-        beta = solve_augmented_qr(null_projection, ()).coefficients * constant_eta
+        beta = project_null_coefficients(
+            null_projection, constant_eta
+        ).coefficients.copy()
+        for block in prepared.fitting.penalty_structure.blocks:
+            beta[block.start : block.stop] = np.linalg.solve(
+                block.transform.dense(), beta[block.start : block.stop]
+            )
+
+    # Initial source rows and public null-projection QR are no longer needed.
+    # Release them before any old/current/candidate working scan can coexist;
+    # the initial phase's two designs and compact QR/helper fit its own peak.
+    if not prepared.predict_spec.has_intercept:
+        del public_X
+    del null_projection, X, batch, y, weight, _offset, valid, initial
+
+    if beta_old_init is not None:
+        beta = np.array(beta_old_init, dtype=float, copy=True)
+        if beta.shape != (p,) or not np.all(np.isfinite(beta)):
+            raise ValueError("finite matching NB null anchor required")
+    beta_null = beta.copy()
+    if estimate_theta:
+        capacity = max(1, int(np.ceil(metadata["max_count"])))
+        # The inherited table-selection policy budgets four capacity arrays up
+        # to 8MiB. Charge sixteen arrays for this combined value/gradient/
+        # Hessian graph; the recurrence branch has only batch-vector storage.
+        table_policy_bytes = 8 * 4 * (capacity + 1)
+        prefix_bytes = 8 * 16 * (capacity + 1)
+        prefix_bytes = (
+            prefix_bytes
+            if metadata["integer_counts"] and table_policy_bytes <= 8 << 20
+            else 0
+        )
+        ledger = replace(
+            ledger, device_visible_bytes=ledger.device_visible_bytes + prefix_bytes
+        )
+        if ledger.required_bytes > maximum_bytes:
+            raise MemoryError(
+                "NB conditional count-prefix workspace exceeds maximum_bytes"
+            )
 
     def scan_at(factory, *, positive=False, score=False):
         nonlocal scans, batches_scanned
@@ -374,6 +464,7 @@ def fit_nb_streamed_pirls(
         return deviance, domain and np.isfinite(deviance)
 
     deviance, domain = trial(beta)
+    deviance_theta = tuple(np.asarray(parameters.log_theta))
     if not np.isfinite(deviance):
         raise FloatingPointError("NB null source deviance is nonfinite")
     if not domain:
@@ -381,7 +472,23 @@ def fit_nb_streamed_pirls(
     old_pdev = deviance + float(beta @ penalty(beta))
     if not np.isfinite(old_pdev):
         raise FloatingPointError("NB null penalized deviance is nonfinite")
+    initial_retained = False
+    if beta_start is not None and start_is_absent is not True:
+        retained = np.array(beta_start, dtype=float, copy=True)
+        if retained.shape != (p,) or not np.all(np.isfinite(retained)):
+            raise ValueError("finite matching NB retained start required")
+        start_dev, start_domain = trial(retained)
+        start_pdev = start_dev + float(retained @ penalty(retained))
+        if start_domain and np.isfinite(start_pdev) and start_pdev <= old_pdev:
+            beta = retained
+            initial_retained = True
+    elif beta_start is None and start_is_absent is False:
+        raise ValueError("NB retained start flag requires beta_start")
     history = [old_pdev]
+    theta_iterations = theta_scans = theta_status = 0
+    theta_history = [float(np.asarray(parameters.log_theta)[0])]
+    last_theta_result = None
+    stopping_pdev = old_pdev
     recoveries = backtracks = 0
     converged = failed = False
     candidate_scan = None
@@ -394,7 +501,7 @@ def fit_nb_streamed_pirls(
                     ).eta
                 )
             )
-            if iteration == 0
+            if iteration == 0 and not initial_retained
             else (lambda batch, X, beta=beta: X @ beta + batch.offset)
         )
         current = scan_at(eta_factory) if iteration == 0 else candidate_scan
@@ -415,22 +522,95 @@ def fit_nb_streamed_pirls(
         candidate = proposal.coefficients
         threshold = 10.0 * (0.1 + abs(old_pdev)) * np.sqrt(np.finfo(float).eps)
         accepted = False
-        for halving in range(control.max_halvings + 1):
+        if estimate_theta or beta_start is not None:
+            # gam.fit4 safeguards finite deviance, then domain, then divergence.
+            # The first two use coefold (a retained start when present), while
+            # immediate divergence switches to null.coef even for a retained start.
             candidate_dev, candidate_domain = trial(candidate)
-            with np.errstate(over="ignore", invalid="ignore"):
+            guard_halvings = 0
+            while not np.isfinite(candidate_dev):
+                if guard_halvings >= control.max_iter:
+                    break
+                candidate = 0.5 * (candidate + beta)
+                guard_halvings += 1
+                candidate_dev, candidate_domain = trial(candidate)
+            domain_halvings = 0
+            while np.isfinite(candidate_dev) and not candidate_domain:
+                if domain_halvings >= control.max_iter:
+                    break
+                candidate = 0.5 * (candidate + beta)
+                domain_halvings += 1
+                candidate_dev, candidate_domain = trial(candidate)
+            candidate_pdev = candidate_dev + float(candidate @ penalty(candidate))
+            divergence_halvings = 0
+            while (
+                candidate_domain
+                and np.isfinite(candidate_pdev)
+                and candidate_pdev - old_pdev > threshold
+            ):
+                if divergence_halvings >= 100:
+                    break
+                candidate = 0.5 * (candidate + (beta_null if iteration == 0 else beta))
+                divergence_halvings += 1
+                candidate_dev, candidate_domain = trial(candidate)
                 candidate_pdev = candidate_dev + float(candidate @ penalty(candidate))
-            if (
+            accepted = (
                 candidate_domain
                 and np.isfinite(candidate_pdev)
                 and candidate_pdev - old_pdev <= threshold
-            ):
-                accepted = True
-                backtracks += halving
-                break
-            candidate = 0.5 * (candidate + beta)
+            )
+            backtracks += guard_halvings + domain_halvings + divergence_halvings
+        else:
+            for halving in range(control.max_halvings + 1):
+                candidate_dev, candidate_domain = trial(candidate)
+                with np.errstate(over="ignore", invalid="ignore"):
+                    candidate_pdev = candidate_dev + float(
+                        candidate @ penalty(candidate)
+                    )
+                if (
+                    candidate_domain
+                    and np.isfinite(candidate_pdev)
+                    and candidate_pdev - old_pdev <= threshold
+                ):
+                    accepted = True
+                    backtracks += halving
+                    break
+                candidate = 0.5 * (candidate + (beta_null if iteration == 0 else beta))
         if not accepted:
             failed = True
             break
+        candidate_theta = tuple(np.asarray(parameters.log_theta))
+        if estimate_theta:
+            # Counts and carried theta are already separate. Do not retain the
+            # preceding conditional histories during the next replay/return.
+            last_theta_result = None
+            last_theta_result = conditional_theta_stream(
+                stream,
+                family,
+                lineage,
+                candidate,
+                np.asarray(parameters.log_theta),
+                control,
+                max_y=int(np.ceil(metadata["max_count"])),
+                integer_counts=bool(metadata["integer_counts"]),
+                control=theta_control,
+                device=device,
+            )
+            scans += last_theta_result.source_scans
+            batches_scanned += last_theta_result.batches_scanned
+            theta_scans += last_theta_result.source_scans
+            theta_iterations += last_theta_result.n_iter
+            theta_status = last_theta_result.status
+            parameters = jax.device_put(
+                FamilyExecutionParameters(np.asarray(last_theta_result.log_theta)),
+                device,
+            )
+            theta_history.append(last_theta_result.log_theta[0])
+            if not last_theta_result.converged:
+                deviance_theta = candidate_theta
+                beta, deviance, stopping_pdev = candidate, candidate_dev, candidate_pdev
+                failed = True
+                break
         candidate_scan = scan_at(
             lambda batch, X, candidate=candidate: X @ candidate + batch.offset
         )
@@ -445,11 +625,21 @@ def fit_nb_streamed_pirls(
         gradient_ok = np.max(np.abs(2.0 * residual)) <= control.tol * (
             abs(candidate_pdev) + 1.0
         )
+        deviance_theta = candidate_theta
+        stopping_pdev = candidate_pdev
         beta, deviance, old_pdev = candidate, candidate_dev, candidate_pdev
         history.append(old_pdev)
         if original_posdef and change_ok and gradient_ok:
             converged = True
             break
+        if estimate_theta:
+            # Source refresh happens only after a continuing iteration; the
+            # stopping comparison above deliberately used the pre-theta pdev.
+            deviance, refresh_domain = trial(beta)
+            deviance_theta = tuple(np.asarray(parameters.log_theta))
+            if not refresh_domain:
+                raise FloatingPointError("NB post-theta objective refresh is invalid")
+            old_pdev = deviance + float(beta @ penalty(beta))
     final = scan_at(lambda batch, X: X @ beta + batch.offset, score=True)
     observed = solve_signed_qr(final.observed, actual, balanced_roots=balanced)
     if not observed.score_admissible or observed.fisher_required:
@@ -531,7 +721,15 @@ def fit_nb_streamed_pirls(
     reporting_roundoff = 64 * np.finfo(np.float64).eps * (1 + count + sum_y)
     if not np.isfinite(deviance) or deviance < -reporting_roundoff:
         raise FloatingPointError("NB raw deviance is materially negative or nonfinite")
-    reported_deviance = max(0.0, deviance)
+    final_theta_deviance = final.deviance if estimate_theta else deviance
+    if (
+        not np.isfinite(final_theta_deviance)
+        or final_theta_deviance < -reporting_roundoff
+    ):
+        raise FloatingPointError(
+            "NB final-theta deviance is materially negative or nonfinite"
+        )
+    reported_deviance = max(0.0, final_theta_deviance)
     state = StreamFitState(
         coefficients=jax.device_put(beta, device),
         log_lambda=jax.device_put(rho, device),
@@ -560,11 +758,20 @@ def fit_nb_streamed_pirls(
         recoveries,
         tuple(history),
         ledger,
-        tuple(theta),
+        tuple(np.asarray(parameters.log_theta)),
         bool(metadata["integer_counts"]),
         float(metadata["max_count"]),
         gdi_penalty,
         score_pdev,
         score,
         deviance,
+        initial_retained,
+        theta_iterations,
+        theta_status,
+        theta_scans,
+        stopping_pdev,
+        final_theta_deviance,
+        tuple(theta_history),
+        last_theta_result,
+        deviance_theta,
     )

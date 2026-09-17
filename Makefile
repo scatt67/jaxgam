@@ -65,6 +65,13 @@ test-efs-provider: docker-build ## run provider sequence and dense EFS compatibi
 		tests/test_execution/test_efs_regular_links.py \
 		tests/test_execution/test_efs_nb_links.py -x --tb=short -q
 
+.PHONY: test-nb-efs-theta
+test-nb-efs-theta: docker-build ## run streamed conditional theta/PIRLS source gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_fitting/test_nb_theta_stream.py \
+		tests/test_execution/test_nb_theta_stream.py \
+		tests/test_execution/test_nb_stream.py -x --tb=short -q
+
 .PHONY: test-nb-stream
 test-nb-stream: docker-build ## run internal fixed/trial-theta NB coefficient gates
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \

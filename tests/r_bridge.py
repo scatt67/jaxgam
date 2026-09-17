@@ -1002,6 +1002,221 @@ class RBridge:
             skip_offset_null_deviance=False,
         )
 
+    def nb_pirls_controller_reference(
+        self,
+        X: np.ndarray,
+        X_public: np.ndarray,
+        transform: np.ndarray,
+        E: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        link: str,
+        start: np.ndarray | None,
+        rank: int,
+        tolerance: float,
+    ) -> dict[str, np.ndarray]:
+        """Trace a private pinned ``gam.fit4``/``estimate.theta`` controller."""
+        from rpy2 import rinterface
+
+        from tests.r_ast import (
+            clone_function,
+            find_call_paths,
+            instrument_function,
+            symbol,
+        )
+
+        self._require_rpy2()
+        ro, base = self._ro, self._ro.baseenv
+        r_X, r_X_public, r_transform, r_E = (
+            self._to_r_matrix(values) for values in (X, X_public, transform, E)
+        )
+        r_y, r_weight, r_offset = (
+            self._to_r_vector(values) for values in (y, weight, offset)
+        )
+        p = X.shape[1]
+        theta_initial = self._base.log(self._to_r_vector([0.7]))
+        family = self._call_internal(
+            "fix.family.link",
+            self._mgcv.nb(theta=base["-"](self._to_r_vector([0.7])), link=link),
+        )
+        U1 = (
+            self._base.eigen(self._base.crossprod(r_E), symmetric=True).rx2("vectors")
+            if rank
+            else self._base.diag(p)
+        )
+        if rank:
+            root = base["%*%"](
+                self._base.t(self._to_r_matrix(np.asarray(U1)[:, :rank])),
+                self._base.t(r_E),
+            )
+            roots = base["list"](root)
+        else:
+            roots = base["list"]()
+        target = self._base.rep(
+            family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
+        )
+        null = np.asarray(
+            self._base.qr_coef(self._base.qr(r_X_public), target),
+            dtype=np.float64,
+        ).copy()
+        null[np.isnan(null)] = 0.0
+        null_r = self._base.solve(r_transform, self._to_r_vector(null))
+
+        theta_updates = [0]
+        theta_history = [float(theta_initial[0])]
+        pre_theta = [float(theta_initial[0])]
+        recoveries = [0]
+        final_locals: dict[str, float] = {}
+
+        estimate = self._utils.getFromNamespace("estimate.theta", "mgcv")
+        theta_paths = find_call_paths(
+            estimate, "<-", required_symbols=("theta", "step")
+        )
+        accepted_paths = []
+        for path in theta_paths:
+            node = ro.r["body"](estimate)
+            for index in path:
+                node = node[index]
+            rhs = node[2]
+            if (
+                node[1].rsame(symbol("theta"))
+                and rhs.typeof == rinterface.RTYPES.LANGSXP
+                and rhs[0].rsame(symbol("+"))
+                and rhs[1].rsame(symbol("theta"))
+                and rhs[2].rsame(symbol("step"))
+            ):
+                accepted_paths.append(path)
+        if len(accepted_paths) != 1:
+            raise RBridgeError("Pinned estimate.theta accepted-step anchor changed")
+        traced_estimate = instrument_function(
+            estimate,
+            path=accepted_paths[0],
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=lambda _theta: theta_updates.__setitem__(0, theta_updates[0] + 1),
+            when="after",
+        )
+
+        fit_source = self._utils.getFromNamespace("gam.fit4", "mgcv")
+        theta_calls = find_call_paths(
+            fit_source, "<-", required_symbols=("theta", "estimate.theta")
+        )
+        if len(theta_calls) != 1:
+            raise RBridgeError("Pinned gam.fit4 theta-call anchor changed")
+        fit_source = instrument_function(
+            fit_source,
+            path=theta_calls[0],
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=lambda theta: pre_theta.__setitem__(0, float(theta[0])),
+            when="before",
+        )
+        theta_calls = find_call_paths(
+            fit_source, "<-", required_symbols=("theta", "estimate.theta")
+        )
+        if len(theta_calls) != 1:
+            raise RBridgeError("Pinned gam.fit4 theta return anchor changed")
+        fit_source = instrument_function(
+            fit_source,
+            path=theta_calls[0],
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=lambda theta: theta_history.append(float(theta[0])),
+            when="after",
+        )
+        recovery_paths = []
+        for path in find_call_paths(fit_source, "cat"):
+            node = ro.r["body"](fit_source)
+            for index in path:
+                node = node[index]
+            if (
+                len(node) > 1
+                and node[1].typeof == rinterface.RTYPES.STRSXP
+                and str(node[1][0]) == "**using positive weights\n"
+            ):
+                recovery_paths.append(path)
+        if len(recovery_paths) != 1:
+            raise RBridgeError("Pinned gam.fit4 positive-weight anchor changed")
+        fit_source = instrument_function(
+            fit_source,
+            path=recovery_paths[0],
+            expected_head="cat",
+            capture_symbols=(),
+            callback=lambda: recoveries.__setitem__(0, recoveries[0] + 1),
+        )
+        body = ro.r["body"](fit_source)
+        fit_source = instrument_function(
+            fit_source,
+            path=(len(body) - 1,),
+            expected_head="list",
+            capture_symbols=("oo", "pdev"),
+            callback=lambda oo, pdev: final_locals.update(
+                penalty=float(ro.ListVector(oo).rx2("P")[0]),
+                pdev=float(pdev[0]),
+            ),
+        )
+        private_environment = ro.r["new.env"](parent=ro.r["environment"](fit_source))
+        private_environment["estimate.theta"] = traced_estimate
+        fit_function = clone_function(fit_source, environment=private_environment)
+        smoothing = self._base.c(
+            theta_initial,
+            self._base.log(self._to_r_vector([0.35])) if rank else ro.FloatVector([]),
+        )
+        fit = fit_function(
+            x=r_X,
+            y=r_y,
+            sp=smoothing,
+            Eb=r_E,
+            UrS=roots,
+            weights=r_weight,
+            offset=r_offset,
+            start=ro.NULL if start is None else self._to_r_vector(start),
+            U1=U1,
+            Mp=p - rank,
+            family=family,
+            control=self._mgcv.gam_control(epsilon=tolerance, maxit=100, trace=True),
+            deriv=0,
+            scale=1,
+            scoreType="EFS",
+            **{"null.coef": null_r},
+        )
+        theta = family.rx2("getTheta")()
+        mean = fit.rx2("fitted.values")
+        derivatives = self._call_internal(
+            "dDeta", r_y, mean, r_weight, theta, family, 0
+        )
+        half = self._to_r_vector([0.5])
+        observed = self._base.crossprod(
+            r_X,
+            base["*"](base["*"](half, derivatives.rx2("Deta2")), r_X),
+        )
+        fisher = self._base.crossprod(
+            r_X,
+            base["*"](base["*"](half, derivatives.rx2("EDeta2")), r_X),
+        )
+        final_deviance = self._base.sum(
+            family.rx2("dev.resids")(r_y, mean, r_weight, theta)
+        )
+        return {
+            "beta": np.asarray(fit.rx2("coefficients")).copy(),
+            "theta": np.asarray(theta).copy(),
+            "source_deviance": np.asarray(fit.rx2("deviance")).copy(),
+            "final_deviance": np.asarray(final_deviance).copy(),
+            "source_theta": np.asarray(pre_theta, dtype=np.float64),
+            "gdi_penalty": np.asarray([final_locals["penalty"]]),
+            "score": np.asarray(fit.rx2("REML")).copy(),
+            "stopping_pdev": np.asarray([final_locals["pdev"]]),
+            "G": np.asarray(observed).copy(),
+            "F": np.asarray(fisher).copy(),
+            "V": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
+            "theta_history": np.asarray(theta_history, dtype=np.float64),
+            "iter": np.asarray(fit.rx2("iter")).copy(),
+            "theta_iter": np.asarray([theta_updates[0]]),
+            "null_coefficients": np.asarray(null_r).copy(),
+            "recoveries": np.asarray([recoveries[0]]),
+        }
+
     def nb_fixed_pirls_reference(
         self,
         X: np.ndarray,
@@ -4788,3 +5003,100 @@ if (!is.null(s$sp.criterion)) {{
                 result["sp_criterion"] = None
 
             return result
+
+    def nb_theta_diagnostics(
+        self,
+        start: np.ndarray,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weight: np.ndarray,
+        link: str = "log",
+    ) -> dict[str, np.ndarray]:
+        """Read source contractions and the traced theta path through pinned R."""
+        from rpy2 import rinterface
+
+        from tests.r_ast import find_call_paths, instrument_function, symbol
+
+        self._require_rpy2()
+        start_r = self._to_r_vector(np.asarray(start, dtype=np.float64))
+        y_r = self._to_r_vector(np.asarray(y, dtype=np.float64))
+        mu_r = self._to_r_vector(np.asarray(mu, dtype=np.float64))
+        weight_r = self._to_r_vector(np.asarray(weight, dtype=np.float64))
+        base = self._ro.baseenv
+        family = self._mgcv.nb(theta=base["-"](self._base.exp(start_r)), link=link)
+
+        def fields(theta_r: Any) -> np.ndarray:
+            likelihood = family.rx2("ls")(y_r, w=weight_r, theta=theta_r, scale=1)
+            derivatives = family.rx2("Dd")(y_r, mu_r, theta_r, wt=weight_r, level=2)
+            deviance = self._base.sum(
+                family.rx2("dev.resids")(y_r, mu_r, weight_r, theta_r)
+            )
+            half = self._to_r_vector([2.0])
+            return np.asarray(
+                [
+                    base["-"](base["/"](deviance, half), likelihood.rx2("ls"))[0],
+                    base["-"](
+                        base["/"](self._base.sum(derivatives.rx2("Dth")), half),
+                        likelihood.rx2("lsth1"),
+                    )[0],
+                    base["-"](
+                        base["/"](self._base.sum(derivatives.rx2("Dth2")), half),
+                        likelihood.rx2("lsth2"),
+                    )[0],
+                ],
+                dtype=np.float64,
+            )
+
+        source = self._utils.getFromNamespace("estimate.theta", "mgcv")
+
+        def assignment_path(target: str, increment: str) -> tuple[int, ...]:
+            paths = find_call_paths(source, "<-", required_symbols=(target, increment))
+            matched = []
+            for path in paths:
+                node = self._ro.r["body"](source)
+                for index in path:
+                    node = node[index]
+                rhs = node[2]
+                if (
+                    node[1].rsame(symbol(target))
+                    and rhs.typeof == rinterface.RTYPES.LANGSXP
+                    and rhs[0].rsame(symbol("+"))
+                    and rhs[1].rsame(symbol(target))
+                    and (
+                        rhs[2].rsame(symbol(increment))
+                        if increment == "step"
+                        else float(rhs[2][0]) == 1.0
+                    )
+                ):
+                    matched.append(path)
+            if len(matched) != 1:
+                raise RBridgeError(f"Pinned estimate.theta {target} assignment changed")
+            return matched[0]
+
+        theta_path = [float(start_r[0])]
+        halvings = [0]
+        theta_assignment = assignment_path("theta", "step")
+        iter_assignment = assignment_path("iter", "iter")
+        traced = instrument_function(
+            source,
+            path=theta_assignment,
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=lambda theta: theta_path.append(float(theta[0])),
+            when="after",
+        )
+        traced = instrument_function(
+            traced,
+            path=iter_assignment,
+            expected_head="<-",
+            capture_symbols=("iter",),
+            callback=lambda _iter: halvings.__setitem__(0, halvings[0] + 1),
+            when="after",
+        )
+        end = traced(start_r, family, y_r, mu_r, scale=1, wt=weight_r)
+        return {
+            "initial": fields(start_r),
+            "final": np.r_[np.asarray(end, dtype=np.float64), fields(end)],
+            "path": np.asarray(theta_path, dtype=np.float64),
+            "halvings": np.asarray(halvings, dtype=np.float64),
+        }
