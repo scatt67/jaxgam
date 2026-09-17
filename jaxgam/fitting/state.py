@@ -8,7 +8,7 @@ Row-aligned fitted values, working weights, and responses remain owned by a
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -19,6 +19,52 @@ from jaxgam.fitting.qr import (
     qr_root_inverse,
     qr_root_transpose_inverse,
 )
+
+if TYPE_CHECKING:
+    from jaxgam.fitting.pirls import PIRLSResult
+
+
+class ConsumedFitResult(Protocol):
+    """Optimizer-neutral fields consumed by result materialization."""
+
+    smoothing_params: jax.Array
+    converged: bool
+    n_iter: int
+    score: jax.Array
+    edf: jax.Array
+    scale: jax.Array
+    pirls_result: PIRLSResult
+    convergence_info: str
+    theta: float | None
+
+
+@dataclass(frozen=True)
+class EFSOptimizerDiagnostics:
+    """Compact immutable trace for the host EFS outer controller.
+
+    The histories contain accepted scalar states only.  Trial fit arrays and
+    optimizer-shaped gradients are deliberately absent from this Phase 3
+    contract.
+    """
+
+    reference_profile: str
+    trace_method: str
+    step_policy: str
+    stop_reason: str
+    outer_iterations: int
+    inner_iterations: int
+    theta_iterations: int
+    accepted_score_history: tuple[float, ...]
+    accepted_score_phi_history: tuple[float, ...]
+    multiplier: float
+    final_update_residual: tuple[float, ...]
+    max_proposed_movement: float
+    max_accepted_movement: float
+    numerator_clamp_count: int
+    ratio_replacement_count: int
+    log_lambda_cap_count: int
+    invalid_fit_seen: bool
+    stabilized_solve_seen: bool
 
 
 def _coefficient_rhs(rhs: jax.Array, n_coef: int) -> jax.Array:

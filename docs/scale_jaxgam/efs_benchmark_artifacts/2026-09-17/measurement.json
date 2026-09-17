@@ -1,0 +1,16 @@
+{
+  "process_exit": 2,
+  "selected_comparison_tolerance": "STRICT",
+  "quiet_window": "Parent explicitly granted quiet sequential measurement after all agent Docker tests stopped; released after terminal exit. No performance conclusion uses later numerical-diagnostic timing.",
+  "invocation": "uv run python scripts/benchmark_efs.py --rows 1200 --smooths 10 --basis-dimension 6 --seed 20260910 --warm-repeats 3 --threads 1 --comparison-tolerance STRICT --output-dir /tmp/efs-artifact",
+  "source_commit": "80a25dca1e97714dadc80e4766d9fabf6fb53487",
+  "image_id": "sha256:f4eae281f047815852f2819db0760054a22e93112c7a5dca4031beeee834d6ba",
+  "files": {
+    "input.csv": "22291a4ce4d90220758ae9488d6a880643e75d49d47c809e9d5cf9fe7a1135d4",
+    "config.json": "1af6f57728d82ecce39044b80c9f6a75064e794200abf84539cd3f25e7147798",
+    "report.json": "0c4e02797a61063c9e4a19b3b6589da86f9f070004123857c362689a270dca61",
+    "host-provenance.json": "4bee7fe4d1ffb47f7dac0d47862b4c099719151a0f40d5cc9b8f13a0c5416fe9",
+    "stdout-stderr.log": "77a0b4e3d0ae779d687aa66cc4dd64fa96ffbd1e3ec136f64aae94c6bfb660bc"
+  },
+  "note": "Absolute config path records the original worker location; generator plus CSV hash reproduce the input, or adjust data_path to the archived CSV before worker-only diagnostics."
+}

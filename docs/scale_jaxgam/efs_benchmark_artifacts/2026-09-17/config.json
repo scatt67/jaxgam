@@ -1,0 +1,71 @@
+{
+  "data_path": "/tmp/efs-artifact/input.csv",
+  "data_sha256": "22291a4ce4d90220758ae9488d6a880643e75d49d47c809e9d5cf9fe7a1135d4",
+  "initialization_input_parser": "pandas float_precision=round_trip on saved CSV",
+  "formula": "y ~ s(x1, k=6, bs='cr') + s(x2, k=6, bs='cr') + s(x3, k=6, bs='cr') + s(x4, k=6, bs='cr') + s(x5, k=6, bs='cr') + s(x6, k=6, bs='cr') + s(x7, k=6, bs='cr') + s(x8, k=6, bs='cr') + s(x9, k=6, bs='cr') + s(x10, k=6, bs='cr')",
+  "family": "poisson(log)",
+  "seed": 20260910,
+  "n": 1200,
+  "p": 51,
+  "m": 10,
+  "rank_x": 51,
+  "basis": {
+    "type": "cr",
+    "dimension_per_smooth": 6
+  },
+  "warm_repeats": 3,
+  "threads": 1,
+  "efs_control": {
+    "outer_limit": 200,
+    "log_lambda_max": 15.0,
+    "score_tolerance": 0.1,
+    "pirls_tolerance": 1e-07,
+    "pirls_max_iter": 200,
+    "history_limit": 200
+  },
+  "initial_smoothing_policy": {
+    "jaxgam_newton": {
+      "policy": "public FittingData prior-weight crossproduct initializer",
+      "natural_scale": [
+        287.4210646334217,
+        276.43584063732715,
+        283.2758892174811,
+        316.13571450114796,
+        290.20408826574516,
+        255.7363955895281,
+        311.3742788927972,
+        262.6313783363455,
+        264.1225174965325,
+        301.52898389788464
+      ]
+    },
+    "jaxgam_efs_and_pinned_r": {
+      "policy": "public efs_initial_log_lambda; identical R in.out sp",
+      "natural_scale": [
+        495.3627209827142,
+        479.9053019800485,
+        488.98906218949026,
+        541.7354426108623,
+        496.0093640955985,
+        439.775459953537,
+        539.2851685607677,
+        451.23619407793547,
+        454.8513666720661,
+        521.4605918184966
+      ],
+      "scale": 1.0
+    }
+  },
+  "efs_initial_sp": [
+    495.3627209827142,
+    479.9053019800485,
+    488.98906218949026,
+    541.7354426108623,
+    496.0093640955985,
+    439.775459953537,
+    539.2851685607677,
+    451.23619407793547,
+    454.8513666720661,
+    521.4605918184966
+  ]
+}

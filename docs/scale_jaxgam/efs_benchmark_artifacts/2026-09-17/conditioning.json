@@ -1,0 +1,28 @@
+{
+  "description": "Reporting-state Fisher plus penalty, reconstructed in transformed fitting coordinates; diagnostic, not captured pre-gdi solver factors. No causal error bound claimed.",
+  "data_sha256": "22291a4ce4d90220758ae9488d6a880643e75d49d47c809e9d5cf9fe7a1135d4",
+  "condition_x_setup": 5.3917343815365335,
+  "condition_x_fitting": 13.090527641327752,
+  "rank_x": 51,
+  "penalty_rank": 40,
+  "states": {
+    "jaxgam_efs": {
+      "condition_fisher_plus_penalty": 37751.88240734643,
+      "eigenvalue_min": 86.8366950371134,
+      "eigenvalue_max": 3278248.699676991,
+      "smoothing_ratio": 213876.09550024284,
+      "machine_epsilon_times_condition": 8.382601814315477e-12,
+      "h_symmetry_max_absolute": 2.2737367544323206e-13,
+      "rank_h": 51
+    },
+    "pinned_r_efs": {
+      "condition_fisher_plus_penalty": 37751.882434950705,
+      "eigenvalue_min": 86.83669497348068,
+      "eigenvalue_max": 3278248.699677509,
+      "smoothing_ratio": 213876.0965725899,
+      "machine_epsilon_times_condition": 8.382601820444858e-12,
+      "h_symmetry_max_absolute": 2.2737367544323206e-13,
+      "rank_h": 51
+    }
+  }
+}

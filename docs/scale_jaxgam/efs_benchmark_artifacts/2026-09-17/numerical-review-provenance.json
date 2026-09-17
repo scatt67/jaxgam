@@ -1,0 +1,14 @@
+{
+  "description": "Four separate attempted explanations/corrections in addition to saved-input provenance. Diagnostic timing excluded from performance observation.",
+  "input_sha256": "22291a4ce4d90220758ae9488d6a880643e75d49d47c809e9d5cf9fe7a1135d4",
+  "source_commit": "80a25dca1e97714dadc80e4766d9fabf6fb53487",
+  "image_id": "sha256:f4eae281f047815852f2819db0760054a22e93112c7a5dca4031beeee834d6ba",
+  "threads": 1,
+  "generator_script_sha256": "9d627c2b2224e47448f6c9842c679d1bf96bd6391693485b74e36ddbae8f9d77",
+  "conditioning_script_sha256": "ca54b86222e7298092c12a98c2bfee4819a674a7f9b76da82fa4e98feee069fb",
+  "files": {
+    "numerical-review.json": "ea95a534910afefd693543320cd97a7fa4ee78375c5cfad9b2c4b3d66192ed7d",
+    "conditioning.json": "93590664e201d3e921cfe7359c97ba15e90bf90061a1f3574e88daebd8a95303"
+  },
+  "reproduction": "See bounded numerical diagnostic procedure in efs_benchmark_observation_2026-09-17.md; tested worker/controller/RBridge functions are in recorded source."
+}

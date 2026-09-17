@@ -20,7 +20,11 @@ import pytest
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting import pirls as pirls_module
 from jaxgam.fitting.data import FittingData
-from jaxgam.fitting.efs_theta import _efs_nb_log_deviance, conditional_theta_nll
+from jaxgam.fitting.efs_theta import (
+    _efs_nb_deviance,
+    _efs_nb_log_deviance,
+    conditional_theta_nll,
+)
 from jaxgam.fitting.pirls import (
     _EFS_STATUS_BETA_STEP_FAILED,
     _EFS_STATUS_INVALID_INPUT,
@@ -38,7 +42,227 @@ from jaxgam.fitting.pirls import (
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import _AssertCollector, check_that, r_available
+from tests.r_bridge import RBridge
 from tests.tolerances import MODERATE, STRICT
+
+
+def test_efs_indefinite_observed_system_retries_positive_curvature_under_jit() -> None:
+    """Match gam.fit4's positive-row retry after an indefinite Newton system."""
+    X = jnp.eye(2)
+    penalty = 0.1 * jnp.eye(2)
+    observed_weight = jnp.asarray([-2.0, 3.0])
+    observed_response = jnp.asarray([4.0, 5.0])
+
+    def run():
+        def factors(_mu, _eta):
+            return _efs_observed_working_factors(
+                observed_weight,
+                observed_response,
+                observed_weight * observed_response,
+            )
+
+        def form_wls(current):
+            rhs = jnp.where(
+                current.use_weighted_response,
+                current.weighted_response,
+                current.weight * current.response,
+            )
+            return (current.weight[:, None] * X).T @ X, X.T @ rhs
+
+        return _efs_beta_step_with_recovery(
+            X=X,
+            S_lambda=penalty,
+            offset=jnp.zeros(2),
+            family=NegativeBinomial(theta=0.8),
+            beta=jnp.zeros(2),
+            eta=jnp.zeros(2),
+            mu=jnp.ones(2),
+            beta_old=jnp.zeros(2),
+            eta_old=jnp.zeros(2),
+            null_beta=jnp.zeros(2),
+            null_eta=jnp.zeros(2),
+            initial_start_retained=jnp.asarray(False),
+            iteration=jnp.asarray(0, dtype=jnp.int32),
+            baseline=jnp.asarray(100.0),
+            compute_working_factors=factors,
+            form_wls=form_wls,
+            compute_dev=lambda _mu, _eta: jnp.asarray(0.0),
+            max_recovery_halvings=100,
+        )
+
+    result = jax.jit(run)()
+    expected = np.linalg.solve(
+        np.diag([0.0, 3.0]) + 0.1 * np.eye(2), np.asarray([0.0, 15.0])
+    )
+    assert bool(result.accepted)
+    assert bool(result.factors_valid)
+    assert bool(result.solver_valid)
+    assert bool(result.positive_curvature_retry)
+    np.testing.assert_allclose(
+        result.beta, expected, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+def test_efs_observed_spd_skips_curvature_retry_under_jit() -> None:
+    """A valid observed solve does not report source fallback stabilization."""
+    X = jnp.eye(2)
+    penalty = 0.1 * jnp.eye(2)
+    observed_weight = jnp.asarray([2.0, 3.0])
+    observed_response = jnp.asarray([4.0, 5.0])
+
+    def run():
+        def factors(_mu, _eta):
+            return _efs_observed_working_factors(
+                observed_weight,
+                observed_response,
+                observed_weight * observed_response,
+            )
+
+        def form_wls(current):
+            rhs = jnp.where(
+                current.use_weighted_response,
+                current.weighted_response,
+                current.weight * current.response,
+            )
+            return (current.weight[:, None] * X).T @ X, X.T @ rhs
+
+        return _efs_beta_step_with_recovery(
+            X=X,
+            S_lambda=penalty,
+            offset=jnp.zeros(2),
+            family=NegativeBinomial(theta=0.8),
+            beta=jnp.zeros(2),
+            eta=jnp.zeros(2),
+            mu=jnp.ones(2),
+            beta_old=jnp.zeros(2),
+            eta_old=jnp.zeros(2),
+            null_beta=jnp.zeros(2),
+            null_eta=jnp.zeros(2),
+            initial_start_retained=jnp.asarray(False),
+            iteration=jnp.asarray(0, dtype=jnp.int32),
+            baseline=jnp.asarray(100.0),
+            compute_working_factors=factors,
+            form_wls=form_wls,
+            compute_dev=lambda _mu, _eta: jnp.asarray(0.0),
+            max_recovery_halvings=100,
+        )
+
+    result = jax.jit(run)()
+    expected = np.linalg.solve(
+        np.diag(np.asarray(observed_weight)) + 0.1 * np.eye(2),
+        np.asarray(observed_weight * observed_response),
+    )
+    assert bool(result.accepted)
+    assert not bool(result.positive_curvature_retry)
+    np.testing.assert_allclose(
+        result.beta, expected, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_nonlog_nb_near_boundary_observed_factors_match_pinned_r_strict() -> None:
+    """Raw valid eta keeps source derivatives below the family reporting floor."""
+    y = np.array([0.0, 0.0, 1.0, 5.0, 50.0, 4000.0])
+    mu = np.array([1e-12, 0.05, 0.9, 3.0, 1e3, 1e4])
+    weights = np.array([1.0, 0.7, 1.3, 2.0, 0.5, 1.1])
+    offset = np.array([0.013, 0.01, -0.02, 0.03, -0.04, 0.05])
+    bridge = RBridge(mode="subprocess")
+    collector = _AssertCollector()
+    for link in ("identity", "sqrt"):
+        family = NegativeBinomial(theta=2.7, link=link)
+        raw_eta = jnp.asarray(mu if link == "identity" else np.sqrt(mu))
+
+        @jax.jit
+        def factors(eta, log_theta, family=family):
+            return _efs_nb_observed_working_factors(
+                eta,
+                log_theta,
+                jnp.asarray(y),
+                jnp.asarray(weights),
+                jnp.asarray(offset),
+                family,
+            )
+
+        for theta in (0.1, 2.7, 1e6):
+            actual = factors(raw_eta, jnp.asarray([np.log(theta)]))
+            reference = bridge.efs_nb_working_factors(
+                link, y, mu, weights, theta, offset
+            )
+            collector.check(
+                f"{link} theta={theta:g} weight",
+                lambda a=actual.weight, e=reference["weight"]: (
+                    np.testing.assert_allclose(a, e, rtol=STRICT.rtol, atol=STRICT.atol)
+                ),
+            )
+            collector.check(
+                f"{link} theta={theta:g} weighted response",
+                lambda a=actual.weighted_response, e=reference["weighted_response"]: (
+                    np.testing.assert_allclose(a, e, rtol=STRICT.rtol, atol=STRICT.atol)
+                ),
+            )
+            collector.check(
+                f"{link} theta={theta:g} finite factors",
+                lambda a=actual: check_that(
+                    bool(a.valid),
+                    "near-boundary observed W/Wz must remain usable",
+                ),
+            )
+    collector.raise_if_any("nonlog NB near-boundary observed factors")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_nonlog_nb_finite_tail_deviance_derivatives_match_pinned_r_strict() -> None:
+    """Large valid means retain finite source deviance and eta derivatives."""
+    y = np.array([0.25, 0.0, 0.0])
+    mu = np.array([1e8, 1e16, 1e20])
+    weights = np.array([1.0, 0.7, 1.3])
+    theta = 2.7
+    bridge = RBridge(mode="subprocess")
+    collector = _AssertCollector()
+    for link in ("identity", "sqrt"):
+        family = NegativeBinomial(theta=theta, link=link)
+        eta = jnp.asarray(mu if link == "identity" else np.sqrt(mu))
+        log_theta = jnp.asarray([np.log(theta)])
+
+        def deviance(current_eta, log_theta=log_theta, family=family):
+            return _efs_nb_deviance(
+                current_eta,
+                log_theta,
+                jnp.asarray(y),
+                jnp.asarray(weights),
+                family,
+            )
+
+        actual_value = jax.jit(deviance)(eta)
+        actual_deta = jax.jit(jax.grad(deviance))(eta)
+        actual_deta2 = jnp.diag(jax.jit(jax.hessian(deviance))(eta))
+        reference = bridge.efs_nb_deviance_derivatives(link, y, mu, weights, theta)
+        collector.check(
+            f"{link} deviance",
+            lambda a=actual_value, e=reference["deviance"]: np.testing.assert_allclose(
+                a, np.sum(e), rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+        collector.check(
+            f"{link} first derivative",
+            lambda a=actual_deta, e=reference["deta"]: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+        collector.check(
+            f"{link} second derivative",
+            lambda a=actual_deta2, e=reference["deta2"]: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+        collector.check(
+            f"{link} finite",
+            lambda values=(actual_value, actual_deta, actual_deta2): check_that(
+                all(np.all(np.isfinite(np.asarray(value))) for value in values),
+                "valid NB tail values and derivatives must remain finite",
+            ),
+        )
+    collector.raise_if_any("nonlog NB finite tail deviance derivatives")
 
 
 def _fixture(*, fractional_below_one: bool = False):
@@ -285,6 +509,7 @@ def test_efs_theta_pirls_distinguishes_unrecoverable_beta_step(monkeypatch):
             factors_valid=jnp.array(True),
             solver_valid=jnp.array(True),
             failure_status=jnp.array(0, dtype=jnp.int32),
+            positive_curvature_retry=jnp.array(False),
         )
 
     monkeypatch.setattr(pirls_module, "_efs_beta_step_with_recovery", rejected_step)
@@ -314,6 +539,7 @@ def test_efs_theta_pirls_names_nonfinite_recovery_exhaustion(monkeypatch):
             failure_status=jnp.array(
                 _EFS_STATUS_NONFINITE_RECOVERY_FAILED, dtype=jnp.int32
             ),
+            positive_curvature_retry=jnp.array(False),
         )
 
     monkeypatch.setattr(

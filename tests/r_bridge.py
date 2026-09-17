@@ -321,11 +321,45 @@ class RBridge:
         historical ``nb()`` mapping when callers do not request a size.
         """
         if theta is not None:
-            if family != "nb":
-                raise ValueError("EFS theta is supported only for family='nb'")
             if not np.isfinite(theta) or theta <= 0:
                 raise ValueError("EFS NB theta must be finite and positive")
-            return f"nb(theta={float(theta)!r})"
+            nb_links = {
+                "nb": "log",
+                "nb_identity": "identity",
+                "nb_sqrt": "sqrt",
+            }
+            try:
+                link = nb_links[family]
+            except KeyError:
+                raise ValueError(
+                    "EFS theta is supported only for family='nb' or its named link keys"
+                ) from None
+            if family == "nb":
+                return f"nb(theta={float(theta)!r})"
+            return f"nb(theta={float(theta)!r}, link={link!r})"
+        regular_constructors = {
+            "gaussian": "gaussian",
+            "binomial": "binomial",
+            "poisson": "poisson",
+            "gamma": "Gamma",
+        }
+        r_links = {
+            "identity": "identity",
+            "log": "log",
+            "logit": "logit",
+            "inverse": "inverse",
+            "probit": "probit",
+            "cloglog": "cloglog",
+            "sqrt": "sqrt",
+            "inverse_squared": "1/mu^2",
+        }
+        for family_name, constructor in regular_constructors.items():
+            prefix = f"{family_name}_"
+            if family.startswith(prefix):
+                link = family.removeprefix(prefix)
+                if link not in r_links:
+                    break
+                return f"{constructor}(link={r_links[link]!r})"
         return self._get_subprocess_family(family)
 
     # ------------------------------------------------------------------ #
@@ -639,6 +673,116 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
             theta,
         )
 
+    def efs_nb_working_factors(
+        self,
+        link: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weights: np.ndarray,
+        theta: float,
+        offset: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned ``dDeta`` observed W and Wz for NB links."""
+        self._require_pinned_efs_versions()
+        if link not in {"identity", "sqrt"}:
+            raise ValueError("NB working-factor oracle link must be identity or sqrt")
+        arrays = [
+            np.asarray(value, dtype=np.float64) for value in (y, mu, weights, offset)
+        ]
+        if (
+            any(value.ndim != 1 for value in arrays)
+            or len({len(value) for value in arrays}) != 1
+        ):
+            raise ValueError("NB working-factor oracle inputs must be aligned vectors")
+        if not np.isfinite(theta) or theta <= 0.0:
+            raise ValueError(
+                "NB working-factor oracle theta must be finite and positive"
+            )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            output_path = os.path.join(tmpdir, "factors.csv")
+            script_path = os.path.join(tmpdir, "factors.R")
+            pd.DataFrame(
+                {
+                    "y": arrays[0],
+                    "mu": arrays[1],
+                    "wt": arrays[2],
+                    "offset": arrays[3],
+                }
+            ).to_csv(data_path, index=False)
+            Path(script_path).write_text(
+                "\n".join(
+                    [
+                        "library(mgcv)",
+                        f"data <- read.csv({data_path!r})",
+                        f"family <- mgcv::nb(link={link!r})",
+                        "family <- mgcv:::fix.family.link(family)",
+                        "eta <- family$linkfun(data$mu)",
+                        f"d <- mgcv:::dDeta(data$y, data$mu, data$wt, log({theta!r}), family, deriv=0)",
+                        "w <- 0.5 * d$Deta2",
+                        "wz <- w * (eta - data$offset) - 0.5 * d$Deta",
+                        f"write.csv(data.frame(weight=w, weighted_response=wz), {output_path!r}, row.names=FALSE)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self._run_efs_rscript(script_path)
+            result = pd.read_csv(output_path)
+        return {
+            "weight": result["weight"].to_numpy(dtype=np.float64),
+            "weighted_response": result["weighted_response"].to_numpy(dtype=np.float64),
+        }
+
+    def efs_nb_deviance_derivatives(
+        self,
+        link: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weights: np.ndarray,
+        theta: float,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned NB deviance and its first two eta derivatives."""
+        self._require_pinned_efs_versions()
+        if link not in {"identity", "sqrt"}:
+            raise ValueError("NB deviance oracle link must be identity or sqrt")
+        arrays = [np.asarray(value, dtype=np.float64) for value in (y, mu, weights)]
+        if (
+            any(value.ndim != 1 for value in arrays)
+            or len({len(value) for value in arrays}) != 1
+        ):
+            raise ValueError("NB deviance oracle inputs must be aligned vectors")
+        if not np.isfinite(theta) or theta <= 0.0:
+            raise ValueError("NB deviance oracle theta must be finite and positive")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "data.csv")
+            output_path = os.path.join(tmpdir, "deviance.csv")
+            script_path = os.path.join(tmpdir, "deviance.R")
+            pd.DataFrame({"y": arrays[0], "mu": arrays[1], "wt": arrays[2]}).to_csv(
+                data_path, index=False
+            )
+            Path(script_path).write_text(
+                "\n".join(
+                    [
+                        "options(digits=17)",
+                        "library(mgcv)",
+                        f"data <- read.csv({data_path!r})",
+                        f"family <- mgcv::nb(link={link!r})",
+                        "family <- mgcv:::fix.family.link(family)",
+                        f"d <- mgcv:::dDeta(data$y, data$mu, data$wt, log({theta!r}), family, deriv=0)",
+                        "dev <- family$dev.resids(data$y, data$mu, data$wt, log("
+                        f"{theta!r}))",
+                        f"write.csv(data.frame(deviance=dev, deta=d$Deta, deta2=d$Deta2), {output_path!r}, row.names=FALSE)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self._run_efs_rscript(script_path)
+            result = pd.read_csv(output_path)
+        return {
+            name: result[name].to_numpy(dtype=np.float64)
+            for name in ("deviance", "deta", "deta2")
+        }
+
     def efs_diagnostics(
         self,
         formula: str,
@@ -675,6 +819,142 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
             initial_beta,
             beta_old_init,
         )
+
+    def efs_regular_gdi1_diagnostics(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        penalty: np.ndarray,
+        start: np.ndarray,
+        null_coef: np.ndarray,
+        *,
+        family: str = "gaussian",
+        link: str = "log",
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+        scale: float = 1.0,
+        tolerance: float = 1e-7,
+    ) -> dict[str, Any]:
+        """Trace one pinned regular-family ``gam.fit3`` final ``gdi1`` solve.
+
+        This narrow layer oracle uses ``Rscript`` in either bridge mode.  It
+        accepts one already materialized positive-semidefinite penalty so tests
+        can distinguish the PIRLS stopping state, C_gdi1 candidate state, and
+        returned feasible state without constructing a formula or outer loop.
+        """
+        self._require_pinned_efs_versions()
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        penalty = np.asarray(penalty, dtype=np.float64)
+        start = np.asarray(start, dtype=np.float64)
+        null_coef = np.asarray(null_coef, dtype=np.float64)
+        if weights is None:
+            weights = np.ones_like(y)
+        if offset is None:
+            offset = np.zeros_like(y)
+        weights = np.asarray(weights, dtype=np.float64)
+        offset = np.asarray(offset, dtype=np.float64)
+        if (
+            X.ndim != 2
+            or y.shape != (X.shape[0],)
+            or penalty.shape != (X.shape[1], X.shape[1])
+            or start.shape != (X.shape[1],)
+            or null_coef.shape != (X.shape[1],)
+            or weights.shape != y.shape
+            or offset.shape != y.shape
+        ):
+            raise ValueError("Regular gdi1 oracle inputs have incompatible shapes")
+        if not all(
+            np.all(np.isfinite(value))
+            for value in (X, y, penalty, start, null_coef, weights, offset)
+        ):
+            raise ValueError("Regular gdi1 oracle requires finite array inputs")
+        if np.any(weights <= 0.0) or not np.isfinite(scale) or scale <= 0.0:
+            raise ValueError("Regular gdi1 oracle requires positive weights and scale")
+        if not np.isfinite(tolerance) or tolerance <= 0.0:
+            raise ValueError("Regular gdi1 oracle requires a positive tolerance")
+        family_expressions = {
+            ("gaussian", "log"): "gaussian('log')",
+            ("poisson", "identity"): "poisson('identity')",
+        }
+        try:
+            family_expression = family_expressions[(family, link)]
+        except KeyError:
+            raise ValueError(
+                "Regular gdi1 oracle supports Gaussian/log or Poisson/identity"
+            ) from None
+        np.testing.assert_allclose(penalty, penalty.T, rtol=0.0, atol=1e-14)
+        if np.min(np.linalg.eigvalsh(penalty)) < -1e-12:
+            raise ValueError(
+                "Regular gdi1 oracle penalty must be positive semidefinite"
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            for name, value in (
+                ("X", X),
+                ("y", y),
+                ("penalty", penalty),
+                ("start", start),
+                ("null", null_coef),
+                ("weights", weights),
+                ("offset", offset),
+            ):
+                np.savetxt(base / f"{name}.csv", value, delimiter=",")
+            script = "\n".join(
+                [
+                    "library(mgcv)",
+                    f"base <- {str(base)!r}",
+                    f"n <- {X.shape[0]}L; p <- {X.shape[1]}L",
+                    "read.matrix <- function(name, nr, nc) matrix(scan(file.path(base, paste0(name, '.csv')), sep=',', quiet=TRUE), nr, nc, byrow=TRUE)",
+                    "read.vector <- function(name) scan(file.path(base, paste0(name, '.csv')), sep=',', quiet=TRUE)",
+                    "X <- read.matrix('X', n, p); y <- read.vector('y'); S <- read.matrix('penalty', p, p)",
+                    "start <- read.vector('start'); null.coef <- read.vector('null'); weights <- read.vector('weights'); offset <- read.vector('offset')",
+                    "ee <- eigen((S + t(S))/2, symmetric=TRUE); keep <- ee$values > max(ee$values) * .Machine$double.eps^.75",
+                    "if (!any(keep)) stop('regular gdi1 oracle requires a nonzero penalty')",
+                    "Y <- ee$vectors[, keep, drop=FALSE]; Z <- ee$vectors[, !keep, drop=FALSE]; vals <- ee$values[keep]",
+                    "B <- sweep(Y, 2, sqrt(vals), '*'); Eb <- t(B); U1 <- cbind(Y, Z); Mp <- ncol(Z); UrS <- list(t(Y) %*% B)",
+                    f"family <- mgcv:::fix.family.ls(mgcv:::fix.family.var(mgcv:::fix.family.link({family_expression})))",
+                    "trace.env <- new.env(parent=asNamespace('mgcv'))",
+                    "fit3.source <- capture.output(mgcv:::gam.fit3); fit3.source <- fit3.source[seq_len(tail(which(fit3.source == '}'), 1L))]",
+                    "fit3.source[1] <- sub('^function', 'gam.fit3.trace <- function', fit3.source[1])",
+                    "pre.anchor <- '        wdr <- dev.resids(y, mu, weights)'",
+                    "if (sum(fit3.source == pre.anchor) != 1L) stop('pinned gam.fit3 pre-gdi1 anchor changed')",
+                    "fit3.source[fit3.source == pre.anchor] <- paste0('        trace.env$pre.beta <- drop(T %*% start); trace.env$pre.eta <- eta; trace.env$pre.mu <- mu; trace.env$pre.deviance <- dev; trace.env$pre.pdev <- pdev\\n', pre.anchor)",
+                    "gdi.anchor <- '        coef <- oo$beta'",
+                    "if (sum(fit3.source == gdi.anchor) != 1L) stop('pinned gam.fit3 gdi1 anchor changed')",
+                    "fit3.source[fit3.source == gdi.anchor] <- paste0('        trace.env$gdi.beta <- drop(T %*% oo$beta); trace.env$gdi.penalty <- oo$conv.tol\\n', gdi.anchor)",
+                    "eval(parse(text=fit3.source), envir=trace.env)",
+                    f"fit <- trace.env$gam.fit3.trace(X, y, sp=0, Eb=Eb, UrS=UrS, weights=weights, start=start, offset=offset, U1=U1, Mp=Mp, family=family, control=gam.control(maxit=100, epsilon={float(tolerance)!r}), intercept=TRUE, deriv=0, gamma=1, scale={float(scale)!r}, scoreType='EFS', null.coef=null.coef, n.true=n)",
+                    "write.csv(data.frame(name=c('pre_deviance','pre_pdev','gdi_penalty','reported_scale','score'), value=c(trace.env$pre.deviance,trace.env$pre.pdev,trace.env$gdi.penalty,fit$scale.est,fit$REML)), file.path(base, 'scalars.csv'), row.names=FALSE)",
+                    "write.csv(data.frame(pre_beta=trace.env$pre.beta,gdi_beta=trace.env$gdi.beta,selected_beta=fit$coefficients), file.path(base, 'coefficients.csv'), row.names=FALSE)",
+                    "write.csv(data.frame(pre_eta=trace.env$pre.eta,pre_mu=trace.env$pre.mu,selected_eta=fit$linear.predictors,selected_mu=fit$fitted.values,observed_weight=fit$working.weights,fisher_weight=fit$weights), file.path(base, 'states.csv'), row.names=FALSE)",
+                    "write.csv(as.data.frame(crossprod(X, fit$working.weights * X)), file.path(base, 'XtWX.csv'), row.names=FALSE)",
+                    "write.csv(as.data.frame(crossprod(X, fit$weights * X)), file.path(base, 'XtWX_fisher.csv'), row.names=FALSE)",
+                ]
+            )
+            script_path = base / "regular_gdi1.R"
+            script_path.write_text(script, encoding="utf-8")
+            self._run_efs_rscript(str(script_path))
+            scalars = pd.read_csv(base / "scalars.csv").set_index("name")["value"]
+            coefficients = pd.read_csv(base / "coefficients.csv")
+            states = pd.read_csv(base / "states.csv")
+            return {
+                **{name: float(scalars[name]) for name in scalars.index},
+                **{
+                    name: coefficients[name].to_numpy(dtype=np.float64)
+                    for name in coefficients.columns
+                },
+                **{
+                    name: states[name].to_numpy(dtype=np.float64)
+                    for name in states.columns
+                },
+                "XtWX": pd.read_csv(base / "XtWX.csv").to_numpy(dtype=np.float64),
+                "XtWX_fisher": pd.read_csv(base / "XtWX_fisher.csv").to_numpy(
+                    dtype=np.float64
+                ),
+                "source_commit": _PINNED_MGCV_SOURCE_COMMIT,
+            }
 
     @staticmethod
     def _require_pinned_efs_versions() -> None:

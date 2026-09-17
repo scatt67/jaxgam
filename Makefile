@@ -96,6 +96,14 @@ pre-commit-install: ## install pre-commit hooks
 benchmark-nb-lgamma: ## benchmark NB lgamma derivative prefix kernel
 	$(UV) run python scripts/benchmark_nb_lgamma_derivatives.py
 
+.PHONY: benchmark-efs
+benchmark-efs: ## benchmark dense Newton/EFS against pinned R EFS (OUTPUT=/tmp/jaxgam-efs-benchmark)
+	$(UV) run python scripts/benchmark_efs.py --output-dir $${OUTPUT:-/tmp/jaxgam-efs-benchmark}
+
+.PHONY: benchmark-efs-smoke
+benchmark-efs-smoke: ## run the small end-to-end dense EFS benchmark gate
+	$(UV) run python scripts/benchmark_efs.py --smoke --warm-repeats 1 --comparison-tolerance MODERATE --output-dir $${OUTPUT:-/tmp/jaxgam-efs-benchmark-smoke}
+
 .PHONY: efs-fixture
 efs-fixture: ## generate a reproducible pinned EFS oracle fixture (OUTPUT=path.csv)
 	@test -n "$(OUTPUT)" || (echo "Usage: make efs-fixture OUTPUT=/tmp/efs.csv" && exit 1)

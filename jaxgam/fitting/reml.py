@@ -167,6 +167,35 @@ def _criterion_core(
     penalty = beta @ S_lambda @ beta
     Dp = deviance + penalty
 
+    log_det_H, log_det_S = _criterion_log_determinants(
+        log_lambda,
+        XtWX,
+        S_lambda,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+        rank_deficit,
+    )
+
+    return Dp / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
+
+
+def _criterion_log_determinants(
+    log_lambda: jax.Array,
+    XtWX: jax.Array,
+    S_lambda: jax.Array,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    rank_deficit: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Return the two log determinants used by scalar REML scores."""
     H = XtWX + S_lambda
     if rank_deficit == 0:
         # Diagonal preconditioning: scale H to unit diagonal before logdet.
@@ -201,7 +230,7 @@ def _criterion_core(
         multi_block_proj_S,
     )
 
-    return Dp / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
+    return log_det_H, log_det_S
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +440,47 @@ def reml_criterion(
         multi_block_proj_S,
         rank_deficit,
     )
+    return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
+
+
+def reml_criterion_from_penalized_deviance(
+    log_lambda: jax.Array,
+    XtWX: jax.Array,
+    penalized_deviance: jax.Array,
+    ls_sat: jax.Array,
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
+    phi: jax.Array,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    rank_deficit: int = 0,
+) -> jax.Array:
+    """Evaluate REML from an explicit source-provenance ``Dp`` value.
+
+    Pinned ``gam.fit3`` keeps the deviance from its converged PIRLS state but
+    adds ``C_gdi1``'s final weighted-solve penalty.  That combination cannot be
+    represented faithfully by a single coefficient/deviance pair when the
+    final candidate is rejected on a family-domain check, so the EFS adapter
+    passes the resulting penalized deviance explicitly through this function.
+    """
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
+    log_det_H, log_det_S = _criterion_log_determinants(
+        log_lambda,
+        XtWX,
+        S_lambda,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+        rank_deficit,
+    )
+    core = penalized_deviance / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
 
