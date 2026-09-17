@@ -650,11 +650,35 @@ class ExponentialFamily(ABC):
         """
         return np.asarray(self._initialize_impl(y, prior_weight), dtype=float)
 
+    def execution_initial_input_ok_from_summary_cpu(
+        self,
+        y: np.ndarray,
+        prior_weight: np.ndarray,
+        summary: object | None,  # noqa: ARG002
+    ) -> np.ndarray:
+        """Validate initialized input using finalized global family metadata."""
+        return self.execution_initial_input_ok_cpu(y, prior_weight)
+
+    def execution_initial_mustart_from_summary_cpu(
+        self,
+        y: np.ndarray,
+        prior_weight: np.ndarray,
+        summary: object | None,  # noqa: ARG002
+    ) -> np.ndarray:
+        """Build one mustart batch using finalized global family metadata.
+
+        Families whose source initializer needs a whole-response statistic
+        override this hook. The default preserves the existing initializer.
+        """
+        return self.execution_initial_mustart_cpu(y, prior_weight)
+
     def initial_working_state_cpu(
         self,
         y: np.ndarray,
         prior_weight: np.ndarray,
         valid: np.ndarray,
+        *,
+        summary: object | None = None,
     ) -> FamilyInitialWorkingState:
         """Build one masked, exact-R-style first ``mustart``/``eta`` state.
 
@@ -672,11 +696,15 @@ class ExponentialFamily(ABC):
 
         padding = self.execution_padding()
         normalized_y = self.execution_initial_response_cpu(y, prior_weight)
-        row_input_ok = self.execution_initial_input_ok_cpu(normalized_y, prior_weight)
+        row_input_ok = self.execution_initial_input_ok_from_summary_cpu(
+            normalized_y, prior_weight, summary
+        )
         real_input = valid & row_input_ok
         y_safe = np.where(real_input, normalized_y, padding.response)
         weight_safe = np.where(real_input, prior_weight, 0.0)
-        mustart_raw = self.execution_initial_mustart_cpu(y_safe, weight_safe)
+        mustart_raw = self.execution_initial_mustart_from_summary_cpu(
+            y_safe, weight_safe, summary
+        )
         eta_raw = np.asarray(self.link.initial_link_cpu(mustart_raw), dtype=float)
         mu_raw = np.asarray(self.link.inverse(eta_raw), dtype=float)
 

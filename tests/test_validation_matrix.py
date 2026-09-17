@@ -783,6 +783,67 @@ class TestValidationMatrix:
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize("link", ["log", "inverse"])
+def test_public_dense_efs_gaussian_patched_response_matches_pinned_r(
+    r_bridge, link: str
+) -> None:
+    """Global fix.family starts must finish through the public EFS path."""
+    rng = np.random.default_rng(7321)
+    x = np.linspace(-0.7, 0.8, 83)
+    y = np.exp(0.2 + 0.3 * x) + rng.normal(0.0, 0.08, len(x))
+    y[[2, 15]] = [-0.2, -0.05] if link == "log" else 0.0
+    weights = 0.4 + rng.uniform(size=len(x))
+    weights[8] = 0.0
+    offset = 0.03 * np.sin(x)
+    data = pd.DataFrame({"x": x, "y": y, "w": weights, "off": offset})
+    formula = "y ~ s(x, bs='cr', k=7)"
+    family = Gaussian(link)
+    setup = ModelSetup.build(
+        parse_formula(formula), data, weights=weights, offset=offset
+    )
+    initial = efs_initial_log_lambda(setup, family)
+    initial_scale = efs_initial_log_scale(setup, family)
+    result = GAM(formula, family=family, optimizer="efs").fit(
+        data, weights=weights, offset=offset
+    )
+    reference = r_bridge.fit_efs(
+        formula,
+        data,
+        f"gaussian_{link}",
+        weights="w",
+        offset="off",
+        initial_smoothing=np.exp(np.asarray(initial)),
+        initial_scale=float(np.exp(initial_scale)),
+    )
+    collector = _AssertCollector()
+    for label, actual, expected in (
+        ("coefficients", result.coefficients, reference["coefficients"]),
+        ("fitted values", result.fitted_values, reference["fitted_values"]),
+        ("deviance", result.deviance, reference["deviance"]),
+        ("score", result.score, reference["reml_score"]),
+        ("smoothing", result.smoothing_params, reference["smoothing_params"]),
+        ("edf", result.edf, reference["edf"]),
+        ("edf total", result.edf_total, reference["edf_total"]),
+        ("covariance", result.Vp, reference["Vp"]),
+        ("null deviance", result.null_deviance, reference["null_deviance"]),
+        ("reported Fletcher scale", result.scale, reference["scale"]),
+    ):
+        collector.check(
+            label,
+            lambda a=actual, e=expected: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.check(
+        "strategy", lambda: np.testing.assert_equal(result.lambda_strategy, "efs_reml")
+    )
+    collector.check(
+        "convergence", lambda: np.testing.assert_equal(result.converged, True)
+    )
+    collector.raise_if_any(f"public dense Gaussian/{link} patched-response EFS")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 def test_public_dense_efs_gaussian_inverse_result_matches_pinned_r(r_bridge) -> None:
     """Broad public-result parity belongs in the optimizer-aware matrix."""
     rng = np.random.default_rng(7712)
