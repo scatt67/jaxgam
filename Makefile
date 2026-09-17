@@ -51,6 +51,15 @@ test-discrete: docker-build ## run exact discrete representation/operator tests 
 		tests/test_data/test_discretize.py tests/test_formula/test_discrete_design.py \
 		tests/test_fitting/test_discrete_ops.py -x --tb=short -v
 
+.PHONY: test-efs-provider
+test-efs-provider: docker-build ## run provider sequence and dense EFS compatibility gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_execution/test_efs_provider.py \
+		tests/test_execution/test_efs.py \
+		tests/test_execution/test_efs_public_api.py \
+		tests/test_execution/test_efs_regular_links.py \
+		tests/test_execution/test_efs_nb_links.py -x --tb=short -q
+
 .PHONY: test-nb-stream
 test-nb-stream: docker-build ## run internal fixed/trial-theta NB coefficient gates
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
