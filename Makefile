@@ -51,6 +51,11 @@ test-discrete: docker-build ## run exact discrete representation/operator tests 
 		tests/test_data/test_discretize.py tests/test_formula/test_discrete_design.py \
 		tests/test_fitting/test_discrete_ops.py -x --tb=short -v
 
+.PHONY: test-efs-factor
+test-efs-factor: docker-build ## run exact factor-action EFS contractions and dense kernel compatibility
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_fitting/test_efs_factor.py tests/test_fitting/test_efs.py -x --tb=short -q
+
 .PHONY: test-efs-provider
 test-efs-provider: docker-build ## run provider sequence and dense EFS compatibility gates
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
