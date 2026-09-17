@@ -1022,6 +1022,88 @@ class RBridge:
             dtype=np.float64,
         )
 
+    def nb_working_source_factors(
+        self,
+        link: str,
+        theta: float,
+        mu: np.ndarray,
+        eta: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        *,
+        direct_design: np.ndarray | None = None,
+        direct_penalty: np.ndarray | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate pinned ``dDeta`` and source positive-observed retry in R."""
+        self._require_rpy2()
+        base = self._ro.baseenv
+        mu_r, eta_r, y_r, weight_r, offset_r = (
+            self._to_r_vector(values) for values in (mu, eta, y, weight, offset)
+        )
+        family = self._call_internal(
+            "fix.family.link", self._mgcv.nb(theta=theta, link=link)
+        )
+        derivatives = self._call_internal(
+            "dDeta",
+            y_r,
+            mu_r,
+            weight_r,
+            self._base.log(self._to_r_vector([theta])),
+            family,
+            0,
+        )
+        half = self._to_r_vector([0.5])
+        weight_observed = base["*"](half, derivatives.rx2("Deta2"))
+        fisher = base["*"](half, derivatives.rx2("EDeta2"))
+        centered_eta = base["-"](eta_r, offset_r)
+        weighted_response = base["-"](
+            base["*"](weight_observed, centered_eta),
+            base["*"](half, derivatives.rx2("Deta")),
+        )
+        response = base["-"](centered_eta, derivatives.rx2("Deta.Deta2"))
+        deviance = self._base.sum(family.rx2("dev.resids")(y_r, mu_r, weight_r))
+        invalid = base["|"](
+            base["!"](base["is.finite"](weight_observed)),
+            base["!"](base["is.finite"](response)),
+        )
+        retry_invalid = base["|"](
+            base["!"](base["is.finite"](weight_observed)),
+            base["<="](weight_observed, 0),
+        )
+        retried_weight = base["ifelse"](
+            retry_invalid, self._to_r_vector([0.0]), weight_observed
+        )
+        retried_response = base["-"](
+            base["*"](retried_weight, centered_eta),
+            base["*"](half, derivatives.rx2("Deta")),
+        )
+        good = base["&"](
+            base["is.finite"](retried_weight),
+            base["is.finite"](retried_response),
+        )
+        output: dict[str, Any] = {
+            "w": np.asarray(weight_observed).copy(),
+            "fisher": np.asarray(fisher).copy(),
+            "wz": np.asarray(weighted_response).copy(),
+            "z": np.asarray(response).copy(),
+            "dev": float(deviance[0]),
+            "use.wy": bool(self._base.any(invalid)[0]),
+            "retry_w": np.asarray(retried_weight).copy(),
+            "retry_wz": np.asarray(retried_response).copy(),
+            "good.count": int(self._base.sum(good)[0]),
+        }
+        if direct_design is not None:
+            if direct_penalty is None:
+                raise ValueError("direct_penalty is required with direct_design")
+            design_r = self._to_r_matrix(direct_design)
+            penalty_r = self._to_r_matrix(direct_penalty)
+            gram = self._base.crossprod(design_r, base["*"](retried_weight, design_r))
+            rhs = self._base.crossprod(design_r, retried_response)
+            beta = self._base.solve(base["+"](gram, penalty_r), rhs)
+            output["beta"] = np.asarray(beta).ravel().copy()
+        return output
+
     def binomial_likelihood_aic(
         self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
     ) -> np.ndarray:
