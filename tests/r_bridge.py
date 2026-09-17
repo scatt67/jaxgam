@@ -727,6 +727,41 @@ class RBridge:
             )[0]
         )
 
+    def source_gaussian_aic(
+        self, response: np.ndarray, mean: np.ndarray, weights: np.ndarray
+    ) -> float:
+        """Evaluate stats Gaussian raw AIC, including zero-weight boundaries."""
+        self._require_rpy2()
+        y = np.asarray(response, dtype=np.float64)
+        mu = np.asarray(mean, dtype=np.float64)
+        w = np.asarray(weights, dtype=np.float64)
+        if y.ndim != 1 or mu.shape != y.shape or w.shape != y.shape:
+            raise ValueError("Gaussian AIC oracle vectors must align")
+        family = self._stats.gaussian()
+        y_r, mu_r, w_r = map(self._to_r_vector, (y, mu, w))
+        deviance = self._base.sum(family.rx2("dev.resids")(y_r, mu_r, w_r))
+        result = family.rx2("aic")(
+            y_r, self._to_r_vector(np.ones(len(y))), mu_r, w_r, deviance
+        )
+        return float(result[0])
+
+    def source_gaussian_saturated_likelihood(
+        self, response: np.ndarray, weights: np.ndarray, scale: float
+    ) -> np.ndarray:
+        """Evaluate mgcv's patched Gaussian saturated likelihood derivatives."""
+        self._require_rpy2()
+        y = np.asarray(response, dtype=np.float64)
+        w = np.asarray(weights, dtype=np.float64)
+        if y.ndim != 1 or w.shape != y.shape or not np.isfinite(scale) or scale <= 0:
+            raise ValueError("Gaussian likelihood oracle inputs are invalid")
+        family = self._call_internal("fix.family.ls", self._stats.gaussian())
+        return np.asarray(
+            family.rx2("ls")(
+                self._to_r_vector(y), self._to_r_vector(w), len(y), float(scale)
+            ),
+            dtype=np.float64,
+        ).copy()
+
     def source_gaussian_initial_values(
         self, response: np.ndarray, link: str
     ) -> tuple[float, np.ndarray]:
