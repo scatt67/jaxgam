@@ -826,6 +826,60 @@ class RBridge:
             dtype=np.float64,
         )
 
+    def binomial_likelihood_aic(
+        self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
+    ) -> np.ndarray:
+        """Return pinned saturated likelihood and binomial AIC for one response."""
+        self._require_rpy2()
+        y_r, weight_r, mu_r = (self._to_r_vector(values) for values in (y, weight, mu))
+        trials = self._base.rep(1.0, times=len(y))
+        family = self._stats.binomial()
+        saturated = self._call_internal("fix.family.ls", family).rx2("ls")(
+            y_r, weight_r, trials, 1
+        )
+        aic = family.rx2("aic")(y_r, trials, mu_r, weight_r, 0)
+        return np.asarray([saturated[0], aic[0]], dtype=np.float64)
+
+    def binomial_deviance_curvature(
+        self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
+    ) -> np.ndarray:
+        """Evaluate stats binomial deviance and direct mean-scale curvature in R."""
+        self._require_rpy2()
+        y_r, weight_r, mu_r = (self._to_r_vector(values) for values in (y, weight, mu))
+        base = self._ro.baseenv
+        one = self._to_r_vector([1.0])
+        squared_mu = base["^"](mu_r, 2)
+        squared_complement = base["^"](base["-"](one, mu_r), 2)
+        curvature = base["*"](
+            weight_r,
+            base["+"](
+                base["/"](y_r, squared_mu),
+                base["/"](base["-"](one, y_r), squared_complement),
+            ),
+        )
+        deviance = self._stats.binomial().rx2("dev.resids")(y_r, mu_r, weight_r)
+        return np.column_stack((np.asarray(deviance), np.asarray(curvature)))
+
+    def binomial_aic_rows(
+        self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
+    ) -> np.ndarray:
+        """Call stats binomial AIC independently on each source row."""
+        self._require_rpy2()
+        aic = self._stats.binomial().rx2("aic")
+        return np.asarray(
+            [
+                aic(
+                    self._to_r_vector(y[index : index + 1]),
+                    self._to_r_vector([1.0]),
+                    self._to_r_vector(mu[index : index + 1]),
+                    self._to_r_vector(weight[index : index + 1]),
+                    0,
+                )[0]
+                for index in range(len(y))
+            ],
+            dtype=np.float64,
+        )
+
     def regular_first_iteration_source(
         self, family_name: str, link: str, y: np.ndarray
     ) -> dict[str, np.ndarray]:
