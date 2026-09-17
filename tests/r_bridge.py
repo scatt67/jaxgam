@@ -20,8 +20,10 @@ import hashlib
 import os
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
@@ -296,6 +298,100 @@ class RBridge:
             family=r_family,
             method=method,
         )
+
+    def benchmark_efs(
+        self,
+        formula: str,
+        data_path: Path,
+        initial_sp: np.ndarray,
+        *,
+        repeats: int,
+        threads: int,
+        pirls_tolerance: float,
+        pirls_max_iter: int,
+        log_lambda_max: float,
+        score_tolerance: float,
+    ) -> dict[str, Any]:
+        """Measure repeated Poisson EFS fits of the saved benchmark input.
+
+        R still reads the identical saved CSV. Formula, data, family and
+        controls are prepared once; timings include the synchronous rpy2 call
+        boundary and the complete R fit, with result extraction afterward.
+        """
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        self._require_rpy2()
+        if repeats < 1 or threads < 1:
+            raise ValueError("Benchmark repeats and threads must be positive.")
+        r_data = self._utils.read_csv(str(data_path))
+        r_formula = self._ro.Formula(formula)
+        r_family = self._stats.poisson()
+        r_control = self._mgcv.gam_control(
+            epsilon=pirls_tolerance,
+            maxit=pirls_max_iter,
+            nthreads=threads,
+            **{"efs.lspmax": log_lambda_max, "efs.tol": score_tolerance},
+        )
+        initial = self._ro.ListVector(
+            {"sp": self._to_r_vector(initial_sp), "scale": self._ro.FloatVector([1.0])}
+        )
+        durations: list[float] = []
+        validity: list[bool] = []
+        for _ in range(repeats + 1):
+            start = time.perf_counter()
+            try:
+                model = self._mgcv.gam(
+                    r_formula,
+                    data=r_data,
+                    family=r_family,
+                    method="REML",
+                    optimizer="efs",
+                    scale=1.0,
+                    control=r_control,
+                    **{"in.out": initial},
+                )
+            except RRuntimeError as error:
+                raise RBridgeError(f"Pinned R benchmark failed: {error}") from error
+            durations.append(time.perf_counter() - start)
+            outer = model.rx2("outer.info")
+            converged = (
+                bool(model.rx2("converged")[0])
+                and str(outer.rx2("conv")[0]) == "full convergence"
+            )
+            finite = all(
+                np.all(np.isfinite(np.asarray(model.rx2(name), dtype=np.float64)))
+                for name in (
+                    "coefficients",
+                    "fitted.values",
+                    "sp",
+                    "edf",
+                    "Vp",
+                    "linear.predictors",
+                    "deviance",
+                    "gcv.ubre",
+                    "scale",
+                )
+            )
+            validity.append(bool(converged and finite))
+        summary = self._call_internal("summary.gam", model)
+        return {
+            "cold_seconds": durations[0],
+            "warm_seconds": durations[1:],
+            "validity": validity,
+            "result": {
+                "coefficients": np.asarray(model.rx2("coefficients")).tolist(),
+                "fitted_values": np.asarray(model.rx2("fitted.values")).tolist(),
+                "smoothing_params": np.asarray(model.rx2("sp")).tolist(),
+                "edf": np.asarray(summary.rx2("edf")).tolist(),
+                "deviance": float(model.rx2("deviance")[0]),
+                "score": float(model.rx2("gcv.ubre")[0]),
+                "scale": float(model.rx2("scale")[0]),
+                "outer_iterations": int(outer.rx2("iter")[0]),
+                "converged": converged,
+                "convergence_info": str(outer.rx2("conv")[0]),
+            },
+            "session_info": list(self._utils.capture_output(self._utils.sessionInfo())),
+        }
 
     def _get_r_family_rpy2(self, family: str) -> Any:
         """Map a Python family string to an R family function call."""
