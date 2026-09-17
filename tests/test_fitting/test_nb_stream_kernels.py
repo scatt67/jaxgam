@@ -118,7 +118,7 @@ def test_batch_reduction_theta_isolation_and_padding(link):
         summary.deviance, full.deviance, rtol=STRICT.rtol, atol=STRICT.atol
     )
     assert summary.domain_ok
-    assert len(jax.tree_util.tree_leaves(summary)) == 5
+    assert len(jax.tree_util.tree_leaves(summary)) == 7
     changed = _batch(link, 100.0, mu, y)
     assert not np.allclose(changed.fisher_weight, full.fisher_weight)
     repeated = _batch(link, 0.8, mu, y)
@@ -163,16 +163,16 @@ def test_zero_weight_global_direct_selection_and_empty_neutrality():
     leaf = nb_working_summary(empty)
     assert leaf.domain_ok
     assert leaf.deviance == 0
-    assert leaf.direct_count == 0
+    assert leaf.direct_informative_count == 0
     assert not leaf.requires_direct_response
     all_zero = _batch("sqrt", 2.0, [1.0, 2.0], [0.0, 7.0], wt=[0.0, 0.0])
     zero_summary = nb_working_summary(all_zero)
-    assert zero_summary.normal_count == 0
-    assert zero_summary.direct_count == 0
+    assert zero_summary.normal_informative_count == 0
+    assert zero_summary.direct_informative_count == 0
     assert zero_summary.deviance == 0
     merged = jax.jit(merge_nb_working_summaries)(leaf, zero_summary)
     assert merged.requires_direct_response
-    assert merged.direct_count == 0
+    assert merged.direct_informative_count == 0
 
 
 def test_validation_fail_closed():
@@ -210,7 +210,8 @@ def test_zero_curvature_direct_rhs_and_family_count_metadata():
     )
     assert G[0, 0] == 0
     np.testing.assert_allclose(rhs, [-0.5], rtol=STRICT.rtol, atol=STRICT.atol)
-    assert nb_working_summary(batch).direct_count == 0
+    assert nb_working_summary(batch).direct_informative_count == 0
+    assert nb_working_summary(batch).direct_good_count == 1
     # Metadata belongs to the family; neither theta nor count magnitude
     # allocates a prefix/response copy inside these coefficient kernels.
     family = NegativeBinomial(theta=2.0, fixed=True)
@@ -279,7 +280,11 @@ def test_source_direct_switch_and_positive_retry_at_zero_curvature():
       w <- .5*dd$Deta2; z <- eta-offset-dd$Deta.Deta2
       use.wy <- any(!is.finite(w) | !is.finite(z))
       w[!is.finite(w) | w<=0] <- 0
-      list(use.wy=use.wy,w=w,wz=w*(eta-offset)-.5*dd$Deta)
+      wz <- w*(eta-offset)-.5*dd$Deta
+      good <- is.finite(w) & is.finite(wz)
+      X <- matrix(c(1,2),ncol=1); S <- matrix(2,nrow=1)
+      beta <- solve(crossprod(X,w*X)+S,crossprod(X,wz))
+      list(use.wy=use.wy,w=w,wz=wz,good.count=sum(good),beta=beta)
     }""")()
     assert batch.requires_direct_response == bool(oracle.rx2("use.wy")[0])
     retry = jax.jit(nb_positive_observed_retry)(batch)
@@ -287,5 +292,17 @@ def test_source_direct_switch_and_positive_retry_at_zero_curvature():
         np.testing.assert_allclose(
             actual, np.asarray(oracle.rx2(name)), rtol=STRICT.rtol, atol=STRICT.atol
         )
-    assert nb_working_summary(retry).direct_count == 0
+    summary = nb_working_summary(retry)
+    assert summary.direct_informative_count == 0
+    assert summary.direct_good_count == int(oracle.rx2("good.count")[0])
+    assert summary.direct_good_count == 2
+    G, rhs = jax.jit(nb_working_statistics)(
+        jnp.asarray([[1.0], [2.0]]),
+        retry,
+        use_weighted_response=jnp.asarray(True),
+    )
+    beta = jax.jit(jnp.linalg.solve)(G + jnp.asarray([[2.0]]), rhs)
+    np.testing.assert_allclose(
+        beta, np.asarray(oracle.rx2("beta")).ravel(), rtol=STRICT.rtol, atol=STRICT.atol
+    )
     assert np.all(np.asarray(retry.weighted_response) != 0)
