@@ -58,7 +58,7 @@ from jaxgam.fitting.reml import (
     reml_criterion_from_penalized_deviance,
 )
 from jaxgam.fitting.state import EFSOptimizerDiagnostics
-from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
+from jaxgam.links.links import IdentityLink, InverseLink, LogLink, SqrtLink
 
 if TYPE_CHECKING:
     from jaxgam.formula.design import ModelSetup
@@ -84,12 +84,41 @@ def efs_initial_log_lambda(setup: ModelSetup, family: ExponentialFamily) -> jax.
         nb_observed_ldxx = np.zeros_like(ldxx)
         nb_fisher_ldxx = np.zeros_like(ldxx)
     batch_rows = 8192
+    gaussian_metadata = None
+    if isinstance(family, Gaussian) and isinstance(family.link, (LogLink, InverseLink)):
+        # initial.spg evaluates the same fix.family initializer as gam.fit3.
+        # Its unweighted response SD is global, including zero-prior rows.
+        summary = None
+        for start in range(0, setup.n_obs, batch_rows):
+            stop = min(start + batch_rows, setup.n_obs)
+            batch = family.execution_summary_from_batch(
+                setup.y[start:stop],
+                setup.weights[start:stop],
+                np.ones(stop - start, dtype=bool),
+            )
+            summary = (
+                batch
+                if summary is None
+                else family.merge_execution_summaries(summary, batch)
+            )
+        assert summary is not None
+        gaussian_metadata = family.finalize_execution_summary(summary)
     for start in range(0, setup.X.shape[0], batch_rows):
         stop = min(start + batch_rows, setup.X.shape[0])
         y = setup.y[start:stop]
         prior = setup.weights[start:stop]
-        mu = np.asarray(family.initialize(y, prior), dtype=np.float64)
-        eta = np.asarray(family.link.link(mu), dtype=np.float64)
+        if not np.all(np.isfinite(prior) & (prior >= 0.0)):
+            raise ValueError(
+                "EFS initial.spg prior weights must be finite and nonnegative"
+            )
+        if gaussian_metadata is None:
+            mu = np.asarray(family.initialize(y, prior), dtype=np.float64)
+            eta = np.asarray(family.link.link(mu), dtype=np.float64)
+        else:
+            mu = family.execution_initial_mustart_from_summary_cpu(
+                y, prior, gaussian_metadata
+            )
+            eta = family.link.initial_link_cpu(mu)
         mu_eta = np.asarray(family.link.mu_eta(eta), dtype=np.float64)
         if isinstance(family, NegativeBinomial):
             # initial.spg's extended-family branch (mgcv.r:4787-4794) uses
@@ -116,9 +145,9 @@ def efs_initial_log_lambda(setup: ModelSetup, family: ExponentialFamily) -> jax.
         else:
             variance = np.asarray(family.variance(mu), dtype=np.float64)
             working = prior * mu_eta**2 / variance
-        if not np.all(np.isfinite(working)) or np.any(working <= 0):
+        if not np.all(np.isfinite(working)) or np.any(working < 0):
             raise ValueError(
-                "EFS initial.spg working weights must be finite and positive"
+                "EFS initial.spg working weights must be finite and nonnegative"
             )
         weighted_X = np.sqrt(working)[:, None] * setup.X[start:stop]
         ldxx += np.sum(weighted_X * weighted_X, axis=0)
@@ -135,6 +164,8 @@ def efs_initial_log_lambda(setup: ModelSetup, family: ExponentialFamily) -> jax.
             raise ValueError(
                 "EFS initial.spg working weights must be finite and positive"
             )
+    if not np.all(np.isfinite(ldxx)) or not np.any(ldxx > 0.0):
+        raise ValueError("EFS initial.spg has no finite informative weighted design")
     return jnp.asarray(
         FittingData._initial_sp_from_crossproduct_diag(setup.X, structure, ldxx)
     )
@@ -167,6 +198,7 @@ def _efs_initial_log_scale_from_arrays(
     # where Python family initialization performs response-domain validation,
     # before we reproduce get.null.coef's unweighted mean convention.
     response_sum = 0.0
+    positive_weight_count = 0
     n_obs = int(y.shape[0])
     batch_rows = 8192
     for start in range(0, n_obs, batch_rows):
@@ -176,13 +208,14 @@ def _efs_initial_log_scale_from_arrays(
         if (
             not np.all(np.isfinite(y_batch))
             or not np.all(np.isfinite(wt_batch))
-            or np.any(wt_batch <= 0)
+            or np.any(wt_batch < 0)
         ):
-            raise ValueError(
-                "EFS initial scale requires finite strictly positive weights"
-            )
+            raise ValueError("EFS initial scale requires finite nonnegative weights")
         family.initialize(y_batch, wt_batch)
         response_sum += float(np.sum(y_batch))
+        positive_weight_count += int(np.count_nonzero(wt_batch > 0.0))
+    if positive_weight_count == 0:
+        raise ValueError("EFS initial scale requires a globally informative source")
     response_mean = response_sum / n_obs
     deviance = 0.0
     for start in range(0, n_obs, batch_rows):
@@ -583,9 +616,12 @@ def _efs_regular_start(
     if start_present:
         initial_eta = fd.X @ beta_start + offset
     else:
-        initial = family.initial_working_state_cpu(
-            y, np.asarray(fd.wt, dtype=np.float64), np.ones(fd.n_obs, dtype=bool)
+        weights = np.asarray(fd.wt, dtype=np.float64)
+        valid = np.ones(fd.n_obs, dtype=bool)
+        summary = family.finalize_execution_summary(
+            family.execution_summary_from_batch(y, weights, valid)
         )
+        initial = family.initial_working_state_cpu(y, weights, valid, summary=summary)
         if not initial.input_ok:
             raise ValueError("EFS regular initial response is invalid in pinned R")
         initial_eta = jnp.asarray(initial.eta, dtype=fd.X.dtype)
@@ -1195,15 +1231,31 @@ def dense_efs_unknown_scale(
         )
     if fitting_data.n_penalties == 0:
         raise ValueError("EFS bypasses models without estimated penalties")
+    # These corrected Gaussian starts have owning zero-prior full-fit gates.
+    # Their noncanonical source loop masks zero priors; the other routes keep
+    # the established bounds until their own source policy is validated.
+    zero_prior_source = isinstance(fitting_data.family, Gaussian) and isinstance(
+        fitting_data.family.link, (LogLink, InverseLink)
+    )
+    positive_weight_count = 0
     for start in range(0, fitting_data.n_obs, 8192):
         prior_weights = np.asarray(fitting_data.wt[start : start + 8192])
+        below_bound = prior_weights < _W_MIN
+        if zero_prior_source:
+            below_bound &= prior_weights != 0.0
         if not np.all(np.isfinite(prior_weights)) or np.any(
-            (prior_weights < _W_MIN) | (prior_weights > _W_MAX)
+            below_bound | (prior_weights > _W_MAX)
         ):
             raise ValueError(
                 "EFS unknown-scale path requires finite positive prior weights "
-                "inside PIRLS clipping bounds"
+                "inside PIRLS clipping bounds; zero priors require the validated "
+                "Gaussian log/inverse source loop"
             )
+        positive_weight_count += int(np.count_nonzero(prior_weights > 0.0))
+    if positive_weight_count == 0:
+        raise ValueError(
+            "EFS unknown-scale path requires a globally informative source"
+        )
     if fitting_data.rank_deficit:
         raise ValueError(
             "EFS unknown-scale path requires an identifiable penalized system"

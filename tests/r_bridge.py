@@ -727,6 +727,66 @@ class RBridge:
             )[0]
         )
 
+    def source_gaussian_initial_values(
+        self, response: np.ndarray, link: str
+    ) -> tuple[float, np.ndarray]:
+        """Evaluate the installed family's ``initialize`` language object."""
+        self._require_rpy2()
+        y = np.asarray(response, dtype=np.float64)
+        if y.ndim != 1 or link not in {"log", "inverse"}:
+            raise ValueError("Gaussian initializer requires a response and known link")
+        family = self._call_internal("fix.family", self._stats.gaussian(link=link))
+        environment = self._base.new_env(parent=self._ro.globalenv)
+        environment["y"] = self._to_r_vector(y)
+        environment["nobs"] = self._to_r_vector(np.array([len(y)], dtype=np.int32))
+        environment["family"] = family
+        self._base.eval(family.rx2("initialize"), envir=environment)
+        return (
+            float(self._stats.sd(self._to_r_vector(y))[0]),
+            np.asarray(environment["mustart"], dtype=np.float64).copy(),
+        )
+
+    def source_gaussian_efs_initial(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        link: str,
+        weights: np.ndarray,
+    ) -> np.ndarray:
+        """Return pinned ``initial.spg`` and null scale from a setup object."""
+        self._require_rpy2()
+        weight_array = np.asarray(weights, dtype=np.float64)
+        if weight_array.shape != (len(data),) or link not in {"log", "inverse"}:
+            raise ValueError("Gaussian EFS initial oracle inputs are invalid")
+        setup = self._mgcv.gam(
+            self._ro.Formula(formula),
+            data=self._to_r_dataframe(data),
+            weights=self._to_r_vector(weight_array),
+            family=self._stats.gaussian(link=link),
+            fit=False,
+        )
+        patched = self._call_internal("fix.family", setup.rx2("family"))
+        setup = self._ro.baseenv["[[<-"](setup, "family", patched)
+        initial = self._call_internal(
+            "initial.spg",
+            setup.rx2("X"),
+            setup.rx2("y"),
+            setup.rx2("w"),
+            patched,
+            setup.rx2("S"),
+            setup.rx2("rank"),
+            setup.rx2("off"),
+        )
+        null = self._call_internal("get.null.coef", setup)
+        divide = self._ro.baseenv["/"]
+        return np.asarray(
+            self._base.c(
+                self._base.log(initial),
+                self._base.log(divide(null.rx2("null.scale"), 10.0)),
+            ),
+            dtype=np.float64,
+        ).copy()
+
     def source_weighted_stream_reml_fit(
         self,
         formula: str,
