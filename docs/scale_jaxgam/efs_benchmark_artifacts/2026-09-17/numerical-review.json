@@ -1,0 +1,1087 @@
+{
+  "data_sha256": "22291a4ce4d90220758ae9488d6a880643e75d49d47c809e9d5cf9fe7a1135d4",
+  "source": {
+    "benchmark_script_sha256": "a4b2b794bf17ea9d7cb93f601786ecabf67a580207b64b5a3a55e93b530e43da",
+    "git_commit": "80a25dca1e97714dadc80e4766d9fabf6fb53487",
+    "git_commit_unavailable_reason": null
+  },
+  "image": "sha256:f4eae281f047815852f2819db0760054a22e93112c7a5dca4031beeee834d6ba",
+  "baseline_controls": {
+    "outer_limit": 200,
+    "log_lambda_max": 15.0,
+    "score_tolerance": 0.1,
+    "pirls_tolerance": 1e-07,
+    "pirls_max_iter": 200,
+    "history_limit": 200
+  },
+  "passes": [
+    {
+      "name": "saved-input and initializer roundtrip correction",
+      "provenance": {
+        "roundtrip_input_hash_verified": true,
+        "initializer_parser": "pandas float_precision=round_trip on saved CSV",
+        "model": "y ~ s(x1, k=6, bs='cr') + s(x2, k=6, bs='cr') + s(x3, k=6, bs='cr') + s(x4, k=6, bs='cr') + s(x5, k=6, bs='cr') + s(x6, k=6, bs='cr') + s(x7, k=6, bs='cr') + s(x8, k=6, bs='cr') + s(x9, k=6, bs='cr') + s(x10, k=6, bs='cr')",
+        "n": 1200,
+        "p": 51,
+        "m": 10
+      },
+      "strict": {
+        "fields": {
+          "coefficients": {
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 1.0071430356362043e-09,
+            "max_relative_error": 2.1194312886212024e-08,
+            "passed": false
+          },
+          "deviance": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 1.1029464985767845e-07,
+            "max_relative_error": 7.5294956784132e-11,
+            "passed": true
+          },
+          "edf": {
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 7.958894876480826e-09,
+            "max_relative_error": 1.7923579444274467e-09,
+            "passed": false
+          },
+          "fitted_values": {
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 7.362428888768591e-09,
+            "max_relative_error": 2.0781125615622644e-09,
+            "passed": false
+          },
+          "outer_iterations": {
+            "jaxgam": 27,
+            "passed": true,
+            "pinned_r": 27
+          },
+          "scale": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0,
+            "passed": true
+          },
+          "score": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 4.799858288606629e-10,
+            "max_relative_error": 2.457518443018661e-13,
+            "passed": true
+          },
+          "smoothing_params": {
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 1.149462946159474e-06,
+            "max_relative_error": 1.0769416489134242e-08,
+            "passed": false
+          }
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "passed": false,
+        "tolerance": {
+          "atol": 1e-12,
+          "name": "STRICT",
+          "rtol": 1e-10
+        }
+      },
+      "moderate_diagnostic": {
+        "fields": {
+          "coefficients": {
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 1.0071430356362043e-09,
+            "max_relative_error": 2.1194312886212024e-08,
+            "passed": true
+          },
+          "deviance": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 1.1029464985767845e-07,
+            "max_relative_error": 7.5294956784132e-11,
+            "passed": true
+          },
+          "edf": {
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 7.958894876480826e-09,
+            "max_relative_error": 1.7923579444274467e-09,
+            "passed": true
+          },
+          "fitted_values": {
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 7.362428888768591e-09,
+            "max_relative_error": 2.0781125615622644e-09,
+            "passed": true
+          },
+          "outer_iterations": {
+            "jaxgam": 27,
+            "passed": true,
+            "pinned_r": 27
+          },
+          "scale": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0,
+            "passed": true
+          },
+          "score": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 4.799858288606629e-10,
+            "max_relative_error": 2.457518443018661e-13,
+            "passed": true
+          },
+          "smoothing_params": {
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 1.149462946159474e-06,
+            "max_relative_error": 1.0769416489134242e-08,
+            "passed": true
+          }
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "passed": true,
+        "tolerance": {
+          "atol": 1e-06,
+          "name": "MODERATE",
+          "rtol": 0.0001
+        }
+      }
+    },
+    {
+      "name": "independent pinned RBridge extraction and input serialization",
+      "r_worker_vs_rbridge": {
+        "tolerance": {
+          "name": "STRICT",
+          "rtol": 1e-10,
+          "atol": 1e-12
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "fields": {
+          "coefficients": {
+            "passed": true,
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 6.938893903907228e-17,
+            "max_relative_error": 1.2198689579651734e-14
+          },
+          "fitted_values": {
+            "passed": true,
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "smoothing_params": {
+            "passed": true,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "edf": {
+            "passed": true,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "deviance": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "score": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "scale": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "outer_iterations": {
+            "passed": true,
+            "jaxgam": 27,
+            "pinned_r": 27
+          }
+        },
+        "passed": true
+      },
+      "strict": {
+        "tolerance": {
+          "name": "STRICT",
+          "rtol": 1e-10,
+          "atol": 1e-12
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "fields": {
+          "coefficients": {
+            "passed": false,
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 1.0071430356362043e-09,
+            "max_relative_error": 2.1194312886212024e-08
+          },
+          "fitted_values": {
+            "passed": false,
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 7.362428888768591e-09,
+            "max_relative_error": 2.0781125615622644e-09
+          },
+          "smoothing_params": {
+            "passed": false,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 1.149462946159474e-06,
+            "max_relative_error": 1.0769416489134242e-08
+          },
+          "edf": {
+            "passed": false,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 7.958894876480826e-09,
+            "max_relative_error": 1.7923579444274467e-09
+          },
+          "deviance": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 1.1029464985767845e-07,
+            "max_relative_error": 7.5294956784132e-11
+          },
+          "score": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 4.799858288606629e-10,
+            "max_relative_error": 2.457518443018661e-13
+          },
+          "scale": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "outer_iterations": {
+            "passed": true,
+            "jaxgam": 27,
+            "pinned_r": 27
+          }
+        },
+        "passed": false
+      }
+    },
+    {
+      "name": "public Phase3 versus direct accepted controller",
+      "direct_outer_iterations": 27,
+      "public_outer_iterations": 27,
+      "direct_converged": true,
+      "direct_inner_converged": true,
+      "direct_selected_fields_finite": true,
+      "adapter_fields": {
+        "coefficients": {
+          "passed": true,
+          "actual_shape": [
+            51
+          ],
+          "expected_shape": [
+            51
+          ],
+          "max_absolute_error": 0.0,
+          "max_relative_error": 0.0
+        },
+        "fitted_values": {
+          "passed": true,
+          "actual_shape": [
+            1200
+          ],
+          "expected_shape": [
+            1200
+          ],
+          "max_absolute_error": 0.0,
+          "max_relative_error": 0.0
+        },
+        "smoothing_params": {
+          "passed": true,
+          "actual_shape": [
+            10
+          ],
+          "expected_shape": [
+            10
+          ],
+          "max_absolute_error": 0.0,
+          "max_relative_error": 0.0
+        },
+        "score": {
+          "passed": true,
+          "actual_shape": [],
+          "expected_shape": [],
+          "max_absolute_error": 0.0,
+          "max_relative_error": 0.0
+        },
+        "deviance": {
+          "passed": true,
+          "actual_shape": [],
+          "expected_shape": [],
+          "max_absolute_error": 0.0,
+          "max_relative_error": 0.0
+        },
+        "scale": {
+          "passed": true,
+          "actual_shape": [],
+          "expected_shape": [],
+          "max_absolute_error": 0.0,
+          "max_relative_error": 0.0
+        }
+      },
+      "remaining_default_strict": {
+        "fields": {
+          "coefficients": {
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 1.0071430356362043e-09,
+            "max_relative_error": 2.1194312886212024e-08,
+            "passed": false
+          },
+          "deviance": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 1.1029464985767845e-07,
+            "max_relative_error": 7.5294956784132e-11,
+            "passed": true
+          },
+          "edf": {
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 7.958894876480826e-09,
+            "max_relative_error": 1.7923579444274467e-09,
+            "passed": false
+          },
+          "fitted_values": {
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 7.362428888768591e-09,
+            "max_relative_error": 2.0781125615622644e-09,
+            "passed": false
+          },
+          "outer_iterations": {
+            "jaxgam": 27,
+            "passed": true,
+            "pinned_r": 27
+          },
+          "scale": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0,
+            "passed": true
+          },
+          "score": {
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 4.799858288606629e-10,
+            "max_relative_error": 2.457518443018661e-13,
+            "passed": true
+          },
+          "smoothing_params": {
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 1.149462946159474e-06,
+            "max_relative_error": 1.0769416489134242e-08,
+            "passed": false
+          }
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "passed": false,
+        "tolerance": {
+          "atol": 1e-12,
+          "name": "STRICT",
+          "rtol": 1e-10
+        }
+      }
+    },
+    {
+      "name": "outer score-window tightening",
+      "controls": {
+        "outer_limit": 200,
+        "log_lambda_max": 15.0,
+        "score_tolerance": 0.001,
+        "pirls_tolerance": 1e-07,
+        "pirls_max_iter": 200,
+        "history_limit": 200
+      },
+      "measured_fit_validity": {
+        "jaxgam": [
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          }
+        ],
+        "pinned_r": [
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          }
+        ]
+      },
+      "selected_state": {
+        "jaxgam": {
+          "score": 1953.1320795210731,
+          "deviance": 1464.8063429685753,
+          "smoothing_params": [
+            22.841063729744068,
+            53.177661643056396,
+            296.96360633962547,
+            64.2042872329635,
+            3269017.3724721107,
+            184.915785320655,
+            30.531521933202953,
+            205.5681914311936,
+            326.73742260029456,
+            15.288869907312696
+          ],
+          "outer_iterations": 29,
+          "converged": true,
+          "convergence_info": "deviance_change"
+        },
+        "pinned_r": {
+          "score": 1953.1320795216152,
+          "deviance": 1464.806342860934,
+          "smoothing_params": [
+            22.8410636218418,
+            53.177661125988,
+            296.963606454545,
+            64.2042870995949,
+            3269017.37247211,
+            184.915785370351,
+            30.5315218292976,
+            205.568190295676,
+            326.737422533939,
+            15.2888698303428
+          ],
+          "outer_iterations": 29,
+          "converged": true,
+          "convergence_info": "full convergence"
+        }
+      },
+      "strict": {
+        "tolerance": {
+          "name": "STRICT",
+          "rtol": 1e-10,
+          "atol": 1e-12
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "fields": {
+          "coefficients": {
+            "passed": false,
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 9.688445046229788e-10,
+            "max_relative_error": 2.0938073555834553e-08
+          },
+          "fitted_values": {
+            "passed": false,
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 7.245287036994341e-09,
+            "max_relative_error": 2.049864515440565e-09
+          },
+          "smoothing_params": {
+            "passed": false,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 1.135517607053771e-06,
+            "max_relative_error": 9.723413600500495e-09
+          },
+          "edf": {
+            "passed": false,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 7.515756905718263e-09,
+            "max_relative_error": 1.6906283414641538e-09
+          },
+          "deviance": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 1.0764142643893138e-07,
+            "max_relative_error": 7.34850903421782e-11
+          },
+          "score": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 5.420588422566652e-10,
+            "max_relative_error": 2.775331212569264e-13
+          },
+          "scale": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "outer_iterations": {
+            "passed": true,
+            "jaxgam": 29,
+            "pinned_r": 29
+          }
+        },
+        "passed": false
+      },
+      "moderate_diagnostic": {
+        "tolerance": {
+          "name": "MODERATE",
+          "rtol": 0.0001,
+          "atol": 1e-06
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "fields": {
+          "coefficients": {
+            "passed": true,
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 9.688445046229788e-10,
+            "max_relative_error": 2.0938073555834553e-08
+          },
+          "fitted_values": {
+            "passed": true,
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 7.245287036994341e-09,
+            "max_relative_error": 2.049864515440565e-09
+          },
+          "smoothing_params": {
+            "passed": true,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 1.135517607053771e-06,
+            "max_relative_error": 9.723413600500495e-09
+          },
+          "edf": {
+            "passed": true,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 7.515756905718263e-09,
+            "max_relative_error": 1.6906283414641538e-09
+          },
+          "deviance": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 1.0764142643893138e-07,
+            "max_relative_error": 7.34850903421782e-11
+          },
+          "score": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 5.420588422566652e-10,
+            "max_relative_error": 2.775331212569264e-13
+          },
+          "scale": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "outer_iterations": {
+            "passed": true,
+            "jaxgam": 29,
+            "pinned_r": 29
+          }
+        },
+        "passed": true
+      },
+      "default_profile_remains": false
+    },
+    {
+      "name": "inner PIRLS tightening (different profile)",
+      "controls": {
+        "outer_limit": 200,
+        "log_lambda_max": 15.0,
+        "score_tolerance": 0.1,
+        "pirls_tolerance": 1e-10,
+        "pirls_max_iter": 200,
+        "history_limit": 200
+      },
+      "measured_fit_validity": {
+        "jaxgam": [
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          }
+        ],
+        "pinned_r": [
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "passed": true,
+            "reasons": []
+          }
+        ]
+      },
+      "selected_state": {
+        "jaxgam": {
+          "score": 1953.1321533886867,
+          "deviance": 1464.8344932608697,
+          "smoothing_params": [
+            22.84561636032762,
+            53.83900616382963,
+            296.9527874141185,
+            64.02052567867419,
+            3269017.3724721107,
+            184.8360475443494,
+            30.549565547360455,
+            205.95301194960857,
+            327.08162488129244,
+            15.284631809020492
+          ],
+          "outer_iterations": 27,
+          "converged": true,
+          "convergence_info": "score_window"
+        },
+        "pinned_r": {
+          "score": 1953.1321533891457,
+          "deviance": 1464.8344931496367,
+          "smoothing_params": [
+            22.8456162520468,
+            53.8390055619705,
+            296.95278753075,
+            64.0205255592377,
+            3269017.37247211,
+            184.83604760415,
+            30.5495654416904,
+            205.953010788121,
+            327.081624780968,
+            15.2846317325435
+          ],
+          "outer_iterations": 27,
+          "converged": true,
+          "convergence_info": "full convergence"
+        }
+      },
+      "strict": {
+        "tolerance": {
+          "name": "STRICT",
+          "rtol": 1e-10,
+          "atol": 1e-12
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "fields": {
+          "coefficients": {
+            "passed": false,
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 1.0227049207500727e-09,
+            "max_relative_error": 2.1278766845841536e-08
+          },
+          "fitted_values": {
+            "passed": false,
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 7.4062764809923465e-09,
+            "max_relative_error": 2.0906543003810897e-09
+          },
+          "smoothing_params": {
+            "passed": false,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 1.16148757456358e-06,
+            "max_relative_error": 1.1178867841014634e-08
+          },
+          "edf": {
+            "passed": false,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 8.127714501426908e-09,
+            "max_relative_error": 1.8303764382120157e-09
+          },
+          "deviance": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 1.1123302101623267e-07,
+            "max_relative_error": 7.593555554324997e-11
+          },
+          "score": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 4.5906745071988553e-10,
+            "max_relative_error": 2.350416739201672e-13
+          },
+          "scale": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "outer_iterations": {
+            "passed": true,
+            "jaxgam": 27,
+            "pinned_r": 27
+          }
+        },
+        "passed": false
+      },
+      "moderate_diagnostic": {
+        "tolerance": {
+          "name": "MODERATE",
+          "rtol": 0.0001,
+          "atol": 1e-06
+        },
+        "fit_validity": {
+          "jaxgam": {
+            "passed": true,
+            "reasons": []
+          },
+          "pinned_r": {
+            "passed": true,
+            "reasons": []
+          }
+        },
+        "fields": {
+          "coefficients": {
+            "passed": true,
+            "actual_shape": [
+              51
+            ],
+            "expected_shape": [
+              51
+            ],
+            "max_absolute_error": 1.0227049207500727e-09,
+            "max_relative_error": 2.1278766845841536e-08
+          },
+          "fitted_values": {
+            "passed": true,
+            "actual_shape": [
+              1200
+            ],
+            "expected_shape": [
+              1200
+            ],
+            "max_absolute_error": 7.4062764809923465e-09,
+            "max_relative_error": 2.0906543003810897e-09
+          },
+          "smoothing_params": {
+            "passed": true,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 1.16148757456358e-06,
+            "max_relative_error": 1.1178867841014634e-08
+          },
+          "edf": {
+            "passed": true,
+            "actual_shape": [
+              10
+            ],
+            "expected_shape": [
+              10
+            ],
+            "max_absolute_error": 8.127714501426908e-09,
+            "max_relative_error": 1.8303764382120157e-09
+          },
+          "deviance": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 1.1123302101623267e-07,
+            "max_relative_error": 7.593555554324997e-11
+          },
+          "score": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 4.5906745071988553e-10,
+            "max_relative_error": 2.350416739201672e-13
+          },
+          "scale": {
+            "passed": true,
+            "actual_shape": [],
+            "expected_shape": [],
+            "max_absolute_error": 0.0,
+            "max_relative_error": 0.0
+          },
+          "outer_iterations": {
+            "passed": true,
+            "jaxgam": 27,
+            "pinned_r": 27
+          }
+        },
+        "passed": true
+      },
+      "default_profile_remains": false
+    }
+  ]
+}

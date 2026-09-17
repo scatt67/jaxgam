@@ -1,0 +1,121 @@
+{
+  "original_report_sha256": "0c4e02797a61063c9e4a19b3b6589da86f9f070004123857c362689a270dca61",
+  "original_selected_tolerance": "STRICT",
+  "original_process_exit": 2,
+  "reviewed_decision": "Main-agent retrospective numerical acceptance after four failed case-specific diagnostic attempts plus saved-input provenance under the user four-pass MEDIUM/MODERATE policy. Persistent representative runtime selection remains pending explicit user approval after automatic-review rejection. This decision does not rewrite the measurement.",
+  "scope": {
+    "data_sha256": "22291a4ce4d90220758ae9488d6a880643e75d49d47c809e9d5cf9fe7a1135d4",
+    "formula": "y ~ s(x1, k=6, bs='cr') + s(x2, k=6, bs='cr') + s(x3, k=6, bs='cr') + s(x4, k=6, bs='cr') + s(x5, k=6, bs='cr') + s(x6, k=6, bs='cr') + s(x7, k=6, bs='cr') + s(x8, k=6, bs='cr') + s(x9, k=6, bs='cr') + s(x10, k=6, bs='cr')",
+    "family": "poisson(log)",
+    "seed": 20260910,
+    "n": 1200,
+    "p": 51,
+    "m": 10,
+    "efs_control": {
+      "history_limit": 200,
+      "log_lambda_max": 15.0,
+      "outer_limit": 200,
+      "pirls_max_iter": 200,
+      "pirls_tolerance": 1e-07,
+      "score_tolerance": 0.1
+    }
+  },
+  "moderate_fields": [
+    "coefficients",
+    "fitted_values",
+    "smoothing_params",
+    "edf"
+  ],
+  "fields": {
+    "coefficients": {
+      "actual_shape": [
+        51
+      ],
+      "expected_shape": [
+        51
+      ],
+      "max_absolute_error": 1.0071430356362043e-09,
+      "max_relative_error": 2.1194312886212024e-08,
+      "passed": true,
+      "reviewed_tolerance": "MODERATE"
+    },
+    "deviance": {
+      "actual_shape": [],
+      "expected_shape": [],
+      "max_absolute_error": 1.1029464985767845e-07,
+      "max_relative_error": 7.5294956784132e-11,
+      "passed": true,
+      "reviewed_tolerance": "STRICT"
+    },
+    "edf": {
+      "actual_shape": [
+        10
+      ],
+      "expected_shape": [
+        10
+      ],
+      "max_absolute_error": 7.958894876480826e-09,
+      "max_relative_error": 1.7923579444274467e-09,
+      "passed": true,
+      "reviewed_tolerance": "MODERATE"
+    },
+    "fitted_values": {
+      "actual_shape": [
+        1200
+      ],
+      "expected_shape": [
+        1200
+      ],
+      "max_absolute_error": 7.362428888768591e-09,
+      "max_relative_error": 2.0781125615622644e-09,
+      "passed": true,
+      "reviewed_tolerance": "MODERATE"
+    },
+    "outer_iterations": {
+      "jaxgam": 27,
+      "passed": true,
+      "pinned_r": 27,
+      "reviewed_tolerance": "EXACT"
+    },
+    "scale": {
+      "actual_shape": [],
+      "expected_shape": [],
+      "max_absolute_error": 0.0,
+      "max_relative_error": 0.0,
+      "passed": true,
+      "reviewed_tolerance": "STRICT"
+    },
+    "score": {
+      "actual_shape": [],
+      "expected_shape": [],
+      "max_absolute_error": 4.799858288606629e-10,
+      "max_relative_error": 2.457518443018661e-13,
+      "passed": true,
+      "reviewed_tolerance": "STRICT"
+    },
+    "smoothing_params": {
+      "actual_shape": [
+        10
+      ],
+      "expected_shape": [
+        10
+      ],
+      "max_absolute_error": 1.149462946159474e-06,
+      "max_relative_error": 1.0769416489134242e-08,
+      "passed": true,
+      "reviewed_tolerance": "MODERATE"
+    }
+  },
+  "fit_validity": {
+    "jaxgam": {
+      "passed": true,
+      "reasons": []
+    },
+    "pinned_r": {
+      "passed": true,
+      "reasons": []
+    }
+  },
+  "reviewed_evaluation_passed": true,
+  "programmatic_selector_status": "Current r4 harness still restricts MODERATE to smoke. Representative runtime and Make target remain STRICT. No rejected source/test/Make changes were applied, no indirect replacement gate was installed, and no new CLI success or timing rerun is claimed."
+}

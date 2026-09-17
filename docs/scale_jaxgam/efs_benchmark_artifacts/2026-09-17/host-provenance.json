@@ -1,0 +1,12 @@
+{
+  "host_cpu_model": "Apple M4",
+  "host_model": "Mac16,12",
+  "host_logical_cpu_count": 10,
+  "host_memory_bytes": 17179869184,
+  "host_source": "sysctl -n machdep.cpu.brand_string hw.model hw.ncpu hw.memsize",
+  "vm_runtime": "Colima/macOS Virtualization.Framework",
+  "vm_architecture": "aarch64",
+  "vm_mount_type": "virtiofs",
+  "vm_source": "colima status",
+  "report_vm_cpu_memory_source": "report.json host.logical_cpu_count and host.total_memory_bytes"
+}

@@ -140,3 +140,9 @@ the mocked R-failure test remains available locally.
 Representative measurements must run sequentially during a coordinated quiet
 validation window. Any timing observation applies only to its frozen input,
 code, container, and host; the harness makes no general speedup claim.
+
+The later representative measurement and numerical review are recorded in
+`efs_benchmark_observation_2026-09-17.md`. Its original report selected STRICT
+and exited 2. Numerical review of a four-field MODERATE proposal is separate
+from the implemented smoke-only selector; the representative runtime selector
+remains STRICT pending explicit approval after automatic-review rejection.
