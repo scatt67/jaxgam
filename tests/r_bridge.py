@@ -1002,6 +1002,135 @@ class RBridge:
             skip_offset_null_deviance=False,
         )
 
+    def nb_fixed_pirls_reference(
+        self,
+        X: np.ndarray,
+        E: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        link: str,
+        theta: float,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned fixed-theta ``gam.fit4`` with private source hooks."""
+        from rpy2 import rinterface
+
+        from tests.r_ast import find_call_paths, instrument_function
+
+        self._require_rpy2()
+        ro, base = self._ro, self._ro.baseenv
+        r_X, r_E = self._to_r_matrix(X), self._to_r_matrix(E)
+        r_y, r_weight, r_offset = (
+            self._to_r_vector(values) for values in (y, weight, offset)
+        )
+        family = self._call_internal(
+            "fix.family.link", self._mgcv.nb(theta=theta, link=link)
+        )
+        p, rank = X.shape[1], E.shape[0]
+        U1 = (
+            self._base.eigen(self._base.crossprod(r_E), symmetric=True).rx2("vectors")
+            if rank
+            else self._base.diag(p)
+        )
+        roots = (
+            base["list"](
+                base["%*%"](
+                    self._base.t(self._to_r_matrix(np.asarray(U1)[:, :rank])),
+                    self._base.t(r_E),
+                )
+            )
+            if rank
+            else base["list"]()
+        )
+        target = self._base.rep(
+            family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
+        )
+        null = np.asarray(self._base.qr_coef(self._base.qr(r_X), target)).copy()
+        null[np.isnan(null)] = 0.0
+        recovery_count = [0]
+        penalty = [np.nan]
+        fit_source = self._utils.getFromNamespace("gam.fit4", "mgcv")
+        recovery_paths = []
+        for path in find_call_paths(fit_source, "cat"):
+            node = ro.r["body"](fit_source)
+            for index in path:
+                node = node[index]
+            if (
+                len(node) > 1
+                and node[1].typeof == rinterface.RTYPES.STRSXP
+                and str(node[1][0]) == "**using positive weights\n"
+            ):
+                recovery_paths.append(path)
+        if len(recovery_paths) != 1:
+            raise RBridgeError("Pinned gam.fit4 positive-weight anchor changed")
+        fit_source = instrument_function(
+            fit_source,
+            path=recovery_paths[0],
+            expected_head="cat",
+            capture_symbols=(),
+            callback=lambda: recovery_count.__setitem__(0, recovery_count[0] + 1),
+        )
+        body = ro.r["body"](fit_source)
+        fit_function = instrument_function(
+            fit_source,
+            path=(len(body) - 1,),
+            expected_head="list",
+            capture_symbols=("oo",),
+            callback=lambda oo: penalty.__setitem__(
+                0, float(ro.ListVector(oo).rx2("P")[0])
+            ),
+        )
+        fit = fit_function(
+            x=r_X,
+            y=r_y,
+            sp=self._base.log(self._to_r_vector([0.35]))
+            if rank
+            else ro.FloatVector([]),
+            Eb=r_E,
+            UrS=roots,
+            weights=r_weight,
+            offset=r_offset,
+            U1=U1,
+            Mp=p - rank,
+            family=family,
+            control=self._mgcv.gam_control(epsilon=1e-11, maxit=100, trace=True),
+            deriv=0,
+            scale=1,
+            scoreType="REML",
+            **{"null.coef": self._to_r_vector(null)},
+        )
+        derivatives = self._call_internal(
+            "dDeta",
+            r_y,
+            fit.rx2("fitted.values"),
+            r_weight,
+            self._base.log(self._to_r_vector([theta])),
+            family,
+            0,
+        )
+        half = self._to_r_vector([0.5])
+        observed = self._base.crossprod(
+            r_X, base["*"](base["*"](half, derivatives.rx2("Deta2")), r_X)
+        )
+        fisher = self._base.crossprod(
+            r_X, base["*"](base["*"](half, derivatives.rx2("EDeta2")), r_X)
+        )
+        covariance = self._base.tcrossprod(fit.rx2("rV"))
+        edf = self._base.sum(base["diag"](base["%*%"](covariance, fisher)))
+        return {
+            "beta": np.asarray(fit.rx2("coefficients")).copy(),
+            "dev": np.asarray(fit.rx2("deviance")).copy(),
+            "G": np.asarray(observed).copy(),
+            "F": np.asarray(fisher).copy(),
+            "V": np.asarray(covariance).copy(),
+            "edf": np.asarray(edf).copy(),
+            "score": np.asarray(fit.rx2("REML")).copy(),
+            "gdi": np.asarray(penalty, dtype=np.float64),
+            "iter": np.asarray(fit.rx2("iter")).copy(),
+            "converged": np.asarray(fit.rx2("converged")).copy(),
+            "recovery": np.asarray(recovery_count),
+        }
+
     def nb_saturated_likelihood_derivatives(
         self, y: np.ndarray, weight: np.ndarray, theta: float
     ) -> np.ndarray:
