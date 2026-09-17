@@ -33,11 +33,17 @@ The controller OR-reduces `requires_direct_response` across the scan before
 choosing normal or direct rows. Raw pseudo-responses remain available for
 diagnostics, while `nb_selected_working_rows` supplies finite QR inputs.
 The direct route does not require finite pseudo-responses and retains a finite
-derivative RHS even when curvature is zero. Informative counts count usable
-nonzero-curvature rows, independently from the derivative RHS and raw masks.
-Empty, all-zero-weight and padded batches contribute neutral systems/counts.
+derivative RHS even when curvature is zero. Source good-row counts count the selected finite W/z or W/Wz rows, including
+zero curvature with finite derivative RHS. The gam.fit4 data gate checks this
+good-row count. Separate informative counts count usable nonzero curvature;
+they must not reject a zero-curvature direct-RHS penalized solve. Factor and
+penalty rank determine solve/score admissibility independently.
+Empty, all-zero-weight and padded batches contribute neutral systems and
+curvature counts. Real zero-prior rows remain source good rows on the direct
+path; they contribute zero RHS/deviance. Global prior-weight support and family
+domain checks are separate from source good-row counts.
 Invalid real input fails the domain flag; controllers must check global
-domain/admissibility and informative-count metadata before accepting a solve.
+domain/admissibility and source good-row metadata before accepting a solve.
 
 An indefinite observed solve requests a separate scan with
 `nb_positive_observed_retry`. This zeros nonpositive/nonfinite observed

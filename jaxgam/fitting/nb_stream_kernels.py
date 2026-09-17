@@ -48,8 +48,10 @@ class NBWorkingSummary(NamedTuple):
 
     requires_direct_response: jax.Array
     domain_ok: jax.Array
-    normal_count: jax.Array
-    direct_count: jax.Array
+    normal_good_count: jax.Array
+    direct_good_count: jax.Array
+    normal_informative_count: jax.Array
+    direct_informative_count: jax.Array
     deviance: jax.Array
 
 
@@ -214,6 +216,8 @@ def nb_working_summary(batch: NBWorkingBatch) -> NBWorkingSummary:
     return NBWorkingSummary(
         batch.requires_direct_response,
         batch.domain_ok,
+        jnp.sum(batch.normal_rows),
+        jnp.sum(batch.direct_rows),
         jnp.sum(batch.normal_rows & informative),
         jnp.sum(batch.direct_rows & informative),
         batch.deviance,
@@ -228,8 +232,10 @@ def merge_nb_working_summaries(
     return NBWorkingSummary(
         left.requires_direct_response | right.requires_direct_response,
         left.domain_ok & right.domain_ok,
-        left.normal_count + right.normal_count,
-        left.direct_count + right.direct_count,
+        left.normal_good_count + right.normal_good_count,
+        left.direct_good_count + right.direct_good_count,
+        left.normal_informative_count + right.normal_informative_count,
+        left.direct_informative_count + right.direct_informative_count,
         left.deviance + right.deviance,
     )
 
