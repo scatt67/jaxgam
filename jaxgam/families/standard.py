@@ -121,8 +121,17 @@ class Gaussian(ExponentialFamily):
         """
         nobs = len(y)
         dev = float(np.sum(wt * (y - mu) ** 2))
-        sum_log_wt = float(np.sum(np.log(wt[wt > 0])))
-        return float(nobs * (np.log(2 * np.pi * dev / nobs) + 1.0) + 2.0 - sum_log_wt)
+        # stats::gaussian$aic includes all prior weights. A real zero prior
+        # yields +Inf for positive deviance (and NaN at zero deviance), unlike
+        # fix.family.ls, whose saturated likelihood filters zero-prior rows.
+        # Preserve the source diagnostic instead of returning a finite AIC.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sum_log_wt = float(np.sum(np.log(wt)))
+            return float(
+                nobs * (np.log(np.divide(2 * np.pi * dev, nobs)) + 1.0)
+                + 2.0
+                - sum_log_wt
+            )
 
     def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu = y for Gaussian."""
