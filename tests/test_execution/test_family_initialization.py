@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import subprocess
-from functools import partial
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -19,7 +20,11 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
     FamilyExecutionLineage,
     FamilyExecutionParameters,
+    _initial_newton_quantities,
     batch_initial_working_quantities,
+    finalize_initial_working_status,
+    initial_working_status,
+    merge_initial_working_status,
 )
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
@@ -172,6 +177,16 @@ class _NonfiniteD2Identity(IdentityLink):
         return array_module(mu).full_like(mu, np.inf)
 
 
+class _NonfiniteObservedBinomial(Binomial):
+    """Makes only the raw AD observed-information diagnostic non-finite."""
+
+    family_name = "nonfinite_observed_binomial"
+
+    def deviance_derivative_contributions(self, y, mu, wt):
+        xp = array_module(mu)
+        return super().deviance_derivative_contributions(y, mu, wt) + mu * xp.nan
+
+
 class _ZeroVarianceGaussian(Gaussian):
     """An invalid variance contract used to prove positive rows fail closed."""
 
@@ -218,6 +233,7 @@ def test_zero_mu_eta_and_empty_batches_are_neutral_not_invalid() -> None:
     assert bool(result.working_inputs_ok)
     assert bool(result.working_system_admissible)
     assert int(result.informative_count) == 0
+    np.testing.assert_array_equal(result.informative_mask, [False])
     np.testing.assert_array_equal(np.asarray(result.fisher_weight), [0.0])
 
 
@@ -242,6 +258,64 @@ def test_selected_fisher_system_ignores_unselected_nonfinite_newton_diagnostic()
     assert bool(result.working_system_admissible)
     assert np.isinf(np.asarray(result.newton_alpha_raw)[0])
     np.testing.assert_allclose(result.fisher_weight, [1.0])
+
+
+def test_selected_newton_system_ignores_raw_nonfinite_observed_diagnostic() -> None:
+    """Operational alpha W/z remains distinct from raw AD curvature status."""
+    family = _NonfiniteObservedBinomial(LogLink())
+    result = batch_initial_working_quantities(
+        jnp.asarray([0.4]),
+        jnp.ones(1),
+        jnp.zeros(1),
+        jnp.ones(1, dtype=bool),
+        jnp.asarray([np.log(0.3)]),
+        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
+        family,
+        FamilyExecutionContext.from_family(family),
+    )
+    assert not bool(result.observed_information_ok)
+    assert bool(result.fisher_system_ok)
+    assert bool(result.newton_system_ok)
+    assert bool(result.working_system_admissible)
+    assert np.isnan(np.asarray(result.observed_weight)[0])
+
+
+def test_source_ordered_initial_arithmetic_preserves_identity_derivatives() -> None:
+    """Materializing R temporaries must not disable AD of the shared hooks."""
+    family = Binomial(LogLink())
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    context = FamilyExecutionContext.from_family(family)
+    mu = jnp.asarray([0.3, 0.9])
+    _, tangent = jax.jit(
+        lambda value: jax.jvp(
+            family.link.second_derivative, (value,), (jnp.ones_like(value),)
+        )
+    )(mu)
+    np.testing.assert_allclose(
+        tangent, 2.0 / np.asarray(mu) ** 3, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+    def weight_at_eta(eta):
+        return batch_initial_working_quantities(
+            jnp.asarray([0.4]),
+            jnp.asarray([0.8]),
+            jnp.zeros(1),
+            jnp.ones(1, dtype=bool),
+            eta,
+            parameters,
+            family,
+            context,
+        ).newton_weight
+
+    _, derivative = jax.jit(
+        lambda eta: jax.jvp(weight_at_eta, (eta,), (jnp.ones_like(eta),))
+    )(jnp.asarray([np.log(0.3)]))
+    expected = 0.8 * 0.6 * 0.3 * 1.3 / 0.7**3
+    np.testing.assert_allclose(
+        derivative, [expected], rtol=STRICT.rtol, atol=STRICT.atol
+    )
 
 
 @pytest.mark.parametrize("fixed", [True, False])
@@ -326,59 +400,288 @@ def test_initial_raw_alpha_uses_unclipped_second_link_derivative(
     )
 
 
-def test_binomial_log_reports_unresolved_near_zero_alpha_without_rewriting() -> None:
-    """Keep raw alpha/sign and fail the operational parity gate near cancellation."""
+def _pinned_binomial_log_cancellation_oracle() -> dict[str, np.ndarray]:
+    """Evaluate the named gam.fit3 alpha temporaries in pinned R."""
+    script = r"""
+        suppressPackageStartupMessages(library(mgcv))
+        f <- mgcv:::fix.family.link(mgcv:::fix.family.var(binomial("log")))
+        neighbor <- 1 - .Machine$double.eps / 2
+        y <- c(1, neighbor, 1 - 1e-12, 1, neighbor)
+        eta <- log(c(13 / 18, 13 / 18, 13 / 18, .3, .9))
+        weights <- c(.8, 1.7, .25, 2.3, .4)
+        offset <- c(-.1, .2, 0, -.4, .7)
+        mu <- f$linkinv(eta)
+        variance <- f$variance(mu)
+        mu_eta <- f$mu.eta(eta)
+        residual <- y - mu
+        alpha_raw <- 1 + residual * (
+          f$dvar(mu) / variance + f$d2link(mu) * mu_eta
+        )
+        alpha <- alpha_raw
+        alpha[alpha == 0] <- .Machine$double.eps
+        weight <- weights * alpha * mu_eta^2 / variance
+        response <- (eta - offset) + residual / (mu_eta * alpha)
+        emit <- function(name, value) cat(
+          paste(c(name, sprintf("%.17g", value)), collapse="|"), "\n"
+        )
+        emit("eta", eta); emit("mu", mu); emit("alpha_raw", alpha_raw)
+        emit("alpha", alpha); emit("weight", weight); emit("response", response)
+    """
+    completed = subprocess.run(
+        ["Rscript", "-e", script], check=True, capture_output=True, text=True
+    )
+    oracle: dict[str, np.ndarray] = {}
+    for line in completed.stdout.splitlines():
+        fields = line.split("|")
+        if fields[0] in {"eta", "mu", "alpha_raw", "alpha", "weight", "response"}:
+            oracle[fields[0]] = np.asarray(fields[1:], dtype=float)
+    if len(oracle) != 6:
+        raise AssertionError(f"Missing Binomial/log oracle fields: {completed.stderr}")
+    return oracle
+
+
+@pytest.mark.skipif(not r_available(), reason="requires pinned R 4.5.2 + mgcv 1.9-3")
+def test_binomial_log_exact_and_neighbor_alpha_match_pinned_r_cpu_and_jit() -> None:
+    """Preserve R operation order and only its literal alpha-zero replacement."""
+    oracle = _pinned_binomial_log_cancellation_oracle()
     family = Binomial(LogLink())
-    y = jnp.asarray([0.0, 1.0, 0.0])
-    weight = jnp.asarray([1.0, 0.8, 1.3])
-    state = family.initial_working_state_cpu(
-        np.asarray(y), np.asarray(weight), np.ones(3, bool)
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
     )
-    result = batch_initial_working_quantities(
-        y,
-        weight,
-        jnp.asarray([0.1, -0.1, 0.05]),
-        jnp.ones(3, dtype=bool),
-        jnp.asarray(state.eta),
-        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
-        family,
-        FamilyExecutionContext.from_family(family),
+    context = FamilyExecutionContext.from_family(family)
+    y = jnp.asarray(
+        [1.0, np.nextafter(1.0, 0.0), 1.0 - 1e-12, 1.0, np.nextafter(1.0, 0.0)]
     )
-    assert bool(result.input_ok)
-    assert bool(result.domain_ok)
-    assert bool(result.alpha_resolution_unresolved[1])
-    assert not bool(result.working_system_admissible)
-    assert np.asarray(result.newton_alpha_raw)[1] != np.finfo(float).eps
-    np.testing.assert_allclose(
-        result.newton_alpha, result.newton_alpha_raw, rtol=STRICT.rtol, atol=STRICT.atol
+    weight = jnp.asarray([0.8, 1.7, 0.25, 2.3, 0.4])
+    offset = jnp.asarray([-0.1, 0.2, 0.0, -0.4, 0.7])
+    eta = jnp.asarray(oracle["eta"])
+
+    results = []
+    with jax.disable_jit():
+        results.append(
+            batch_initial_working_quantities(
+                y,
+                weight,
+                offset,
+                jnp.ones(5, dtype=bool),
+                eta,
+                parameters,
+                family,
+                context,
+            )
+        )
+    results.append(
+        batch_initial_working_quantities(
+            y, weight, offset, jnp.ones(5, dtype=bool), eta, parameters, family, context
+        )
+    )
+    for result in results:
+        np.testing.assert_allclose(
+            result.mu, oracle["mu"], rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        np.testing.assert_allclose(
+            result.newton_alpha_raw, oracle["alpha_raw"], rtol=STRICT.rtol, atol=0.0
+        )
+        np.testing.assert_allclose(
+            result.newton_alpha, oracle["alpha"], rtol=STRICT.rtol, atol=0.0
+        )
+        np.testing.assert_allclose(
+            result.newton_weight, oracle["weight"], rtol=STRICT.rtol, atol=0.0
+        )
+        np.testing.assert_allclose(
+            result.newton_response,
+            oracle["response"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert np.asarray(result.newton_alpha_raw)[0] == 0.0
+        assert np.asarray(result.newton_alpha)[0] == np.finfo(float).eps
+        np.testing.assert_array_equal(
+            np.asarray(result.newton_alpha)[1:],
+            np.asarray(result.newton_alpha_raw)[1:],
+        )
+        np.testing.assert_array_equal(
+            result.alpha_resolution_unresolved, [True, True, False, True, True]
+        )
+        assert bool(result.newton_system_ok)
+        assert not bool(result.working_system_admissible)
+
+
+def test_initial_working_status_requires_a_globally_informative_valid_row() -> None:
+    """Empty and zero-weight batches are neutral; global absence still fails."""
+    family = Binomial(LogLink())
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    context = FamilyExecutionContext.from_family(family)
+
+    def evaluate(y, weight, valid, eta):
+        size = len(y)
+        return batch_initial_working_quantities(
+            jnp.asarray(y),
+            jnp.asarray(weight),
+            jnp.zeros(size),
+            jnp.asarray(valid),
+            jnp.asarray(eta),
+            parameters,
+            family,
+            context,
+        )
+
+    empty = evaluate([], [], [], [])
+    zero_weight = evaluate([np.nan], [0.0], [True], [np.log(0.5)])
+    informative = evaluate([0.4], [0.8], [True], [np.log(0.3)])
+    invalid = evaluate([1.1], [1.0], [True], [np.log(0.5)])
+
+    neutral = merge_initial_working_status(
+        initial_working_status(empty), initial_working_status(zero_weight)
+    )
+    assert not bool(finalize_initial_working_status(neutral))
+    forward = merge_initial_working_status(neutral, initial_working_status(informative))
+    reverse = merge_initial_working_status(initial_working_status(informative), neutral)
+    assert bool(finalize_initial_working_status(forward))
+    assert bool(finalize_initial_working_status(reverse))
+    rejected = merge_initial_working_status(forward, initial_working_status(invalid))
+    assert not bool(finalize_initial_working_status(rejected))
+    assert np.asarray(forward[1]).dtype == np.dtype("int64")
+
+
+def _pinned_binomial_log_binary_oracle() -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray
+]:
+    """Preserve binary input and all R vector temporaries across 328 rows."""
+    weights = np.concatenate((np.geomspace(0.05, 100.0, 81), [0.8]))
+    y = np.repeat([1.0, np.nextafter(1.0, 0.0), 1.0 - 1e-12, 0.6], len(weights))
+    weight = np.tile(weights, 4)
+    offset = np.linspace(-0.4, 0.7, len(y))
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        np.column_stack((y, weight, offset)).astype("<f8").ravel(order="F").tofile(
+            root / "input.bin"
+        )
+        script = r"""
+            suppressPackageStartupMessages(library(mgcv))
+            stopifnot(as.character(getRversion()) == "4.5.2",
+                      as.character(packageVersion("mgcv")) == "1.9.3")
+            input <- matrix(readBin("input.bin", "double", n=328*3, size=8,
+                                    endian="little"), ncol=3)
+            y <- input[,1]; weights <- input[,2]; offset <- input[,3]
+            nobs <- length(y); mustart <- NULL
+            f <- mgcv:::fix.family.var(mgcv:::fix.family.link(binomial("log")))
+            eval(f$initialize)
+            eta <- f$linkfun(mustart)
+            mu <- f$linkinv(eta); variance <- f$variance(mu)
+            mu_eta <- f$mu.eta(eta); dvar <- f$dvar(mu); d2link <- f$d2link(mu)
+            residual <- y - mu
+            alpha_raw <- 1 + residual * (dvar/variance + d2link*mu_eta)
+            alpha <- alpha_raw; alpha[alpha == 0] <- .Machine$double.eps
+            weight <- weights*alpha*mu_eta^2/variance
+            response <- (eta-offset)+residual/(mu_eta*alpha)
+            writeBin(as.double(cbind(eta,mu,variance,mu_eta,dvar,d2link,
+                                    alpha_raw,alpha,weight,response)), "oracle.bin",
+                     size=8, endian="little")
+        """
+        subprocess.run(
+            ["Rscript", "-e", script],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        oracle = np.fromfile(root / "oracle.bin", dtype="<f8").reshape(
+            (-1, 10), order="F"
+        )
+    return y, weight, offset, oracle
+
+
+@pytest.mark.skipif(not r_available(), reason="requires pinned R 4.5.2 + mgcv 1.9-3")
+def test_binomial_log_binary_operation_provenance_and_first_system() -> None:
+    """Match all source arithmetic at common mu; retain inverse-link guard.
+
+    Raw tiny alpha and W use zero absolute tolerance as a diagnostic stronger
+    than repository STRICT. It must not silently redefine final-fit parity.
+    The mixed informative design also checks the actual first linear system;
+    this does not establish a cancellation-only or signed-solver release.
+    """
+    y, weight, offset, oracle = _pinned_binomial_log_binary_oracle()
+    family = Binomial(LogLink())
+    parameters = FamilyExecutionParameters.from_snapshot(
+        family.execution_parameter_snapshot()
+    )
+    context = FamilyExecutionContext.from_family(family)
+    grid = np.linspace(-1.0, 1.0, len(y))
+    X = np.column_stack((np.ones(len(y)), grid, np.sin(3.0 * grid)))
+    penalty = np.diag([0.0, 0.2, 0.4])
+    expected_weight, expected_response = oracle[:, 8], oracle[:, 9]
+    expected_product = expected_weight * expected_response
+    expected_beta = np.linalg.solve(
+        X.T @ (expected_weight[:, None] * X) + penalty, X.T @ expected_product
     )
 
-    nextafter = batch_initial_working_quantities(
-        jnp.asarray([0.0, np.nextafter(1.0, 0.0), 0.0]),
-        weight,
-        jnp.asarray([0.1, -0.1, 0.05]),
-        jnp.ones(3, dtype=bool),
-        jnp.asarray(state.eta),
-        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
-        family,
-        FamilyExecutionContext.from_family(family),
-    )
-    assert bool(nextafter.alpha_resolution_unresolved[1])
-    assert not bool(nextafter.working_system_admissible)
-    assert np.asarray(nextafter.newton_alpha_raw)[1] > 0.0
+    for disable in (True, False):
+        with jax.disable_jit(disable):
+            matched = _initial_newton_quantities(
+                jnp.asarray(y),
+                jnp.asarray(weight),
+                jnp.asarray(offset),
+                *(jnp.asarray(oracle[:, i]) for i in range(6)),
+            )
+            actual = batch_initial_working_quantities(
+                jnp.asarray(y),
+                jnp.asarray(weight),
+                jnp.asarray(offset),
+                jnp.ones(len(y), dtype=bool),
+                jnp.asarray(oracle[:, 0]),
+                parameters,
+                family,
+                context,
+            )
+        for value, column in zip(matched, range(6, 10), strict=True):
+            np.testing.assert_allclose(
+                value, oracle[:, column], rtol=STRICT.rtol, atol=0.0
+            )
 
-    far = batch_initial_working_quantities(
-        jnp.asarray([0.0, 1.0 - 1e-12, 0.0]),
-        weight,
-        jnp.asarray([0.1, -0.1, 0.05]),
-        jnp.ones(3, dtype=bool),
-        jnp.asarray(state.eta),
-        FamilyExecutionParameters.from_snapshot(family.execution_parameter_snapshot()),
-        family,
-        FamilyExecutionContext.from_family(family),
-    )
-    assert not bool(far.alpha_resolution_unresolved[1])
-    assert bool(far.working_system_admissible)
+        same_mu = np.asarray(actual.mu) == oracle[:, 1]
+        for field, column in (
+            ("newton_alpha_raw", 6),
+            ("newton_alpha", 7),
+            ("newton_weight", 8),
+            ("newton_response", 9),
+        ):
+            np.testing.assert_allclose(
+                np.asarray(getattr(actual, field))[same_mu],
+                oracle[same_mu, column],
+                rtol=STRICT.rtol,
+                atol=0.0,
+            )
+        response_mismatch = ~np.isclose(
+            actual.newton_response,
+            expected_response,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert np.all(~same_mu[response_mismatch])
+        assert np.all(np.asarray(actual.alpha_resolution_unresolved)[response_mismatch])
+        assert not bool(actual.working_system_admissible)
+        # Repository STRICT accepts tiny W/alpha absolute differences; the
+        # unscaled z disagreement remains explicit and guarded above.
+        np.testing.assert_allclose(
+            actual.newton_alpha, oracle[:, 7], rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        np.testing.assert_allclose(
+            actual.newton_weight, expected_weight, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        actual_weight = np.asarray(actual.newton_weight)
+        product = actual_weight * np.asarray(actual.newton_response)
+        np.testing.assert_allclose(
+            product, expected_product, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        beta = np.linalg.solve(
+            X.T @ (actual_weight[:, None] * X) + penalty, X.T @ product
+        )
+        np.testing.assert_allclose(
+            beta, expected_beta, rtol=STRICT.rtol, atol=STRICT.atol
+        )
 
 
 @pytest.mark.parametrize(
@@ -425,6 +728,7 @@ def test_initial_working_kernel_jits_and_preserves_raw_systems(family) -> None:
     )(jnp.asarray(state.eta))
     assert bool(result.domain_ok)
     assert bool(result.working_system_admissible)
+    np.testing.assert_array_equal(result.informative_mask, [True, False])
     for value in (
         result.fisher_weight,
         result.fisher_response,
@@ -675,41 +979,16 @@ def test_first_working_kernel_matches_pinned_gam_fit3_all_regular_links() -> Non
                 result.mu, expected["mu"]
             ),
         )
-        if name == "binomial_log":
-            # This cell is an explicit future 7.4 compatibility gate: pinned
-            # R and compiled JAX differ by ulps around alpha=0.  Eta/mu and
-            # raw systems remain available for diagnosis, but cannot be sent
-            # to an observed Newton solver as R-validated values.
-            assert bool(result.alpha_resolution_unresolved[1])
-            assert not bool(result.working_system_admissible)
-            admissible_rows = ~np.asarray(result.alpha_resolution_unresolved)
-            collector.check(
-                f"{name}: admissible raw weight",
-                partial(
-                    _assert_r_vector,
-                    np.asarray(selected_weight)[admissible_rows],
-                    expected["weight"][admissible_rows],
-                ),
-            )
-            collector.check(
-                f"{name}: admissible raw z",
-                partial(
-                    _assert_r_vector,
-                    np.asarray(selected_z)[admissible_rows],
-                    expected["z"][admissible_rows],
-                ),
-            )
-        else:
-            collector.check(
-                f"{name}: raw weight",
-                lambda selected_weight=selected_weight, expected=expected: (
-                    _assert_r_vector(selected_weight, expected["weight"])
-                ),
-            )
-            collector.check(
-                f"{name}: raw z",
-                lambda selected_z=selected_z, expected=expected: _assert_r_vector(
-                    selected_z, expected["z"]
-                ),
-            )
+        collector.check(
+            f"{name}: raw weight",
+            lambda selected_weight=selected_weight, expected=expected: _assert_r_vector(
+                selected_weight, expected["weight"]
+            ),
+        )
+        collector.check(
+            f"{name}: raw z",
+            lambda selected_z=selected_z, expected=expected: _assert_r_vector(
+                selected_z, expected["z"]
+            ),
+        )
     collector.raise_if_any("pinned gam.fit3 first-working oracle")
