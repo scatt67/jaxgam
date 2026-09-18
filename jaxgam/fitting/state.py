@@ -66,6 +66,11 @@ class EFSOptimizerDiagnostics:
     log_lambda_cap_count: int
     invalid_fit_seen: bool
     stabilized_solve_seen: bool
+    # Only executed fit-provider scans/batches are counted. Phase-1 basis
+    # preparation and future outer-start preparation are separate costs.
+    # Missing measurements in any trial make the aggregate unavailable.
+    provider_source_scans: int | None = None
+    provider_batches_scanned: int | None = None
 
 
 def _coefficient_rhs(rhs: jax.Array, n_coef: int) -> jax.Array:
