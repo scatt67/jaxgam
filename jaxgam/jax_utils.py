@@ -140,6 +140,34 @@ def array_module(x: object) -> types.ModuleType:
     return np
 
 
+@jax.custom_jvp
+def _materialize_source_jax(value: jax.Array) -> jax.Array:
+    return jnp.nextafter(value, value)
+
+
+@_materialize_source_jax.defjvp
+def _materialize_source_jvp(
+    primals: tuple[jax.Array], tangents: tuple[jax.Array]
+) -> tuple[jax.Array, jax.Array]:
+    (value,) = primals
+    (tangent,) = tangents
+    return _materialize_source_jax(value), tangent
+
+
+def _materialize_source_operation(
+    value: jax.Array | np.ndarray,
+) -> jax.Array | np.ndarray:
+    """Preserve one rounded source temporary with its identity derivative.
+
+    nextafter(x, x) is exactly x. Its bit-level lowering prevents XLA from
+    contracting arithmetic across a source vector-operation boundary; the
+    custom JVP preserves the derivative of this identity operation.
+    """
+    if is_jax_array(value):
+        return _materialize_source_jax(value)
+    return np.nextafter(value, value)
+
+
 # ---------------------------------------------------------------------------
 # Linear algebra primitives
 # ---------------------------------------------------------------------------

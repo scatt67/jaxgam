@@ -395,15 +395,43 @@ class GAMPredictionResult:
         """Build compact prediction state directly from row-free stream state."""
         from jaxgam.fitting.reml import (
             reml_criterion,
+            reml_criterion_from_penalized_deviance,
             reml_criterion_with_logdet_hessian,
         )
+        from jaxgam.fitting.signed_qr import SignedQRCoefficientFactor
         from jaxgam.fitting.state import PivotedQRCoefficientFactor
 
         coefficients_fit = to_numpy(stream_state.coefficients)
         coefficients = _prepared_transform_coefficients_cpu(prepared, coefficients_fit)
         scale = float(to_numpy(stream_state.scale))
         phi = 1.0 if family.scale_known else scale
-        if isinstance(stream_state.coefficient_factor, PivotedQRCoefficientFactor):
+        if isinstance(
+            stream_state.coefficient_factor, SignedQRCoefficientFactor
+        ) and not bool(to_numpy(stream_state.coefficient_factor.score_admissible)):
+            raise FloatingPointError(
+                "Signed observed score determinant is inadmissible."
+            )
+        if isinstance(stream_state.coefficient_factor, SignedQRCoefficientFactor):
+            # gam.fit3 retains the final candidate's penalty in its score
+            # even when domain recovery returns the prior feasible beta.
+            score = reml_criterion_from_penalized_deviance(
+                stream_state.log_lambda,
+                stream_state.xtwx,
+                stream_state.penalized_deviance,
+                stream_state.saturated_loglik,
+                metadata.penalty_structure,
+                stream_state.score_scale,
+                metadata.total_penalty_null_dim,
+                metadata.singleton_sp_indices,
+                metadata.singleton_ranks,
+                metadata.singleton_eig_constants,
+                metadata.multi_block_sp_indices,
+                metadata.multi_block_ranks,
+                metadata.multi_block_proj_S,
+                metadata.rank_deficit,
+                log_det_hessian=stream_state.coefficient_factor.logdet_hessian(),
+            )
+        elif isinstance(stream_state.coefficient_factor, PivotedQRCoefficientFactor):
             score = reml_criterion_with_logdet_hessian(
                 stream_state.log_lambda,
                 stream_state.coefficients,
