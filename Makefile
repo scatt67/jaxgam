@@ -57,6 +57,10 @@ test-efs-factor: docker-build ## run exact factor-action EFS contractions and de
 		tests/test_fitting/test_efs_factor.py tests/test_fitting/test_efs.py -x --tb=short -q
 
 .PHONY: test-efs-stream-provider
+test-efs-stream-start: docker-build ## run bounded streamed EFS default-start reductions and source gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest tests/test_execution/test_efs_stream_start.py tests/test_execution/test_efs_stream_provider.py tests/test_execution/test_null_coefficient.py --tb=short
+
+.PHONY: test-efs-stream-start
 test-efs-stream-provider: docker-build ## run actual streamed EFS provider, source attribution and controller compatibility
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
 		tests/test_execution/test_efs_stream_provider.py \

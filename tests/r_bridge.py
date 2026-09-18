@@ -468,6 +468,107 @@ class RBridge:
                     return constructor(link=links[link])
         raise ValueError(f"Unknown EFS family: {family!r}")
 
+    def efs_nb_null_deviance(
+        self, y: np.ndarray, mu: float, weights: np.ndarray, theta: float
+    ) -> float:
+        """Evaluate pinned NB ``dev.resids`` with the source's R reduction."""
+        self._require_rpy2()
+        y = np.asarray(y, dtype=np.float64)
+        weights = np.asarray(weights, dtype=np.float64)
+        if y.ndim != 1 or weights.shape != y.shape:
+            raise ValueError("NB null-deviance inputs need matching vectors")
+        if not np.isfinite(mu) or not np.isfinite(theta) or theta <= 0:
+            raise ValueError("NB null-deviance needs finite mu and positive theta")
+        family = self._mgcv.nb(theta=float(theta))
+        deviance = family.rx2("dev.resids")(
+            self._to_r_vector(y),
+            self._base.rep(float(mu), len(y)),
+            self._to_r_vector(weights),
+            self._base.log(float(theta)),
+        )
+        return float(self._base.sum(deviance)[0])
+
+    def efs_startup_reference(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        weights: np.ndarray,
+        penalties: list[np.ndarray],
+        ranks: list[int],
+        offsets: list[int],
+        *,
+        family: str,
+        link: str,
+        theta: float,
+    ) -> dict[str, np.ndarray | float]:
+        """Run pinned ``get.null.coef`` and ``initial.spg`` on supplied arrays."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        weights = np.asarray(weights, dtype=np.float64)
+        if X.ndim != 2 or y.shape != (X.shape[0],) or weights.shape != y.shape:
+            raise ValueError("EFS startup arrays have incompatible dimensions")
+        if len(penalties) != len(ranks) or len(ranks) != len(offsets):
+            raise ValueError("EFS startup penalty metadata lengths differ")
+        if family == "nb":
+            r_family = self._mgcv.nb(theta=float(theta), link=link)
+        else:
+            constructors = {
+                "Gamma": self._stats.Gamma,
+                "gaussian": self._stats.gaussian,
+                "poisson": self._stats.poisson,
+                "binomial": self._stats.binomial,
+            }
+            try:
+                r_family = constructors[family](link=link)
+            except KeyError:
+                raise ValueError(
+                    f"Unsupported EFS startup family: {family!r}"
+                ) from None
+        r_family = self._call_internal("fix.family", r_family)
+        r_x = self._to_r_matrix(X)
+        r_y = self._to_r_vector(y)
+        r_weight = self._to_r_vector(weights)
+        r_penalties = rinterface.ListSexpVector(
+            [self._to_r_matrix(value) for value in penalties]
+        )
+        r_ranks = self._to_r_vector(np.asarray(ranks, dtype=np.int32))
+        r_offsets = self._to_r_vector(np.asarray(offsets, dtype=np.int32))
+        setup = self._ro.ListVector(
+            {
+                "X": r_x,
+                "y": r_y,
+                "w": r_weight,
+                "n": self._ro.IntVector([len(y)]),
+                "family": r_family,
+            }
+        )
+        null = self._call_internal("get.null.coef", setup)
+        sp = self._call_internal(
+            "initial.spg",
+            r_x,
+            r_y,
+            r_weight,
+            r_family,
+            r_penalties,
+            r_ranks,
+            r_offsets,
+        )
+        r_phi = (
+            self._ro.FloatVector([1.0])
+            if family in {"poisson", "binomial", "nb"}
+            else self._ro.r["/"](null.rx2("null.scale"), 10)
+        )
+        return {
+            "log_smoothing": np.asarray(self._base.log(sp), dtype=np.float64).copy(),
+            "null_coefficients": np.asarray(
+                null.rx2("null.coef"), dtype=np.float64
+            ).copy(),
+            "scale": float(np.asarray(r_phi, dtype=np.float64)[0]),
+        }
+
     def fit_gam(
         self,
         formula: str,

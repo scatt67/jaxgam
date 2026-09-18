@@ -1,9 +1,9 @@
-"""Bounded, lineage-checked NB accepted/trial fits for the EFS controller.
+"""Bounded, lineage-checked regular and NB accepted/trial EFS fits.
 
-This first provider component uses explicit controller starts. Streamed
-initial-sp/scale, regular-family binding and public dispatch are separate
-components; this adapter does not materialize training rows or change the
-reviewed outer or coefficient-controller policies.
+These adapters consume explicit controller requests. Streamed initial-sp/scale
+preparation and public dispatch compose around the shared provider protocol;
+the adapters do not materialize training rows or change the reviewed outer
+or coefficient-controller policies.
 """
 
 from __future__ import annotations
