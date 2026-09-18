@@ -783,6 +783,128 @@ class TestValidationMatrix:
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    "case",
+    ["gaussian", "gamma", "poisson", "binomial"]
+    + [
+        f"nb-{link}-{mode}"
+        for link in ("log", "identity", "sqrt")
+        for mode in ("fixed", "estimated")
+    ],
+)
+def test_internal_streamed_default_start_efs_matches_pinned_selected_fit(
+    r_bridge, case
+):
+    """Default coefficient starts, source-aligned initial sp/phi, binary R fields."""
+
+    from jaxgam.execution.efs_stream import fit_streamed_efs
+    from jaxgam.families.standard import Binomial, Gamma
+    from jaxgam.results import _prepared_transform_coefficients_cpu
+    from tests.test_execution.test_efs_stream_start import _regular
+    from tests.test_execution.test_nb_stream import _fixture
+
+    versions_match, reason = r_bridge.check_versions()
+    assert versions_match, reason
+    if case.startswith("nb-"):
+        _, link, mode = case.split("-")
+        stream, family = _fixture(link, estimated=mode == "estimated", smooth=True)
+        r_name = "nb"
+        theta = -2.7 if mode == "estimated" else 2.7
+    else:
+        family = {
+            "gaussian": Gaussian,
+            "gamma": Gamma,
+            "poisson": Poisson,
+            "binomial": Binomial,
+        }[case]()
+        stream = _regular(family)
+        r_name, link, theta = (
+            case,
+            {
+                "gaussian": "identity",
+                "gamma": "inverse",
+                "poisson": "log",
+                "binomial": "logit",
+            }[case],
+            1.0,
+        )
+    result = fit_streamed_efs(stream, family, maximum_bytes=10_000_000, batch_rows=11)
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    reference = RBridge(mode="rpy2").efs_streamed_default_start_reference(
+        batch.columns["x"],
+        batch.y,
+        batch.weight,
+        batch.offset,
+        family=r_name,
+        link=link,
+        theta=theta,
+        smoothing=np.exp(result.startup.log_lambda),
+        scale=result.startup.score_phi,
+    )
+    fit = result.fit
+    beta = _prepared_transform_coefficients_cpu(
+        stream.prepared, np.asarray(fit.pirls_result.coefficients)
+    )
+    mu = result.family.link.linkinv(
+        stream.prepared.evaluate_batch(batch) @ beta + batch.offset
+    )
+    collector = _AssertCollector()
+    for field, actual in (
+        ("beta", beta),
+        ("mu", mu),
+        ("D", fit.pirls_result.deviance),
+        ("score", fit.score),
+        ("sp", fit.smoothing_params),
+        ("edf", fit.edf),
+        ("scale", fit.scale),
+    ):
+        expected = np.asarray(
+            reference[
+                {
+                    "beta": "coefficients",
+                    "mu": "fitted_values",
+                    "D": "deviance",
+                    "score": "reml_score",
+                    "sp": "smoothing_params",
+                    "edf": "edf_total",
+                    "scale": "scale",
+                }[field]
+            ],
+            dtype=float,
+        )
+        collector.check(
+            field,
+            lambda a=actual, e=expected: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.check(
+        "outer iterations",
+        lambda: np.testing.assert_equal(fit.n_iter, int(reference["outer_iterations"])),
+    )
+    collector.check(
+        "source convergence",
+        lambda: np.testing.assert_equal(
+            str(reference["convergence"]), "full convergence"
+        ),
+    )
+    collector.check(
+        "stream convergence", lambda: np.testing.assert_equal(fit.converged, True)
+    )
+    if case.startswith("nb-"):
+        collector.check(
+            "theta",
+            lambda: np.testing.assert_allclose(
+                fit.theta,
+                np.asarray(reference["theta"]),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+    collector.raise_if_any(f"default-start streamed EFS {case}")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 @pytest.mark.parametrize("link", ["log", "inverse"])
 def test_public_dense_efs_gaussian_patched_response_matches_pinned_r(
     r_bridge, link: str
