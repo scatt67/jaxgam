@@ -59,6 +59,8 @@ def test_compact_efs_diagnostics_count_failure_and_stabilization_events() -> Non
         pirls_result=SimpleNamespace(n_iter=np.array(3)),
         theta_n_iter=np.array(2),
         positive_curvature_retry_count=np.array(0),
+        source_scans=None,
+        batches_scanned=None,
     )
     accepted = SimpleNamespace(log_lambda=np.array([0.2, -0.1, 0.0]))
     raw = SimpleNamespace(ratio=np.array([1.0, 1e6, 1.0]))

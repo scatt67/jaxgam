@@ -302,6 +302,10 @@ class EFSFitState:
     # Count is bounded by the EFS-only PIRLS iteration limit and is collapsed
     # to the public stabilized-solve indicator by the host accumulator.
     positive_curvature_retry_count: jax.Array | None = None
+    # Counts include one provider's summary/initialization, coefficient/theta
+    # replay and reporting scans. Phase-1 preparation is outside this scope.
+    source_scans: int | None = None
+    batches_scanned: int | None = None
 
 
 @dataclass(frozen=True)
@@ -346,12 +350,20 @@ class _EFSDiagnosticsAccumulator:
     invalid_fit_seen: bool = False
     gdi1_fallback_seen: bool = False
     positive_curvature_retry_count: int = 0
+    provider_source_scans: int = 0
+    provider_batches_scanned: int = 0
+    provider_costs_complete: bool = True
 
     def observe_fit(self, state: EFSFitState) -> None:
         self.inner_iterations += int(np.asarray(state.pirls_result.n_iter))
         if state.theta_n_iter is not None:
             self.theta_iterations += int(np.asarray(state.theta_n_iter))
         self.invalid_fit_seen |= not state.valid
+        if state.source_scans is None or state.batches_scanned is None:
+            self.provider_costs_complete = False
+        else:
+            self.provider_source_scans += state.source_scans
+            self.provider_batches_scanned += state.batches_scanned
         if state.gdi1_candidate_valid is not None:
             self.gdi1_fallback_seen |= not bool(np.asarray(state.gdi1_candidate_valid))
         if state.positive_curvature_retry_count is not None:
@@ -431,6 +443,12 @@ class _EFSDiagnosticsAccumulator:
             outer_iterations=outer_iterations,
             inner_iterations=self.inner_iterations,
             theta_iterations=self.theta_iterations,
+            provider_source_scans=self.provider_source_scans
+            if self.provider_costs_complete
+            else None,
+            provider_batches_scanned=self.provider_batches_scanned
+            if self.provider_costs_complete
+            else None,
             accepted_score_history=history,
             accepted_score_phi_history=score_phi_history,
             multiplier=float(multiplier),
