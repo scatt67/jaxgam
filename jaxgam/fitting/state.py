@@ -71,6 +71,9 @@ class EFSOptimizerDiagnostics:
     # Missing measurements in any trial make the aggregate unavailable.
     provider_source_scans: int | None = None
     provider_batches_scanned: int | None = None
+    # Default-start reductions only, excluding Phase-1 basis preparation.
+    startup_source_scans: int | None = None
+    startup_batches_scanned: int | None = None
 
 
 def _coefficient_rhs(rhs: jax.Array, n_coef: int) -> jax.Array:
