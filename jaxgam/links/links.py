@@ -22,7 +22,7 @@ import numpy as np
 from scipy.special import ndtr, ndtri
 from scipy.stats import norm
 
-from jaxgam.jax_utils import array_module, is_jax_array
+from jaxgam.jax_utils import _materialize_source_operation, array_module, is_jax_array
 
 if TYPE_CHECKING:
     import jax
@@ -242,7 +242,10 @@ class LogLink(Link):
         return 1.0 / xp.maximum(mu, _EPS)
 
     def second_derivative(self, mu: Array) -> Array:
-        return -1.0 / mu**2
+        squared = mu**2
+        # Pinned fix.family.link materializes mu^2 before the division.
+        squared = _materialize_source_operation(squared)
+        return -1.0 / squared
 
     def mu_eta(self, eta: Array) -> Array:
         xp = array_module(eta)

@@ -8,14 +8,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam.control import FitControl
+from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import (
     _efs_regular_start,
     dense_efs_unknown_scale,
     efs_initial_log_lambda,
     efs_initial_log_scale,
 )
+from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
+from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.standard import Gaussian
-from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.family_execution import (
     FamilyExecutionContext,
     batch_execution_summary,
@@ -23,7 +27,11 @@ from jaxgam.fitting.family_execution import (
     merge_execution_summaries,
 )
 from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
+from jaxgam.formula.prepare import prepare_model
+from jaxgam.results import GAMPredictionResult
+from tests.helpers import _AssertCollector
 from tests.r_bridge import RBridge
 from tests.tolerances import STRICT
 
@@ -79,6 +87,108 @@ def test_global_patched_gaussian_mustart_cpu_jit_and_batch_parity(link):
                     rtol=STRICT.rtol,
                     atol=STRICT.atol,
                 )
+
+
+@pytest.mark.usefixtures("r_bridge")
+@pytest.mark.parametrize("link", ["log", "inverse"])
+def test_patched_gaussian_start_matches_actual_public_gam(link):
+    rng = np.random.default_rng(7321)
+    x = np.linspace(-0.7, 0.8, 83)
+    y = np.exp(0.2 + 0.3 * x) + rng.normal(0.0, 0.08, len(x))
+    if link == "log":
+        y[[2, 15]] = [-0.2, -0.05]
+    else:
+        y[[2, 15]] = 0.0
+    weight = 0.4 + rng.uniform(size=len(x))
+    weight[8] = 0.0
+    offset = 0.03 * np.sin(x)
+    source_fit = RBridge().source_gaussian_public_fit(
+        "y ~ x",
+        pd.DataFrame({"y": y, "x": x}),
+        link,
+        weight,
+        offset,
+        epsilon=1e-12,
+    )
+    oracle = np.r_[
+        source_fit["coefficients"],
+        source_fit["deviance"],
+        source_fit["scale"],
+        source_fit["edf"],
+        source_fit["score"],
+    ]
+    # gam.outer reports scale.est as sig2; the REML objective retains its
+    # distinct optimized reml.scale, notably with real zero-prior rows.
+    score_phi = source_fit["reml_scale"]
+    oracle_covariance = source_fit["covariance"]
+    family = Gaussian(link)
+    source = DataFrameRowSource(
+        pd.DataFrame({"x": x, "y": y}), response="y", weights=weight, offset=offset
+    )
+    prepared = prepare_model(parse_formula("y ~ x"), source, family=family)
+    stream = StreamDesign(prepared, source)
+    X = np.column_stack((np.ones(len(x)), x))
+    checks = _AssertCollector()
+    for B in (1, 7, 200):
+        result = fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=10000000,
+            score_scale=score_phi,
+            control=StreamPIRLSControl(
+                batch_rows=B,
+                tol=1e-12,
+                max_iter=100,
+                max_halvings=100,
+                solver_policy="qr",
+            ),
+        )
+        state = result.state
+        assert state.converged
+        prediction = GAMPredictionResult._from_stream_fit(
+            stream_state=state,
+            prepared=prepared,
+            metadata=PreparedFittingMetadata.from_prepared(prepared, family),
+            family=family,
+            formula="y ~ x",
+            method="REML",
+            control=FitControl(),
+        )
+        covariance = state.scale * np.asarray(
+            state.fisher_coefficient_factor.hessian_inverse(jnp.eye(2))
+        )
+        for leaf, value, reference in (
+            (
+                "coef_dev_scale_edf_reml",
+                np.r_[
+                    state.coefficients,
+                    state.deviance,
+                    state.scale,
+                    state.edf,
+                    prediction.score,
+                ],
+                oracle,
+            ),
+            (
+                "fitted",
+                family.link.inverse(X @ np.asarray(state.coefficients) + offset),
+                source_fit["fitted"],
+            ),
+            ("fisher_covariance", covariance, oracle_covariance),
+            (
+                "standard_error",
+                np.sqrt(np.einsum("ij,jk,ik->i", X, covariance, X)),
+                np.sqrt(np.einsum("ij,jk,ik->i", X, oracle_covariance, X)),
+            ),
+        ):
+            checks.check(
+                f"{link}/B{B}/{leaf}",
+                lambda a=value, b=reference: np.testing.assert_allclose(
+                    a, b, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+    checks.raise_if_any("Public Gaussian patched-start parity")
 
 
 @pytest.mark.parametrize("link", ["log", "inverse"])
