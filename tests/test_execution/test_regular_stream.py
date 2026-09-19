@@ -221,6 +221,15 @@ def test_regular_gamma_information_consumers_and_measured_scans(batch_rows):
     assert state.batches_scanned == stream.source.batches
     assert result.final_refit_accepted
     assert isinstance(state.coefficient_factor, SignedQRCoefficientFactor)
+    assert isinstance(result.source_coefficient_factor, SignedQRCoefficientFactor)
+    assert result.source_coefficient_factor is not state.coefficient_factor
+    assert not result.source_solve_coefficients.flags.writeable
+    np.testing.assert_allclose(
+        result.source_solve_coefficients,
+        state.coefficients,
+        rtol=0.0,
+        atol=0.0,
+    )
     X = np.column_stack((np.ones(len(data)), data.x))
     mu_info = X @ result.information_coefficients + off
     observed = X.T @ (
@@ -338,6 +347,25 @@ def test_explicit_source_null_anchor_is_distinct_and_prospectively_charged():
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+
+
+def test_regular_source_adjoint_state_is_prospectively_budgeted():
+    stream, family, *_ = _fixture()
+    control = StreamPIRLSControl(batch_rows=17, solver_policy="qr")
+    ledger = preflight_regular_stream_workspace(stream, control, 10000000)
+    p = stream.prepared.n_coef
+    assert ledger.source_adjoint_bytes == 8 * (4 * p * p + 10 * p)
+    assert ledger.required_bytes > ledger.source_adjoint_bytes
+    with pytest.raises(MemoryError, match="known workspace"):
+        fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=ledger.required_bytes - 1,
+            score_scale=0.7,
+            control=control,
+        )
+    assert stream.source.scans == 0
 
 
 def test_regular_iteration_history_is_prospectively_budgeted():
@@ -657,6 +685,19 @@ def test_regular_penalized_gamma_identity_matches_pinned_signed_score_and_fisher
         state = result.state
         assert state.converged
         assert result.final_refit_accepted == (not controlled_invalid_refit)
+        assert not result.source_solve_coefficients.flags.writeable
+        if controlled_invalid_refit:
+            np.testing.assert_array_equal(result.source_solve_coefficients, bad)
+            assert not np.array_equal(
+                result.source_solve_coefficients, np.asarray(state.coefficients)
+            )
+        else:
+            np.testing.assert_allclose(
+                result.source_solve_coefficients,
+                state.coefficients,
+                rtol=0.0,
+                atol=0.0,
+            )
         payload = result.source_score
         np.testing.assert_allclose(
             [

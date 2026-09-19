@@ -5,6 +5,7 @@ import inspect
 import json
 from dataclasses import replace
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -273,6 +274,46 @@ def _check_penalized_fit(family_class, link, *, extreme=False):
         actual_se = np.sqrt(
             float(state.scale) * np.einsum("ij,jk,ik->i", X, actual_covariance, X)
         )
+        normalized_y = jnp.asarray(
+            family.execution_initial_response(data.y.to_numpy(), weight)
+        )
+        X_jax = jnp.asarray(X)
+        offset_jax = jnp.asarray(offset)
+        weight_jax = jnp.asarray(weight)
+
+        def source_deviance(
+            beta,
+            X_value=X_jax,
+            offset_value=offset_jax,
+            y_value=normalized_y,
+            weight_value=weight_jax,
+        ):
+            mu = family.link.inverse(X_value @ beta + offset_value)
+            return jnp.sum(
+                family.deviance_derivative_contributions(y_value, mu, weight_value)
+            )
+
+        source_jacobian = 0.5 * jax.hessian(source_deviance)(
+            jnp.asarray(result.information_coefficients)
+        ) + jnp.diag(jnp.asarray([0.0, 0.35]))
+        source_inverse = result.source_coefficient_factor.hessian_inverse(jnp.eye(2))
+        np.testing.assert_allclose(
+            source_jacobian @ source_inverse,
+            np.eye(2),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert not result.source_solve_coefficients.flags.writeable
+        source_gradient = 0.5 * jax.grad(source_deviance)(
+            jnp.asarray(result.information_coefficients)
+        ) + jnp.diag(jnp.asarray([0.0, 0.35])) @ jnp.asarray(
+            result.information_coefficients
+        )
+        scaled_source_gradient = float(
+            jnp.max(jnp.abs(source_gradient))
+            / (1.0 + abs(result.source_score.stopping_penalized_deviance))
+        )
+        assert scaled_source_gradient <= fit_control.tol
         for field, observed, expected, tolerance in (
             ("beta", np.asarray(state.coefficients), reference[:2], fit_tolerance),
             (
