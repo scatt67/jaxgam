@@ -1068,6 +1068,131 @@ class RBridge:
             np.asarray(fit.rx2("fitted.values"), dtype=np.float64).copy(),
         )
 
+    def source_regular_gdi_ratio(
+        self,
+        design: np.ndarray,
+        response: np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        coefficients: np.ndarray,
+        covariance_direction: np.ndarray,
+        *,
+        family_name: str,
+        link: str,
+        fisher_equals_observed: bool,
+    ) -> np.ndarray:
+        """Form gdi1's first cotangent from installed family derivatives."""
+        self._require_rpy2()
+        constructors = {
+            "gaussian": self._stats.gaussian,
+            "Gamma": self._stats.Gamma,
+            "poisson": self._stats.poisson,
+            "binomial": self._stats.binomial,
+        }
+        if family_name not in constructors:
+            raise ValueError("Unknown regular family for source gdi ratio")
+        X = np.asarray(design, dtype=np.float64)
+        y = np.asarray(response, dtype=np.float64)
+        w = np.asarray(weights, dtype=np.float64)
+        off = np.asarray(offset, dtype=np.float64)
+        beta = np.asarray(coefficients, dtype=np.float64)
+        direction = np.asarray(covariance_direction, dtype=np.float64)
+        if (
+            X.ndim != 2
+            or y.shape != (len(X),)
+            or w.shape != y.shape
+            or off.shape != y.shape
+            or beta.shape != (X.shape[1],)
+            or direction.shape != (X.shape[1], X.shape[1])
+        ):
+            raise ValueError("Regular gdi ratio oracle inputs are misaligned")
+        r_link = "1/mu^2" if link == "inverse_squared" else link
+        family = constructors[family_name](link=r_link)
+        for patch in ("fix.family.link", "fix.family.var", "fix.family.ls"):
+            family = self._call_internal(patch, family)
+        add = self._ro.baseenv["+"]
+        subtract = self._ro.baseenv["-"]
+        multiply = self._ro.baseenv["*"]
+        divide = self._ro.baseenv["/"]
+        power = self._ro.baseenv["^"]
+        matrix_product = self._ro.baseenv["%*%"]
+        X_r = self._to_r_matrix(X)
+        y_r = self._to_r_vector(y)
+        weight_r = self._to_r_vector(w)
+        eta = self._base.drop(
+            add(matrix_product(X_r, self._to_r_vector(beta)), self._to_r_vector(off))
+        )
+        mu_r = family.rx2("linkinv")(eta)
+        me_r = family.rx2("mu.eta")(eta)
+        good = (w > 0) & (np.asarray(me_r, dtype=np.float64) != 0)
+        X_r = self._to_r_matrix(X[good])
+        y_r = self._to_r_vector(y[good])
+        weight_r = self._to_r_vector(w[good])
+        mu_r = self._to_r_vector(np.asarray(mu_r, dtype=np.float64)[good])
+        me_r = self._to_r_vector(np.asarray(me_r, dtype=np.float64)[good])
+
+        def derivative(name: str):
+            return family.rx2(name)(mu_r)
+
+        variance = derivative("variance")
+        g1 = divide(1.0, me_r)
+        g2 = divide(derivative("d2link"), g1)
+        g3 = divide(derivative("d3link"), g1)
+        variance_first = divide(derivative("dvar"), variance)
+        variance_second = divide(derivative("d2var"), variance)
+        fisher_weight = divide(multiply(weight_r, power(me_r, 2.0)), variance)
+        if fisher_equals_observed:
+            weight = fisher_weight
+            derivative_weight = divide(
+                multiply(subtract(0.0, weight), add(variance_first, multiply(2.0, g2))),
+                g1,
+            )
+        else:
+            alpha = add(1.0, multiply(subtract(y_r, mu_r), add(variance_first, g2)))
+            alpha_values = np.asarray(alpha, dtype=np.float64).copy()
+            alpha_values[alpha_values == 0] = np.finfo(float).eps
+            alpha = self._to_r_vector(alpha_values)
+            weight = multiply(fisher_weight, alpha)
+            second = subtract(
+                add(subtract(variance_second, power(variance_first, 2.0)), g3),
+                power(g2, 2.0),
+            )
+            alpha_first = divide(
+                add(
+                    subtract(0.0, add(variance_first, g2)),
+                    multiply(subtract(y_r, mu_r), second),
+                ),
+                alpha,
+            )
+            derivative_weight = divide(
+                multiply(
+                    weight,
+                    subtract(subtract(alpha_first, variance_first), multiply(2.0, g2)),
+                ),
+                g1,
+            )
+        row_direction = self._base.rowSums(
+            multiply(matrix_product(X_r, self._to_r_matrix(direction)), X_r)
+        )
+        deviance_derivative = divide(
+            multiply(multiply(-2.0, weight_r), subtract(y_r, mu_r)),
+            multiply(variance, g1),
+        )
+        beta_cotangent = self._base.drop(
+            self._base.crossprod(
+                X_r,
+                add(
+                    multiply(row_direction, derivative_weight),
+                    multiply(0.7, deviance_derivative),
+                ),
+            )
+        )
+        saturated = family.rx2("ls")(y_r, weight_r, len(y_r), 0.8)
+        log_scale_cotangent = multiply(multiply(-0.6, saturated[1]), 0.8)
+        return np.asarray(
+            self._base.c(beta_cotangent, log_scale_cotangent), dtype=np.float64
+        ).copy()
+
     def fit_efs(
         self,
         formula: str,
