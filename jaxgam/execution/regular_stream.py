@@ -21,6 +21,7 @@ from jaxgam.execution.qr import PositiveQRState, qr_update
 from jaxgam.execution.signed_qr import SignedQRState, signed_qr_update, solve_signed_qr
 from jaxgam.execution.stream import StreamPIRLSControl, _source_batches
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.family_execution import (
     FamilyExecutionLineage,
     FamilyExecutionParameters,
@@ -38,6 +39,35 @@ from jaxgam.fitting.signed_qr import SignedQRCoefficientFactor
 from jaxgam.fitting.state import PivotedQRCoefficientFactor, StreamFitState
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.fitting_prepare import qr_penalty_roots
+
+
+def _source_regular_deviance(
+    family: ExponentialFamily,
+    y: np.ndarray,
+    mu: np.ndarray,
+    weight: np.ndarray,
+) -> float:
+    """Evaluate stats-family dev.resids without reporting-domain clipping.
+
+    This is used only for gam.fit3's explicit recovery-anchor ``old.pdev``.
+    Accepted trials retain the existing checked execution primitive.
+    """
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        if isinstance(family, Gaussian):
+            contribution = weight * (y - mu) ** 2
+        elif isinstance(family, Poisson):
+            ratio = np.where(y == 0.0, 1.0, y / mu)
+            contribution = 2.0 * weight * (y * np.log(ratio) - (y - mu))
+        elif isinstance(family, Binomial):
+            left = np.where(y == 0.0, 1.0, y / mu)
+            right = np.where(y == 1.0, 1.0, (1.0 - y) / (1.0 - mu))
+            contribution = 2.0 * weight * (y * np.log(left) + (1.0 - y) * np.log(right))
+        elif isinstance(family, Gamma):
+            ratio = np.where(y == 0.0, 1.0, y / mu)
+            contribution = -2.0 * weight * (np.log(ratio) - (y - mu) / mu)
+        else:
+            return float(np.asarray(family.dev_resids(y, mu, weight)))
+    return float(np.sum(contribution))
 
 
 @dataclass(frozen=True)
@@ -450,7 +480,11 @@ def fit_regular_streamed_pirls(
         if not isinstance(null_coefficients, np.ndarray):
             raise ValueError("null_coefficients must be a finite fitting p-vector")
         null_view = null_coefficients
-        if null_view.shape != (p,) or not np.issubdtype(null_view.dtype, np.number):
+        if (
+            null_view.shape != (p,)
+            or not np.issubdtype(null_view.dtype, np.number)
+            or np.iscomplexobj(null_view)
+        ):
             raise ValueError("null_coefficients must be a finite fitting p-vector")
         ledger = replace(
             ledger,
@@ -490,7 +524,7 @@ def fit_regular_streamed_pirls(
             raise FloatingPointError("regular penalized deviance is nonfinite")
         return value
 
-    def trial(beta: np.ndarray) -> tuple[float, bool]:
+    def trial(beta: np.ndarray, *, source_anchor: bool = False) -> tuple[float, bool]:
         nonlocal scans, batches_scanned
         if not np.all(np.isfinite(beta)):
             return np.inf, False
@@ -501,19 +535,28 @@ def fit_regular_streamed_pirls(
         ):
             X = checked_X(batch)
             lineage.validate(prepared, family)
-            value, admissible = regular_trial_deviance(
-                jax.device_put(X, device),
-                jax.device_put(y, device),
-                jax.device_put(weight, device),
-                jax.device_put(offset, device),
-                jax.device_put(valid, device),
-                jax.device_put(beta, device),
-                parameters,
-                family,
-                lineage.context,
-            )
-            deviance += float(np.asarray(value))
-            domain = domain and bool(np.asarray(admissible))
+            if source_anchor:
+                normalized_y = family.execution_initial_response_cpu(y, weight)
+                eta = X @ beta + offset
+                mu = np.asarray(family.link.inverse(eta))
+                deviance += _source_regular_deviance(family, normalized_y, mu, weight)
+                domain = domain and bool(
+                    np.all(family.valid_eta(eta)) and np.all(family.valid_mu(mu))
+                )
+            else:
+                value, admissible = regular_trial_deviance(
+                    jax.device_put(X, device),
+                    jax.device_put(y, device),
+                    jax.device_put(weight, device),
+                    jax.device_put(offset, device),
+                    jax.device_put(valid, device),
+                    jax.device_put(beta, device),
+                    parameters,
+                    family,
+                    lineage.context,
+                )
+                deviance += float(np.asarray(value))
+                domain = domain and bool(np.asarray(admissible))
             batches_scanned += 1
         scans += 1
         return deviance, domain and np.isfinite(deviance)
@@ -611,10 +654,18 @@ def fit_regular_streamed_pirls(
             eta = 0.9 * eta + 0.1 * anchor
         return eta
 
-    current_deviance, domain = trial(beta)
-    if not domain:
-        raise ValueError("regular null coefficient anchor leaves the family domain")
-    old_pdev = penalized(beta, current_deviance)
+    current_deviance, _ = trial(beta, source_anchor=explicit_null is not None)
+    # gam.fit3 evaluates dev.resids at its recovery anchor without an upfront
+    # validmu check. A positive-infinite Poisson zero-anchor baseline is usable:
+    # the first working system still starts from mustart. Preserve the raw
+    # source value rather than replacing every invalid-domain result by +Inf.
+    # NaN/-Inf cannot enter the source divergence arithmetic coherently.
+    if explicit_null is None:
+        old_pdev = penalized(beta, current_deviance)
+    else:
+        old_pdev = float(current_deviance + beta @ penalty_apply(beta))
+    if np.isnan(old_pdev) or np.isneginf(old_pdev):
+        raise ValueError("regular null coefficient baseline is inadmissible")
     history = [old_pdev]
     converged = False
     line_search_failed = False

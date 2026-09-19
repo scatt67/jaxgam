@@ -2190,6 +2190,57 @@ class RBridge:
             ),
         }
 
+    def regular_source_zero_null(self, x: np.ndarray, y: np.ndarray) -> dict[str, Any]:
+        """Compare a raw zero null anchor in pinned Poisson and Gamma fits."""
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        self._require_rpy2()
+        ro = self._ro
+        base = ro.baseenv
+        r_y = self._to_r_vector(np.asarray(y, dtype=np.float64))
+        r_X = base["cbind"](self._base.rep(1.0, times=len(y)), self._to_r_vector(x))
+        weight = self._base.rep(1.0, times=len(y))
+        offset = self._base.rep(0.0, times=len(y))
+        results = {}
+        for name, scale in (("poisson", 1), ("Gamma", 0)):
+            family = self._regular_source_family(name, "identity", fix_base=False)
+            environment = self._base.new_env(parent=ro.globalenv)
+            environment["family"] = family
+            environment["y"] = r_y
+            environment["weights"] = weight
+            environment["nobs"] = ro.IntVector([len(y)])
+            ro.r["evalq"](family.rx2("initialize"), envir=environment)
+            try:
+                fit = self._call_internal(
+                    "gam.fit3",
+                    x=r_X,
+                    y=environment["y"],
+                    sp=ro.FloatVector([]),
+                    Eb=0,
+                    UrS=base["list"](),
+                    weights=weight,
+                    offset=offset,
+                    U1=self._base.diag(self._base.ncol(r_X)),
+                    Mp=self._base.ncol(r_X),
+                    family=family,
+                    control=self._mgcv.gam_control(epsilon=1e-7, maxit=200),
+                    deriv=0,
+                    scale=scale,
+                    scoreType="REML",
+                    **{"null.coef": self._base.numeric(self._base.ncol(r_X))},
+                )
+            except RRuntimeError:
+                if name != "Gamma":
+                    raise
+                results["gamma_failed"] = True
+            else:
+                if name == "Gamma":
+                    results["gamma_failed"] = False
+                else:
+                    results["beta"] = np.asarray(fit.rx2("coefficients"))
+                    results["deviance"] = np.asarray(fit.rx2("deviance"))
+        return results
+
     def regular_source_gamma_fixed_trial(
         self,
         link: str,
