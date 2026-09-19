@@ -905,6 +905,39 @@ def test_internal_streamed_default_start_efs_matches_pinned_selected_fit(
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_streamed_regular_recovery_anchor_matches_pinned_efs_default(r_bridge):
+    """mgcv.r omits G$null.coef when dispatching every efsudr refit."""
+    versions_match, reason = r_bridge.check_versions()
+    assert versions_match, reason
+    from jaxgam.execution.efs_stream import fit_streamed_efs
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    family = Gaussian()
+    stream = _regular(family)
+    execution = fit_streamed_efs(
+        stream, family, maximum_bytes=10_000_000, batch_rows=11
+    )
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    reference = RBridge(mode="rpy2").efs_streamed_default_start_reference(
+        batch.columns["x"],
+        batch.y,
+        batch.weight,
+        batch.offset,
+        family="gaussian",
+        link="identity",
+        theta=1.0,
+        smoothing=np.exp(execution.startup.log_lambda),
+        scale=execution.startup.score_phi,
+        trace_null_coef=True,
+    )
+    trace = reference["null_coef_trace_summary"]
+    assert all(reference["null_coef_omitted"])
+    assert trace[0] > 1
+    assert trace[1] == stream.prepared.n_coef
+    assert trace[2] == 0
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 @pytest.mark.parametrize("link", ["log", "inverse"])
 def test_public_dense_efs_gaussian_patched_response_matches_pinned_r(
     r_bridge, link: str

@@ -3011,6 +3011,160 @@ class RBridge:
             },
         }
 
+    def efs_streamed_default_start_reference(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        *,
+        family: str,
+        link: str,
+        theta: float,
+        smoothing: np.ndarray,
+        scale: float,
+        trace_null_coef: bool = False,
+    ) -> dict[str, Any]:
+        """Fit the pinned cubic EFS model with explicit source startup state."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        from tests.r_ast import clone_function, make_r_callback
+
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        weights = np.asarray(weights, dtype=np.float64)
+        offset = np.asarray(offset, dtype=np.float64)
+        smoothing = np.asarray(smoothing, dtype=np.float64)
+        if any(
+            value.ndim != 1 or value.shape != y.shape for value in (x, weights, offset)
+        ):
+            raise ValueError("EFS streamed reference columns must align")
+        if smoothing.ndim != 1 or smoothing.size == 0:
+            raise ValueError("EFS streamed reference needs smoothing parameters")
+        if family == "nb":
+            r_family = self._mgcv.nb(theta=float(theta), link=link)
+        else:
+            constructors = {
+                "gaussian": self._stats.gaussian,
+                "gamma": self._stats.Gamma,
+                "poisson": self._stats.poisson,
+                "binomial": self._stats.binomial,
+            }
+            try:
+                r_family = constructors[family](link=link)
+            except KeyError:
+                raise ValueError(
+                    f"Unsupported EFS streamed family: {family!r}"
+                ) from None
+        data = self._ro.DataFrame(
+            {
+                "x": self._to_r_vector(x),
+                "y": self._to_r_vector(y),
+                "w": self._to_r_vector(weights),
+                "off": self._to_r_vector(offset),
+            }
+        )
+        fit_args: dict[str, Any] = {
+            "data": data,
+            "weights": self._to_r_vector(weights),
+            "offset": self._to_r_vector(offset),
+            "family": r_family,
+            "method": "REML",
+            "optimizer": "efs",
+            "control": self._mgcv.gam_control(
+                epsilon=1e-7, maxit=200, efs_tol=0.1, efs_lspmax=15
+            ),
+            "in.out": self._ro.ListVector(
+                {
+                    "sp": self._to_r_vector(smoothing),
+                    "scale": self._ro.FloatVector([scale]),
+                }
+            ),
+        }
+        r_gam = self._mgcv.gam
+        null_trace: list[np.ndarray] = []
+        null_omitted: list[bool] = []
+        if trace_null_coef:
+            namespace = self._ro.r["getNamespace"]("mgcv")
+            private = self._ro.r["new.env"](parent=namespace)
+            fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
+            formals = self._ro.r["formals"](fit3)
+            default_null = formals[list(formals.names).index("null.coef")][0]
+            r_name = self._ro.r["as.name"]
+            if (
+                not default_null[0].rsame(r_name("rep"))
+                or float(np.asarray(default_null[1])[0]) != 0.0
+                or not default_null[2][0].rsame(r_name("ncol"))
+                or not default_null[2][1].rsame(r_name("x"))
+            ):
+                raise RBridgeError("Pinned gam.fit3 null-coef default changed")
+
+            def record_fit3(**arguments: Any) -> Any:
+                null_omitted.append("null.coef" not in arguments)
+                null_trace.append(
+                    np.array(
+                        arguments.get(
+                            "null.coef",
+                            self._base.rep(
+                                0.0, int(self._base.ncol(arguments["x"])[0])
+                            ),
+                        ),
+                        dtype=np.float64,
+                        copy=True,
+                    )
+                )
+                return fit3(**arguments)
+
+            fit_callback = make_r_callback(record_fit3)
+            private["gam.fit3"] = fit_callback
+            private["efsudr"] = clone_function(
+                self._utils.getFromNamespace("efsudr", "mgcv"), environment=private
+            )
+            private["gam.outer"] = clone_function(
+                self._utils.getFromNamespace("gam.outer", "mgcv"), environment=private
+            )
+            private["estimate.gam"] = clone_function(
+                self._utils.getFromNamespace("estimate.gam", "mgcv"),
+                environment=private,
+            )
+            r_gam = clone_function(
+                self._utils.getFromNamespace("gam", "mgcv"), environment=private
+            )
+        try:
+            model = r_gam(self._ro.Formula('y ~ s(x, bs="cr", k=6)'), **fit_args)
+        finally:
+            if trace_null_coef:
+                private["gam.fit3"] = self._ro.NULL
+                private["efsudr"] = self._ro.NULL
+                private["gam.outer"] = self._ro.NULL
+                private["estimate.gam"] = self._ro.NULL
+        reference = self._extract_fit_results_rpy2(model)
+        outer = model.rx2("outer.info")
+        reference.update(
+            outer_iterations=int(np.asarray(outer.rx2("iter"))[0]),
+            convergence=str(outer.rx2("conv")[0]),
+            null_coef_trace=tuple(null_trace),
+            null_coef_omitted=tuple(null_omitted),
+        )
+        if trace_null_coef:
+            if not null_trace:
+                raise RBridgeError("Pinned EFS produced no gam.fit3 null-coef trace")
+            r_trace = rinterface.ListSexpVector(
+                [self._to_r_vector(value) for value in null_trace]
+            )
+            reference["null_coef_trace_summary"] = np.asarray(
+                [
+                    int(self._base.length(r_trace)[0]),
+                    int(self._base.length(r_trace[0])[0]),
+                    float(
+                        self._base.max(self._base.abs(self._base.unlist(r_trace)))[0]
+                    ),
+                ],
+                dtype=np.float64,
+            )
+        return reference
+
     def efs_regular_gdi1_diagnostics(
         self,
         X: np.ndarray,
@@ -5104,160 +5258,6 @@ if (!is.null(s$sp.criterion)) {{
                 result["sp_criterion"] = None
 
             return result
-
-    def efs_streamed_default_start_reference(
-        self,
-        x: np.ndarray,
-        y: np.ndarray,
-        weights: np.ndarray,
-        offset: np.ndarray,
-        *,
-        family: str,
-        link: str,
-        theta: float,
-        smoothing: np.ndarray,
-        scale: float,
-        trace_null_coef: bool = False,
-    ) -> dict[str, Any]:
-        """Fit the pinned cubic EFS model with explicit source startup state."""
-        self._require_rpy2()
-        from rpy2 import rinterface
-
-        from tests.r_ast import clone_function, make_r_callback
-
-        x = np.asarray(x, dtype=np.float64)
-        y = np.asarray(y, dtype=np.float64)
-        weights = np.asarray(weights, dtype=np.float64)
-        offset = np.asarray(offset, dtype=np.float64)
-        smoothing = np.asarray(smoothing, dtype=np.float64)
-        if any(
-            value.ndim != 1 or value.shape != y.shape for value in (x, weights, offset)
-        ):
-            raise ValueError("EFS streamed reference columns must align")
-        if smoothing.ndim != 1 or smoothing.size == 0:
-            raise ValueError("EFS streamed reference needs smoothing parameters")
-        if family == "nb":
-            r_family = self._mgcv.nb(theta=float(theta), link=link)
-        else:
-            constructors = {
-                "gaussian": self._stats.gaussian,
-                "gamma": self._stats.Gamma,
-                "poisson": self._stats.poisson,
-                "binomial": self._stats.binomial,
-            }
-            try:
-                r_family = constructors[family](link=link)
-            except KeyError:
-                raise ValueError(
-                    f"Unsupported EFS streamed family: {family!r}"
-                ) from None
-        data = self._ro.DataFrame(
-            {
-                "x": self._to_r_vector(x),
-                "y": self._to_r_vector(y),
-                "w": self._to_r_vector(weights),
-                "off": self._to_r_vector(offset),
-            }
-        )
-        fit_args: dict[str, Any] = {
-            "data": data,
-            "weights": self._to_r_vector(weights),
-            "offset": self._to_r_vector(offset),
-            "family": r_family,
-            "method": "REML",
-            "optimizer": "efs",
-            "control": self._mgcv.gam_control(
-                epsilon=1e-7, maxit=200, efs_tol=0.1, efs_lspmax=15
-            ),
-            "in.out": self._ro.ListVector(
-                {
-                    "sp": self._to_r_vector(smoothing),
-                    "scale": self._ro.FloatVector([scale]),
-                }
-            ),
-        }
-        r_gam = self._mgcv.gam
-        null_trace: list[np.ndarray] = []
-        null_omitted: list[bool] = []
-        if trace_null_coef:
-            namespace = self._ro.r["getNamespace"]("mgcv")
-            private = self._ro.r["new.env"](parent=namespace)
-            fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
-            formals = self._ro.r["formals"](fit3)
-            default_null = formals[list(formals.names).index("null.coef")][0]
-            r_name = self._ro.r["as.name"]
-            if (
-                not default_null[0].rsame(r_name("rep"))
-                or float(np.asarray(default_null[1])[0]) != 0.0
-                or not default_null[2][0].rsame(r_name("ncol"))
-                or not default_null[2][1].rsame(r_name("x"))
-            ):
-                raise RBridgeError("Pinned gam.fit3 null-coef default changed")
-
-            def record_fit3(**arguments: Any) -> Any:
-                null_omitted.append("null.coef" not in arguments)
-                null_trace.append(
-                    np.array(
-                        arguments.get(
-                            "null.coef",
-                            self._base.rep(
-                                0.0, int(self._base.ncol(arguments["x"])[0])
-                            ),
-                        ),
-                        dtype=np.float64,
-                        copy=True,
-                    )
-                )
-                return fit3(**arguments)
-
-            fit_callback = make_r_callback(record_fit3)
-            private["gam.fit3"] = fit_callback
-            private["efsudr"] = clone_function(
-                self._utils.getFromNamespace("efsudr", "mgcv"), environment=private
-            )
-            private["gam.outer"] = clone_function(
-                self._utils.getFromNamespace("gam.outer", "mgcv"), environment=private
-            )
-            private["estimate.gam"] = clone_function(
-                self._utils.getFromNamespace("estimate.gam", "mgcv"),
-                environment=private,
-            )
-            r_gam = clone_function(
-                self._utils.getFromNamespace("gam", "mgcv"), environment=private
-            )
-        try:
-            model = r_gam(self._ro.Formula('y ~ s(x, bs="cr", k=6)'), **fit_args)
-        finally:
-            if trace_null_coef:
-                private["gam.fit3"] = self._ro.NULL
-                private["efsudr"] = self._ro.NULL
-                private["gam.outer"] = self._ro.NULL
-                private["estimate.gam"] = self._ro.NULL
-        reference = self._extract_fit_results_rpy2(model)
-        outer = model.rx2("outer.info")
-        reference.update(
-            outer_iterations=int(np.asarray(outer.rx2("iter"))[0]),
-            convergence=str(outer.rx2("conv")[0]),
-            null_coef_trace=tuple(null_trace),
-            null_coef_omitted=tuple(null_omitted),
-        )
-        if trace_null_coef:
-            if not null_trace:
-                raise RBridgeError("Pinned EFS produced no gam.fit3 null-coef trace")
-            r_trace = rinterface.ListSexpVector(
-                [self._to_r_vector(value) for value in null_trace]
-            )
-            reference["null_coef_trace_summary"] = np.asarray(
-                [
-                    int(self._base.length(r_trace)[0]),
-                    int(self._base.length(r_trace[0])[0]),
-                    float(
-                        self._base.max(self._base.abs(self._base.unlist(r_trace)))[0]
-                    ),
-                ],
-                dtype=np.float64,
-            )
-        return reference
 
     def nb_theta_diagnostics(
         self,

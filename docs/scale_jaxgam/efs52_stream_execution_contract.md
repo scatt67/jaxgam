@@ -17,8 +17,15 @@ The pinned top-level EFS call (`R/mgcv.r:1663–1666`) omits `G$null.coef`.
 For NB this adapter therefore supplies gam.fit4's zero default recovery anchor
 on every first/refit call. The startup response-mean projection remains a
 distinct recorded get.null.coef reduction and is not passed as this anchor.
-The regular controller's projected anchor remains under separate source review;
-existing dense and fixed/trial-controller defaults are unchanged.
+Regular streamed EFS uses the same zero source default through an additive
+`null_coefficients` seam. Its `None` default retains the existing projected
+get.null.coef behavior byte-for-byte for non-EFS regular-controller callers.
+The explicit vector is shape/finiteness validated, copied only after an extra
+`8*p` prospective host-vector charge, and remains distinct from retained
+initial coefficients and their predictor. A pinned trace captures every
+gam.fit3 null.coefficient argument in a top-level EFS fit and verifies the same
+zero p-vector on every refit. Existing dense and fixed/trial-controller
+defaults are unchanged.
 
 The preserved seed-1201, n=79 identity-link fixture exposed this distinction.
 Before the correction, fixed-theta smoothing differed by 2.815e-4 (relative
@@ -35,9 +42,10 @@ theta after fitting. Caller families and immutable initial metadata stay
 unchanged. This distinction is required when consuming the final fit in
 Phase 3; the final score is already attributed to its explicit source timing.
 
-The numeric budget charges an additional `8*(2*p + 3*m + 32)` bytes before
-provider construction for the CPU null/start vectors and device first-request
-vectors, including the temporary shifted smoothing start. Startup workspace
+The numeric budget charges an additional `8*(2*p + 3*m + 32)` bytes for NB
+and `8*(3*p + 3*m + 32)` bytes for regular EFS before provider construction.
+These cover CPU null/source-anchor and device first-request vectors, including
+the temporary shifted smoothing start. Startup workspace
 and provider metadata/three prior fits/configured histories are separately
 charged by their reviewed bounds. Their combined startup lifetime is checked
 from existing descriptors before provider metadata transfer or root construction.

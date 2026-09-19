@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from jaxgam.control import EFSControl
-from jaxgam.execution import efs_stream
+from jaxgam.execution import efs_stream, efs_stream_provider
 from jaxgam.execution.efs_stream import fit_streamed_efs
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from tests.test_execution.test_efs_stream_start import _regular
@@ -171,7 +171,7 @@ def test_combined_startup_bound_rejects_before_metadata_or_roots():
     stream = _regular(family)
     persistent, _preparation, prior, trace = efs_stream._provider_memory_bounds(stream)
     p, m = stream.prepared.n_coef, stream.prepared.penalties.n_penalties
-    retained = 8 * (2 * p + 3 * m + 32)
+    retained = 8 * (3 * p + 3 * m + 32)
     history = 128 * (EFSControl().history_limit + 4) + 1024
     workspace = efs_stream._startup_workspace_bytes(stream, 11)
     budget = retained + persistent + prior + trace + history + workspace - 1
@@ -208,6 +208,30 @@ def test_outer_iteration_limit_is_not_reported_as_convergence():
     assert stream.source.batches - before[1] == (
         diagnostics.startup_batches_scanned + diagnostics.provider_batches_scanned
     )
+
+
+def test_regular_default_efs_dispatch_supplies_zero_recovery_anchor_every_refit():
+    family = Gaussian()
+    stream = _regular(family)
+    captured = []
+    actual = efs_stream_provider.fit_regular_streamed_pirls
+
+    def capture(*args, **kwargs):
+        captured.append(np.array(kwargs["null_coefficients"], copy=True))
+        return actual(*args, **kwargs)
+
+    with patch.object(efs_stream_provider, "fit_regular_streamed_pirls", capture):
+        result = fit_streamed_efs(
+            stream,
+            family,
+            maximum_bytes=10_000_000,
+            batch_rows=11,
+            control=EFSControl(outer_limit=4),
+        )
+    assert captured
+    for anchor in captured:
+        np.testing.assert_array_equal(anchor, np.zeros(stream.prepared.n_coef))
+    assert np.any(result.startup.null_coefficients != 0)
 
 
 def test_missing_preparation_rejects_without_source_scan():

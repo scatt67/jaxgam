@@ -85,8 +85,11 @@ def fit_streamed_efs(
         raise ValueError("batch_rows must be a positive integer")
     # Immutable startup CPU arrays and device first-request arrays remain
     # alive across fitting. They are additional to provider trial ownership.
+    retained_coefficient_vectors = 2 if isinstance(family, NegativeBinomial) else 3
     retained_startup = 8 * (
-        2 * prepared.n_coef + 3 * prepared.penalties.n_penalties + 32
+        retained_coefficient_vectors * prepared.n_coef
+        + 3 * prepared.penalties.n_penalties
+        + 32
     )
     if retained_startup >= maximum_bytes:
         raise MemoryError("Streamed EFS startup retention exceeds maximum_bytes")
@@ -118,6 +121,13 @@ def fit_streamed_efs(
         control=control,
         device=device,
     )
+    if isinstance(provider, RegularStreamEFSProvider):
+        source_null = np.zeros(provider.fitting.n_coef, dtype=np.float64)
+        source_null.setflags(write=False)
+        provider = replace(
+            provider,
+            source_null_coefficients=source_null,
+        )
     startup = prepare_stream_efs_start(provider)
     # Include the selected device for loop-created constants as well as
     # first-request arrays; CPU reductions keep their existing phase seam.
