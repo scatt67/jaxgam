@@ -30,6 +30,7 @@ class InitialWorkingSelection:
     domain_ok: bool
     valid_rows: int
     source_scans: int
+    batches_scanned: int
 
 
 NullEtaFactory = Callable[[RowBatch], np.ndarray]
@@ -52,20 +53,41 @@ def _scan_initial_state(
     batch_rows: int,
     shrink_count: int,
     null_eta_for_batch: NullEtaFactory,
-) -> tuple[bool, bool, int]:
+    summary: object | None,
+    eta_for_batch: NullEtaFactory | None,
+) -> tuple[bool, bool, int, int]:
     """Replay one bounded candidate without retaining per-row state."""
     _validate_before_scan(stream, family, lineage)
     input_ok = True
     domain_ok = True
     valid_rows = 0
+    batches_scanned = 0
     for batch in stream.source.scan(batch_rows):
+        batches_scanned += 1
         lineage.validate(stream.prepared, family)
         if batch.y is None:
             raise ValueError("Initial working-state replay requires response values.")
         valid = np.asarray(batch.valid, dtype=bool)
-        state = family.initial_working_state_cpu(batch.y, batch.weight, valid)
+        if len(valid) > batch_rows:
+            raise ValueError("Initial working-state replay exceeds its batch cap.")
+        if valid_rows + int(np.sum(valid)) > stream.prepared.n_obs:
+            raise RuntimeError(
+                "Initial working-state replay exceeds its valid row count."
+            )
+        state = family.initial_working_state_cpu(
+            batch.y, batch.weight, valid, summary=summary
+        )
         input_ok = input_ok and state.input_ok
         valid_rows += int(np.sum(valid))
+        eta = (
+            state.eta
+            if eta_for_batch is None
+            else np.asarray(eta_for_batch(batch), dtype=float)
+        )
+        if eta.shape != valid.shape:
+            raise ValueError("eta_for_batch must return one value per source row.")
+        eta = np.where(valid, eta, 0.0)
+        anchor_ok = True
         if shrink_count:
             null_eta = np.asarray(null_eta_for_batch(batch), dtype=float)
             if null_eta.shape != valid.shape:
@@ -75,19 +97,17 @@ def _scan_initial_state(
             null_eta_safe = np.where(valid, null_eta, 0.0)
             # Reapply the literal recurrence, rather than a closed form, to
             # retain R's operation order while keeping only one batch alive.
-            eta = state.eta
             for _ in range(shrink_count):
                 eta = 0.9 * eta + 0.1 * null_eta_safe
-            mu = np.asarray(family.link.inverse(eta), dtype=float)
-            candidate_ok = (
-                np.all(np.isfinite(null_eta[valid]))
-                and np.all(np.isfinite(eta[valid]))
-                and np.all(np.asarray(family.valid_eta(eta[valid]), dtype=bool))
-                and np.all(np.isfinite(mu[valid]))
-                and np.all(np.asarray(family.valid_mu(mu[valid]), dtype=bool))
-            )
-        else:
-            candidate_ok = state.domain_ok
+            anchor_ok = np.all(np.isfinite(null_eta[valid]))
+        mu = np.asarray(family.link.inverse(eta), dtype=float)
+        candidate_ok = (
+            anchor_ok
+            and np.all(np.isfinite(eta[valid]))
+            and np.all(np.asarray(family.valid_eta(eta[valid]), dtype=bool))
+            and np.all(np.isfinite(mu[valid]))
+            and np.all(np.asarray(family.valid_mu(mu[valid]), dtype=bool))
+        )
         domain_ok = domain_ok and bool(candidate_ok)
     _validate_before_scan(stream, family, lineage)
     if valid_rows != stream.prepared.n_obs:
@@ -95,7 +115,7 @@ def _scan_initial_state(
             "RowSource scan changed its valid row count after preparation; "
             "prepare again."
         )
-    return input_ok, domain_ok, valid_rows
+    return input_ok, domain_ok, valid_rows, batches_scanned
 
 
 def select_initial_working_state_cpu(
@@ -105,6 +125,8 @@ def select_initial_working_state_cpu(
     *,
     batch_rows: int,
     null_eta_for_batch: NullEtaFactory,
+    summary: object | None = None,
+    eta_for_batch: NullEtaFactory | None = None,
 ) -> InitialWorkingSelection:
     """Find a globally valid R-style start by at most 20 .9/.1 shrinks.
 
@@ -113,6 +135,9 @@ def select_initial_working_state_cpu(
     a design matrix.  A family input error (for example Gamma ``y <= 0``) is
     returned fail-closed immediately.  A finite but invalid predictor is
     replayed at shrink counts 0 through 20, matching ``gam.fit3``'s bound.
+    An optional predictor factory supplies a retained coefficient start;
+    family input normalization and the separate null backoff anchor remain
+    unchanged. No predictor array is retained between source scans.
     """
     if (
         not isinstance(batch_rows, int)
@@ -120,15 +145,19 @@ def select_initial_working_state_cpu(
         or batch_rows <= 0
     ):
         raise ValueError("batch_rows must be a positive integer.")
+    batches_scanned = 0
     for shrink_count in range(_MAX_INITIAL_SHRINKS + 1):
-        input_ok, domain_ok, valid_rows = _scan_initial_state(
+        input_ok, domain_ok, valid_rows, batch_count = _scan_initial_state(
             stream,
             family,
             lineage,
             batch_rows,
             shrink_count,
             null_eta_for_batch,
+            summary,
+            eta_for_batch,
         )
+        batches_scanned += batch_count
         scans = shrink_count + 1
         if not input_ok or domain_ok:
             return InitialWorkingSelection(
@@ -137,6 +166,7 @@ def select_initial_working_state_cpu(
                 domain_ok=domain_ok,
                 valid_rows=valid_rows,
                 source_scans=scans,
+                batches_scanned=batches_scanned,
             )
     return InitialWorkingSelection(
         shrink_count=_MAX_INITIAL_SHRINKS,
@@ -144,4 +174,5 @@ def select_initial_working_state_cpu(
         domain_ok=False,
         valid_rows=valid_rows,
         source_scans=_MAX_INITIAL_SHRINKS + 1,
+        batches_scanned=batches_scanned,
     )

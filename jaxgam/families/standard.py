@@ -29,7 +29,7 @@ from jaxgam.families.base import (
     FamilyExecutionCapabilities,
     StreamReductionPolicy,
 )
-from jaxgam.jax_utils import array_module
+from jaxgam.jax_utils import _materialize_source_operation, array_module
 from jaxgam.links.links import IdentityLink, InverseLink, Link, LogitLink, LogLink
 
 # Numerical stability constants for clamping near boundaries.
@@ -420,7 +420,7 @@ class Binomial(ExponentialFamily):
         return xp.where(prior_weight == 0.0, 0.0, y)
 
     def execution_capabilities(self) -> FamilyExecutionCapabilities:
-        """Report the bounded Binomial/log alpha resolution gap honestly."""
+        """Keep the unresolved Binomial/log cancellation boundary explicit."""
         capabilities = super().execution_capabilities()
         if isinstance(self.link, LogLink):
             return replace(
@@ -438,6 +438,18 @@ class Binomial(ExponentialFamily):
         correction = alpha_raw - 1.0
         resolution = 8.0 * np.finfo(float).eps * (1.0 + xp.abs(correction))
         return xp.abs(alpha_raw) <= resolution
+
+    def execution_initial_variance(self, mu: np.ndarray) -> np.ndarray:
+        """Materialize stats::binomial's subtraction before its product."""
+        complement = 1.0 - mu
+        complement = _materialize_source_operation(complement)
+        return mu * complement
+
+    def execution_initial_dvar(self, mu: np.ndarray) -> np.ndarray:
+        """Materialize fix.family.var's product before its subtraction."""
+        twice_mu = 2.0 * mu
+        twice_mu = _materialize_source_operation(twice_mu)
+        return 1.0 - twice_mu
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Binomial: 0 < mu < 1."""

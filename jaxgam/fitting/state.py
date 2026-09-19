@@ -19,6 +19,7 @@ from jaxgam.fitting.qr import (
     qr_root_inverse,
     qr_root_transpose_inverse,
 )
+from jaxgam.fitting.signed_qr import SignedQRCoefficientFactor
 
 if TYPE_CHECKING:
     from jaxgam.fitting.pirls import PIRLSResult
@@ -194,7 +195,9 @@ class PivotedQRCoefficientFactor:
         return 2.0 * jnp.sum(jnp.log(jnp.abs(jnp.diag(self.R))))
 
 
-CoefficientFactor: TypeAlias = CholeskyCoefficientFactor | PivotedQRCoefficientFactor
+CoefficientFactor: TypeAlias = (
+    CholeskyCoefficientFactor | PivotedQRCoefficientFactor | SignedQRCoefficientFactor
+)
 
 
 @dataclass(frozen=True)
