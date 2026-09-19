@@ -8,6 +8,7 @@ no reverse-mode trace can retain a replayable source's rows.
 from __future__ import annotations
 
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -15,9 +16,147 @@ import jax.scipy.linalg as jsla
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.fitting import penalty_ops
+from jaxgam.fitting.family_execution import (
+    FamilyExecutionContext,
+    FamilyExecutionParameters,
+    batch_initial_working_quantities,
+    batch_saturated_loglikelihood,
+)
 from jaxgam.fitting.pirls import _W_MAX, _W_MIN
 from jaxgam.fitting.reml import reml_criterion
 from jaxgam.jax_utils import cho_factor
+
+
+class RegularBatchScoreVJP(NamedTuple):
+    """One batch's cotangents and explicit derivative eligibility.
+
+    A neutral batch is admissible; the host must separately require globally
+    informative data. No source iterator or coefficient-fit tape is retained.
+    """
+
+    beta: jax.Array
+    log_phi: jax.Array
+    admissible: jax.Array
+    informative_count: jax.Array
+
+
+@partial(jax.jit, static_argnames=("family", "context"))
+def regular_batch_statistics_vjp(
+    beta: jax.Array,
+    log_phi: jax.Array,
+    X: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    valid: jax.Array,
+    observed_cotangent: jax.Array,
+    deviance_cotangent: jax.Array,
+    saturated_cotangent: jax.Array,
+    parameters: FamilyExecutionParameters,
+    family: ExponentialFamily,
+    context: FamilyExecutionContext,
+) -> RegularBatchScoreVJP:
+    """Differentiate regular score statistics through the family contract.
+
+    The score's observed system uses the same good-row mask and canonical
+    Fisher dispatch as the regular controller. Deviance uses the smooth
+    derivative primitive rather than the reporting clamp. Actual saturated
+    likelihood supplies the scale derivative. This function does not decide
+    coefficient recovery or turn an unresolved source system into an eligible
+    derivative: the host must reject a false ``admissible`` result.
+    """
+    if context.capabilities.dynamic_theta:
+        raise NotImplementedError("Regular adjoints require a static family parameter.")
+    valid = jnp.asarray(valid, dtype=bool)
+    finite_X = jnp.all(jnp.isfinite(X), axis=1)
+    X_safe = jnp.where((valid & finite_X)[:, None], X, 0.0)
+    normalized_y = family.execution_initial_response(y, prior_weight)
+
+    def statistics(beta_value: jax.Array) -> tuple[jax.Array, jax.Array]:
+        eta = X_safe @ beta_value + offset
+        working = batch_initial_working_quantities(
+            normalized_y,
+            prior_weight,
+            offset,
+            valid,
+            eta,
+            parameters,
+            family,
+            context,
+        )
+        score_weight = (
+            working.fisher_weight
+            if context.capabilities.fisher_equals_observed_for_score
+            else working.observed_weight
+        )
+        observed = (X_safe.T * score_weight) @ X_safe
+        # Undefined responses in padding/zero-prior rows must stay outside
+        # both the direct primitive and its derivative graph.
+        informative = working.informative_mask
+        y_safe = jnp.where(informative, normalized_y, context.padding.response)
+        weight_safe = jnp.where(informative, prior_weight, 0.0)
+        eta_safe = jnp.where(informative, eta, context.padding.eta)
+        mu_safe = family.link.inverse(eta_safe)
+        contributions = family.deviance_derivative_contributions_for_parameters(
+            y_safe, mu_safe, weight_safe, parameters.log_theta
+        )
+        return observed, jnp.sum(jnp.where(informative, contributions, 0.0))
+
+    _, pullback = jax.vjp(statistics, beta)
+    beta_bar = pullback((observed_cotangent, deviance_cotangent))[0]
+
+    def saturated(log_phi_value: jax.Array) -> jax.Array:
+        value, _ = batch_saturated_loglikelihood(
+            normalized_y,
+            prior_weight,
+            valid,
+            jnp.exp(log_phi_value),
+            parameters,
+            family,
+            context,
+        )
+        return value
+
+    saturated_value, saturated_derivative = jax.value_and_grad(saturated)(log_phi)
+    working = batch_initial_working_quantities(
+        normalized_y,
+        prior_weight,
+        offset,
+        valid,
+        X_safe @ beta + offset,
+        parameters,
+        family,
+        context,
+    )
+    _, likelihood_ok = batch_saturated_loglikelihood(
+        normalized_y,
+        prior_weight,
+        valid,
+        jnp.exp(log_phi),
+        parameters,
+        family,
+        context,
+    )
+    log_phi_bar = saturated_cotangent * saturated_derivative
+    score_information_ok = (
+        working.fisher_system_ok
+        if context.capabilities.fisher_equals_observed_for_score
+        else working.observed_information_ok
+    )
+    admissible = (
+        jnp.all(jnp.isfinite(beta))
+        & jnp.all(~valid | finite_X)
+        & working.working_system_admissible
+        & score_information_ok
+        & ~jnp.any(working.alpha_resolution_unresolved)
+        & likelihood_ok
+        & jnp.all(jnp.isfinite(beta_bar))
+        & jnp.isfinite(saturated_value)
+        & jnp.isfinite(log_phi_bar)
+    )
+    return RegularBatchScoreVJP(
+        beta_bar, log_phi_bar, admissible, working.informative_count
+    )
 
 
 @partial(
