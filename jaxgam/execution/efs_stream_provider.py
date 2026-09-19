@@ -385,6 +385,7 @@ class RegularStreamEFSProvider(NBStreamEFSProvider):
     """
 
     family: ExponentialFamily
+    source_null_coefficients: np.ndarray | None = None
 
     @classmethod
     def create(
@@ -439,6 +440,7 @@ class RegularStreamEFSProvider(NBStreamEFSProvider):
             control=self.control,
             device=self.device,
             initial_coefficients=None if present is False else beta,
+            null_coefficients=self.source_null_coefficients,
         )
         self.lineage.validate(self.stream.prepared, self.family)
         if self.stream.source.fingerprint() != self.lineage.source_fingerprint:

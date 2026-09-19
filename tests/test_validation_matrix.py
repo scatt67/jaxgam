@@ -913,6 +913,56 @@ def test_internal_streamed_default_start_efs_matches_pinned_selected_fit(
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_streamed_regular_recovery_anchor_matches_pinned_efs_default(r_bridge):
+    """mgcv.r omits G$null.coef when dispatching every efsudr refit."""
+    robjects = pytest.importorskip("rpy2.robjects")
+    versions_match, reason = r_bridge.check_versions()
+    assert versions_match, reason
+    from jaxgam.execution.efs_stream import fit_streamed_efs
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    family = Gaussian()
+    stream = _regular(family)
+    execution = fit_streamed_efs(
+        stream, family, maximum_bytes=10_000_000, batch_rows=11
+    )
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    traced = robjects.r("""function(x, y, w, off, sp, phi) {
+      suppressPackageStartupMessages(library(mgcv))
+      ns <- asNamespace("mgcv")
+      assign(".efs_anchor_trace", list(), envir=.GlobalEnv)
+      trace("gam.fit3", where=ns, print=FALSE, tracer=quote({
+        z <- get(".efs_anchor_trace", envir=.GlobalEnv)
+        assign(".efs_anchor_trace", append(z, list(as.numeric(null.coef))),
+               envir=.GlobalEnv)
+      }))
+      on.exit({
+        untrace("gam.fit3", where=ns)
+        rm(".efs_anchor_trace", envir=.GlobalEnv)
+      }, add=TRUE)
+      d <- data.frame(x=x, y=y, w=w, off=off)
+      gam(y ~ s(x, bs="cr", k=6), data=d, weights=w, offset=off,
+          family=gaussian(), method="REML", optimizer="efs",
+          control=gam.control(epsilon=1e-7, maxit=200,
+                              efs.tol=.1, efs.lspmax=15),
+          in.out=list(sp=sp, scale=phi))
+      a <- get(".efs_anchor_trace", envir=.GlobalEnv)
+      c(n=length(a), p=length(a[[1]]), max_abs=max(abs(unlist(a))))
+    }""")(
+        robjects.FloatVector(batch.columns["x"]),
+        robjects.FloatVector(batch.y),
+        robjects.FloatVector(batch.weight),
+        robjects.FloatVector(batch.offset),
+        robjects.FloatVector(np.exp(execution.startup.log_lambda)),
+        robjects.FloatVector([execution.startup.score_phi]),
+    )
+    trace = np.asarray(traced, dtype=float)
+    assert trace[0] > 1
+    assert trace[1] == stream.prepared.n_coef
+    assert trace[2] == 0
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 @pytest.mark.parametrize("link", ["log", "inverse"])
 def test_public_dense_efs_gaussian_patched_response_matches_pinned_r(
     r_bridge, link: str

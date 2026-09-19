@@ -4,6 +4,7 @@ import inspect
 import subprocess
 import sys
 from dataclasses import replace
+from unittest.mock import patch
 
 import jax.numpy as jnp
 import numpy as np
@@ -166,6 +167,65 @@ def test_regular_budget_rejection_is_prospective():
         )
     assert stream.source.scans == 0
     assert stream.source.batches == 0
+
+
+def test_explicit_source_null_anchor_is_distinct_and_prospectively_charged():
+    stream, family, *_ = _fixture()
+    control = StreamPIRLSControl(batch_rows=17, solver_policy="qr", tol=1e-11)
+    ledger = preflight_regular_stream_workspace(stream, control, 10000000)
+    anchor = np.zeros(stream.prepared.n_coef)
+    anchor[0] = 0.2
+    with pytest.raises(MemoryError, match="explicit regular null anchor"):
+        fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=ledger.required_bytes + 8 * len(anchor) - 1,
+            score_scale=0.7,
+            control=control,
+            null_coefficients=anchor,
+        )
+    assert stream.source.scans == stream.source.batches == 0
+    with pytest.raises(ValueError, match="finite fitting p-vector"):
+        fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=10000000,
+            score_scale=0.7,
+            control=control,
+            null_coefficients=np.full(len(anchor), np.nan),
+        )
+    assert stream.source.scans == stream.source.batches == 0
+
+    with patch.object(
+        regular_controller,
+        "project_null_coefficients",
+        side_effect=AssertionError("explicit anchor must not be reprojected"),
+    ):
+        result = fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=10000000,
+            score_scale=0.7,
+            control=control,
+            null_coefficients=anchor,
+        )
+    np.testing.assert_array_equal(result.null_coefficients, anchor)
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    X = stream.prepared.evaluate_fitting_batch(batch)
+    expected = float(
+        family.dev_resids(
+            batch.y, family.link.linkinv(X @ anchor + batch.offset), batch.weight
+        )
+    )
+    np.testing.assert_allclose(
+        result.accepted_penalized_history[0],
+        expected,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
 
 
 def test_regular_iteration_history_is_prospectively_budgeted():
