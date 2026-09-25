@@ -216,8 +216,11 @@ def test_binomial_log_admission_matches_pinned_default_final_fields_and_se():
     }
     checks = _AssertCollector()
     for label, (y, weight) in cases.items():
+        # This exact mixed system oscillates at epsilon=1e-10 on pinned
+        # native AMD64 R; its selected source control stays 100x tighter
+        # than gam.control's default.
         oracle_fit = RBridge(mode="rpy2").binomial_log_admission_reference(
-            y, weight, 1e-10
+            y, weight, 1e-9 if label == "mixed" else 1e-10
         )
         family = Binomial("log")
         source = DataFrameRowSource(
