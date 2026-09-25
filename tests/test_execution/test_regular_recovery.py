@@ -265,11 +265,12 @@ library(mgcv)
 stopifnot(getRversion()=="4.5.2",packageVersion("mgcv")=="1.9.3")
 d <- commandArgs(TRUE)[1]
 y <- scan(file.path(d,"y"),quiet=TRUE); w <- scan(file.path(d,"w"),quiet=TRUE)
+epsilon <- as.double(commandArgs(TRUE)[2])
 fam <- mgcv:::fix.family.link(binomial("log"))
 fam <- mgcv:::fix.family.var(fam); fam <- mgcv:::fix.family.ls(fam)
 fit <- tryCatch(mgcv:::gam.fit3(x=matrix(1,length(y),1),y=y,sp=numeric(),
  Eb=0,UrS=list(),weights=w,offset=rep(0,length(y)),Mp=1,family=fam,
- control=gam.control(epsilon=1e-10,maxit=100),deriv=0,scale=1,
+ control=gam.control(epsilon=epsilon,maxit=100),deriv=0,scale=1,
  scoreType="REML",null.coef=log(mean(y))),error=function(e)e)
 if(inherits(fit,"error")) {
  writeLines(conditionMessage(fit),file.path(d,"failure"))
@@ -289,12 +290,23 @@ if(inherits(fit,"error")) {
         directory.mkdir()
         np.savetxt(directory / "y", y, fmt="%.17g")
         np.savetxt(directory / "w", weight, fmt="%.17g")
-        subprocess.run(
-            ["Rscript", "-e", script, str(directory)],
-            check=True,
+        completed = subprocess.run(
+            [
+                "Rscript",
+                "-e",
+                script,
+                str(directory),
+                # This exact mixed system oscillates at epsilon=1e-10 on
+                # pinned native AMD64 R, even through maxit=200.  The selected
+                # source control is still 100x tighter than gam.control's
+                # default; neighboring boundary cases retain 1e-10.
+                "1e-9" if label == "mixed" else "1e-10",
+            ],
+            check=False,
             capture_output=True,
             text=True,
         )
+        assert completed.returncode == 0, completed.stderr
         family = Binomial("log")
         source = DataFrameRowSource(
             pd.DataFrame({"y": y}), response="y", weights=weight
