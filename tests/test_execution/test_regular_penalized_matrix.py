@@ -136,7 +136,18 @@ def _rank_one_preparation(source, family):
 
 
 def _source_reference(
-    tmp_path, family, link, X, y, weight, offset, start, *, derivatives=False
+    tmp_path,
+    family,
+    link,
+    X,
+    y,
+    weight,
+    offset,
+    start,
+    *,
+    derivatives=False,
+    rho=None,
+    score_phi=0.7,
 ):
     for name, values in (
         ("X", X),
@@ -146,6 +157,12 @@ def _source_reference(
         ("start", start),
     ):
         np.savetxt(tmp_path / name, values, fmt="%.17g")
+    np.savetxt(
+        tmp_path / "rho",
+        np.atleast_1d(np.log(0.35) if rho is None else rho),
+        fmt="%.17g",
+    )
+    np.savetxt(tmp_path / "score_phi", np.atleast_1d(score_phi), fmt="%.17g")
     script = r"""
 library(mgcv)
 stopifnot(getRversion()=="4.5.2",packageVersion("mgcv")=="1.9.3")
@@ -163,8 +180,8 @@ known <- a[2] %in% c("binomial","poisson")
 # S=diag(0,1): put the unique penalized direction first for gam.reparam,
 # exactly as gam.fit3's UrS/U1 contract requires. Eb is the unscaled root.
 E <- matrix(c(0,1),1,2);U1 <- matrix(c(0,1,1,0),2,2)
-UrS <- list(matrix(1,1,1));sp <- log(.35)
-if (!known) sp <- c(sp,log(.7))
+UrS <- list(matrix(1,1,1));sp <- c(read("rho"));score.phi <- c(read("score_phi"))
+if (!known) sp <- c(sp,log(score.phi))
 diag <- new.env(parent=emptyenv())
 walk <- function(e) {
  if (is.call(e) && identical(e[[1]],as.name("<-")) &&

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numbers
+import sys
 from collections import deque
 from dataclasses import dataclass, replace
 
@@ -150,6 +151,29 @@ class StreamREMLOptimization:
     cumulative_batches_scanned: int
     projected_gradient_inf: float
     accepted_score_history: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class RegularStreamREMLOptimization:
+    """Diagnostic outcome of joint regular streamed L-BFGS-B optimization."""
+
+    trial: RegularStreamREMLTrial
+    converged: bool
+    message: str
+    status: int
+    n_iter: int
+    n_evaluations: int
+    n_accepted: int
+    cumulative_source_scans: int
+    cumulative_batches_scanned: int
+    projected_gradient_inf: float
+    accepted_score_history: tuple[float, ...]
+    outer_workspace_bytes: int
+
+    @property
+    def required_bytes(self) -> int:
+        """Known trial plus retained optimizer workspace at the peak."""
+        return self.trial.workspace.required_bytes + self.outer_workspace_bytes
 
 
 def _preflight(
@@ -883,4 +907,276 @@ def optimize_stream_reml(
         cumulative_batches_scanned=objective.cumulative_batches_scanned,
         projected_gradient_inf=projected_gradient_inf,
         accepted_score_history=objective.accepted_score_history,
+    )
+
+
+class _AcceptedRegularTrialObjective:
+    """Joint regular objective retaining only accepted and candidate trials."""
+
+    def __init__(
+        self,
+        stream: StreamDesign,
+        family: ExponentialFamily,
+        params_initial: np.ndarray,
+        pirls_control: StreamPIRLSControl,
+        reml_control: StreamREMLControl,
+        maximum_bytes: int,
+        initial_coefficients: np.ndarray | None,
+        device: jax.Device | None,
+    ) -> None:
+        self._stream = stream
+        self._family = family
+        self._pirls_control = pirls_control
+        self._maximum_bytes = maximum_bytes
+        self._device = device
+        self.accepted = evaluate_regular_stream_reml(
+            stream,
+            family,
+            params_initial,
+            maximum_bytes=maximum_bytes,
+            control=pirls_control,
+            initial_coefficients=initial_coefficients,
+            device=device,
+        )
+        self.candidate: RegularStreamREMLTrial | None = None
+        self.n_evaluations = 1
+        self.n_accepted = 0
+        self.cumulative_source_scans = self.accepted.source_scans
+        self.cumulative_batches_scanned = self.accepted.batches_scanned
+        self._history: deque[float] = deque(maxlen=reml_control.history_size)
+        self._history.append(float(np.asarray(self.accepted.score)))
+
+    @property
+    def accepted_score_history(self) -> tuple[float, ...]:
+        return tuple(self._history)
+
+    def _check_source_unchanged(self) -> None:
+        if self._stream.source.fingerprint() != self.accepted.source_fingerprint:
+            raise RuntimeError(
+                "RowSource changed during regular streamed REML optimization."
+            )
+
+    def __call__(self, params: np.ndarray) -> tuple[float, np.ndarray]:
+        """Evaluate from the last callback-accepted regular coefficient state."""
+        self._check_source_unchanged()
+        params_host = np.asarray(params, dtype=np.float64)
+        if _same_rho(params_host, self.accepted.params):
+            trial = self.accepted
+        elif self.candidate is not None and _same_rho(
+            params_host, self.candidate.params
+        ):
+            trial = self.candidate
+        else:
+            self.candidate = None
+            trial = evaluate_regular_stream_reml(
+                self._stream,
+                self._family,
+                params_host,
+                maximum_bytes=self._maximum_bytes,
+                control=self._pirls_control,
+                warm_start=self.accepted,
+                device=self._device,
+            )
+            self.candidate = trial
+            self.n_evaluations += 1
+            self.cumulative_source_scans += trial.source_scans
+            self.cumulative_batches_scanned += trial.batches_scanned
+        score = float(np.asarray(trial.score))
+        gradient = np.asarray(trial.gradient, dtype=np.float64)
+        if not np.isfinite(score) or not np.all(np.isfinite(gradient)):
+            raise FloatingPointError(
+                "Regular streamed REML optimizer received a non-finite trial."
+            )
+        return score, gradient
+
+    def callback(self, intermediate_result: OptimizeResult) -> None:
+        """Promote only the exact regular trial accepted by L-BFGS-B."""
+        self._check_source_unchanged()
+        params = np.asarray(intermediate_result.x, dtype=np.float64)
+        if _same_rho(params, self.accepted.params):
+            return
+        if self.candidate is None or not _same_rho(params, self.candidate.params):
+            raise RuntimeError(
+                "L-BFGS-B accepted a point without the matching exact regular "
+                "streamed trial; refusing an unverified warm start."
+            )
+        self.accepted = self.candidate
+        self.candidate = None
+        self.n_accepted += 1
+        self._history.append(float(np.asarray(self.accepted.score)))
+
+
+def _regular_optimizer_workspace_bytes(
+    p: int,
+    n_params: int,
+    control: StreamREMLControl,
+    pirls_control: StreamPIRLSControl,
+) -> tuple[int, int, int]:
+    """Return retained accepted-trial and bounded L-BFGS-B workspace bytes."""
+    # The retained result owns observed, Fisher and source factors, their
+    # compact corrections, two information matrices, coefficient roles,
+    # parameters/gradient and scalar source diagnostics.  Twelve p-square and
+    # forty-eight p-vector slots are a prospective upper bound measured by an
+    # owning test against the recursively enumerated immutable result arrays.
+    retained_trial_bytes = 8 * (12 * p * p + 48 * p)
+    pointer_bytes = np.dtype(np.intp).itemsize
+    # The accepted fit's penalized-deviance tuple coexists with the active
+    # candidate, whose own history is already in the controller ledger.
+    retained_history_bytes = (pirls_control.max_iter + 1) * (
+        sys.getsizeof(0.0) + pointer_bytes
+    ) + sys.getsizeof(())
+    # L-BFGS-B's documented double workspace is
+    # (2m+5)q + 11m^2 + 8m, with 3q integer slots. Charge those integers as
+    # eight-byte entries. The accepted-score deque and returned tuple can
+    # coexist, so charge their float objects, references and containers too.
+    # Four pointer slots per entry conservatively cover both references plus
+    # deque block links and rounded spare capacity at large history sizes.
+    m = control.maxcor
+    lbfgs_workspace_bytes = (
+        8 * ((2 * m + 8) * n_params + 11 * m * m + 8 * m)
+        + control.history_size * (sys.getsizeof(0.0) + 4 * pointer_bytes)
+        + sys.getsizeof(deque())
+        + sys.getsizeof(())
+    )
+    return retained_trial_bytes, retained_history_bytes, lbfgs_workspace_bytes
+
+
+def optimize_regular_stream_reml(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    initial_params: np.ndarray | jax.Array,
+    *,
+    maximum_bytes: int,
+    pirls_control: StreamPIRLSControl | None = None,
+    control: StreamREMLControl | None = None,
+    initial_coefficients: np.ndarray | None = None,
+    device: jax.Device | None = None,
+) -> RegularStreamREMLOptimization:
+    """Optimize the exact regular source objective with bounded L-BFGS-B.
+
+    Unknown-scale families jointly optimize ``[rho, log_phi]``. Only smoothing
+    coordinates are box constrained; the scale coordinate retains the dense
+    joint-objective convention. Every accepted point owns a fully reconverged
+    source trial, and a rejected candidate can never become a warm start.
+    """
+    reml_control = StreamREMLControl() if control is None else control
+    if (
+        not isinstance(maximum_bytes, numbers.Integral)
+        or isinstance(maximum_bytes, bool)
+        or maximum_bytes <= 0
+    ):
+        raise ValueError("maximum_bytes must be a positive integer")
+    maximum_bytes = int(maximum_bytes)
+    fitting = stream.prepared.fitting
+    if fitting is None:
+        raise ValueError("Regular streamed REML requires fitting preparation.")
+    n_lambda = fitting.penalty_structure.n_penalties
+    if n_lambda == 0:
+        raise NotImplementedError(
+            "Regular streamed REML L-BFGS-B requires a smoothing parameter."
+        )
+    n_params = n_lambda + int(not family.scale_known)
+    params_initial = np.asarray(initial_params, dtype=np.float64)
+    if params_initial.shape != (n_params,):
+        raise ValueError(
+            f"initial_params must have shape ({n_params},), got {params_initial.shape}."
+        )
+    if not np.all(np.isfinite(params_initial)):
+        raise ValueError("initial_params must contain only finite values.")
+
+    lower, upper = -40.0, 40.0
+    params_initial = params_initial.copy()
+    params_initial[:n_lambda] = np.clip(params_initial[:n_lambda], lower, upper)
+    base_pirls_control = (
+        StreamPIRLSControl(solver_policy="qr")
+        if pirls_control is None
+        else pirls_control
+    )
+    if base_pirls_control.solver_policy != "qr":
+        raise ValueError("Regular streamed REML requires solver_policy='qr'.")
+    pirls_control = replace(
+        base_pirls_control,
+        tol=min(base_pirls_control.tol, 1e-9, reml_control.gtol / 100.0),
+    )
+
+    p = stream.prepared.n_coef
+    # One retained accepted result coexists with the active candidate and
+    # SciPy's bounded correction/history work. Opaque native scratch follows
+    # the existing workspace convention.
+    retained_trial_bytes, retained_history_bytes, lbfgs_workspace_bytes = (
+        _regular_optimizer_workspace_bytes(p, n_params, reml_control, pirls_control)
+    )
+    outer_workspace_bytes = (
+        retained_trial_bytes + retained_history_bytes + lbfgs_workspace_bytes
+    )
+    if outer_workspace_bytes >= maximum_bytes:
+        raise MemoryError(
+            "Regular streamed REML optimizer retention needs "
+            f"{outer_workspace_bytes} bytes before a trial, exceeding "
+            f"maximum_bytes={maximum_bytes}."
+        )
+    trial_budget = maximum_bytes - outer_workspace_bytes
+    objective = _AcceptedRegularTrialObjective(
+        stream,
+        family,
+        params_initial,
+        pirls_control,
+        reml_control,
+        trial_budget,
+        initial_coefficients,
+        device,
+    )
+    bounds = [(lower, upper)] * n_lambda + [(None, None)] * (n_params - n_lambda)
+    result = minimize(
+        objective,
+        params_initial,
+        method="L-BFGS-B",
+        jac=True,
+        bounds=bounds,
+        callback=objective.callback,
+        options={
+            "maxiter": reml_control.max_iter,
+            "maxfun": reml_control.maxfun,
+            "maxcor": reml_control.maxcor,
+            "maxls": reml_control.maxls,
+            "gtol": reml_control.gtol,
+            "ftol": reml_control.ftol,
+        },
+    )
+    result_params = np.asarray(result.x, dtype=np.float64)
+    if not _same_rho(result_params, objective.accepted.params):
+        raise RuntimeError(
+            "L-BFGS-B returned a point without a matching accepted regular "
+            "streamed trial; no optimization result is available."
+        )
+    objective._check_source_unchanged()
+    gradient = np.asarray(objective.accepted.gradient, dtype=np.float64)
+    projected = gradient.copy()
+    projected[:n_lambda] = _projected_gradient(
+        result_params[:n_lambda],
+        gradient[:n_lambda],
+        lower=lower,
+        upper=upper,
+    )
+    projected_gradient_inf = float(np.max(np.abs(projected)))
+    converged = bool(result.success) and projected_gradient_inf <= reml_control.gtol
+    message = str(result.message)
+    if bool(result.success) and not converged:
+        message = (
+            f"{message}; projected gradient {projected_gradient_inf:.3e} exceeds "
+            f"gtol {reml_control.gtol:.3e}."
+        )
+    return RegularStreamREMLOptimization(
+        trial=objective.accepted,
+        converged=converged,
+        message=message,
+        status=int(result.status),
+        n_iter=int(result.nit),
+        n_evaluations=objective.n_evaluations,
+        n_accepted=objective.n_accepted,
+        cumulative_source_scans=objective.cumulative_source_scans,
+        cumulative_batches_scanned=objective.cumulative_batches_scanned,
+        projected_gradient_inf=projected_gradient_inf,
+        accepted_score_history=objective.accepted_score_history,
+        outer_workspace_bytes=outer_workspace_bytes,
     )
