@@ -57,6 +57,10 @@ _MU_EPS = 1e-10
 # 4x safety margin and budget the compiled derivative, not merely the table.
 _PREFIX_WORKSPACE_BYTES = 8 << 20
 _PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER = 4
+# Returning the primal with its JVP/Hessian keeps scalars and aligned buffers
+# live alongside the differentiated prefix. The current CPU executable needs
+# 504 bytes beyond the 4x table estimate at the boundary; reserve 512.
+_PREFIX_COMPILED_FIXED_BYTES = 512
 _VECTOR_DIFF_MAX_THETA_TO_COUNT = 1e6
 _FRACTIONAL_ASYMPTOTIC_THETA = 1e6
 _FRACTIONAL_ASYMPTOTIC_THETA_TO_RESPONSE = 1e4
@@ -502,13 +506,15 @@ class NegativeBinomial(ExtendedFamily):
 
 
 @functools.partial(jax.custom_jvp, nondiff_argnums=(3, 4))
-def _lgamma_diff_planned(theta, y, count_indices, capacity, integer_counts):  # noqa: ARG001
+def _lgamma_diff_planned(theta, y, count_indices, capacity, integer_counts):
     """``lgamma(theta) - lgamma(theta + y)`` with stable AD derivatives.
 
-    Forward pass uses standard lgamma subtraction (accurate for the value).
-    The JVP uses the digamma recurrence ``-sum_{k=0}^{y-1} 1/(theta+k)``
-    which avoids the catastrophic cancellation in ``digamma(theta) -
-    digamma(theta+y)`` when theta is large.
+    Integer-count forward values use the exact recurrence
+    ``-sum(log(theta+k), k=0..y-1)`` when its prefix fits the bounded plan.
+    Oversized plans retain vectorized lgamma subtraction where it is well
+    conditioned and otherwise use a bounded-workspace scalar recurrence. The
+    JVP likewise uses the digamma recurrence
+    ``-sum_{k=0}^{y-1} 1/(theta+k)`` when subtraction would cancel.
 
     Second derivatives (Hessian) get the trigamma recurrence
     ``sum 1/(theta+k)^2`` for free by differentiating through the JVP.
@@ -528,7 +534,50 @@ def _lgamma_diff_planned(theta, y, count_indices, capacity, integer_counts):  # 
         Static fast-path guard. Fractional responses retain the gamma
         derivative semantics instead of being rounded for a recurrence.
     """
-    return jsp.gammaln(theta) - jsp.gammaln(theta + y)
+    if not integer_counts:
+        return jsp.gammaln(theta) - jsp.gammaln(theta + y)
+
+    indices = jnp.asarray(count_indices, dtype=jnp.int64)
+    valid_indices = (indices >= 0) & (indices <= capacity)
+    if capacity <= 0:
+        value = jnp.zeros_like(y)
+    elif (
+        (capacity + 1)
+        * np.dtype(np.float64).itemsize
+        * _PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
+        + _PREFIX_COMPILED_FIXED_BYTES
+        <= _PREFIX_WORKSPACE_BYTES
+    ):
+        log_terms = jnp.log(theta + jnp.arange(capacity, dtype=y.dtype))
+        prefix = jnp.concatenate((jnp.zeros(1, dtype=y.dtype), jnp.cumsum(log_terms)))
+        value = -jnp.take(prefix, indices, mode="fill", fill_value=jnp.nan)
+    else:
+
+        def _stable_recurrence(_: None):
+            def body(k, acc):
+                return acc + jnp.where(k < indices, jnp.log(theta + k), 0.0)
+
+            return -jax.lax.fori_loop(0, capacity, body, jnp.zeros_like(y))
+
+        def _vectorized(_: None):
+            return jsp.gammaln(theta) - jsp.gammaln(theta + y)
+
+        if indices.shape[0] == 0:
+            smallest_count = jnp.array(1.0, dtype=y.dtype)
+        else:
+            positive_counts = jnp.where(
+                indices > 0,
+                jnp.asarray(indices, dtype=y.dtype),
+                jnp.inf,
+            )
+            smallest_count = jnp.minimum(jnp.min(positive_counts), 1.0)
+        value = jax.lax.cond(
+            theta <= _VECTOR_DIFF_MAX_THETA_TO_COUNT * smallest_count,
+            _vectorized,
+            _stable_recurrence,
+            operand=None,
+        )
+    return jnp.where(valid_indices, value, jnp.nan)
 
 
 @_lgamma_diff_planned.defjvp
@@ -568,9 +617,13 @@ def _lgamma_diff_jvp(capacity, integer_counts, primals, tangents):
         )
     elif capacity <= 0:
         dtheta_value = jnp.zeros_like(y)
-    elif (capacity + 1) * np.dtype(
-        np.float64
-    ).itemsize * _PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER <= _PREFIX_WORKSPACE_BYTES:
+    elif (
+        (capacity + 1)
+        * np.dtype(np.float64).itemsize
+        * _PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
+        + _PREFIX_COMPILED_FIXED_BYTES
+        <= _PREFIX_WORKSPACE_BYTES
+    ):
         reciprocal = 1.0 / (theta + jnp.arange(capacity, dtype=y.dtype))
         prefix = jnp.concatenate((jnp.zeros(1, dtype=y.dtype), jnp.cumsum(reciprocal)))
         # FittingData validates this metadata once. Direct callers receive a
