@@ -580,7 +580,12 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
     )
     oracle = _pinned_six_row_theta(start, y, mu, weight, link)
     initial = fields(start)
-    objective_tolerance = STRICT if variant == "integer" else MODERATE
+    # Both exact hashed inputs have reviewed objective-cancellation gates.
+    # The integer gate became MODERATE when the published stable saturated
+    # likelihood removed the source gamma cancellation; see the numerical
+    # review. Every derivative, final-state and trajectory assertion below
+    # retains its independently reviewed class.
+    objective_tolerance = MODERATE
     theta_tolerance = MODERATE if variant == "integer" else STRICT
     np.testing.assert_allclose(
         initial[0],
