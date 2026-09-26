@@ -59,8 +59,39 @@ def _fixed_theta_control(batch_rows):
     return StreamPIRLSControl(batch_rows=batch_rows, solver_policy="qr", tol=1e-11)
 
 
+def _fixed_theta_model_formula(stream):
+    """Render the exact prepared model contract used by the narrow score gate."""
+    prepared = stream.prepared
+    prediction = prepared.predict_spec
+    smooth_blocks = tuple(
+        block for block in prediction.coef_map.terms if block.smooth is not None
+    )
+    if (
+        len(smooth_blocks) != 1
+        or prediction.parametric_terms
+        or not prediction.has_intercept
+    ):
+        raise ValueError("fixed-theta score gate requires its one-smooth model")
+    smooth = smooth_blocks[0].smooth
+    spec = smooth.spec
+    if (
+        spec.smooth_type != "s"
+        or len(spec.variables) != 1
+        or spec.by is not None
+        or spec.extra_args
+    ):
+        raise ValueError("fixed-theta score gate requires its exact smooth contract")
+    return f'{prepared.response} ~ s({spec.variables[0]}, bs="{spec.bs}", k={spec.k})'
+
+
 def _fixture(
-    link="log", theta=2.7, *, estimated=False, smooth=False, response_theta=None
+    link="log",
+    theta=2.7,
+    *,
+    estimated=False,
+    smooth=False,
+    response_theta=None,
+    smooth_basis="cr",
 ):
     rng = np.random.default_rng(1201)
     x = np.linspace(-0.6, 0.7, 79)
@@ -75,7 +106,7 @@ def _fixture(
     data = pd.DataFrame({"x": x, "y": y})
     family = NegativeBinomial(theta=theta, fixed=not estimated, link=link)
     source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
-    formula = 'y ~ s(x, bs="cr", k=6)' if smooth else "y ~ x"
+    formula = f'y ~ s(x, bs="{smooth_basis}", k=6)' if smooth else "y ~ x"
     prepared = prepare_model(parse_formula(formula), source, family=family)
     return StreamDesign(prepared, _CountedSource(source)), family
 
@@ -113,7 +144,7 @@ def _fixed_theta_score_gate_digest(stream, link, theta, batch_rows):
         "batch_rows": batch_rows,
         "control": asdict(_fixed_theta_control(batch_rows)),
         "family": "NegativeBinomial-fixed",
-        "formula": 'y ~ s(x, bs="cr", k=6)',
+        "formula": _fixed_theta_model_formula(stream),
         "link": link,
         "maximum_bytes": _FIXED_THETA_MAXIMUM_BYTES,
         "n_coef": stream.prepared.n_coef,
@@ -123,6 +154,25 @@ def _fixed_theta_score_gate_digest(stream, link, theta, batch_rows):
     }
     digest.update(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
     return digest.hexdigest()
+
+
+def test_fixed_theta_score_digest_binds_actual_basis_and_control(monkeypatch) -> None:
+    stream, _ = _fixture("log", 1e6, smooth=True, response_theta=2.7)
+    assert _fixed_theta_model_formula(stream) == 'y ~ s(x, bs="cr", k=6)'
+    expected = _fixed_theta_score_gate_digest(stream, "log", 1e6, 5)
+
+    changed_basis, _ = _fixture(
+        "log", 1e6, smooth=True, response_theta=2.7, smooth_basis="cs"
+    )
+    assert _fixed_theta_score_gate_digest(changed_basis, "log", 1e6, 5) != expected
+
+    monkeypatch.setattr(
+        __name__ + "._fixed_theta_control",
+        lambda batch_rows: StreamPIRLSControl(
+            batch_rows=batch_rows, solver_policy="qr", tol=1e-10
+        ),
+    )
+    assert _fixed_theta_score_gate_digest(stream, "log", 1e6, 5) != expected
 
 
 @pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
