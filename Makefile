@@ -60,7 +60,7 @@ test-efs-factor: docker-build ## run exact factor-action EFS contractions and de
 test-efs-stream-execution: docker-build ## run complete streamed EFS loop ownership/count/JIT gates
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
 		tests/test_execution/test_efs_stream.py tests/test_execution/test_efs_stream_start.py \
-		tests/test_validation_matrix.py::test_internal_streamed_default_start_efs_matches_pinned_selected_fit --tb=short
+		tests/test_validation_matrix.py::test_public_streamed_default_start_efs_matches_pinned_selected_fit --tb=short
 
 .PHONY: test-efs-stream-start
 test-efs-stream-start: docker-build ## run bounded streamed EFS default-start reductions and source gates

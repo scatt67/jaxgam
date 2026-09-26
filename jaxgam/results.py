@@ -391,8 +391,15 @@ class GAMPredictionResult:
         method: str,
         control: FitControl,
         execution_route: str = "stream",
+        selected_fit: ConsumedFitResult | None = None,
+        lambda_strategy: str = "fixed",
     ) -> GAMPredictionResult:
-        """Build compact prediction state directly from row-free stream state."""
+        """Build compact prediction state directly from row-free stream state.
+
+        ``selected_fit`` supplies outer-optimizer scalar provenance while the
+        row-free ``stream_state`` continues to own coefficient/factor state.
+        Omitting it preserves the established fixed-sp result byte semantics.
+        """
         from jaxgam.fitting.reml import (
             reml_criterion,
             reml_criterion_from_penalized_deviance,
@@ -468,6 +475,40 @@ class GAMPredictionResult:
                 metadata.multi_block_proj_S,
                 metadata.rank_deficit,
             )
+        theta = None
+        smoothing_params = np.exp(to_numpy(stream_state.log_lambda))
+        converged = stream_state.converged
+        n_iter = stream_state.n_iter
+        convergence_info = (
+            "fixed sp streamed PIRLS"
+            if stream_state.converged
+            else "fixed sp streamed PIRLS did not converge"
+        )
+        optimizer_diagnostics = None
+        if selected_fit is not None:
+            if selected_fit.pirls_result is not stream_state:
+                raise ValueError("selected streamed fit does not own the final state")
+            selected_scale = float(to_numpy(selected_fit.scale))
+            selected_score = float(to_numpy(selected_fit.score))
+            selected_smoothing = to_numpy(selected_fit.smoothing_params)
+            if (
+                not np.isfinite(selected_scale)
+                or selected_scale <= 0.0
+                or not np.isfinite(selected_score)
+                or selected_smoothing.shape != stream_state.log_lambda.shape
+                or not np.all(np.isfinite(selected_smoothing))
+                or np.any(selected_smoothing <= 0.0)
+            ):
+                raise FloatingPointError("selected streamed fit scalars are invalid")
+            scale = selected_scale
+            phi = 1.0 if family.scale_known else scale
+            score = selected_score
+            theta = selected_fit.theta
+            smoothing_params = selected_smoothing
+            converged = selected_fit.converged
+            n_iter = selected_fit.n_iter
+            convergence_info = selected_fit.convergence_info
+            optimizer_diagnostics = getattr(selected_fit, "optimizer_diagnostics", None)
         factor = None
         qr_factor = None
         transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
@@ -537,20 +578,17 @@ class GAMPredictionResult:
             deviance=float(to_numpy(stream_state.deviance)),
             score=float(to_numpy(score)),
             scale=scale,
-            theta=None,
-            smoothing_params=np.exp(to_numpy(stream_state.log_lambda)),
-            converged=stream_state.converged,
-            n_iter=stream_state.n_iter,
-            convergence_info=(
-                "fixed sp streamed PIRLS"
-                if stream_state.converged
-                else "fixed sp streamed PIRLS did not converge"
-            ),
+            theta=theta,
+            smoothing_params=smoothing_params,
+            converged=converged,
+            n_iter=n_iter,
+            convergence_info=convergence_info,
             method=method,
-            lambda_strategy="fixed",
+            lambda_strategy=lambda_strategy,
             execution_path="jax",
             execution_route=execution_route,
             execution_fallback_reason=None,
+            optimizer_diagnostics=optimizer_diagnostics,
             n=prepared.n_obs,
             _batch_rows=control.batch_rows,
         )

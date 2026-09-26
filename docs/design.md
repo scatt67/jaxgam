@@ -3632,13 +3632,15 @@ optimizer. Its update uses the penalty-range determinant derivative,
 Fisher-covariance contractions, and penalty quadratic forms for each coupled
 penalty. A singleton-rank formula is therefore not a general implementation.
 
-EFS is an authorized dense follow-on optimizer selected explicitly with
-``optimizer="efs"``. The released route covers the tested regular-family links,
-regular-family scale handling, and the separate fixed/estimated NB theta path
-for log, identity, and square-root links. Fixed smoothing and zero-penalty
-models retain their established dispatch precedence. Estimated EFS does not
-consume a ``RowSource``. The existing ``gaussian_compression=True``
-availability guard remains unchanged in this published stack.
+EFS is an authorized optimizer selected explicitly with ``optimizer="efs"``.
+Dense execution covers all result modes. Replayable ``RowSource`` execution is
+available with the explicit QR solver and a prediction result; its compact
+result may retain Fisher uncertainty but owns no training rows or source. The
+released routes cover the tested regular-family links, regular-family scale
+handling, and the separate fixed/estimated NB theta path for log, identity,
+and square-root links. Fixed smoothing and zero-penalty models retain their
+established dispatch precedence. The existing
+``gaussian_compression=True`` availability guard remains unchanged.
 For estimated negative-binomial identity and square-root links, the pinned
 ``gam.fit4`` default is a zero-coefficient recovery anchor. The public adapter
 accepts these links only when applying the supplied offset to that anchor gives
@@ -3652,8 +3654,9 @@ EFS controller may accept a finite score increase after contraction reaches
 multiplier one, exactly as pinned mgcv does. EFS records an immutable compact
 profile with its exact trace and step policy, convergence reason, selected
 iteration counts, bounded accepted histories, movement maxima, and numerical
-event indicators. It is not represented as a monotone Newton trajectory or as
-fREML.
+event indicators. The streamed profile records startup and executed-provider
+scan counts separately and excludes Phase-1 preparation from both. It is not
+represented as a monotone Newton trajectory or as fREML.
 
 ### 8.3 GCV and UBRE Criteria
 

@@ -1,9 +1,11 @@
 # Complete internal streamed EFS execution
 
 `execution.efs_stream.fit_streamed_efs` composes the reviewed source startup,
-immutable provider/context and existing accepted/trial EFS outer loops. It
-returns no source or training rows. Public routing and Phase-3 result modes
-remain separate work; this component does not claim completion of EFS5.2.
+immutable provider/context and existing accepted/trial EFS outer loops. The
+public adapter selects it only for explicit QR `RowSource` execution and
+materializes a compact prediction result. Neither layer returns a source or
+training rows. Streamed full/inference result modes remain outside this
+contract because they retain row-aligned state.
 
 The source policy is pinned mgcv 1.9-3 `R/gam.fit4.r::efsudr`: the first
 smoothing start receives +2.5 once, accepted coefficients start subsequent

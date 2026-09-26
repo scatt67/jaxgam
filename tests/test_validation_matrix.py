@@ -21,6 +21,7 @@ Tolerance rationale (from AGENTS.md §Common Pitfalls, MEMORY.md):
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import dataclass
@@ -31,13 +32,15 @@ import pytest
 from jax import clear_caches
 
 from jaxgam.api import GAM
+from jaxgam.control import FitControl
+from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda, efs_initial_log_scale
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.fitting.newton import NewtonOptimizer
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import SEED, _AssertCollector, r_available
+from tests.helpers import SEED, _AssertCollector, check_that, r_available
 from tests.r_bridge import RBridge
 from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 
@@ -782,6 +785,74 @@ class TestValidationMatrix:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("family_name", ["gaussian", "gamma", "poisson", "binomial"])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "identity",
+        "log",
+        "logit",
+        "probit",
+        "cloglog",
+        "inverse",
+        "inverse_squared",
+        "sqrt",
+    ],
+)
+def test_public_streamed_efs_regular_family_link_inventory(
+    family_name: str, link: str
+) -> None:
+    """Every constructor link either executes or preserves its named start boundary."""
+    from jaxgam.families.standard import Binomial, Gamma
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    family = {
+        "gaussian": Gaussian,
+        "gamma": Gamma,
+        "poisson": Poisson,
+        "binomial": Binomial,
+    }[family_name](link=link)
+    stream = _regular(family)
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    data = pd.DataFrame({"x": np.asarray(batch.columns["x"]), "y": np.asarray(batch.y)})
+    offset = np.asarray(batch.offset)
+    if family_name == "binomial" and link == "log":
+        offset = np.full(len(data), -0.5)
+    elif family_name == "binomial" and link in {"inverse", "inverse_squared"}:
+        offset = np.full(len(data), 2.0)
+    model = GAM(
+        'y ~ s(x, bs="cr", k=6)',
+        family=family,
+        optimizer="efs",
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=11,
+        ),
+    )
+    source = DataFrameRowSource(
+        data,
+        response="y",
+        weights=np.asarray(batch.weight),
+        offset=offset,
+    )
+    if family_name == "poisson" and link in {"logit", "probit", "cloglog"}:
+        with pytest.raises(ValueError, match="finite null link mean"):
+            model.fit(source, result="prediction")
+        return
+
+    result = model.fit(source, result="prediction")
+    assert result.converged
+    assert result.lambda_strategy == "efs_reml"
+    assert result.execution_route == "stream_efs_qr"
+    assert result.optimizer_diagnostics is not None
+    assert result.optimizer_diagnostics.provider_source_scans > 0
+    assert np.all(np.isfinite(result.coefficients))
+    assert np.isfinite(result.deviance)
+    assert np.isfinite(result.score)
+    assert result.deviance >= -STRICT.atol
+
+
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 @pytest.mark.parametrize(
     "case",
@@ -792,11 +863,8 @@ class TestValidationMatrix:
         for mode in ("fixed", "estimated")
     ],
 )
-def test_internal_streamed_default_start_efs_matches_pinned_selected_fit(
-    r_bridge, case
-):
-    """Default coefficient starts, source-aligned initial sp/phi, binary R fields."""
-
+def test_public_streamed_default_start_efs_matches_pinned_selected_fit(r_bridge, case):
+    """Public row-source results preserve the reviewed internal/R selected fit."""
     from jaxgam.execution.efs_stream import fit_streamed_efs
     from jaxgam.families.standard import Binomial, Gamma
     from jaxgam.results import _prepared_transform_coefficients_cpu
@@ -848,7 +916,38 @@ def test_internal_streamed_default_start_efs_matches_pinned_selected_fit(
     mu = result.family.link.linkinv(
         stream.prepared.evaluate_batch(batch) @ beta + batch.offset
     )
+    public_data = pd.DataFrame(
+        {"x": np.asarray(batch.columns["x"]), "y": np.asarray(batch.y)}
+    )
+    public_family = copy.deepcopy(family)
+    public = GAM(
+        'y ~ s(x, bs="cr", k=6)',
+        family=public_family,
+        optimizer="efs",
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=11,
+        ),
+    ).fit(
+        DataFrameRowSource(
+            public_data,
+            response="y",
+            weights=np.asarray(batch.weight),
+            offset=np.asarray(batch.offset),
+        ),
+        result="prediction",
+    )
     collector = _AssertCollector()
+    reference_fields = {
+        "beta": "coefficients",
+        "mu": "fitted_values",
+        "D": "deviance",
+        "score": "reml_score",
+        "sp": "smoothing_params",
+        "edf": "edf_total",
+        "scale": "scale",
+    }
     for field, actual in (
         ("beta", beta),
         ("mu", mu),
@@ -858,20 +957,7 @@ def test_internal_streamed_default_start_efs_matches_pinned_selected_fit(
         ("edf", fit.edf),
         ("scale", fit.scale),
     ):
-        expected = np.asarray(
-            reference[
-                {
-                    "beta": "coefficients",
-                    "mu": "fitted_values",
-                    "D": "deviance",
-                    "score": "reml_score",
-                    "sp": "smoothing_params",
-                    "edf": "edf_total",
-                    "scale": "scale",
-                }[field]
-            ],
-            dtype=float,
-        )
+        expected = np.asarray(reference[reference_fields[field]], dtype=float)
         collector.check(
             field,
             lambda a=actual, e=expected: np.testing.assert_allclose(
@@ -880,16 +966,49 @@ def test_internal_streamed_default_start_efs_matches_pinned_selected_fit(
         )
     collector.check(
         "outer iterations",
-        lambda: np.testing.assert_equal(fit.n_iter, int(reference["outer_iterations"])),
+        lambda: np.testing.assert_equal(fit.n_iter, reference["outer_iterations"]),
     )
     collector.check(
         "source convergence",
-        lambda: np.testing.assert_equal(
-            str(reference["convergence"]), "full convergence"
-        ),
+        lambda: np.testing.assert_equal(reference["convergence"], "full convergence"),
     )
     collector.check(
         "stream convergence", lambda: np.testing.assert_equal(fit.converged, True)
+    )
+    for field, actual, expected in (
+        ("public beta", public.coefficients, beta),
+        (
+            "public mu",
+            public.predict(public_data, offset=np.asarray(batch.offset)),
+            mu,
+        ),
+        ("public deviance", public.deviance, fit.pirls_result.deviance),
+        ("public score", public.score, fit.score),
+        ("public sp", public.smoothing_params, fit.smoothing_params),
+        ("public scale", public.scale, fit.scale),
+    ):
+        collector.check(
+            field,
+            lambda a=actual, e=expected: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.check(
+        "public outer iterations",
+        lambda: np.testing.assert_equal(public.n_iter, fit.n_iter),
+    )
+    collector.check(
+        "public strategy",
+        lambda: np.testing.assert_equal(public.lambda_strategy, "efs_reml"),
+    )
+    collector.check(
+        "public diagnostics",
+        lambda: check_that(
+            public.optimizer_diagnostics is not None
+            and public.optimizer_diagnostics.provider_source_scans > 0
+            and public.optimizer_diagnostics.startup_source_scans == 2,
+            "public streamed EFS omitted source-cost diagnostics",
+        ),
     )
     if case.startswith("nb-"):
         collector.check(
@@ -897,6 +1016,24 @@ def test_internal_streamed_default_start_efs_matches_pinned_selected_fit(
             lambda: np.testing.assert_allclose(
                 fit.theta,
                 np.asarray(reference["theta"]),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        collector.check(
+            "public theta",
+            lambda: np.testing.assert_allclose(
+                public.theta,
+                fit.theta,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        collector.check(
+            "public selected family",
+            lambda: np.testing.assert_allclose(
+                public.family.get_theta(transformed=True)[0],
+                fit.theta,
                 rtol=STRICT.rtol,
                 atol=STRICT.atol,
             ),
