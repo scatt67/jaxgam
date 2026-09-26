@@ -3649,6 +3649,12 @@ as pinned mgcv. Its EFS-only coefficient solve also follows ``gam.fit4`` by
 retrying an indefinite observed-information proposal with positive-curvature
 rows.
 
+The nonadvertised Poisson logit, probit and complementary-log-log constructor
+extensions retain their source default-start boundary. Positive integer
+responses make the row initializer exceed the bounded-link domain; an
+all-zero response gives a nonfinite null-link mean. Their internal
+matched-start evidence does not imply a public default-start route.
+
 Newton retains its existing objective-monotonicity contract, while the faithful
 EFS controller may accept a finite score increase after contraction reaches
 multiplier one, exactly as pinned mgcv does. EFS records an immutable compact

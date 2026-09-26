@@ -94,6 +94,14 @@ input just as pinned mgcv does. Explicit fixed smoothing parameters and models
 without penalties keep their existing fixed/Newton routes. The existing
 `gaussian_compression=True` availability guard remains unchanged.
 
+Poisson logit, probit, and complementary-log-log are constructor extensions,
+not advertised Poisson links. Their integer-response NULL initialization
+leaves the bounded link domain when any response is positive, while an
+all-zero response has a nonfinite null-link mean. The public streamed route
+therefore preserves the pinned default-start rejection; the internal
+matched-start evidence remains recorded separately and is not presented as a
+public default-start capability.
+
 Every EFS result mode retains `optimizer_diagnostics`, an immutable compact
 record containing the pinned profile, exact trace and step policies, stop
 reason, outer, inner, and theta iteration counts, bounded accepted score/scale
