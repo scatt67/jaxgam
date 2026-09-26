@@ -71,7 +71,7 @@ For replayable input, request the compact prediction result and QR solver:
 
 ```python
 prediction = GAM(
-    "y ~ s(x1) + s(x2)",
+    "y ~ s(x1, bs='cr') + s(x2, bs='cr')",
     family="poisson",
     optimizer="efs",
     control=FitControl(execution="stream", linear_solver="qr"),
@@ -82,9 +82,10 @@ EFS supports dense input and replayable `RowSource` input for the built-in
 regular-family link constructors and negative binomial log, identity, and
 square-root links within their tested response/start domains. The streamed
 route is selected with `FitControl(execution="stream", linear_solver="qr")`
-and currently returns `result="prediction"`; full and inference results retain
-row-aligned state and therefore remain dense. Prediction results may retain
-Fisher uncertainty and support batched prediction without retaining the
+and currently returns `result="prediction"`. Its preparation path supports
+cubic regression (`bs="cr"`) and cubic shrinkage (`bs="cs"`) smooths. Other
+result modes use dense execution. Prediction results retain selected total EDF
+and may retain Fisher uncertainty for batched prediction without retaining the
 training source.
 
 Estimated negative-binomial identity and square-root fits require an offset

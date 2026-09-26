@@ -35,6 +35,7 @@ def test_prediction_mode_is_compact_and_matches_dense_point_predictions(
     assert isinstance(compact, GAMPredictionResult)
     assert not hasattr(compact, "edf")
     assert not hasattr(compact, "Vp")
+    np.testing.assert_allclose(compact.edf_total, full.edf_total)
     np.testing.assert_allclose(compact.predict(data[["x"]]), full.predict(data[["x"]]))
     with pytest.raises(RuntimeError, match="uncertainty is unavailable"):
         compact.predict(data[["x"]], se_fit=True)
@@ -114,6 +115,7 @@ def test_factor_provider_owns_inputs_and_validates_offsets_and_pickle() -> None:
     assert all(values.flags.writeable for _, _, _, values in caller_transforms)
     assert not owned._fisher_factor.flags.writeable
     restored = pickle.loads(pickle.dumps(result))
+    np.testing.assert_equal(restored.edf_total, result.edf_total)
     assert not restored.smoothing_params.flags.writeable
     assert not restored._predictor._fisher_factor.flags.writeable
     for offset in (1.0, np.ones((len(data), 1)), np.full(len(data), np.nan)):

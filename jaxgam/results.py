@@ -263,6 +263,7 @@ class GAMPredictionResult:
     scale: float
     theta: float | None
     smoothing_params: np.ndarray
+    edf_total: float
     converged: bool
     n_iter: int
     convergence_info: str
@@ -477,6 +478,7 @@ class GAMPredictionResult:
             )
         theta = None
         smoothing_params = np.exp(to_numpy(stream_state.log_lambda))
+        edf_total = float(to_numpy(stream_state.edf))
         converged = stream_state.converged
         n_iter = stream_state.n_iter
         convergence_info = (
@@ -505,6 +507,9 @@ class GAMPredictionResult:
             score = selected_score
             theta = selected_fit.theta
             smoothing_params = selected_smoothing
+            edf_total = float(to_numpy(selected_fit.edf))
+            if not np.isfinite(edf_total) or edf_total < 0.0:
+                raise FloatingPointError("selected streamed fit EDF is invalid")
             converged = selected_fit.converged
             n_iter = selected_fit.n_iter
             convergence_info = selected_fit.convergence_info
@@ -580,6 +585,7 @@ class GAMPredictionResult:
             scale=scale,
             theta=theta,
             smoothing_params=smoothing_params,
+            edf_total=edf_total,
             converged=converged,
             n_iter=n_iter,
             convergence_info=convergence_info,
@@ -743,6 +749,7 @@ class GAMResults(_FitDiagnostics):
                 scale=scale,
                 theta=fit_result.theta,
                 smoothing_params=to_numpy(fit_result.smoothing_params),
+                edf_total=float(to_numpy(fit_result.edf)),
                 converged=fit_result.converged,
                 n_iter=fit_result.n_iter,
                 convergence_info=fit_result.convergence_info,

@@ -24,7 +24,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -41,7 +41,7 @@ from jaxgam.fitting.newton import NewtonOptimizer
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import SEED, _AssertCollector, check_that, r_available
-from tests.r_bridge import RBridge
+from tests.r_bridge import RBridge, RBridgeError
 from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 
 # ---------------------------------------------------------------------------
@@ -785,6 +785,142 @@ class TestValidationMatrix:
 # ---------------------------------------------------------------------------
 
 
+def _public_regular_efs_profile_digest(
+    prepared, batch, offset, family_name, link, formula, control, startup
+) -> str:
+    """Bind a reviewed tolerance to raw rows, coordinates, starts and controls."""
+    digest = hashlib.sha256()
+    for name, value, dtype in (
+        ("x", batch.columns["x"], "<f8"),
+        ("y", batch.y, "<f8"),
+        ("weight", batch.weight, "<f8"),
+        ("offset", offset, "<f8"),
+        ("valid", batch.valid, "u1"),
+        ("row_positions", batch.row_positions, "<i8"),
+    ):
+        array = np.asarray(value, dtype=dtype)
+        digest.update(name.encode())
+        digest.update(repr(array.shape).encode())
+        digest.update(array.tobytes(order="C"))
+    structure = prepared.fitting.penalty_structure
+    blocks = []
+    for block_index, block in enumerate(structure.blocks):
+        transform = np.asarray(block.transform.dense(), dtype="<f8")
+        digest.update(f"transform-{block_index}".encode())
+        digest.update(repr(transform.shape).encode())
+        digest.update(transform.tobytes(order="C"))
+        for penalty_index, penalty in enumerate(block.dense_penalties()):
+            penalty = np.asarray(penalty, dtype="<f8")
+            digest.update(f"penalty-{block_index}-{penalty_index}".encode())
+            digest.update(repr(penalty.shape).encode())
+            digest.update(penalty.tobytes(order="C"))
+        blocks.append(
+            {
+                "start": block.start,
+                "stop": block.stop,
+                "sp_indices": block.sp_indices,
+                "ranks": block.ranks,
+            }
+        )
+    payload = {
+        "basis_fingerprint": prepared.basis_fingerprint,
+        "blocks": blocks,
+        "control": asdict(control),
+        "family": family_name,
+        "formula": formula,
+        "initial_scale_hex": float(startup.score_phi).hex(),
+        "initial_smoothing_hex": tuple(
+            float(value).hex() for value in np.exp(startup.log_lambda)
+        ),
+        "link": link,
+        "n_coef": prepared.n_coef,
+        "n_obs": prepared.n_obs,
+        "source_fingerprint": prepared.source_fingerprint,
+    }
+    digest.update(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+    return digest.hexdigest()
+
+
+def test_public_regular_efs_profile_digest_binds_basis_controls_and_starts() -> None:
+    """A reviewed numerical profile cannot migrate to a nearby model."""
+    from jaxgam.control import EFSControl
+    from jaxgam.execution.efs_stream_provider import RegularStreamEFSProvider
+    from jaxgam.execution.efs_stream_start import prepare_stream_efs_start
+    from jaxgam.formula.design_provider import StreamDesign
+    from jaxgam.formula.prepare import prepare_model
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    family = Poisson("identity")
+    original = _regular(family)
+    batch = next(original.source.source.scan(original.prepared.n_obs))
+    data = pd.DataFrame({"x": np.asarray(batch.columns["x"]), "y": batch.y})
+    source = DataFrameRowSource(
+        data,
+        response="y",
+        weights=np.asarray(batch.weight),
+        offset=np.asarray(batch.offset),
+    )
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=11,
+        uncertainty="fisher",
+    )
+    prepared = prepare_model(parse_formula(formula), source, family=family)
+    startup = prepare_stream_efs_start(
+        RegularStreamEFSProvider.create(
+            StreamDesign(prepared, source),
+            family,
+            maximum_bytes=10_000_000,
+            batch_rows=11,
+            control=control.efs,
+        )
+    )
+
+    def digest(model, model_formula, model_control, model_startup):
+        return _public_regular_efs_profile_digest(
+            model,
+            batch,
+            np.asarray(batch.offset),
+            "poisson",
+            "identity",
+            model_formula,
+            model_control,
+            model_startup,
+        )
+
+    expected = digest(prepared, formula, control, startup)
+    assert (
+        expected == "71bc41060f5f138cb00bd8a2328e726718d98454b02eb71634470699bd6ce0a8"
+    )
+    changed_control = replace(control, efs=EFSControl(score_tolerance=0.01))
+    assert digest(prepared, formula, changed_control, startup) != expected
+    assert (
+        digest(
+            prepared,
+            formula,
+            control,
+            replace(startup, log_lambda=startup.log_lambda + 0.01),
+        )
+        != expected
+    )
+    assert (
+        digest(
+            prepared,
+            formula,
+            control,
+            replace(startup, score_phi=startup.score_phi + 0.01),
+        )
+        != expected
+    )
+    changed_formula = 'y ~ s(x, bs="cs", k=6)'
+    changed_prepared = prepare_model(
+        parse_formula(changed_formula), source, family=family
+    )
+    assert digest(changed_prepared, changed_formula, control, startup) != expected
+
+
 @pytest.mark.parametrize("family_name", ["gaussian", "gamma", "poisson", "binomial"])
 @pytest.mark.parametrize(
     "link",
@@ -802,8 +938,12 @@ class TestValidationMatrix:
 def test_public_streamed_efs_regular_family_link_inventory(
     family_name: str, link: str
 ) -> None:
-    """Every constructor link either executes or preserves its named start boundary."""
+    """Every public regular cell has selected R parity or its pinned boundary."""
+    from jaxgam.execution.efs_stream_provider import RegularStreamEFSProvider
+    from jaxgam.execution.efs_stream_start import prepare_stream_efs_start
     from jaxgam.families.standard import Binomial, Gamma
+    from jaxgam.formula.design_provider import StreamDesign
+    from jaxgam.formula.prepare import prepare_model
     from tests.test_execution.test_efs_stream_start import _regular
 
     family = {
@@ -820,15 +960,18 @@ def test_public_streamed_efs_regular_family_link_inventory(
         offset = np.full(len(data), -0.5)
     elif family_name == "binomial" and link in {"inverse", "inverse_squared"}:
         offset = np.full(len(data), 2.0)
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=11,
+        uncertainty="fisher",
+    )
     model = GAM(
-        'y ~ s(x, bs="cr", k=6)',
+        formula,
         family=family,
         optimizer="efs",
-        control=FitControl(
-            execution="stream",
-            linear_solver="qr",
-            batch_rows=11,
-        ),
+        control=control,
     )
     source = DataFrameRowSource(
         data,
@@ -839,6 +982,23 @@ def test_public_streamed_efs_regular_family_link_inventory(
     if family_name == "poisson" and link in {"logit", "probit", "cloglog"}:
         with pytest.raises(ValueError, match="finite null link mean"):
             model.fit(source, result="prediction")
+        if r_available():
+            oracle_data = data.assign(w=np.asarray(batch.weight), off=offset)
+            expected_r_error = (
+                r"Value 1\.1 out of range"
+                if link == "logit"
+                else "missing value where TRUE/FALSE needed"
+            )
+            with pytest.raises(RBridgeError, match=expected_r_error):
+                RBridge(mode="subprocess").fit_efs(
+                    formula,
+                    oracle_data,
+                    f"{family_name}_{link}",
+                    weights="w",
+                    offset="off",
+                    initial_smoothing=np.array([0.4]),
+                    scale=1.0,
+                )
         return
 
     result = model.fit(source, result="prediction")
@@ -851,6 +1011,145 @@ def test_public_streamed_efs_regular_family_link_inventory(
     assert np.isfinite(result.deviance)
     assert np.isfinite(result.score)
     assert result.deviance >= -STRICT.atol
+    if not r_available():
+        return
+
+    prepared = prepare_model(parse_formula(formula), source, family=family)
+    startup = prepare_stream_efs_start(
+        RegularStreamEFSProvider.create(
+            StreamDesign(prepared, source),
+            family,
+            maximum_bytes=10_000_000,
+            batch_rows=11,
+            control=control.efs,
+        )
+    )
+    oracle_data = data.assign(w=np.asarray(batch.weight), off=offset)
+    oracle_arguments: dict[str, object] = {
+        "weights": "w",
+        "offset": "off",
+        "initial_smoothing": np.exp(startup.log_lambda),
+    }
+    if family.scale_known:
+        oracle_arguments["scale"] = 1.0
+    else:
+        oracle_arguments["initial_scale"] = startup.score_phi
+    bridge = RBridge(mode="subprocess")
+    if family_name == "binomial" and link in {"inverse", "inverse_squared"}:
+        # The selected efsudr fit is valid. Pinned estimate.gam subsequently
+        # refits an offset-only GLM solely to replace null.deviance, and that
+        # auxiliary bounded-link GLM rejects this input. Preserve both facts.
+        with pytest.raises(RBridgeError, match="no valid set of coefficients"):
+            bridge.fit_efs(
+                formula,
+                oracle_data,
+                f"{family_name}_{link}",
+                **oracle_arguments,
+            )
+        reference = bridge.fit_efs_selected_before_offset_null_deviance(
+            formula,
+            oracle_data,
+            f"{family_name}_{link}",
+            **oracle_arguments,
+        )
+    else:
+        reference = bridge.fit_efs(
+            formula,
+            oracle_data,
+            f"{family_name}_{link}",
+            **oracle_arguments,
+        )
+    prediction, prediction_se = result.predict(data, se_fit=True, offset=offset)
+    prediction_matrix = result.predict_matrix(data)
+    reference_link_se = np.sqrt(
+        np.maximum(
+            np.sum((prediction_matrix @ reference["Vp"]) * prediction_matrix, axis=1),
+            0.0,
+        )
+    )
+    reference_eta = np.asarray(family.link.link(reference["fitted_values"]))
+    reference_response_se = reference_link_se * np.abs(
+        np.asarray(family.link.mu_eta(reference_eta))
+    )
+    profile_digest = _public_regular_efs_profile_digest(
+        prepared,
+        batch,
+        offset,
+        family_name,
+        link,
+        formula,
+        control,
+        startup,
+    )
+    reviewed_profile = {
+        ("poisson", "identity"): (
+            "71bc41060f5f138cb00bd8a2328e726718d98454b02eb71634470699bd6ce0a8",
+            "fc7066fc896ad7131ad8a105979163a6da1db6c30361397d8a3f72ef361b4a9f",
+            4,
+            {
+                "coefficients",
+                "fitted values",
+                "smoothing",
+                "total EDF",
+                "prediction SE",
+            },
+        ),
+        ("binomial", "log"): (
+            "1b92d5b8e29458e873c702d93e22e1a639ed34e27711f4e6e08a6b4850f01ef8",
+            "b85057b3ab7ac3340e364cfa1407f3887f5d00b5f53ee3e2af00c976f191c552",
+            15,
+            {
+                "coefficients",
+                "fitted values",
+                "deviance",
+                "score",
+                "smoothing",
+                "total EDF",
+                "prediction SE",
+            },
+        ),
+    }.get((family_name, link))
+    moderate_fields: set[str] = set()
+    if reviewed_profile is not None:
+        (
+            expected_profile_digest,
+            expected_data_hash,
+            expected_outer,
+            moderate_fields,
+        ) = reviewed_profile
+        # These are the two exact, reviewed B=11 profiles in the durable
+        # EFS5.2 numerical record. A fixture, formula, control or iteration
+        # change must not silently inherit their field-specific tolerance.
+        assert profile_digest == expected_profile_digest
+        assert reference["provenance"]["data_hash"] == expected_data_hash
+        assert result.n_iter == reference["outer_iterations"] == expected_outer
+    collector = _AssertCollector()
+    for field, actual, expected in (
+        ("coefficients", result.coefficients, reference["coefficients"]),
+        ("fitted values", prediction, reference["fitted_values"]),
+        ("deviance", result.deviance, reference["deviance"]),
+        ("score", result.score, reference["reml_score"]),
+        ("smoothing", result.smoothing_params, reference["smoothing_params"]),
+        ("scale", result.scale, reference["scale"]),
+        ("total EDF", result.edf_total, reference["edf_total"]),
+        ("prediction SE", prediction_se, reference_response_se),
+    ):
+        tolerance = MODERATE if field in moderate_fields else STRICT
+        collector.check(
+            field,
+            lambda a=actual, e=expected, t=tolerance: np.testing.assert_allclose(
+                a, e, rtol=t.rtol, atol=t.atol
+            ),
+        )
+    collector.check(
+        "outer iterations",
+        lambda: np.testing.assert_equal(result.n_iter, reference["outer_iterations"]),
+    )
+    collector.check(
+        "source convergence",
+        lambda: np.testing.assert_equal(reference["convergence"], "full convergence"),
+    )
+    collector.raise_if_any(f"public streamed {family_name}/{link} EFS")
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
