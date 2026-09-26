@@ -785,10 +785,163 @@ class TestValidationMatrix:
 # ---------------------------------------------------------------------------
 
 
+_PUBLIC_REGULAR_EFS_TRANSFORM = np.array(
+    [
+        [
+            -0.10084646645334684,
+            -1.5872439753048382,
+            -1.5149403149145282,
+            0.7234966544244805,
+            -0.3140116461486681,
+        ],
+        [
+            0.10236876609052073,
+            -3.9105443262306543,
+            -1.190320844008348,
+            -0.4198142664814773,
+            0.4164342835175478,
+        ],
+        [
+            0.3414144879573992,
+            -3.9105443262306565,
+            0.5513358735670422,
+            -0.419814266481478,
+            -0.474994460636809,
+        ],
+        [
+            0.6162906991472893,
+            -1.5872439753048448,
+            0.772773694637967,
+            0.7234966544244804,
+            0.2459953222195101,
+        ],
+        [
+            0.694962263357019,
+            3.6744007175401556,
+            -1.0006471340648064,
+            -0.26852628762908964,
+            -0.09170493222124834,
+        ],
+    ]
+)
+_PUBLIC_REGULAR_EFS_PENALTY = np.array(
+    [
+        [
+            9.937835741841669e-18,
+            1.6872378158651704e-16,
+            -2.4752486035416775e-17,
+            -2.192047912054851e-17,
+            7.056647794383049e-18,
+        ],
+        [
+            1.6872378158651704e-16,
+            1.0000000000000013,
+            9.745377350634318e-16,
+            -6.737150635018578e-17,
+            5.067830620666182e-16,
+        ],
+        [
+            -2.4752486035416775e-17,
+            9.745377350634318e-16,
+            1.000000000000001,
+            -5.302746651749044e-16,
+            -7.481211836555918e-17,
+        ],
+        [
+            -2.192047912054851e-17,
+            -6.737150635018578e-17,
+            -5.302746651749044e-16,
+            0.9999999999999993,
+            -2.086648644527683e-16,
+        ],
+        [
+            7.056647794383049e-18,
+            5.067830620666182e-16,
+            -7.481211836555918e-17,
+            -2.086648644527683e-16,
+            0.9999999999999994,
+        ],
+    ]
+)
+_PUBLIC_REGULAR_EFS_CENTERING = np.array(
+    [
+        [
+            -0.5151698058830185,
+            -0.4435469801400466,
+            -0.4435469801400465,
+            -0.5151698058830186,
+            -0.19459225964847143,
+        ],
+        [
+            0.7778322044614241,
+            -0.19128033838590863,
+            -0.19128033838590858,
+            -0.22216779553857588,
+            -0.08391822048046804,
+        ],
+        [
+            -0.19128033838590863,
+            0.8353129094865832,
+            -0.1646870905134167,
+            -0.19128033838590866,
+            -0.07225127103293447,
+        ],
+        [
+            -0.19128033838590858,
+            -0.16468709051341673,
+            0.8353129094865833,
+            -0.1912803383859086,
+            -0.07225127103293445,
+        ],
+        [
+            -0.2221677955385759,
+            -0.1912803383859087,
+            -0.19128033838590863,
+            0.7778322044614241,
+            -0.08391822048046806,
+        ],
+        [
+            -0.08391822048046804,
+            -0.07225127103293447,
+            -0.07225127103293445,
+            -0.08391822048046804,
+            0.9683020317524568,
+        ],
+    ]
+)
+
+
+def _assert_public_regular_efs_numeric_metadata(prepared) -> None:
+    """Bind reviewed coordinate values without architecture-specific bytes."""
+    structure = prepared.fitting.penalty_structure
+    assert len(structure.blocks) == 1
+    block = structure.blocks[0]
+    assert len(block.local_penalties) == 1
+    np.testing.assert_allclose(
+        block.transform.dense(),
+        _PUBLIC_REGULAR_EFS_TRANSFORM,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        block.dense_penalties()[0],
+        _PUBLIC_REGULAR_EFS_PENALTY,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        prepared.predict_spec.coef_map.terms[1].Z_centering,
+        _PUBLIC_REGULAR_EFS_CENTERING,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
 def _public_regular_efs_profile_digest(
     prepared, batch, offset, family_name, link, formula, control, startup
 ) -> str:
     """Bind a reviewed tolerance to raw rows, coordinates, starts and controls."""
+    _assert_public_regular_efs_numeric_metadata(prepared)
     digest = hashlib.sha256()
     for name, value, dtype in (
         ("x", batch.columns["x"], "<f8"),
@@ -862,6 +1015,7 @@ def test_public_regular_efs_profile_digest_binds_basis_controls_and_starts() -> 
     from jaxgam.execution.efs_stream_start import prepare_stream_efs_start
     from jaxgam.formula.design_provider import StreamDesign
     from jaxgam.formula.prepare import prepare_model
+    from jaxgam.penalties.structure import DenseLocalPenalty, DenseTransform
     from tests.test_execution.test_efs_stream_start import _regular
 
     family = Poisson("identity")
@@ -928,11 +1082,41 @@ def test_public_regular_efs_profile_digest_binds_basis_controls_and_starts() -> 
         )
         != expected
     )
+    structure = prepared.fitting.penalty_structure
+    block = structure.blocks[0]
+    changed_penalty = np.array(block.dense_penalties()[0], copy=True)
+    changed_penalty[0, 0] += 1e-3
+    penalty_block = replace(
+        block,
+        local_penalties=(DenseLocalPenalty(changed_penalty),),
+    )
+    penalty_prepared = replace(
+        prepared,
+        fitting=replace(
+            prepared.fitting,
+            penalty_structure=replace(structure, blocks=(penalty_block,)),
+        ),
+    )
+    with pytest.raises(AssertionError):
+        digest(penalty_prepared, formula, control, startup)
+    changed_transform = np.array(block.transform.dense(), copy=True)
+    changed_transform[0, 0] += 1e-3
+    transform_block = replace(block, transform=DenseTransform(changed_transform))
+    transform_prepared = replace(
+        prepared,
+        fitting=replace(
+            prepared.fitting,
+            penalty_structure=replace(structure, blocks=(transform_block,)),
+        ),
+    )
+    with pytest.raises(AssertionError):
+        digest(transform_prepared, formula, control, startup)
     changed_formula = 'y ~ s(x, bs="cs", k=6)'
     changed_prepared = prepare_model(
         parse_formula(changed_formula), source, family=family
     )
-    assert digest(changed_prepared, changed_formula, control, startup) != expected
+    with pytest.raises(AssertionError):
+        digest(changed_prepared, changed_formula, control, startup)
 
 
 @pytest.mark.parametrize("family_name", ["gaussian", "gamma", "poisson", "binomial"])
