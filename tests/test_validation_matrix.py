@@ -803,28 +803,40 @@ def _public_regular_efs_profile_digest(
         digest.update(repr(array.shape).encode())
         digest.update(array.tobytes(order="C"))
     structure = prepared.fitting.penalty_structure
-    blocks = []
-    for block_index, block in enumerate(structure.blocks):
-        transform = np.asarray(block.transform.dense(), dtype="<f8")
-        digest.update(f"transform-{block_index}".encode())
-        digest.update(repr(transform.shape).encode())
-        digest.update(transform.tobytes(order="C"))
-        for penalty_index, penalty in enumerate(block.dense_penalties()):
-            penalty = np.asarray(penalty, dtype="<f8")
-            digest.update(f"penalty-{block_index}-{penalty_index}".encode())
-            digest.update(repr(penalty.shape).encode())
-            digest.update(penalty.tobytes(order="C"))
-        blocks.append(
-            {
-                "start": block.start,
-                "stop": block.stop,
-                "sp_indices": block.sp_indices,
-                "ranks": block.ranks,
-            }
-        )
+    blocks = [
+        {
+            "local_penalties": tuple(
+                (type(penalty).__name__, (penalty.size, penalty.size))
+                for penalty in block.local_penalties
+            ),
+            "start": block.start,
+            "stop": block.stop,
+            "sp_indices": block.sp_indices,
+            "ranks": block.ranks,
+            "transform": (
+                type(block.transform).__name__,
+                (block.transform.size, block.transform.size),
+            ),
+        }
+        for block in structure.blocks
+    ]
+    coordinate_terms = tuple(
+        {
+            "col_start": term.col_start,
+            "del_index": term.del_index,
+            "label": term.label,
+            "n_coefs": term.n_coefs,
+            "n_coefs_raw": term.n_coefs_raw,
+            "smooth": type(term.smooth).__name__ if term.smooth is not None else None,
+            "term_type": term.term_type,
+            "z_shape": None if term.Z_centering is None else term.Z_centering.shape,
+        }
+        for term in prepared.predict_spec.coef_map.terms
+    )
     payload = {
         "basis_fingerprint": prepared.basis_fingerprint,
         "blocks": blocks,
+        "coordinate_terms": coordinate_terms,
         "control": asdict(control),
         "family": family_name,
         "formula": formula,
@@ -835,6 +847,8 @@ def _public_regular_efs_profile_digest(
         "link": link,
         "n_coef": prepared.n_coef,
         "n_obs": prepared.n_obs,
+        "penalty_count": structure.n_penalties,
+        "term_names": prepared.predict_spec.term_names,
         "source_fingerprint": prepared.source_fingerprint,
     }
     digest.update(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
@@ -892,7 +906,7 @@ def test_public_regular_efs_profile_digest_binds_basis_controls_and_starts() -> 
 
     expected = digest(prepared, formula, control, startup)
     assert (
-        expected == "71bc41060f5f138cb00bd8a2328e726718d98454b02eb71634470699bd6ce0a8"
+        expected == "60595632ad5693a8826346291064cb36f1462e28b7556dd38ba0fe552a35f747"
     )
     changed_control = replace(control, efs=EFSControl(score_tolerance=0.01))
     assert digest(prepared, formula, changed_control, startup) != expected
@@ -1083,7 +1097,7 @@ def test_public_streamed_efs_regular_family_link_inventory(
     )
     reviewed_profile = {
         ("poisson", "identity"): (
-            "71bc41060f5f138cb00bd8a2328e726718d98454b02eb71634470699bd6ce0a8",
+            "60595632ad5693a8826346291064cb36f1462e28b7556dd38ba0fe552a35f747",
             "fc7066fc896ad7131ad8a105979163a6da1db6c30361397d8a3f72ef361b4a9f",
             4,
             {
@@ -1095,7 +1109,7 @@ def test_public_streamed_efs_regular_family_link_inventory(
             },
         ),
         ("binomial", "log"): (
-            "1b92d5b8e29458e873c702d93e22e1a639ed34e27711f4e6e08a6b4850f01ef8",
+            "dccbbe802c1344875fb8111c1b3c1939df649e1fd8f2be9277d724da0455e9e7",
             "b85057b3ab7ac3340e364cfa1407f3887f5d00b5f53ee3e2af00c976f191c552",
             15,
             {
