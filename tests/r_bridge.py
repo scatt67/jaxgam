@@ -1810,6 +1810,77 @@ class RBridge:
             output["beta"] = np.asarray(beta).ravel().copy()
         return output
 
+    def nb_batch_derivative_contractions(
+        self,
+        link: str,
+        theta: float,
+        beta: np.ndarray,
+        X: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        observed_bar: np.ndarray,
+        deviance_bar: float,
+        likelihood_bar: float,
+    ) -> dict[str, Any]:
+        """Contract pinned ``dDeta`` and ``nb()$ls`` at one streamed state."""
+        self._require_rpy2()
+        base = self._ro.baseenv
+        X_r, C_r = self._to_r_matrix(X), self._to_r_matrix(observed_bar)
+        beta_r, y_r, weight_r, offset_r = (
+            self._to_r_vector(values) for values in (beta, y, weight, offset)
+        )
+        half = self._to_r_vector([0.5])
+        theta_r = self._to_r_vector([theta])
+        dbar_r = self._to_r_vector([deviance_bar])
+        lsbar_r = self._to_r_vector([likelihood_bar])
+        family = self._call_internal(
+            "fix.family.link",
+            self._mgcv.nb(theta=base["-"](theta_r), link=link),
+        )
+        eta = base["+"](base["drop"](base["%*%"](X_r, beta_r)), offset_r)
+        mu = family.rx2("linkinv")(eta)
+        log_theta = self._base.log(theta_r)
+        derivatives = self._call_internal(
+            "dDeta", y_r, mu, weight_r, log_theta, family, 1
+        )
+        cc = base["rowSums"](base["*"](base["%*%"](X_r, base["t"](C_r)), X_r))
+        likelihood = family.rx2("ls")(y_r, weight_r, log_theta, 1)
+        beta_term = base["+"](
+            base["*"](base["*"](half, cc), derivatives.rx2("Deta3")),
+            base["*"](dbar_r, derivatives.rx2("Deta")),
+        )
+        theta_term = base["+"](
+            base["+"](
+                self._base.sum(
+                    base["*"](base["*"](half, cc), derivatives.rx2("Deta2th"))
+                ),
+                base["*"](dbar_r, self._base.sum(derivatives.rx2("Dth"))),
+            ),
+            base["*"](lsbar_r, likelihood.rx2("lsth1")),
+        )
+        half_curvature = base["*"](half, derivatives.rx2("Deta2"))
+        weighted_response = base["-"](
+            base["*"](half_curvature, base["-"](eta, offset_r)),
+            base["*"](half, derivatives.rx2("Deta")),
+        )
+        good = base["&"](
+            base["is.finite"](half_curvature),
+            base["is.finite"](weighted_response),
+        )
+        return {
+            "beta": np.asarray(base["drop"](self._base.crossprod(X_r, beta_term))),
+            "log.theta": np.asarray(theta_term).copy(),
+            "stationarity": np.asarray(
+                base["drop"](
+                    self._base.crossprod(
+                        X_r, base["*"](half, derivatives.rx2("Detath"))
+                    )
+                )
+            ).copy(),
+            "good": int(self._base.sum(good)[0]),
+        }
+
     def binomial_likelihood_aic(
         self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
     ) -> np.ndarray:

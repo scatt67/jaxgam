@@ -127,6 +127,11 @@ test-efs-recovery-ci: ## run focused EFS retained-start recovery using a built i
 		tests/test_fitting/test_efs_theta_pirls.py::test_efs_theta_pirls_nonsaturated_inner_contract_matches_pinned_r[weighted_ridge] \
 		-s -x --tb=short
 
+.PHONY: test-pr82-nb-batch
+test-pr82-nb-batch: docker-build ## run dynamic-theta NB batch derivative gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_fitting/test_nb_stream_reml.py -x --tb=short -v
+
 .PHONY: colima-start
 colima-start: ## start colima VM (no-op if already running)
 	@colima status 2>/dev/null || colima start --cpu $(COLIMA_CPU) --memory $(COLIMA_MEMORY)
