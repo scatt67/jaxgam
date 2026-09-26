@@ -1,10 +1,12 @@
 """Fixed/trial-theta host controller, source stopping and bounded scans."""
 
+import hashlib
 import json
 import logging
 import os
 import subprocess
 import sys
+from dataclasses import asdict
 
 import jax
 import jax.numpy as jnp
@@ -31,7 +33,31 @@ from jaxgam.links.links import ProbitLink
 from tests.helpers import _AssertCollector, r_available
 from tests.r_bridge import RBridge
 from tests.test_execution.test_regular_stream import _CountedSource, _EmptyCountedSource
-from tests.tolerances import STRICT
+from tests.tolerances import MODERATE, STRICT
+
+_FIXED_THETA_MAXIMUM_BYTES = 10_000_000
+_FIXED_THETA_LOG_RHO = float(np.log(0.35))
+_FIXED_THETA_SCORE_DIGESTS = {
+    ("log", 5): "c87c1a096a48d56d1a8c9c256b7137ed28a7dcf01e4cdba08caa0b3744a5a7e8",
+    ("log", 200): "746053734ee4918bf6a55762a0a2e831ead3dbdc66a0dd1ec970fd40e875bc59",
+    (
+        "identity",
+        5,
+    ): "85188dd6f21cb91f89c3375d646e42fe79d749a23839bb8b725b6f877ac6091d",
+    (
+        "identity",
+        200,
+    ): "ccb9b98b515f9962365a3025cb8114ee88f2ff4947ab98a3d2d9cb21382c3b14",
+    ("sqrt", 5): "e93435e53603c3da73ecb7dc47a04509e0e758c86537a59d201b39b50a3a7694",
+    (
+        "sqrt",
+        200,
+    ): "1716d50e31b7317f9aec63eabcd01d30594e6dbaba89094d67ba7c5341797385",
+}
+
+
+def _fixed_theta_control(batch_rows):
+    return StreamPIRLSControl(batch_rows=batch_rows, solver_policy="qr", tol=1e-11)
 
 
 def _fixture(
@@ -56,18 +82,48 @@ def _fixture(
 
 
 def _fit(stream, family, batch_rows=11, parameters=None, **kwargs):
-    rho = np.full_like(stream.prepared.fitting.log_lambda_init, np.log(0.35))
+    rho = np.full_like(stream.prepared.fitting.log_lambda_init, _FIXED_THETA_LOG_RHO)
     return fit_nb_streamed_pirls(
         stream,
         family,
         rho,
-        maximum_bytes=10_000_000,
+        maximum_bytes=_FIXED_THETA_MAXIMUM_BYTES,
         parameters=parameters,
-        control=StreamPIRLSControl(
-            batch_rows=batch_rows, solver_policy="qr", tol=1e-11
-        ),
+        control=_fixed_theta_control(batch_rows),
         **kwargs,
     )
+
+
+def _fixed_theta_score_gate_digest(stream, link, theta, batch_rows):
+    """Bind the narrow score tolerance to its exact input/model/control."""
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    digest = hashlib.sha256()
+    for name, value, dtype in (
+        ("x", batch.columns["x"], "<f8"),
+        ("y", batch.y, "<f8"),
+        ("weight", batch.weight, "<f8"),
+        ("offset", batch.offset, "<f8"),
+        ("valid", batch.valid, "u1"),
+        ("row_positions", batch.row_positions, "<i8"),
+    ):
+        array = np.asarray(value, dtype=dtype)
+        digest.update(name.encode())
+        digest.update(repr(array.shape).encode())
+        digest.update(array.tobytes(order="C"))
+    payload = {
+        "batch_rows": batch_rows,
+        "control": asdict(_fixed_theta_control(batch_rows)),
+        "family": "NegativeBinomial-fixed",
+        "formula": 'y ~ s(x, bs="cr", k=6)',
+        "link": link,
+        "maximum_bytes": _FIXED_THETA_MAXIMUM_BYTES,
+        "n_coef": stream.prepared.n_coef,
+        "n_obs": stream.prepared.n_obs,
+        "rho_hex": _FIXED_THETA_LOG_RHO.hex(),
+        "theta_hex": float(theta).hex(),
+    }
+    digest.update(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+    return digest.hexdigest()
 
 
 @pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
@@ -606,6 +662,16 @@ def test_pinned_gam_fit4_fixed_theta_prepared_basis_stopping_and_information(
         result = _fit(stream, family, B)
         state = result.state
         collector = _AssertCollector()
+        score_tolerance = STRICT
+        if theta == 1e6:
+            # efam.r's saturated-likelihood expression moves by 6.54e-8
+            # between pinned arm64 and amd64 R for this exact input. See the
+            # checked-in numerical review; no other field or fixture is relaxed.
+            assert (
+                _fixed_theta_score_gate_digest(stream, link, theta, B)
+                == _FIXED_THETA_SCORE_DIGESTS[(link, B)]
+            )
+            score_tolerance = MODERATE
         for name, actual in (
             ("beta", state.coefficients),
             ("dev", state.deviance),
@@ -616,13 +682,16 @@ def test_pinned_gam_fit4_fixed_theta_prepared_basis_stopping_and_information(
             ("gdi", result.gdi_penalty),
             ("score", result.reml_score),
         ):
+            tolerance = score_tolerance if name == "score" else STRICT
             collector.check(
                 name,
-                lambda actual=actual, name=name: np.testing.assert_allclose(
-                    actual,
-                    np.squeeze(expected[name]),
-                    rtol=STRICT.rtol,
-                    atol=STRICT.atol,
+                lambda actual=actual, name=name, tolerance=tolerance: (
+                    np.testing.assert_allclose(
+                        actual,
+                        np.squeeze(expected[name]),
+                        rtol=tolerance.rtol,
+                        atol=tolerance.atol,
+                    )
                 ),
             )
         collector.check(
