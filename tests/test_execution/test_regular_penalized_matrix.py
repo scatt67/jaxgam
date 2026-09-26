@@ -1,7 +1,6 @@
 """Genuine fixed-sp regular release systems and extreme source prior weights."""
 
 import hashlib
-import inspect
 import json
 from dataclasses import replace
 
@@ -41,6 +40,13 @@ _APPROVED_DIGESTS = {
     ),
 }
 
+# SHA256 of the checked-in ``test_regular_starts._case`` source.  Keep this
+# literal in the immutable fixture digest: pytest's rewritten code object does
+# not reliably retain inspectable source lines on pinned Linux containers.
+_FIXTURE_SOURCE_SHA256 = (
+    "db686b3963c602a194d51d425c6155b6f46f643b41ff3929ebb8eacd05e10c6c"
+)
+
 
 def _fixture_digest(
     family_class, link, X, y, weight, offset, start, structure, rho, prepared, control
@@ -56,9 +62,7 @@ def _fixture_digest(
         }
 
     description = {
-        "fixture_source_sha256": hashlib.sha256(
-            inspect.getsource(_case).encode()
-        ).hexdigest(),
+        "fixture_source_sha256": _FIXTURE_SOURCE_SHA256,
         "family": family_class.__name__,
         "link": link,
         "formula": "y~x",

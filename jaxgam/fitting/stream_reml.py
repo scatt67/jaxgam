@@ -31,13 +31,33 @@ class RegularBatchScoreVJP(NamedTuple):
     """One batch's cotangents and explicit derivative eligibility.
 
     A neutral batch is admissible; the host must separately require globally
-    informative data. No source iterator or coefficient-fit tape is retained.
+    informative data. ``admissible`` is the strict per-batch result, while
+    ``structural_admissible`` lets a source-aware host distinguish the sole
+    unresolved-alpha condition and apply its global recovery certificate.
+    ``alpha_exact_zero`` is diagnostic only: pinned R substitutes epsilon for
+    that row and a mixed-success global system can remain full rank. No source
+    iterator or coefficient-fit tape is retained.
     """
 
     beta: jax.Array
     log_phi: jax.Array
     admissible: jax.Array
     informative_count: jax.Array
+    structural_admissible: jax.Array
+    alpha_unresolved: jax.Array
+    alpha_exact_zero: jax.Array
+
+
+class RegularScoreCotangents(NamedTuple):
+    """Scalar source score and explicit coefficient/statistic cotangents."""
+
+    score: jax.Array
+    rho: jax.Array
+    observed: jax.Array
+    source_beta: jax.Array
+    deviance: jax.Array
+    saturated: jax.Array
+    log_phi: jax.Array
 
 
 @partial(jax.jit, static_argnames=("family", "context"))
@@ -62,8 +82,10 @@ def regular_batch_statistics_vjp(
     Fisher dispatch as the regular controller. Deviance uses the smooth
     derivative primitive rather than the reporting clamp. Actual saturated
     likelihood supplies the scale derivative. This function does not decide
-    coefficient recovery or turn an unresolved source system into an eligible
-    derivative: the host must reject a false ``admissible`` result.
+    coefficient recovery. A generic caller must require ``admissible``; a
+    source-aware host may inspect ``structural_admissible`` and
+    ``alpha_unresolved`` only as inputs to its separate global convergence,
+    factor, stationarity, information and lineage certificate.
     """
     if context.capabilities.dynamic_theta:
         raise NotImplementedError("Regular adjoints require a static family parameter.")
@@ -143,19 +165,125 @@ def regular_batch_statistics_vjp(
         if context.capabilities.fisher_equals_observed_for_score
         else working.observed_information_ok
     )
-    admissible = (
+    coefficient_system_ok = (
+        working.fisher_system_ok
+        if context.capabilities.coefficient_system == "fisher"
+        else working.newton_system_ok
+    )
+    alpha_unresolved = jnp.any(working.alpha_resolution_unresolved)
+    alpha_exact_zero = jnp.any(
+        working.informative_mask & (working.newton_alpha_raw == 0.0)
+    )
+    structural_admissible = (
         jnp.all(jnp.isfinite(beta))
         & jnp.all(~valid | finite_X)
-        & working.working_system_admissible
+        & working.domain_ok
+        & working.working_inputs_ok
+        & coefficient_system_ok
         & score_information_ok
-        & ~jnp.any(working.alpha_resolution_unresolved)
         & likelihood_ok
         & jnp.all(jnp.isfinite(beta_bar))
         & jnp.isfinite(saturated_value)
         & jnp.isfinite(log_phi_bar)
     )
+    admissible = structural_admissible & ~alpha_unresolved
     return RegularBatchScoreVJP(
-        beta_bar, log_phi_bar, admissible, working.informative_count
+        beta_bar,
+        log_phi_bar,
+        admissible,
+        working.informative_count,
+        structural_admissible,
+        alpha_unresolved,
+        alpha_exact_zero,
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "Mp",
+        "singleton_sp_indices",
+        "singleton_ranks",
+        "multi_block_sp_indices",
+        "multi_block_ranks",
+    ),
+)
+def regular_score_cotangents(
+    rho: jax.Array,
+    log_phi: jax.Array,
+    observed_inverse: jax.Array,
+    source_beta: jax.Array,
+    raw_deviance: jax.Array,
+    saturated_loglik: jax.Array,
+    log_det_hessian: jax.Array,
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+) -> RegularScoreCotangents:
+    """Differentiate the source-timed regular REML score at a frozen fit.
+
+    ``raw_deviance`` is the pre-``gdi1`` deviance and ``source_beta`` is the
+    candidate returned by the final coefficient solve.  The supplied
+    determinant and inverse belong to the observed score factor.  Keeping
+    those roles explicit avoids rebuilding a different normal-equation
+    factor while retaining the exact local penalty derivative actions.
+    """
+    phi = jnp.exp(log_phi)
+    penalty = penalty_ops.quadratic(penalty_structure, source_beta, rho)
+    penalized_deviance = raw_deviance + penalty
+    log_det_penalty = penalty_ops.log_pdet(
+        rho,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
+    score = (
+        penalized_deviance / (2.0 * phi)
+        - saturated_loglik
+        + log_det_hessian / 2.0
+        - log_det_penalty / 2.0
+        - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
+    )
+
+    def explicit_rho(rho_value: jax.Array) -> jax.Array:
+        # At the frozen state d log|H| = tr(H^-1 dS).  The observed inverse
+        # comes from the retained signed QR factor, not a second factorization.
+        penalty_value = penalty_ops.quadratic(penalty_structure, source_beta, rho_value)
+        dense_penalty = penalty_ops.materialize(penalty_structure, rho_value)
+        hessian_logdet = 0.5 * jnp.vdot(observed_inverse, dense_penalty.T).real
+        penalty_logdet = penalty_ops.log_pdet(
+            rho_value,
+            singleton_sp_indices,
+            singleton_ranks,
+            singleton_eig_constants,
+            multi_block_sp_indices,
+            multi_block_ranks,
+            multi_block_proj_S,
+        )
+        return penalty_value / (2.0 * phi) + hessian_logdet - penalty_logdet / 2.0
+
+    rho_bar = jax.grad(explicit_rho)(rho)
+    observed_bar = 0.5 * observed_inverse.T
+    source_beta_bar = penalty_ops.apply(penalty_structure, source_beta, rho) / phi
+    deviance_bar = 1.0 / (2.0 * phi)
+    saturated_bar = jnp.array(-1.0, dtype=source_beta.dtype)
+    log_phi_bar = -penalized_deviance / (2.0 * phi) - Mp / 2.0
+    return RegularScoreCotangents(
+        score,
+        rho_bar,
+        observed_bar,
+        source_beta_bar,
+        deviance_bar,
+        saturated_bar,
+        log_phi_bar,
     )
 
 
