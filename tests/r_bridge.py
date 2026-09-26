@@ -1103,6 +1103,45 @@ class RBridge:
             skip_offset_null_deviance=False,
         )
 
+    def fit_efs_selected_before_offset_null_deviance(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        *,
+        weights: str | None = None,
+        offset: str | None = None,
+        controls: dict[str, float] | None = None,
+        initial_smoothing: np.ndarray | None = None,
+        initial_scale: float | None = None,
+        scale: float = -1.0,
+        theta: float | None = None,
+    ) -> dict[str, Any]:
+        """Return a selected EFS fit before offset null-deviance postprocessing.
+
+        Pinned ``estimate.gam`` refits an offset-only GLM after the complete
+        EFS fit. Some bounded noncanonical links reject that auxiliary GLM
+        even though ``efsudr`` and ``gam.fit3.post.proc`` returned a valid
+        selected model. This oracle clones the pinned closure and disables
+        only that post-fit assignment. Callers must separately preserve the
+        public ``gam`` rejection as boundary evidence.
+        """
+        self._require_pinned_efs_versions()
+        return self._fit_efs_rpy2(
+            formula,
+            data,
+            family,
+            weights,
+            offset,
+            controls,
+            initial_smoothing,
+            initial_scale,
+            False,
+            scale,
+            theta,
+            skip_offset_null_deviance=True,
+        )
+
     def nb_pirls_controller_reference(
         self,
         X: np.ndarray,
