@@ -179,6 +179,8 @@ def test_regular_batch_vjp_preserves_unresolved_binomial_log_boundary():
         context,
     )
     assert not bool(result.admissible)
+    assert bool(result.structural_admissible)
+    assert bool(result.alpha_unresolved)
 
 
 def test_canonical_score_vjp_ignores_unused_observed_diagnostic():
