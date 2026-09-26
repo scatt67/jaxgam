@@ -67,20 +67,40 @@ result = GAM(
 ).fit(data)
 ```
 
-The released EFS route is dense. It supports the built-in regular-family link
-constructors and negative binomial log, identity, and square-root links within
-their tested response/start domains. Estimated negative-binomial identity and
-square-root fits require an offset whose mean at the zero-coefficient recovery
-anchor is positive. A zero offset produces a zero mean for these links, so the
-public route rejects that input just as pinned mgcv does. Explicit fixed
-smoothing parameters and models without penalties keep their existing
-fixed/Newton routes. Estimated EFS smoothing rejects `RowSource` execution. The existing
+For replayable input, request the compact prediction result and QR solver:
+
+```python
+prediction = GAM(
+    "y ~ s(x1) + s(x2)",
+    family="poisson",
+    optimizer="efs",
+    control=FitControl(execution="stream", linear_solver="qr"),
+).fit(source, result="prediction")
+```
+
+EFS supports dense input and replayable `RowSource` input for the built-in
+regular-family link constructors and negative binomial log, identity, and
+square-root links within their tested response/start domains. The streamed
+route is selected with `FitControl(execution="stream", linear_solver="qr")`
+and currently returns `result="prediction"`; full and inference results retain
+row-aligned state and therefore remain dense. Prediction results may retain
+Fisher uncertainty and support batched prediction without retaining the
+training source.
+
+Estimated negative-binomial identity and square-root fits require an offset
+whose mean at the zero-coefficient recovery anchor is positive. A zero offset
+produces a zero mean for these links, so both execution routes reject that
+input just as pinned mgcv does. Explicit fixed smoothing parameters and models
+without penalties keep their existing fixed/Newton routes. The existing
 `gaussian_compression=True` availability guard remains unchanged.
 
 Every EFS result mode retains `optimizer_diagnostics`, an immutable compact
 record containing the pinned profile, exact trace and step policies, stop
-reason, outer, inner, and theta iteration counts, bounded accepted score/scale histories,
-final multiplier/update residual, movement maxima, and numerical event flags.
+reason, outer, inner, and theta iteration counts, bounded accepted score/scale
+histories, final multiplier/update residual, movement maxima, and numerical
+event flags. Streamed EFS diagnostics additionally separate startup scans from
+scans made by every executed outer trial. These counts exclude Phase-1 model
+preparation.
 Ordinary Newton and fixed-smoothing results set this field to `None`.
 
 ::: jaxgam.api.GAM

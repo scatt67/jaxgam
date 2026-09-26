@@ -13,6 +13,7 @@ Design doc reference: docs/refactor_gam_api/design.md §3.3
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, overload
 
 import numpy as np
@@ -161,7 +162,8 @@ class GAM:
         -------
         GAMResults or GAMInferenceResult
             Frozen full-diagnostic or lean-inference result. Streamed fitting
-            currently requires explicit fixed ``sp`` and ``result='prediction'``.
+            returns ``result='prediction'`` and supports either explicit fixed
+            ``sp`` or estimated EFS smoothing with the explicit QR solver.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
@@ -304,7 +306,7 @@ class GAM:
         result: Literal["full", "inference", "prediction"],
         family: ExponentialFamily,
     ) -> GAMPredictionResult:
-        """Run the narrow fixed-sp replayable-source execution route."""
+        """Run the replayable-source prediction-result execution route."""
         from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
         from jaxgam.families.standard import Binomial, Gaussian, Poisson
 
@@ -317,22 +319,24 @@ class GAM:
                 "weights and offset must be owned by the RowSource for "
                 "execution='stream'; do not pass separate arrays."
             )
-        if self.optimizer == "efs" and self.sp is None:
-            raise NotImplementedError(
-                "optimizer='efs' does not support estimated smoothing from a "
-                "RowSource; use dense execution or explicit fixed sp"
-            )
         if result != "prediction":
             raise NotImplementedError(
-                "Streamed fitting initially supports result='prediction' only; "
+                "Streamed fitting supports result='prediction' only; "
                 "full and inference results retain unsupported row diagnostics."
             )
-        if self.sp is None:
+        estimated_efs = self.optimizer == "efs" and self.sp is None
+        if estimated_efs:
+            if self.control.linear_solver != "qr":
+                raise NotImplementedError(
+                    "Streamed optimizer='efs' requires linear_solver='qr'."
+                )
+            _check_stream_efs_family(family)
+        elif self.sp is None:
             raise NotImplementedError(
                 "Streamed fitting currently requires explicit fixed sp; "
                 "streamed smoothing-parameter optimization is not implemented."
             )
-        if not family.is_canonical or not isinstance(
+        elif not family.is_canonical or not isinstance(
             family, (Gaussian, Poisson, Binomial)
         ):
             raise NotImplementedError(
@@ -341,17 +345,50 @@ class GAM:
             )
         spec = parse_formula(self.formula)
         prepared = prepare_model(spec, data, family=family)
+        stream = StreamDesign(prepared, data)
+        jax_device = _resolve_device(self.device)
+        if estimated_efs:
+            if prepared.penalties is None or prepared.penalties.n_penalties == 0:
+                return _fit_stream_parametric_bypass(
+                    stream,
+                    family,
+                    formula=self.formula,
+                    method=self.method,
+                    control=self.control,
+                    device=jax_device,
+                )
+            from jaxgam.execution.efs_stream import fit_streamed_efs
+
+            execution = fit_streamed_efs(
+                stream,
+                family,
+                maximum_bytes=self.control.memory_budget_bytes,
+                batch_rows=self.control.batch_rows,
+                control=self.control.efs,
+                device=jax_device,
+            )
+            return GAMPredictionResult._from_stream_fit(
+                stream_state=execution.fit.pirls_result,
+                prepared=prepared,
+                metadata=execution.metadata,
+                family=execution.family,
+                formula=self.formula,
+                method=self.method,
+                control=self.control,
+                execution_route="stream_efs_qr",
+                selected_fit=execution.fit,
+                lambda_strategy="efs_reml",
+            )
         _preflight_stream_workspace(
             prepared.n_coef,
             self.control.batch_rows,
             self.control.memory_budget_bytes,
             linear_solver=self.control.linear_solver,
         )
-        jax_device = _resolve_device(self.device)
         metadata = PreparedFittingMetadata.from_prepared(prepared, family, jax_device)
         log_lambda = _fixed_log_smoothing_parameters(self.sp, metadata.n_penalties)
         stream_state = fit_streamed_pirls(
-            StreamDesign(prepared, data),
+            stream,
             family,
             log_lambda,
             control=StreamPIRLSControl(
@@ -372,6 +409,128 @@ class GAM:
                 "stream_qr" if self.control.linear_solver == "qr" else "stream"
             ),
         )
+
+
+def _check_stream_efs_family(family: ExponentialFamily) -> None:
+    """Reject statically unsupported streamed-EFS families before preparation."""
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
+    from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
+
+    if isinstance(family, NegativeBinomial):
+        if not isinstance(family.link, (LogLink, IdentityLink, SqrtLink)):
+            raise NotImplementedError(
+                "Streamed EFS supports NB log, identity, and sqrt links only."
+            )
+        return
+    if not isinstance(family, (Gaussian, Binomial, Poisson, Gamma)):
+        raise NotImplementedError(
+            "Streamed EFS supports registered Gaussian, Binomial, Poisson, "
+            "Gamma, and NegativeBinomial families only."
+        )
+    if family.execution_parameter_snapshot().theta_mode != "none":
+        raise NotImplementedError("Streamed regular EFS does not accept theta state.")
+
+
+def _fit_stream_parametric_bypass(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    *,
+    formula: str,
+    method: str,
+    control: FitControl,
+    device: jax.Device | None,
+) -> GAMPredictionResult:
+    """Preserve the ordinary no-penalty fit before streamed EFS dispatch."""
+    from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
+    from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
+    from jaxgam.execution.stream import StreamPIRLSControl
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.fitting.family_execution import (
+        FamilyExecutionLineage,
+        FamilyExecutionParameters,
+    )
+
+    prepared = stream.prepared
+    coefficient_control = StreamPIRLSControl(
+        batch_rows=control.batch_rows,
+        max_iter=control.efs.pirls_max_iter,
+        tol=control.efs.pirls_tolerance,
+        solver_policy="qr",
+    )
+    empty_rho = np.zeros(0, dtype=np.float64)
+    if isinstance(family, NegativeBinomial):
+        lineage = FamilyExecutionLineage.from_prepared(prepared, family)
+        parameters = (
+            FamilyExecutionParameters.from_snapshot(lineage.parameters)
+            if family.n_theta
+            else None
+        )
+        state = fit_nb_streamed_pirls(
+            stream,
+            family,
+            empty_rho,
+            maximum_bytes=control.memory_budget_bytes,
+            parameters=parameters,
+            control=coefficient_control,
+            device=device,
+            estimate_theta=False,
+        ).state
+    else:
+        regular = fit_regular_streamed_pirls(
+            stream,
+            family,
+            empty_rho,
+            maximum_bytes=control.memory_budget_bytes,
+            score_scale=1.0,
+            control=coefficient_control,
+            device=device,
+        )
+        state = regular.state
+        if not family.scale_known:
+            # Dense Newton's no-penalty shortcut scores at the reported
+            # Fletcher scale. Coefficients are dispersion-invariant, so no
+            # second coefficient fit or EFS outer loop is needed. The
+            # saturated likelihood is scale-dependent and needs one bounded
+            # replay at that selected scale.
+            from jaxgam.execution.stream import _source_batches
+
+            lineage = FamilyExecutionLineage.from_prepared(prepared, family)
+            reported_scale = float(np.asarray(state.scale))
+            saturated = 0.0
+            batches = 0
+            for _batch, y, weight, _offset, _valid in _source_batches(
+                stream, family, lineage, coefficient_control.batch_rows
+            ):
+                saturated += float(
+                    np.asarray(
+                        family.saturated_loglik(y, weight, reported_scale, max_y=0)
+                    )
+                )
+                batches += 1
+            if not np.isfinite(saturated):
+                raise FloatingPointError(
+                    "parametric streamed saturated likelihood is nonfinite"
+                )
+            state = replace(
+                state,
+                score_scale=state.scale,
+                saturated_loglik=np.asarray(saturated),
+                source_scans=state.source_scans + 1,
+                batches_scanned=state.batches_scanned + batches,
+            )
+    metadata = PreparedFittingMetadata.from_prepared(prepared, family, device)
+    return GAMPredictionResult._from_stream_fit(
+        stream_state=state,
+        prepared=prepared,
+        metadata=metadata,
+        family=family,
+        formula=formula,
+        method=method,
+        control=control,
+        execution_route="stream_parametric_qr",
+        lambda_strategy=f"newton_{method.lower()}",
+    )
 
 
 # ---------------------------------------------------------------------------

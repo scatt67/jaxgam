@@ -654,13 +654,15 @@ def fit_regular_streamed_pirls(
             eta = 0.9 * eta + 0.1 * anchor
         return eta
 
-    current_deviance, _ = trial(beta, source_anchor=explicit_null is not None)
+    current_deviance, domain = trial(beta, source_anchor=explicit_null is not None)
     # gam.fit3 evaluates dev.resids at its recovery anchor without an upfront
     # validmu check. A positive-infinite Poisson zero-anchor baseline is usable:
     # the first working system still starts from mustart. Preserve the raw
     # source value rather than replacing every invalid-domain result by +Inf.
     # NaN/-Inf cannot enter the source divergence arithmetic coherently.
     if explicit_null is None:
+        if not domain:
+            raise ValueError("regular null coefficient anchor leaves the family domain")
         old_pdev = penalized(beta, current_deviance)
     else:
         old_pdev = float(current_deviance + beta @ penalty_apply(beta))

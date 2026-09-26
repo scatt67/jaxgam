@@ -14,6 +14,7 @@ import pytest
 import jaxgam.execution.regular_stream as regular_controller
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource
+from jaxgam.execution.null_coefficient import NullCoefficientProjection
 from jaxgam.execution.regular_stream import (
     _positive_signed_state,
     fit_regular_streamed_pirls,
@@ -140,6 +141,31 @@ def test_explicit_zero_null_preserves_raw_source_baseline_semantics() -> None:
             score_scale=0.7,
             control=control,
             null_coefficients=np.zeros(gamma_prepared.n_coef),
+        )
+
+
+def test_default_null_preserves_original_domain_rejection() -> None:
+    """Only an explicit source anchor may retain a raw +Inf baseline."""
+    stream, family, *_ = _fixture()
+    p = stream.prepared.n_coef
+    invalid_projection = NullCoefficientProjection(
+        np.zeros(p), p, np.arange(p, dtype=np.int64)
+    )
+    with (
+        patch.object(
+            regular_controller,
+            "project_null_coefficients",
+            return_value=invalid_projection,
+        ),
+        pytest.raises(ValueError, match="anchor leaves the family domain"),
+    ):
+        fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=10_000_000,
+            score_scale=0.7,
+            control=StreamPIRLSControl(batch_rows=11, solver_policy="qr"),
         )
 
 

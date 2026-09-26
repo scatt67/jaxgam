@@ -59,9 +59,10 @@ def fit_streamed_efs(
 ) -> StreamEFSExecution:
     """Run EFS with conditional theta inside streamed coefficient PIRLS.
 
-    This internal fitting-boundary function does not change public dispatch
-    or the ordinary/fixed-sp routes. Source preparation is caller-owned;
-    startup and all actually executed provider trials have separate counts.
+    The public adapter selects this fitting boundary only after explicit QR,
+    result-mode, family and penalty checks. Ordinary/fixed-sp routes remain
+    separate. Source preparation is caller-owned; startup and all actually
+    executed provider trials have separate counts.
     """
     if (
         not isinstance(maximum_bytes, Integral)

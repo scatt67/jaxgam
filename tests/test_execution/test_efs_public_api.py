@@ -22,6 +22,7 @@ from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import _EFSDiagnosticsAccumulator
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.registry import get_family
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from tests.helpers import _AssertCollector, check_that, r_available
 from tests.r_bridge import RBridge, RBridgeError
 from tests.tolerances import STRICT
@@ -413,11 +414,11 @@ def test_public_efs_rejects_unsupported_links_and_optimizers() -> None:
         GAM("y ~ s(x)", optimizer=True)
 
 
-def test_estimated_efs_rejects_rowsource_explicitly_but_fixed_sp_precedes() -> None:
+def test_streamed_efs_requires_explicit_qr_but_fixed_sp_precedes() -> None:
     data = _poisson_data(n=48)
     source = DataFrameRowSource(data, response="y")
     control = FitControl(execution="stream")
-    with pytest.raises(NotImplementedError, match=r"estimated smoothing.*RowSource"):
+    with pytest.raises(NotImplementedError, match="requires linear_solver='qr'"):
         GAM(
             "y ~ s(x, bs='cr', k=5)",
             family="poisson",
@@ -433,3 +434,239 @@ def test_estimated_efs_rejects_rowsource_explicitly_but_fixed_sp_precedes() -> N
     ).fit(source, result="prediction")
     assert result.lambda_strategy == "fixed"
     assert result.optimizer_diagnostics is None
+
+
+def test_streamed_static_rejections_precede_model_preparation(monkeypatch) -> None:
+    data = _poisson_data(n=32)
+    source = DataFrameRowSource(data, response="y")
+
+    def unexpected_prepare(*_args, **_kwargs):
+        raise AssertionError("statically rejected route reached preparation")
+
+    monkeypatch.setattr("jaxgam.api.prepare_model", unexpected_prepare)
+    with pytest.raises(NotImplementedError, match="requires linear_solver='qr'"):
+        GAM(
+            "y ~ s(x, bs='cr', k=5)",
+            family="poisson",
+            optimizer="efs",
+            control=FitControl(execution="stream"),
+        ).fit(source, result="prediction")
+    with pytest.raises(NotImplementedError, match="result='prediction' only"):
+        GAM(
+            "y ~ s(x, bs='cr', k=5)",
+            family="poisson",
+            optimizer="efs",
+            control=FitControl(execution="stream", linear_solver="qr"),
+        ).fit(source, result="full")
+    with pytest.raises(NotImplementedError, match="canonical Gaussian"):
+        GAM(
+            "y ~ s(x, bs='cr', k=5)",
+            family="gamma",
+            optimizer="efs",
+            sp=[0.4],
+            control=FitControl(execution="stream", linear_solver="qr"),
+        ).fit(source, result="prediction")
+
+
+def test_streamed_efs_prediction_result_is_picklable_with_uncertainty() -> None:
+    data = _poisson_data(n=56)
+    source = DataFrameRowSource(data, response="y")
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=9,
+        uncertainty="fisher",
+        efs=EFSControl(history_limit=6),
+    )
+    result = GAM(
+        "y ~ s(x, bs='cr', k=5)",
+        family="poisson",
+        optimizer="efs",
+        control=control,
+    ).fit(source, result="prediction")
+
+    assert result.converged
+    assert result.lambda_strategy == "efs_reml"
+    assert result.execution_route == "stream_efs_qr"
+    assert result.optimizer_diagnostics is not None
+    assert result.optimizer_diagnostics.reference_profile.endswith("-streamed")
+    assert result.optimizer_diagnostics.provider_source_scans > 0
+    assert result.optimizer_diagnostics.startup_source_scans == 2
+    prediction, se = result.predict(data, se_fit=True)
+    assert np.isfinite(prediction).all()
+    assert np.isfinite(se).all()
+    restored = pickle.loads(pickle.dumps(result))
+    np.testing.assert_array_equal(restored.coefficients, result.coefficients)
+    np.testing.assert_array_equal(restored.predict(data), result.predict(data))
+    assert restored.optimizer_diagnostics == result.optimizer_diagnostics
+    assert not hasattr(result, "source")
+    assert not hasattr(result, "prepared")
+
+
+@pytest.mark.parametrize("family_cls", [Gaussian, Binomial, Poisson, Gamma])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "identity",
+        "log",
+        "logit",
+        "probit",
+        "cloglog",
+        "inverse",
+        "inverse_squared",
+        "sqrt",
+    ],
+)
+def test_streamed_efs_static_regular_inventory_is_admitted(family_cls, link) -> None:
+    from jaxgam.api import _check_stream_efs_family
+
+    _check_stream_efs_family(family_cls(link=link))
+
+
+@pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
+@pytest.mark.parametrize("fixed", [False, True])
+def test_streamed_efs_static_nb_inventory_is_admitted(link: str, fixed: bool) -> None:
+    from jaxgam.api import _check_stream_efs_family
+
+    _check_stream_efs_family(NegativeBinomial(theta=0.8, link=link, fixed=fixed))
+
+
+@pytest.mark.parametrize(
+    "link", ["logit", "probit", "cloglog", "inverse", "inverse_squared"]
+)
+def test_streamed_efs_static_nb_inventory_rejects_unadvertised_links(link: str) -> None:
+    from jaxgam.api import _check_stream_efs_family
+
+    with pytest.raises(NotImplementedError, match="NB log, identity, and sqrt"):
+        _check_stream_efs_family(NegativeBinomial(theta=0.8, link=link))
+
+
+def test_streamed_estimated_nb_snapshots_selected_theta_without_mutating_caller() -> (
+    None
+):
+    data = _nb_data(n=72)
+    offset = np.ones(len(data))
+    family = NegativeBinomial(theta=0.8, link="identity")
+    incoming = family.get_theta(transformed=False).copy()
+    result = GAM(
+        "y ~ s(x, bs='cr', k=5)",
+        family=family,
+        optimizer="efs",
+        control=FitControl(execution="stream", linear_solver="qr", batch_rows=11),
+    ).fit(DataFrameRowSource(data, response="y", offset=offset), result="prediction")
+
+    assert result.theta is not None
+    assert result.optimizer_diagnostics is not None
+    assert result.optimizer_diagnostics.theta_iterations > 0
+    np.testing.assert_array_equal(family.get_theta(transformed=False), incoming)
+    assert result.family is not family
+    np.testing.assert_allclose(
+        result.family.get_theta(transformed=True)[0],
+        result.theta,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_streamed_efs_public_memory_budget_rejects_before_provider_allocation(
+    monkeypatch,
+) -> None:
+    from jaxgam.execution import efs_stream
+
+    def unexpected_create(*_args, **_kwargs):
+        raise AssertionError("provider allocated before public memory preflight")
+
+    monkeypatch.setattr(
+        efs_stream.RegularStreamEFSProvider, "create", unexpected_create
+    )
+    data = _poisson_data(n=32)
+    with pytest.raises(MemoryError, match="startup retention exceeds"):
+        GAM(
+            "y ~ s(x, bs='cr', k=5)",
+            family="poisson",
+            optimizer="efs",
+            control=FitControl(
+                execution="stream",
+                linear_solver="qr",
+                memory_budget_bytes=1,
+            ),
+        ).fit(DataFrameRowSource(data, response="y"), result="prediction")
+
+
+def test_streamed_parametric_nb_bypass_matches_ordinary_newton_snapshot() -> None:
+    rng = np.random.default_rng(822)
+    n = 72
+    x = np.linspace(-0.8, 0.9, n)
+    offset = 0.4 + 0.05 * np.sin(2 * x)
+    weight = 0.7 + 0.5 * rng.random(n)
+    theta = 0.8
+    mu = np.exp(0.2 + 0.35 * x + offset)
+    y = rng.negative_binomial(theta, theta / (theta + mu))
+    data = pd.DataFrame({"x": x, "y": y})
+    family = NegativeBinomial(theta=theta)
+    incoming = family.get_theta(transformed=False).copy()
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=11,
+        efs=EFSControl(pirls_tolerance=1e-11),
+    )
+    result = GAM("y ~ x", family=family, optimizer="efs", control=control).fit(
+        DataFrameRowSource(data, response="y", weights=weight, offset=offset),
+        result="prediction",
+    )
+    ordinary = GAM(
+        "y ~ x", family=NegativeBinomial(theta=theta), optimizer="newton"
+    ).fit(data, weights=weight, offset=offset, result="prediction")
+
+    assert result.lambda_strategy == "newton_reml"
+    assert result.execution_route == "stream_parametric_qr"
+    assert result.optimizer_diagnostics is None
+    assert result.theta is None
+    np.testing.assert_array_equal(family.get_theta(transformed=False), incoming)
+    np.testing.assert_array_equal(result.family.get_theta(False), incoming)
+    np.testing.assert_allclose(
+        result.coefficients,
+        ordinary.coefficients,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        result.score, ordinary.score, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+def test_streamed_parametric_unknown_scale_scores_at_reported_scale() -> None:
+    rng = np.random.default_rng(823)
+    n = 72
+    x = np.linspace(-0.8, 0.9, n)
+    offset = 0.2 + 0.05 * np.sin(2 * x)
+    weight = 0.7 + 0.5 * rng.random(n)
+    y = 2.0 + 0.35 * x + offset + rng.normal(0.0, 0.1, n)
+    data = pd.DataFrame({"x": x, "y": y})
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=11,
+        efs=EFSControl(pirls_tolerance=1e-11),
+    )
+    result = GAM("y ~ x", family="gaussian", optimizer="efs", control=control).fit(
+        DataFrameRowSource(data, response="y", weights=weight, offset=offset),
+        result="prediction",
+    )
+    ordinary = GAM("y ~ x", family="gaussian", optimizer="newton").fit(
+        data, weights=weight, offset=offset, result="prediction"
+    )
+
+    np.testing.assert_allclose(
+        result.coefficients,
+        ordinary.coefficients,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        result.scale, ordinary.scale, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_allclose(
+        result.score, ordinary.score, rtol=STRICT.rtol, atol=STRICT.atol
+    )
