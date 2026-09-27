@@ -1,5 +1,6 @@
 """Source-timed host adjoints for the regular streamed controller."""
 
+import hashlib
 import sys
 from collections import deque
 from dataclasses import fields, is_dataclass, replace
@@ -20,6 +21,14 @@ from jaxgam.execution.reml import (
 from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.formula.design_provider import StreamDesign
+from jaxgam.formula.parser import parse_formula
+from jaxgam.formula.prepare import prepare_model
+from jaxgam.penalties.structure import (
+    DenseLocalPenalty,
+    IdentityTransform,
+    PenaltyBlock,
+    PenaltyStructure,
+)
 from tests.test_execution.test_regular_penalized_matrix import (
     _APPROVED_DIGESTS,
     _fixture_digest,
@@ -34,6 +43,7 @@ class _CountedSource:
     def __init__(self, source):
         self.source = source
         self.scans = 0
+        self.batches = 0
 
     @property
     def n_rows(self):
@@ -44,7 +54,9 @@ class _CountedSource:
 
     def scan(self, batch_rows):
         self.scans += 1
-        yield from self.source.scan(batch_rows)
+        for batch in self.source.scan(batch_rows):
+            self.batches += 1
+            yield batch
 
 
 def _problem(family_class, link):
@@ -56,6 +68,93 @@ def _problem(family_class, link):
     )
     params = rho if family.scale_known else np.r_[rho, np.log(0.7)]
     return family, data, weight, offset, start, source, prepared, params, control
+
+
+def _coupled_penalty_problem():
+    """Two overlapping rank-one penalties with one retained null direction."""
+    family, data, weight, offset, start = _case(Poisson, "log")
+    x = np.asarray(data.x)
+    data = data.assign(z=np.sin(2.3 * x) + 0.17 * x**2)
+    start = np.r_[start, 0.0]
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    prepared = prepare_model(parse_formula("y~x+z"), source, family=family)
+    first_direction = np.array([0.0, 1.0, 0.0])
+    second_direction = np.array([0.0, 1.0, -1.0])
+    structure = PenaltyStructure(
+        n_coef=3,
+        blocks=(
+            PenaltyBlock(
+                start=0,
+                stop=3,
+                sp_indices=(0, 1),
+                local_penalties=(
+                    DenseLocalPenalty(np.outer(first_direction, first_direction)),
+                    DenseLocalPenalty(np.outer(second_direction, second_direction)),
+                ),
+                transform=IdentityTransform(3),
+                ranks=(1, 1),
+            ),
+        ),
+    )
+    fitting = replace(
+        prepared.fitting,
+        penalty_structure=structure,
+        log_lambda_init=np.zeros(2),
+        total_penalty_rank=2,
+        total_penalty_null_dim=1,
+    )
+    fingerprint = hashlib.sha256(
+        (prepared.basis_fingerprint + ":coupled-rank-one-penalties").encode()
+    ).hexdigest()
+    prepared = replace(
+        prepared,
+        penalties=structure,
+        fitting=fitting,
+        basis_fingerprint=fingerprint,
+    )
+    return family, start, source, prepared
+
+
+def _rotated_null_penalty_problem():
+    """Dense rank-one penalty whose two-dimensional nullspace is not axial."""
+    family, data, weight, offset, start = _case(Poisson, "log")
+    x = np.asarray(data.x)
+    data = data.assign(z=np.sin(2.3 * x) + 0.17 * x**2)
+    start = np.r_[start, 0.0]
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    prepared = prepare_model(parse_formula("y~x+z"), source, family=family)
+    penalized_direction = np.ones(3) / np.sqrt(3.0)
+    dense_penalty = np.outer(penalized_direction, penalized_direction)
+    structure = PenaltyStructure(
+        n_coef=3,
+        blocks=(
+            PenaltyBlock(
+                start=0,
+                stop=3,
+                sp_indices=(0,),
+                local_penalties=(DenseLocalPenalty(dense_penalty),),
+                transform=IdentityTransform(3),
+                ranks=(1,),
+            ),
+        ),
+    )
+    fitting = replace(
+        prepared.fitting,
+        penalty_structure=structure,
+        log_lambda_init=np.zeros(1),
+        total_penalty_rank=1,
+        total_penalty_null_dim=2,
+    )
+    fingerprint = hashlib.sha256(
+        (prepared.basis_fingerprint + ":dense-rotated-null-penalty").encode()
+    ).hexdigest()
+    prepared = replace(
+        prepared,
+        penalties=structure,
+        fitting=fitting,
+        basis_fingerprint=fingerprint,
+    )
+    return family, start, source, prepared, penalized_direction
 
 
 def _retained_numeric_bytes(value, seen=None):
@@ -116,7 +215,8 @@ def test_regular_source_gradient_matches_all_32_pinned_gdi_cells(family_class, l
         initial_coefficients=start,
     )
     approved_boundary = (family_class, link) == (Binomial, "log")
-    if approved_boundary:
+    approved_fit_boundary = (family_class, link) in _APPROVED_DIGESTS
+    if approved_fit_boundary:
         assert (
             _fixture_digest(
                 family_class,
@@ -131,11 +231,14 @@ def test_regular_source_gradient_matches_all_32_pinned_gdi_cells(family_class, l
                 prepared,
                 control,
             )
-            == _APPROVED_DIGESTS[(Binomial, "log")]
+            == _APPROVED_DIGESTS[(family_class, link)]
         )
+    if approved_boundary:
         assert trial.alpha_roundoff_recovered
         assert trial.fit_result.state.n_iter == 4
         assert trial.fit_result.source_score.candidate_valid
+        np.testing.assert_array_equal(oracle["status"], [1.0, 4.0])
+        np.testing.assert_array_equal(oracle["candidate_valid"], [1.0])
     else:
         assert not trial.alpha_roundoff_recovered
     tolerance = MODERATE if approved_boundary else STRICT
@@ -151,14 +254,67 @@ def test_regular_source_gradient_matches_all_32_pinned_gdi_cells(family_class, l
         rtol=tolerance.rtol if approved_boundary else STRICT.rtol,
         atol=tolerance.atol if approved_boundary else STRICT.atol,
     )
+    state = trial.fit_result.state
+    actual_covariance = np.asarray(
+        state.fisher_coefficient_factor.hessian_inverse(jnp.eye(prepared.n_coef))
+    )
+    actual_mu = np.asarray(
+        family.link.inverse(X @ np.asarray(state.coefficients) + offset)
+    )
+    expected_mu = np.asarray(family.link.inverse(X @ fields[:2] + offset))
+    actual_se = np.sqrt(
+        float(state.scale) * np.einsum("ij,jk,ik->i", X, actual_covariance, X)
+    )
+    expected_se = np.sqrt(fields[3] * np.einsum("ij,jk,ik->i", X, _covariance, X))
+    fit_tolerance = MODERATE if approved_fit_boundary else STRICT
+    for actual, expected in (
+        (state.coefficients, fields[:2]),
+        (actual_mu, expected_mu),
+        (actual_covariance, _covariance),
+        (actual_se, expected_se),
+    ):
+        np.testing.assert_allclose(
+            actual,
+            expected,
+            rtol=fit_tolerance.rtol,
+            atol=fit_tolerance.atol,
+        )
+    for actual, expected in (
+        (state.deviance, fields[2]),
+        (state.scale, fields[3]),
+    ):
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+    # Reuse the coefficient layer's reviewed native-AMD64 EDF allowance for
+    # this same digest-guarded Binomial/log state after four source corrections.
+    # Deviance, scale and every other family's EDF remain STRICT.
+    edf_tolerance = MODERATE if approved_boundary else STRICT
+    np.testing.assert_allclose(
+        state.edf, fields[4], rtol=edf_tolerance.rtol, atol=edf_tolerance.atol
+    )
     assert trial.source_factor_residual < STRICT.atol
     assert trial.observed_factor_residual < STRICT.atol
 
 
-def test_regular_source_gradient_matches_refitted_scalar_finite_difference():
-    family, _data, _weight, _offset, start, source, prepared, params, control = (
-        _problem(Gaussian, "identity")
+@pytest.mark.parametrize("family_class", [Gaussian, Gamma, Poisson, Binomial])
+@pytest.mark.parametrize("link", _LINKS)
+def test_regular_source_gradient_matches_all_32_refitted_finite_differences(
+    family_class, link
+):
+    family, data, weight, offset, start, source, prepared, params, control = _problem(
+        family_class, link
     )
+    tighter_cells = {
+        (Gaussian, "probit"),
+        (Gaussian, "inverse_squared"),
+        (Poisson, "log"),
+        (Poisson, "inverse_squared"),
+        (Binomial, "inverse"),
+        (Binomial, "inverse_squared"),
+    }
+    if (family_class, link) in tighter_cells:
+        control = replace(control, tol=1e-9)
+    elif (family_class, link) == (Poisson, "inverse"):
+        control = replace(control, tol=1e-10)
     stream = StreamDesign(prepared, source)
     trial = evaluate_regular_stream_reml(
         stream,
@@ -168,36 +324,63 @@ def test_regular_source_gradient_matches_refitted_scalar_finite_difference():
         control=control,
         initial_coefficients=start,
     )
-    step = 5e-5
+    approved_boundary = (family_class, link) in {
+        (Poisson, "identity"),
+        (Binomial, "log"),
+    }
+    if approved_boundary:
+        X = np.column_stack((np.ones(len(data)), data.x))
+        assert (
+            _fixture_digest(
+                family_class,
+                link,
+                X,
+                data.y,
+                weight,
+                offset,
+                start,
+                prepared.fitting.penalty_structure,
+                params[:1],
+                prepared,
+                control,
+            )
+            == _APPROVED_DIGESTS[(family_class, link)]
+        )
+        assert trial.fit_result.state.n_iter == 4
+        assert trial.fit_result.source_score.candidate_valid
+    step = {
+        (Poisson, "identity"): 1e-3,
+        (Binomial, "log"): 1e-2,
+    }.get((family_class, link), 1e-3)
     finite_difference = np.empty_like(params)
     for index in range(len(params)):
-        direction = np.zeros_like(params)
-        direction[index] = step
-        plus = evaluate_regular_stream_reml(
-            stream,
-            family,
-            params + direction,
-            maximum_bytes=64_000_000,
-            control=control,
-            warm_start=trial,
-        )
-        minus = evaluate_regular_stream_reml(
-            stream,
-            family,
-            params - direction,
-            maximum_bytes=64_000_000,
-            control=control,
-            warm_start=trial,
-        )
-        finite_difference[index] = (float(plus.score) - float(minus.score)) / (
-            2.0 * step
-        )
+        scores = []
+        for multiplier in (-2.0, -1.0, 1.0, 2.0):
+            direction = np.zeros_like(params)
+            direction[index] = multiplier * step
+            evaluated = evaluate_regular_stream_reml(
+                stream,
+                family,
+                params + direction,
+                maximum_bytes=64_000_000,
+                control=control,
+                warm_start=trial,
+            )
+            scores.append(float(evaluated.score))
+        finite_difference[index] = (
+            scores[0] - 8.0 * scores[1] + 8.0 * scores[2] - scores[3]
+        ) / (12.0 * step)
+    tolerance = MODERATE if approved_boundary else STRICT
     np.testing.assert_allclose(
         np.asarray(trial.gradient),
         finite_difference,
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
+        rtol=tolerance.rtol,
+        atol=tolerance.atol,
     )
+    if approved_boundary:
+        assert np.all(
+            np.abs(np.asarray(trial.gradient) - finite_difference) < tolerance.atol
+        )
 
 
 def test_regular_source_gradient_rejects_rank_deficit_before_scanning():
@@ -829,3 +1012,246 @@ def test_regular_stream_reml_optimizer_rejects_source_mutation(monkeypatch) -> N
     fingerprint[0] = "changed"
     with pytest.raises(RuntimeError, match="RowSource changed"):
         objective(np.array([0.0]))
+
+
+def test_regular_stream_reml_coupled_penalties_are_partition_invariant() -> None:
+    """Exercise overlapping penalties, their gradient, and outer optimization."""
+    family, start, source, prepared = _coupled_penalty_problem()
+    fixed_trials = {}
+    optimized = []
+    for batch_rows in (17, 200):
+        control = StreamPIRLSControl(
+            solver_policy="qr",
+            batch_rows=batch_rows,
+            max_iter=100,
+            tol=1e-9,
+        )
+        for rho in (np.zeros(2), np.full(2, 30.0)):
+            counted = _CountedSource(source)
+            trial = evaluate_regular_stream_reml(
+                StreamDesign(prepared, counted),
+                family,
+                rho,
+                maximum_bytes=64_000_000,
+                control=control,
+                initial_coefficients=start,
+            )
+            assert trial.source_scans == counted.scans
+            assert trial.batches_scanned == counted.batches
+            assert trial.source_factor_residual < STRICT.rtol
+            assert trial.observed_factor_residual < STRICT.rtol
+            fixed_trials[(batch_rows, float(rho[0]))] = trial
+
+        counted = _CountedSource(source)
+        result = optimize_regular_stream_reml(
+            StreamDesign(prepared, counted),
+            family,
+            np.zeros(2),
+            maximum_bytes=64_000_000,
+            pirls_control=control,
+            control=StreamREMLControl(
+                max_iter=40,
+                maxfun=100,
+                gtol=1e-6,
+                ftol=1e-14,
+                history_size=16,
+            ),
+            initial_coefficients=start,
+        )
+        assert result.converged
+        assert result.n_iter == result.n_accepted > 0
+        assert result.n_evaluations >= result.n_accepted + 1
+        assert result.projected_gradient_inf <= 1e-6
+        assert result.cumulative_source_scans == counted.scans
+        assert result.cumulative_batches_scanned == counted.batches
+        assert np.all(np.diff(result.accepted_score_history) <= STRICT.atol)
+        optimized.append(result)
+
+    for rho in (0.0, 30.0):
+        left = fixed_trials[(17, rho)]
+        right = fixed_trials[(200, rho)]
+        for left_value, right_value in (
+            (left.score, right.score),
+            (left.gradient, right.gradient),
+            (
+                left.fit_result.state.coefficients,
+                right.fit_result.state.coefficients,
+            ),
+            (left.fit_result.state.deviance, right.fit_result.state.deviance),
+            (left.fit_result.state.edf, right.fit_result.state.edf),
+        ):
+            np.testing.assert_allclose(
+                left_value,
+                right_value,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            )
+
+    left_result, right_result = optimized
+    assert left_result.n_iter == right_result.n_iter
+    assert left_result.n_evaluations == right_result.n_evaluations
+    for left_value, right_value in (
+        (left_result.trial.params, right_result.trial.params),
+        (left_result.trial.score, right_result.trial.score),
+        (left_result.trial.gradient, right_result.trial.gradient),
+        (
+            left_result.trial.fit_result.state.coefficients,
+            right_result.trial.fit_result.state.coefficients,
+        ),
+        (left_result.accepted_score_history, right_result.accepted_score_history),
+    ):
+        np.testing.assert_allclose(
+            left_value,
+            right_value,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+
+def test_regular_stream_reml_coupled_gradient_and_high_rho_failure() -> None:
+    """Validate the coupled derivative and keep a rejected boundary truthful."""
+    family, start, source, prepared = _coupled_penalty_problem()
+    control = StreamPIRLSControl(
+        solver_policy="qr", batch_rows=17, max_iter=100, tol=1e-9
+    )
+    rho = np.zeros(2)
+    trial = evaluate_regular_stream_reml(
+        StreamDesign(prepared, source),
+        family,
+        rho,
+        maximum_bytes=64_000_000,
+        control=control,
+        initial_coefficients=start,
+    )
+    h = 1e-3
+    finite_difference = []
+    for index in range(2):
+        scores = []
+        for multiplier in (-2.0, -1.0, 1.0, 2.0):
+            params = rho.copy()
+            params[index] += multiplier * h
+            evaluated = evaluate_regular_stream_reml(
+                StreamDesign(prepared, source),
+                family,
+                params,
+                maximum_bytes=64_000_000,
+                control=control,
+                initial_coefficients=start,
+            )
+            scores.append(float(evaluated.score))
+        finite_difference.append(
+            (scores[0] - 8.0 * scores[1] + 8.0 * scores[2] - scores[3]) / (12.0 * h)
+        )
+    np.testing.assert_allclose(
+        trial.gradient,
+        finite_difference,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="converged, valid final source state",
+    ):
+        evaluate_regular_stream_reml(
+            StreamDesign(prepared, source),
+            family,
+            np.full(2, 40.0),
+            maximum_bytes=64_000_000,
+            control=control,
+            initial_coefficients=start,
+        )
+
+
+def test_regular_stream_reml_rejects_high_rho_rotated_nullspace_roundoff() -> None:
+    """Never return a plausible derivative after dense nullspace contamination."""
+    family, start, source, prepared, penalized_direction = (
+        _rotated_null_penalty_problem()
+    )
+    structure = prepared.fitting.penalty_structure
+    assert prepared.fitting.total_penalty_rank == 1
+    assert prepared.fitting.total_penalty_null_dim == 2
+    null_basis = np.column_stack(
+        (
+            np.array([1.0, -1.0, 0.0]) / np.sqrt(2.0),
+            np.array([1.0, 1.0, -2.0]) / np.sqrt(6.0),
+        )
+    )
+    np.testing.assert_allclose(
+        penalized_direction @ null_basis,
+        np.zeros(2),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+    controls = {
+        batch_rows: StreamPIRLSControl(
+            solver_policy="qr", batch_rows=batch_rows, max_iter=100, tol=1e-9
+        )
+        for batch_rows in (17, 200)
+    }
+    regular_trials = []
+    for control in controls.values():
+        trial = evaluate_regular_stream_reml(
+            StreamDesign(prepared, source),
+            family,
+            np.zeros(1),
+            maximum_bytes=64_000_000,
+            control=control,
+            initial_coefficients=start,
+        )
+        assert trial.source_factor_residual < STRICT.rtol
+        assert trial.observed_factor_residual < STRICT.rtol
+        regular_trials.append(trial)
+    for left, right in (
+        (regular_trials[0].score, regular_trials[1].score),
+        (regular_trials[0].gradient, regular_trials[1].gradient),
+        (
+            regular_trials[0].fit_result.state.coefficients,
+            regular_trials[1].fit_result.state.coefficients,
+        ),
+    ):
+        np.testing.assert_allclose(left, right, rtol=STRICT.rtol, atol=STRICT.atol)
+
+    step = 1e-3
+    scores = []
+    for multiplier in (-2.0, -1.0, 1.0, 2.0):
+        evaluated = evaluate_regular_stream_reml(
+            StreamDesign(prepared, source),
+            family,
+            np.array([multiplier * step]),
+            maximum_bytes=64_000_000,
+            control=controls[17],
+            warm_start=regular_trials[0],
+        )
+        scores.append(float(evaluated.score))
+    finite_difference = (scores[0] - 8.0 * scores[1] + 8.0 * scores[2] - scores[3]) / (
+        12.0 * step
+    )
+    np.testing.assert_allclose(
+        regular_trials[0].gradient,
+        np.array([finite_difference]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+    high_rho = np.array([40.0])
+    materialized = structure.materialize(high_rho)
+    # Mathematically S_lambda annihilates this basis. At exp(40), forming the
+    # dense matrix injects order-one products into it; this is the PR9
+    # high-rho penalty-nullspace roundoff mechanism, not an axial zero row.
+    assert np.max(np.abs(materialized @ null_basis)) >= 1.0
+    assert np.all(np.isfinite(materialized))
+    for control in controls.values():
+        with pytest.raises(
+            RuntimeError,
+            match="converged, valid final source state",
+        ):
+            evaluate_regular_stream_reml(
+                StreamDesign(prepared, source),
+                family,
+                high_rho,
+                maximum_bytes=64_000_000,
+                control=control,
+                initial_coefficients=start,
+            )
