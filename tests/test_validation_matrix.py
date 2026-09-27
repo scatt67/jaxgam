@@ -910,6 +910,11 @@ _PUBLIC_REGULAR_EFS_CENTERING = np.array(
     ]
 )
 
+_PUBLIC_REGULAR_EFS_REVIEWED_STARTS = {
+    ("poisson", "identity"): ((40.684535996984636,), 1.0),
+    ("binomial", "log"): ((26.259202947309102,), 1.0),
+}
+
 
 def _assert_public_regular_efs_numeric_metadata(prepared) -> None:
     """Bind reviewed coordinate values without architecture-specific bytes."""
@@ -935,6 +940,39 @@ def _assert_public_regular_efs_numeric_metadata(prepared) -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+
+
+def _public_regular_efs_start_descriptor(
+    family_name: str, link: str, startup
+) -> dict[str, object]:
+    """Bind reviewed derived starts numerically, then serialize their profile."""
+    smoothing = np.exp(np.asarray(startup.log_lambda, dtype=np.float64))
+    scale = float(startup.score_phi)
+    reviewed = _PUBLIC_REGULAR_EFS_REVIEWED_STARTS.get((family_name, link))
+    if reviewed is None:
+        return {
+            "scale_hex": scale.hex(),
+            "smoothing_hex": tuple(float(value).hex() for value in smoothing),
+        }
+    expected_smoothing, expected_scale = reviewed
+    np.testing.assert_allclose(
+        smoothing,
+        expected_smoothing,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        scale,
+        expected_scale,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    # Serialize the immutable reviewed descriptor after proving the actual
+    # architecture-local reduction lies on that same STRICT numerical profile.
+    return {
+        "scale_hex": float(expected_scale).hex(),
+        "smoothing_hex": tuple(float(value).hex() for value in expected_smoothing),
+    }
 
 
 def _public_regular_efs_profile_digest(
@@ -986,6 +1024,7 @@ def _public_regular_efs_profile_digest(
         }
         for term in prepared.predict_spec.coef_map.terms
     )
+    start_descriptor = _public_regular_efs_start_descriptor(family_name, link, startup)
     payload = {
         "basis_fingerprint": prepared.basis_fingerprint,
         "blocks": blocks,
@@ -993,10 +1032,8 @@ def _public_regular_efs_profile_digest(
         "control": asdict(control),
         "family": family_name,
         "formula": formula,
-        "initial_scale_hex": float(startup.score_phi).hex(),
-        "initial_smoothing_hex": tuple(
-            float(value).hex() for value in np.exp(startup.log_lambda)
-        ),
+        "initial_scale_hex": start_descriptor["scale_hex"],
+        "initial_smoothing_hex": start_descriptor["smoothing_hex"],
         "link": link,
         "n_coef": prepared.n_coef,
         "n_obs": prepared.n_obs,
@@ -1062,26 +1099,44 @@ def test_public_regular_efs_profile_digest_binds_basis_controls_and_starts() -> 
     assert (
         expected == "60595632ad5693a8826346291064cb36f1462e28b7556dd38ba0fe552a35f747"
     )
+    portable_start = replace(
+        startup,
+        log_lambda=np.nextafter(startup.log_lambda, np.inf),
+    )
+    assert not np.array_equal(
+        np.exp(portable_start.log_lambda),
+        np.exp(startup.log_lambda),
+    )
+    assert digest(prepared, formula, control, portable_start) == expected
     changed_control = replace(control, efs=EFSControl(score_tolerance=0.01))
     assert digest(prepared, formula, changed_control, startup) != expected
-    assert (
+    with pytest.raises(AssertionError):
         digest(
             prepared,
             formula,
             control,
             replace(startup, log_lambda=startup.log_lambda + 0.01),
         )
-        != expected
-    )
-    assert (
+    with pytest.raises(AssertionError):
         digest(
             prepared,
             formula,
             control,
             replace(startup, score_phi=startup.score_phi + 0.01),
         )
-        != expected
+    expected_smoothing = _PUBLIC_REGULAR_EFS_REVIEWED_STARTS[("poisson", "identity")][
+        0
+    ][0]
+    outside_strict = expected_smoothing + 2.0 * (
+        STRICT.atol + STRICT.rtol * abs(expected_smoothing)
     )
+    with pytest.raises(AssertionError):
+        digest(
+            prepared,
+            formula,
+            control,
+            replace(startup, log_lambda=np.log(np.asarray([outside_strict]))),
+        )
     structure = prepared.fitting.penalty_structure
     block = structure.blocks[0]
     changed_penalty = np.array(block.dense_penalties()[0], copy=True)
