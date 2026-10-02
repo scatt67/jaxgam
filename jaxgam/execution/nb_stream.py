@@ -58,6 +58,24 @@ _summary = jax.jit(nb_working_summary)
 _merge = jax.jit(merge_nb_working_summaries)
 
 
+def _nb_count_prefix_workspace_bytes(
+    max_count: float,
+    integer_counts: bool,
+    *,
+    live_tables: int,
+) -> int:
+    """Return the prospective compiled prefix workspace for one NB phase."""
+    capacity = max(1, int(np.ceil(max_count)))
+    # The accepted likelihood selects its prefix only while four float64
+    # tables plus the measured aligned-buffer reserve fit in 8MiB.  The
+    # conditional theta value/gradient/Hessian graph has sixteen live tables;
+    # the coefficient score and first-derivative replay each have four.
+    table_policy_bytes = 8 * 4 * (capacity + 1) + 512
+    if not integer_counts or table_policy_bytes > 8 << 20:
+        return 0
+    return 8 * live_tables * (capacity + 1) + 512
+
+
 def _link_name(family: NegativeBinomial) -> str:
     if not isinstance(family, NegativeBinomial):
         raise TypeError("NB coefficient controller requires NegativeBinomial")
@@ -223,6 +241,7 @@ class NBStreamResult:
     score_penalized_deviance: float
     reml_score: float
     source_deviance: float
+    source_solve_coefficients: np.ndarray
     initial_start_retained: bool = False
     theta_n_iter: int = 0
     theta_status: int = 0
@@ -232,6 +251,11 @@ class NBStreamResult:
     theta_history: tuple[float, ...] = ()
     last_theta_result: NBStreamThetaResult | None = None
     source_deviance_log_theta: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        coefficients = np.array(self.source_solve_coefficients, dtype=float, copy=True)
+        coefficients.setflags(write=False)
+        object.__setattr__(self, "source_solve_coefficients", coefficients)
 
 
 def fit_nb_streamed_pirls(
@@ -401,25 +425,32 @@ def fit_nb_streamed_pirls(
         if beta.shape != (p,) or not np.all(np.isfinite(beta)):
             raise ValueError("finite matching NB null anchor required")
     beta_null = beta.copy()
-    if estimate_theta:
-        capacity = max(1, int(np.ceil(metadata["max_count"])))
-        # The inherited table-selection policy budgets four capacity arrays up
-        # to 8MiB. Charge sixteen arrays for this combined value/gradient/
-        # Hessian graph; the recurrence branch has only batch-vector storage.
-        table_policy_bytes = 8 * 4 * (capacity + 1)
-        prefix_bytes = 8 * 16 * (capacity + 1)
-        prefix_bytes = (
-            prefix_bytes
-            if metadata["integer_counts"] and table_policy_bytes <= 8 << 20
-            else 0
+    # Every fixed/trial coefficient fit evaluates the saturated likelihood at
+    # the end, so its planned prefix is not conditional on theta estimation.
+    # The conditional theta graph needs a larger simultaneous table set; use
+    # the phase maximum because these two reductions never overlap.
+    forward_prefix_bytes = _nb_count_prefix_workspace_bytes(
+        metadata["max_count"],
+        # The compatibility score kernel selects integer arithmetic per
+        # batch. Its compiled conditional retains the integer branch even
+        # when another source batch made the global summary fractional.
+        True,
+        live_tables=4,
+    )
+    conditional_prefix_bytes = (
+        _nb_count_prefix_workspace_bytes(
+            metadata["max_count"], metadata["integer_counts"], live_tables=16
         )
-        ledger = replace(
-            ledger, device_visible_bytes=ledger.device_visible_bytes + prefix_bytes
-        )
-        if ledger.required_bytes > maximum_bytes:
-            raise MemoryError(
-                "NB conditional count-prefix workspace exceeds maximum_bytes"
-            )
+        if estimate_theta
+        else 0
+    )
+    prefix_bytes = max(forward_prefix_bytes, conditional_prefix_bytes)
+    ledger = replace(
+        ledger, device_visible_bytes=ledger.device_visible_bytes + prefix_bytes
+    )
+    if ledger.required_bytes > maximum_bytes:
+        phase = "conditional" if estimate_theta else "fixed/trial score"
+        raise MemoryError(f"NB {phase} count-prefix workspace exceeds maximum_bytes")
 
     def scan_at(factory, *, positive=False, score=False):
         nonlocal scans, batches_scanned
@@ -765,6 +796,7 @@ def fit_nb_streamed_pirls(
         score_pdev,
         score,
         deviance,
+        observed.coefficients,
         initial_retained,
         theta_iterations,
         theta_status,

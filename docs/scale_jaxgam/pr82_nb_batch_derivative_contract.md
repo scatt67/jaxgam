@@ -1,8 +1,8 @@
 # PR8.2 Negative Binomial batch derivative contract
 
-This component adds the row-local derivative kernel needed by a future exact
-streamed REML host for estimated Negative Binomial theta. It does not add an
-optimizer or substitute the EFS conditional-theta update for joint REML.
+This component adds the row-local derivative kernel and the exact fixed-state
+streamed REML host for Negative Binomial theta. It does not add an optimizer
+or substitute the EFS conditional-theta update for joint REML.
 
 The source mapping is mgcv 1.9-3 `R/gam.fit4.r` lines 561–628,
 `R/efam.r` lines 206–273, and `src/gdi.c`'s IFT derivative assembly. At the
@@ -49,3 +49,54 @@ tail through 1000, exact pinned-R `Dd`/`ls` contractions, independent dense AD,
 padded batch reduction, dynamic-theta cache isolation, and an independent
 five-point coefficient-refit finite difference. All numerical assertions
 start and remain at repository `STRICT` tolerance.
+
+## Fixed-state host assembly
+
+`evaluate_nb_stream_reml` accepts `[rho, log_theta]` for an estimated family
+and `rho` for a fixed-theta family. Every call reconverges the coefficient
+subproblem at the requested immutable theta with
+`fit_nb_streamed_pirls(..., estimate_theta=False)`. The conditional EFS theta
+controller is never called. A warm start supplies only coefficients from a
+compatible converged trial; score statistics and theta parameters are always
+recomputed from the replayable source.
+
+The host preserves `gam.fit4`/`gdi2` score provenance. Raw deviance and the
+observed information belong to the reported coefficient state. The penalty
+and its direct smoothing derivative use the separately retained final source
+solve candidate. The observed signed-QR factor supplies the determinant,
+inverse, and adjoint solve. After reducing the batch cotangents, the assembled
+theta derivative is
+
+```text
+partial score / partial log_theta
+  - adjoint' partial_log_theta g.
+```
+
+Pinned R returns extended-family coordinates before smoothing coordinates;
+the oracle gate explicitly converts its `[log_theta, rho]` result to the
+JaxGAM `[rho, log_theta]` contract. Fixed-theta R drops the theta derivative,
+as does the host.
+
+The memory preflight first rejects the base controller and O(Bp+p²) adjoint
+ledger. It then performs one bounded scalar count-summary scan before any
+prefix allocation. Every fixed/trial coefficient fit uses the planned prefix
+again for its final saturated-likelihood score, so the shared NB controller
+charges four live float64 tables plus 512 bytes of fixed aligned-buffer
+headroom even when conditional theta is disabled. The compatibility score
+kernel chooses its integer path per batch, so this charge also applies when a
+different batch makes the global source fractional. Conditional theta retains
+its distinct sixteen-table value/gradient/Hessian peak when the global count
+plan is integral. The planned host derivative uses that global plan, shares
+the controller's four-table phase maximum, and separately charges its
+O(Bp+p²) arrays and retained source-solve coefficient copy. Large-count tests
+prove an insufficient budget fails after only the bounded summary and before
+coefficient working scans, score dispatch, or derivative dispatch. The
+summary and derivative scans are included in the returned source and batch
+counts.
+
+Host validation adds all three links against live pinned `gam.fit4` for both
+fixed and free theta, the existing dense joint-theta custom JVP, and full
+five-point reconverged finite differences for both rho and log theta. It also
+checks trial-theta/family isolation, fixed-theta coordinate omission, warm
+starts, factor residuals, scan counts, and prospective large-count memory.
+Every numerical comparison remains `STRICT`.
