@@ -1213,9 +1213,15 @@ def test_regular_stream_reml_rejects_high_rho_rotated_nullspace_roundoff() -> No
     ):
         np.testing.assert_allclose(left, right, rtol=STRICT.rtol, atol=STRICT.atol)
 
-    step = 1e-3
+    # Center the score differences before applying stencil weights.  The
+    # absolute REML scores are about 85, so weighting them directly needlessly
+    # amplifies platform-dependent last-bit cancellation.  A sixth-order
+    # stencil at this step keeps truncation and score-quantization errors below
+    # STRICT on the source-aligned analytic derivative.
+    step = 1e-2
+    center_score = float(regular_trials[0].score)
     scores = []
-    for multiplier in (-2.0, -1.0, 1.0, 2.0):
+    for multiplier in (-3.0, -2.0, -1.0, 1.0, 2.0, 3.0):
         evaluated = evaluate_regular_stream_reml(
             StreamDesign(prepared, source),
             family,
@@ -1224,10 +1230,15 @@ def test_regular_stream_reml_rejects_high_rho_rotated_nullspace_roundoff() -> No
             control=controls[17],
             warm_start=regular_trials[0],
         )
-        scores.append(float(evaluated.score))
-    finite_difference = (scores[0] - 8.0 * scores[1] + 8.0 * scores[2] - scores[3]) / (
-        12.0 * step
-    )
+        scores.append(float(evaluated.score) - center_score)
+    finite_difference = (
+        -scores[0]
+        + 9.0 * scores[1]
+        - 45.0 * scores[2]
+        + 45.0 * scores[3]
+        - 9.0 * scores[4]
+        + scores[5]
+    ) / (60.0 * step)
     np.testing.assert_allclose(
         regular_trials[0].gradient,
         np.array([finite_difference]),
