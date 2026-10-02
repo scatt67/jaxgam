@@ -257,6 +257,45 @@ def test_prospective_budget_and_control_parameter_rejections():
         )
 
 
+def test_mixed_count_score_prefix_budget_precedes_working_and_score_dispatch(
+    monkeypatch,
+):
+    """A per-batch integer branch is charged despite global fractional data."""
+    original, _ = _fixture("log", smooth=True)
+    batch = next(original.source.source.scan(original.prepared.n_obs))
+    y = np.array(batch.y, copy=True)
+    y[0] = 100_000.0
+    y[-1] = 0.5
+    family = NegativeBinomial(theta=2.7, fixed=True, link="log")
+    source = DataFrameRowSource(
+        pd.DataFrame({"x": batch.columns["x"], "y": y}),
+        response="y",
+        weights=batch.weight,
+        offset=batch.offset,
+    )
+    stream = StreamDesign(
+        prepare_model(parse_formula('y ~ s(x, bs="cr", k=6)'), source, family=family),
+        _CountedSource(source),
+    )
+    control = _fixed_theta_control(11)
+    ledger = preflight_regular_stream_workspace(stream, control, 10_000_000)
+    prefix_bytes = 8 * 4 * (100_000 + 1) + 512
+
+    def forbid_scan(*_args, **_kwargs):
+        raise AssertionError("working system dispatched before prefix preflight")
+
+    monkeypatch.setattr("jaxgam.execution.nb_stream.nb_working_scan", forbid_scan)
+    with pytest.raises(MemoryError, match="fixed/trial score count-prefix"):
+        fit_nb_streamed_pirls(
+            stream,
+            family,
+            np.full_like(stream.prepared.fitting.log_lambda_init, _FIXED_THETA_LOG_RHO),
+            maximum_bytes=ledger.required_bytes + prefix_bytes - 1,
+            control=control,
+        )
+    assert stream.source.scans == 1
+
+
 def test_empty_batches_are_neutral_and_accounted():
     stream, family = _fixture("identity")
     expected = _fit(stream, family)
