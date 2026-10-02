@@ -1342,6 +1342,7 @@ def test_public_streamed_efs_regular_family_link_inventory(
             {
                 "coefficients",
                 "fitted values",
+                "deviance",
                 "smoothing",
                 "total EDF",
                 "prediction SE",
