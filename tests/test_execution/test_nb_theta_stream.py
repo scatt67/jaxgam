@@ -493,11 +493,6 @@ def test_no_intercept_null_projection_counts_zero_priors_and_releases_qr(
         assert result.state.batches_scanned == stream.source.batches - before[1]
 
 
-def _pinned_six_row_theta(start, y, mu, weight, link):
-    """Read source contractions and the traced theta path through pinned R."""
-    return RBridge(mode="rpy2").nb_theta_diagnostics(start, y, mu, weight, link)
-
-
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
 @pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
 @pytest.mark.parametrize("variant", ["integer", "fractional_ge_one"])
@@ -506,7 +501,7 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
 ):
     """Exact generated cases: reviewed cancellation fields, no path relaxation.
 
-    See docs/scale_jaxgam/efs52_nb_conditional_theta_numerical_review.md.
+    Four source-arithmetic correction passes bound the cancellation fields.
     All ordinary controller and identical-coordinate end contractions stay STRICT.
     """
     import hashlib
@@ -572,7 +567,7 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
         max_y=fixture["max_y"],
         integer_counts=fixture["integer_counts"],
     )
-    oracle = _pinned_six_row_theta(start, y, mu, weight, link)
+    oracle = RBridge(mode="rpy2").nb_theta_diagnostics(start, y, mu, weight, link)
     initial = fields(start)
     # Both exact hashed inputs have reviewed objective-cancellation gates.
     # The integer gate became MODERATE when the published stable saturated
