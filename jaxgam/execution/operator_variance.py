@@ -1,7 +1,11 @@
 """Bounded selected-row Fisher variance from a frozen operator system.
 
 The caller supplies a certified Fisher ``FrozenScanSystem`` at the selected
-fit's coefficients, family parameters and smoothing parameters. This host
+fit's coefficients, family parameters and smoothing parameters. A generic
+``FrozenScanSystem`` does not encode whether its row curvature came from the
+Fisher or observed information; this internal provider cannot establish that
+semantic fact from positive definiteness alone. Public uncertainty must use
+a family-aware constructor that certifies the Fisher weights. This host
 component solves one prediction design row at a time; it retains no covariance
 matrix, expanded prediction design or collection of coefficient solves.
 """
@@ -62,7 +66,10 @@ class OperatorVarianceSolveError(RuntimeError):
 class SelectedOperatorVariance:
     """Compose generic prediction geometry with a frozen Fisher PCG system.
 
-    ``system.memory_budget_bytes`` is reserved in full. The additional budget
+    The caller certifies that ``fisher_system`` uses Fisher row curvature;
+    passing an observed-information system computes a different quadratic and
+    is not a covariance estimate. ``system.memory_budget_bytes`` is reserved
+    in full. The additional budget
     covers the caller-owned selected output, one coefficient RHS and bounded
     prediction geometry. The intentionally conservative split lets the
     existing PCG preflight account for compiler scratch without a hidden

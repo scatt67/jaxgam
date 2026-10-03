@@ -220,3 +220,31 @@ def test_selected_variance_preserves_failed_pcg_status():
     assert failure.value.row == 0
     assert failure.value.iterations == 1
     assert system.diagnostics.normal_actions == system.diagnostics.completed_scans - 1
+
+
+def test_selected_variance_preserves_duplicate_rows_and_zero_unseen_effect():
+    row = np.arange(27)
+    frame = pd.DataFrame(
+        {
+            "y": 0.2 * row,
+            "g": pd.Categorical(np.resize(["a", "b"], len(row))),
+        }
+    )
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        parse_formula("y~0+s(g,bs='re')"),
+        source,
+        control=OperatorPreparationControl(batch_rows=5),
+    )
+    system = FrozenScanSystem(
+        model, source, np.array([0.0]), memory_budget_bytes=1024 * 1024
+    )
+    selected = pd.DataFrame({"g": pd.Categorical(["a", "z", "a", "b", "z"])})
+    result = SelectedOperatorVariance(
+        system, scale=1.0, memory_budget_bytes=2 * 1024 * 1024
+    ).variance(selected)
+    np.testing.assert_allclose(result.variance[[0, 2]], result.variance[0])
+    np.testing.assert_array_equal(result.variance[[1, 4]], 0.0)
+    assert result.variance[3] > 0
+    assert result.diagnostics.completed_rows == len(selected)
+    assert result.diagnostics.normal_actions == result.diagnostics.source_scans
