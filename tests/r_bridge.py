@@ -92,6 +92,8 @@ class RBridge:
         "gamma": "Gamma()",
         "gamma_log": "Gamma(link='log')",
         "nb": "nb()",
+        "nb_identity": "nb(link='identity')",
+        "nb_sqrt": "nb(link='sqrt')",
     }
 
     _ro: Any
@@ -238,6 +240,20 @@ class RBridge:
             )
         return r_family
 
+    def _get_efs_subprocess_family(self, family: str, theta: float | None) -> str:
+        """Resolve an EFS oracle family, including a fixed NB size.
+
+        ``mgcv::nb(theta=...)`` is the fixed-theta EFS route.  Keep the
+        historical ``nb()`` mapping when callers do not request a size.
+        """
+        if theta is not None:
+            if family != "nb":
+                raise ValueError("EFS theta is supported only for family='nb'")
+            if not np.isfinite(theta) or theta <= 0:
+                raise ValueError("EFS NB theta must be finite and positive")
+            return f"nb(theta={float(theta)!r})"
+        return self._get_subprocess_family(family)
+
     # ------------------------------------------------------------------ #
     #  fit_gam                                                            #
     # ------------------------------------------------------------------ #
@@ -381,6 +397,7 @@ class RBridge:
         initial_scale: float | None = None,
         null_coef: bool = False,
         scale: float = -1.0,
+        theta: float | None = None,
     ) -> dict[str, Any]:
         """Fit pinned mgcv ``optimizer='efs'`` as an oracle-only bridge call.
 
@@ -400,6 +417,7 @@ class RBridge:
             initial_scale,
             null_coef,
             scale,
+            theta,
         )
 
     def efs_diagnostics(
@@ -415,6 +433,7 @@ class RBridge:
         initial_scale: float | None = None,
         null_coef: bool = False,
         scale: float = -1.0,
+        theta: float | None = None,
     ) -> dict[str, Any]:
         """Return real per-refit EFS statistics from a private source copy."""
         self._require_pinned_efs_versions()
@@ -429,6 +448,7 @@ class RBridge:
             initial_scale,
             null_coef,
             scale,
+            theta,
         )
 
     @staticmethod
@@ -644,11 +664,12 @@ class RBridge:
         initial_scale: float | None,
         null_coef: bool,
         scale: float,
+        theta: float | None,
     ) -> dict[str, Any]:
         resolved, initial = self._validate_efs_inputs(
             data, weights, offset, controls, initial_smoothing
         )
-        r_family = self._get_subprocess_family(family)
+        r_family = self._get_efs_subprocess_family(family, theta)
         if initial_scale is not None and (
             not np.isfinite(initial_scale) or initial_scale <= 0
         ):
@@ -761,6 +782,7 @@ class RBridge:
         initial_scale: float | None,
         null_coef: bool,
         scale: float,
+        theta: float | None,
     ) -> dict[str, Any]:
         """Execute a private instrumented pinned ``efsudr`` source function."""
         resolved, initial = self._validate_efs_inputs(
@@ -770,7 +792,7 @@ class RBridge:
             not np.isfinite(initial_scale) or initial_scale <= 0
         ):
             raise ValueError("EFS initial_scale must be finite and positive")
-        r_family = self._get_subprocess_family(family)
+        r_family = self._get_efs_subprocess_family(family, theta)
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
             source_path = os.path.join(tmpdir, "efsudr_pinned.R")
