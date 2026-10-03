@@ -30,6 +30,24 @@ SEED = 42
 N = 200
 
 
+def nb_theta_six_row_case(variant: str) -> dict[str, object]:
+    """Construct the reviewed high-theta count boundary without saved data."""
+    if variant not in ("integer", "fractional_ge_one"):
+        raise ValueError("Unknown six-row NB theta variant.")
+    return {
+        "integer_counts": variant == "integer",
+        "log_theta": [float(np.log(1e6))],
+        "max_y": 8,
+        "mu": [1.2, 2.4, 3.1, 0.8, 2.0, 4.0],
+        "weight": [0.8, 1.2, 0.0, 1.0, 0.9, 1.1],
+        "y": (
+            [0.0, 2.0, 3.0, 4.0, 0.0, 7.0]
+            if variant == "integer"
+            else [0.0, 2.25, 3.5, 4.75, 0.0, 7.25]
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # R bridge helpers
 # ---------------------------------------------------------------------------

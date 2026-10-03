@@ -17,7 +17,7 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionParameters,
 )
 from jaxgam.formula.fitting_prepare import qr_penalty_roots
-from tests.helpers import _AssertCollector, r_available
+from tests.helpers import _AssertCollector, nb_theta_six_row_case, r_available
 from tests.r_bridge import RBridge
 from tests.test_execution.test_nb_stream import _fit, _fixture
 from tests.tolerances import MODERATE, STRICT
@@ -504,14 +504,13 @@ def _pinned_six_row_theta(start, y, mu, weight, link):
 def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
     link, variant
 ):
-    """Exact hashed fixtures: reviewed cancellation fields, no path relaxation.
+    """Exact generated cases: reviewed cancellation fields, no path relaxation.
 
     See docs/scale_jaxgam/efs52_nb_conditional_theta_numerical_review.md.
     All ordinary controller and identical-coordinate end contractions stay STRICT.
     """
     import hashlib
     import json
-    from pathlib import Path
 
     import jax.numpy as jnp
     import pandas as pd
@@ -523,12 +522,8 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
     from jaxgam.formula.parser import parse_formula
     from jaxgam.formula.prepare import prepare_model
 
-    path = (
-        Path(__file__).parents[1]
-        / "fixtures"
-        / ("efs52_nb_theta_six_row_" + variant + ".json")
-    )
-    raw = path.read_bytes()
+    fixture = nb_theta_six_row_case(variant)
+    raw = json.dumps(fixture, sort_keys=True, separators=(",", ":")).encode()
     expected_hash = {
         "integer": "da0bc32e17c97b4decc43fa523c00315fd4f975a0fa73c7fadbdc0f3e5e16fcc",
         "fractional_ge_one": (
@@ -536,7 +531,6 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
         ),
     }[variant]
     assert hashlib.sha256(raw).hexdigest() == expected_hash
-    fixture = json.loads(raw)
     mu, y, weight = [np.asarray(fixture[key]) for key in ("mu", "y", "weight")]
     start = np.asarray(fixture["log_theta"])
     eta = np.log(mu) if link == "log" else mu if link == "identity" else np.sqrt(mu)

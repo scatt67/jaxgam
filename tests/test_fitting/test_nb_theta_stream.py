@@ -14,6 +14,8 @@ from jaxgam.fitting.nb_theta_stream import (
     nb_conditional_theta_batch,
     nb_conditional_theta_step,
 )
+from tests.helpers import nb_theta_six_row_case, r_available
+from tests.r_bridge import RBridge
 from tests.tolerances import MODERATE, STRICT
 
 
@@ -277,15 +279,8 @@ def test_compiled_theta_batch_memory_and_output_are_recorded(B, caplog):
 @pytest.mark.parametrize("variant", ["integer", "fractional_ge_one"])
 def test_fixed_mean_theta_derivatives_match_65_digit_reference_strict(link, variant):
     from decimal import Decimal, localcontext
-    from pathlib import Path
 
-    fixture = json.loads(
-        (
-            Path(__file__).parents[1]
-            / "fixtures"
-            / ("efs52_nb_theta_six_row_" + variant + ".json")
-        ).read_text()
-    )
+    fixture = nb_theta_six_row_case(variant)
     mu, y, weight = [np.asarray(fixture[key]) for key in ("mu", "y", "weight")]
     log_theta = np.asarray(fixture["log_theta"])
     with localcontext() as context:
@@ -354,30 +349,34 @@ def test_fixed_mean_theta_derivatives_match_65_digit_reference_strict(link, vari
     )
 
 
-def test_saved_source_evidence_keeps_failed_early_trajectories_and_binary_values():
-    from pathlib import Path
+@pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
+@pytest.mark.parametrize("variant", ["integer", "fractional_ge_one"])
+def test_six_row_source_cancellation_is_bounded_against_live_r(variant):
+    """Keep the weak-curvature source comparison live on both hard inputs."""
+    fixture = nb_theta_six_row_case(variant)
+    mu, y, weight = [np.asarray(fixture[name]) for name in ("mu", "y", "weight")]
+    start = np.asarray(fixture["log_theta"])
+    family = NegativeBinomial(theta=0.7, link="identity")
+    observed = jax.jit(
+        nb_conditional_theta_batch,
+        static_argnames=("family", "max_y", "integer_counts"),
+    )(
+        jnp.asarray(start),
+        jnp.asarray(mu),
+        jnp.asarray(y),
+        jnp.asarray(weight),
+        jnp.ones(len(y), dtype=bool),
+        family,
+        max_y=int(fixture["max_y"]),
+        integer_counts=bool(fixture["integer_counts"]),
+    )
+    assert observed.admissible
 
-    directory = Path(__file__).parents[1] / "fixtures"
-    report = json.loads(
-        (directory / "efs52_nb_theta_numerical_review.json").read_text()
-    )
-    binary_path = directory / "efs52_nb_theta_review_R_binary.npz"
-    assert (
-        hashlib.sha256(binary_path.read_bytes()).hexdigest()
-        == report["binary_npz_sha256"]
-    )
-    with np.load(binary_path, allow_pickle=False) as binary:
-        for record in report["records"]:
-            prefix = record["variant"] + "_" + record["link"]
-            for field in ("R_initial", "R_final"):
-                np.testing.assert_array_equal(
-                    binary[prefix + "_" + field], record[field]
-                )
-            np.testing.assert_array_equal(
-                binary[prefix + "_R_path"], record["R_theta_path"]
-            )
-            actual = np.asarray(record["stable_final"]["theta_path"])
-            reference = np.asarray(record["R_theta_path"])
-            assert len(actual) == len(reference)
-            bound = MODERATE.atol + MODERATE.rtol * np.abs(reference)
-            assert np.any(np.abs(actual - reference) > bound)
+    source = RBridge(mode="rpy2").nb_theta_diagnostics(
+        start, y, mu, weight, link="identity"
+    )["initial"]
+    assert source.shape == (3,)
+    actual = np.asarray(observed[:3])
+    np.testing.assert_allclose(actual, source, rtol=MODERATE.rtol, atol=MODERATE.atol)
+    strict_bound = STRICT.atol + STRICT.rtol * np.abs(source[1:])
+    assert np.any(np.abs(actual[1:] - source[1:]) > strict_bound)
