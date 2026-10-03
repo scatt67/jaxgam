@@ -633,8 +633,10 @@ def test_saturated_likelihood_and_inventory_are_jittable_complete() -> None:
     assert nb_log.default_link
     assert not nb_log.mathematical_canonical
     assert not nb_log.legacy_route_is_canonical
-    assert nb_log.efs_status == "implementation_missing"
-    assert not nb_log.numerical_boundaries
+    assert nb_log.efs_status == "internal_pinned_parity_with_named_boundary"
+    assert "near_poisson_selected_theta_loose_exception" in (
+        nb_log.numerical_boundaries
+    )
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")

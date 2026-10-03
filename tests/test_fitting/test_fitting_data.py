@@ -295,6 +295,22 @@ class TestFromSetupBasic:
             actual = FittingData._weighted_crossproduct_diag(X, weights)
             np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=0.0)
 
+    def test_efs_initial_sp_adapter_uses_shared_cpu_balancing(
+        self, gaussian_setup
+    ) -> None:
+        """Dense and EFS initialization retain the same global-column scaling."""
+        X = gaussian_setup.X
+        structure = gaussian_setup.penalties
+        weights = np.linspace(0.2, 1.6, len(X))
+        diagonal = np.sum((np.sqrt(weights)[:, None] * X) ** 2, axis=0)
+
+        actual = FittingData._initial_sp_from_crossproduct_diag(X, structure, diagonal)
+        expected = FittingData._initial_sp(X, structure, weights)
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+
+        with pytest.raises(ValueError, match="must match the design columns"):
+            FittingData._initial_sp_from_crossproduct_diag(X, structure, diagonal[:-1])
+
     @pytest.mark.parametrize(
         ("family", "sp", "y"),
         [
