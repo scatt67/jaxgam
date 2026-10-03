@@ -726,6 +726,14 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
     )
     assert end.converged
     assert end.n_iter == len(oracle["path"]) - 1
+    # The source and stable kernels select the same endpoint while their
+    # early weak-curvature steps remain observably different. Keep that
+    # diagnostic gate live instead of reading archived trajectory arrays.
+    python_path = np.asarray(end.theta_history)
+    source_path = np.asarray(oracle["path"])
+    assert python_path.shape == source_path.shape
+    path_bound = MODERATE.atol + MODERATE.rtol * np.abs(source_path)
+    assert np.any(np.abs(python_path - source_path) > path_bound)
     assert abs(initial[1]) > 1e-7 * (abs(initial[0]) + 1)
     assert abs(oracle["initial"][1]) > 1e-7 * (abs(oracle["initial"][0]) + 1)
     assert abs(end.gradient) <= 1e-7 * (abs(end.nll) + 1)
