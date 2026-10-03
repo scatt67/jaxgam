@@ -39,6 +39,7 @@ from jaxgam.fitting.reml import (
     fletcher_scale,
     pearson_rss,
     reml_criterion,
+    reml_criterion_from_penalized_deviance,
     reml_criterion_with_logdet_hessian,
 )
 from jaxgam.jax_utils import to_jax, to_numpy
@@ -186,6 +187,44 @@ def test_fixed_state_reml_with_supplied_hessian_logdet_matches_dense(
     )
     np.testing.assert_allclose(
         np.asarray(compiled), np.asarray(supplied), rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    # A recovered reporting beta need not carry the source's solve penalty.
+    # The explicit frozen Dp path retains that penalty and the observed
+    # factor determinant without refactorizing a normal matrix.
+    pdev = (
+        result.deviance + result.coefficients @ fd.S_lambda(rho) @ result.coefficients
+    )
+    delta = jnp.asarray(1.3)
+
+    def explicit_source_score(Dp):
+        return reml_criterion_from_penalized_deviance(
+            rho,
+            args["XtWX"],
+            Dp,
+            args["ls_sat"],
+            fd.penalty_structure,
+            args["phi"],
+            args["Mp"],
+            fd.singleton_sp_indices,
+            fd.singleton_ranks,
+            fd.singleton_eig_constants,
+            fd.multi_block_sp_indices,
+            fd.multi_block_ranks,
+            fd.multi_block_proj_S,
+            log_det_hessian=logdet,
+        )
+
+    np.testing.assert_allclose(
+        jax.jit(explicit_source_score)(pdev + delta),
+        supplied + delta / (2.0 * args["phi"]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        jax.jit(jax.grad(explicit_source_score))(pdev),
+        1.0 / (2.0 * args["phi"]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
     )
 
 
