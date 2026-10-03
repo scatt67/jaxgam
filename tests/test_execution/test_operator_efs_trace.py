@@ -37,11 +37,18 @@ def _model(frame, formula, *, batch_rows=7):
 @pytest.mark.parametrize(
     "expression", ["s(x,bs='cr',k=6)+s(g,bs='re')", "te(x,z,bs='cr',k=4)"]
 )
-def test_exact_operator_fisher_trace_and_quadratic_match_pinned_r(r_bridge, expression):
+@pytest.mark.parametrize("family", ["gaussian", "poisson"])
+def test_exact_operator_fisher_trace_and_quadratic_match_pinned_r(
+    r_bridge, expression, family
+):
     row = np.arange(47)
     frame = pd.DataFrame(
         {
-            "y": 0.8 + np.sin(row / 9) + 0.02 * np.cos(row),
+            "y": (
+                0.8 + np.sin(row / 9) + 0.02 * np.cos(row)
+                if family == "gaussian"
+                else np.resize([1, 3, 2, 4, 2, 5], len(row))
+            ),
             "x": np.linspace(0.1, 1.5, len(row)),
             "z": ((17 * row) % len(row)) / len(row),
             "g": pd.Categorical(np.resize(["a", "b", "c"], len(row))),
@@ -49,16 +56,20 @@ def test_exact_operator_fisher_trace_and_quadratic_match_pinned_r(r_bridge, expr
     )
     formula = f"y~{expression}"
     sp = np.array([0.7, 1.1])
-    reference = r_bridge.fit_fixed_sp(
-        formula, frame, "gaussian", sp, with_uncertainty=True
-    )
+    reference = r_bridge.fit_fixed_sp(formula, frame, family, sp, with_uncertainty=True)
     collector = _AssertCollector()
     for B in (1, 11):
         source, model = _model(frame, formula, batch_rows=B)
+        curvature = (
+            None
+            if family == "gaussian"
+            else lambda batch, mu=reference["fitted_values"]: mu[batch.row_positions]
+        )
         system = FrozenScanSystem(
             model,
             source,
             np.log(sp),
+            curvature=curvature,
             memory_budget_bytes=8 * 1024 * 1024,
         )
         result = ExactOperatorPenaltyStatistics(
