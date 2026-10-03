@@ -8,7 +8,6 @@ import jax
 import numpy as np
 import pandas as pd
 import pytest
-from tests.fixtures.efs_weighted_additive_cr_repro import FORMULA, make_data
 
 from jaxgam.execution import efs as execution_efs
 from jaxgam.execution.efs import (
@@ -24,6 +23,22 @@ from jaxgam.formula.parser import parse_formula
 from tests.helpers import _AssertCollector, r_available
 from tests.r_bridge import RBridge
 from tests.tolerances import MODERATE, STRICT
+
+FORMULA = "y ~ s(x, bs='cr', k=6) + s(z, bs='cr', k=5)"
+
+
+def make_data() -> pd.DataFrame:
+    """Construct the weighted-offset additive cubic R comparison input."""
+    rng = np.random.default_rng(2026)
+    n = 64
+    x = np.linspace(-1.0, 1.0, n)
+    z = rng.uniform(-1.0, 1.0, n)
+    offset = rng.normal(0.0, 0.05, n)
+    eta = 0.2 + 0.5 * np.sin(3.0 * x) - 0.2 * z + offset
+    y = rng.poisson(np.exp(eta))
+    return pd.DataFrame(
+        {"y": y, "x": x, "z": z, "w": 0.5 + rng.random(n), "off": offset}
+    )
 
 
 def _build(
