@@ -133,11 +133,22 @@ no conditional-theta RSS or timing claim is inferred from it.
 ## Numerical review and remaining scope
 
 All ordinary/default/retained controller fields and same-coordinate end
-contractions remain STRICT. The [reviewed six-row record](efs52_nb_conditional_theta_numerical_review.md)
-permits only named field-specific MODERATE comparisons at its two immutable
-inputs and log(1e6) start. The saved early trajectories exceed MODERATE and
-remain explicit limitations. Counts, stopping inequalities, validity and
-safeguards are independent mandatory gates.
+contractions remain STRICT. The narrowly reviewed six-row integer and
+fractional inputs use `mu=[1.2,2.4,3.1,0.8,2.0,4.0]`, prior weights
+`[0.8,1.2,0,1,0.9,1.1]`, responses `[0,2,3,4,0,7]` or
+`[0,2.25,3.5,4.75,0,7.25]`, and a log(1e6) theta start. Four executed
+corrections (matched JIT execution, per-row differentiation, literal source
+ratio and stable log-mean arithmetic) still missed STRICT initial R
+gradient/Hessian parity; the stable arithmetic matched an independent
+65-digit derivative reference more closely. On only these exact inputs,
+initial R objective/gradient/Hessian, nonlog dense initial derivatives,
+fractional nonlog dense initial objective and integer selected final theta
+have named MODERATE owning comparisons. Unchanged dense log-link and integer
+initial objectives, final objective and identical-coordinate final
+contractions, and the high-precision derivative reference remain STRICT.
+Early theta trajectories exceed even MODERATE and remain explicit limitations.
+Counts, stopping inequalities, validity and safeguards are independent
+mandatory gates; this does not relax other inputs or controller paths.
 
 The null helper's owning tests establish source alias rank/coordinates;
 full aliased coefficient/score parity is not implied by the new full-rank

@@ -50,22 +50,8 @@ it passed STRICT but differed by one final bit in a coupled determinant derivati
 The byte check now compares both kernels under JIT, matching the production mode;
 no production arithmetic or tolerance was changed.
 
-Final pinned owning selection: 64 passed, terminal exit 0, no skips or xfails;
-new module 98% branch-inclusive coverage. The original dense statistics,
-preparation, determinant-derivative and update function bodies are AST-identical
-to accepted 76526f3. All 169 production/test Python files match the r3 image.
-
-The [compiled-memory record](efs52_factor_memory_2026-09-17.json) preserves exact
-image and kernel/test hashes. The tested shapes use full-rank pivoted QR with
-disjoint singleton identity roots, including final blocks smaller than 32.
-
-| p | m | Compiler temporary bytes | Argument bytes | Output bytes | Visible RHS + action bound |
-|---:|---:|---:|---:|---:|---:|
-| 96 | 1 | 173600 | 76048 | 66 | 49152 |
-| 192 | 1 | 641504 | 299536 | 66 | 98304 |
-| 96 | 5 | 178016 | 76112 | 162 | 30720 |
-| 192 | 5 | 643296 | 299600 | 162 | 98304 |
-
-Alias bytes were zero in these four observations. Runtime RSS and allocator
-peaks were not measured. These observations apply to the recorded backend and
-shapes; they do not establish a general performance or device-memory claim.
+Compiled-memory checks use full-rank pivoted QR with disjoint singleton
+identity roots, including final blocks smaller than 32. They report compiler
+arguments, outputs, temporaries and aliases separately from the visible
+RHS/action bound. Runtime RSS and allocator peaks require separate measurement;
+compiler temporaries alone establish no general device-memory or speed claim.
