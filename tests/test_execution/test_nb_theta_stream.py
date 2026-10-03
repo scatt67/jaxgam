@@ -1,9 +1,5 @@
 """Global conditional theta Newton and its in-PIRLS source timing."""
 
-import subprocess
-import tempfile
-from pathlib import Path
-
 import jax
 import numpy as np
 import pytest
@@ -549,66 +545,6 @@ def test_no_intercept_null_projection_counts_zero_priors_and_releases_qr(
         assert result.state.batches_scanned == stream.source.batches - before[1]
 
 
-def _pinned_six_row_theta(start, y, mu, weight, link):
-    """Read source contractions and the traced theta path through pinned R."""
-    bridge = RBridge(mode="subprocess")
-    valid, reason = bridge.check_versions()
-    assert valid, reason
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory)
-        for name, values in (
-            ("start", start),
-            ("y", y),
-            ("mu", mu),
-            ("weight", weight),
-        ):
-            np.asarray(values, dtype="<f8").tofile(path / f"{name}.bin")
-        script = r"""
-      stopifnot(as.character(getRversion())=="4.5.2",
-                as.character(packageVersion("mgcv"))=="1.9.3")
-      args <- commandArgs(TRUE); d <- args[1]; link <- args[2]
-      vec <- function(name,n) readBin(file.path(d,paste0(name,".bin")),
-                                      double(),n=n,size=8,endian="little")
-      start <- vec("start",1); y <- vec("y",6); mu <- vec("mu",6)
-      w <- vec("weight",6)
-      fam <- do.call(mgcv::nb,list(theta=-exp(start),link=link))
-      fields <- function(theta) {
-        ls <- fam$ls(y,w=w,theta=theta,scale=1)
-        dd <- fam$Dd(y,mu,theta,wt=w,level=2)
-        c(sum(fam$dev.resids(y,mu,w,theta))/2-ls$ls,
-          sum(dd$Dth)/2-ls$lsth1[1],sum(dd$Dth2)/2-as.matrix(ls$lsth2)[1,1])
-      }
-      theta_path <- start; halving_count <- 0L
-      lines <- deparse(mgcv:::estimate.theta,width.cutoff=500L)
-      lines[1] <- sub("function","traced <- function",lines[1],fixed=TRUE)
-      anchor <- "theta <- theta + step"
-      stopifnot(sum(grepl(anchor,lines,fixed=TRUE))==1L)
-      insertion <- paste0(anchor,"; theta_path <<- c(theta_path,theta)")
-      lines <- sub(anchor,insertion,lines,fixed=TRUE)
-      halving_anchor <- "iter <- iter + 1"
-      stopifnot(sum(grepl(halving_anchor,lines,fixed=TRUE))==1L)
-      insertion <- paste0(halving_anchor,"; halving_count <<- halving_count+1L")
-      lines <- sub(halving_anchor,insertion,lines,fixed=TRUE)
-      eval(parse(text=lines))
-      end <- traced(start,fam,y,mu,scale=1,wt=w)
-      result <- list(initial=fields(start),final=c(end,fields(end)),
-                     path=theta_path,halvings=halving_count)
-      for (name in names(result))
-        writeBin(as.double(result[[name]]),
-                 file.path(d,paste0(name,".out")),size=8,endian="little")
-        """
-        subprocess.run(
-            ["Rscript", "--vanilla", "-e", script, directory, link],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return {
-            name: np.fromfile(path / f"{name}.out", dtype="<f8")
-            for name in ("initial", "final", "path", "halvings")
-        }
-
-
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
 @pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
 @pytest.mark.parametrize("variant", ["integer", "fractional_ge_one"])
@@ -617,7 +553,7 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
 ):
     """Exact generated cases: reviewed cancellation fields, no path relaxation.
 
-    See docs/scale_jaxgam/efs52_nb_conditional_theta_numerical_review.md.
+    Four source-arithmetic correction passes bound the cancellation fields.
     All ordinary controller and identical-coordinate end contractions stay STRICT.
     """
     import hashlib
@@ -683,7 +619,7 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
         max_y=fixture["max_y"],
         integer_counts=fixture["integer_counts"],
     )
-    oracle = _pinned_six_row_theta(start, y, mu, weight, link)
+    oracle = RBridge(mode="subprocess").nb_theta_diagnostics(start, y, mu, weight, link)
     initial = fields(start)
     # Both exact hashed inputs have reviewed objective-cancellation gates.
     # The integer gate became MODERATE when the published stable saturated

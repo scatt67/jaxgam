@@ -713,6 +713,71 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
             skip_offset_null_deviance=True,
         )
 
+    def nb_theta_diagnostics(
+        self,
+        start: np.ndarray,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weight: np.ndarray,
+        link: str = "log",
+    ) -> dict[str, np.ndarray]:
+        """Read source contractions and the traced theta path through pinned R."""
+        self._require_pinned_efs_versions()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            for name, values in (
+                ("start", start),
+                ("y", y),
+                ("mu", mu),
+                ("weight", weight),
+            ):
+                np.asarray(values, dtype="<f8").tofile(path / f"{name}.bin")
+            script = r"""
+          stopifnot(as.character(getRversion())=="4.5.2",
+                    as.character(packageVersion("mgcv"))=="1.9.3")
+          args <- commandArgs(TRUE); d <- args[1]; link <- args[2]; n <- as.integer(args[3])
+          vec <- function(name,n) readBin(file.path(d,paste0(name,".bin")),
+                                          double(),n=n,size=8,endian="little")
+          start <- vec("start",1); y <- vec("y",n); mu <- vec("mu",n)
+          w <- vec("weight",n)
+          fam <- do.call(mgcv::nb,list(theta=-exp(start),link=link))
+          fields <- function(theta) {
+            ls <- fam$ls(y,w=w,theta=theta,scale=1)
+            dd <- fam$Dd(y,mu,theta,wt=w,level=2)
+            c(sum(fam$dev.resids(y,mu,w,theta))/2-ls$ls,
+              sum(dd$Dth)/2-ls$lsth1[1],sum(dd$Dth2)/2-as.matrix(ls$lsth2)[1,1])
+          }
+          theta_path <- start; halving_count <- 0L
+          lines <- deparse(mgcv:::estimate.theta,width.cutoff=500L)
+          lines[1] <- sub("function","traced <- function",lines[1],fixed=TRUE)
+          anchor <- "theta <- theta + step"
+          stopifnot(sum(grepl(anchor,lines,fixed=TRUE))==1L)
+          insertion <- paste0(anchor,"; theta_path <<- c(theta_path,theta)")
+          lines <- sub(anchor,insertion,lines,fixed=TRUE)
+          halving_anchor <- "iter <- iter + 1"
+          stopifnot(sum(grepl(halving_anchor,lines,fixed=TRUE))==1L)
+          insertion <- paste0(halving_anchor,"; halving_count <<- halving_count+1L")
+          lines <- sub(halving_anchor,insertion,lines,fixed=TRUE)
+          eval(parse(text=lines))
+          end <- traced(start,fam,y,mu,scale=1,wt=w)
+          result <- list(initial=fields(start),final=c(end,fields(end)),
+                         path=theta_path,halvings=halving_count)
+          for (name in names(result))
+            writeBin(as.double(result[[name]]),
+                     file.path(d,paste0(name,".out")),size=8,endian="little")
+            """
+            subprocess.run(
+                ["Rscript", "--vanilla", "-e", script, directory, link, str(len(y))],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            return {
+                name: np.fromfile(path / f"{name}.out", dtype="<f8")
+                for name in ("initial", "final", "path", "halvings")
+            }
+
     def efs_nb_working_factors(
         self,
         link: str,

@@ -2,9 +2,6 @@
 
 import hashlib
 import json
-import subprocess
-import tempfile
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -18,6 +15,7 @@ from jaxgam.fitting.nb_theta_stream import (
     nb_conditional_theta_step,
 )
 from tests.helpers import nb_theta_six_row_case, r_available
+from tests.r_bridge import RBridge
 from tests.tolerances import MODERATE, STRICT
 
 
@@ -374,34 +372,9 @@ def test_six_row_source_cancellation_is_bounded_against_live_r(variant):
     )
     assert observed.admissible
 
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory)
-        inputs = (("mu", mu), ("y", y), ("weight", weight), ("start", start))
-        for name, values in inputs:
-            np.asarray(values, dtype="<f8").tofile(path / name)
-        script = r"""
-        stopifnot(as.character(getRversion()) == "4.5.2",
-                  as.character(packageVersion("mgcv")) == "1.9.3")
-        d <- commandArgs(TRUE)[1]
-        vec <- function(name, n) readBin(file.path(d, name), double(), n=n,
-                                          size=8, endian="little")
-        mu <- vec("mu", 6); y <- vec("y", 6); w <- vec("weight", 6)
-        theta <- vec("start", 1)
-        fam <- mgcv::nb(theta=-exp(theta), link="identity")
-        ls <- fam$ls(y, w=w, theta=theta, scale=1)
-        dd <- fam$Dd(y, mu, theta, wt=w, level=2)
-        fields <- c(sum(fam$dev.resids(y, mu, w, theta))/2-ls$ls,
-                    sum(dd$Dth)/2-ls$lsth1[1],
-                    sum(dd$Dth2)/2-as.matrix(ls$lsth2)[1,1])
-        cat(paste(sprintf("%.17g", fields), collapse=" "))
-        """
-        completed = subprocess.run(
-            ["Rscript", "--vanilla", "-e", script, directory],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    source = np.fromstring(completed.stdout, sep=" ")
+    source = RBridge(mode="subprocess").nb_theta_diagnostics(
+        start, y, mu, weight, link="identity"
+    )["initial"]
     assert source.shape == (3,)
     actual = np.asarray(observed[:3])
     np.testing.assert_allclose(actual, source, rtol=MODERATE.rtol, atol=MODERATE.atol)
