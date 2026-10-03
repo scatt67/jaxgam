@@ -5641,3 +5641,139 @@ if (!is.null(s$sp.criterion)) {{
                 result["sp_criterion"] = None
 
             return result
+
+    def nb_cubic_outer_fit(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        link: str,
+        *,
+        estimated: bool,
+        pinned_rho: float | None = None,
+    ) -> dict[str, Any]:
+        """Fit the NB cr(k=8) outer-optimizer model with pinned review controls."""
+        self._require_rpy2()
+        ro = self._ro
+        r_data = self._to_r_dataframe(data[["x", "y"]])
+        family = self._mgcv.nb(theta=-2.7 if estimated else 2.7, link=link)
+        control = self._mgcv.gam_control(
+            epsilon=1e-11,
+            maxit=200,
+            newton=ro.ListVector(
+                {"conv.tol": 1e-6, "maxNstep": 5.0, "maxSstep": 2.0, "maxHalf": 30}
+            ),
+        )
+        options: dict[str, Any] = {}
+        if pinned_rho is not None:
+            options["sp"] = self._base.exp(self._to_r_vector([pinned_rho]))
+        fit = self._mgcv.gam(
+            ro.Formula('y ~ s(x, bs="cr", k=8)'),
+            data=r_data,
+            weights=self._to_r_vector(weight),
+            offset=self._to_r_vector(offset),
+            family=family,
+            method="REML",
+            optimizer=ro.StrVector(["outer", "newton"]),
+            control=control,
+            **options,
+        )
+        outer = fit.rx2("outer.info")
+        if outer is ro.NULL:
+            # With both theta and smoothing fixed there is no outer step.
+            outer_converged = not estimated and pinned_rho is not None
+            outer_iterations = 0
+        else:
+            outer_converged = str(outer.rx2("conv")[0]) == "full convergence"
+            outer_iterations = int(outer.rx2("iter")[0])
+        return {
+            "rho": (
+                pinned_rho
+                if pinned_rho is not None
+                else float(self._base.log(fit.rx2("sp"))[0])
+            ),
+            "log_theta": float(fit.rx2("family").rx2("getTheta")()[0]),
+            "score": float(fit.rx2("gcv.ubre")[0]),
+            "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
+            "deviance": float(fit.rx2("deviance")[0]),
+            "edf": float(self._base.sum(fit.rx2("edf"))[0]),
+            "scale": float(fit.rx2("sig2")[0]),
+            "inner_converged": bool(fit.rx2("converged")[0]),
+            "outer_converged": outer_converged,
+            "outer_iterations": outer_iterations,
+        }
+
+    def nb_selected_fit(
+        self,
+        X: np.ndarray,
+        E: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        params: np.ndarray,
+        link: str,
+        *,
+        estimated: bool,
+        epsilon: float = 1e-11,
+        max_iter: int = 200,
+    ) -> dict[str, Any]:
+        """Evaluate pinned gam.fit4 in supplied NB fitting coordinates (theta 2.7)."""
+        self._require_rpy2()
+        ro = self._ro
+        X, E, y, weight, offset, params = (
+            np.asarray(value, dtype=np.float64)
+            for value in (X, E, y, weight, offset, params)
+        )
+        r_X, r_E = self._to_r_matrix(X), self._to_r_matrix(E)
+        r_y = self._to_r_vector(y)
+        family = self._call_internal(
+            "fix.family.link",
+            self._mgcv.nb(
+                theta=-float(self._base.exp(self._to_r_vector(params[-1:]))[0])
+                if estimated
+                else 2.7,
+                link=link,
+            ),
+        )
+        rank = E.shape[0]
+        U1 = self._base.eigen(self._base.crossprod(r_E), symmetric=True).rx2("vectors")
+        U1_penalized = self._to_r_matrix(np.asarray(U1)[:, :rank])
+        root = ro.baseenv["%*%"](self._base.t(U1_penalized), self._base.t(r_E))
+        target = self._base.rep(
+            family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
+        )
+        null = np.asarray(
+            self._base.qr_coef(self._base.qr(r_X), target), dtype=np.float64
+        )
+        null[np.isnan(null)] = 0.0
+        smoothing = params[[1, 0]] if estimated else params[:1]
+        fit = self._call_internal(
+            "gam.fit4",
+            x=r_X,
+            y=r_y,
+            sp=self._to_r_vector(smoothing),
+            Eb=r_E,
+            UrS=ro.baseenv["list"](root),
+            weights=self._to_r_vector(weight),
+            offset=self._to_r_vector(offset),
+            U1=U1,
+            Mp=X.shape[1] - rank,
+            family=family,
+            control=self._mgcv.gam_control(epsilon=epsilon, maxit=max_iter),
+            deriv=1,
+            scale=1,
+            scoreType="REML",
+            **{"null.coef": self._to_r_vector(null)},
+        )
+        if not bool(fit.rx2("converged")[0]):
+            raise RBridgeError("Pinned gam.fit4 coefficient oracle did not converge.")
+        gradient = np.asarray(fit.rx2("REML1")).copy()
+        if estimated:
+            gradient = gradient[[1, 0]]
+        return {
+            "score": float(fit.rx2("REML")[0]),
+            "iter": int(fit.rx2("iter")[0]),
+            "deviance": float(fit.rx2("deviance")[0]),
+            "beta": np.asarray(fit.rx2("coefficients")).copy(),
+            "gradient": gradient,
+        }

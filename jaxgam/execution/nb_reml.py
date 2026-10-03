@@ -8,6 +8,7 @@ host never invokes EFS conditional-theta updates.
 
 from __future__ import annotations
 
+import numbers
 from dataclasses import dataclass, replace
 
 import jax
@@ -22,6 +23,12 @@ from jaxgam.execution.nb_stream import (
 from jaxgam.execution.regular_stream import (
     RegularStreamWorkspace,
     preflight_regular_stream_workspace,
+)
+from jaxgam.execution.reml import (
+    StreamREMLControl,
+    _AcceptedParameterizedTrialObjective,
+    _parameterized_optimizer_workspace_bytes,
+    _run_parameterized_stream_reml,
 )
 from jaxgam.execution.stream import (
     StreamPIRLSControl,
@@ -70,6 +77,29 @@ class NBStreamREMLTrial:
     basis_fingerprint: str
     family_name: str
     link_name: str
+
+
+@dataclass(frozen=True)
+class NBStreamREMLOptimization:
+    """Diagnostic outcome of exact joint NB streamed optimization."""
+
+    trial: NBStreamREMLTrial
+    converged: bool
+    message: str
+    status: int
+    n_iter: int
+    n_evaluations: int
+    n_accepted: int
+    cumulative_source_scans: int
+    cumulative_batches_scanned: int
+    projected_gradient_inf: float
+    accepted_score_history: tuple[float, ...]
+    outer_workspace_bytes: int
+
+    @property
+    def required_bytes(self) -> int:
+        """Known trial plus retained optimizer workspace at the peak."""
+        return self.trial.workspace.required_bytes + self.outer_workspace_bytes
 
 
 @dataclass(frozen=True)
@@ -439,4 +469,171 @@ def evaluate_nb_stream_reml(
         basis_fingerprint=stream.prepared.basis_fingerprint,
         family_name=family.family_name,
         link_name=type(family.link).__qualname__,
+    )
+
+
+class _AcceptedNBTrialObjective(
+    _AcceptedParameterizedTrialObjective[NBStreamREMLTrial]
+):
+    """NB adapter for the common accepted/candidate trial driver."""
+
+    def __init__(
+        self,
+        stream: StreamDesign,
+        family: NegativeBinomial,
+        params_initial: np.ndarray,
+        pirls_control: StreamPIRLSControl,
+        reml_control: StreamREMLControl,
+        maximum_bytes: int,
+        initial_coefficients: np.ndarray | None,
+        device: jax.Device | None,
+    ) -> None:
+        def evaluate(
+            params: np.ndarray,
+            warm_start: NBStreamREMLTrial | None,
+        ) -> NBStreamREMLTrial:
+            return evaluate_nb_stream_reml(
+                stream,
+                family,
+                params,
+                maximum_bytes=maximum_bytes,
+                control=pirls_control,
+                warm_start=warm_start,
+                initial_coefficients=(
+                    initial_coefficients if warm_start is None else None
+                ),
+                device=device,
+            )
+
+        super().__init__(
+            stream,
+            params_initial,
+            reml_control,
+            evaluate,
+            objective_name="NB streamed REML",
+            source_name="NB streamed REML",
+            trial_name="NB streamed",
+        )
+
+
+def optimize_nb_stream_reml(
+    stream: StreamDesign,
+    family: NegativeBinomial,
+    initial_params: np.ndarray | jax.Array,
+    *,
+    maximum_bytes: int,
+    pin_lambda: bool = False,
+    pirls_control: StreamPIRLSControl | None = None,
+    control: StreamREMLControl | None = None,
+    initial_coefficients: np.ndarray | None = None,
+    device: jax.Device | None = None,
+) -> NBStreamREMLOptimization:
+    """Optimize exact NB REML jointly over smoothing and free theta.
+
+    Dynamic-theta families use ``[rho, log_theta]``. Fixed-theta families
+    optimize rho only. With ``pin_lambda=True``, each supplied rho is held at
+    its exact value, including values outside the estimated-rho box, while
+    log-theta remains free and unbounded.
+    """
+    reml_control = StreamREMLControl() if control is None else control
+    if (
+        not isinstance(maximum_bytes, numbers.Integral)
+        or isinstance(maximum_bytes, bool)
+        or maximum_bytes <= 0
+    ):
+        raise ValueError("maximum_bytes must be a positive integer")
+    maximum_bytes = int(maximum_bytes)
+    if not isinstance(pin_lambda, bool):
+        raise ValueError("pin_lambda must be bool")
+    if not isinstance(family, NegativeBinomial) or family.n_theta not in (0, 1):
+        raise TypeError("NB streamed REML optimization requires NegativeBinomial")
+    fitting = stream.prepared.fitting
+    if fitting is None:
+        raise ValueError("NB streamed REML requires fitting preparation")
+    n_lambda = fitting.penalty_structure.n_penalties
+    n_params = n_lambda + family.n_theta
+    params_initial = np.asarray(initial_params, dtype=np.float64)
+    if params_initial.shape != (n_params,):
+        raise ValueError(
+            f"initial_params must have shape ({n_params},), got {params_initial.shape}."
+        )
+    if not np.all(np.isfinite(params_initial)):
+        raise ValueError("initial_params must contain only finite values")
+
+    lower, upper = -40.0, 40.0
+    params_initial = params_initial.copy()
+    if pin_lambda:
+        bounds: list[tuple[float | None, float | None]] = [
+            (float(value), float(value)) for value in params_initial[:n_lambda]
+        ]
+    else:
+        params_initial[:n_lambda] = np.clip(params_initial[:n_lambda], lower, upper)
+        bounds = [(lower, upper)] * n_lambda
+    bounds.extend([(None, None)] * family.n_theta)
+
+    base_pirls_control = (
+        StreamPIRLSControl(solver_policy="qr")
+        if pirls_control is None
+        else pirls_control
+    )
+    if base_pirls_control.solver_policy != "qr":
+        raise ValueError("NB streamed REML requires solver_policy='qr'")
+    pirls_control = replace(
+        base_pirls_control,
+        tol=min(base_pirls_control.tol, 1e-9, reml_control.gtol / 100.0),
+    )
+
+    retained_trial_bytes, retained_history_bytes, lbfgs_workspace_bytes = (
+        _parameterized_optimizer_workspace_bytes(
+            stream.prepared.n_coef,
+            n_params,
+            reml_control,
+            pirls_control,
+        )
+    )
+    outer_workspace_bytes = (
+        retained_trial_bytes + retained_history_bytes + lbfgs_workspace_bytes
+    )
+    if outer_workspace_bytes >= maximum_bytes:
+        raise MemoryError(
+            "NB streamed REML optimizer retention needs "
+            f"{outer_workspace_bytes} bytes before a trial, exceeding "
+            f"maximum_bytes={maximum_bytes}."
+        )
+    trial_budget = maximum_bytes - outer_workspace_bytes
+    objective = _AcceptedNBTrialObjective(
+        stream,
+        family,
+        params_initial,
+        pirls_control,
+        reml_control,
+        trial_budget,
+        initial_coefficients,
+        device,
+    )
+    optimized = _run_parameterized_stream_reml(
+        objective,
+        params_initial,
+        bounds,
+        reml_control,
+    )
+    trial = optimized.trial
+    if family.n_theta and not np.array_equal(
+        np.asarray(trial.fit_result.log_theta),
+        np.asarray(trial.params[n_lambda:]),
+    ):
+        raise RuntimeError("NB optimizer returned a state from stale theta")
+    return NBStreamREMLOptimization(
+        trial=trial,
+        converged=optimized.converged,
+        message=optimized.message,
+        status=optimized.status,
+        n_iter=optimized.n_iter,
+        n_evaluations=optimized.n_evaluations,
+        n_accepted=optimized.n_accepted,
+        cumulative_source_scans=optimized.cumulative_source_scans,
+        cumulative_batches_scanned=optimized.cumulative_batches_scanned,
+        projected_gradient_inf=optimized.projected_gradient_inf,
+        accepted_score_history=optimized.accepted_score_history,
+        outer_workspace_bytes=outer_workspace_bytes,
     )
