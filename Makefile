@@ -51,6 +51,18 @@ test-discrete: docker-build ## run exact discrete representation/operator tests 
 		tests/test_data/test_discretize.py tests/test_formula/test_discrete_design.py \
 		tests/test_fitting/test_discrete_ops.py -x --tb=short -v
 
+.PHONY: test-nb-stream
+test-nb-stream: docker-build ## run internal fixed/trial-theta NB coefficient gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_execution/test_nb_stream.py \
+		tests/test_fitting/test_nb_stream_kernels.py -x --tb=short -q
+
+.PHONY: test-nb-stream-memory
+test-nb-stream-memory: docker-build ## record bounded fixed-B/p NB coefficient memory
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_execution/test_nb_stream.py \
+		-k warm_coefficient_memory --log-cli-level=INFO -x --tb=short -q
+
 .PHONY: test-cov
 test-cov: docker-build ## run tests with coverage in Docker
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \

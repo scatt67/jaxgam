@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from scipy.special import digamma, polygamma
+from scipy.special import digamma, gammaln, polygamma
 
 from jaxgam.families import negative_binomial as nb
 from jaxgam.families.negative_binomial import (
@@ -238,6 +238,66 @@ def test_fractional_large_theta_matches_decimal_oracle_across_transition(theta) 
     )
 
 
+def test_huge_theta_forward_value_matches_decimal_integer_recurrence(
+    monkeypatch,
+) -> None:
+    """Both bounded-prefix and bounded-workspace values avoid cancellation."""
+    getcontext().prec = 80
+    theta = Decimal("1000000000000")
+    counts = np.array([0, 1, 7, 19], dtype=np.int64)
+    expected = np.array(
+        [
+            float(
+                -sum(
+                    ((theta + Decimal(k)).ln() for k in range(int(count))),
+                    Decimal(0),
+                )
+            )
+            for count in counts
+        ]
+    )
+    arguments = (
+        jnp.asarray(float(theta)),
+        jnp.asarray(counts, dtype=jnp.float64),
+        jnp.asarray(counts),
+        int(np.max(counts)),
+        True,
+    )
+    actual = np.asarray(_lgamma_diff_planned(*arguments))
+    np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+
+    monkeypatch.setattr(nb, "_PREFIX_WORKSPACE_BYTES", 0)
+    fallback = np.asarray(
+        jax.jit(_lgamma_diff_planned, static_argnums=(3, 4))(*arguments)
+    )
+    np.testing.assert_allclose(fallback, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+    raw = np.asarray(
+        jax.scipy.special.gammaln(float(theta))
+        - jax.scipy.special.gammaln(float(theta) + counts)
+    )
+    assert np.max(np.abs(raw - expected)) > 1e-3
+
+
+def test_large_count_forward_uses_bounded_well_conditioned_fallback() -> None:
+    """An oversized plan must retain its O(n) vectorized value branch."""
+    capacity = (nb._PREFIX_WORKSPACE_BYTES - nb._PREFIX_COMPILED_FIXED_BYTES) // (
+        np.dtype(np.float64).itemsize * nb._PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
+    )
+    counts = jnp.asarray([float(capacity)])
+    indices = jnp.asarray([capacity], dtype=jnp.int64)
+    theta = jnp.asarray(2.0)
+
+    def value(theta, counts, indices):
+        return _lgamma_diff_planned(theta, counts, indices, capacity, True)
+
+    lowered = jax.jit(value).lower(theta, counts, indices)
+    compiled = lowered.compile()
+    actual = np.asarray(compiled(theta, counts, indices))
+    expected = gammaln(2.0) - gammaln(2.0 + capacity)
+    np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+    assert compiled.memory_analysis().temp_size_in_bytes <= 4096
+
+
 def test_empty_zero_and_plan_sentinel_are_safe() -> None:
     plan = CountPrefixPlan(jnp.zeros(0, dtype=jnp.int64), 0, 1, True)
     out = _lgamma_diff_planned(
@@ -261,6 +321,7 @@ def test_undersized_metadata_is_not_silently_clipped_in_every_branch(
         def fn(theta, y=y, indices=indices, capacity=capacity):
             return jnp.sum(_lgamma_diff_planned(theta, y, indices, capacity, True))
 
+        assert np.isnan(np.asarray(fn(jnp.array(1e12))))
         assert np.isnan(np.asarray(jax.grad(fn)(jnp.array(1e12))))
 
 
@@ -324,13 +385,10 @@ def test_fitting_data_prepares_integer_indices_once_for_nb_only() -> None:
 
 def test_compiled_memory_respects_prefix_boundary_and_empty_fallback() -> None:
     max_fast_capacity = (
-        nb._PREFIX_WORKSPACE_BYTES
-        // (
-            np.dtype(np.float64).itemsize
-            * nb._PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
-        )
-        - 1
-    )
+        nb._PREFIX_WORKSPACE_BYTES - nb._PREFIX_COMPILED_FIXED_BYTES
+    ) // (
+        np.dtype(np.float64).itemsize * nb._PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
+    ) - 1
 
     def compile_hessian(y, indices, capacity, log_theta):
         def hessian(log_theta, y, indices):
@@ -355,6 +413,32 @@ def test_compiled_memory_respects_prefix_boundary_and_empty_fallback() -> None:
     )
     assert fast_memory.temp_size_in_bytes <= nb._PREFIX_WORKSPACE_BYTES
 
+    fast_y = jnp.array([0.0, 1.0, float(max_fast_capacity)])
+    fast_indices = jnp.array([0, 1, max_fast_capacity], dtype=jnp.int64)
+
+    def value_jvp_hessian(log_theta, y, indices):
+        def value(theta):
+            return jnp.sum(
+                _lgamma_diff_planned(
+                    jnp.exp(theta), y, indices, max_fast_capacity, True
+                )
+            )
+
+        primal, tangent = jax.jvp(value, (log_theta,), (jnp.ones_like(log_theta),))
+        return primal, tangent, jax.hessian(value)(log_theta)
+
+    compiled_bundle = (
+        jax.jit(value_jvp_hessian)
+        .lower(jnp.array(np.log(2.0)), fast_y, fast_indices)
+        .compile()
+    )
+    bundle = compiled_bundle(jnp.array(np.log(2.0)), fast_y, fast_indices)
+    assert all(np.isfinite(np.asarray(value)) for value in bundle)
+    assert (
+        compiled_bundle.memory_analysis().temp_size_in_bytes
+        <= nb._PREFIX_WORKSPACE_BYTES
+    )
+
     fallback_capacity = max_fast_capacity + 1
     fallback_memory = compile_hessian(
         jnp.array([0.0, 1.0, float(fallback_capacity)]),
@@ -374,12 +458,14 @@ def test_compiled_memory_respects_prefix_boundary_and_empty_fallback() -> None:
     fast_bytes = (max_fast_capacity + 1) * np.dtype(np.float64).itemsize
     assert (
         fast_bytes * nb._PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
+        + nb._PREFIX_COMPILED_FIXED_BYTES
         <= nb._PREFIX_WORKSPACE_BYTES
     )
     assert (
         (max_fast_capacity + 2)
         * np.dtype(np.float64).itemsize
         * nb._PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
+        + nb._PREFIX_COMPILED_FIXED_BYTES
         > nb._PREFIX_WORKSPACE_BYTES
     )
 
