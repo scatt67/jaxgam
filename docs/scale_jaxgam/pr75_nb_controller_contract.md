@@ -3,11 +3,13 @@
 The internal `fit_nb_streamed_pirls` controller consumes the accepted PR7.5
 batch kernels and PR7.4 signed QR reducer. It fits coefficients at an explicit
 theta for NB/log, identity and sqrt, with smoothing held fixed. An estimated
-family requires an explicit trial `FamilyExecutionParameters`; this call
-does not estimate theta. The caller-owned family and its prepared lineage
+family requires an explicit trial `FamilyExecutionParameters`; the default
+call does not estimate theta. The caller-owned family and its prepared lineage
 remain unchanged. Public all-family streaming belongs to PR7.6; joint exact
 REML theta/smoothing optimization belongs to PR8.2. Conditional EFS theta
-Newton is a distinct existing policy and is not used here.
+Newton is a distinct policy enabled only by the internal EFS5.2
+`estimate_theta=True` opt-in; see
+[its contract](efs52_nb_conditional_theta_contract.md).
 
 Ground truth is mgcv 1.9-3, commit
 `fb7e8e718377513e78ba6c6bf7e60757fc6a32a9`: `R/efam.r::nb`,
@@ -87,12 +89,14 @@ identity theta0.8/cr k5/offset1 separately exercises three positive-observed
 recoveries and global backtracking. All new numerical assertions start at
 repository STRICT; no tolerance exception is introduced.
 
-The full-rank no-intercept oracle gates do not establish aliased null-anchor
-parity. The current projection reuses the QR solver's rank convention;
-pinned `get.null.coef` instead uses natural-column `qr`/`dqrdc2` and replaces
-aliased NA coordinates by zero. Integration of the separately reviewed
-shared source null-projection helper remains open. This controller does not
-claim completion of that boundary or of the public PR7.6 release matrix.
+The separately reviewed natural-column source null-projection helper now
+consumes the compact unweighted PUBLIC-coordinate QR, including real rows
+with zero prior weight, and replaces source aliased NA coordinates by zero.
+Only then does the NB controller convert into local fitting coordinates.
+Its initial public design/QR/CPU working rows are released before working
+scans. The helper's owning tests cover aliased projection rank/coordinates;
+full aliased coefficient/score parity remains separate from the controller's full-rank no-intercept gates. This does not close the public PR7.6 release
+matrix.
 
 ## NB workspace accounting
 

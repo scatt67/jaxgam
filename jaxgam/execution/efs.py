@@ -17,6 +17,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxgam.control import EFSControl
+from jaxgam.execution.efs_provider import (
+    EFSControllerContext,
+    EFSFitProvider,
+    EFSFitRequest,
+)
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
@@ -57,7 +62,7 @@ from jaxgam.fitting.reml import (
     reml_criterion,
     reml_criterion_from_penalized_deviance,
 )
-from jaxgam.fitting.state import EFSOptimizerDiagnostics
+from jaxgam.fitting.state import EFSOptimizerDiagnostics, StreamFitState
 from jaxgam.links.links import IdentityLink, InverseLink, LogLink, SqrtLink
 
 if TYPE_CHECKING:
@@ -268,7 +273,7 @@ class EFSFitState:
     """One immutable accepted or trial fit, all in fitting coordinates."""
 
     log_lambda: jax.Array
-    pirls_result: PIRLSResult
+    pirls_result: PIRLSResult | StreamFitState
     score: jax.Array
     edf: jax.Array
     statistics: EFSStatistics
@@ -297,6 +302,10 @@ class EFSFitState:
     # Count is bounded by the EFS-only PIRLS iteration limit and is collapsed
     # to the public stabilized-solve indicator by the host accumulator.
     positive_curvature_retry_count: jax.Array | None = None
+    # Counts include one provider's summary/initialization, coefficient/theta
+    # replay and reporting scans. Phase-1 preparation is outside this scope.
+    source_scans: int | None = None
+    batches_scanned: int | None = None
 
 
 @dataclass(frozen=True)
@@ -313,7 +322,7 @@ class EFSResult:
     score: jax.Array
     edf: jax.Array
     scale: jax.Array
-    pirls_result: PIRLSResult
+    pirls_result: PIRLSResult | StreamFitState
     convergence_info: str
     theta: float | None = None
     update_residual: jax.Array | None = None
@@ -341,12 +350,20 @@ class _EFSDiagnosticsAccumulator:
     invalid_fit_seen: bool = False
     gdi1_fallback_seen: bool = False
     positive_curvature_retry_count: int = 0
+    provider_source_scans: int = 0
+    provider_batches_scanned: int = 0
+    provider_costs_complete: bool = True
 
     def observe_fit(self, state: EFSFitState) -> None:
         self.inner_iterations += int(np.asarray(state.pirls_result.n_iter))
         if state.theta_n_iter is not None:
             self.theta_iterations += int(np.asarray(state.theta_n_iter))
         self.invalid_fit_seen |= not state.valid
+        if state.source_scans is None or state.batches_scanned is None:
+            self.provider_costs_complete = False
+        else:
+            self.provider_source_scans += state.source_scans
+            self.provider_batches_scanned += state.batches_scanned
         if state.gdi1_candidate_valid is not None:
             self.gdi1_fallback_seen |= not bool(np.asarray(state.gdi1_candidate_valid))
         if state.positive_curvature_retry_count is not None:
@@ -405,6 +422,7 @@ class _EFSDiagnosticsAccumulator:
         score_phi_history: tuple[float, ...],
         multiplier: float,
         update_residual: jax.Array | None,
+        context: EFSControllerContext | None = None,
     ) -> EFSOptimizerDiagnostics:
         residual = (
             ()
@@ -412,13 +430,25 @@ class _EFSDiagnosticsAccumulator:
             else tuple(float(value) for value in np.ravel(np.asarray(update_residual)))
         )
         return EFSOptimizerDiagnostics(
-            reference_profile="mgcv-1.9-3-efsudr-dense",
-            trace_method="exact-dense-fisher",
+            reference_profile=(
+                "mgcv-1.9-3-efsudr-dense"
+                if context is None
+                else context.reference_profile
+            ),
+            trace_method=(
+                "exact-dense-fisher" if context is None else context.trace_method
+            ),
             step_policy="efsudr-extension-contraction",
             stop_reason=stop_reason,
             outer_iterations=outer_iterations,
             inner_iterations=self.inner_iterations,
             theta_iterations=self.theta_iterations,
+            provider_source_scans=self.provider_source_scans
+            if self.provider_costs_complete
+            else None,
+            provider_batches_scanned=self.provider_batches_scanned
+            if self.provider_costs_complete
+            else None,
             accepted_score_history=history,
             accepted_score_phi_history=score_phi_history,
             multiplier=float(multiplier),
@@ -901,6 +931,37 @@ def _fit_state(
     )
 
 
+def _dense_fit_provider(
+    fitting_data: FittingData, plan: EFSStatisticsPlan, control: EFSControl
+) -> EFSFitProvider:
+    """Keep dense inputs in this adapter, preserving every fit call shape."""
+
+    def fit(request: EFSFitRequest) -> EFSFitState:
+        kwargs = {}
+        if request.log_theta_start is not None:
+            kwargs["log_theta_start"] = request.log_theta_start
+        if request.beta_old_init is not None:
+            kwargs["beta_old_init"] = request.beta_old_init
+        if request.start_is_absent is not None:
+            kwargs["start_is_absent"] = request.start_is_absent
+        if request.regular_start_present is not None:
+            kwargs["regular_start_present"] = request.regular_start_present
+        args = (fitting_data, plan, request.log_lambda, request.beta_start, control)
+        if request.score_phi is not None:
+            args = (*args, request.score_phi)
+        return _fit_state(*args, **kwargs)
+
+    return fit
+
+
+def _selected_provider_theta(
+    state: EFSFitState, context: EFSControllerContext
+) -> float | None:
+    if state.log_theta is not None:
+        return float(np.asarray(jnp.exp(state.log_theta[0])))
+    return context.fixed_theta
+
+
 def dense_efs_known_scale(
     fitting_data: FittingData,
     *,
@@ -1009,29 +1070,35 @@ def dense_efs_known_scale(
             "EFS initial log smoothing parameters must be finite and match penalties"
         )
     if estimated_theta:
-        accepted = _fit_state(
-            fitting_data,
-            plan,
+        request = EFSFitRequest(
             rho0,
             beta0,
-            control,
             log_theta_start=theta0,
             beta_old_init=beta_old_init,
             start_is_absent=initial_start_is_absent,
         )
     elif regular_absent_start:
-        accepted = _fit_state(
-            fitting_data,
-            plan,
-            rho0,
-            beta0,
-            control,
-            regular_start_present=False,
-        )
+        request = EFSFitRequest(rho0, beta0, regular_start_present=False)
     else:
-        # Keep the established known-scale call signature byte-for-byte for
-        # Poisson, binomial, and fixed-theta NB scripted/default paths.
-        accepted = _fit_state(fitting_data, plan, rho0, beta0, control)
+        request = EFSFitRequest(rho0, beta0)
+    return _run_efs_known_scale(
+        _dense_fit_provider(fitting_data, plan, control),
+        EFSControllerContext(
+            estimated_theta=estimated_theta, fixed_theta=_fixed_theta(fitting_data)
+        ),
+        request,
+        control,
+    )
+
+
+def _run_efs_known_scale(
+    provider: EFSFitProvider,
+    context: EFSControllerContext,
+    initial_request: EFSFitRequest,
+    control: EFSControl,
+) -> EFSResult:
+    """Run the existing known-scale EFS policy with row-independent fits."""
+    accepted = provider(initial_request)
     diagnostics = _EFSDiagnosticsAccumulator()
     diagnostics.observe_fit(accepted)
     if not accepted.valid:
@@ -1049,10 +1116,11 @@ def dense_efs_known_scale(
             score_phi_history=(),
             multiplier=1.0,
             update_residual=None,
+            context=context,
         )
         return EFSResult(
-            rho0,
-            jnp.exp(rho0),
+            initial_request.log_lambda,
+            jnp.exp(initial_request.log_lambda),
             False,
             0,
             accepted.score,
@@ -1060,7 +1128,7 @@ def dense_efs_known_scale(
             jnp.array(1.0),
             accepted.pirls_result,
             failure_label,
-            _result_theta(accepted, fitting_data),
+            _selected_provider_theta(accepted, context),
             optimizer_diagnostics=optimizer_diagnostics,
         )
 
@@ -1072,25 +1140,18 @@ def dense_efs_known_scale(
 
     def refit(rho: jax.Array, old: EFSFitState) -> EFSFitState:
         """Refit from the immutable old accepted beta/theta state only."""
-        if estimated_theta:
+        if context.estimated_theta:
             assert old.log_theta is not None
-            assert beta_old_init is not None
-            return _fit_state(
-                fitting_data,
-                plan,
-                rho,
-                old.pirls_result.coefficients,
-                control,
-                log_theta_start=old.log_theta,
-                beta_old_init=beta_old_init,
+            assert initial_request.beta_old_init is not None
+            return provider(
+                EFSFitRequest(
+                    rho,
+                    old.pirls_result.coefficients,
+                    log_theta_start=old.log_theta,
+                    beta_old_init=initial_request.beta_old_init,
+                )
             )
-        return _fit_state(
-            fitting_data,
-            plan,
-            rho,
-            old.pirls_result.coefficients,
-            control,
-        )
+        return provider(EFSFitRequest(rho, old.pirls_result.coefficients))
 
     for iteration in range(1, control.outer_limit + 1):
         raw = efs_raw_update(
@@ -1187,6 +1248,7 @@ def dense_efs_known_scale(
         score_phi_history=(),
         multiplier=multiplier,
         update_residual=update_residual,
+        context=context,
     )
     return EFSResult(
         accepted.log_lambda,
@@ -1198,7 +1260,7 @@ def dense_efs_known_scale(
         jnp.array(1.0),
         accepted.pirls_result,
         label,
-        _result_theta(accepted, fitting_data),
+        _selected_provider_theta(accepted, context),
         update_residual,
         tuple(history)[-control.history_limit :],
         multiplier,
@@ -1291,26 +1353,25 @@ def dense_efs_unknown_scale(
 
     plan = prepare_efs_statistics(fitting_data)
     if regular_source_loop and not regular_start_present:
-        accepted = _fit_state(
-            fitting_data,
-            plan,
-            rho0,
-            beta0,
-            control,
-            score_phi0,
-            regular_start_present=False,
-        )
+        request = EFSFitRequest(rho0, beta0, score_phi0, regular_start_present=False)
     else:
-        # Preserve the established adapter call shape for scripted controller
-        # tests and all regular paths with a coefficient-representable start.
-        accepted = _fit_state(
-            fitting_data,
-            plan,
-            rho0,
-            beta0,
-            control,
-            score_phi0,
-        )
+        request = EFSFitRequest(rho0, beta0, score_phi0)
+    return _run_efs_unknown_scale(
+        _dense_fit_provider(fitting_data, plan, control),
+        EFSControllerContext(),
+        request,
+        control,
+    )
+
+
+def _run_efs_unknown_scale(
+    provider: EFSFitProvider,
+    context: EFSControllerContext,
+    initial_request: EFSFitRequest,
+    control: EFSControl,
+) -> EFSResult:
+    """Run the existing scale-carrying EFS policy with row-independent fits."""
+    accepted = provider(initial_request)
     diagnostics = _EFSDiagnosticsAccumulator()
     diagnostics.observe_fit(accepted)
     if not accepted.valid:
@@ -1324,10 +1385,11 @@ def dense_efs_unknown_scale(
             score_phi_history=(),
             multiplier=1.0,
             update_residual=None,
+            context=context,
         )
         return EFSResult(
-            rho0,
-            jnp.exp(rho0),
+            initial_request.log_lambda,
+            jnp.exp(initial_request.log_lambda),
             False,
             0,
             accepted.score,
@@ -1373,13 +1435,10 @@ def dense_efs_unknown_scale(
         # point, so retaining rho's maximum is the exact nonzero component.
         original_max_step = float(np.max(np.abs(np.asarray(update_residual))))
         assert old.carried_phi is not None
-        candidate = _fit_state(
-            fitting_data,
-            plan,
-            raw.log_smoothing_trial,
-            old.pirls_result.coefficients,
-            control,
-            old.carried_phi,
+        candidate = provider(
+            EFSFitRequest(
+                raw.log_smoothing_trial, old.pirls_result.coefficients, old.carried_phi
+            )
         )
         diagnostics.observe_fit(candidate)
         if not candidate.valid:
@@ -1394,13 +1453,10 @@ def dense_efs_unknown_scale(
                 diagnostics.observe_trial(
                     old.log_lambda, raw.ratio, multiplier * 2.0, control.log_lambda_max
                 )
-                extension = _fit_state(
-                    fitting_data,
-                    plan,
-                    extension_rho,
-                    old.pirls_result.coefficients,
-                    control,
-                    old.carried_phi,
+                extension = provider(
+                    EFSFitRequest(
+                        extension_rho, old.pirls_result.coefficients, old.carried_phi
+                    )
                 )
                 diagnostics.observe_fit(extension)
                 if extension.valid and float(np.asarray(extension.score)) < float(
@@ -1431,13 +1487,8 @@ def dense_efs_unknown_scale(
                 diagnostics.observe_trial(
                     old.log_lambda, raw.ratio, multiplier, control.log_lambda_max
                 )
-                candidate = _fit_state(
-                    fitting_data,
-                    plan,
-                    rho,
-                    old.pirls_result.coefficients,
-                    control,
-                    old.carried_phi,
+                candidate = provider(
+                    EFSFitRequest(rho, old.pirls_result.coefficients, old.carried_phi)
                 )
                 diagnostics.observe_fit(candidate)
                 if not candidate.valid:
@@ -1482,6 +1533,7 @@ def dense_efs_unknown_scale(
         score_phi_history=tuple(score_phi_history)[-control.history_limit :],
         multiplier=multiplier,
         update_residual=update_residual,
+        context=context,
     )
     return EFSResult(
         accepted.log_lambda,

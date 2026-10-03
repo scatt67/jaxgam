@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jax
 import numpy as np
@@ -21,6 +21,7 @@ from jaxgam.execution.qr import PositiveQRState, qr_update
 from jaxgam.execution.signed_qr import SignedQRState, signed_qr_update, solve_signed_qr
 from jaxgam.execution.stream import StreamPIRLSControl, _source_batches
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.family_execution import (
     FamilyExecutionLineage,
     FamilyExecutionParameters,
@@ -38,6 +39,35 @@ from jaxgam.fitting.signed_qr import SignedQRCoefficientFactor
 from jaxgam.fitting.state import PivotedQRCoefficientFactor, StreamFitState
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.fitting_prepare import qr_penalty_roots
+
+
+def _source_regular_deviance(
+    family: ExponentialFamily,
+    y: np.ndarray,
+    mu: np.ndarray,
+    weight: np.ndarray,
+) -> float:
+    """Evaluate stats-family dev.resids without reporting-domain clipping.
+
+    This is used only for gam.fit3's explicit recovery-anchor ``old.pdev``.
+    Accepted trials retain the existing checked execution primitive.
+    """
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        if isinstance(family, Gaussian):
+            contribution = weight * (y - mu) ** 2
+        elif isinstance(family, Poisson):
+            ratio = np.where(y == 0.0, 1.0, y / mu)
+            contribution = 2.0 * weight * (y * np.log(ratio) - (y - mu))
+        elif isinstance(family, Binomial):
+            left = np.where(y == 0.0, 1.0, y / mu)
+            right = np.where(y == 1.0, 1.0, (1.0 - y) / (1.0 - mu))
+            contribution = 2.0 * weight * (y * np.log(left) + (1.0 - y) * np.log(right))
+        elif isinstance(family, Gamma):
+            ratio = np.where(y == 0.0, 1.0, y / mu)
+            contribution = -2.0 * weight * (np.log(ratio) - (y - mu) / mu)
+        else:
+            return float(np.asarray(family.dev_resids(y, mu, weight)))
+    return float(np.sum(contribution))
 
 
 @dataclass(frozen=True)
@@ -375,13 +405,16 @@ def fit_regular_streamed_pirls(
     control: StreamPIRLSControl | None = None,
     device: jax.Device | None = None,
     initial_coefficients: np.ndarray | None = None,
+    null_coefficients: np.ndarray | None = None,
 ) -> RegularStreamResult:
     """Fit a regular fixed-sp/trial-scale system with source initialization.
 
     This internal engine requires unpadded prepared batches. A retained
     p-vector start is expressed in local-D fitting coordinates. The separate
     source null anchor is projected in public coordinates with R's natural
-    column policy, then converted to local-D coordinates.
+    column policy, then converted to local-D coordinates. An explicit finite
+    fitting-coordinate ``null_coefficients`` vector overrides that projection
+    for source callers whose outer dispatch owns a distinct recovery anchor.
     Unknown-scale fits require an explicit trial score scale; Fletcher
     reporting does not profile an outer REML scale. Public release and the
     all-family outer controller remain separate validation milestones.
@@ -442,6 +475,26 @@ def fit_regular_streamed_pirls(
     scans = 0
     batches_scanned = 0
     p = prepared.n_coef
+    explicit_null = None
+    if null_coefficients is not None:
+        if not isinstance(null_coefficients, np.ndarray):
+            raise ValueError("null_coefficients must be a finite fitting p-vector")
+        null_view = null_coefficients
+        if (
+            null_view.shape != (p,)
+            or not np.issubdtype(null_view.dtype, np.number)
+            or np.iscomplexobj(null_view)
+        ):
+            raise ValueError("null_coefficients must be a finite fitting p-vector")
+        ledger = replace(
+            ledger,
+            host_coefficient_bytes=ledger.host_coefficient_bytes + 8 * p,
+        )
+        if ledger.required_bytes > maximum_bytes:
+            raise MemoryError("explicit regular null anchor exceeds maximum_bytes")
+        explicit_null = np.array(null_view, dtype=float, copy=True)
+        if not np.all(np.isfinite(explicit_null)):
+            raise ValueError("null_coefficients must be a finite fitting p-vector")
     retained_start = None
     if initial_coefficients is not None:
         retained_start = np.array(initial_coefficients, dtype=float, copy=True)
@@ -471,7 +524,7 @@ def fit_regular_streamed_pirls(
             raise FloatingPointError("regular penalized deviance is nonfinite")
         return value
 
-    def trial(beta: np.ndarray) -> tuple[float, bool]:
+    def trial(beta: np.ndarray, *, source_anchor: bool = False) -> tuple[float, bool]:
         nonlocal scans, batches_scanned
         if not np.all(np.isfinite(beta)):
             return np.inf, False
@@ -482,19 +535,28 @@ def fit_regular_streamed_pirls(
         ):
             X = checked_X(batch)
             lineage.validate(prepared, family)
-            value, admissible = regular_trial_deviance(
-                jax.device_put(X, device),
-                jax.device_put(y, device),
-                jax.device_put(weight, device),
-                jax.device_put(offset, device),
-                jax.device_put(valid, device),
-                jax.device_put(beta, device),
-                parameters,
-                family,
-                lineage.context,
-            )
-            deviance += float(np.asarray(value))
-            domain = domain and bool(np.asarray(admissible))
+            if source_anchor:
+                normalized_y = family.execution_initial_response_cpu(y, weight)
+                eta = X @ beta + offset
+                mu = np.asarray(family.link.inverse(eta))
+                deviance += _source_regular_deviance(family, normalized_y, mu, weight)
+                domain = domain and bool(
+                    np.all(family.valid_eta(eta)) and np.all(family.valid_mu(mu))
+                )
+            else:
+                value, admissible = regular_trial_deviance(
+                    jax.device_put(X, device),
+                    jax.device_put(y, device),
+                    jax.device_put(weight, device),
+                    jax.device_put(offset, device),
+                    jax.device_put(valid, device),
+                    jax.device_put(beta, device),
+                    parameters,
+                    family,
+                    lineage.context,
+                )
+                deviance += float(np.asarray(value))
+                domain = domain and bool(np.asarray(admissible))
             batches_scanned += 1
         scans += 1
         return deviance, domain and np.isfinite(deviance)
@@ -512,10 +574,11 @@ def fit_regular_streamed_pirls(
         rows = len(valid)
         if rows > ledger.batch_rows:
             raise ValueError("regular source exceeds prospective batch cap")
-        X_public = prepared.evaluate_batch(batch) if rows else np.empty((0, p))
-        if X_public.shape != (rows, p) or not np.all(np.isfinite(X_public)):
-            raise ValueError("finite matching public null-anchor design required")
-        null_qr = qr_update(null_qr, X_public, np.ones(rows), n_coef=p)
+        if explicit_null is None:
+            X_public = prepared.evaluate_batch(batch) if rows else np.empty((0, p))
+            if X_public.shape != (rows, p) or not np.all(np.isfinite(X_public)):
+                raise ValueError("finite matching public null-anchor design required")
+            null_qr = qr_update(null_qr, X_public, np.ones(rows), n_coef=p)
         normalized_y = family.execution_initial_response_cpu(y, weight)
         if (
             not family.response_support.check(normalized_y)
@@ -544,12 +607,15 @@ def fit_regular_streamed_pirls(
     constant_eta = float(
         np.asarray(family.link.initial_link_cpu(np.asarray(sum_y / count)))
     )
-    assert null_qr is not None
-    null_public = project_null_coefficients(null_qr, constant_eta)
-    beta = np.array(null_public.coefficients, copy=True)
-    for block in prepared.fitting.penalty_structure.blocks:
-        where = slice(block.start, block.stop)
-        beta[where] = np.linalg.solve(block.transform.dense(), beta[where])
+    if explicit_null is not None:
+        beta = explicit_null
+    else:
+        assert null_qr is not None
+        null_public = project_null_coefficients(null_qr, constant_eta)
+        beta = np.array(null_public.coefficients, copy=True)
+        for block in prepared.fitting.penalty_structure.blocks:
+            where = slice(block.start, block.stop)
+            beta[where] = np.linalg.solve(block.transform.dense(), beta[where])
     if not np.all(np.isfinite(beta)):
         raise FloatingPointError("regular null coefficient is nonfinite")
 
@@ -588,10 +654,20 @@ def fit_regular_streamed_pirls(
             eta = 0.9 * eta + 0.1 * anchor
         return eta
 
-    current_deviance, domain = trial(beta)
-    if not domain:
-        raise ValueError("regular null coefficient anchor leaves the family domain")
-    old_pdev = penalized(beta, current_deviance)
+    current_deviance, domain = trial(beta, source_anchor=explicit_null is not None)
+    # gam.fit3 evaluates dev.resids at its recovery anchor without an upfront
+    # validmu check. A positive-infinite Poisson zero-anchor baseline is usable:
+    # the first working system still starts from mustart. Preserve the raw
+    # source value rather than replacing every invalid-domain result by +Inf.
+    # NaN/-Inf cannot enter the source divergence arithmetic coherently.
+    if explicit_null is None:
+        if not domain:
+            raise ValueError("regular null coefficient anchor leaves the family domain")
+        old_pdev = penalized(beta, current_deviance)
+    else:
+        old_pdev = float(current_deviance + beta @ penalty_apply(beta))
+    if np.isnan(old_pdev) or np.isneginf(old_pdev):
+        raise ValueError("regular null coefficient baseline is inadmissible")
     history = [old_pdev]
     converged = False
     line_search_failed = False

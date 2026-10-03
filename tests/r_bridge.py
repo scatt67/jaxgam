@@ -671,7 +671,112 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
             null_coef,
             scale,
             theta,
+            skip_offset_null_deviance=False,
         )
+
+    def fit_efs_selected_before_offset_null_deviance(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        *,
+        weights: str | None = None,
+        offset: str | None = None,
+        controls: dict[str, float] | None = None,
+        initial_smoothing: np.ndarray | None = None,
+        initial_scale: float | None = None,
+        scale: float = -1.0,
+        theta: float | None = None,
+    ) -> dict[str, Any]:
+        """Return a selected EFS fit before offset null-deviance postprocessing.
+
+        Pinned ``estimate.gam`` refits an offset-only GLM after the complete
+        EFS fit. Some bounded noncanonical links reject that auxiliary GLM
+        even though ``efsudr`` and ``gam.fit3.post.proc`` returned a valid
+        selected model. This oracle copies the pinned source and disables
+        only that post-fit assignment. Callers must separately preserve the
+        public ``gam`` rejection as boundary evidence.
+        """
+        self._require_pinned_efs_versions()
+        return self._fit_efs_subprocess(
+            formula,
+            data,
+            family,
+            weights,
+            offset,
+            controls,
+            initial_smoothing,
+            initial_scale,
+            False,
+            scale,
+            theta,
+            skip_offset_null_deviance=True,
+        )
+
+    def nb_theta_diagnostics(
+        self,
+        start: np.ndarray,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weight: np.ndarray,
+        link: str = "log",
+    ) -> dict[str, np.ndarray]:
+        """Read source contractions and the traced theta path through pinned R."""
+        self._require_pinned_efs_versions()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            for name, values in (
+                ("start", start),
+                ("y", y),
+                ("mu", mu),
+                ("weight", weight),
+            ):
+                np.asarray(values, dtype="<f8").tofile(path / f"{name}.bin")
+            script = r"""
+          stopifnot(as.character(getRversion())=="4.5.2",
+                    as.character(packageVersion("mgcv"))=="1.9.3")
+          args <- commandArgs(TRUE); d <- args[1]; link <- args[2]; n <- as.integer(args[3])
+          vec <- function(name,n) readBin(file.path(d,paste0(name,".bin")),
+                                          double(),n=n,size=8,endian="little")
+          start <- vec("start",1); y <- vec("y",n); mu <- vec("mu",n)
+          w <- vec("weight",n)
+          fam <- do.call(mgcv::nb,list(theta=-exp(start),link=link))
+          fields <- function(theta) {
+            ls <- fam$ls(y,w=w,theta=theta,scale=1)
+            dd <- fam$Dd(y,mu,theta,wt=w,level=2)
+            c(sum(fam$dev.resids(y,mu,w,theta))/2-ls$ls,
+              sum(dd$Dth)/2-ls$lsth1[1],sum(dd$Dth2)/2-as.matrix(ls$lsth2)[1,1])
+          }
+          theta_path <- start; halving_count <- 0L
+          lines <- deparse(mgcv:::estimate.theta,width.cutoff=500L)
+          lines[1] <- sub("function","traced <- function",lines[1],fixed=TRUE)
+          anchor <- "theta <- theta + step"
+          stopifnot(sum(grepl(anchor,lines,fixed=TRUE))==1L)
+          insertion <- paste0(anchor,"; theta_path <<- c(theta_path,theta)")
+          lines <- sub(anchor,insertion,lines,fixed=TRUE)
+          halving_anchor <- "iter <- iter + 1"
+          stopifnot(sum(grepl(halving_anchor,lines,fixed=TRUE))==1L)
+          insertion <- paste0(halving_anchor,"; halving_count <<- halving_count+1L")
+          lines <- sub(halving_anchor,insertion,lines,fixed=TRUE)
+          eval(parse(text=lines))
+          end <- traced(start,fam,y,mu,scale=1,wt=w)
+          result <- list(initial=fields(start),final=c(end,fields(end)),
+                         path=theta_path,halvings=halving_count)
+          for (name in names(result))
+            writeBin(as.double(result[[name]]),
+                     file.path(d,paste0(name,".out")),size=8,endian="little")
+            """
+            subprocess.run(
+                ["Rscript", "--vanilla", "-e", script, directory, link, str(len(y))],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            return {
+                name: np.fromfile(path / f"{name}.out", dtype="<f8")
+                for name in ("initial", "final", "path", "halvings")
+            }
 
     def efs_nb_working_factors(
         self,
@@ -1170,6 +1275,8 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
         null_coef: bool,
         scale: float,
         theta: float | None,
+        *,
+        skip_offset_null_deviance: bool,
     ) -> dict[str, Any]:
         resolved, initial = self._validate_efs_inputs(
             data, weights, offset, controls, initial_smoothing
@@ -1192,8 +1299,11 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
             if offset is not None:
                 setup_arguments.append(f"offset=data[[{offset!r}]]")
             setup_suffix = ", " + ", ".join(setup_arguments) if setup_arguments else ""
+            gam_function = (
+                "oracle_env$gam.selected" if skip_offset_null_deviance else "gam"
+            )
             null_coef_prefix = (
-                f"G <- gam({formula}, data=data, family={r_family}, fit=FALSE{setup_suffix})"
+                f"G <- {gam_function}({formula}, data=data, family={r_family}, fit=FALSE{setup_suffix})"
                 if null_coef
                 else ""
             )
@@ -1217,12 +1327,31 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
                 "reml_scale": os.path.join(tmpdir, "reml_scale.txt"),
                 "theta": os.path.join(tmpdir, "theta.txt"),
             }
+            source_prefix = []
+            if skip_offset_null_deviance:
+                source_prefix = [
+                    "oracle_env <- new.env(parent=asNamespace('mgcv'))",
+                    "estimate_source <- capture.output(mgcv:::estimate.gam)",
+                    "estimate_source <- estimate_source[seq_len(tail(which(estimate_source == '}'), 1L))]",
+                    "estimate_source[1] <- sub('^function', 'estimate.gam <- function', estimate_source[1])",
+                    "null_anchor <- '    if (!inherits(G$family, \"extended.family\") && G$intercept && '",
+                    "if (sum(estimate_source == null_anchor) != 1L) stop('pinned estimate.gam null-deviance anchor changed')",
+                    "null_assignment <- '        object$null.deviance <- glm(object$y ~ offset(G$offset), '",
+                    "if (sum(estimate_source == null_assignment) != 1L) stop('pinned estimate.gam null-deviance assignment changed')",
+                    "estimate_source[estimate_source == null_anchor] <- '    if (FALSE && '",
+                    "eval(parse(text=estimate_source), envir=oracle_env)",
+                    "gam_source <- capture.output(mgcv:::gam)",
+                    "gam_source <- gam_source[seq_len(tail(which(gam_source == '}'), 1L))]",
+                    "gam_source[1] <- sub('^function', 'gam.selected <- function', gam_source[1])",
+                    "eval(parse(text=gam_source), envir=oracle_env)",
+                ]
             script = "\n".join(
                 [
                     "library(mgcv)",
                     f"data <- read.csv({data_path!r})",
+                    *source_prefix,
                     null_coef_prefix,
-                    f"model <- gam({formula}, data=data, family={r_family}, {r_arguments}{null_coef_argument})",
+                    f"model <- {gam_function}({formula}, data=data, family={r_family}, {r_arguments}{null_coef_argument})",
                     "s <- summary(model)",
                     f"write.csv(data.frame(v=as.numeric(coef(model))), {outputs['coefficients']!r}, row.names=FALSE)",
                     f"write.csv(data.frame(v=as.numeric(fitted(model))), {outputs['fitted']!r}, row.names=FALSE)",
@@ -1250,7 +1379,7 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
             def scalar(key: str) -> float:
                 return float(Path(outputs[key]).read_text(encoding="utf-8").strip())
 
-            return {
+            result = {
                 "coefficients": vector("coefficients"),
                 "fitted_values": vector("fitted"),
                 "smoothing_params": vector("sp"),
@@ -1274,6 +1403,9 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
                 "controls": resolved,
                 "provenance": self._efs_provenance(data),
             }
+            if skip_offset_null_deviance:
+                result["oracle_stage"] = "selected_before_offset_null_deviance"
+            return result
 
     def _efs_diagnostics_subprocess(
         self,
