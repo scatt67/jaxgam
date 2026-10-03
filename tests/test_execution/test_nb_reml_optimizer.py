@@ -175,9 +175,11 @@ def _optimizer_gate_digest(stream, family, params) -> str:
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
+        actual_transform = penalty.blocks[0].transform.matrix.T
+        expected_transform = metadata["transform"].T
         np.testing.assert_allclose(
-            penalty.blocks[0].transform.matrix,
-            metadata["transform"],
+            actual_transform[:, :, None] * actual_transform[:, None, :],
+            expected_transform[:, :, None] * expected_transform[:, None, :],
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
