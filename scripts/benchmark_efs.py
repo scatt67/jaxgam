@@ -656,7 +656,10 @@ def _comparison_selection(config: dict[str, Any], tolerance: str) -> dict[str, A
     return {
         "name": tolerance,
         "reviewed_scope": approved,
-        "review_record": ("docs/scale_jaxgam/efs_benchmark_validation_2026-09-17.md"),
+        "review_basis": (
+            "Five input, oracle, adapter, and control correction passes did not "
+            "reach STRICT for this exact pinned-R smoke case."
+        ),
     }
 
 
