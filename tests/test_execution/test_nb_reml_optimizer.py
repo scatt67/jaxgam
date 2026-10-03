@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import asdict, replace
-from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -31,7 +28,7 @@ from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.fitting_prepare import qr_penalty_roots
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
-from tests.helpers import _AssertCollector, r_available
+from tests.helpers import _AssertCollector, nb_optimizer_case_data, r_available
 from tests.r_bridge import RBridge
 from tests.test_execution.test_nb_reml import (
     _CONTROL,
@@ -61,62 +58,16 @@ _OPTIMIZER_PIRLS_CONTROL = type(_CONTROL)(
     max_iter=200,
 )
 _OPTIMIZER_MAXIMUM_BYTES = 64_000_000
-_OPTIMIZER_REVIEW_SHA256 = (
-    "0528a07a8c1b12d4ae628b8063cabd1a27d656aac42bff53a580c4e78327baba"
-)
-_OPTIMIZER_INPUT_SHA256 = (
-    "6f78b9ac6c859994b5eb9fcc0a3a172b1810f77472e2d9021e9dc1cabac4f558"
-)
-_OPTIMIZER_CSV_SHA256 = (
-    "525561fc0ac0702e3d95574ab8edb8252b396a69d9abde0f2e025b704f9ccd58"
-)
-_OPTIMIZER_FIXTURE_PATH = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "pr82_nb_optimizer_seed8803.csv"
-)
-_OPTIMIZER_MODEL_METADATA_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "fixtures"
-    / "pr82_nb_optimizer_model_metadata.npz"
-)
-_OPTIMIZER_MODEL_METADATA_SHA256 = (
-    "103185a4abf21ec23848ed8a1468b840874243e4ad87fa6edf96b00a1f55ff0f"
-)
-_SELECTED_GATE_DIGESTS = {
-    ("log", False): "5817af18b2bd67b9fd1869c65db36d2d3d316a161b43669edf1a34b7663872a5",
-    ("log", True): "0d0c601e5be809ba9e0705d06fc14abd973dea9ffa488905e7988c7e0fc105e5",
-    (
-        "identity",
-        False,
-    ): "c014ff97560384d87f58cd49f70e1f896e3f5f07829e7d249f387fae6713f336",
-    (
-        "identity",
-        True,
-    ): "d726eec69ff706a51b50ccb2961f2e7ea08ccfcb1b0d79c9899367675ffab057",
-    ("sqrt", False): "2c52cd9c4b59b24ea21517975863470d6833b1cc0d37bd91640e3b1fdd0a537f",
-    ("sqrt", True): "0d1a730dce4274a258af0e837564989a66143c7a1b99742a7b8c0c3f92b552fb",
-}
+# These controls and the named seeded model are the reviewed selection profile.
+# A candidate test must match them before a field-specific MODERATE comparison.
+_REVIEWED_OPTIMIZER_CONTROL = _OPTIMIZER_CONTROL
+_REVIEWED_PIRLS_CONTROL = _OPTIMIZER_PIRLS_CONTROL
 
 
 def _optimizer_case(link: str, *, estimated: bool, smooth: bool = True):
-    assert hashlib.sha256(_OPTIMIZER_FIXTURE_PATH.read_bytes()).hexdigest() == (
-        _OPTIMIZER_CSV_SHA256
-    )
-    saved = pd.read_csv(_OPTIMIZER_FIXTURE_PATH, float_precision="round_trip")
-    x = saved.x.to_numpy()
-    y = saved.y.to_numpy(dtype=np.float64)
-    weight = saved.weight.to_numpy()
-    offset = saved.offset.to_numpy()
-    family = NegativeBinomial(
-        theta=_THETA,
-        fixed=not estimated,
-        link=link,
-    )
-    source = DataFrameRowSource(
-        pd.DataFrame({"x": x, "y": y}),
-        response="y",
-        weights=weight,
-        offset=offset,
-    )
+    data, weight, offset = nb_optimizer_case_data()
+    family = NegativeBinomial(theta=_THETA, fixed=not estimated, link=link)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
     prepared = prepare_model(
         parse_formula('y ~ s(x, bs="cr", k=8)' if smooth else "y ~ x"),
         source,
@@ -129,20 +80,36 @@ def _optimizer_case(link: str, *, estimated: bool, smooth: bool = True):
     return StreamDesign(prepared, _CountedSource(source)), family, params
 
 
-def _optimizer_gate_digest(stream, family, params) -> str:
+def _assert_optimizer_case(stream, family, params, *, link, estimated) -> None:
+    """Bind MODERATE only to the original generated model and controls."""
     source = getattr(stream.source, "source", stream.source)
-    batch = next(source.scan(stream.prepared.n_obs))
-    raw = hashlib.sha256()
-    for name, value in (
-        ("x", batch.columns["x"]),
-        ("y", batch.y),
-        ("weight", batch.weight),
-        ("offset", batch.offset),
+    data, weight, offset = nb_optimizer_case_data()
+    expected_source = DataFrameRowSource(
+        data, response="y", weights=weight, offset=offset
+    )
+    assert stream.prepared.n_obs == source.n_rows == expected_source.n_rows == 180
+    assert source.fingerprint() == expected_source.fingerprint()
+    actual = next(source.scan(stream.prepared.n_obs))
+    for observed, expected in (
+        (actual.columns["x"], data.x.to_numpy()),
+        (actual.y, data.y.to_numpy()),
+        (actual.weight, weight),
+        (actual.offset, offset),
     ):
-        array = np.asarray(value, dtype="<f8")
-        raw.update(name.encode())
-        raw.update(array.tobytes())
-    assert raw.hexdigest() == _OPTIMIZER_INPUT_SHA256
+        np.testing.assert_array_equal(observed, expected)
+    assert type(family) is NegativeBinomial
+    assert family.family_name == "nb"
+    expected_family = NegativeBinomial(theta=_THETA, fixed=not estimated, link=link)
+    assert type(family.link) is type(expected_family.link)
+    assert family.n_theta == int(estimated)
+    np.testing.assert_array_equal(family.get_theta(transformed=True), [_THETA])
+    assert len(params) == 1 + family.n_theta
+    np.testing.assert_array_equal(np.asarray(params)[0], np.log(0.5))
+    if family.n_theta:
+        np.testing.assert_array_equal(np.asarray(params)[-1], np.log(_THETA))
+    assert _OPTIMIZER_CONTROL == _REVIEWED_OPTIMIZER_CONTROL
+    assert _OPTIMIZER_PIRLS_CONTROL == _REVIEWED_PIRLS_CONTROL
+    assert _OPTIMIZER_MAXIMUM_BYTES == 64_000_000
     smooth_blocks = tuple(
         block
         for block in stream.prepared.predict_spec.coef_map.terms
@@ -150,91 +117,40 @@ def _optimizer_gate_digest(stream, family, params) -> str:
     )
     assert len(smooth_blocks) == 1
     smooth = smooth_blocks[0].smooth.spec
-    assert len(smooth.variables) == 1
+    assert tuple(smooth.variables) == ("x",)
+    assert smooth.bs == "cr"
+    assert smooth.k == 8
     assert smooth.by is None
     assert not smooth.extra_args
-    formula = (
-        f"{stream.prepared.response} ~ s({smooth.variables[0]}, "
-        f'bs="{smooth.bs}", k={smooth.k})'
-    )
-    review = raw.copy()
-    review.update(formula.encode())
-    review.update(float(_THETA).hex().encode())
-    if formula == 'y ~ s(x, bs="cr", k=8)':
-        assert review.hexdigest() == _OPTIMIZER_REVIEW_SHA256
+    assert stream.prepared.response == "y"
+    assert stream.prepared.n_coef == 8
     penalty = stream.prepared.fitting.penalty_structure
-    assert hashlib.sha256(_OPTIMIZER_MODEL_METADATA_PATH.read_bytes()).hexdigest() == (
-        _OPTIMIZER_MODEL_METADATA_SHA256
-    )
+    assert penalty.n_penalties == 1
     assert len(penalty.blocks) == 1
     assert len(penalty.blocks[0].local_penalties) == 1
-    with np.load(_OPTIMIZER_MODEL_METADATA_PATH, allow_pickle=False) as metadata:
-        np.testing.assert_allclose(
-            penalty.blocks[0].local_penalties[0].matrix,
-            metadata["penalty"],
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-        actual_transform = penalty.blocks[0].transform.matrix.T
-        expected_transform = metadata["transform"].T
-        np.testing.assert_allclose(
-            actual_transform[:, :, None] * actual_transform[:, None, :],
-            expected_transform[:, :, None] * expected_transform[:, None, :],
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-    penalty_coordinates = [
-        {
-            "local_penalties": [
-                {
-                    "shape": item.matrix.shape,
-                    "type": type(item).__qualname__,
-                }
-                for item in block.local_penalties
-            ],
-            "ranks": block.ranks,
-            "sp_indices": block.sp_indices,
-            "start": block.start,
-            "stop": block.stop,
-            "transform_shape": block.transform.matrix.shape,
-            "transform_type": type(block.transform).__qualname__,
-        }
-        for block in penalty.blocks
-    ]
-    payload = {
-        "basis_fingerprint": stream.prepared.basis_fingerprint,
-        "family": family.family_name,
-        "family_class": type(family).__qualname__,
-        "family_n_theta": family.n_theta,
-        "family_theta_hex": [
-            float(value).hex() for value in family.get_theta(transformed=False)
-        ],
-        "formula": formula,
-        "initial_params_hex": [float(value).hex() for value in params],
-        "link": type(family.link).__qualname__,
-        "maximum_bytes": _OPTIMIZER_MAXIMUM_BYTES,
-        "model_metadata_sha256": _OPTIMIZER_MODEL_METADATA_SHA256,
-        "n_coef": stream.prepared.n_coef,
-        "n_obs": stream.prepared.n_obs,
-        "optimizer_control": asdict(_OPTIMIZER_CONTROL),
-        "penalty_coordinates": penalty_coordinates,
-        "pirls_control": asdict(_OPTIMIZER_PIRLS_CONTROL),
-        "r_controls": {
-            "epsilon": 1e-11,
-            "max_iter": 200,
-            "newton_conv_tol": 1e-6,
-            "newton_max_half": 30,
-            "newton_max_n_step": 5,
-            "newton_max_s_step": 2,
-        },
-        "review_fixture_sha256": review.hexdigest(),
-        "source_fingerprint": stream.prepared.source_fingerprint,
-        "theta_hex": float(_THETA).hex(),
-    }
-    digest = hashlib.sha256()
-    digest.update(raw.digest())
-    digest.update(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
-    return digest.hexdigest()
+    assert penalty.blocks[0].ranks == (6,)
+    # A fresh preparation of the same generated rows protects local-D basis,
+    # penalty and transform coordinates without retaining numeric snapshots.
+    reference = prepare_model(
+        parse_formula('y ~ s(x, bs="cr", k=8)'), expected_source, family=family
+    )
+    assert stream.prepared.basis_fingerprint == reference.basis_fingerprint
+    np.testing.assert_allclose(
+        penalty.blocks[0].local_penalties[0].matrix,
+        reference.fitting.penalty_structure.blocks[0].local_penalties[0].matrix,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    actual_transform = penalty.blocks[0].transform.matrix.T
+    expected_transform = reference.fitting.penalty_structure.blocks[
+        0
+    ].transform.matrix.T
+    np.testing.assert_allclose(
+        actual_transform[:, :, None] * actual_transform[:, None, :],
+        expected_transform[:, :, None] * expected_transform[:, None, :],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
 
 
 def _optimize(link: str, *, estimated: bool, pin_lambda: bool = False):
@@ -473,10 +389,7 @@ def test_nb_optimizer_independently_selected_fit_matches_pinned_outer_source(
 ):
     """The reviewed six-cell outer fit retains STRICT score agreement."""
     stream, family, initial, result = _optimize(link, estimated=estimated)
-    assert (
-        _optimizer_gate_digest(stream, family, initial)
-        == _SELECTED_GATE_DIGESTS[(link, estimated)]
-    )
+    _assert_optimizer_case(stream, family, initial, link=link, estimated=estimated)
     expected = _pinned_outer_reference(
         stream,
         link,
@@ -567,19 +480,27 @@ def test_selected_fit_moderate_gate_binds_input_model_start_and_controls(
     monkeypatch,
 ):
     stream, family, initial = _optimizer_case("log", estimated=True)
-    expected = _SELECTED_GATE_DIGESTS[("log", True)]
-    assert _optimizer_gate_digest(stream, family, initial) == expected
+    _assert_optimizer_case(stream, family, initial, link="log", estimated=True)
 
     changed_start = initial.copy()
     changed_start[0] = np.nextafter(changed_start[0], np.inf)
-    assert _optimizer_gate_digest(stream, family, changed_start) != expected
+    with pytest.raises(AssertionError):
+        _assert_optimizer_case(
+            stream, family, changed_start, link="log", estimated=True
+        )
+
+    with pytest.raises(AssertionError):
+        _assert_optimizer_case(stream, family, initial, link="sqrt", estimated=True)
+    with pytest.raises(AssertionError):
+        _assert_optimizer_case(stream, family, initial, link="log", estimated=False)
 
     with monkeypatch.context() as control_patch:
         control_patch.setattr(
             __name__ + "._OPTIMIZER_CONTROL",
             replace(_OPTIMIZER_CONTROL, ftol=1e-13),
         )
-        assert _optimizer_gate_digest(stream, family, initial) != expected
+        with pytest.raises(AssertionError):
+            _assert_optimizer_case(stream, family, initial, link="log", estimated=True)
 
     source = getattr(stream.source, "source", stream.source)
     batch = next(source.scan(stream.prepared.n_obs))
@@ -600,7 +521,9 @@ def test_selected_fit_moderate_gate_binds_input_model_start_and_controls(
         changed_source,
     )
     with pytest.raises(AssertionError):
-        _optimizer_gate_digest(changed_stream, family, initial)
+        _assert_optimizer_case(
+            changed_stream, family, initial, link="log", estimated=True
+        )
 
     changed_basis_source = DataFrameRowSource(
         pd.DataFrame({"x": batch.columns["x"], "y": batch.y}),
@@ -617,7 +540,35 @@ def test_selected_fit_moderate_gate_binds_input_model_start_and_controls(
         changed_basis_source,
     )
     with pytest.raises(AssertionError):
-        _optimizer_gate_digest(changed_basis_stream, family, initial)
+        _assert_optimizer_case(
+            changed_basis_stream, family, initial, link="log", estimated=True
+        )
+
+
+@pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
+def test_nb_optimizer_generated_basis_and_penalty_match_live_pinned_r():
+    """Validate model coordinates through gam.setup instead of saved matrices."""
+    stream, family, initial = _optimizer_case("log", estimated=True)
+    _assert_optimizer_case(stream, family, initial, link="log", estimated=True)
+    source = getattr(stream.source, "source", stream.source)
+    batch = next(source.scan(stream.prepared.n_obs))
+    data = pd.DataFrame({"x": batch.columns["x"], "y": batch.y})
+    expected_X, expected_S, metadata = RBridge(mode="rpy2").nb_cubic_setup(
+        data, batch.weight, batch.offset
+    )
+    np.testing.assert_array_equal(metadata, [2.0, 6.0])
+    np.testing.assert_allclose(
+        stream.prepared.evaluate_batch(batch),
+        expected_X,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        stream.prepared.penalties.blocks[0].local_penalties[0].matrix,
+        expected_S,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
 
 
 @pytest.mark.parametrize("estimated", [False, True], ids=["fixed", "dynamic"])

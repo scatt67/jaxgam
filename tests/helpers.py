@@ -48,6 +48,19 @@ def nb_theta_six_row_case(variant: str) -> dict[str, object]:
     }
 
 
+def nb_optimizer_case_data() -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """Recreate the seeded weighted NB model used by the exact outer gates."""
+    rng = np.random.default_rng(8803)
+    x = np.linspace(-1.0, 1.0, 180)
+    offset = 0.12 * np.cos(2.0 * x)
+    mu = np.exp(1.0 + 1.1 * np.sin(3.2 * x) + 0.35 * np.cos(6.0 * x) + offset)
+    theta = 2.7
+    y = rng.negative_binomial(theta, theta / (theta + mu)).astype(float)
+    weight = 0.7 + 0.6 * rng.random(len(x))
+    weight[::29] = 0.0
+    return pd.DataFrame({"x": x, "y": y}), weight, offset
+
+
 # ---------------------------------------------------------------------------
 # R bridge helpers
 # ---------------------------------------------------------------------------
