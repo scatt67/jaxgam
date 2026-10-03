@@ -8,3 +8,21 @@ site/
 .coverage
 docker/renv/library/
 scratch/*
+
+# Generate test inputs in code and obtain reference results from RBridge.
+/tests/fixtures/
+# Local investigation artifacts are not source files.
+/scripts/review_*
+/scripts/*smoke*.py
+/docs/scale_jaxgam/evidence/
+/docs/scale_jaxgam/resume_evidence_*/
+/docs/scale_jaxgam/efs_benchmark_artifacts/
+/docs/scale_jaxgam/*.json
+/docs/scale_jaxgam/*.jsonl
+/docs/scale_jaxgam/*.npz
+/docs/scale_jaxgam/*.npy
+/docs/scale_jaxgam/*.log
+/docs/scale_jaxgam/*_review*.md
+/docs/scale_jaxgam/*_observation_*.md
+/docs/scale_jaxgam/*_validation_*.md
+/docs/scale_jaxgam/*_handoff_*.md
