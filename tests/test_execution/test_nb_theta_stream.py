@@ -1,5 +1,9 @@
 """Global conditional theta Newton and its in-PIRLS source timing."""
 
+import subprocess
+import tempfile
+from pathlib import Path
+
 import jax
 import numpy as np
 import pytest
@@ -17,7 +21,8 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionParameters,
 )
 from jaxgam.formula.fitting_prepare import qr_penalty_roots
-from tests.helpers import _AssertCollector, r_available
+from tests.helpers import _AssertCollector, nb_theta_six_row_case, r_available
+from tests.r_bridge import RBridge
 from tests.test_execution.test_nb_stream import _fit, _fixture
 from tests.tolerances import MODERATE, STRICT
 
@@ -545,10 +550,27 @@ def test_no_intercept_null_projection_counts_zero_priors_and_releases_qr(
 
 
 def _pinned_six_row_theta(start, y, mu, weight, link):
-    """Binary source contractions and a traced unmodified theta update loop."""
-    ro = pytest.importorskip("rpy2.robjects")
-    function = ro.r("""function(start,y,mu,w,link) {
-      stopifnot(as.character(getRversion())=="4.5.2",packageVersion("mgcv")==package_version("1.9.3"))
+    """Read source contractions and the traced theta path through pinned R."""
+    bridge = RBridge(mode="subprocess")
+    valid, reason = bridge.check_versions()
+    assert valid, reason
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory)
+        for name, values in (
+            ("start", start),
+            ("y", y),
+            ("mu", mu),
+            ("weight", weight),
+        ):
+            np.asarray(values, dtype="<f8").tofile(path / f"{name}.bin")
+        script = r"""
+      stopifnot(as.character(getRversion())=="4.5.2",
+                as.character(packageVersion("mgcv"))=="1.9.3")
+      args <- commandArgs(TRUE); d <- args[1]; link <- args[2]
+      vec <- function(name,n) readBin(file.path(d,paste0(name,".bin")),
+                                      double(),n=n,size=8,endian="little")
+      start <- vec("start",1); y <- vec("y",6); mu <- vec("mu",6)
+      w <- vec("weight",6)
       fam <- do.call(mgcv::nb,list(theta=-exp(start),link=link))
       fields <- function(theta) {
         ls <- fam$ls(y,w=w,theta=theta,scale=1)
@@ -569,17 +591,22 @@ def _pinned_six_row_theta(start, y, mu, weight, link):
       lines <- sub(halving_anchor,insertion,lines,fixed=TRUE)
       eval(parse(text=lines))
       end <- traced(start,fam,y,mu,scale=1,wt=w)
-      list(initial=fields(start),final=c(end,fields(end)),path=theta_path,
-           halvings=halving_count)
-    }""")
-    result = function(
-        ro.FloatVector(start),
-        ro.FloatVector(y),
-        ro.FloatVector(mu),
-        ro.FloatVector(weight),
-        link,
-    )
-    return {name: np.asarray(result.rx2(name)) for name in result.names}
+      result <- list(initial=fields(start),final=c(end,fields(end)),
+                     path=theta_path,halvings=halving_count)
+      for (name in names(result))
+        writeBin(as.double(result[[name]]),
+                 file.path(d,paste0(name,".out")),size=8,endian="little")
+        """
+        subprocess.run(
+            ["Rscript", "--vanilla", "-e", script, directory, link],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return {
+            name: np.fromfile(path / f"{name}.out", dtype="<f8")
+            for name in ("initial", "final", "path", "halvings")
+        }
 
 
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
@@ -588,14 +615,13 @@ def _pinned_six_row_theta(start, y, mu, weight, link):
 def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
     link, variant
 ):
-    """Exact hashed fixtures: reviewed cancellation fields, no path relaxation.
+    """Exact generated cases: reviewed cancellation fields, no path relaxation.
 
     See docs/scale_jaxgam/efs52_nb_conditional_theta_numerical_review.md.
     All ordinary controller and identical-coordinate end contractions stay STRICT.
     """
     import hashlib
     import json
-    from pathlib import Path
 
     import jax.numpy as jnp
     import pandas as pd
@@ -607,12 +633,8 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
     from jaxgam.formula.parser import parse_formula
     from jaxgam.formula.prepare import prepare_model
 
-    path = (
-        Path(__file__).parents[1]
-        / "fixtures"
-        / ("efs52_nb_theta_six_row_" + variant + ".json")
-    )
-    raw = path.read_bytes()
+    fixture = nb_theta_six_row_case(variant)
+    raw = json.dumps(fixture, sort_keys=True, separators=(",", ":")).encode()
     expected_hash = {
         "integer": "da0bc32e17c97b4decc43fa523c00315fd4f975a0fa73c7fadbdc0f3e5e16fcc",
         "fractional_ge_one": (
@@ -620,7 +642,6 @@ def test_exact_six_row_theta_boundary_has_reviewed_field_specific_source_gates(
         ),
     }[variant]
     assert hashlib.sha256(raw).hexdigest() == expected_hash
-    fixture = json.loads(raw)
     mu, y, weight = [np.asarray(fixture[key]) for key in ("mu", "y", "weight")]
     start = np.asarray(fixture["log_theta"])
     eta = np.log(mu) if link == "log" else mu if link == "identity" else np.sqrt(mu)

@@ -2,6 +2,9 @@
 
 import hashlib
 import json
+import subprocess
+import tempfile
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -14,6 +17,7 @@ from jaxgam.fitting.nb_theta_stream import (
     nb_conditional_theta_batch,
     nb_conditional_theta_step,
 )
+from tests.helpers import nb_theta_six_row_case, r_available
 from tests.tolerances import MODERATE, STRICT
 
 
@@ -277,15 +281,8 @@ def test_compiled_theta_batch_memory_and_output_are_recorded(B, caplog):
 @pytest.mark.parametrize("variant", ["integer", "fractional_ge_one"])
 def test_fixed_mean_theta_derivatives_match_65_digit_reference_strict(link, variant):
     from decimal import Decimal, localcontext
-    from pathlib import Path
 
-    fixture = json.loads(
-        (
-            Path(__file__).parents[1]
-            / "fixtures"
-            / ("efs52_nb_theta_six_row_" + variant + ".json")
-        ).read_text()
-    )
+    fixture = nb_theta_six_row_case(variant)
     mu, y, weight = [np.asarray(fixture[key]) for key in ("mu", "y", "weight")]
     log_theta = np.asarray(fixture["log_theta"])
     with localcontext() as context:
@@ -354,30 +351,59 @@ def test_fixed_mean_theta_derivatives_match_65_digit_reference_strict(link, vari
     )
 
 
-def test_saved_source_evidence_keeps_failed_early_trajectories_and_binary_values():
-    from pathlib import Path
+@pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
+@pytest.mark.parametrize("variant", ["integer", "fractional_ge_one"])
+def test_six_row_source_cancellation_is_bounded_against_live_r(variant):
+    """Keep the weak-curvature source comparison live on both hard inputs."""
+    fixture = nb_theta_six_row_case(variant)
+    mu, y, weight = [np.asarray(fixture[name]) for name in ("mu", "y", "weight")]
+    start = np.asarray(fixture["log_theta"])
+    family = NegativeBinomial(theta=0.7, link="identity")
+    observed = jax.jit(
+        nb_conditional_theta_batch,
+        static_argnames=("family", "max_y", "integer_counts"),
+    )(
+        jnp.asarray(start),
+        jnp.asarray(mu),
+        jnp.asarray(y),
+        jnp.asarray(weight),
+        jnp.ones(len(y), dtype=bool),
+        family,
+        max_y=int(fixture["max_y"]),
+        integer_counts=bool(fixture["integer_counts"]),
+    )
+    assert observed.admissible
 
-    directory = Path(__file__).parents[1] / "fixtures"
-    report = json.loads(
-        (directory / "efs52_nb_theta_numerical_review.json").read_text()
-    )
-    binary_path = directory / "efs52_nb_theta_review_R_binary.npz"
-    assert (
-        hashlib.sha256(binary_path.read_bytes()).hexdigest()
-        == report["binary_npz_sha256"]
-    )
-    with np.load(binary_path, allow_pickle=False) as binary:
-        for record in report["records"]:
-            prefix = record["variant"] + "_" + record["link"]
-            for field in ("R_initial", "R_final"):
-                np.testing.assert_array_equal(
-                    binary[prefix + "_" + field], record[field]
-                )
-            np.testing.assert_array_equal(
-                binary[prefix + "_R_path"], record["R_theta_path"]
-            )
-            actual = np.asarray(record["stable_final"]["theta_path"])
-            reference = np.asarray(record["R_theta_path"])
-            assert len(actual) == len(reference)
-            bound = MODERATE.atol + MODERATE.rtol * np.abs(reference)
-            assert np.any(np.abs(actual - reference) > bound)
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory)
+        inputs = (("mu", mu), ("y", y), ("weight", weight), ("start", start))
+        for name, values in inputs:
+            np.asarray(values, dtype="<f8").tofile(path / name)
+        script = r"""
+        stopifnot(as.character(getRversion()) == "4.5.2",
+                  as.character(packageVersion("mgcv")) == "1.9.3")
+        d <- commandArgs(TRUE)[1]
+        vec <- function(name, n) readBin(file.path(d, name), double(), n=n,
+                                          size=8, endian="little")
+        mu <- vec("mu", 6); y <- vec("y", 6); w <- vec("weight", 6)
+        theta <- vec("start", 1)
+        fam <- mgcv::nb(theta=-exp(theta), link="identity")
+        ls <- fam$ls(y, w=w, theta=theta, scale=1)
+        dd <- fam$Dd(y, mu, theta, wt=w, level=2)
+        fields <- c(sum(fam$dev.resids(y, mu, w, theta))/2-ls$ls,
+                    sum(dd$Dth)/2-ls$lsth1[1],
+                    sum(dd$Dth2)/2-as.matrix(ls$lsth2)[1,1])
+        cat(paste(sprintf("%.17g", fields), collapse=" "))
+        """
+        completed = subprocess.run(
+            ["Rscript", "--vanilla", "-e", script, directory],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    source = np.fromstring(completed.stdout, sep=" ")
+    assert source.shape == (3,)
+    actual = np.asarray(observed[:3])
+    np.testing.assert_allclose(actual, source, rtol=MODERATE.rtol, atol=MODERATE.atol)
+    strict_bound = STRICT.atol + STRICT.rtol * np.abs(source[1:])
+    assert np.any(np.abs(actual[1:] - source[1:]) > strict_bound)
