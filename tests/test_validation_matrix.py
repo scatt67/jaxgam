@@ -906,9 +906,8 @@ def test_estimated_nb_nonlog_positive_offset_public_efs_matches_pinned_r(
 ) -> None:
     """Exercise the source-valid default anchor and positive-curvature retry.
 
-    Identity's selected coefficient/smoothing residual uses the reviewed
-    four-pass MODERATE proposal recorded in
-    ``docs/scale_jaxgam/efs5_1_public_numerical_review.md``. Its
+    Identity's selected coefficient/smoothing residual uses MODERATE after
+    four source, adapter, and stopping correction passes. Its
     deviance, score, theta, and outer count remain STRICT; sqrt is STRICT for
     every fitted quantity. No explicit coefficient or theta start is supplied.
     """
@@ -971,8 +970,7 @@ def test_public_dense_efs_poisson_log_seed1033_result_matches_pinned_r(
 ) -> None:
     """Preserve the reviewed seed-1033 public Poisson default-profile gate.
 
-    Four source/adapter/stopping diagnostics are recorded in
-    ``docs/scale_jaxgam/efs5_1_public_numerical_review.md``. The public
+    After four source, adapter, and stopping correction passes, the public
     and direct controller agree at STRICT, while the pinned R terminal fit has
     coefficient/mean residuals below 4.1e-10. Those fitted quantities use the
     reviewed MODERATE gate; scalar score/deviance/scale checks remain STRICT.
