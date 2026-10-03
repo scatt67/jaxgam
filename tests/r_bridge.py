@@ -778,6 +778,196 @@ write.csv(diag, {str(paths["diag"])!r}, row.names=FALSE)
                 for name in ("initial", "final", "path", "halvings")
             }
 
+    def nb_selected_fit(
+        self,
+        X: np.ndarray,
+        E: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        params: np.ndarray,
+        link: str,
+        *,
+        estimated: bool,
+        epsilon: float = 1e-11,
+        max_iter: int = 200,
+    ) -> dict[str, Any]:
+        """Evaluate pinned gam.fit4 in supplied NB fitting coordinates (theta 2.7)."""
+        self._require_pinned_efs_versions()
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            for name, value in (
+                ("X", X),
+                ("E", E),
+                ("y", y),
+                ("weight", weight),
+                ("offset", offset),
+                ("params", params),
+            ):
+                np.savetxt(tmp_path / name, value, fmt="%.17g")
+            script = r"""
+        library(mgcv)
+        stopifnot(getRversion()=="4.5.2",packageVersion("mgcv")=="1.9.3")
+        a <- commandArgs(TRUE); d <- a[1]; link <- a[2]; estimated <- a[3]=="TRUE"
+        epsilon <- as.double(a[4]); maxit <- as.integer(a[5])
+        read <- function(name) as.matrix(read.table(file.path(d,name)))
+        X <- read("X"); E <- read("E"); y <- c(read("y")); wt <- c(read("weight"))
+        off <- c(read("offset")); params <- c(read("params")); theta <- 2.7
+        fam <- mgcv:::fix.family.link(do.call(mgcv::nb,
+         list(theta=if(estimated) -exp(params[length(params)]) else theta,link=link)))
+        q <- ncol(X); rank <- nrow(E)
+        U1 <- eigen(crossprod(E),symmetric=TRUE)$vectors
+        UrS <- list(t(U1[,seq_len(rank),drop=FALSE]) %*% t(E))
+        null <- qr.coef(qr(X),rep(fam$linkfun(mean(y)),length(y))); null[is.na(null)] <- 0
+        sp <- if(estimated) c(params[2],params[1]) else params[1]
+        fit <- mgcv:::gam.fit4(x=X,y=y,sp=sp,Eb=E,UrS=UrS,weights=wt,offset=off,
+         U1=U1,Mp=q-rank,family=fam,
+         control=mgcv::gam.control(epsilon=epsilon,maxit=maxit),deriv=1,scale=1,
+         scoreType="REML",null.coef=null)
+        stopifnot(fit$converged)
+        writeBin(as.double(c(fit$REML,fit$iter,fit$deviance,
+         fit$coefficients,fit$REML1)),file.path(d,"reference"),size=8,endian="little")
+        """
+            completed = subprocess.run(
+                [
+                    "Rscript",
+                    "-e",
+                    script,
+                    str(tmp_path),
+                    link,
+                    str(estimated).upper(),
+                    f"{epsilon:.17g}",
+                    str(max_iter),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+            )
+            assert completed.returncode == 0, completed.stderr
+            raw = np.fromfile(tmp_path / "reference", dtype="<f8")
+            p = X.shape[1]
+            gradient = raw[3 + p :]
+            if estimated:
+                gradient = gradient[[1, 0]]
+            return {
+                "score": raw[0],
+                "iter": int(raw[1]),
+                "deviance": raw[2],
+                "beta": raw[3 : 3 + p],
+                "gradient": gradient,
+            }
+
+    def nb_cubic_outer_fit(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        link: str,
+        *,
+        estimated: bool,
+        pinned_rho: float | None = None,
+    ) -> dict[str, Any]:
+        """Fit the NB cr(k=8) outer-optimizer model with pinned review controls."""
+        self._require_pinned_efs_versions()
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            for name, value in (
+                ("x", data.x.to_numpy()),
+                ("y", data.y.to_numpy()),
+                ("weight", weight),
+                ("offset", offset),
+            ):
+                np.savetxt(tmp_path / name, value, fmt="%.17g")
+            script = r"""
+        library(mgcv)
+        stopifnot(getRversion()=="4.5.2",packageVersion("mgcv")=="1.9.3")
+        a<-commandArgs(TRUE);d<-a[1];link<-a[2];estimated<-a[3]=="TRUE"
+        pinned<-a[4]!="NONE";rho<-if(pinned)as.double(a[4])else 0
+        v<-function(n)scan(file.path(d,n),quiet=TRUE)
+        dat<-data.frame(x=v("x"),y=v("y"));w<-v("weight");o<-v("offset")
+        fam<-do.call(nb,list(theta=if(estimated)-2.7 else 2.7,link=link))
+        fit<-gam(y~s(x,bs="cr",k=8),data=dat,weights=w,offset=o,family=fam,
+         sp=if(pinned)exp(rho)else NULL,method="REML",optimizer=c("outer","newton"),
+         control=gam.control(epsilon=1e-11,maxit=200,
+         newton=list(conv.tol=1e-6,maxNstep=5,maxSstep=2,maxHalf=30)))
+        outer.full<-identical(fit$outer.info$conv,"full convergence")
+        rho.out<-if(pinned)rho else log(fit$sp)
+        writeBin(as.double(c(rho.out,fit$family$getTheta(),fit$gcv.ubre,
+         fit$fitted.values,fit$deviance,sum(fit$edf),fit$sig2,fit$converged,
+         outer.full,fit$outer.info$iter)),file.path(d,"outer"),size=8,endian="little")
+        """
+            completed = subprocess.run(
+                [
+                    "Rscript",
+                    "-e",
+                    script,
+                    str(tmp_path),
+                    link,
+                    str(estimated).upper(),
+                    "NONE" if pinned_rho is None else f"{pinned_rho:.17g}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+            )
+            assert completed.returncode == 0, completed.stderr
+            raw = np.fromfile(tmp_path / "outer", dtype="<f8")
+            n = len(data)
+            return {
+                "rho": raw[0],
+                "log_theta": raw[1],
+                "score": raw[2],
+                "fitted_values": raw[3 : 3 + n],
+                "deviance": raw[-6],
+                "edf": raw[-5],
+                "scale": raw[-4],
+                "inner_converged": bool(raw[-3]),
+                "outer_converged": bool(raw[-2]),
+                "outer_iterations": int(raw[-1]),
+            }
+
+    def nb_cubic_setup(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return gam.setup X, S, offsets and ranks for the NB cr(k=8) model."""
+        self._require_pinned_efs_versions()
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            data.to_csv(tmp_path / "data.csv", index=False, float_format="%.17g")
+            np.savetxt(tmp_path / "weight", weight, fmt="%.17g")
+            np.savetxt(tmp_path / "offset", offset, fmt="%.17g")
+            script = r"""
+        library(mgcv)
+        stopifnot(as.character(getRversion())=="4.5.2",
+                  as.character(packageVersion("mgcv"))=="1.9.3")
+        d <- commandArgs(TRUE)[1]
+        dat <- read.csv(file.path(d,"data.csv"))
+        w <- scan(file.path(d,"weight"),quiet=TRUE)
+        o <- scan(file.path(d,"offset"),quiet=TRUE)
+        G <- gam(y~s(x,bs="cr",k=8),data=dat,weights=w,offset=o,
+                 family=nb(theta=2.7,link="log"),method="REML",fit=FALSE)
+        write.table(G$X,file.path(d,"X"),row.names=FALSE,col.names=FALSE)
+        write.table(G$S[[1]],file.path(d,"S"),row.names=FALSE,col.names=FALSE)
+        writeBin(as.double(c(G$off,G$rank)),file.path(d,"metadata"),size=8,endian="little")
+        """
+            completed = subprocess.run(
+                ["Rscript", "-e", script, str(tmp_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+            )
+            assert completed.returncode == 0, completed.stderr
+            expected_X = np.loadtxt(tmp_path / "X")
+            expected_S = np.loadtxt(tmp_path / "S")
+            metadata = np.fromfile(tmp_path / "metadata", dtype="<f8")
+            return expected_X, expected_S, metadata
+
     def efs_nb_working_factors(
         self,
         link: str,
