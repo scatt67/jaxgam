@@ -434,6 +434,9 @@ class RBridge:
         null_coef: bool = False,
         scale: float = -1.0,
         theta: float | None = None,
+        initial_log_theta: float | None = None,
+        initial_beta: np.ndarray | None = None,
+        beta_old_init: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Return real per-refit EFS statistics from a private source copy."""
         self._require_pinned_efs_versions()
@@ -449,6 +452,9 @@ class RBridge:
             null_coef,
             scale,
             theta,
+            initial_log_theta,
+            initial_beta,
+            beta_old_init,
         )
 
     @staticmethod
@@ -783,6 +789,9 @@ class RBridge:
         null_coef: bool,
         scale: float,
         theta: float | None,
+        initial_log_theta: float | None,
+        initial_beta: np.ndarray | None,
+        beta_old_init: np.ndarray | None,
     ) -> dict[str, Any]:
         """Execute a private instrumented pinned ``efsudr`` source function."""
         resolved, initial = self._validate_efs_inputs(
@@ -792,6 +801,19 @@ class RBridge:
             not np.isfinite(initial_scale) or initial_scale <= 0
         ):
             raise ValueError("EFS initial_scale must be finite and positive")
+        if initial_log_theta is not None and not np.isfinite(initial_log_theta):
+            raise ValueError("EFS initial_log_theta must be finite")
+
+        def numeric_vector(value: np.ndarray | None, name: str) -> str | None:
+            if value is None:
+                return None
+            vector = np.asarray(value, dtype=np.float64)
+            if vector.ndim != 1 or vector.size == 0 or not np.all(np.isfinite(vector)):
+                raise ValueError(f"EFS {name} must be a nonempty finite vector")
+            return "c(" + ", ".join(repr(float(item)) for item in vector) + ")"
+
+        initial_beta_text = numeric_vector(initial_beta, "initial_beta")
+        beta_old_text = numeric_vector(beta_old_init, "beta_old_init")
         r_family = self._get_efs_subprocess_family(family, theta)
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = os.path.join(tmpdir, "data.csv")
@@ -800,9 +822,18 @@ class RBridge:
             trace_path = os.path.join(tmpdir, "trace.csv")
             coefficient_path = os.path.join(tmpdir, "coefficient_trace.csv")
             fitted_path = os.path.join(tmpdir, "fitted_trace.csv")
+            start_path = os.path.join(tmpdir, "start_trace.csv")
+            theta_path = os.path.join(tmpdir, "theta_trace.csv")
+            reset_path = os.path.join(tmpdir, "start_retained_trace.csv")
             multiplier_path = os.path.join(tmpdir, "multipliers.csv")
             branch_path = os.path.join(tmpdir, "branches.txt")
             score_path = os.path.join(tmpdir, "score.txt")
+            selected_sp_path = os.path.join(tmpdir, "selected_sp.csv")
+            selected_coefficient_path = os.path.join(
+                tmpdir, "selected_coefficients.csv"
+            )
+            selected_fitted_path = os.path.join(tmpdir, "selected_fitted.csv")
+            selected_deviance_path = os.path.join(tmpdir, "selected_deviance.txt")
             data.to_csv(data_path, index=False)
             source = self._pinned_efsudr_source()
 
@@ -857,7 +888,19 @@ class RBridge:
                 "NULL" if initial_scale is None else repr(float(initial_scale))
             )
             null_coef_argument = (
-                ", null.coef=mgcv:::get.null.coef(G)$null.coef" if null_coef else ""
+                f", null.coef={beta_old_text}"
+                if beta_old_text is not None
+                else ", null.coef=mgcv:::get.null.coef(G)$null.coef"
+                if null_coef
+                else ""
+            )
+            start_argument = (
+                "" if initial_beta_text is None else f", start={initial_beta_text}"
+            )
+            theta_initializer = (
+                ""
+                if initial_log_theta is None
+                else f"if (!is.null(family$n.theta) && family$n.theta > 0) family$putTheta(c({float(initial_log_theta)!r}))"
             )
             script = "\n".join(
                 [
@@ -865,6 +908,7 @@ class RBridge:
                     f"data <- read.csv({data_path!r})",
                     f"G <- gam({formula}, data=data, family={r_family}, fit=FALSE{setup_suffix})",
                     "family <- mgcv:::fix.family.ls(mgcv:::fix.family.var(mgcv:::fix.family.link(G$family)))",
+                    theta_initializer,
                     "G$rS <- mgcv:::mini.roots(G$S, G$off, ncol(G$X), G$rank)",
                     "Ssp <- mgcv:::totalPenaltySpace(G$S, G$H, G$off, ncol(G$X))",
                     "G$Eb <- Ssp$E; G$U1 <- cbind(Ssp$Y, Ssp$Z); G$Mp <- ncol(Ssp$Z)",
@@ -872,36 +916,62 @@ class RBridge:
                     f"initial_sp <- {initial_text}",
                     "if (is.null(initial_sp)) initial_sp <- mgcv:::initial.spg(G$X, G$y, G$w, family, G$S, G$rank, G$off, offset=G$offset, E=G$Eb)",
                     "lsp <- log(initial_sp)",
+                    "if (!is.null(family$n.theta) && family$n.theta > 0) lsp <- c(family$getTheta(), lsp)",
                     f"fit_scale <- {float(scale)!r}",
                     "if (family$family[1] %in% c('poisson', 'binomial')) fit_scale <- 1",
                     f"initial_phi <- {initial_scale_text}",
                     "if (fit_scale <= 0) { if (is.null(initial_phi)) { null_fit <- mgcv:::get.null.coef(G); initial_phi <- null_fit$null.scale / 10 }; lsp <- c(lsp, log(initial_phi)) }",
                     "trace_env <- new.env(parent=asNamespace('mgcv'))",
-                    "trace_env$trace_log <- list(); trace_env$coefficient_log <- list(); trace_env$fitted_log <- list(); trace_env$multiplier_history <- numeric(); trace_env$branch_history <- character()",
+                    "trace_env$trace_log <- list(); trace_env$coefficient_log <- list(); trace_env$fitted_log <- list(); trace_env$start_log <- list(); trace_env$theta_log <- list(); trace_env$start_retained_log <- logical(); trace_env$multiplier_history <- numeric(); trace_env$branch_history <- character(); trace_env$trace_env <- trace_env",
                     "trace_env$efs_record_multiplier <- function(value) trace_env$multiplier_history <- c(trace_env$multiplier_history, value)",
                     "trace_env$efs_record_branch <- function(value) trace_env$branch_history <- c(trace_env$branch_history, value)",
+                    "fit4_source <- capture.output(mgcv:::gam.fit4)",
+                    "fit4_source <- fit4_source[seq_len(tail(which(fit4_source == '}'), 1L))]",
+                    "fit4_source[1] <- sub('^function', 'gam.fit4 <- function', fit4_source[1])",
+                    "fit4_anchor <- '    coefold <- null.coef'",
+                    "if (sum(fit4_source == fit4_anchor) != 1L) stop('pinned gam.fit4 start-retention anchor changed')",
+                    "fit4_source[fit4_source == fit4_anchor] <- paste0('    trace_env$start_retained_log[[length(trace_env$start_retained_log) + 1L]] <- !is.null(start)\\n', fit4_anchor)",
+                    "eval(parse(text=fit4_source), envir=trace_env)",
+                    "fit3_source <- capture.output(mgcv:::gam.fit3)",
+                    "fit3_source <- fit3_source[seq_len(tail(which(fit3_source == '}'), 1L))]",
+                    "fit3_source[1] <- sub('^function', 'gam.fit3_impl <- function', fit3_source[1])",
+                    "eval(parse(text=fit3_source), envir=trace_env)",
                     "trace_env$gam.fit3 <- function(...) {",
-                    "  args <- list(...); fit <- do.call(get('gam.fit3', envir=asNamespace('mgcv')), args)",
-                    "  nsp <- length(args$UrS); Y <- args$U1[, seq_len(ncol(args$U1) - args$Mp), drop=FALSE]",
+                    "  args <- list(...); fit <- do.call(get('gam.fit3_impl', envir=trace_env), args)",
+                    "  nsp <- length(args$UrS); nth <- if (inherits(args$family, 'extended.family')) args$family$n.theta else 0L; Y <- args$U1[, seq_len(ncol(args$U1) - args$Mp), drop=FALSE]",
                     "  Yb <- drop(t(Y) %*% fit$coefficients); rVY <- t(fit$rV) %*% Y",
                     "  bSb <- trVS <- rep(NA_real_, nsp)",
                     "  if (nsp > 0) for (i in seq_len(nsp)) { bSb[i] <- sum((Yb %*% args$UrS[[i]])^2); trVS[i] <- sum((rVY %*% args$UrS[[i]])^2) }",
-                    "  score_phi <- if (length(args$sp) > nsp) exp(tail(args$sp, 1)) else args$scale",
-                    "  update_phi <- if (length(args$sp) > nsp) fit$scale else args$scale",
-                    "  trace_env$trace_log[[length(trace_env$trace_log) + 1]] <- data.frame(call=rep(length(trace_env$trace_log) + 1L, nsp), parameter=seq_len(nsp), log_smoothing=as.numeric(args$sp[seq_len(nsp)]), ldetS1=as.numeric(fit$ldetS1[seq_len(nsp)]), bSb=as.numeric(bSb), trVS=as.numeric(trVS), score=rep(as.numeric(fit$REML)[1], nsp), score_phi=rep(as.numeric(score_phi)[1], nsp), update_phi=rep(as.numeric(update_phi)[1], nsp), reported_phi=rep(as.numeric(fit$scale)[1], nsp), deviance=rep(as.numeric(fit$dev)[1], nsp))",
+                    "  score_phi <- if (length(args$sp) > nth + nsp) exp(tail(args$sp, 1)) else args$scale",
+                    "  update_phi <- if (length(args$sp) > nth + nsp) fit$scale else args$scale",
+                    "  theta_in <- if (nth > 0) args$sp[1] else NA_real_; theta_out <- if (nth > 0) args$family$getTheta()[1] else NA_real_",
+                    "  trace_env$trace_log[[length(trace_env$trace_log) + 1]] <- data.frame(call=rep(length(trace_env$trace_log) + 1L, nsp), parameter=seq_len(nsp), log_smoothing=as.numeric(args$sp[nth + seq_len(nsp)]), ldetS1=as.numeric(fit$ldetS1[seq_len(nsp)]), bSb=as.numeric(bSb), trVS=as.numeric(trVS), score=rep(as.numeric(fit$REML)[1], nsp), score_phi=rep(as.numeric(score_phi)[1], nsp), update_phi=rep(as.numeric(update_phi)[1], nsp), reported_phi=rep(as.numeric(fit$scale)[1], nsp), theta_input=rep(as.numeric(theta_in)[1], nsp), theta_output=rep(as.numeric(theta_out)[1], nsp), deviance=rep(as.numeric(fit$dev)[1], nsp))",
                     "  trace_env$coefficient_log[[length(trace_env$coefficient_log) + 1]] <- as.numeric(fit$coefficients)",
                     "  trace_env$fitted_log[[length(trace_env$fitted_log) + 1]] <- as.numeric(fit$fitted.values)",
+                    "  trace_env$start_log[[length(trace_env$start_log) + 1]] <- if (is.null(args$start)) rep(NA_real_, ncol(args$x)) else as.numeric(args$start)",
+                    "  trace_env$theta_log[[length(trace_env$theta_log) + 1]] <- c(theta_input=theta_in, theta_output=theta_out)",
                     "  fit",
                     "}",
                     f"source({source_path!r}, local=trace_env)",
-                    f"fit <- trace_env$efsudr(x=G$X, y=G$y, lsp=lsp, Eb=G$Eb, UrS=G$UrS, weights=G$w, family=family, offset=G$offset, U1=G$U1, intercept=G$intercept, scale=fit_scale, Mp=G$Mp, control=gam.control(efs.lspmax={resolved['efs_lspmax']!r}, efs.tol={resolved['efs_tol']!r}), n.true=G$n.true{null_coef_argument})",
+                    f"fit <- trace_env$efsudr(x=G$X, y=G$y, lsp=lsp, Eb=G$Eb, UrS=G$UrS, weights=G$w, family=family, offset=G$offset, U1=G$U1, intercept=G$intercept, scale=fit_scale, Mp=G$Mp, control=gam.control(efs.lspmax={resolved['efs_lspmax']!r}, efs.tol={resolved['efs_tol']!r}), n.true=G$n.true{start_argument}{null_coef_argument})",
                     "trace <- do.call(rbind, trace_env$trace_log)",
                     f"write.csv(trace, {trace_path!r}, row.names=FALSE)",
                     f"write.csv(do.call(rbind, trace_env$coefficient_log), {coefficient_path!r}, row.names=FALSE)",
                     f"write.csv(do.call(rbind, trace_env$fitted_log), {fitted_path!r}, row.names=FALSE)",
+                    f"write.csv(do.call(rbind, trace_env$start_log), {start_path!r}, row.names=FALSE)",
+                    f"write.csv(do.call(rbind, trace_env$theta_log), {theta_path!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(start_retained=trace_env$start_retained_log), {reset_path!r}, row.names=FALSE)",
                     f"write.csv(data.frame(multiplier=trace_env$multiplier_history), {multiplier_path!r}, row.names=FALSE)",
                     f"writeLines(trace_env$branch_history, {branch_path!r})",
                     f"writeLines(format(fit$REML, digits=17), {score_path!r})",
+                    # ``efsudr`` returns the selected fit after accepting or
+                    # rejecting an extension.  ``family`` can instead retain
+                    # the last trial's theta, so all final oracle comparisons
+                    # must use this returned packed state.
+                    f"write.csv(data.frame(v=as.numeric(fit$sp)), {selected_sp_path!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(v=as.numeric(fit$coefficients)), {selected_coefficient_path!r}, row.names=FALSE)",
+                    f"write.csv(data.frame(v=as.numeric(fit$fitted.values)), {selected_fitted_path!r}, row.names=FALSE)",
+                    f"writeLines(format(fit$dev, digits=17), {selected_deviance_path!r})",
                 ]
             )
             Path(script_path).write_text(script, encoding="utf-8")
@@ -917,10 +987,27 @@ class RBridge:
                 "statistics": trace,
                 "coefficients": coefficients,
                 "fitted_values": fitted,
+                "starts": pd.read_csv(start_path).to_numpy(dtype=np.float64),
+                "theta_trace": pd.read_csv(theta_path).to_numpy(dtype=np.float64),
+                "start_retained": pd.read_csv(reset_path)["start_retained"].to_numpy(
+                    dtype=bool
+                ),
                 "multipliers": multipliers,
                 "branches": branches,
                 "final_score": float(
                     Path(score_path).read_text(encoding="utf-8").strip()
+                ),
+                "selected_packed_sp": pd.read_csv(selected_sp_path)["v"].to_numpy(
+                    dtype=np.float64
+                ),
+                "selected_coefficients": pd.read_csv(selected_coefficient_path)[
+                    "v"
+                ].to_numpy(dtype=np.float64),
+                "selected_fitted_values": pd.read_csv(selected_fitted_path)[
+                    "v"
+                ].to_numpy(dtype=np.float64),
+                "selected_deviance": float(
+                    Path(selected_deviance_path).read_text(encoding="utf-8").strip()
                 ),
                 "initial_shift": 2.5,
                 "source_commit": _PINNED_MGCV_SOURCE_COMMIT,
