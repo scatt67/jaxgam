@@ -1,11 +1,11 @@
 """Genuine fixed-sp regular release systems and extreme source prior weights."""
 
 import hashlib
-import inspect
 import json
 import subprocess
 from dataclasses import replace
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -40,6 +40,13 @@ _APPROVED_DIGESTS = {
     ),
 }
 
+# SHA256 of the checked-in ``test_regular_starts._case`` source.  Keep this
+# literal in the immutable fixture digest: pytest's rewritten code object does
+# not reliably retain inspectable source lines on pinned Linux containers.
+_FIXTURE_SOURCE_SHA256 = (
+    "db686b3963c602a194d51d425c6155b6f46f643b41ff3929ebb8eacd05e10c6c"
+)
+
 
 def _fixture_digest(
     family_class, link, X, y, weight, offset, start, structure, rho, prepared, control
@@ -55,9 +62,7 @@ def _fixture_digest(
         }
 
     description = {
-        "fixture_source_sha256": hashlib.sha256(
-            inspect.getsource(_case).encode()
-        ).hexdigest(),
+        "fixture_source_sha256": _FIXTURE_SOURCE_SHA256,
         "family": family_class.__name__,
         "link": link,
         "formula": "y~x",
@@ -130,7 +135,20 @@ def _rank_one_preparation(source, family):
     ), rho
 
 
-def _source_reference(tmp_path, family, link, X, y, weight, offset, start):
+def _source_reference(
+    tmp_path,
+    family,
+    link,
+    X,
+    y,
+    weight,
+    offset,
+    start,
+    *,
+    derivatives=False,
+    rho=None,
+    score_phi=0.7,
+):
     for name, values in (
         ("X", X),
         ("y", y),
@@ -139,6 +157,12 @@ def _source_reference(tmp_path, family, link, X, y, weight, offset, start):
         ("start", start),
     ):
         np.savetxt(tmp_path / name, values, fmt="%.17g")
+    np.savetxt(
+        tmp_path / "rho",
+        np.atleast_1d(np.log(0.35) if rho is None else rho),
+        fmt="%.17g",
+    )
+    np.savetxt(tmp_path / "score_phi", np.atleast_1d(score_phi), fmt="%.17g")
     script = r"""
 library(mgcv)
 stopifnot(getRversion()=="4.5.2",packageVersion("mgcv")=="1.9.3")
@@ -156,8 +180,8 @@ known <- a[2] %in% c("binomial","poisson")
 # S=diag(0,1): put the unique penalized direction first for gam.reparam,
 # exactly as gam.fit3's UrS/U1 contract requires. Eb is the unscaled root.
 E <- matrix(c(0,1),1,2);U1 <- matrix(c(0,1,1,0),2,2)
-UrS <- list(matrix(1,1,1));sp <- log(.35)
-if (!known) sp <- c(sp,log(.7))
+UrS <- list(matrix(1,1,1));sp <- c(read("rho"));score.phi <- c(read("score_phi"))
+if (!known) sp <- c(sp,log(score.phi))
 diag <- new.env(parent=emptyenv())
 walk <- function(e) {
  if (is.call(e) && identical(e[[1]],as.name("<-")) &&
@@ -187,6 +211,11 @@ writeBin(as.double(c(fit$coefficients,fit$deviance,if (known) 1 else fit$scale.e
  fit$trA,fit$REML,null,as.vector(tcrossprod(fit$rV)))),
  file.path(d,"reference"),size=8,endian="little")
 """
+    if derivatives:
+        script = script.replace("deriv=0,", "deriv=1,").replace(
+            "writeBin(as.double(diag$valid)",
+            'writeBin(as.double(fit$REML1),file.path(d,"gradient"),size=8,endian="little")\nwriteBin(as.double(diag$valid)',
+        )
     completed = subprocess.run(
         [
             "Rscript",
@@ -204,7 +233,10 @@ writeBin(as.double(c(fit$coefficients,fit$deviance,if (known) 1 else fit$scale.e
         f"Pinned penalized oracle failed: {completed.stderr}"
     )
     raw = np.fromfile(tmp_path / "reference", dtype="<f8")
-    return raw[:6], raw[6:8], raw[8:].reshape(2, 2, order="F")
+    result = (raw[:6], raw[6:8], raw[8:].reshape(2, 2, order="F"))
+    if derivatives:
+        return (*result, np.fromfile(tmp_path / "gradient", dtype="<f8"))
+    return result
 
 
 def _check_penalized_fit(tmp_path, family_class, link, *, extreme=False):
@@ -322,6 +354,46 @@ def _check_penalized_fit(tmp_path, family_class, link, *, extreme=False):
         actual_se = np.sqrt(
             float(state.scale) * np.einsum("ij,jk,ik->i", X, actual_covariance, X)
         )
+        normalized_y = jnp.asarray(
+            family.execution_initial_response(data.y.to_numpy(), weight)
+        )
+        X_jax = jnp.asarray(X)
+        offset_jax = jnp.asarray(offset)
+        weight_jax = jnp.asarray(weight)
+
+        def source_deviance(
+            beta,
+            X_value=X_jax,
+            offset_value=offset_jax,
+            y_value=normalized_y,
+            weight_value=weight_jax,
+        ):
+            mu = family.link.inverse(X_value @ beta + offset_value)
+            return jnp.sum(
+                family.deviance_derivative_contributions(y_value, mu, weight_value)
+            )
+
+        source_jacobian = 0.5 * jax.hessian(source_deviance)(
+            jnp.asarray(result.information_coefficients)
+        ) + jnp.diag(jnp.asarray([0.0, 0.35]))
+        source_inverse = result.source_coefficient_factor.hessian_inverse(jnp.eye(2))
+        np.testing.assert_allclose(
+            source_jacobian @ source_inverse,
+            np.eye(2),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert not result.source_solve_coefficients.flags.writeable
+        source_gradient = 0.5 * jax.grad(source_deviance)(
+            jnp.asarray(result.information_coefficients)
+        ) + jnp.diag(jnp.asarray([0.0, 0.35])) @ jnp.asarray(
+            result.information_coefficients
+        )
+        scaled_source_gradient = float(
+            jnp.max(jnp.abs(source_gradient))
+            / (1.0 + abs(result.source_score.stopping_penalized_deviance))
+        )
+        assert scaled_source_gradient <= fit_control.tol
         for field, observed, expected, tolerance in (
             ("beta", np.asarray(state.coefficients), reference[:2], fit_tolerance),
             (
