@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import subprocess
-from dataclasses import asdict, replace
-from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -32,7 +28,8 @@ from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.fitting_prepare import qr_penalty_roots
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
-from tests.helpers import _AssertCollector, r_available
+from tests.helpers import _AssertCollector, nb_optimizer_case_data, r_available
+from tests.r_bridge import RBridge
 from tests.test_execution.test_nb_reml import (
     _CONTROL,
     _LINKS,
@@ -61,62 +58,16 @@ _OPTIMIZER_PIRLS_CONTROL = type(_CONTROL)(
     max_iter=200,
 )
 _OPTIMIZER_MAXIMUM_BYTES = 64_000_000
-_OPTIMIZER_REVIEW_SHA256 = (
-    "0528a07a8c1b12d4ae628b8063cabd1a27d656aac42bff53a580c4e78327baba"
-)
-_OPTIMIZER_INPUT_SHA256 = (
-    "6f78b9ac6c859994b5eb9fcc0a3a172b1810f77472e2d9021e9dc1cabac4f558"
-)
-_OPTIMIZER_CSV_SHA256 = (
-    "525561fc0ac0702e3d95574ab8edb8252b396a69d9abde0f2e025b704f9ccd58"
-)
-_OPTIMIZER_FIXTURE_PATH = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "pr82_nb_optimizer_seed8803.csv"
-)
-_OPTIMIZER_MODEL_METADATA_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "fixtures"
-    / "pr82_nb_optimizer_model_metadata.npz"
-)
-_OPTIMIZER_MODEL_METADATA_SHA256 = (
-    "103185a4abf21ec23848ed8a1468b840874243e4ad87fa6edf96b00a1f55ff0f"
-)
-_SELECTED_GATE_DIGESTS = {
-    ("log", False): "5817af18b2bd67b9fd1869c65db36d2d3d316a161b43669edf1a34b7663872a5",
-    ("log", True): "0d0c601e5be809ba9e0705d06fc14abd973dea9ffa488905e7988c7e0fc105e5",
-    (
-        "identity",
-        False,
-    ): "c014ff97560384d87f58cd49f70e1f896e3f5f07829e7d249f387fae6713f336",
-    (
-        "identity",
-        True,
-    ): "d726eec69ff706a51b50ccb2961f2e7ea08ccfcb1b0d79c9899367675ffab057",
-    ("sqrt", False): "2c52cd9c4b59b24ea21517975863470d6833b1cc0d37bd91640e3b1fdd0a537f",
-    ("sqrt", True): "0d1a730dce4274a258af0e837564989a66143c7a1b99742a7b8c0c3f92b552fb",
-}
+# These controls and the named seeded model are the reviewed selection profile.
+# A candidate test must match them before a field-specific MODERATE comparison.
+_REVIEWED_OPTIMIZER_CONTROL = _OPTIMIZER_CONTROL
+_REVIEWED_PIRLS_CONTROL = _OPTIMIZER_PIRLS_CONTROL
 
 
 def _optimizer_case(link: str, *, estimated: bool, smooth: bool = True):
-    assert hashlib.sha256(_OPTIMIZER_FIXTURE_PATH.read_bytes()).hexdigest() == (
-        _OPTIMIZER_CSV_SHA256
-    )
-    saved = pd.read_csv(_OPTIMIZER_FIXTURE_PATH, float_precision="round_trip")
-    x = saved.x.to_numpy()
-    y = saved.y.to_numpy(dtype=np.float64)
-    weight = saved.weight.to_numpy()
-    offset = saved.offset.to_numpy()
-    family = NegativeBinomial(
-        theta=_THETA,
-        fixed=not estimated,
-        link=link,
-    )
-    source = DataFrameRowSource(
-        pd.DataFrame({"x": x, "y": y}),
-        response="y",
-        weights=weight,
-        offset=offset,
-    )
+    data, weight, offset = nb_optimizer_case_data()
+    family = NegativeBinomial(theta=_THETA, fixed=not estimated, link=link)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
     prepared = prepare_model(
         parse_formula('y ~ s(x, bs="cr", k=8)' if smooth else "y ~ x"),
         source,
@@ -129,20 +80,36 @@ def _optimizer_case(link: str, *, estimated: bool, smooth: bool = True):
     return StreamDesign(prepared, _CountedSource(source)), family, params
 
 
-def _optimizer_gate_digest(stream, family, params) -> str:
+def _assert_optimizer_case(stream, family, params, *, link, estimated) -> None:
+    """Bind MODERATE only to the original generated model and controls."""
     source = getattr(stream.source, "source", stream.source)
-    batch = next(source.scan(stream.prepared.n_obs))
-    raw = hashlib.sha256()
-    for name, value in (
-        ("x", batch.columns["x"]),
-        ("y", batch.y),
-        ("weight", batch.weight),
-        ("offset", batch.offset),
+    data, weight, offset = nb_optimizer_case_data()
+    expected_source = DataFrameRowSource(
+        data, response="y", weights=weight, offset=offset
+    )
+    assert stream.prepared.n_obs == source.n_rows == expected_source.n_rows == 180
+    assert source.fingerprint() == expected_source.fingerprint()
+    actual = next(source.scan(stream.prepared.n_obs))
+    for observed, expected in (
+        (actual.columns["x"], data.x.to_numpy()),
+        (actual.y, data.y.to_numpy()),
+        (actual.weight, weight),
+        (actual.offset, offset),
     ):
-        array = np.asarray(value, dtype="<f8")
-        raw.update(name.encode())
-        raw.update(array.tobytes())
-    assert raw.hexdigest() == _OPTIMIZER_INPUT_SHA256
+        np.testing.assert_array_equal(observed, expected)
+    assert type(family) is NegativeBinomial
+    assert family.family_name == "nb"
+    expected_family = NegativeBinomial(theta=_THETA, fixed=not estimated, link=link)
+    assert type(family.link) is type(expected_family.link)
+    assert family.n_theta == int(estimated)
+    np.testing.assert_array_equal(family.get_theta(transformed=True), [_THETA])
+    assert len(params) == 1 + family.n_theta
+    np.testing.assert_array_equal(np.asarray(params)[0], np.log(0.5))
+    if family.n_theta:
+        np.testing.assert_array_equal(np.asarray(params)[-1], np.log(_THETA))
+    assert _OPTIMIZER_CONTROL == _REVIEWED_OPTIMIZER_CONTROL
+    assert _OPTIMIZER_PIRLS_CONTROL == _REVIEWED_PIRLS_CONTROL
+    assert _OPTIMIZER_MAXIMUM_BYTES == 64_000_000
     smooth_blocks = tuple(
         block
         for block in stream.prepared.predict_spec.coef_map.terms
@@ -150,91 +117,40 @@ def _optimizer_gate_digest(stream, family, params) -> str:
     )
     assert len(smooth_blocks) == 1
     smooth = smooth_blocks[0].smooth.spec
-    assert len(smooth.variables) == 1
+    assert tuple(smooth.variables) == ("x",)
+    assert smooth.bs == "cr"
+    assert smooth.k == 8
     assert smooth.by is None
     assert not smooth.extra_args
-    formula = (
-        f"{stream.prepared.response} ~ s({smooth.variables[0]}, "
-        f'bs="{smooth.bs}", k={smooth.k})'
-    )
-    review = raw.copy()
-    review.update(formula.encode())
-    review.update(float(_THETA).hex().encode())
-    if formula == 'y ~ s(x, bs="cr", k=8)':
-        assert review.hexdigest() == _OPTIMIZER_REVIEW_SHA256
+    assert stream.prepared.response == "y"
+    assert stream.prepared.n_coef == 8
     penalty = stream.prepared.fitting.penalty_structure
-    assert hashlib.sha256(_OPTIMIZER_MODEL_METADATA_PATH.read_bytes()).hexdigest() == (
-        _OPTIMIZER_MODEL_METADATA_SHA256
-    )
+    assert penalty.n_penalties == 1
     assert len(penalty.blocks) == 1
     assert len(penalty.blocks[0].local_penalties) == 1
-    with np.load(_OPTIMIZER_MODEL_METADATA_PATH, allow_pickle=False) as metadata:
-        np.testing.assert_allclose(
-            penalty.blocks[0].local_penalties[0].matrix,
-            metadata["penalty"],
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-        actual_transform = penalty.blocks[0].transform.matrix.T
-        expected_transform = metadata["transform"].T
-        np.testing.assert_allclose(
-            actual_transform[:, :, None] * actual_transform[:, None, :],
-            expected_transform[:, :, None] * expected_transform[:, None, :],
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-    penalty_coordinates = [
-        {
-            "local_penalties": [
-                {
-                    "shape": item.matrix.shape,
-                    "type": type(item).__qualname__,
-                }
-                for item in block.local_penalties
-            ],
-            "ranks": block.ranks,
-            "sp_indices": block.sp_indices,
-            "start": block.start,
-            "stop": block.stop,
-            "transform_shape": block.transform.matrix.shape,
-            "transform_type": type(block.transform).__qualname__,
-        }
-        for block in penalty.blocks
-    ]
-    payload = {
-        "basis_fingerprint": stream.prepared.basis_fingerprint,
-        "family": family.family_name,
-        "family_class": type(family).__qualname__,
-        "family_n_theta": family.n_theta,
-        "family_theta_hex": [
-            float(value).hex() for value in family.get_theta(transformed=False)
-        ],
-        "formula": formula,
-        "initial_params_hex": [float(value).hex() for value in params],
-        "link": type(family.link).__qualname__,
-        "maximum_bytes": _OPTIMIZER_MAXIMUM_BYTES,
-        "model_metadata_sha256": _OPTIMIZER_MODEL_METADATA_SHA256,
-        "n_coef": stream.prepared.n_coef,
-        "n_obs": stream.prepared.n_obs,
-        "optimizer_control": asdict(_OPTIMIZER_CONTROL),
-        "penalty_coordinates": penalty_coordinates,
-        "pirls_control": asdict(_OPTIMIZER_PIRLS_CONTROL),
-        "r_controls": {
-            "epsilon": 1e-11,
-            "max_iter": 200,
-            "newton_conv_tol": 1e-6,
-            "newton_max_half": 30,
-            "newton_max_n_step": 5,
-            "newton_max_s_step": 2,
-        },
-        "review_fixture_sha256": review.hexdigest(),
-        "source_fingerprint": stream.prepared.source_fingerprint,
-        "theta_hex": float(_THETA).hex(),
-    }
-    digest = hashlib.sha256()
-    digest.update(raw.digest())
-    digest.update(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
-    return digest.hexdigest()
+    assert penalty.blocks[0].ranks == (6,)
+    # A fresh preparation of the same generated rows protects local-D basis,
+    # penalty and transform coordinates without retaining numeric snapshots.
+    reference = prepare_model(
+        parse_formula('y ~ s(x, bs="cr", k=8)'), expected_source, family=family
+    )
+    assert stream.prepared.basis_fingerprint == reference.basis_fingerprint
+    np.testing.assert_allclose(
+        penalty.blocks[0].local_penalties[0].matrix,
+        reference.fitting.penalty_structure.blocks[0].local_penalties[0].matrix,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    actual_transform = penalty.blocks[0].transform.matrix.T
+    expected_transform = reference.fitting.penalty_structure.blocks[
+        0
+    ].transform.matrix.T
+    np.testing.assert_allclose(
+        actual_transform[:, :, None] * actual_transform[:, None, :],
+        expected_transform[:, :, None] * expected_transform[:, None, :],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
 
 
 def _optimize(link: str, *, estimated: bool, pin_lambda: bool = False):
@@ -287,7 +203,6 @@ def _dense_score(stream, family, trial, link):
 
 
 def _pinned_selected_reference(
-    tmp_path,
     stream,
     link,
     params,
@@ -303,70 +218,21 @@ def _pinned_selected_reference(
     E = np.zeros((len(roots[0].root), stream.prepared.n_coef))
     root = roots[0]
     E[:, root.start : root.stop] = root.root
-    for name, value in (
-        ("X", X),
-        ("E", E),
-        ("y", batch.y),
-        ("weight", batch.weight),
-        ("offset", batch.offset),
-        ("params", params),
-    ):
-        np.savetxt(tmp_path / name, value, fmt="%.17g")
-    script = r"""
-library(mgcv)
-stopifnot(getRversion()=="4.5.2",packageVersion("mgcv")=="1.9.3")
-a <- commandArgs(TRUE); d <- a[1]; link <- a[2]; estimated <- a[3]=="TRUE"
-epsilon <- as.double(a[4]); maxit <- as.integer(a[5])
-read <- function(name) as.matrix(read.table(file.path(d,name)))
-X <- read("X"); E <- read("E"); y <- c(read("y")); wt <- c(read("weight"))
-off <- c(read("offset")); params <- c(read("params")); theta <- 2.7
-fam <- mgcv:::fix.family.link(do.call(mgcv::nb,
- list(theta=if(estimated) -exp(params[length(params)]) else theta,link=link)))
-q <- ncol(X); rank <- nrow(E)
-U1 <- eigen(crossprod(E),symmetric=TRUE)$vectors
-UrS <- list(t(U1[,seq_len(rank),drop=FALSE]) %*% t(E))
-null <- qr.coef(qr(X),rep(fam$linkfun(mean(y)),length(y))); null[is.na(null)] <- 0
-sp <- if(estimated) c(params[2],params[1]) else params[1]
-fit <- mgcv:::gam.fit4(x=X,y=y,sp=sp,Eb=E,UrS=UrS,weights=wt,offset=off,
- U1=U1,Mp=q-rank,family=fam,
- control=mgcv::gam.control(epsilon=epsilon,maxit=maxit),deriv=1,scale=1,
- scoreType="REML",null.coef=null)
-stopifnot(fit$converged)
-writeBin(as.double(c(fit$REML,fit$iter,fit$deviance,
- fit$coefficients,fit$REML1)),file.path(d,"reference"),size=8,endian="little")
-"""
-    completed = subprocess.run(
-        [
-            "Rscript",
-            "-e",
-            script,
-            str(tmp_path),
-            link,
-            str(estimated).upper(),
-            f"{epsilon:.17g}",
-            str(max_iter),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    return RBridge(mode="subprocess").nb_selected_fit(
+        X,
+        E,
+        batch.y,
+        batch.weight,
+        batch.offset,
+        params,
+        link,
+        estimated=estimated,
+        epsilon=epsilon,
+        max_iter=max_iter,
     )
-    assert completed.returncode == 0, completed.stderr
-    raw = np.fromfile(tmp_path / "reference", dtype="<f8")
-    p = stream.prepared.n_coef
-    gradient = raw[3 + p :]
-    if estimated:
-        gradient = gradient[[1, 0]]
-    return {
-        "score": raw[0],
-        "iter": int(raw[1]),
-        "deviance": raw[2],
-        "beta": raw[3 : 3 + p],
-        "gradient": gradient,
-    }
 
 
 def _pinned_outer_reference(
-    tmp_path,
     stream,
     link,
     *,
@@ -375,60 +241,14 @@ def _pinned_outer_reference(
 ):
     source = getattr(stream.source, "source", stream.source)
     batch = next(source.scan(stream.prepared.n_obs))
-    for name, value in (
-        ("x", batch.columns["x"]),
-        ("y", batch.y),
-        ("weight", batch.weight),
-        ("offset", batch.offset),
-    ):
-        np.savetxt(tmp_path / name, value, fmt="%.17g")
-    script = r"""
-library(mgcv)
-stopifnot(getRversion()=="4.5.2",packageVersion("mgcv")=="1.9.3")
-a<-commandArgs(TRUE);d<-a[1];link<-a[2];estimated<-a[3]=="TRUE"
-pinned<-a[4]!="NONE";rho<-if(pinned)as.double(a[4])else 0
-v<-function(n)scan(file.path(d,n),quiet=TRUE)
-dat<-data.frame(x=v("x"),y=v("y"));w<-v("weight");o<-v("offset")
-fam<-do.call(nb,list(theta=if(estimated)-2.7 else 2.7,link=link))
-fit<-gam(y~s(x,bs="cr",k=8),data=dat,weights=w,offset=o,family=fam,
- sp=if(pinned)exp(rho)else NULL,method="REML",optimizer=c("outer","newton"),
- control=gam.control(epsilon=1e-11,maxit=200,
- newton=list(conv.tol=1e-6,maxNstep=5,maxSstep=2,maxHalf=30)))
-outer.full<-identical(fit$outer.info$conv,"full convergence")
-rho.out<-if(pinned)rho else log(fit$sp)
-writeBin(as.double(c(rho.out,fit$family$getTheta(),fit$gcv.ubre,
- fit$fitted.values,fit$deviance,sum(fit$edf),fit$sig2,fit$converged,
- outer.full,fit$outer.info$iter)),file.path(d,"outer"),size=8,endian="little")
-"""
-    completed = subprocess.run(
-        [
-            "Rscript",
-            "-e",
-            script,
-            str(tmp_path),
-            link,
-            str(estimated).upper(),
-            "NONE" if pinned_rho is None else f"{pinned_rho:.17g}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    return RBridge(mode="subprocess").nb_cubic_outer_fit(
+        pd.DataFrame({"x": batch.columns["x"], "y": batch.y}),
+        batch.weight,
+        batch.offset,
+        link,
+        estimated=estimated,
+        pinned_rho=pinned_rho,
     )
-    assert completed.returncode == 0, completed.stderr
-    raw = np.fromfile(tmp_path / "outer", dtype="<f8")
-    n = stream.prepared.n_obs
-    return {
-        "rho": raw[0],
-        "log_theta": raw[1],
-        "score": raw[2],
-        "fitted_values": raw[3 : 3 + n],
-        "deviance": raw[-6],
-        "edf": raw[-5],
-        "scale": raw[-4],
-        "inner_converged": bool(raw[-3]),
-        "outer_converged": bool(raw[-2]),
-        "outer_iterations": int(raw[-1]),
-    }
 
 
 @pytest.mark.parametrize("estimated", [False, True], ids=["fixed", "dynamic"])
@@ -534,10 +354,9 @@ def test_nb_optimizer_selected_trial_stationarity_and_nearby_dense_derivatives(
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
 @pytest.mark.parametrize("estimated", [False, True], ids=["fixed", "dynamic"])
 @pytest.mark.parametrize("link", _LINKS)
-def test_nb_optimizer_selected_state_matches_pinned_gam_fit4(tmp_path, link, estimated):
+def test_nb_optimizer_selected_state_matches_pinned_gam_fit4(link, estimated):
     stream, _family, _params, result = _optimize(link, estimated=estimated)
     expected = _pinned_selected_reference(
-        tmp_path,
         stream,
         link,
         np.asarray(result.trial.params),
@@ -566,16 +385,12 @@ def test_nb_optimizer_selected_state_matches_pinned_gam_fit4(tmp_path, link, est
 @pytest.mark.parametrize("estimated", [False, True], ids=["fixed", "dynamic"])
 @pytest.mark.parametrize("link", _LINKS)
 def test_nb_optimizer_independently_selected_fit_matches_pinned_outer_source(
-    tmp_path, link, estimated
+    link, estimated
 ):
     """The reviewed six-cell outer fit retains STRICT score agreement."""
     stream, family, initial, result = _optimize(link, estimated=estimated)
-    assert (
-        _optimizer_gate_digest(stream, family, initial)
-        == _SELECTED_GATE_DIGESTS[(link, estimated)]
-    )
+    _assert_optimizer_case(stream, family, initial, link=link, estimated=estimated)
     expected = _pinned_outer_reference(
-        tmp_path,
         stream,
         link,
         estimated=estimated,
@@ -665,19 +480,27 @@ def test_selected_fit_moderate_gate_binds_input_model_start_and_controls(
     monkeypatch,
 ):
     stream, family, initial = _optimizer_case("log", estimated=True)
-    expected = _SELECTED_GATE_DIGESTS[("log", True)]
-    assert _optimizer_gate_digest(stream, family, initial) == expected
+    _assert_optimizer_case(stream, family, initial, link="log", estimated=True)
 
     changed_start = initial.copy()
     changed_start[0] = np.nextafter(changed_start[0], np.inf)
-    assert _optimizer_gate_digest(stream, family, changed_start) != expected
+    with pytest.raises(AssertionError):
+        _assert_optimizer_case(
+            stream, family, changed_start, link="log", estimated=True
+        )
+
+    with pytest.raises(AssertionError):
+        _assert_optimizer_case(stream, family, initial, link="sqrt", estimated=True)
+    with pytest.raises(AssertionError):
+        _assert_optimizer_case(stream, family, initial, link="log", estimated=False)
 
     with monkeypatch.context() as control_patch:
         control_patch.setattr(
             __name__ + "._OPTIMIZER_CONTROL",
             replace(_OPTIMIZER_CONTROL, ftol=1e-13),
         )
-        assert _optimizer_gate_digest(stream, family, initial) != expected
+        with pytest.raises(AssertionError):
+            _assert_optimizer_case(stream, family, initial, link="log", estimated=True)
 
     source = getattr(stream.source, "source", stream.source)
     batch = next(source.scan(stream.prepared.n_obs))
@@ -698,7 +521,9 @@ def test_selected_fit_moderate_gate_binds_input_model_start_and_controls(
         changed_source,
     )
     with pytest.raises(AssertionError):
-        _optimizer_gate_digest(changed_stream, family, initial)
+        _assert_optimizer_case(
+            changed_stream, family, initial, link="log", estimated=True
+        )
 
     changed_basis_source = DataFrameRowSource(
         pd.DataFrame({"x": batch.columns["x"], "y": batch.y}),
@@ -715,7 +540,35 @@ def test_selected_fit_moderate_gate_binds_input_model_start_and_controls(
         changed_basis_source,
     )
     with pytest.raises(AssertionError):
-        _optimizer_gate_digest(changed_basis_stream, family, initial)
+        _assert_optimizer_case(
+            changed_basis_stream, family, initial, link="log", estimated=True
+        )
+
+
+@pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
+def test_nb_optimizer_generated_basis_and_penalty_match_live_pinned_r():
+    """Validate model coordinates through gam.setup instead of saved matrices."""
+    stream, family, initial = _optimizer_case("log", estimated=True)
+    _assert_optimizer_case(stream, family, initial, link="log", estimated=True)
+    source = getattr(stream.source, "source", stream.source)
+    batch = next(source.scan(stream.prepared.n_obs))
+    data = pd.DataFrame({"x": batch.columns["x"], "y": batch.y})
+    expected_X, expected_S, metadata = RBridge(mode="subprocess").nb_cubic_setup(
+        data, batch.weight, batch.offset
+    )
+    np.testing.assert_array_equal(metadata, [2.0, 6.0])
+    np.testing.assert_allclose(
+        stream.prepared.evaluate_batch(batch),
+        expected_X,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        stream.prepared.penalties.blocks[0].local_penalties[0].matrix,
+        expected_S,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
 
 
 @pytest.mark.parametrize("estimated", [False, True], ids=["fixed", "dynamic"])
@@ -762,16 +615,13 @@ def test_nb_optimizer_pins_supplied_rho_outside_estimated_bounds(link, estimated
 
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
 @pytest.mark.parametrize("link", _LINKS)
-def test_nb_optimizer_dynamic_pinned_rho_matches_tight_pinned_source_state(
-    tmp_path, link
-):
+def test_nb_optimizer_dynamic_pinned_rho_matches_tight_pinned_source_state(link):
     stream, _family, supplied, result = _optimize(
         link,
         estimated=True,
         pin_lambda=True,
     )
     expected = _pinned_selected_reference(
-        tmp_path,
         stream,
         link,
         np.asarray(result.trial.params),
