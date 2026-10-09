@@ -378,6 +378,37 @@ class TestRComparison:
 
         return smooth, r_result, {"x1": x1, "x2": x2}
 
+    def test_te_cr_source_normalization_matches_r_strict(self) -> None:
+        """smoothCon's DLANGE normalization is preserved before constraints."""
+        import pandas as pd
+
+        from tests.r_bridge import RBridge
+
+        position = np.arange(97, dtype=np.float64)
+        x = (position + 0.2 * np.sin(position * 0.7)) / len(position)
+        z = np.cos(position * 0.23) + 0.07 * np.sin(position * 0.91)
+        expected = RBridge(mode="rpy2").smooth_construct(
+            "te(x,z,bs='cr',k=3)",
+            pd.DataFrame({"x": x, "z": z}),
+        )
+        smooth = TensorProductSmooth(
+            make_smooth_spec(["x", "z"], bs="cr", k=3, smooth_type="te")
+        )
+        smooth.setup({"x": x, "z": z})
+
+        np.testing.assert_allclose(
+            smooth.training_design_matrix(),
+            expected["X"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        for observed, target in zip(
+            smooth.build_penalty_matrices(), expected["S"], strict=True
+        ):
+            np.testing.assert_allclose(
+                observed.S, target, rtol=STRICT.rtol, atol=STRICT.atol
+            )
+
     def _setup_te_tp(self) -> tuple:
         """Setup te(x1, x2, bs='tp', k=5) for R comparison."""
         import pandas as pd

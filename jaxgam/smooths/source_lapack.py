@@ -1,0 +1,850 @@
+"""Pinned LAPACK provider for source-exact cubic shrinkage penalties.
+
+The cubic shrinkage and thin-plate constructors are sensitive to their numeric
+provider's null-space coordinates.  This module binds only the required
+LAPACKE/CBLAS entry points from two declared packages: the accepted
+``scipy-openblas32==0.3.26.0.4`` cubic provider and the source-coordinate
+``scipy-openblas64==0.3.30.0.2`` Lanczos provider.  It never searches for R or
+a system BLAS/LAPACK and does not replace NumPy/SciPy's backend.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import functools
+import sys
+from dataclasses import dataclass
+from importlib import metadata as importlib_metadata
+from importlib import util as importlib_util
+from pathlib import Path
+
+import numpy as np
+import numpy.typing as npt
+
+_PROVIDER_VERSION = "0.3.26.0.4"
+_OPENBLAS_PREFIX = "OpenBLAS 0.3.26 "
+_LANCZOS_PROVIDER_VERSION = "0.3.30.0.2"
+_LANCZOS_OPENBLAS_PREFIX = "OpenBLAS 0.3.30 "
+_LAPACK_ROW_MAJOR = 101
+_LAPACK_COL_MAJOR = 102
+_CBLAS_ROW_MAJOR = 101
+_CBLAS_NO_TRANS = 111
+_CBLAS_TRANS = 112
+_CBLAS_UPPER = 121
+_LAPACK_INT_MAX = np.iinfo(np.int32).max
+_LANCZOS_INT_MAX = np.iinfo(np.int64).max
+
+
+@dataclass(frozen=True)
+class _DeclaredProvider:
+    """Validated package metadata without executing its eager global loader."""
+
+    package: str
+    version: str
+    config: str
+    library_path: Path
+    library_name: str
+
+    @property
+    def __version__(self) -> str:
+        return self.version
+
+    def get_openblas_config(self) -> str:
+        return self.config
+
+    def get_lib_dir(self) -> str:
+        return str(self.library_path.parent)
+
+    def get_library(self) -> str:
+        return self.library_name
+
+
+@dataclass(frozen=True)
+class _SourceLapack:
+    """Validated LP64 function handles owned by the declared provider."""
+
+    module: _DeclaredProvider
+    library: ctypes.CDLL
+    dsyevr_work: object
+    dgemm: object
+    dptsv: object
+
+
+@dataclass(frozen=True)
+class _SourceLanczos:
+    """Pinned provider handles for the retained Lanczos implementation."""
+
+    module: _DeclaredProvider
+    library: ctypes.CDLL
+    dsyevd_work: object
+    dgemv: object
+    dgemm: object
+    ddot: object
+    dnrm2: object
+
+
+def source_lanczos_workspace_bound(n: int, k: int) -> int:
+    """Bound workspace beyond the retained symmetric input matrix.
+
+    The peak owns the retained matrix copy, full Lanczos vectors, a copied
+    row-major prefix, DSYEVD eigenvectors/work (including the LAPACKE layout
+    conversion), output Ritz vectors, scalar work vectors, and integer work.
+    The caller separately owns the symmetric input matrix.  The bound is
+    deliberately independent of convergence timing.
+    """
+    for name, value in (("n", n), ("k", k)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"Source Lanczos {name} must be a positive integer.")
+    if k > n:
+        raise ValueError("Source Lanczos k cannot exceed n.")
+    if n > _LANCZOS_INT_MAX:
+        raise ValueError("Source Lanczos dimension exceeds the ILP64 integer range.")
+    return 8 * (7 * n * n + 2 * n * k + 19 * n + 35)
+
+
+def cubic_shrinkage_workspace_bound(k: int) -> int:
+    """Return a conservative peak byte bound beyond the retained input S.
+
+    The eigensolve peak owns the overwritten input copy, eigenvectors, values,
+    support indices, and capped DSYEVR work arrays.  The reconstruction peak
+    owns eigenvectors, the scaled transposed factor, and the returned penalty.
+    The caps are checked against the provider's workspace query before either
+    full work array is allocated.
+    """
+    if isinstance(k, bool) or not isinstance(k, int) or k < 3:
+        raise ValueError("Cubic shrinkage dimension must be an integer >= 3.")
+    eigensolve_peak = 16 * k * k + (8 + 8 + 8 * 64 + 4 * 32) * k + 16
+    reconstruction_peak = 24 * k * k + 16 * k
+    return max(eigensolve_peak, reconstruction_peak)
+
+
+def _provider_library_path(package: str, *, darwin_name: str, linux_name: str) -> Path:
+    # Distribution names use hyphens while their import packages use
+    # underscores.  ``find_spec`` locates the package without executing its
+    # eager ``__init__`` (which would load OpenBLAS with ``RTLD_GLOBAL``).
+    spec = importlib_util.find_spec(package.replace("-", "_"))
+    if spec is None or spec.origin is None:
+        raise RuntimeError(f"Declared numeric provider {package!r} is unavailable.")
+    library_dir = (Path(spec.origin).resolve().parent / "lib").resolve()
+    if sys.platform == "darwin":
+        library = library_dir / darwin_name
+    elif sys.platform.startswith("linux"):
+        library = library_dir / linux_name
+    elif sys.platform == "win32":
+        libraries = sorted(library_dir.glob("*.dll"))
+        if len(libraries) != 1:
+            raise RuntimeError(f"{package} must contain exactly one package-local DLL.")
+        library = libraries[0]
+    else:
+        raise RuntimeError(f"No declared {package} wheel supports this platform.")
+    library = library.resolve()
+    if library.parent != library_dir or not library.is_file():
+        raise RuntimeError(f"Pinned OpenBLAS library is unavailable at {library}.")
+    return library
+
+
+def _declared_provider(
+    package: str,
+    *,
+    version: str,
+    prefix: str,
+    darwin_name: str,
+    linux_name: str,
+    library_name: str,
+    config_symbol: str,
+    ilp64: bool,
+) -> tuple[_DeclaredProvider, ctypes.CDLL]:
+    try:
+        actual_version = importlib_metadata.version(package)
+    except importlib_metadata.PackageNotFoundError as exc:
+        raise RuntimeError(
+            f"Declared numeric provider {package!r} is unavailable."
+        ) from exc
+    if actual_version != version:
+        raise RuntimeError(f"{package}=={version} is required; found {actual_version}.")
+    path = _provider_library_path(
+        package, darwin_name=darwin_name, linux_name=linux_name
+    )
+    library = ctypes.CDLL(str(path), ctypes.RTLD_LOCAL)
+    try:
+        config_function = getattr(library, config_symbol)
+    except AttributeError as exc:
+        raise RuntimeError(f"{package} does not export {config_symbol}.") from exc
+    config_function.argtypes = []
+    config_function.restype = ctypes.c_char_p
+    raw_config = config_function()
+    if raw_config is None:
+        raise RuntimeError(f"{package} returned an empty OpenBLAS configuration.")
+    config = raw_config.decode()
+    if not config.startswith(prefix):
+        raise RuntimeError(f"{package} returned unexpected config {config!r}.")
+    config_is_ilp64 = "USE64BITINT" in config.split()
+    if config_is_ilp64 != ilp64:
+        expected = "ILP64" if ilp64 else "LP64"
+        raise RuntimeError(f"{package} does not provide the required {expected} ABI.")
+    provider = _DeclaredProvider(package, actual_version, config, path, library_name)
+    return provider, library
+
+
+@functools.lru_cache(maxsize=1)
+def _source_lapack() -> _SourceLapack:
+    provider, library = _declared_provider(
+        "scipy-openblas32",
+        version=_PROVIDER_VERSION,
+        prefix=_OPENBLAS_PREFIX,
+        darwin_name="libscipy_openblas.dylib",
+        linux_name="libscipy_openblas.so",
+        library_name="scipy_openblas",
+        config_symbol="scipy_openblas_get_config",
+        ilp64=False,
+    )
+    lapack_int = ctypes.c_int
+    double = ctypes.c_double
+    int_pointer = ctypes.POINTER(lapack_int)
+    double_pointer = ctypes.POINTER(double)
+    try:
+        dsyevr_work = library.scipy_LAPACKE_dsyevr_work
+        dgemm = library.scipy_cblas_dgemm
+        dptsv = library.scipy_LAPACKE_dptsv
+    except AttributeError as exc:
+        raise RuntimeError(
+            "Pinned OpenBLAS provider does not export the required LP64 "
+            "LAPACKE/CBLAS symbols."
+        ) from exc
+    dsyevr_work.argtypes = [
+        lapack_int,
+        ctypes.c_char,
+        ctypes.c_char,
+        ctypes.c_char,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double,
+        double,
+        lapack_int,
+        lapack_int,
+        double,
+        int_pointer,
+        double_pointer,
+        double_pointer,
+        lapack_int,
+        int_pointer,
+        double_pointer,
+        lapack_int,
+        int_pointer,
+        lapack_int,
+    ]
+    dsyevr_work.restype = lapack_int
+    dgemm.argtypes = [
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+    ]
+    dgemm.restype = None
+    dptsv.argtypes = [
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        double_pointer,
+        double_pointer,
+        double_pointer,
+        lapack_int,
+    ]
+    dptsv.restype = lapack_int
+    return _SourceLapack(provider, library, dsyevr_work, dgemm, dptsv)
+
+
+@functools.lru_cache(maxsize=1)
+def _source_lanczos() -> _SourceLanczos:
+    """Load only the source Rlanczos entry points from the pinned provider."""
+    provider, library = _declared_provider(
+        "scipy-openblas64",
+        version=_LANCZOS_PROVIDER_VERSION,
+        prefix=_LANCZOS_OPENBLAS_PREFIX,
+        darwin_name="libscipy_openblas64_.dylib",
+        linux_name="libscipy_openblas64_.so",
+        library_name="scipy_openblas64_",
+        config_symbol="scipy_openblas_get_config64_",
+        ilp64=True,
+    )
+    enum_int = ctypes.c_int
+    lapack_int = ctypes.c_int64
+    double = ctypes.c_double
+    int_pointer = ctypes.POINTER(lapack_int)
+    double_pointer = ctypes.POINTER(double)
+    try:
+        dsyevd_work = library.scipy_LAPACKE_dsyevd_work64_
+        dgemv = library.scipy_cblas_dgemv64_
+        dgemm = library.scipy_cblas_dgemm64_
+        ddot = library.scipy_cblas_ddot64_
+        dnrm2 = library.scipy_cblas_dnrm264_
+    except AttributeError as exc:
+        raise RuntimeError(
+            "Pinned OpenBLAS provider does not export the source Lanczos "
+            "ILP64 LAPACKE/CBLAS symbols."
+        ) from exc
+    dsyevd_work.argtypes = [
+        enum_int,
+        ctypes.c_char,
+        ctypes.c_char,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        double_pointer,
+        lapack_int,
+        int_pointer,
+        lapack_int,
+    ]
+    dsyevd_work.restype = lapack_int
+    dgemv.argtypes = [
+        enum_int,
+        enum_int,
+        lapack_int,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+    ]
+    dgemv.restype = None
+    dgemm.argtypes = [
+        enum_int,
+        enum_int,
+        enum_int,
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+    ]
+    dgemm.restype = None
+    ddot.argtypes = [
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+    ]
+    ddot.restype = double
+    dnrm2.argtypes = [lapack_int, double_pointer, lapack_int]
+    dnrm2.restype = double
+    return _SourceLanczos(provider, library, dsyevd_work, dgemv, dgemm, ddot, dnrm2)
+
+
+def source_lanczos(
+    matrix: npt.NDArray[np.float64],
+    k: int,
+    *,
+    tol: float | None = None,
+    available_workspace_bytes: int | None = None,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Run the retained Rlanczos port on the declared numeric provider.
+
+    JaxGAM deliberately uses a tighter convergence check than mgcv's raw
+    truncated iteration because canonical tensor coordinates can amplify a
+    merely converged Ritz residual.  The established algorithm is unchanged:
+    deterministic start, two block reorthogonalization passes and dense
+    symmetric decomposition of the tridiagonal iterate.  Pinning every BLAS
+    and eigen operation removes the Accelerate/OpenBLAS coordinate split.
+    """
+    if not isinstance(matrix, np.ndarray) or matrix.dtype != np.dtype(np.float64):
+        raise TypeError("Source Lanczos matrix must be a float64 NumPy array.")
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("Source Lanczos matrix must be square.")
+    n = matrix.shape[0]
+    required = source_lanczos_workspace_bound(n, k)
+    if available_workspace_bytes is not None:
+        if (
+            isinstance(available_workspace_bytes, bool)
+            or not isinstance(available_workspace_bytes, int)
+            or available_workspace_bytes < 0
+        ):
+            raise ValueError("available_workspace_bytes must be a nonnegative integer.")
+        if required > available_workspace_bytes:
+            raise MemoryError(
+                f"Source Lanczos requires {required} workspace bytes; "
+                f"{available_workspace_bytes} available."
+            )
+    if tol is None:
+        tol = np.finfo(float).eps ** 0.7
+    if not np.isfinite(tol) or tol <= 0.0 or tol > 0.01:
+        raise ValueError("Source Lanczos tolerance must lie in (0, 0.01].")
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("Source Lanczos matrix must contain only finite values.")
+
+    source = _source_lanczos()
+    double_pointer = ctypes.POINTER(ctypes.c_double)
+    int_pointer = ctypes.POINTER(ctypes.c_int64)
+    one = 1
+    # Match the established Numba implementation's C-contiguous operands.
+    a_matrix = np.array(matrix, dtype=np.float64, order="C", copy=True)
+    q = np.empty((n, n), dtype=np.float64, order="C")
+    jran = 1
+    squared = 0.0
+    for i in range(n):
+        jran = (jran * 106 + 1283) % 6075
+        value = jran / 6075.0 - 0.5
+        q[i, 0] = value
+        squared += value * value
+    length = np.sqrt(squared)
+    for i in range(n):
+        q[i, 0] /= length
+
+    alpha = np.empty(n, dtype=np.float64)
+    beta = np.empty(n, dtype=np.float64)
+    z = np.empty(n, dtype=np.float64)
+    f_check = max(10, k // 2)
+    f_check = min(f_check, max(1, n // 10))
+    d = np.empty(0, dtype=np.float64)
+    vectors = np.empty((0, 0), dtype=np.float64)
+    j_final = n
+    n_positive = 0
+    n_negative = 0
+    converged = False
+
+    for j in range(n):
+        qj = np.ascontiguousarray(q[:, j])
+        source.dgemv(
+            _CBLAS_ROW_MAJOR,
+            _CBLAS_NO_TRANS,
+            n,
+            n,
+            1.0,
+            a_matrix.ctypes.data_as(double_pointer),
+            n,
+            qj.ctypes.data_as(double_pointer),
+            one,
+            0.0,
+            z.ctypes.data_as(double_pointer),
+            one,
+        )
+        value = source.ddot(
+            n,
+            qj.ctypes.data_as(double_pointer),
+            one,
+            z.ctypes.data_as(double_pointer),
+            one,
+        )
+        del qj
+        alpha[j] = value
+        if j == 0:
+            for i in range(n):
+                z[i] -= value * q[i, j]
+        else:
+            previous = beta[j - 1]
+            for i in range(n):
+                z[i] -= value * q[i, j] + previous * q[i, j - 1]
+            coefficients = np.empty(j + 1, dtype=np.float64)
+            q_columns = np.ascontiguousarray(q[:, : j + 1])
+            for _ in range(2):
+                source.dgemv(
+                    _CBLAS_ROW_MAJOR,
+                    _CBLAS_TRANS,
+                    n,
+                    j + 1,
+                    1.0,
+                    q_columns.ctypes.data_as(double_pointer),
+                    j + 1,
+                    z.ctypes.data_as(double_pointer),
+                    one,
+                    0.0,
+                    coefficients.ctypes.data_as(double_pointer),
+                    one,
+                )
+                source.dgemv(
+                    _CBLAS_ROW_MAJOR,
+                    _CBLAS_NO_TRANS,
+                    n,
+                    j + 1,
+                    -1.0,
+                    q_columns.ctypes.data_as(double_pointer),
+                    j + 1,
+                    coefficients.ctypes.data_as(double_pointer),
+                    one,
+                    1.0,
+                    z.ctypes.data_as(double_pointer),
+                    one,
+                )
+            del q_columns, coefficients
+        beta[j] = source.dnrm2(n, z.ctypes.data_as(double_pointer), one)
+        if j < n - 1:
+            for i in range(n):
+                q[i, j + 1] = z[i] / beta[j]
+        if not ((j >= k and j % f_check == 0) or j == n - 1):
+            continue
+
+        size = j + 1
+        tridiagonal = np.zeros((size, size), dtype=np.float64, order="C")
+        for index in range(size):
+            tridiagonal[index, index] = alpha[index]
+        for index in range(j):
+            tridiagonal[index, index + 1] = beta[index]
+            tridiagonal[index + 1, index] = beta[index]
+        d = np.empty(size, dtype=np.float64)
+        work_query = np.empty(1, dtype=np.float64)
+        iwork_query = np.empty(1, dtype=np.int64)
+        status = source.dsyevd_work(
+            _LAPACK_ROW_MAJOR,
+            b"V",
+            b"L",
+            size,
+            tridiagonal.ctypes.data_as(double_pointer),
+            size,
+            d.ctypes.data_as(double_pointer),
+            work_query.ctypes.data_as(double_pointer),
+            -1,
+            iwork_query.ctypes.data_as(int_pointer),
+            -1,
+        )
+        if status != 0:
+            raise np.linalg.LinAlgError(
+                f"DSYEVD workspace query failed with info={status}."
+            )
+        lwork = _query_length(
+            work_query[0],
+            name="lwork",
+            cap=max(2 * size * size + 6 * size + 1, 34 * size),
+            integer_max=_LANCZOS_INT_MAX,
+        )
+        liwork = _query_length(
+            iwork_query[0],
+            name="liwork",
+            cap=5 * size + 3,
+            integer_max=_LANCZOS_INT_MAX,
+        )
+        work = np.empty(lwork, dtype=np.float64)
+        iwork = np.empty(liwork, dtype=np.int64)
+        status = source.dsyevd_work(
+            _LAPACK_ROW_MAJOR,
+            b"V",
+            b"L",
+            size,
+            tridiagonal.ctypes.data_as(double_pointer),
+            size,
+            d.ctypes.data_as(double_pointer),
+            work.ctypes.data_as(double_pointer),
+            lwork,
+            iwork.ctypes.data_as(int_pointer),
+            liwork,
+        )
+        if status != 0:
+            raise np.linalg.LinAlgError(f"DSYEVD failed with info={status}.")
+        del work_query, iwork_query, work, iwork
+        d = d[::-1].copy()
+        vectors = tridiagonal[:, ::-1].copy(order="C")
+        del tridiagonal
+        norm = max(abs(d[0]), abs(d[-1]))
+        errors = np.abs(beta[j] * vectors[-1, :])
+        positive = negative = 0
+        ok = True
+        while positive + negative < k:
+            if abs(d[positive]) >= abs(d[j - negative]):
+                if errors[positive] > norm * tol:
+                    ok = False
+                    break
+                positive += 1
+            else:
+                # This index is intentionally source ordered (mat.c Rlanczos).
+                if errors[negative] > norm * tol:
+                    ok = False
+                    break
+                negative += 1
+        if ok:
+            j_final = size
+            n_positive = positive
+            n_negative = negative
+            converged = True
+            break
+        if j < n - 1:
+            # Failed intermediate Ritz vectors are not needed by later iterations.
+            d = np.empty(0, dtype=np.float64)
+            vectors = np.empty((0, 0), dtype=np.float64)
+
+    if not converged:
+        positive = negative = 0
+        while positive + negative < k:
+            if abs(d[positive]) >= abs(d[n - 1 - negative]):
+                positive += 1
+            else:
+                negative += 1
+        n_positive = positive
+        n_negative = negative
+    selected = list(range(n_positive)) + list(range(j_final - n_negative, j_final))
+    values = np.empty(k, dtype=np.float64)
+    selected_vectors = np.empty((j_final, k), dtype=np.float64, order="C")
+    for output_column, input_column in enumerate(selected):
+        values[output_column] = d[input_column]
+        selected_vectors[:, output_column] = vectors[:, input_column]
+    del a_matrix, alpha, beta, z, d, vectors
+    q_columns = np.ascontiguousarray(q[:, :j_final])
+    output = np.empty((n, k), dtype=np.float64, order="C")
+    source.dgemm(
+        _CBLAS_ROW_MAJOR,
+        _CBLAS_NO_TRANS,
+        _CBLAS_NO_TRANS,
+        n,
+        k,
+        j_final,
+        1.0,
+        q_columns.ctypes.data_as(double_pointer),
+        j_final,
+        selected_vectors.ctypes.data_as(double_pointer),
+        k,
+        0.0,
+        output.ctypes.data_as(double_pointer),
+        k,
+    )
+    return values, output
+
+
+def _check_input_shape(S: npt.NDArray[np.float64]) -> int:
+    if not isinstance(S, np.ndarray) or S.dtype != np.dtype(np.float64):
+        raise TypeError("Cubic shrinkage penalty must be a float64 NumPy array.")
+    if S.ndim != 2 or S.shape[0] != S.shape[1] or S.shape[0] < 3:
+        raise ValueError("Cubic shrinkage penalty must be square with k >= 3.")
+    if S.shape[0] > _LAPACK_INT_MAX:
+        raise ValueError("Cubic shrinkage dimension exceeds the LP64 integer range.")
+    return S.shape[0]
+
+
+def _check_input_finite(S: npt.NDArray[np.float64]) -> None:
+    if not np.all(np.isfinite(S)):
+        raise ValueError("Cubic shrinkage penalty must contain only finite values.")
+
+
+def natural_cubic_system_solve(
+    diagonal: npt.NDArray[np.float64],
+    off_diagonal: npt.NDArray[np.float64],
+    rhs: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Solve pinned ``getFS``'s positive-definite tridiagonal system.
+
+    Pinned mgcv calls Netlib ``DPTSV`` directly for this operation.  Calling
+    the same entry point preserves its factorization and multiple-RHS
+    arithmetic instead of approximating it with algebraically equivalent
+    Python loops.
+    """
+    if not isinstance(diagonal, np.ndarray) or diagonal.dtype != np.float64:
+        raise TypeError("Natural cubic diagonal must be a float64 NumPy array.")
+    if not isinstance(off_diagonal, np.ndarray) or off_diagonal.dtype != np.float64:
+        raise TypeError("Natural cubic off-diagonal must be a float64 NumPy array.")
+    if not isinstance(rhs, np.ndarray) or rhs.dtype != np.float64:
+        raise TypeError("Natural cubic right-hand side must be a float64 NumPy array.")
+    if diagonal.ndim != 1 or diagonal.size < 1:
+        raise ValueError("Natural cubic diagonal must be nonempty and one-dimensional.")
+    n = diagonal.size
+    if n > _LAPACK_INT_MAX:
+        raise ValueError("Natural cubic dimension exceeds the LP64 integer range.")
+    if off_diagonal.shape != (n - 1,):
+        raise ValueError("Natural cubic off-diagonal has the wrong shape.")
+    if rhs.ndim != 2 or rhs.shape[0] != n or rhs.shape[1] < 1:
+        raise ValueError("Natural cubic right-hand side has the wrong shape.")
+    if rhs.shape[1] > _LAPACK_INT_MAX:
+        raise ValueError("Natural cubic right-hand side count exceeds LP64 range.")
+    if not (
+        np.all(np.isfinite(diagonal))
+        and np.all(np.isfinite(off_diagonal))
+        and np.all(np.isfinite(rhs))
+    ):
+        raise ValueError("Natural cubic system must contain only finite values.")
+
+    diagonal_copy = np.array(diagonal, dtype=np.float64, order="C", copy=True)
+    off_diagonal_copy = np.array(off_diagonal, dtype=np.float64, order="C", copy=True)
+    solution = np.array(rhs, dtype=np.float64, order="F", copy=True)
+    provider = _source_lapack()
+    double_pointer = ctypes.POINTER(ctypes.c_double)
+    info = provider.dptsv(
+        _LAPACK_COL_MAJOR,
+        n,
+        solution.shape[1],
+        diagonal_copy.ctypes.data_as(double_pointer),
+        off_diagonal_copy.ctypes.data_as(double_pointer),
+        solution.ctypes.data_as(double_pointer),
+        n,
+    )
+    if info < 0:
+        raise RuntimeError(f"Pinned DPTSV rejected argument {-info}.")
+    if info > 0:
+        raise np.linalg.LinAlgError(
+            "Natural cubic knot system is not positive definite."
+        )
+    return solution
+
+
+def _query_length(
+    value: float | np.integer,
+    *,
+    name: str,
+    cap: int,
+    integer_max: int = _LAPACK_INT_MAX,
+) -> int:
+    numeric = float(value)
+    if (
+        not np.isfinite(numeric)
+        or not numeric.is_integer()
+        or numeric < 1.0
+        or numeric > integer_max
+    ):
+        raise RuntimeError(
+            f"Pinned DSYEVR returned an invalid LP64 {name} query: {value!r}."
+        )
+    result = int(numeric)
+    if result > cap:
+        raise RuntimeError(
+            "Pinned DSYEVR returned workspace outside the declared bound: "
+            f"{name}={result}, cap={cap}."
+        )
+    return result
+
+
+def cubic_shrinkage_penalty(
+    S: npt.NDArray[np.float64],
+    *,
+    shrink: float = 0.1,
+    available_workspace_bytes: int | None = None,
+) -> npt.NDArray[np.float64]:
+    """Apply mgcv's source-ordered cubic shrinkage eigentransform.
+
+    The provider returns ascending eigenpairs.  R's ``eigen`` returns them in
+    descending order, and that order is load-bearing for repeated null values
+    and GEMM accumulation.  The two null replacements are also intentionally
+    assigned sequentially, as in ``smooth.r`` lines 1495--1498.
+    """
+    k = _check_input_shape(S)
+    required = cubic_shrinkage_workspace_bound(k)
+    if available_workspace_bytes is not None:
+        if (
+            isinstance(available_workspace_bytes, bool)
+            or not isinstance(available_workspace_bytes, int)
+            or available_workspace_bytes < 0
+        ):
+            raise ValueError("available_workspace_bytes must be a nonnegative integer.")
+        if required > available_workspace_bytes:
+            raise MemoryError(
+                "Cubic shrinkage requires "
+                f"{required} workspace bytes; {available_workspace_bytes} available."
+            )
+    if not np.isfinite(shrink) or shrink <= 0.0:
+        raise ValueError("Cubic shrinkage factor must be finite and positive.")
+    _check_input_finite(S)
+
+    provider = _source_lapack()
+    lapack_int = ctypes.c_int
+    double = ctypes.c_double
+    double_pointer = ctypes.POINTER(double)
+    int_pointer = ctypes.POINTER(lapack_int)
+
+    a = np.array(S, dtype=np.float64, order="F", copy=True)
+    values = np.empty(k, dtype=np.float64)
+    vectors = np.empty((k, k), dtype=np.float64, order="F")
+    support = np.empty(2 * k, dtype=np.int32)
+    count = lapack_int(0)
+    work_query = np.empty(1, dtype=np.float64)
+    iwork_query = np.empty(1, dtype=np.int32)
+
+    def arguments(
+        matrix: np.ndarray,
+        support_array: np.ndarray,
+        work: np.ndarray,
+        iwork: np.ndarray,
+        lwork: int,
+        liwork: int,
+    ):
+        return (
+            _LAPACK_COL_MAJOR,
+            b"V",
+            b"A",
+            b"L",
+            k,
+            matrix.ctypes.data_as(double_pointer),
+            k,
+            0.0,
+            0.0,
+            0,
+            0,
+            0.0,
+            ctypes.byref(count),
+            values.ctypes.data_as(double_pointer),
+            vectors.ctypes.data_as(double_pointer),
+            k,
+            support_array.ctypes.data_as(int_pointer),
+            work.ctypes.data_as(double_pointer),
+            lwork,
+            iwork.ctypes.data_as(int_pointer),
+            liwork,
+        )
+
+    status = provider.dsyevr_work(
+        *arguments(a, support, work_query, iwork_query, -1, -1)
+    )
+    if status != 0:
+        raise np.linalg.LinAlgError(
+            f"DSYEVR workspace query failed with info={status}."
+        )
+    lwork = _query_length(work_query[0], name="lwork", cap=64 * k)
+    liwork = _query_length(iwork_query[0], name="liwork", cap=32 * k)
+    work = np.empty(lwork, dtype=np.float64)
+    iwork = np.empty(liwork, dtype=np.int32)
+    np.copyto(a, S)
+    count.value = 0
+    status = provider.dsyevr_work(*arguments(a, support, work, iwork, lwork, liwork))
+    if status != 0:
+        raise np.linalg.LinAlgError(f"DSYEVR failed with info={status}.")
+    if count.value != k:
+        raise np.linalg.LinAlgError(
+            f"DSYEVR returned {count.value} eigenpairs for a {k} by {k} penalty."
+        )
+    del a, support, work_query, iwork_query, work, iwork
+    if not np.all(np.isfinite(values)) or not np.all(np.isfinite(vectors)):
+        raise np.linalg.LinAlgError("DSYEVR returned non-finite eigenpairs.")
+
+    values = values[::-1].copy()
+    for left in range(k // 2):
+        right_column = k - 1 - left
+        temporary = vectors[:, left].copy()
+        vectors[:, left] = vectors[:, right_column]
+        vectors[:, right_column] = temporary
+    values[-2] = values[-3] * shrink
+    values[-1] = values[-2] * shrink
+    right = np.empty((k, k), dtype=np.float64, order="F")
+    np.multiply(values[:, None], vectors.T, out=right)
+    penalty = np.empty((k, k), dtype=np.float64, order="F")
+    provider.dgemm(
+        _LAPACK_COL_MAJOR,
+        _CBLAS_NO_TRANS,
+        _CBLAS_NO_TRANS,
+        k,
+        k,
+        k,
+        1.0,
+        vectors.ctypes.data_as(double_pointer),
+        k,
+        right.ctypes.data_as(double_pointer),
+        k,
+        0.0,
+        penalty.ctypes.data_as(double_pointer),
+        k,
+    )
+    return penalty

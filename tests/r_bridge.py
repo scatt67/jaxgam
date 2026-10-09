@@ -613,6 +613,181 @@ class RBridge:
             return self._fit_rpy2(formula, data, family, method)
         return self._fit_subprocess(formula, data, family, method)
 
+    def _source_cubic_spec(self, *, basis: str, k: int) -> Any:
+        """Build an unevaluated cubic specification with ``x`` as an R symbol."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        from tests.r_ast import symbol
+
+        arguments = rinterface.ListSexpVector(
+            [
+                self._mgcv.s,
+                symbol("x"),
+                self._ro.StrVector([basis]),
+                self._ro.IntVector([k]),
+            ]
+        )
+        arguments.names = self._ro.StrVector(["", "", "bs", "k"])
+        return self._ro.r["evalq"](self._ro.r["as.call"](arguments))
+
+    def source_cubic_smooth(self, x: np.ndarray, *, basis: str, k: int) -> Any:
+        """Construct one installed mgcv cubic smooth as an R object."""
+        spec = self._source_cubic_spec(basis=basis, k=k)
+        frame = self._to_r_dataframe(pd.DataFrame({"x": x}))
+        return self._call_internal("smooth.construct", spec, frame, knots=self._ro.NULL)
+
+    def source_cubic_prediction(
+        self, x: np.ndarray, new_x: np.ndarray, *, k: int
+    ) -> np.ndarray:
+        """Evaluate pinned cubic extrapolation through ``PredictMat``."""
+        spec = self._source_cubic_spec(basis="cr", k=k)
+        source = self._to_r_dataframe(pd.DataFrame({"x": x}))
+        smooth = self._mgcv.smoothCon(spec, source, absorb_cons=False)[0]
+        frame = self._to_r_dataframe(pd.DataFrame({"x": new_x}))
+        return np.asarray(self._mgcv.PredictMat(smooth, frame))
+
+    def source_cubic_knots(self, x: np.ndarray, *, basis: str, k: int) -> np.ndarray:
+        """Return pinned cubic knot placement from ``smooth.construct``."""
+        return np.asarray(self.source_cubic_smooth(x, basis=basis, k=k).rx2("xp"))
+
+    def source_cubic_shrinkage_penalty(self, penalty: np.ndarray) -> np.ndarray:
+        """Apply pinned R eigenvalue shrinkage to an identical raw penalty."""
+        self._require_rpy2()
+        base = self._ro.baseenv
+        eigensystem = self._base.eigen(self._to_r_matrix(penalty), symmetric=True)
+        values = eigensystem.rx2("values")
+        count = len(values)
+        values = base["[<-"](
+            values,
+            count - 1,
+            value=base["*"](base["["](values, count - 2), 0.1),
+        )
+        values = base["[<-"](
+            values,
+            count,
+            value=base["*"](base["["](values, count - 1), 0.1),
+        )
+        vectors = eigensystem.rx2("vectors")
+        return np.asarray(
+            base["%*%"](
+                vectors,
+                base["*"](self._base.as_numeric(values), self._base.t(vectors)),
+            )
+        )
+
+    def source_penalty_frobenius_norms(
+        self, penalties: tuple[np.ndarray, ...]
+    ) -> np.ndarray:
+        """Reduce source penalty squares in R's column-major sum order."""
+        self._require_rpy2()
+        multiply = self._ro.baseenv["*"]
+        values = []
+        for penalty in penalties:
+            matrix = np.asarray(penalty, dtype=np.float64)
+            if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+                raise ValueError("Source penalty norm requires square matrices")
+            source_matrix = self._to_r_matrix(matrix)
+            values.append(
+                float(
+                    self._base.sqrt(
+                        self._base.sum(multiply(source_matrix, source_matrix))
+                    )[0]
+                )
+            )
+        return np.asarray(values, dtype=np.float64)
+
+    def source_gaussian_rank_fit(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        smoothing_parameters: np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+    ) -> dict[str, Any]:
+        """Call pinned ``gam.setup``/``gam.fit3`` in its public rank gauge."""
+        from rpy2.robjects import ListVector
+
+        self._require_rpy2()
+        smoothing = np.atleast_1d(np.asarray(smoothing_parameters, dtype=np.float64))
+        weight_array = np.asarray(weights, dtype=np.float64)
+        offset_array = np.asarray(offset, dtype=np.float64)
+        if (
+            smoothing.ndim != 1
+            or not len(smoothing)
+            or np.any(smoothing <= 0)
+            or weight_array.shape != (len(data),)
+            or offset_array.shape != (len(data),)
+        ):
+            raise ValueError("Gaussian rank oracle inputs are invalid")
+        r_formula = self._ro.Formula(formula)
+        frame = self._to_r_dataframe(data)
+        interpreted = self._call_internal("interpret.gam", r_formula)
+        setup = self._call_internal(
+            "gam.setup", interpreted, self._stats.terms(interpreted.rx2("pf")), frame
+        )
+        design = setup.rx2("X")
+        width = int(self._base.ncol(design)[0])
+        roots = self._call_internal(
+            "mini.roots",
+            setup.rx2("S"),
+            setup.rx2("off"),
+            width,
+            setup.rx2("rank"),
+        )
+        penalty_space = self._call_internal(
+            "totalPenaltySpace",
+            setup.rx2("S"),
+            setup.rx2("H"),
+            setup.rx2("off"),
+            width,
+        )
+        range_basis = penalty_space.rx2("Y")
+        null_basis = penalty_space.rx2("Z")
+        transform = self._base.cbind(range_basis, null_basis)
+        null_width = int(self._base.ncol(null_basis)[0])
+        matrix_product = self._ro.baseenv["%*%"]
+        projected_roots = ListVector(
+            [
+                (str(index), matrix_product(self._base.t(range_basis), root))
+                for index, root in enumerate(roots)
+            ]
+        )
+        family = self._stats.gaussian()
+        for patch in ("fix.family.link", "fix.family.var", "fix.family.ls"):
+            family = self._call_internal(patch, family)
+        response_name = formula.split("~", 1)[0].strip()
+        fit = self._call_internal(
+            "gam.fit3",
+            x=design,
+            y=self._to_r_vector(data[response_name].to_numpy(dtype=np.float64)),
+            sp=self._base.log(self._to_r_vector(smoothing)),
+            Eb=penalty_space.rx2("E"),
+            UrS=projected_roots,
+            weights=self._to_r_vector(weight_array),
+            offset=self._to_r_vector(offset_array),
+            U1=transform,
+            Mp=null_width,
+            family=family,
+            control=self._mgcv.gam_control(maxit=1),
+            deriv=0,
+            scale=1,
+        )
+        public_factor = fit.rx2("rV")
+        covariance = matrix_product(public_factor, self._base.t(public_factor))
+        return {
+            "X": np.asarray(design, dtype=np.float64).copy(),
+            "S": [
+                np.asarray(penalty, dtype=np.float64).copy()
+                for penalty in setup.rx2("S")
+            ],
+            "coefficients": np.asarray(
+                fit.rx2("coefficients"), dtype=np.float64
+            ).copy(),
+            "covariance": np.asarray(covariance, dtype=np.float64).copy(),
+            "score": float(fit.rx2("REML")[0]),
+        }
+
     def fix_dependence(
         self,
         X1: np.ndarray,

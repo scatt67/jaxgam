@@ -31,7 +31,8 @@ from scipy import linalg
 from scipy.linalg.lapack import get_lapack_funcs
 
 from jaxgam.smooths.by_variable import FactorBySmooth, NumericBySmooth
-from jaxgam.smooths.tensor import TensorInteractionSmooth
+from jaxgam.smooths.source_penalty_coordinates import source_centered_smooth
+from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 
 if TYPE_CHECKING:
     from jaxgam.smooths.base import Smooth
@@ -459,6 +460,15 @@ class CoefficientMap:
                         sm.k_per_level,
                         base_constraint=getattr(sm, "_base_constraint", None),
                     )
+                elif isinstance(base_smooth, TensorProductSmooth) and (
+                    base_smooth.spec.smooth_type == "te"
+                    and base_smooth.spec.bs in ("cr", "cs")
+                ):
+                    X_c, source_penalties, Z = source_centered_smooth(
+                        np.asarray(X_blocks[i], dtype=np.float64),
+                        tuple(np.asarray(S, dtype=np.float64) for S in S_blocks[i]),
+                    )
+                    S_c = list(source_penalties)
                 else:
                     X_c, S_c, Z = cls.apply_sum_to_zero(X_blocks[i], S_blocks[i])
 

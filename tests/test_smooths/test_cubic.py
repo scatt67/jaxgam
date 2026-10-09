@@ -262,6 +262,49 @@ class TestRComparison:
 
     # --- cr element-wise tests (STRICT) ---
 
+    def test_cr_source_arithmetic_matches_r_strict(self) -> None:
+        """Pinned getFS/crspl arithmetic matches R before constraints."""
+        import pandas as pd
+
+        from tests.r_bridge import RBridge
+
+        position = np.arange(97, dtype=np.float64)
+        x = (position + 0.2 * np.sin(position * 0.7)) / len(position)
+        data = pd.DataFrame({"x": x})
+        expected = RBridge(mode="rpy2").smooth_construct("s(x, bs='cr', k=3)", data)
+        smooth = CubicRegressionSmooth(make_smooth_spec(["x"], bs="cr", k=3))
+        smooth.setup({"x": x})
+
+        np.testing.assert_allclose(
+            smooth.training_design_matrix(),
+            expected["X"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            smooth.build_penalty_matrices()[0].S,
+            expected["S"][0],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_cr_source_extrapolation_matches_r_strict(self) -> None:
+        """Grouped source-order basis evaluation retains crspl extrapolation."""
+        from tests.r_bridge import RBridge
+
+        x = np.linspace(-0.7, 1.3, 53, dtype=np.float64)
+        new_x = np.array([-1.2, -0.7, -0.1, 1.3, 1.9], dtype=np.float64)
+        bridge = RBridge(mode="rpy2")
+        expected = bridge.source_cubic_prediction(x, new_x, k=6)
+        smooth = CubicRegressionSmooth(make_smooth_spec(["x"], bs="cr", k=6))
+        smooth.setup({"x": x})
+        np.testing.assert_allclose(
+            smooth.predict_matrix({"x": new_x}),
+            expected,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
     def test_cr_X_values_vs_r(self) -> None:
         """cr basis matrix X matches R element-wise (STRICT).
 
@@ -302,30 +345,11 @@ class TestRComparison:
 
     def test_cr_knots_vs_r(self) -> None:
         """cr knot locations match R (STRICT)."""
-        import pandas as pd
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
+        from tests.r_bridge import RBridge
 
         smooth, _r_result, x = self._setup_cr()
 
-        # Extract knots via rpy2 (smoothCon doesn't export xp for cr)
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(pd.DataFrame({"x": x}))
-        ro.globalenv["dat_input"] = r_df
-        r_knots = np.array(
-            ro.r(
-                """
-            library(mgcv)
-            dat <- as.data.frame(dat_input)
-            spec <- s(x, bs="cr", k=10)
-            spec <- eval(spec)
-            sm <- smooth.construct(spec, dat, knots=NULL)
-            sm$xp
-            """
-            )
-        )
+        r_knots = RBridge(mode="rpy2").source_cubic_knots(x, basis="cr", k=10)
         np.testing.assert_allclose(
             smooth._knots,
             r_knots,
@@ -372,29 +396,11 @@ class TestRComparison:
 
     def test_cc_knots_vs_r(self) -> None:
         """cc knot locations match R (STRICT)."""
-        import pandas as pd
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
+        from tests.r_bridge import RBridge
 
         smooth, _r_result, x = self._setup_cc()
 
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(pd.DataFrame({"x": x}))
-        ro.globalenv["dat_input"] = r_df
-        r_knots = np.array(
-            ro.r(
-                """
-            library(mgcv)
-            dat <- as.data.frame(dat_input)
-            spec <- s(x, bs="cc", k=10)
-            spec <- eval(spec)
-            sm <- smooth.construct(spec, dat, knots=NULL)
-            sm$xp
-            """
-            )
-        )
+        r_knots = RBridge(mode="rpy2").source_cubic_knots(x, basis="cc", k=10)
         np.testing.assert_allclose(
             smooth._knots,
             r_knots,

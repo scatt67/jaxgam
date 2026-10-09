@@ -113,14 +113,20 @@ class DenseTransform:
 LocalTransform = IdentityTransform | DiagonalTransform | DenseTransform
 
 
-def _as_local_penalty(S: npt.NDArray[np.floating]) -> LocalPenalty:
+def _as_local_penalty(
+    S: npt.NDArray[np.floating], *, preserve_bytes: bool = False
+) -> LocalPenalty:
     S = _owned_readonly(S)
     diagonal = np.diag(S)
     if np.array_equal(S, np.diag(diagonal)):
         if len(diagonal) and np.all(diagonal == diagonal[0]):
             return IdentityPenalty(len(diagonal), float(diagonal[0]))
         return DiagonalPenalty(_owned_readonly(diagonal))
-    return DenseLocalPenalty(_owned_readonly(0.5 * (S + S.T)))
+    # Source-centered te() penalties carry harmless last-bit asymmetry from
+    # applying two packed QR transforms. Re-symmetrizing them changes the
+    # pinned rank-deficient public coordinate gauge.
+    matrix = S if preserve_bytes else 0.5 * (S + S.T)
+    return DenseLocalPenalty(_owned_readonly(matrix))
 
 
 @dataclass(frozen=True)
@@ -197,6 +203,10 @@ def make_penalty_structure(
         if not penalties:
             continue
         dense = tuple(np.array(S, dtype=float, copy=True) for S in penalties)
+        smooth_spec = getattr(getattr(term, "smooth", None), "spec", None)
+        preserve_source_bytes = getattr(
+            smooth_spec, "smooth_type", None
+        ) == "te" and getattr(smooth_spec, "bs", None) in ("cr", "cs")
         ranks = tuple(_penalty_rank(S, n_coef) for S in dense)
         if len(dense) > 1 and _non_overlapping(dense):
             # Factor-by levels are disjoint. Retain each actual coefficient
@@ -227,7 +237,10 @@ def make_penalty_structure(
                     start=term.col_start,
                     stop=term.col_start + term.n_coefs,
                     sp_indices=tuple(term.penalty_indices),
-                    local_penalties=tuple(_as_local_penalty(S) for S in dense),
+                    local_penalties=tuple(
+                        _as_local_penalty(S, preserve_bytes=preserve_source_bytes)
+                        for S in dense
+                    ),
                     transform=IdentityTransform(term.n_coefs),
                     ranks=ranks,
                 )

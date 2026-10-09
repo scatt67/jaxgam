@@ -24,6 +24,7 @@ from scipy import linalg
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
+from jaxgam.smooths.source_penalty_coordinates import source_symmetric_max_eigenvalue
 from jaxgam.smooths.utils import row_tensor as _row_tensor
 
 # ---------------------------------------------------------------------------
@@ -207,15 +208,27 @@ class TensorProductSmooth(Smooth):
                 extra_args=extra,
             )
             # Lazy import to break circular dependency: registry → tensor → registry
+            from jaxgam.smooths.cubic import CubicRegressionSmooth
             from jaxgam.smooths.registry import get_smooth_class
 
             smooth_cls = get_smooth_class(self.spec.bs)
             marginal = smooth_cls(marginal_spec)
-            marginal.setup(data)
+            # R's te() uses smooth.construct() for unconstrained cubic
+            # marginals. ti() uses smoothCon() and retains its existing
+            # normalization policy.
+            raw_cubic = (
+                self.spec.smooth_type == "te"
+                and self.spec.bs in ("cr", "cs")
+                and isinstance(marginal, CubicRegressionSmooth)
+            )
+            if raw_cubic:
+                marginal.setup(data, _normalize_penalty=False)
+            else:
+                marginal.setup(data)
             X_j = marginal.consume_training_design_matrix()
             # Get the normalized penalty and undo smoothCon normalization
             S_normalized = marginal.build_penalty_matrices()[0].S
-            S_raw = S_normalized * marginal._s_scale
+            S_raw = S_normalized if raw_cubic else S_normalized * marginal._s_scale
             marginals_info.append((marginal, X_j, S_raw))
         return marginals_info
 
@@ -277,8 +290,16 @@ class TensorProductSmooth(Smooth):
 
         for j in range(n_marginals):
             # Normalize by largest eigenvalue (matching R)
-            eigvals_j = linalg.eigvalsh(S_list[j])
-            max_eigval = np.max(np.abs(eigvals_j))
+            # smooth.construct.tensor.smooth.spec calls R's value-only
+            # symmetric eigen() for each marginal scale. The value-only
+            # DSYEVR path can round differently from an eigenvector solve.
+            if self.spec.bs in ("cr", "cs"):
+                max_eigval = source_symmetric_max_eigenvalue(
+                    np.asarray(S_list[j], dtype=np.float64)
+                )
+            else:
+                eigvals_j = linalg.eigvalsh(S_list[j])
+                max_eigval = np.max(np.abs(eigvals_j))
             S_norm = S_list[j] / max_eigval if max_eigval > 0 else S_list[j].copy()
 
             # Build Kronecker product: I ⊗ ... ⊗ S_norm ⊗ ... ⊗ I
@@ -338,11 +359,15 @@ class TensorProductSmooth(Smooth):
 
         # Apply smoothCon normalization — R normalizes each penalty
         # by its own 1-norm (not all by S[0]'s norm)
-        max_x_sq = np.linalg.norm(X_tensor, ord=np.inf) ** 2
+        # R's smoothCon uses base::norm(), which dispatches to LAPACK DLANGE.
+        # Preserve that reduction order: NumPy's row/column sums can differ by
+        # one ULP before the penalty scaling division.
+        matrix_norm = linalg.get_lapack_funcs("lange", (X_tensor,))
+        max_x_sq = matrix_norm(b"I", X_tensor) ** 2
         if max_x_sq > 0:
             normalized = []
             for p in self._penalties:
-                maS = np.linalg.norm(p.S, ord=1) / max_x_sq
+                maS = matrix_norm(b"O", p.S) / max_x_sq
                 normalized.append(
                     Penalty(p.S / maS, rank=p.rank, null_space_dim=p.null_space_dim)
                 )

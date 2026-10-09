@@ -8,6 +8,7 @@ for a starting coefficient vector.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -24,6 +25,7 @@ from jaxgam.penalties.structure import (
     PenaltyBlock,
     PenaltyStructure,
 )
+from jaxgam.smooths.source_penalty_coordinates import source_symmetric_eigh
 
 _EPS_TWO_THIRDS = np.finfo(float).eps ** (2.0 / 3.0)
 _ACTIVITY_THRESH = np.finfo(float).eps ** 0.8
@@ -160,6 +162,255 @@ def qr_penalty_roots(structure: PenaltyStructure) -> tuple[QRLocalPenaltyRoot, .
             root = np.sqrt(eigenvalues[selected])[:, None] * vectors[:, selected].T
             result.append(QRLocalPenaltyRoot(block.start, block.stop, sp_index, root))
     return tuple(result)
+
+
+@dataclass(frozen=True)
+class GlobalPenaltyCoordinates:
+    """Current mgcv-style global penalty coordinates for one score state.
+
+    These arrays are CPU preparation metadata.  ``transform`` is the current
+    ``U1 %*% blockdiag(Qs, I)`` map from fitting coordinates back to public
+    constrained coefficients.  It must be rebuilt for every log-smoothing
+    state because ``Qs`` is smoothing-parameter dependent.
+    """
+
+    transform: npt.NDArray[np.float64]
+    penalty_space: npt.NDArray[np.float64]
+    balanced_root: npt.NDArray[np.float64]
+    penalty_roots: tuple[npt.NDArray[np.float64], ...]
+
+    def __post_init__(self) -> None:
+        transform = np.asarray(self.transform, dtype=float)
+        penalty_space = np.asarray(self.penalty_space, dtype=float)
+        balanced_root = np.asarray(self.balanced_root, dtype=float)
+        if transform.ndim != 2 or transform.shape[0] != transform.shape[1]:
+            raise ValueError("global penalty transform must be square")
+        if penalty_space.shape != transform.shape:
+            raise ValueError("global penalty space has incompatible shape")
+        if balanced_root.ndim != 2 or balanced_root.shape[1] != transform.shape[0]:
+            raise ValueError("global balanced root has incompatible shape")
+        if not all(
+            np.all(np.isfinite(value))
+            for value in (transform, penalty_space, balanced_root)
+        ):
+            raise ValueError("global penalty coordinates must be finite")
+        roots: list[np.ndarray] = []
+        for root in self.penalty_roots:
+            root_array = np.asarray(root, dtype=float)
+            if root_array.ndim != 2 or root_array.shape[1] != transform.shape[0]:
+                raise ValueError("global penalty root has incompatible shape")
+            if not np.all(np.isfinite(root_array)):
+                raise ValueError("global penalty roots must be finite")
+            roots.append(_owned_readonly(root_array))
+        object.__setattr__(self, "transform", _owned_readonly(transform))
+        object.__setattr__(self, "penalty_space", _owned_readonly(penalty_space))
+        object.__setattr__(self, "balanced_root", _owned_readonly(balanced_root))
+        object.__setattr__(self, "penalty_roots", tuple(roots))
+
+
+def _symmetric_eigh(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Use mgcv's lower-triangle DSYEVR coordinate gauge."""
+    return source_symmetric_eigh(np.asarray(matrix, dtype=np.float64))
+
+
+def _source_penalty_frobenius_norm(penalty: np.ndarray) -> float:
+    """Match R's column-major ``sqrt(sum(S * S))`` with bounded scratch."""
+    rows, columns = penalty.shape
+    if rows == 0 or columns == 0:
+        return 0.0
+    chunk_rows = min(rows, 4096)
+    work = np.empty(chunk_rows + 1, dtype=np.longdouble)
+    accumulated = np.longdouble(0.0)
+    for column in range(columns):
+        for start in range(0, rows, chunk_rows):
+            stop = min(start + chunk_rows, rows)
+            count = stop - start
+            work[0] = accumulated
+            values = penalty[start:stop, column]
+            # R materializes S*S as binary64 before its sequential LDOUBLE sum.
+            work[1 : count + 1] = values * values
+            np.cumsum(work[: count + 1], dtype=np.longdouble, out=work[: count + 1])
+            accumulated = work[count]
+    return math.sqrt(float(accumulated))
+
+
+def _root_columns(matrix: np.ndarray, rank: int | None = None) -> np.ndarray:
+    """Compact PSD root columns, matching ``mini.roots``'s rank contract."""
+    values, vectors = _symmetric_eigh(matrix)
+    if rank is None:
+        largest = float(np.max(values, initial=0.0))
+        active = values > largest * _EPS_TWO_THIRDS
+    else:
+        if not 0 <= rank <= len(values):
+            raise ValueError("global penalty root has invalid supplied rank")
+        active = np.zeros(len(values), dtype=bool)
+        if rank:
+            active[-rank:] = True
+        elif np.linalg.norm(matrix, ord="fro") != 0:
+            raise ValueError("global penalty root rank is zero for a nonzero penalty")
+        if rank and np.any(values[active] <= 0):
+            raise ValueError("global penalty root has non-positive supplied direction")
+    return vectors[:, active] * np.sqrt(values[active])
+
+
+def _stable_range_rotation(
+    roots: tuple[np.ndarray, ...], log_lambda: npt.ArrayLike
+) -> tuple[np.ndarray, tuple[np.ndarray, ...]]:
+    """Port ``gdi.c::get_stableS``'s orthogonal range-space rotation.
+
+    The grouping and rank cutoffs are deliberately source-specific.  The
+    routine returns ``Qs`` and transformed root *columns* in range
+    coordinates; callers append the global penalty null space afterwards.
+    """
+    log_sp = np.asarray(log_lambda, dtype=float)
+    if len(roots) != len(log_sp):
+        raise ValueError("global penalty roots and smoothing parameters disagree")
+    if log_sp.ndim != 1 or not np.all(np.isfinite(log_sp)):
+        raise ValueError("global penalty log smoothing parameters must be finite")
+    smoothing_parameters = np.exp(log_sp)
+    if not np.all(np.isfinite(smoothing_parameters)) or np.any(
+        smoothing_parameters <= 0
+    ):
+        raise ValueError("global penalty smoothing parameters must be positive")
+    if not roots:
+        return np.empty((0, 0)), ()
+    q = roots[0].shape[0]
+    if any(root.ndim != 2 or root.shape[0] != q for root in roots):
+        raise ValueError("global penalty roots have incompatible dimensions")
+    transformed_roots = [np.array(root, copy=True) for root in roots]
+    gamma = np.ones(len(roots), dtype=bool)
+    qf = np.eye(q)
+    k = 0
+    current = q
+    d_tol = np.finfo(float).eps ** 0.3
+    r_tol = np.finfo(float).eps ** 0.75
+
+    while True:
+        norms = np.array(
+            [
+                np.linalg.norm(root[k:, :].T @ root[k:, :], ord="fro")
+                if active
+                else 0.0
+                for root, active in zip(transformed_roots, gamma, strict=True)
+            ]
+        )
+        weighted_norms = norms * smoothing_parameters
+        maximum = float(np.max(weighted_norms, initial=0.0))
+        alpha = gamma & (weighted_norms > maximum * d_tol)
+        if not np.any(alpha):
+            raise ValueError("global penalty rotation has no active penalty")
+        gamma_next = gamma & ~alpha
+        if np.any(gamma_next):
+            scaled = np.zeros((current, current))
+            for root, norm, active in zip(transformed_roots, norms, alpha, strict=True):
+                if active:
+                    tail = root[k:, :]
+                    scaled += tail @ tail.T / norm
+            values, _ = _symmetric_eigh(scaled)
+            rank = 1
+            while rank < current and values[current - rank - 1] > values[-1] * r_tol:
+                rank += 1
+        else:
+            rank = current
+
+        if rank == current:
+            break
+
+        dominant = np.zeros((current, current))
+        for index, root in enumerate(transformed_roots):
+            if alpha[index]:
+                tail = root[k:, :]
+                dominant += smoothing_parameters[index] * tail @ tail.T
+        values, vectors = _symmetric_eigh(dominant)
+        values, rotation = values[::-1], vectors[:, ::-1]
+        qf[:, k:] = qf[:, k:] @ rotation
+        for index, root in enumerate(transformed_roots):
+            tail = root[k:, :]
+            rotated = rotation.T @ tail
+            if alpha[index]:
+                root[k : k + rank, :] = rotated[:rank, :]
+                root[k + rank :, :] = 0.0
+            elif gamma_next[index]:
+                root[k:, :] = rotated
+        gamma = gamma_next
+        k += rank
+        current -= rank
+        if current == 0:
+            break
+
+    return qf, tuple(transformed_roots)
+
+
+def global_penalty_coordinates(
+    structure: PenaltyStructure,
+    log_lambda: npt.ArrayLike,
+) -> GlobalPenaltyCoordinates:
+    """Build the current global ``U1/Qs`` coordinate state from public S_j.
+
+    This follows pinned mgcv's ``totalPenaltySpace``, ``mini.roots`` and
+    ``gam.reparam`` route.  It intentionally receives the public constrained
+    penalty structure, never a block-local D-whitened fitting structure.
+    """
+    log_sp = np.asarray(log_lambda, dtype=float)
+    if structure.n_penalties != len(log_sp):
+        raise ValueError("global penalties and smoothing parameters disagree")
+    if log_sp.ndim != 1 or not np.all(np.isfinite(log_sp)):
+        raise ValueError("global penalty log smoothing parameters must be finite")
+    smoothing_parameters = np.exp(log_sp)
+    if not np.all(np.isfinite(smoothing_parameters)) or np.any(
+        smoothing_parameters <= 0
+    ):
+        raise ValueError("global penalty smoothing parameters must be positive")
+    if not structure.n_penalties:
+        raise ValueError("global penalty coordinates require at least one penalty")
+    balanced = np.zeros((structure.n_coef, structure.n_coef))
+    components: list[tuple[int, int, int, np.ndarray, int]] = []
+    for block in structure.blocks:
+        for index, penalty, rank in zip(
+            block.sp_indices,
+            block.dense_penalties(),
+            block.ranks,
+            strict=True,
+        ):
+            # R's sum(S * S) accumulates before the double-precision sqrt.
+            # The final rounding matters for tied global penalty directions.
+            norm = _source_penalty_frobenius_norm(penalty)
+            if norm == 0:
+                raise ValueError(
+                    "global penalty coordinates do not accept zero penalties"
+                )
+            balanced[block.start : block.stop, block.start : block.stop] += (
+                penalty / norm
+            )
+            components.append((index, block.start, block.stop, penalty, rank))
+    values, vectors = _symmetric_eigh(balanced)
+    values, vectors = values[::-1], vectors[:, ::-1]
+    active = values > values[0] * np.finfo(float).eps ** 0.66
+    y = vectors[:, active]
+    z = vectors[:, ~active]
+    root_parts: list[list[np.ndarray]] = [[] for _ in range(structure.n_penalties)]
+    for index, start, stop, penalty, rank in components:
+        root_parts[index].append(y[start:stop, :].T @ _root_columns(penalty, rank))
+    range_roots = tuple(
+        np.concatenate(parts, axis=1) if parts else np.empty((y.shape[1], 0))
+        for parts in root_parts
+    )
+    qs, stable_roots = _stable_range_rotation(range_roots, log_sp)
+    q = structure.n_coef
+    mp = z.shape[1]
+    rotation = np.eye(q)
+    rotation[: q - mp, : q - mp] = qs
+    transform = np.column_stack((y, z)) @ rotation
+    balanced_root = np.sqrt(values[active])[:, None] * y.T @ transform
+    full_roots = tuple(
+        np.vstack((root, np.zeros((mp, root.shape[1])))).T for root in stable_roots
+    )
+    return GlobalPenaltyCoordinates(
+        transform,
+        np.column_stack((y, z)),
+        balanced_root,
+        full_roots,
+    )
 
 
 def _make_transform(D: np.ndarray) -> object:
