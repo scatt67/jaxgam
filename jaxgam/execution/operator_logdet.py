@@ -56,7 +56,13 @@ _DEFAULT_LOGDET_CONTROL = OperatorLogDetControl()
 
 @dataclass(frozen=True)
 class OperatorLogDetDiagnostics:
-    """Actual scan work and separate sampling/truncation diagnostics."""
+    """Actual scan work and separate sampling/truncation diagnostics.
+
+    ``exact_krylov_probes`` counts numerical closure or full-dimensional
+    recurrences; it is not a certified finite-precision logdet error bound.
+    A depth-one truncation has no comparison depth and reports an infinite
+    depth difference rather than suggesting zero truncation error.
+    """
 
     probes: int
     lanczos_depth: int
@@ -108,6 +114,14 @@ def _log_quadrature(diagonal: np.ndarray, off_diagonal: np.ndarray) -> float:
     if not np.all(np.isfinite(eigenvalues)) or np.any(eigenvalues <= 0):
         raise np.linalg.LinAlgError("Lanczos Ritz values are not positive finite.")
     return float(np.dot(eigenvectors[0] ** 2, np.log(eigenvalues)))
+
+
+def _stable_norm(vector: np.ndarray) -> float:
+    """Preserve the action scale when its squared norm would underflow."""
+    maximum = float(np.max(np.abs(vector), initial=0.0))
+    if maximum == 0.0:
+        return 0.0
+    return maximum * float(np.sqrt(np.sum((vector / maximum) ** 2)))
 
 
 class FrozenOperatorLogDet:
@@ -168,6 +182,9 @@ class FrozenOperatorLogDet:
         depth = min(p, self.control.lanczos_depth)
         rng = np.random.default_rng(self.control.seed)
         values = np.empty(self.control.probes, dtype=np.float64)
+        basis = np.empty((depth, p), dtype=np.float64)
+        diagonal = np.empty(depth, dtype=np.float64)
+        off_diagonal = np.empty(max(depth - 1, 0), dtype=np.float64)
         maximum_depth_difference = 0.0
         exact_krylov_probes = 0
         actions_before = self.system.diagnostics.normal_actions
@@ -175,10 +192,7 @@ class FrozenOperatorLogDet:
         for probe in range(self.control.probes):
             signs = rng.integers(0, 2, size=p, dtype=np.int8)
             initial = (2 * signs.astype(np.float64) - 1) / math.sqrt(p)
-            basis = np.empty((depth, p), dtype=np.float64)
             basis[0] = initial
-            diagonal = np.empty(depth, dtype=np.float64)
-            off_diagonal = np.empty(max(depth - 1, 0), dtype=np.float64)
             previous_beta = 0.0
             used = 0
             exact = False
@@ -205,10 +219,11 @@ class FrozenOperatorLogDet:
                     for _ in range(2):
                         for prior in range(step + 1):
                             remainder -= np.dot(basis[prior], remainder) * basis[prior]
-                    beta = float(np.linalg.norm(remainder))
+                    beta = _stable_norm(remainder)
                     used = step + 1
+                    action_norm = _stable_norm(action)
                     if beta <= self.control.breakdown_rtol * max(
-                        1.0, float(np.linalg.norm(action))
+                        action_norm, np.finfo(np.float64).tiny
                     ):
                         exact = True
                         break
@@ -227,7 +242,9 @@ class FrozenOperatorLogDet:
                 quadrature = _log_quadrature(
                     diagonal[:used], off_diagonal[: max(used - 1, 0)]
                 )
-                if used > 1 and not exact:
+                if used == 1 and not exact:
+                    maximum_depth_difference = math.inf
+                elif used > 1 and not exact:
                     prior = _log_quadrature(
                         diagonal[: used - 1], off_diagonal[: used - 2]
                     )

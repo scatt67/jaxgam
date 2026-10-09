@@ -240,3 +240,59 @@ def test_large_symbolic_logdet_stays_below_global_square(monkeypatch):
     assert result.diagnostics.source_scans == 4
     assert result.diagnostics.peak_bound_bytes < 16 * 1024 * 1024
     assert 8 * model.n_coef**2 > 16 * 1024 * 1024
+
+
+def test_nontrivial_spd_logdet_obeys_tiny_and_large_scale_identity(monkeypatch):
+    row = np.arange(31)
+    frame = pd.DataFrame(
+        {
+            "y": 1.0 + row / 31,
+            "x": np.linspace(-1, 1, len(row)),
+            "g": pd.Categorical(np.resize(["a", "b", "c"], len(row))),
+        }
+    )
+    system, matrix = _system("y~x+s(g,bs='re')", frame)
+    original_matvec = system.matvec
+    control = OperatorLogDetControl(probes=4, lanczos_depth=matrix.shape[0], seed=17)
+    probe_results = {}
+    for scale in (1e-20, 1.0, 1e20):
+        monkeypatch.setattr(
+            system,
+            "matvec",
+            lambda vector, scale=scale: scale * original_matvec(vector),
+        )
+        result = FrozenOperatorLogDet(
+            system, memory_budget_bytes=4 * 1024 * 1024, control=control
+        ).estimate()
+        assert result.diagnostics.exact_krylov_probes == control.probes
+        assert result.diagnostics.maximum_depth_difference == 0.0
+        assert result.diagnostics.completed_actions == result.diagnostics.source_scans
+        probe_results[scale] = result.per_probe
+    for scale in (1e-20, 1e20):
+        np.testing.assert_allclose(
+            probe_results[scale] - probe_results[1.0],
+            matrix.shape[0] * np.log(scale),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+
+def test_depth_one_nontrivial_spectrum_has_indeterminate_truncation_error():
+    row = np.arange(25)
+    frame = pd.DataFrame(
+        {
+            "y": row / 25,
+            "x": np.linspace(-1, 1, len(row)),
+            "g": pd.Categorical(np.resize(["a", "b", "c"], len(row))),
+        }
+    )
+    system, _ = _system("y~x+s(g,bs='re')", frame)
+    result = FrozenOperatorLogDet(
+        system,
+        memory_budget_bytes=4 * 1024 * 1024,
+        control=OperatorLogDetControl(probes=4, lanczos_depth=1, seed=5),
+    ).estimate()
+    assert np.isfinite(result.value)
+    assert result.diagnostics.exact_krylov_probes == 0
+    assert np.isinf(result.diagnostics.maximum_depth_difference)
+    assert result.diagnostics.completed_actions == 4
