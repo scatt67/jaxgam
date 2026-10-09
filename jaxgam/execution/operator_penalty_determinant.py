@@ -53,7 +53,10 @@ def _singleton(penalty: LocalPenalty, rho: float) -> tuple[float, int]:
         if not np.isfinite(penalty.scale) or penalty.scale < 0:
             raise ValueError("Local penalty must be positive semidefinite.")
         return (
-            (penalty.size * (rho + np.log(penalty.scale)), penalty.size)
+            (
+                penalty.size * (rho + np.log(max(penalty.scale, _LOG_FLOOR))),
+                penalty.size,
+            )
             if penalty.scale > 0
             else (0.0, 0)
         )
@@ -177,7 +180,7 @@ class LocalOperatorPenaltyDeterminant:
             if has_dense and size > self.max_dense_block_size:
                 raise MemoryError("Dense local penalty exceeds its hard size cap.")
             entries = (
-                32 * size**2 + 64 * size
+                (2 * len(block.local_penalties) + 24) * size**2 + 64 * size
                 if has_dense
                 else 48 * size + 32 * len(block.local_penalties)
             )
@@ -214,6 +217,8 @@ class LocalOperatorPenaltyDeterminant:
                 value, local_rank = _multidiagonal(penalties, weights)
             else:
                 value, local_rank = _multidense(penalties, weights)
+            if not np.isfinite(value):
+                raise FloatingPointError("Local penalty determinant is nonfinite.")
             values[index] = value
             rank += local_rank
         return OperatorPenaltyLogDet(

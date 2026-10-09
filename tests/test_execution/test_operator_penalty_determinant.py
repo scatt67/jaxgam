@@ -197,3 +197,54 @@ def test_zero_and_invalid_local_penalties_do_not_produce_fictitious_logdet():
         LocalOperatorPenaltyDeterminant(negative, memory_budget_bytes=100_000).evaluate(
             np.zeros(1, dtype=np.float64)
         )
+
+
+def test_singleton_identity_uses_dense_efs_log_eigenvalue_floor():
+    structure = PenaltyStructure(
+        n_coef=3,
+        blocks=(
+            PenaltyBlock(
+                0,
+                3,
+                (0,),
+                (IdentityPenalty(3, 1e-40),),
+                IdentityTransform(3),
+                (3,),
+            ),
+        ),
+    )
+    actual = LocalOperatorPenaltyDeterminant(
+        structure, memory_budget_bytes=100_000
+    ).evaluate(np.array([np.log(0.7)]))
+    np.testing.assert_allclose(
+        actual.value,
+        3 * (np.log(0.7) + np.log(1e-30)),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    with pytest.raises(FloatingPointError, match="nonfinite"):
+        LocalOperatorPenaltyDeterminant(
+            structure, memory_budget_bytes=100_000
+        ).evaluate(np.array([1e308]))
+
+
+def test_dense_multi_penalty_preflight_charges_each_live_local_matrix():
+    penalties = tuple(DenseLocalPenalty(np.eye(64)) for _ in range(20))
+    structure = PenaltyStructure(
+        n_coef=64,
+        blocks=(
+            PenaltyBlock(
+                0,
+                64,
+                tuple(range(20)),
+                penalties,
+                IdentityTransform(64),
+                (64,) * 20,
+            ),
+        ),
+    )
+    evaluator = LocalOperatorPenaltyDeterminant(
+        structure, memory_budget_bytes=1_500_000
+    )
+    with pytest.raises(MemoryError, match="requires"):
+        evaluator.evaluate(np.zeros(20, dtype=np.float64))
