@@ -466,7 +466,7 @@ def optimize_gaussian_qr_lbfgs(
         raise ValueError("Gaussian QR L-BFGS requires at least one penalty.")
     reml_control = (
         StreamREMLControl(
-            gtol=float(np.sqrt(np.finfo(np.float64).eps)),
+            gtol=1e-10,
             ftol=0.0,
             maxcor=GAUSSIAN_LBFGS_MAXCOR,
         )
