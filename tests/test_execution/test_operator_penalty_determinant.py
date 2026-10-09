@@ -248,3 +248,55 @@ def test_dense_multi_penalty_preflight_charges_each_live_local_matrix():
     )
     with pytest.raises(MemoryError, match="requires"):
         evaluator.evaluate(np.zeros(20, dtype=np.float64))
+
+
+@pytest.mark.parametrize(
+    "penalties",
+    [
+        (IdentityPenalty(2, 1e308), IdentityPenalty(2, 1e308)),
+        (
+            DenseLocalPenalty(np.eye(2) * 1e308),
+            DenseLocalPenalty(np.eye(2) * 1e308),
+        ),
+        (IdentityPenalty(2, 1e-308), IdentityPenalty(2, 1e-308)),
+        (
+            DenseLocalPenalty(np.eye(2) * 1e-308),
+            DenseLocalPenalty(np.eye(2) * 1e-308),
+        ),
+    ],
+)
+def test_coupled_local_range_remains_active_across_finite_scales(penalties):
+    structure = PenaltyStructure(
+        n_coef=2,
+        blocks=(PenaltyBlock(0, 2, (0, 1), penalties, IdentityTransform(2), (2, 2)),),
+    )
+    result = LocalOperatorPenaltyDeterminant(
+        structure, memory_budget_bytes=100_000
+    ).evaluate(np.zeros(2, dtype=np.float64))
+    expected = 2 * (np.log(penalties[0].dense()[0, 0]) + np.log(2.0))
+    np.testing.assert_allclose(
+        result.value, expected, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert result.rank == 2
+    assert result.null_dimension == 0
+
+
+def test_finite_block_determinants_cannot_overflow_total_score_component():
+    structure = PenaltyStructure(
+        n_coef=2,
+        blocks=tuple(
+            PenaltyBlock(
+                index,
+                index + 1,
+                (index,),
+                (IdentityPenalty(1),),
+                IdentityTransform(1),
+                (1,),
+            )
+            for index in range(2)
+        ),
+    )
+    with pytest.raises(FloatingPointError, match="Total"):
+        LocalOperatorPenaltyDeterminant(
+            structure, memory_budget_bytes=100_000
+        ).evaluate(np.array([1e308, 1e308]))

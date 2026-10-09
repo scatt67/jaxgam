@@ -82,22 +82,31 @@ def _multidiagonal(
 ) -> tuple[float, int]:
     size = penalties[0].size
     range_weight = np.zeros(size, dtype=np.float64)
+    log_scales = []
+    maxima = []
     for penalty in penalties:
         diagonal = _penalty_diagonal(penalty)
         if not np.all(np.isfinite(diagonal)) or np.any(diagonal < 0):
             raise ValueError("Local diagonal penalty must be nonnegative finite.")
-        norm = float(np.linalg.norm(diagonal))
+        maximum = float(np.max(diagonal, initial=0.0))
+        scaled = diagonal / maximum if maximum else np.zeros(size)
+        norm = float(np.linalg.norm(scaled))
         if norm:
-            range_weight += diagonal / norm
+            range_weight += scaled / norm
+        log_scales.append(np.log(maximum) if maximum else -np.inf)
+        maxima.append(maximum)
     maximum = float(np.max(range_weight, initial=0.0))
     active = range_weight > maximum * _RANK_TOLERANCE
     rank = int(np.count_nonzero(active))
     if not rank:
         return 0.0, 0
-    offset = float(np.max(rho))
+    offsets = rho + np.asarray(log_scales)
+    offset = float(np.max(offsets))
     combined = np.zeros(rank, dtype=np.float64)
-    for penalty, weight in zip(penalties, rho, strict=True):
-        combined += np.exp(weight - offset) * _penalty_diagonal(penalty)[active]
+    for penalty, weight, maximum in zip(penalties, offsets, maxima, strict=True):
+        if np.isfinite(weight):
+            diagonal = _penalty_diagonal(penalty)
+            combined += np.exp(weight - offset) * (diagonal[active] / maximum)
     if np.any(combined <= 0) or not np.all(np.isfinite(combined)):
         raise np.linalg.LinAlgError("Combined penalty lost its fixed range.")
     return rank * offset + float(np.sum(np.log(combined))), rank
@@ -109,18 +118,22 @@ def _multidense(
     size = penalties[0].size
     normalized = np.zeros((size, size), dtype=np.float64)
     matrices = []
+    log_scales = []
     for penalty in penalties:
         matrix = penalty.dense()
         if not np.all(np.isfinite(matrix)):
             raise ValueError("Local penalty must be finite.")
-        eigenvalues = np.linalg.eigvalsh(matrix)
+        scale = float(np.max(np.abs(matrix), initial=0.0))
+        scaled = matrix / scale if scale else np.zeros_like(matrix)
+        eigenvalues = np.linalg.eigvalsh(scaled)
         maximum = float(np.max(np.abs(eigenvalues), initial=0.0))
         if np.min(eigenvalues, initial=0.0) < -maximum * _RANK_TOLERANCE:
             raise ValueError("Local penalty must be positive semidefinite.")
-        norm = float(np.linalg.norm(matrix, "fro"))
+        norm = float(np.linalg.norm(scaled, "fro"))
         if norm:
-            normalized += matrix / norm
-        matrices.append(matrix)
+            normalized += scaled / norm
+        matrices.append(scaled)
+        log_scales.append(np.log(scale) if scale else -np.inf)
     eigenvalues, eigenvectors = np.linalg.eigh(normalized)
     maximum = float(np.max(eigenvalues, initial=0.0))
     active = eigenvalues > maximum * _RANK_TOLERANCE
@@ -128,10 +141,12 @@ def _multidense(
     if not rank:
         return 0.0, 0
     range_basis = eigenvectors[:, active]
-    offset = float(np.max(rho))
+    offsets = rho + np.asarray(log_scales)
+    offset = float(np.max(offsets))
     combined = np.zeros((rank, rank), dtype=np.float64)
-    for matrix, weight in zip(matrices, rho, strict=True):
-        combined += np.exp(weight - offset) * (range_basis.T @ matrix @ range_basis)
+    for matrix, weight in zip(matrices, offsets, strict=True):
+        if np.isfinite(weight):
+            combined += np.exp(weight - offset) * (range_basis.T @ matrix @ range_basis)
     sign, logabs = np.linalg.slogdet(combined)
     if sign <= 0 or not np.isfinite(logabs):
         raise np.linalg.LinAlgError("Combined penalty lost its fixed range.")
@@ -221,8 +236,12 @@ class LocalOperatorPenaltyDeterminant:
                 raise FloatingPointError("Local penalty determinant is nonfinite.")
             values[index] = value
             rank += local_rank
+        with np.errstate(over="ignore"):
+            total = float(np.sum(values))
+        if not np.isfinite(total):
+            raise FloatingPointError("Total local penalty determinant is nonfinite.")
         return OperatorPenaltyLogDet(
-            value=float(np.sum(values)),
+            value=total,
             rank=rank,
             null_dimension=self.structure.n_coef - rank,
             block_values=values,
