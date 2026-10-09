@@ -59,9 +59,41 @@ class OperatorScoreEstimate:
     source_scans: int
     seed: int
     lanczos_depth: int
+    n_coef: int
+    probe_fingerprint: str
 
     def __post_init__(self) -> None:
         values = np.array(self.per_probe, dtype=np.float64, copy=True)
+        if (
+            not math.isfinite(self.value)
+            or values.ndim != 1
+            or len(values) < 1
+            or not np.all(np.isfinite(values))
+        ):
+            raise ValueError("Score estimate and probes must be finite and nonempty.")
+        if not math.isclose(
+            math.fsum(float(value) / len(values) for value in values),
+            self.value,
+            rel_tol=64 * np.finfo(np.float64).eps,
+            abs_tol=64 * np.finfo(np.float64).eps,
+        ):
+            raise ValueError("Score estimate must equal its probe mean.")
+        if (
+            self.n_coef < 1
+            or self.seed < 0
+            or self.lanczos_depth < 1
+            or self.source_scans < 0
+            or not isinstance(self.probe_fingerprint, str)
+            or len(self.probe_fingerprint) != 64
+        ):
+            raise ValueError("Score probe provenance is invalid.")
+        if (
+            math.isnan(self.monte_carlo_standard_error)
+            or self.monte_carlo_standard_error < 0
+            or math.isnan(self.maximum_depth_difference)
+            or self.maximum_depth_difference < 0
+        ):
+            raise ValueError("Score uncertainty diagnostics must be nonnegative.")
         values.setflags(write=False)
         object.__setattr__(self, "per_probe", values)
 
@@ -80,6 +112,8 @@ def assemble_operator_score(
         raise TypeError("penalty must be OperatorPenaltyLogDet.")
     if penalty.rank + penalty.null_dimension != terms.n_coef:
         raise ValueError("Penalty range and score coordinates disagree.")
+    if observed.diagnostics.n_coef != terms.n_coef:
+        raise ValueError("Observed system and score coordinates disagree.")
     if (
         not math.isfinite(observed.value)
         or not math.isfinite(penalty.value)
@@ -113,6 +147,8 @@ def assemble_operator_score(
         source_scans=observed.diagnostics.source_scans,
         seed=observed.diagnostics.seed,
         lanczos_depth=observed.diagnostics.lanczos_depth,
+        n_coef=observed.diagnostics.n_coef,
+        probe_fingerprint=observed.diagnostics.probe_fingerprint,
     )
 
 
@@ -144,11 +180,16 @@ def compare_operator_scores(
     if (
         accepted.seed != trial.seed
         or accepted.lanczos_depth != trial.lanczos_depth
+        or accepted.n_coef != trial.n_coef
+        or accepted.probe_fingerprint != trial.probe_fingerprint
         or accepted.per_probe.shape != trial.per_probe.shape
     ):
         raise ValueError("Paired score comparisons require identical probes.")
-    paired = trial.per_probe - accepted.per_probe
+    with np.errstate(over="ignore", invalid="ignore"):
+        paired = trial.per_probe - accepted.per_probe
     difference = trial.value - accepted.value
+    if not math.isfinite(difference) or not np.all(np.isfinite(paired)):
+        raise FloatingPointError("Paired score difference is nonfinite.")
     standard_error = (
         float(np.std(paired, ddof=1) / math.sqrt(len(paired)))
         if len(paired) > 1

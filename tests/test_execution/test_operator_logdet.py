@@ -93,6 +93,8 @@ def test_each_fixed_probe_matches_dense_matrix_log_and_seed_replay():
         first.per_probe, expected, rtol=STRICT.rtol, atol=STRICT.atol
     )
     np.testing.assert_array_equal(first.per_probe, second.per_probe)
+    assert first.diagnostics.n_coef == matrix.shape[0]
+    assert first.diagnostics.probe_fingerprint == second.diagnostics.probe_fingerprint
     assert first.diagnostics.exact_krylov_probes == control.probes
     assert first.diagnostics.completed_actions == first.diagnostics.source_scans
     different = FrozenOperatorLogDet(
@@ -103,10 +105,34 @@ def test_each_fixed_probe_matches_dense_matrix_log_and_seed_replay():
         ),
     ).estimate()
     assert np.any(different.per_probe != first.per_probe)
+    assert (
+        different.diagnostics.probe_fingerprint != first.diagnostics.probe_fingerprint
+    )
     true_logdet = float(np.linalg.slogdet(matrix)[1])
     assert abs(first.value - true_logdet) < max(
         4 * first.diagnostics.monte_carlo_standard_error, STRICT.atol
     )
+
+
+def test_same_seed_and_depth_on_different_dimensions_has_different_probes():
+    control = OperatorLogDetControl(probes=4, lanczos_depth=3, seed=29)
+    fingerprints = []
+    for levels in (3, 4):
+        frame = pd.DataFrame(
+            {
+                "y": np.ones(24),
+                "g": pd.Categorical(
+                    np.resize([f"g{index}" for index in range(levels)], 24)
+                ),
+            }
+        )
+        system, _ = _system("y~0+s(g,bs='re')", frame)
+        estimate = FrozenOperatorLogDet(
+            system, memory_budget_bytes=4 * 1024 * 1024, control=control
+        ).estimate()
+        assert estimate.diagnostics.n_coef == levels
+        fingerprints.append(estimate.diagnostics.probe_fingerprint)
+    assert fingerprints[0] != fingerprints[1]
 
 
 def test_logdet_preflights_budget_and_controls_before_actions(monkeypatch):

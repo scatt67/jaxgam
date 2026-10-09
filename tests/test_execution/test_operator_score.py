@@ -18,7 +18,7 @@ from jaxgam.execution.operator_score import (
 from tests.tolerances import STRICT
 
 
-def _logdet(values, *, seed=13, depth=4, depth_error=0.02):
+def _logdet(values, *, seed=13, depth=4, depth_error=0.02, n_coef=4, fingerprint=None):
     values = np.asarray(values, dtype=np.float64)
     return OperatorLogDetEstimate(
         float(np.mean(values)),
@@ -33,17 +33,27 @@ def _logdet(values, *, seed=13, depth=4, depth_error=0.02):
             float(np.std(values, ddof=1) / np.sqrt(len(values))),
             depth_error,
             4096,
+            n_coef,
+            fingerprint or f"{seed:032x}{n_coef:032x}",
         ),
     )
 
 
-def _score(values, *, seed=13, depth=4, null_dimension=1):
-    terms = OperatorScoreTerms(16.0, -18.4, 1.7, 4)
+def _score(values, *, seed=13, depth=4, null_dimension=1, n_coef=4, fingerprint=None):
+    terms = OperatorScoreTerms(16.0, -18.4, 1.7, n_coef)
     penalty = OperatorPenaltyLogDet(
-        2.1, 4 - null_dimension, null_dimension, np.array([2.1]), 1024
+        2.1, n_coef - null_dimension, null_dimension, np.array([2.1]), 1024
     )
     return assemble_operator_score(
-        terms, _logdet(values, seed=seed, depth=depth), penalty
+        terms,
+        _logdet(
+            values,
+            seed=seed,
+            depth=depth,
+            n_coef=n_coef,
+            fingerprint=fingerprint,
+        ),
+        penalty,
     )
 
 
@@ -122,5 +132,36 @@ def test_unpaired_probe_or_invalid_bound_rejects_before_decision():
         compare_operator_scores(accepted, _score([3.0, 3.8, 4.6, 5.4], seed=14))
     with pytest.raises(ValueError, match="identical probes"):
         compare_operator_scores(accepted, _score([3.0, 3.8, 4.6, 5.4], depth=3))
+    with pytest.raises(ValueError, match="identical probes"):
+        compare_operator_scores(accepted, _score([3.0, 3.8, 4.6, 5.4], n_coef=5))
+    with pytest.raises(ValueError, match="identical probes"):
+        compare_operator_scores(
+            accepted,
+            _score([3.0, 3.8, 4.6, 5.4], fingerprint="f" * 64),
+        )
     with pytest.raises(ValueError, match="nonnegative"):
         compare_operator_scores(accepted, accepted, trial_error_bound=-1.0)
+
+
+def test_direct_score_estimates_reject_nonfinite_or_inconsistent_samples():
+    score = _score([4.0, 4.4, 4.8, 5.2])
+    values = dict(vars(score))
+    with pytest.raises(ValueError, match="finite"):
+        type(score)(**{**values, "value": float("inf")})
+    with pytest.raises(ValueError, match="finite"):
+        type(score)(**{**values, "per_probe": np.array([4.0, float("nan")])})
+    with pytest.raises(ValueError, match="probe mean"):
+        type(score)(**{**values, "value": score.value + 1.0})
+    with pytest.raises(ValueError, match="provenance"):
+        type(score)(**{**values, "probe_fingerprint": "bad"})
+
+
+def test_finite_inputs_with_overflowing_score_difference_cannot_decide():
+    score = _score([4.0, 4.4, 4.8, 5.2])
+    values = dict(vars(score))
+    high = type(score)(**{**values, "value": 1e308, "per_probe": np.full(4, 1e308)})
+    low = type(score)(**{**values, "value": -1e308, "per_probe": np.full(4, -1e308)})
+    with pytest.raises(FloatingPointError, match="nonfinite"):
+        compare_operator_scores(
+            high, low, accepted_error_bound=0.0, trial_error_bound=0.0
+        )

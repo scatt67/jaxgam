@@ -8,6 +8,7 @@ controller must calibrate both before comparing trial scores.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import numbers
 from dataclasses import dataclass
@@ -73,6 +74,8 @@ class OperatorLogDetDiagnostics:
     monte_carlo_standard_error: float
     maximum_depth_difference: float
     peak_bound_bytes: int
+    n_coef: int
+    probe_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -181,6 +184,8 @@ class FrozenOperatorLogDet:
             raise ValueError("Frozen logdet needs at least one coefficient.")
         depth = min(p, self.control.lanczos_depth)
         rng = np.random.default_rng(self.control.seed)
+        probe_digest = hashlib.sha256()
+        probe_digest.update(np.asarray([p, self.control.probes], dtype="<i8").tobytes())
         values = np.empty(self.control.probes, dtype=np.float64)
         basis = np.empty((depth, p), dtype=np.float64)
         diagonal = np.empty(depth, dtype=np.float64)
@@ -191,6 +196,7 @@ class FrozenOperatorLogDet:
         scans_before = self.system.diagnostics.completed_scans
         for probe in range(self.control.probes):
             signs = rng.integers(0, 2, size=p, dtype=np.int8)
+            probe_digest.update(signs.tobytes())
             initial = (2 * signs.astype(np.float64) - 1) / math.sqrt(p)
             basis[0] = initial
             previous_beta = 0.0
@@ -282,5 +288,7 @@ class FrozenOperatorLogDet:
                 monte_carlo_standard_error=standard_error,
                 maximum_depth_difference=maximum_depth_difference,
                 peak_bound_bytes=required,
+                n_coef=p,
+                probe_fingerprint=probe_digest.hexdigest(),
             ),
         )
