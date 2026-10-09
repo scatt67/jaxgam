@@ -1,8 +1,8 @@
 """RBridge: interface to R's mgcv for reference comparison.
 
-Two modes:
-1. rpy2 (preferred): Direct R execution in-process
-2. subprocess: Run Rscript and parse output (fallback)
+New reference oracles call R functions in-process through rpy2. The explicit
+legacy subprocess mode remains only for pre-stack tests pending migration;
+it is never selected automatically.
 
 Usage::
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+from functools import lru_cache
 from typing import Any, ClassVar
 
 import numpy as np
@@ -36,6 +37,15 @@ _KERNEL_TO_MGCV_TYPE = {
     "matern_5_2": 4,
     "matern_7_2": 5,
 }
+
+
+@lru_cache(maxsize=1)
+def _r_packages() -> tuple[Any, Any, Any, Any, Any]:
+    """Reuse package wrappers around the single embedded R interpreter."""
+    import rpy2.robjects as ro
+    from rpy2.robjects.packages import importr
+
+    return ro, importr("mgcv"), importr("base"), importr("stats"), importr("utils")
 
 
 def gp_config_to_mgcv_m(spec: SmoothSpec, rho: float | None = None) -> list[float]:
@@ -69,7 +79,7 @@ def gp_config_to_mgcv_m(spec: SmoothSpec, rho: float | None = None) -> list[floa
 
 
 class RBridgeError(Exception):
-    """Error communicating with R via subprocess mode."""
+    """Error obtaining a pinned R reference result."""
 
 
 class RBridge:
@@ -78,8 +88,8 @@ class RBridge:
     Parameters
     ----------
     mode : str
-        One of 'auto', 'rpy2', 'subprocess'. 'auto' tries rpy2 first,
-        falls back to subprocess.
+        'auto' and 'rpy2' both require rpy2. 'subprocess' is retained only
+        for older tests pending their separate migration.
     """
 
     _SUBPROCESS_FAMILY_MAP: ClassVar[dict[str, str]] = {
@@ -95,16 +105,10 @@ class RBridge:
     _base: Any
     _stats: Any
 
-    def __init__(self, mode: str = "auto") -> None:
-        if mode == "auto":
-            try:
-                import rpy2.robjects  # noqa: F401
+    _utils: Any
 
-                self.mode = "rpy2"
-                self._setup_rpy2()
-            except (ImportError, ValueError, OSError):
-                self.mode = "subprocess"
-        elif mode == "rpy2":
+    def __init__(self, mode: str = "auto") -> None:
+        if mode in {"auto", "rpy2"}:
             self.mode = "rpy2"
             self._setup_rpy2()
         elif mode == "subprocess":
@@ -116,32 +120,15 @@ class RBridge:
 
     def _setup_rpy2(self) -> None:
         """Initialize rpy2 connection and import R packages."""
-        import rpy2.robjects as ro
-        from rpy2.robjects.packages import importr
-
-        self._ro = ro
-        self._mgcv = importr("mgcv")
-        self._base = importr("base")
-        self._stats = importr("stats")
+        self._ro, self._mgcv, self._base, self._stats, self._utils = _r_packages()
 
     @staticmethod
     def available() -> bool:
-        """Check if R and mgcv are available via either mode."""
+        """Check if rpy2 can load R and mgcv in this process."""
         try:
-            import rpy2.robjects  # noqa: F401
-
+            _r_packages()
             return True
-        except (ImportError, ValueError, OSError):
-            pass
-        try:
-            result = subprocess.run(
-                ["Rscript", "-e", "library(mgcv); cat('ok')"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            return result.returncode == 0 and "ok" in result.stdout
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        except (ImportError, ValueError, OSError, RuntimeError):
             return False
 
     @staticmethod
@@ -151,16 +138,9 @@ class RBridge:
         Returns (True, "") if versions match, or (False, reason) if not.
         """
         try:
-            r_ver = subprocess.check_output(
-                ["Rscript", "-e", "cat(R.version$major, R.version$minor, sep='.')"],
-                text=True,
-                timeout=10,
-            ).strip()
-            mgcv_ver = subprocess.check_output(
-                ["Rscript", "-e", "cat(as.character(packageVersion('mgcv')))"],
-                text=True,
-                timeout=10,
-            ).strip()
+            _, _, base, _, utils = _r_packages()
+            r_ver = str(base.as_character(base.getRversion())[0])
+            mgcv_ver = str(base.as_character(utils.packageVersion("mgcv"))[0])
         except Exception as e:
             return False, f"Cannot query R versions: {e}"
 
@@ -173,6 +153,46 @@ class RBridge:
     # ------------------------------------------------------------------ #
     #  rpy2 helpers                                                       #
     # ------------------------------------------------------------------ #
+
+    def _require_rpy2(self) -> None:
+        """Require the pinned in-process reference for migrated oracles."""
+        if self.mode != "rpy2":
+            raise RBridgeError("This reference oracle requires RBridge(mode='rpy2').")
+        ok, reason = self.check_versions()
+        if not ok:
+            raise RBridgeError(f"Pinned R oracle unavailable: {reason}")
+
+    def _call_internal(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        """Call an installed mgcv namespace function without evaluating source."""
+        function = self._utils.getFromNamespace(name, "mgcv")
+        return function(*args, **kwargs)
+
+    def _to_r_vector(self, values: np.ndarray) -> Any:
+        """Transfer a numeric vector directly, preserving double precision."""
+        values = np.asarray(values)
+        if values.ndim != 1:
+            raise ValueError("R vector input must be one-dimensional.")
+        if values.dtype.kind == "b":
+            return self._ro.BoolVector(values)
+        if values.dtype.kind in "iu":
+            limit = np.iinfo(np.int32)
+            if np.any(values <= limit.min) or np.any(values > limit.max):
+                raise ValueError("R integer input exceeds its non-missing range.")
+            return self._ro.IntVector(values)
+        if values.dtype.kind != "f":
+            raise TypeError("R numeric input must contain floating or integer values.")
+        return self._ro.FloatVector(np.asarray(values, dtype=np.float64))
+
+    def _to_r_matrix(self, values: np.ndarray) -> Any:
+        """Transfer matrix dimensions and column-major numeric values to R."""
+        values = np.asarray(values)
+        if values.ndim != 2:
+            raise ValueError("R matrix input must be two-dimensional.")
+        return self._base.matrix(
+            self._to_r_vector(values.ravel(order="F")),
+            nrow=values.shape[0],
+            ncol=values.shape[1],
+        )
 
     def _to_r_dataframe(self, data: pd.DataFrame) -> Any:
         """Convert a pandas DataFrame to an R data.frame via rpy2."""
@@ -267,6 +287,43 @@ class RBridge:
         if self.mode == "rpy2":
             return self._fit_rpy2(formula, data, family, method)
         return self._fit_subprocess(formula, data, family, method)
+
+    def fix_dependence(
+        self,
+        X1: np.ndarray,
+        X2: np.ndarray,
+        tol: float = np.finfo(float).eps ** 0.5,
+        rank_def: int = 0,
+    ) -> list[int] | None:
+        """Call mgcv's unexported ``fixDependence`` reference routine.
+
+        Returned indices are converted from R's one-based convention to
+        Python's zero-based convention.
+        """
+        X1 = np.asarray(X1, dtype=np.float64)
+        X2 = np.asarray(X2, dtype=np.float64)
+        if X1.ndim != 2 or X2.ndim != 2:
+            raise ValueError("X1 and X2 must both be two-dimensional arrays.")
+        if X1.shape[0] != X2.shape[0]:
+            raise ValueError("X1 and X2 must have the same number of rows.")
+
+        return self._fix_dependence_rpy2(X1, X2, tol, rank_def)
+
+    def _fix_dependence_rpy2(
+        self, X1: np.ndarray, X2: np.ndarray, tol: float, rank_def: int
+    ) -> list[int] | None:
+        """Call ``mgcv:::fixDependence`` through rpy2."""
+        self._require_rpy2()
+        ind = self._call_internal(
+            "fixDependence",
+            self._to_r_matrix(X1),
+            self._to_r_matrix(X2),
+            tol=float(tol),
+            **{"rank.def": int(rank_def)},
+        )
+        if ind is None or ind is self._ro.NULL or len(ind) == 0:
+            return None
+        return [int(index) - 1 for index in ind]
 
     def _fit_rpy2(
         self,
@@ -652,6 +709,30 @@ for (i in seq_len(n_smooths)) {{
             )
         return self._smooth_construct_subprocess(smooth_expr, data, absorb_cons)
 
+    def _smooth_objects_rpy2(
+        self,
+        smooth_expr: str,
+        data: pd.DataFrame,
+        absorb_cons: bool,
+        knots: dict[str, np.ndarray] | None = None,
+    ) -> Any:
+        """Pass an interpreted formula term and data objects to smoothCon."""
+        self._require_rpy2()
+        interpreted = self._call_internal(
+            "interpret.gam", self._ro.Formula("~ " + smooth_expr)
+        )
+        terms = interpreted.rx2("smooth.spec")
+        if len(terms) != 1:
+            raise ValueError("Smooth construction requires exactly one smooth term.")
+        arguments = {"absorb.cons": absorb_cons}
+        if knots is not None:
+            arguments["knots"] = self._ro.ListVector(
+                {name: self._to_r_vector(values) for name, values in knots.items()}
+            )
+        return self._mgcv.smoothCon(
+            terms[0], data=self._to_r_dataframe(data), **arguments
+        )
+
     def _smooth_construct_rpy2(
         self,
         smooth_expr: str,
@@ -659,76 +740,35 @@ for (i in seq_len(n_smooths)) {{
         absorb_cons: bool,
         knots: dict[str, np.ndarray] | None,
     ) -> dict[str, Any]:
-        """Call smoothCon() via rpy2 and extract smooth construction details."""
-        from rpy2.robjects import FloatVector, ListVector
+        """Extract the installed smooth object's fields without generated code."""
+        smooth = self._smooth_objects_rpy2(smooth_expr, data, absorb_cons, knots)[0]
 
-        ro = self._ro
-        r_df = self._to_r_dataframe(data)
+        def optional_array(name: str, shape: tuple[int, ...]) -> np.ndarray:
+            value = smooth.rx2(name)
+            return np.zeros(shape) if value is self._ro.NULL else np.asarray(value)
 
-        # Python booleans → R boolean strings for embedded R code
-        absorb_str = "TRUE" if absorb_cons else "FALSE"
-        knots_arg = ", knots=knots_input" if knots is not None else ""
-        r_code = f"""
-        library(mgcv)
-        dat <- as.data.frame(dat_input)
-        sm <- smoothCon({smooth_expr}, data=dat{knots_arg}, absorb.cons={absorb_str})[[1]]
-        list(
-            X = sm$X,
-            S = sm$S,
-            rank = sm$rank,
-            null_space_dim = sm$null.space.dim,
-            Xu = if (!is.null(sm$Xu)) sm$Xu else matrix(0, 0, 0),
-            UZ = if (!is.null(sm$UZ)) sm$UZ else matrix(0, 0, 0),
-            shift = if (!is.null(sm$shift)) sm$shift else numeric(0),
-            knt = if (!is.null(sm$knt)) sm$knt else matrix(0, 0, 0),
-            gp_defn = if (!is.null(sm$gp.defn)) sm$gp.defn else numeric(0),
-            # mgcv:::gpE is version-pinned by RBridge.check_versions().
-            E = if (!is.null(sm$knt))
-                    mgcv:::gpE(sm$knt, sm$knt, sm$gp.defn)
-                else matrix(0, 0, 0)
-        )
-        """
-        ro.globalenv["dat_input"] = r_df
-        if knots is not None:
-            ro.globalenv["knots_input"] = ListVector(
-                {
-                    name: FloatVector(np.asarray(values, dtype=np.float64).ravel())
-                    for name, values in knots.items()
-                }
+        ranks = np.asarray(smooth.rx2("rank"), dtype=np.float64).ravel()
+        knt = optional_array("knt", (0, 0))
+        gp_defn = optional_array("gp.defn", (0,))
+        E = (
+            np.asarray(
+                self._call_internal(
+                    "gpE", smooth.rx2("knt"), smooth.rx2("knt"), smooth.rx2("gp.defn")
+                ),
+                dtype=np.float64,
             )
-        try:
-            result = ro.r(r_code)
-        finally:
-            del ro.globalenv["dat_input"]
-            if knots is not None:
-                del ro.globalenv["knots_input"]
-
-        X = np.array(result.rx2("X"), dtype=np.float64)
-        rank_arr = np.array(result.rx2("rank"), dtype=np.float64).ravel()
-        rank = int(rank_arr[0])
-        rank_vector = rank_arr.astype(int)
-        nsd_arr = np.array(result.rx2("null_space_dim"), dtype=np.float64).ravel()
-        null_space_dim = int(nsd_arr[0])
-
-        S_list = result.rx2("S")
-        S_matrices = [np.array(S_list[i], dtype=np.float64) for i in range(len(S_list))]
-
-        Xu = np.array(result.rx2("Xu"), dtype=np.float64)
-        UZ = np.array(result.rx2("UZ"), dtype=np.float64)
-        shift = np.array(result.rx2("shift"), dtype=np.float64)
-        knt = np.array(result.rx2("knt"), dtype=np.float64)
-        gp_defn = np.array(result.rx2("gp_defn"), dtype=np.float64)
-        E = np.array(result.rx2("E"), dtype=np.float64)
-
+            if smooth.rx2("knt") is not self._ro.NULL
+            else np.zeros((0, 0))
+        )
         return {
-            "X": X,
-            "S": S_matrices,
-            "rank": rank,
-            "rank_vector": rank_vector,
-            "null_space_dim": null_space_dim,
-            "Xu": Xu,
-            "UZ": UZ,
-            "shift": shift,
+            "X": np.asarray(smooth.rx2("X"), dtype=np.float64),
+            "S": [np.asarray(penalty, dtype=np.float64) for penalty in smooth.rx2("S")],
+            "rank": int(ranks[0]),
+            "rank_vector": ranks.astype(int),
+            "null_space_dim": int(smooth.rx2("null.space.dim")[0]),
+            "Xu": optional_array("Xu", (0, 0)),
+            "UZ": optional_array("UZ", (0, 0)),
+            "shift": optional_array("shift", (0,)),
             "knt": knt,
             "gp_defn": gp_defn,
             "E": E,
@@ -891,74 +931,25 @@ if (!is.null(sm$shift)) {{
         data: pd.DataFrame,
         absorb_cons: bool,
     ) -> list[dict[str, Any]]:
-        """Call smoothCon() via rpy2 and return all smooth objects."""
-        ro = self._ro
-        r_df = self._to_r_dataframe(data)
-
-        absorb_str = "TRUE" if absorb_cons else "FALSE"
-        r_code = f"""
-        library(mgcv)
-        dat <- as.data.frame(dat_input)
-        sml <- smoothCon({smooth_expr}, data=dat, absorb.cons={absorb_str})
-        n_sm <- length(sml)
-        result <- list(n_sm=n_sm, smooths=list())
-        for (i in seq_len(n_sm)) {{
-            sm <- sml[[i]]
-            by_lev <- if (!is.null(sm$by.level)) sm$by.level else "NONE"
-            lab <- if (!is.null(sm$label)) sm$label else ""
-            result$smooths[[i]] <- list(
-                X = sm$X,
-                S = sm$S,
-                rank = sm$rank,
-                null_space_dim = sm$null.space.dim,
-                by_level = by_lev,
-                label = lab
-            )
-        }}
-        result
-        """
-        ro.globalenv["dat_input"] = r_df
-        try:
-            result = ro.r(r_code)
-        finally:
-            del ro.globalenv["dat_input"]
-
-        n_sm = int(np.array(result.rx2("n_sm"))[0])
-        smooths_r = result.rx2("smooths")
-
+        """Extract all factor-by smooths from their installed R objects."""
+        smooths = self._smooth_objects_rpy2(smooth_expr, data, absorb_cons)
         results = []
-        for i in range(n_sm):
-            sm = smooths_r[i]
-            X = np.array(sm.rx2("X"), dtype=np.float64)
-            rank_arr = np.array(sm.rx2("rank"), dtype=np.float64).ravel()
-            rank = int(rank_arr[0])
-            nsd_arr = np.array(sm.rx2("null_space_dim"), dtype=np.float64).ravel()
-            null_space_dim = int(nsd_arr[0])
-
-            S_list_r = sm.rx2("S")
-            S_matrices = [
-                np.array(S_list_r[j], dtype=np.float64) for j in range(len(S_list_r))
-            ]
-
-            by_level_arr = np.array(sm.rx2("by_level"))
-            by_level_str = str(by_level_arr[0]) if by_level_arr.size > 0 else None
-            if by_level_str == "NONE":
-                by_level_str = None
-
-            label_arr = np.array(sm.rx2("label"))
-            label = str(label_arr[0]) if label_arr.size > 0 else ""
-
+        for smooth in smooths:
+            by_level = smooth.rx2("by.level")
+            label = smooth.rx2("label")
             results.append(
                 {
-                    "X": X,
-                    "S": S_matrices,
-                    "rank": rank,
-                    "null_space_dim": null_space_dim,
-                    "by_level": by_level_str,
-                    "label": label,
+                    "X": np.asarray(smooth.rx2("X"), dtype=np.float64),
+                    "S": [
+                        np.asarray(penalty, dtype=np.float64)
+                        for penalty in smooth.rx2("S")
+                    ],
+                    "rank": int(smooth.rx2("rank")[0]),
+                    "null_space_dim": int(smooth.rx2("null.space.dim")[0]),
+                    "by_level": None if by_level is self._ro.NULL else str(by_level[0]),
+                    "label": "" if label is self._ro.NULL else str(label[0]),
                 }
             )
-
         return results
 
     def _smooth_construct_list_subprocess(
