@@ -373,55 +373,92 @@ class CubicRegressionSmooth(Smooth):
         if not self._cyclic:
             j = self._find_knot_intervals(x, knots)
             X = np.zeros((len(x), n_basis))
-            left_rows = np.flatnonzero(x < knots[0])
-            if left_rows.size:
-                h = knots[1] - knots[0]
-                xik = x[left_rows] - knots[0]
-                cjm = -xik * h / 3.0
-                cjp = -xik * h / 6.0
-                X[left_rows] = blas.dgemm(
-                    1.0,
-                    np.column_stack((cjp, cjm)),
-                    np.vstack((F[1], F[0])),
-                )
-                X[left_rows, 0] += 1.0 - xik / h
-                X[left_rows, 1] += xik / h
+            if sys.platform != "darwin":
+                # Keep the pinned source BLAS path on Linux. Accelerate's
+                # two-column GEMM rounds differently from mgcv's crspl FMA.
+                left_rows = np.flatnonzero(x < knots[0])
+                if left_rows.size:
+                    h = knots[1] - knots[0]
+                    xik = x[left_rows] - knots[0]
+                    cjm = -xik * h / 3.0
+                    cjp = -xik * h / 6.0
+                    X[left_rows] = blas.dgemm(
+                        1.0, np.column_stack((cjp, cjm)), np.vstack((F[1], F[0]))
+                    )
+                    X[left_rows, 0] += 1.0 - xik / h
+                    X[left_rows, 1] += xik / h
+                right_rows = np.flatnonzero(x > knots[-1])
+                if right_rows.size:
+                    h = knots[-1] - knots[-2]
+                    xik = x[right_rows] - knots[-1]
+                    cjm = xik * h / 6.0
+                    cjp = xik * h / 3.0
+                    X[right_rows] = blas.dgemm(
+                        1.0, np.column_stack((cjp, cjm)), np.vstack((F[-1], F[-2]))
+                    )
+                    X[right_rows, -2] += -xik / h
+                    X[right_rows, -1] += 1.0 + xik / h
+                interior = (x >= knots[0]) & (x <= knots[-1])
+                for interval in range(n_basis - 1):
+                    rows = np.flatnonzero(interior & (j == interval))
+                    if rows.size == 0:
+                        continue
+                    xj = knots[interval]
+                    xj1 = knots[interval + 1]
+                    h = xj1 - xj
+                    ajm = xj1 - x[rows]
+                    ajp = x[rows] - xj
+                    cjm = (ajm * (ajm * ajm / h - h)) / 6.0
+                    cjp = (ajp * (ajp * ajp / h - h)) / 6.0
+                    coefficients = np.column_stack((cjp, cjm))
+                    factors = np.vstack((F[interval + 1], F[interval]))
+                    X[rows] = blas.dgemm(1.0, coefficients, factors)
+                    X[rows, interval] += ajm / h
+                    X[rows, interval + 1] += ajp / h
+                return X
 
-            right_rows = np.flatnonzero(x > knots[-1])
-            if right_rows.size:
-                h = knots[-1] - knots[-2]
-                xik = x[right_rows] - knots[-1]
-                cjm = xik * h / 6.0
-                cjp = xik * h / 3.0
-                X[right_rows] = blas.dgemm(
-                    1.0,
-                    np.column_stack((cjp, cjm)),
-                    np.vstack((F[-1], F[-2])),
-                )
-                X[right_rows, -2] += -xik / h
-                X[right_rows, -1] += 1.0 + xik / h
-
-            interior = (x >= knots[0]) & (x <= knots[-1])
-            for interval in range(n_basis - 1):
-                rows = np.flatnonzero(interior & (j == interval))
-                if rows.size == 0:
-                    continue
-                xj = knots[interval]
-                xj1 = knots[interval + 1]
-                h = xj1 - xj
-                ajm = xj1 - x[rows]
-                ajp = x[rows] - xj
-                cjm = (ajm * (ajm * ajm / h - h)) / 6.0
-                cjp = (ajp * (ajp * ajp / h - h)) / 6.0
-                # crspl evaluates cjm * F[j,] + cjp * F[j+1,] with
-                # the second product materialized before the fused addition.
-                # Reversing the two-column DGEMM operands preserves exactly
-                # that order without an n-by-k Python scalar loop.
-                coefficients = np.column_stack((cjp, cjm))
-                factors = np.vstack((F[interval + 1], F[interval]))
-                X[rows] = blas.dgemm(1.0, coefficients, factors)
-                X[rows, interval] += ajm / h
-                X[rows, interval + 1] += ajp / h
+            multiply_add = _source_getfs_multiply_add()
+            for row, xi in enumerate(x):
+                interval = int(j[row])
+                if xi < knots[0]:
+                    h = knots[1] - knots[0]
+                    xik = xi - knots[0]
+                    cjm = -xik * h / 3.0
+                    cjp = -xik * h / 6.0
+                    for column in range(n_basis):
+                        X[row, column] = multiply_add(
+                            cjm, F[0, column], cjp * F[1, column]
+                        )
+                    X[row, 0] += 1.0 - xik / h
+                    X[row, 1] += xik / h
+                elif xi > knots[-1]:
+                    h = knots[-1] - knots[-2]
+                    xik = xi - knots[-1]
+                    cjm = xik * h / 6.0
+                    cjp = xik * h / 3.0
+                    left, right = n_basis - 2, n_basis - 1
+                    for column in range(n_basis):
+                        X[row, column] = multiply_add(
+                            cjm, F[left, column], cjp * F[right, column]
+                        )
+                    X[row, left] += -xik / h
+                    X[row, right] += 1.0 + xik / h
+                else:
+                    xj = knots[interval]
+                    xj1 = knots[interval + 1]
+                    h = xj1 - xj
+                    ajm = xj1 - xi
+                    ajp = xi - xj
+                    cjm = (ajm * (ajm * ajm / h - h)) / 6.0
+                    cjp = (ajp * (ajp * ajp / h - h)) / 6.0
+                    ajm /= h
+                    ajp /= h
+                    for column in range(n_basis):
+                        X[row, column] = multiply_add(
+                            cjm, F[interval, column], cjp * F[interval + 1, column]
+                        )
+                    X[row, interval] += ajm
+                    X[row, interval + 1] += ajp
             return X
 
         ajm, ajp, cjm, cjp, j = self._compute_base_functions(x, knots)

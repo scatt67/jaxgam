@@ -26,11 +26,10 @@ def _source_centering_reflector(design: npt.NDArray[np.float64]) -> np.ndarray:
     n_rows, width = design.shape
     if n_rows < 1 or width < 2:
         raise ValueError("Source centering requires a nonempty smooth design.")
+    # R's colMeans walks each column in row order with an LDOUBLE
+    # accumulator. NumPy's sum may use a pairwise reduction instead.
     means = np.asarray(
-        [
-            np.longdouble(design[:, column]).sum(dtype=np.longdouble) / n_rows
-            for column in range(width)
-        ],
+        np.add.accumulate(np.asarray(design, dtype=np.longdouble), axis=0)[-1] / n_rows,
         dtype=np.float64,
     )
     norm = blas.dnrm2(means)

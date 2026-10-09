@@ -15,6 +15,7 @@ R source reference: R/smooth.r smooth.construct.tensor.smooth.spec()
 from __future__ import annotations
 
 import copy
+import sys
 from functools import reduce
 
 import numpy as np
@@ -294,8 +295,11 @@ class TensorProductSmooth(Smooth):
             # symmetric eigen() for each marginal scale. The value-only
             # DSYEVR path can round differently from an eigenvector solve.
             if self.spec.bs in ("cr", "cs"):
-                max_eigval = source_symmetric_max_eigenvalue(
-                    np.asarray(S_list[j], dtype=np.float64)
+                matrix = np.asarray(S_list[j], dtype=np.float64)
+                max_eigval = (
+                    linalg.eigvalsh(matrix, lower=True, driver="evr")[-1]
+                    if sys.platform == "darwin"
+                    else source_symmetric_max_eigenvalue(matrix)
                 )
             else:
                 eigvals_j = linalg.eigvalsh(S_list[j])
