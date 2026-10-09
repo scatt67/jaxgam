@@ -18,11 +18,11 @@ from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
 from jaxgam.smooths.gp_kernels import GPKernel, gp_kernel_registry
+from jaxgam.smooths.source_lapack import source_lanczos
 from jaxgam.smooths.utils import (
     DISTANCE_BATCH_ROWS,
     _compute_distance_matrix,
     _get_unique_rows,
-    _slanczos,
     _subsample_knots,
 )
 
@@ -214,7 +214,7 @@ class GaussianProcessSmooth(Smooth):
         self._resolved_rho = rho_resolved
         self._E_knot = E
 
-        eigvals, eigvecs = _slanczos(E, k, tol=np.finfo(float).eps ** 0.5)
+        eigvals, eigvecs = source_lanczos(E, k, tol=np.finfo(float).eps ** 0.5)
         self._E_knot = None
 
         if (eigvals < 0).any():

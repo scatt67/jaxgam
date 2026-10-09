@@ -401,7 +401,7 @@ class TestIndefiniteClip:
 
     The supported kernels are PSD or numerically near-PSD at d ≤ 3, so an
     organic "indefinite" spectrum is hard to reproduce reliably. To exercise
-    the clip code path deterministically, we monkey-patch ``_slanczos`` to
+    the clip code path deterministically, we monkey-patch ``source_lanczos`` to
     return a spectrum with one injected negative eigenvalue. The full
     R-parity behavior on naturally indefinite spectra is exercised in
     Commit G's smooth-construct tests.
@@ -412,7 +412,7 @@ class TestIndefiniteClip:
         gp_1d_data: dict,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        original_slanczos = gp_module._slanczos
+        original_slanczos = gp_module.source_lanczos
 
         def fake_slanczos(A, k, tol):
             eigvals, eigvecs = original_slanczos(A, k, tol=tol)
@@ -422,7 +422,7 @@ class TestIndefiniteClip:
             eigvals[idx] = -abs(eigvals[idx]) if eigvals[idx] != 0 else -1e-6
             return eigvals, eigvecs
 
-        monkeypatch.setattr(gp_module, "_slanczos", fake_slanczos)
+        monkeypatch.setattr(gp_module, "source_lanczos", fake_slanczos)
 
         spec = _make_spec(["x"])
         smooth = GaussianProcessSmooth(spec)
