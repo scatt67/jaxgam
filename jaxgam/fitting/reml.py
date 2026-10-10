@@ -414,6 +414,61 @@ def reml_criterion(
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
 
+def reml_criterion_with_logdet_hessian(
+    log_lambda: jax.Array,
+    beta: jax.Array,
+    deviance: jax.Array,
+    ls_sat: jax.Array,
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
+    phi: jax.Array,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    log_det_hessian: jax.Array,
+    rank_deficit: int = 0,
+) -> jax.Array:
+    """Evaluate a complete fixed-state REML score with a supplied ``log|H|``.
+
+    This is for a *matched frozen fit state*: ``beta``, deviance, working
+    scale, and ``log_det_hessian`` must all come from the same final solve.
+    In particular it is not a free-``rho`` objective and must not be used for
+    implicit derivatives or smoothing-parameter optimization.  The supplied
+    determinant is accepted only on the full identifiable subspace; explicit
+    coefficient-map/rank-deficit support belongs to the later QR alias path.
+
+    It intentionally preserves the existing REML arithmetic for the penalty
+    quadratic, pseudo-determinant, and ``Mp`` correction while avoiding a
+    second normal-equation factorization solely to obtain ``log|H|``.
+    """
+    if rank_deficit != 0:
+        raise NotImplementedError(
+            "Supplied-Hessian REML requires the full identifiable subspace."
+        )
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
+    penalty = beta @ S_lambda @ beta
+    Dp = deviance + penalty
+    log_det_S = penalty_ops.log_pdet(
+        log_lambda,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
+    return (
+        Dp / (2.0 * phi)
+        - ls_sat
+        + log_det_hessian / 2.0
+        - log_det_S / 2.0
+        - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Joint criteria (log_lambda + log_phi co-optimized)
 # ---------------------------------------------------------------------------

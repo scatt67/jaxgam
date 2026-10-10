@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jaxgam.execution.qr import PositiveQRState, qr_update, solve_augmented_qr
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import _to_jax_structure
@@ -20,17 +21,24 @@ from jaxgam.fitting.family_execution import (
     merge_execution_summaries,
 )
 from jaxgam.fitting.reml import estimate_edf
-from jaxgam.fitting.state import StreamFitState
+from jaxgam.fitting.state import (
+    CholeskyCoefficientFactor,
+    PivotedQRCoefficientFactor,
+    StreamFitState,
+)
 from jaxgam.fitting.stream_kernels import (
     accepts_trial,
     accumulate_working_statistics,
     coefficient_stationarity,
+    coefficient_stationarity_from_parts,
     empty_statistics,
+    positive_qr_working_rows,
     saturated_loglik_reduction,
     solve_penalized_system,
     trial_deviance,
 )
 from jaxgam.formula.design_provider import StreamDesign
+from jaxgam.formula.fitting_prepare import qr_penalty_roots
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,7 @@ class StreamPIRLSControl:
     max_iter: int = 100
     tol: float = 1e-7
     max_halvings: int = 25
+    solver_policy: str = "cholesky"
 
     def __post_init__(self) -> None:
         for name, value, allow_zero in (
@@ -59,6 +68,8 @@ class StreamPIRLSControl:
             raise ValueError("Stream PIRLS tolerance must be a finite positive real.")
         if not np.isfinite(self.tol) or self.tol <= 0:
             raise ValueError("Stream PIRLS controls must be positive (halvings >= 0).")
+        if self.solver_policy not in ("cholesky", "qr"):
+            raise ValueError("solver_policy must be 'cholesky' or 'qr'.")
 
 
 def _preflight(
@@ -209,6 +220,144 @@ def _working_scan(
     return statistics, batches
 
 
+def _qr_working_scan(
+    stream: StreamDesign,
+    beta: jax.Array,
+    family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
+    parameters: FamilyExecutionParameters,
+    control: StreamPIRLSControl,
+    device: jax.Device | None,
+) -> tuple[tuple[jax.Array, jax.Array, jax.Array, jax.Array], PositiveQRState, int]:
+    """Scan positive Fisher QR rows; G/b are reporting statistics, not a solve."""
+    statistics = jax.device_put(empty_statistics(stream.prepared.n_coef), device)
+    qr_state: PositiveQRState | None = None
+    batches = 0
+    for X, y, weight, offset, valid in _fitting_batches(
+        stream, family, lineage, control.batch_rows
+    ):
+        weighted_X, weighted_z, G, b, deviance, domain_ok = positive_qr_working_rows(
+            jax.device_put(X, device),
+            jax.device_put(y, device),
+            jax.device_put(weight, device),
+            jax.device_put(offset, device),
+            jax.device_put(valid, device),
+            beta,
+            parameters,
+            family,
+            lineage.context,
+        )
+        qr_state = qr_update(
+            qr_state,
+            np.asarray(weighted_X),
+            np.asarray(weighted_z),
+            n_coef=stream.prepared.n_coef,
+        )
+        old_G, old_b, old_deviance, old_domain = statistics
+        statistics = (
+            old_G + G,
+            old_b + b,
+            old_deviance + deviance,
+            old_domain & domain_ok,
+        )
+        jax.block_until_ready(statistics[0])
+        batches += 1
+    if qr_state is None:
+        raise ValueError("Streamed QR requires at least one source batch.")
+    return statistics, qr_state, batches
+
+
+def _qr_roots(
+    stream: StreamDesign, rho: jax.Array
+) -> tuple[tuple[tuple[slice, np.ndarray], ...], tuple[tuple[slice, np.ndarray], ...]]:
+    """Build invariant local root layout once for one fixed-sp streamed fit."""
+    assert stream.prepared.fitting is not None
+    layout = qr_penalty_roots(stream.prepared.fitting.penalty_structure)
+    rho_host = np.asarray(rho)
+    balanced = tuple((slice(root.start, root.stop), root.root) for root in layout)
+    actual_roots = []
+    for root in layout:
+        value = np.array(root.root * np.exp(0.5 * rho_host[root.sp_index]), copy=True)
+        value.setflags(write=False)
+        actual_roots.append((slice(root.start, root.stop), value))
+    actual = tuple(actual_roots)
+    return actual, balanced
+
+
+def _qr_factor(
+    qr_state: PositiveQRState,
+    actual_roots: tuple[tuple[slice, np.ndarray], ...],
+    balanced_roots: tuple[tuple[slice, np.ndarray], ...],
+    device: jax.Device | None,
+) -> tuple[jax.Array, PivotedQRCoefficientFactor]:
+    """Attach actual rho-scaled roots while retaining unscaled rank metadata."""
+    solved = solve_augmented_qr(qr_state, actual_roots, balanced_roots=balanced_roots)
+    factor = PivotedQRCoefficientFactor(
+        jax.device_put(solved.R, device),
+        jax.device_put(solved.pivots, device),
+        jax.device_put(solved.keep, device),
+        solved.original_n_coef,
+    )
+    return jax.device_put(solved.coefficients, device), factor
+
+
+def _qr_data_edf(
+    factor: PivotedQRCoefficientFactor,
+    data_state: PositiveQRState,
+    device: jax.Device | None,
+) -> jax.Array:
+    """Return Fisher EDF from the data QR root without forming ``G H^-1``.
+
+    ``data_state.R`` is pivoted.  Restoring its columns gives the data root
+    in fitting coordinates, and ``B^-T R_data.T`` has squared Frobenius norm
+    equal to ``trace(G H^-1)`` without the normal-equation product.
+    """
+    data_R = np.empty_like(data_state.R)
+    data_R[:, data_state.pivots] = data_state.R
+    rows = jax.device_put(jnp.asarray(data_R.T), device)
+    transformed = factor.root_transpose_inverse(rows)
+    return jnp.sum(transformed * transformed)
+
+
+def _working_factor_scan(
+    stream: StreamDesign,
+    beta: jax.Array,
+    family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
+    parameters: FamilyExecutionParameters,
+    control: StreamPIRLSControl,
+    structure: penalty_ops.JaxPenaltyStructure,
+    rho: jax.Array,
+    qr_roots: tuple[
+        tuple[tuple[slice, np.ndarray], ...], tuple[tuple[slice, np.ndarray], ...]
+    ]
+    | None,
+    device: jax.Device | None,
+):
+    """Return one working scan and its explicitly selected coefficient solver."""
+    if control.solver_policy == "qr":
+        statistics, qr_state, batches = _qr_working_scan(
+            stream, beta, family, lineage, parameters, control, device
+        )
+        assert qr_roots is not None
+        proposal, factor = _qr_factor(qr_state, *qr_roots, device)
+        return statistics, proposal, factor, None, batches, qr_state
+    statistics, batches = _working_scan(
+        stream, beta, family, lineage, parameters, control, device
+    )
+    proposal, lower, H = solve_penalized_system(
+        statistics[0], statistics[1], structure, rho
+    )
+    return (
+        statistics,
+        proposal,
+        CholeskyCoefficientFactor(lower, stream.prepared.n_coef),
+        H,
+        batches,
+        None,
+    )
+
+
 def _trial_scan(
     stream: StreamDesign,
     beta: jax.Array,
@@ -341,6 +490,10 @@ def fit_streamed_pirls(
         )
     if not np.all(np.isfinite(np.asarray(rho))):
         raise ValueError("log_lambda must contain only finite values.")
+    # Root construction is CPU-only and invariant over PIRLS working scans.
+    # ``actual`` has the fixed smoothing multipliers; ``balanced`` preserves
+    # scale-independent structural-rank metadata for augmented QR.
+    qr_roots = _qr_roots(stream, rho) if control.solver_policy == "qr" else None
     beta_source = prepared.fitting.beta_init if beta_init is None else beta_init
     beta = jax.device_put(jnp.asarray(beta_source, dtype=jnp.float64), device)
     if beta.shape != (prepared.n_coef,):
@@ -358,12 +511,24 @@ def fit_streamed_pirls(
     backtracks = 0
     final_statistics: tuple[jax.Array, jax.Array, jax.Array, jax.Array] | None = None
     final_H: jax.Array | None = None
-    final_factor: jax.Array | None = None
+    final_factor: CholeskyCoefficientFactor | PivotedQRCoefficientFactor | None = None
+    final_qr_state: PositiveQRState | None = None
     stationarity = np.inf
 
     for iteration in range(control.max_iter):
-        statistics, batch_count = _working_scan(
-            stream, beta, family, lineage, parameters, control, device
+        statistics, proposal, factor, H, batch_count, _qr_data_state = (
+            _working_factor_scan(
+                stream,
+                beta,
+                family,
+                lineage,
+                parameters,
+                control,
+                structure,
+                rho,
+                qr_roots,
+                device,
+            )
         )
         scans += 1
         batches_scanned += batch_count
@@ -373,11 +538,20 @@ def fit_streamed_pirls(
                 "Current streamed PIRLS coefficients leave the family domain."
             )
         current_penalized = deviance + penalty_ops.quadratic(structure, beta, rho)
-        proposal, factor, H = solve_penalized_system(G, b, structure, rho)
-        if not bool(np.all(np.isfinite(np.asarray(factor)))):
-            raise np.linalg.LinAlgError(
+        if not bool(np.all(np.isfinite(np.asarray(proposal)))):
+            message = (
                 "Streamed PIRLS normal equations are not SPD; refusing to add "
                 "jitter that could hide a rank or conditioning failure."
+                if control.solver_policy == "cholesky"
+                else "Streamed PIRLS QR coefficient solve is non-finite."
+            )
+            raise np.linalg.LinAlgError(message)
+        if isinstance(factor, CholeskyCoefficientFactor) and not bool(
+            np.all(np.isfinite(np.asarray(factor.lower)))
+        ):
+            raise np.linalg.LinAlgError(
+                "Streamed PIRLS Cholesky lower factor is non-finite; refusing "
+                "to add jitter that could hide a rank or conditioning failure."
             )
 
         accepted = False
@@ -412,6 +586,7 @@ def fit_streamed_pirls(
             final_statistics = statistics
             final_H = H
             final_factor = factor
+            final_qr_state = _qr_data_state
             break
 
         accepted_penalized = candidate_deviance + penalty_ops.quadratic(
@@ -433,17 +608,35 @@ def fit_streamed_pirls(
             and coefficient_change < control.tol
             and deviance_change < control.tol
         ):
-            final_statistics, batch_count = _working_scan(
-                stream, beta, family, lineage, parameters, control, device
+            (
+                final_statistics,
+                _unused,
+                final_factor_beta,
+                final_H,
+                batch_count,
+                final_qr_state,
+            ) = _working_factor_scan(
+                stream,
+                beta,
+                family,
+                lineage,
+                parameters,
+                control,
+                structure,
+                rho,
+                qr_roots,
+                device,
             )
             scans += 1
             batches_scanned += batch_count
-            final_H_beta, final_factor_beta, final_H = solve_penalized_system(
-                final_statistics[0], final_statistics[1], structure, rho
-            )
-            del final_H_beta
             stationarity = float(
-                np.asarray(coefficient_stationarity(final_H, final_statistics[1], beta))
+                np.asarray(
+                    coefficient_stationarity(final_H, final_statistics[1], beta)
+                    if control.solver_policy == "cholesky"
+                    else coefficient_stationarity_from_parts(
+                        final_statistics[0], final_statistics[1], structure, rho, beta
+                    )
+                )
             )
             final_factor = final_factor_beta
             converged = stationarity < control.tol
@@ -457,21 +650,56 @@ def fit_streamed_pirls(
             final_factor = None
 
     if final_statistics is None:
-        final_statistics, batch_count = _working_scan(
-            stream, beta, family, lineage, parameters, control, device
+        (
+            final_statistics,
+            _unused,
+            final_factor,
+            final_H,
+            batch_count,
+            final_qr_state,
+        ) = _working_factor_scan(
+            stream,
+            beta,
+            family,
+            lineage,
+            parameters,
+            control,
+            structure,
+            rho,
+            qr_roots,
+            device,
         )
         scans += 1
         batches_scanned += batch_count
-        _unused, final_factor, final_H = solve_penalized_system(
-            final_statistics[0], final_statistics[1], structure, rho
-        )
-        del _unused
-    assert final_H is not None
+    if control.solver_policy == "cholesky":
+        assert final_H is not None
+    else:
+        assert final_qr_state is not None
     assert final_factor is not None
+    factor_valid = (
+        bool(np.all(np.isfinite(np.asarray(final_factor.lower))))
+        if isinstance(final_factor, CholeskyCoefficientFactor)
+        else bool(np.all(np.isfinite(np.asarray(final_factor.R))))
+        and bool(np.isfinite(np.asarray(final_factor.logdet_hessian())))
+    )
+    if not factor_valid:
+        raise FloatingPointError(
+            "Streamed PIRLS final state is non-finite or outside domain."
+        )
     G, b, final_deviance, final_domain = final_statistics
     final_penalized = final_deviance + penalty_ops.quadratic(structure, beta, rho)
-    stationarity = float(np.asarray(coefficient_stationarity(final_H, b, beta)))
-    edf = estimate_edf(G, final_factor)
+    stationarity = float(
+        np.asarray(
+            coefficient_stationarity(final_H, b, beta)
+            if control.solver_policy == "cholesky"
+            else coefficient_stationarity_from_parts(G, b, structure, rho, beta)
+        )
+    )
+    edf = (
+        estimate_edf(G, final_factor.lower)
+        if isinstance(final_factor, CholeskyCoefficientFactor)
+        else _qr_data_edf(final_factor, final_qr_state, device)
+    )
     summary, batch_count = _execution_summary_scan(
         stream, family, lineage, control, device
     )
@@ -514,7 +742,7 @@ def fit_streamed_pirls(
         raise NotImplementedError("Unsupported streamed score-scale policy.")
     valid_final = (
         bool(np.all(np.isfinite(np.asarray(beta))))
-        and bool(np.all(np.isfinite(np.asarray(final_factor))))
+        and factor_valid
         and bool(np.isfinite(np.asarray(final_deviance)))
         and bool(np.asarray(final_domain))
         and bool(np.isfinite(np.asarray(scale)) and np.asarray(scale) > 0)
@@ -540,8 +768,8 @@ def fit_streamed_pirls(
         edf=edf,
         xtwx=G,
         xtwx_fisher=G,
-        factor=final_factor,
-        fisher_factor=final_factor,
+        coefficient_factor=final_factor,
+        fisher_coefficient_factor=final_factor,
         n_iter=iteration + 1,
         converged=converged,
         line_search_failed=line_search_failed,

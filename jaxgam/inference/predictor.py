@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
+import scipy.linalg as sla
 
 import jaxgam
 from jaxgam.data.source import RowSource
@@ -18,6 +19,108 @@ from jaxgam.inference._core import finish_prediction, predict_core, prepare_pred
 if TYPE_CHECKING:
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.formula.predict_matrix import Data
+
+
+@dataclass(frozen=True)
+class PivotedQRFisherFactor:
+    """CPU-owned QR covariance action with ``H = (R P.T).T @ (R P.T)``.
+
+    This is deliberately a Phase-3 NumPy object rather than a JAX fitting
+    factor.  It is compact (one triangular root and index maps), picklable,
+    and applies all coefficient actions on axis zero.
+    """
+
+    R: npt.NDArray[np.floating]
+    pivots: npt.NDArray[np.integer]
+    keep: npt.NDArray[np.integer]
+    original_n_coef: int
+
+    def __post_init__(self) -> None:
+        raw_pivots = np.asarray(self.pivots)
+        raw_keep = np.asarray(self.keep)
+        if (
+            raw_pivots.dtype.kind not in "iu"
+            or raw_keep.dtype.kind not in "iu"
+            or raw_pivots.dtype.kind == "b"
+            or raw_keep.dtype.kind == "b"
+            or isinstance(self.original_n_coef, bool)
+            or not isinstance(self.original_n_coef, (int, np.integer))
+        ):
+            raise ValueError("QR Fisher index maps and dimension must be integers")
+        R = np.array(self.R, dtype=float, copy=True)
+        pivots = np.array(self.pivots, dtype=np.intp, copy=True)
+        keep = np.array(self.keep, dtype=np.intp, copy=True)
+        if (
+            R.ndim != 2
+            or self.original_n_coef < 0
+            or (R.ndim == 2 and R.shape[1] != R.shape[0])
+        ):
+            raise ValueError("QR Fisher root must be square with a valid dimension")
+        rank = R.shape[0]
+        if (
+            pivots.shape != (rank,)
+            or keep.shape != (rank,)
+            or self.original_n_coef < rank
+            or np.any(pivots < 0)
+            or np.any(pivots >= rank)
+            or len(np.unique(pivots)) != rank
+            or np.any(keep < 0)
+            or np.any(keep >= self.original_n_coef)
+            or len(np.unique(keep)) != rank
+            or not np.all(np.isfinite(R))
+            or not np.array_equal(R, np.triu(R))
+            or np.any(np.diag(R) == 0.0)
+        ):
+            raise ValueError("invalid compact pivoted QR Fisher factor")
+        for value in (R, pivots, keep):
+            value.setflags(write=False)
+        object.__setattr__(self, "R", R)
+        object.__setattr__(self, "pivots", pivots)
+        object.__setattr__(self, "keep", keep)
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore owned read-only leaves after NumPy's pickle reconstruction."""
+        self.__dict__.update(state)
+        self.__post_init__()
+
+    @property
+    def n_coef(self) -> int:
+        """Original fitting-coordinate dimension."""
+        return self.original_n_coef
+
+    def _project(self, rhs: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        value = np.asarray(rhs, dtype=float)
+        if value.ndim not in (1, 2) or value.shape[0] != self.n_coef:
+            raise ValueError("QR Fisher RHS must use coefficient-first coordinates")
+        return value[self.keep, ...]
+
+    def _reconstruct(
+        self, reduced: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
+        value = np.asarray(reduced, dtype=float)
+        if value.ndim not in (1, 2) or value.shape[0] != self.R.shape[0]:
+            raise ValueError("QR Fisher reduced RHS has the wrong rank")
+        result = np.zeros((self.n_coef, *value.shape[1:]), dtype=value.dtype)
+        result[self.keep, ...] = value
+        return result
+
+    def root_transpose_inverse(
+        self, rhs: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
+        """Apply ``B^-T = R^-T P.T`` to full-coordinate RHS columns."""
+        return sla.solve_triangular(
+            self.R, self._project(rhs)[self.pivots, ...], lower=False, trans="T"
+        )
+
+    def hessian_inverse(
+        self, rhs: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
+        """Apply the compact QR ``H^-1`` action in original coordinates."""
+        rows = self.root_transpose_inverse(rhs)
+        ordered = sla.solve_triangular(self.R, rows, lower=False)
+        reduced = np.zeros_like(ordered)
+        reduced[self.pivots, ...] = ordered
+        return self._reconstruct(reduced)
 
 
 @dataclass(frozen=True)
@@ -41,6 +144,7 @@ class GAMPredictor:
     offset_was_nonzero: bool
     _predict_spec: PredictSpec
     _fisher_factor: npt.NDArray[np.floating] | None = None
+    _fisher_qr_factor: PivotedQRFisherFactor | None = None
     _fisher_transforms: tuple[tuple[int, int, str, npt.NDArray[np.floating]], ...] = ()
     _fisher_scale: float = 1.0
     _output_budget_bytes: int | None = None
@@ -58,6 +162,17 @@ class GAMPredictor:
         if self._fisher_factor is not None:
             object.__setattr__(self, "_fisher_factor", np.array(self._fisher_factor))
             self._fisher_factor.setflags(write=False)
+        if self._fisher_factor is not None and self._fisher_qr_factor is not None:
+            raise ValueError("only one compact Fisher provider may be retained")
+        if self._fisher_qr_factor is not None:
+            if not isinstance(self._fisher_qr_factor, PivotedQRFisherFactor):
+                raise ValueError("compact QR Fisher provider has the wrong type")
+            qr = self._fisher_qr_factor
+            object.__setattr__(
+                self,
+                "_fisher_qr_factor",
+                PivotedQRFisherFactor(qr.R, qr.pivots, qr.keep, qr.original_n_coef),
+            )
         transforms = []
         for start, stop, kind, values in self._fisher_transforms:
             owned = np.array(values)
@@ -67,12 +182,20 @@ class GAMPredictor:
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Restore frozen arrays and report unsupported cross-version loads."""
+        state.setdefault("_fisher_qr_factor", None)
         self.__dict__.update(state)
         self.coefficients.setflags(write=False)
         if self.Vp is not None:
             self.Vp.setflags(write=False)
         if self._fisher_factor is not None:
             self._fisher_factor.setflags(write=False)
+        if self._fisher_qr_factor is not None:
+            qr = self._fisher_qr_factor
+            object.__setattr__(
+                self,
+                "_fisher_qr_factor",
+                PivotedQRFisherFactor(qr.R, qr.pivots, qr.keep, qr.original_n_coef),
+            )
         for _, _, _, values in self._fisher_transforms:
             values.setflags(write=False)
         if self._jaxgam_version != jaxgam.__version__:
@@ -117,14 +240,20 @@ class GAMPredictor:
             self._output_budget_bytes,
             self._memory_budget_bytes,
             matrix_output=False,
+            has_qr_fisher=self._fisher_qr_factor is not None,
         )
-        if se_fit and self.Vp is None and self._fisher_factor is None:
+        if (
+            se_fit
+            and self.Vp is None
+            and self._fisher_factor is None
+            and self._fisher_qr_factor is None
+        ):
             raise RuntimeError(
                 "Prediction uncertainty is unavailable for this "
                 "prediction-only result. "
                 "Fit with FitControl(uncertainty='fisher' or 'covariance')."
             )
-        if self.Vp is not None:
+        if self.Vp is not None and self._fisher_qr_factor is None:
             return predict_core(
                 self._predict_spec,
                 self.coefficients,
@@ -156,6 +285,7 @@ class GAMPredictor:
             pred_type=pred_type,
             se_fit=se_fit,
             fisher_factor=self._fisher_factor,
+            fisher_qr_factor=self._fisher_qr_factor,
             fisher_transforms=self._fisher_transforms,
             fisher_scale=self._fisher_scale,
         )
@@ -170,6 +300,7 @@ class GAMPredictor:
             self._output_budget_bytes,
             self._memory_budget_bytes,
             matrix_output=True,
+            has_qr_fisher=False,
         )
         return self._predict_spec.build_predict_matrix(newdata)
 
@@ -204,7 +335,12 @@ class GAMPredictor:
             raise ValueError(
                 f"pred_type must be 'response' or 'link', got {pred_type!r}"
             )
-        if se_fit and self.Vp is None and self._fisher_factor is None:
+        if (
+            se_fit
+            and self.Vp is None
+            and self._fisher_factor is None
+            and self._fisher_qr_factor is None
+        ):
             raise RuntimeError(
                 "Prediction uncertainty is unavailable for this "
                 "prediction-only result. "
@@ -260,6 +396,7 @@ def _check_prediction_budgets(
     memory_budget: int | None,
     *,
     matrix_output: bool,
+    has_qr_fisher: bool,
 ) -> None:
     """Check returned output and known NumPy matrix workspace separately.
 
@@ -280,9 +417,11 @@ def _check_prediction_budgets(
             f"{output_budget} bytes. Use predict_iter() with smaller batches."
         )
     # Point prediction retains X. Dense Vp SE additionally forms X@Vp and its
-    # elementwise product (3 B*p arrays); factor SE keeps X, fitting X, solve
-    # RHS, and squared solve output (4 B*p arrays).
-    multiplier = 1 if not se_fit else 3 if has_covariance else 4
+    # elementwise product (3 B*p arrays); lower-factor SE keeps X, fitting X,
+    # solve RHS, and squared solve output (4 B*p arrays). Pivoted QR makes
+    # projection, pivoting, solve, and square work arrays; bound each by p
+    # even where its retained rank is smaller (7 B*p arrays).
+    multiplier = 1 if not se_fit else 7 if has_qr_fisher else 3 if has_covariance else 4
     workspace = multiplier * n_rows * p * itemsize
     if memory_budget is not None and workspace > memory_budget:
         raise MemoryError(
