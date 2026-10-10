@@ -194,6 +194,18 @@ def test_history_ownership_is_reserved_before_first_fit():
     assert not provider.fit_calls
 
 
+def test_operator_efs_rejects_empty_smoothing_before_provider_work():
+    provider = _ControlledProvider(direction=-1.0, bound=0.0)
+    with pytest.raises(ValueError, match="rho"):
+        run_operator_efs_known_scale(
+            provider,
+            np.empty(0, dtype=np.float64),
+            control=EFSControl(),
+            initial_accuracy=OperatorLogDetControl(probes=2, lanczos_depth=2),
+        )
+    assert not provider.fit_calls
+
+
 def test_operator_efs_keeps_pinned_minimum_multiplier_worsening_policy():
     provider = _ControlledProvider(direction=1.0, bound=0.0)
     result = _run(provider)
@@ -357,4 +369,20 @@ def test_operator_efs_source_refit_matches_dense_score_bound_at_moderate_p():
             (result.accepted,),
             operation="evaluate",
             pending_fit=result.accepted.fit,
+        )
+
+
+def test_operator_efs_source_provider_requires_penalty():
+    frame = pd.DataFrame({"y": [1.0, 2.0, 1.0, 3.0]})
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(parse_formula("y~1"), source)
+    with pytest.raises(ValueError, match="at least one penalty"):
+        SourceOperatorEFSFitProvider(
+            model,
+            source,
+            Poisson(),
+            fit_control=OperatorControl(),
+            fit_budget_bytes=8 * 1024 * 1024,
+            components_budget_bytes=8 * 1024 * 1024,
+            aggregate_budget_bytes=16 * 1024 * 1024,
         )

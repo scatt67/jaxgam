@@ -118,6 +118,8 @@ class SourceOperatorEFSFitProvider:
     ) -> None:
         if not family.scale_known:
             raise NotImplementedError("Known-scale operator EFS requires fixed scale.")
+        if model.penalties.n_penalties == 0:
+            raise ValueError("Operator EFS requires at least one penalty.")
         if (
             fit_budget_bytes < 1
             or components_budget_bytes < 1
@@ -318,6 +320,7 @@ def run_operator_efs_known_scale(
         raise TypeError("Validated EFS and logdet controls are required.")
     if (
         initial_log_lambda.ndim != 1
+        or initial_log_lambda.size == 0
         or initial_log_lambda.dtype != np.float64
         or not np.all(np.isfinite(initial_log_lambda))
     ):
@@ -345,10 +348,11 @@ def run_operator_efs_known_scale(
             controller_bytes=controller_bytes,
         )
 
-    shifted = np.asarray(initial_log_lambda + 2.5, dtype=np.float64)
     reserve((), operation="fit")
+    shifted = np.asarray(initial_log_lambda + 2.5, dtype=np.float64)
     first_fit = provider.fit(shifted, None)
     _validate_fit_rho(first_fit, shifted)
+    del shifted
     if not first_fit.converged:
         raise RuntimeError("Initial operator EFS coefficient fit did not converge.")
     reserve((), operation="evaluate", pending_fit=first_fit)
