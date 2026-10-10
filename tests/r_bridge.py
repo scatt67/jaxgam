@@ -918,6 +918,32 @@ class RBridge:
             dtype=np.float64,
         ).copy()
 
+    def source_gamma_saturated_likelihood(
+        self, response: np.ndarray, weights: np.ndarray, scale: float
+    ) -> np.ndarray:
+        """Return mgcv's Gamma ls value and first two scale derivatives."""
+        self._require_rpy2()
+        y = np.asarray(response, dtype=np.float64)
+        w = np.asarray(weights, dtype=np.float64)
+        if (
+            y.ndim != 1
+            or w.shape != y.shape
+            or not np.all(np.isfinite(y))
+            or not np.all(np.isfinite(w))
+            or np.any(y <= 0)
+            or np.any(w < 0)
+            or not np.isfinite(scale)
+            or scale <= 0
+        ):
+            raise ValueError("Gamma likelihood oracle inputs are invalid")
+        family = self._call_internal("fix.family.ls", self._stats.Gamma())
+        return np.asarray(
+            family.rx2("ls")(
+                self._to_r_vector(y), self._to_r_vector(w), len(y), float(scale)
+            ),
+            dtype=np.float64,
+        ).copy()
+
     def source_gaussian_initial_values(
         self, response: np.ndarray, link: str
     ) -> tuple[float, np.ndarray]:

@@ -441,6 +441,60 @@ class TestSaturatedAndAicVsRFormula:
             atol=2e-13,
         )
 
+    @pytest.mark.usefixtures("r_bridge")
+    @pytest.mark.parametrize("weight", [31.999999999, 32.0, 32.000000001])
+    def test_gamma_stirling_boundary_derivatives_match_pinned_r(
+        self, r_bridge, weight: float
+    ) -> None:
+        """The selected JIT branch has mgcv's first and second derivative."""
+        family = Gamma()
+        y = jnp.asarray([1.0])
+        weights = jnp.asarray([weight])
+
+        @jax.jit
+        def saturated(log_phi):
+            return family.saturated_loglik(y, weights, jnp.exp(log_phi))
+
+        log_phi = jnp.asarray(0.0)
+        actual = np.asarray(
+            [
+                saturated(log_phi),
+                jax.jit(jax.grad(saturated))(log_phi),
+                jax.jit(jax.hessian(saturated))(log_phi),
+            ]
+        )
+        source = r_bridge.source_gamma_saturated_likelihood(
+            np.asarray(y), np.asarray(weights), 1.0
+        )
+        expected = np.asarray([source[0], source[1], source[1] + source[2]])
+        np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+
+    def test_gamma_stirling_inactive_branches_are_finite_at_large_shape(
+        self,
+    ) -> None:
+        """A masked zero weight and huge shape cannot poison JIT derivatives."""
+        family = Gamma()
+        y = jnp.asarray([1.0, 1.0])
+        weights = jnp.asarray([0.0, 1e12])
+
+        @jax.jit
+        def saturated(log_phi):
+            return family.saturated_loglik(y, weights, jnp.exp(log_phi))
+
+        log_phi = jnp.asarray(0.0)
+        actual = np.asarray(
+            [
+                saturated(log_phi),
+                jax.jit(jax.grad(saturated))(log_phi),
+                jax.jit(jax.hessian(saturated))(log_phi),
+            ]
+        )
+        assert np.all(np.isfinite(actual))
+        np.testing.assert_allclose(
+            actual[0], 0.5 * np.log(1e12 / (2.0 * np.pi)), atol=1e-11
+        )
+        np.testing.assert_allclose(actual[1:], [-0.5, 0.0], atol=1e-9)
+
     def test_binomial_saturated_loglik_includes_lchoose(self) -> None:
         """Binomial ls adds lchoose(m, m*y); 0 for Bernoulli, nonzero grouped."""
         from scipy.special import gammaln

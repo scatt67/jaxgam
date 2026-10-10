@@ -652,7 +652,11 @@ class Gamma(ExponentialFamily):
         # obtain an O(log(x)) value.  The Stirling series cancels those terms
         # symbolically, preserving score differences near the scale optimum.
         # At x >= 32, the first omitted term is below float64 roundoff.
-        large_shape = jnp.maximum(inv_phi, 32.0)
+        use_stirling = inv_phi >= 32.0
+        # Give each inactive branch a finite argument.  A maximum would have
+        # half a derivative exactly at 32; where preserves the selected
+        # Stirling derivative at that branch boundary.
+        large_shape = jnp.where(use_stirling, inv_phi, 32.0)
         inverse_shape = 1.0 / large_shape
         inverse_squared = inverse_shape * inverse_shape
         stirling = 0.5 * (
@@ -665,8 +669,14 @@ class Gamma(ExponentialFamily):
                 + inverse_squared * (-1.0 / 1260.0 + inverse_squared / 1680.0)
             )
         )
-        direct = -jsp.gammaln(inv_phi) - jnp.log(phi) * inv_phi - inv_phi
-        k = jnp.where(inv_phi >= 32.0, stirling, direct)
+        direct_shape = jnp.where(use_stirling, 32.0, inv_phi)
+        direct_phi = jnp.where(use_stirling, 1.0 / 32.0, phi)
+        direct = (
+            -jsp.gammaln(direct_shape)
+            - jnp.log(direct_phi) * direct_shape
+            - direct_shape
+        )
+        k = jnp.where(use_stirling, stirling, direct)
         y_safe = jnp.maximum(y, _LOG_EPS)
         return jnp.sum(jnp.where(wt > 0, k - jnp.log(y_safe), 0.0))
 
