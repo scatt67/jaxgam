@@ -428,6 +428,10 @@ class SourceOperatorEFSFitProvider:
             logdet_control=control,
             max_y=self.max_y,
         ).evaluate()
+        self.completed_source_scans += components.source_scans
+        self.completed_source_batches += components.source_scans * math.ceil(
+            fit.model.n_obs / fit.model.batch_rows
+        )
         if self.score_error_bound is None:
             if fit.family.scale_known:
                 bound = _indexed_poisson_score_bound(fit, components, self.fit_control)
@@ -669,6 +673,11 @@ def _run_operator_efs(
                 pending_fit=old.fit,
             )
             refined_old = evaluate_state(old.fit, current, old.score_phi)
+            if estimate_scale:
+                # Accuracy changes only the score/trace evidence. In efsudr a
+                # winning extension carries the preceding candidate scale,
+                # which differs from its own Fletcher update.
+                refined_old = replace(refined_old, carried_phi=old.carried_phi)
             reserve(
                 (
                     accepted,
@@ -683,7 +692,12 @@ def _run_operator_efs(
                 pending_fit=trial.fit,
             )
             old = refined_old
-            trial = evaluate_state(trial.fit, current, trial.score_phi)
+            refined_trial = evaluate_state(trial.fit, current, trial.score_phi)
+            trial = (
+                replace(refined_trial, carried_phi=trial.carried_phi)
+                if estimate_scale
+                else refined_trial
+            )
             count += 1
 
     for iteration in range(1, control.outer_limit + 1):

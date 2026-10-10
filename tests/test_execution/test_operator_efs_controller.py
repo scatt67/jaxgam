@@ -1,6 +1,7 @@
 """Accepted/trial and adaptive score gates for internal operator EFS."""
 
 import weakref
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import numpy as np
@@ -157,6 +158,87 @@ def test_gaussian_scale_controller_carries_incoming_phi_across_trial():
     np.testing.assert_allclose(
         provider.phi_inputs, [initial.score_phi, initial.update_phi]
     )
+
+
+def test_gaussian_extension_refinement_preserves_candidate_carried_phi():
+    """Refining an accepted extension cannot replace its inherited scale."""
+    ratio = 1.02
+    candidate_rho = 2.5 + np.log(ratio)
+    extension_rho = 2.5 + 2 * np.log(ratio)
+
+    @dataclass(frozen=True)
+    class _ScaleState:
+        fit: object
+        components: object
+        score_error_bound: float
+        score_phi: float
+        update_phi: float
+        reported_phi: float
+        carried_phi: float
+
+    class _ScaleProvider(_ControlledProvider):
+        family = Gaussian()
+
+        def __init__(self):
+            super().__init__(direction=0.0, bound=0.0, ratio=ratio)
+            self.phi_inputs = []
+
+        def evaluate(self, fit, control, *, score_phi=1.0):
+            rho = float(fit.log_lambda[0])
+            self.phi_inputs.append((rho, score_phi, control.probes))
+            score_value = (rho - extension_rho) ** 2
+            estimate = OperatorScoreEstimate(
+                value=score_value,
+                per_probe=np.full(control.probes, score_value),
+                monte_carlo_standard_error=0.0,
+                maximum_depth_difference=0.0,
+                source_scans=0,
+                seed=control.seed,
+                lanczos_depth=control.lanczos_depth,
+                n_coef=1,
+                probe_fingerprint="a" * 64 if control.probes == 2 else "b" * 64,
+            )
+            components = SimpleNamespace(
+                score=estimate,
+                penalty=SimpleNamespace(derivative=np.array([np.exp(rho) * ratio])),
+                fisher=SimpleNamespace(
+                    traces=np.array([0.0]), quadratics=np.array([1.0])
+                ),
+            )
+            update_phi = (
+                2.0
+                if np.isclose(rho, candidate_rho)
+                else 3.0
+                if np.isclose(rho, extension_rho)
+                else 1.0
+            )
+            uncertain = len(self.fit_calls) >= 4 and control.probes == 2
+            return _ScaleState(
+                fit,
+                components,
+                10.0 if uncertain else 0.0,
+                score_phi,
+                update_phi,
+                update_phi,
+                update_phi,
+            )
+
+    provider = _ScaleProvider()
+    result = run_operator_efs_gaussian_scale(
+        provider,
+        np.array([0.0], dtype=np.float64),
+        control=EFSControl(outer_limit=2),
+        initial_accuracy=OperatorLogDetControl(probes=2, lanczos_depth=2),
+        initial_score_phi=0.5,
+        maximum_probes=4,
+        maximum_depth=4,
+    )
+    assert result.accuracy_refinements >= 1
+    assert result.attempted_fits == 5
+    assert result.multiplier == 1.0
+    np.testing.assert_allclose(provider.phi_inputs[3][1], 2.0)
+    np.testing.assert_allclose(provider.phi_inputs[-1][1], 2.0)
+    np.testing.assert_allclose(result.accepted.score_phi, 2.0)
 
 
 def test_operator_efs_applies_initial_shift_and_accepts_proven_improvement():
