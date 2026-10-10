@@ -88,8 +88,9 @@ class OperatorEFSFitProvider(Protocol):
         *,
         operation: str,
         pending_fit: OperatorFitResult | None = None,
+        controller_bytes: int = 0,
     ) -> None:
-        """Reject a fit/evaluation before exceeding shared live ownership."""
+        """Reject work beyond shared state and controller ownership."""
 
 
 class SourceOperatorEFSFitProvider:
@@ -173,8 +174,11 @@ class SourceOperatorEFSFitProvider:
         *,
         operation: str,
         pending_fit: OperatorFitResult | None = None,
+        controller_bytes: int = 0,
     ) -> None:
         """Bound shared accepted/trial storage plus the next complete workspace."""
+        if controller_bytes < 0:
+            raise ValueError("Controller ownership must be nonnegative.")
         if operation == "fit" and pending_fit is None:
             active = self.fit_budget_bytes
         elif operation == "evaluate" and pending_fit is not None:
@@ -184,8 +188,10 @@ class SourceOperatorEFSFitProvider:
         else:
             raise ValueError("Invalid operator EFS reservation request.")
         unique = {id(state): state for state in held}
-        required = active + sum(
-            self._state_retained_bound(state) for state in unique.values()
+        required = (
+            active
+            + controller_bytes
+            + sum(self._state_retained_bound(state) for state in unique.values())
         )
         if required > self.aggregate_budget_bytes:
             raise MemoryError(
@@ -321,13 +327,31 @@ def run_operator_efs_known_scale(
         or not initial_accuracy.lanczos_depth <= maximum_depth <= 128
     ):
         raise ValueError("Accuracy caps must contain initial settings.")
+    history_slots = min(control.outer_limit, max(4, control.history_limit))
+    # Two deques of Python score/bound objects, their returned tuple copies,
+    # accepted history metadata, and live rho/ratio/extension vectors.
+    controller_bytes = 8192 + 256 * history_slots + 128 * len(initial_log_lambda)
+
+    def reserve(
+        held: tuple[OperatorEFSState, ...],
+        *,
+        operation: str,
+        pending_fit: OperatorFitResult | None = None,
+    ) -> None:
+        provider.reserve(
+            held,
+            operation=operation,
+            pending_fit=pending_fit,
+            controller_bytes=controller_bytes,
+        )
+
     shifted = np.asarray(initial_log_lambda + 2.5, dtype=np.float64)
-    provider.reserve((), operation="fit")
+    reserve((), operation="fit")
     first_fit = provider.fit(shifted, None)
     _validate_fit_rho(first_fit, shifted)
     if not first_fit.converged:
         raise RuntimeError("Initial operator EFS coefficient fit did not converge.")
-    provider.reserve((), operation="evaluate", pending_fit=first_fit)
+    reserve((), operation="evaluate", pending_fit=first_fit)
     accepted = provider.evaluate(first_fit, initial_accuracy)
     del first_fit
     fits = 1
@@ -364,7 +388,7 @@ def run_operator_efs_known_scale(
             if probes == current.probes and depth == current.lanczos_depth:
                 return old, trial, current, "indeterminate", count
             current = replace(current, probes=probes, lanczos_depth=depth)
-            provider.reserve(
+            reserve(
                 (
                     accepted,
                     *ambient,
@@ -377,7 +401,7 @@ def run_operator_efs_known_scale(
                 pending_fit=old.fit,
             )
             refined_old = provider.evaluate(old.fit, current)
-            provider.reserve(
+            reserve(
                 (
                     accepted,
                     *ambient,
@@ -403,14 +427,14 @@ def run_operator_efs_known_scale(
             break
         maximum_step = float(np.max(np.abs(rho - accepted.fit.log_lambda)))
         old = accepted
-        provider.reserve((old,), operation="fit")
+        reserve((old,), operation="fit")
         trial_fit = provider.fit(rho, old.fit.coefficients)
         fits += 1
         _validate_fit_rho(trial_fit, rho)
         if not trial_fit.converged:
             stop = "inner_failure"
             break
-        provider.reserve((old,), operation="evaluate", pending_fit=trial_fit)
+        reserve((old,), operation="evaluate", pending_fit=trial_fit)
         candidate = provider.evaluate(trial_fit, accuracy)
         del trial_fit
         old, candidate, accuracy, decision, count = compare(old, candidate)
@@ -424,14 +448,14 @@ def run_operator_efs_known_scale(
                 extended_rho = _trial_rho(
                     old, ratio, multiplier * 2, control.log_lambda_max
                 )
-                provider.reserve((accepted, old, candidate), operation="fit")
+                reserve((accepted, old, candidate), operation="fit")
                 extension_fit = provider.fit(extended_rho, old.fit.coefficients)
                 fits += 1
                 _validate_fit_rho(extension_fit, extended_rho)
                 if not extension_fit.converged:
                     accepted = candidate
                 else:
-                    provider.reserve(
+                    reserve(
                         (accepted, old, candidate),
                         operation="evaluate",
                         pending_fit=extension_fit,
@@ -455,14 +479,14 @@ def run_operator_efs_known_scale(
             while decision == "worsening" and multiplier > 1:
                 multiplier /= 2
                 rho = _trial_rho(old, ratio, multiplier, control.log_lambda_max)
-                provider.reserve((accepted, old, candidate), operation="fit")
+                reserve((accepted, old, candidate), operation="fit")
                 trial_fit = provider.fit(rho, old.fit.coefficients)
                 fits += 1
                 _validate_fit_rho(trial_fit, rho)
                 if not trial_fit.converged:
                     stop = "inner_failure"
                     break
-                provider.reserve(
+                reserve(
                     (accepted, old, candidate),
                     operation="evaluate",
                     pending_fit=trial_fit,

@@ -34,10 +34,11 @@ class _ControlledProvider:
         self.fit_calls = []
         self.evaluations = []
 
-    def reserve(self, held, *, operation, pending_fit=None):
+    def reserve(self, held, *, operation, pending_fit=None, controller_bytes=0):
         assert operation in {"fit", "evaluate"}
         assert isinstance(held, tuple)
         assert (pending_fit is None) == (operation == "fit")
+        assert controller_bytes >= 8192
 
     def fit(self, rho, beta_start):
         assert rho.dtype == np.float64
@@ -132,8 +133,13 @@ def test_refinement_reserves_caller_and_new_large_vector_generations():
             fit.coefficients = np.zeros(2048, dtype=np.float64)
             return fit
 
-        def reserve(self, held, *, operation, pending_fit=None):
-            super().reserve(held, operation=operation, pending_fit=pending_fit)
+        def reserve(self, held, *, operation, pending_fit=None, controller_bytes=0):
+            super().reserve(
+                held,
+                operation=operation,
+                pending_fit=pending_fit,
+                controller_bytes=controller_bytes,
+            )
             unique = {id(state) for state in held}
             self.max_held = max(self.max_held, len(unique))
             if (len(unique) + 1) * vector_bytes > 70 * 1024:
@@ -163,6 +169,29 @@ def test_replaced_initial_fit_is_released_before_later_refits():
     provider = _LifetimeProvider(direction=-1.0, bound=0.0)
     result = _run(provider, outer_limit=2)
     assert result.attempted_fits == 3
+
+
+def test_history_ownership_is_reserved_before_first_fit():
+    class _HistoryBudgetProvider(_ControlledProvider):
+        def reserve(self, held, *, operation, pending_fit=None, controller_bytes=0):
+            super().reserve(
+                held,
+                operation=operation,
+                pending_fit=pending_fit,
+                controller_bytes=controller_bytes,
+            )
+            if controller_bytes > 1024 * 1024:
+                raise MemoryError("Controller history exceeds shared budget.")
+
+    provider = _HistoryBudgetProvider(direction=-1.0, bound=0.0)
+    with pytest.raises(MemoryError, match="Controller history"):
+        run_operator_efs_known_scale(
+            provider,
+            np.array([0.0], dtype=np.float64),
+            control=EFSControl(outer_limit=5000, history_limit=5000),
+            initial_accuracy=OperatorLogDetControl(probes=2, lanczos_depth=2),
+        )
+    assert not provider.fit_calls
 
 
 def test_operator_efs_keeps_pinned_minimum_multiplier_worsening_policy():
