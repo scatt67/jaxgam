@@ -648,7 +648,25 @@ class Gamma(ExponentialFamily):
         inv_phi = wt_safe / scale  # 1 / phi_i = wt_i / scale
         phi = scale / wt_safe
 
-        k = -jsp.gammaln(inv_phi) - jnp.log(phi) * inv_phi - inv_phi
+        # R's large-shape expression subtracts terms of order x log(x) to
+        # obtain an O(log(x)) value.  The Stirling series cancels those terms
+        # symbolically, preserving score differences near the scale optimum.
+        # At x >= 32, the first omitted term is below float64 roundoff.
+        large_shape = jnp.maximum(inv_phi, 32.0)
+        inverse_shape = 1.0 / large_shape
+        inverse_squared = inverse_shape * inverse_shape
+        stirling = 0.5 * (
+            jnp.log(large_shape) - jnp.log(2.0 * jnp.pi)
+        ) + inverse_shape * (
+            -1.0 / 12.0
+            + inverse_squared
+            * (
+                1.0 / 360.0
+                + inverse_squared * (-1.0 / 1260.0 + inverse_squared / 1680.0)
+            )
+        )
+        direct = -jsp.gammaln(inv_phi) - jnp.log(phi) * inv_phi - inv_phi
+        k = jnp.where(inv_phi >= 32.0, stirling, direct)
         y_safe = jnp.maximum(y, _LOG_EPS)
         return jnp.sum(jnp.where(wt > 0, k - jnp.log(y_safe), 0.0))
 

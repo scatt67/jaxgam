@@ -405,6 +405,42 @@ class TestSaturatedAndAicVsRFormula:
     STRICT tolerance — closed-form and deterministic, so they cannot go stale.
     """
 
+    def test_gamma_large_shape_saturated_likelihood_is_stable_and_jitted(
+        self,
+    ) -> None:
+        """The R Gamma shape term remains smooth across a tiny scale step."""
+        from scipy.special import digamma, gammaln
+
+        shape = np.array([31.0, 32.0, 48.0, 200.0, 350.0])
+        phi = 0.005
+        weight = jnp.asarray(shape * phi)
+        y = jnp.asarray([0.7, 0.9, 1.1, 1.3, 1.5])
+        family = Gamma()
+
+        @jax.jit
+        def score(log_phi):
+            return family.saturated_loglik(y, weight, jnp.exp(log_phi))
+
+        log_phi = jnp.log(phi)
+        actual = float(score(log_phi))
+        reference = float(
+            np.sum(-gammaln(shape) + shape * np.log(shape) - shape - np.log(y))
+        )
+        np.testing.assert_allclose(actual, reference, rtol=0.0, atol=2e-12)
+        derivative = float(jax.jit(jax.grad(score))(log_phi))
+        expected_derivative = float(np.sum(shape * (digamma(shape) - np.log(shape))))
+        np.testing.assert_allclose(
+            derivative, expected_derivative, rtol=1e-10, atol=1e-11
+        )
+        step = 1e-8
+        observed_change = float(score(log_phi + step) - score(log_phi))
+        np.testing.assert_allclose(
+            observed_change,
+            derivative * step,
+            rtol=1e-7,
+            atol=2e-13,
+        )
+
     def test_binomial_saturated_loglik_includes_lchoose(self) -> None:
         """Binomial ls adds lchoose(m, m*y); 0 for Bernoulli, nonzero grouped."""
         from scipy.special import gammaln

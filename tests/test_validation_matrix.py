@@ -246,11 +246,7 @@ def test_public_fixed_sp_regular_noncanonical_pinned_r(family_class, link: str) 
             model.fit(source, result="prediction")
         return
     result = model.fit(source, result="prediction")
-    if known_boundary_case:
-        assert result.converged
-    if (family_class, link) == (Gamma, "identity"):
-        assert not result.converged
-        assert "projected gradient" in result.convergence_info
+    assert result.converged
     if r_startup_boundary:
         # mgcv's top-level candidate recovery rejects this input even with a
         # supplied start. Validate the public state against gam.fit3 at the
@@ -378,8 +374,7 @@ def test_public_fixed_sp_nb_theta_modes_pinned_r(
     if supertight_nb:
         _assert_pr76_nb_case(source, model, link)
     result = model.fit(source, result="prediction")
-    if supertight_nb:
-        assert result.converged
+    assert result.converged
     if supertight_nb and link == "log":
         assert expected["inner_converged"]
         assert expected["outer_status"] == "full convergence"
