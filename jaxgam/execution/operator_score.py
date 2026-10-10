@@ -67,6 +67,8 @@ class OperatorScoreEstimate:
     determinant_rounding_bound: float | None = None
     diagonal_condition_ratio: float | None = None
     minimum_diagonal: float | None = None
+    spectral_lower_bound: float | None = None
+    spectral_condition_bound: float | None = None
 
     def __post_init__(self) -> None:
         values = np.array(self.per_probe, dtype=np.float64, copy=True)
@@ -114,6 +116,16 @@ class OperatorScoreEstimate:
             not math.isfinite(self.minimum_diagonal) or self.minimum_diagonal <= 0
         ):
             raise ValueError("Minimum diagonal must be finite positive.")
+        if self.spectral_lower_bound is not None and (
+            not math.isfinite(self.spectral_lower_bound)
+            or self.spectral_lower_bound <= 0
+        ):
+            raise ValueError("Spectral lower bound must be finite positive.")
+        if self.spectral_condition_bound is not None and (
+            not math.isfinite(self.spectral_condition_bound)
+            or self.spectral_condition_bound < 1
+        ):
+            raise ValueError("Spectral condition bound must be finite and >= 1.")
         values.setflags(write=False)
         object.__setattr__(self, "per_probe", values)
 
@@ -177,6 +189,8 @@ def assemble_operator_score(
         ),
         diagonal_condition_ratio=observed.diagnostics.diagonal_condition_ratio,
         minimum_diagonal=observed.diagnostics.minimum_diagonal,
+        spectral_lower_bound=observed.diagnostics.spectral_lower_bound,
+        spectral_condition_bound=observed.diagnostics.spectral_condition_bound,
     )
 
 

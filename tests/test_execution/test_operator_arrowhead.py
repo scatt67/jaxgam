@@ -94,6 +94,11 @@ def test_arrowhead_logdet_and_inverse_match_dense_at_coupled_sizes(levels):
     assert factor.coupling.shape == (levels, len(modest))
     assert not factor.coupling.flags.writeable
     assert factor.peak_bound_bytes < 16 * 1024 * 1024
+    eigenvalues = np.linalg.eigvalsh(hessian)
+    assert 0 < factor.spectral_lower_bound <= eigenvalues[0] * (1 + 1e-10)
+    assert factor.spectral_condition_bound >= (eigenvalues[-1] / eigenvalues[0]) * (
+        1 - 1e-10
+    )
 
 
 @pytest.mark.parametrize("levels", [5, 300])
@@ -133,6 +138,8 @@ def test_arrowhead_logdet_and_fisher_penalties_share_exact_dense_target(levels):
     )
     assert observed.diagnostics.strategy == "structured_arrowhead"
     assert observed.diagnostics.rounding_error_bound is None
+    assert observed.diagnostics.spectral_lower_bound is not None
+    assert observed.diagnostics.spectral_condition_bound is not None
     assert observed.diagnostics.completed_actions == 0
     assert observed.diagnostics.source_scans == 1
     assert fisher.diagnostics.strategy == "structured_arrowhead"

@@ -128,6 +128,8 @@ class PreparedOperatorModel:
     metadata_bound_bytes: int
     preparation_peak_bound_bytes: int
     completed_preparation_scans: int
+    started_preparation_scans: int
+    preparation_yielded_batches: int
     batch_rows: int
     memory_budget_bytes: int
     modest_raw_width: int
@@ -216,6 +218,8 @@ class _CheckedSource:
         self.digest: str | None = None
         self.first_row_digest: str | None = None
         self.completed_scans = 0
+        self.started_scans = 0
+        self.yielded_batches = 0
         self.schemas: dict[str, Any] = {}
         value = source.n_rows
         if (
@@ -241,12 +245,14 @@ class _CheckedSource:
         return self.source.fingerprint()
 
     def scan(self, batch_rows: int):
+        self.started_scans += 1
         digest = hashlib.sha256()
         first_row_digest = None
         count = 0
         before = self.fingerprint()
         requested_rows = min(batch_rows, self.batch_rows)
         for batch in self.source.scan(requested_rows):
+            self.yielded_batches += 1
             positions = np.asarray(batch.row_positions)
             n = len(positions)
             if (
@@ -603,6 +609,8 @@ def prepare_operator_model(
         metadata_bound + modest_retained,
         max(modest_construction, checked.peak_bound_bytes),
         checked.completed_scans,
+        checked.started_scans,
+        checked.yielded_batches,
         control.batch_rows,
         control.memory_budget_bytes,
         raw_width,

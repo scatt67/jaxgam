@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from jaxgam.api import GAM
-from jaxgam.control import FitControl, OperatorControl
+from jaxgam.control import EFSControl, FitControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda
 from jaxgam.execution.operator_efs_start import prepare_indexed_operator_efs_start
@@ -20,7 +20,10 @@ from tests.tolerances import STRICT
 
 
 @pytest.mark.parametrize("family", [Gaussian(), Poisson()])
-def test_indexed_source_initial_spg_matches_dense_at_p_above_coordinate_cap(family):
+@pytest.mark.parametrize("coupled", [False, True])
+def test_indexed_source_initial_spg_matches_dense_at_p_above_coordinate_cap(
+    family, coupled
+):
     p, n = 300, 600
     rng = np.random.default_rng(1409)
     group = np.arange(n) % p
@@ -36,9 +39,10 @@ def test_indexed_source_initial_spg_matches_dense_at_p_above_coordinate_cap(fami
                 [f"g{index}" for index in group],
                 categories=[f"g{index}" for index in range(p)],
             ),
+            "x": np.linspace(-1, 1, n),
         }
     )
-    spec = parse_formula("y~0+s(g,bs='re')")
+    spec = parse_formula("y~x+s(g,bs='re')" if coupled else "y~0+s(g,bs='re')")
     source = DataFrameRowSource(frame, response="y")
     model = prepare_operator_model(
         spec,
@@ -121,6 +125,95 @@ def test_public_indexed_operator_efs_retains_score_and_prediction():
         np.exp(
             ModelSetup.build(parse_formula(formula), frame).X[:10] @ fitted.coefficients
         ),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_public_operator_efs_reports_actual_partitioned_source_batches():
+    p, n = 257, 514
+    group = np.arange(n) % p
+    rng = np.random.default_rng(7734)
+    response = rng.poisson(np.exp(0.2 + 0.2 * np.sin(group / 31)))
+    frame = pd.DataFrame(
+        {
+            "y": response,
+            "g": pd.Categorical(
+                [f"g{index}" for index in group],
+                categories=[f"g{index}" for index in range(p)],
+            ),
+        }
+    )
+
+    class _PartitionedSource(DataFrameRowSource):
+        def __init__(self, data):
+            super().__init__(data, response="y")
+            self.actual_scans = 0
+            self.actual_batches = 0
+
+        def scan(self, batch_rows):
+            self.actual_scans += 1
+            for batch in super().scan(min(batch_rows, 32)):
+                self.actual_batches += 1
+                yield batch
+
+    source = _PartitionedSource(frame)
+    fitted = GAM(
+        "y~0+s(g,bs='re')",
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=64,
+            memory_budget_bytes=128 << 20,
+            operator=OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15),
+        ),
+    ).fit(source, result="prediction")
+    assert fitted.converged
+    assert fitted.source_scans == source.actual_scans
+    assert fitted.batches_scanned == source.actual_batches
+    assert fitted.batches_scanned > fitted.source_scans * ((n + 63) // 64)
+
+
+def test_public_coupled_operator_efs_retains_score_and_prediction():
+    from tests.test_execution.test_operator_efs_arrowhead import (
+        calibrated_coupled_frame,
+    )
+
+    frame = calibrated_coupled_frame(300, 32031, 2)
+    formula = "y~x+s(g,bs='re')"
+    fitted = GAM(
+        formula,
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=64,
+            memory_budget_bytes=128 << 20,
+            efs=EFSControl(outer_limit=20, pirls_tolerance=1e-11),
+            operator=OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15),
+        ),
+    ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
+    assert fitted.converged
+    assert fitted.lambda_strategy == "efs_reml"
+    assert fitted.execution_route == "operator"
+    assert fitted.score is not None
+    assert fitted.score_error_bound is not None
+    assert fitted.score_scale == fitted.scale == 1.0
+    assert fitted.edf_total is not None
+    assert fitted.source_scans is not None
+    assert fitted.source_scans > 1
+    assert fitted.batches_scanned is not None
+    assert fitted.batches_scanned > 10
+    assert fitted.known_workspace_bytes < 128 << 20
+    expected = np.exp(
+        ModelSetup.build(parse_formula(formula), frame).X[:10] @ fitted.coefficients
+    )
+    np.testing.assert_allclose(
+        fitted.predict(frame.iloc[:10]),
+        expected,
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )

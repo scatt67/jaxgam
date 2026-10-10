@@ -13,7 +13,6 @@ Design doc reference: docs/refactor_gam_api/design.md §3.3
 
 from __future__ import annotations
 
-import math
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, overload
 
@@ -458,7 +457,7 @@ class GAM:
     def _fit_operator_efs(
         self, source: RowSource, family: ExponentialFamily
     ) -> GAMPredictionResult:
-        """Materialize the calibrated indexed Poisson operator EFS regime."""
+        """Materialize calibrated indexed and modest-indexed Poisson EFS fits."""
         from jaxgam.execution.operator_efs_controller import (
             SourceOperatorEFSFitProvider,
             run_operator_efs_known_scale,
@@ -493,13 +492,19 @@ class GAM:
                 self.control.operator.max_modest_coefficients,
             ),
         )
+        indexed = (
+            model.random_effects[0].n_coef if len(model.random_effects) == 1 else 0
+        )
+        modest = len(model.modest_columns)
         if (
-            not 256 < model.n_coef <= 512
-            or not 2 * model.n_coef <= model.n_obs <= 3 * model.n_coef
+            not 256 < indexed <= 512
+            or modest > 4
+            or model.n_coef != indexed + modest
+            or not 2 * indexed <= model.n_obs <= 3 * indexed
         ):
             raise NotImplementedError(
-                "Calibrated operator EFS requires 257-512 coefficients "
-                "and 2-3 rows per coefficient."
+                "Calibrated operator EFS requires 257-512 indexed levels, "
+                "at most four modest coefficients, and 2-3 rows per level."
             )
         start = prepare_indexed_operator_efs_start(
             model, source, family, memory_budget_bytes=preparation_budget
@@ -547,13 +552,12 @@ class GAM:
             lambda_strategy="efs_reml",
             execution_route="operator",
             source_scans=(
-                model.completed_preparation_scans
+                model.started_preparation_scans
                 + start.source_scans
                 + provider.completed_source_scans
             ),
             batches_scanned=(
-                model.completed_preparation_scans
-                * math.ceil(model.n_obs / model.batch_rows)
+                model.preparation_yielded_batches
                 + start.source_batches
                 + provider.completed_source_batches
             ),

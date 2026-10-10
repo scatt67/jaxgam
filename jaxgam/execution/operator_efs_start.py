@@ -1,4 +1,4 @@
-"""Bounded source initial.spg start for a pure indexed identity penalty."""
+"""Bounded source initial.spg start for one indexed identity penalty."""
 
 from __future__ import annotations
 
@@ -40,8 +40,9 @@ def prepare_indexed_operator_efs_start(
 ) -> OperatorEFSStart:
     """Replay initial.spg working diagonals without a global design matrix.
 
-    This supports one full-rank indexed random effect with unit amplitudes,
-    weights and no offset. Other model shapes need their own start provider.
+    This supports one full-rank indexed random effect, possibly accompanied by
+    unpenalized modest columns, with unit amplitudes, weights and no offset.
+    Other model shapes need their own start provider.
     The balancing loop reproduces the shared initial.sp diagonal policy for
     a scaled identity penalty without expanding that penalty to p by p.
     """
@@ -51,8 +52,7 @@ def prepare_indexed_operator_efs_start(
         raise RuntimeError("Operator EFS start source changed from preparation.")
     p = model.n_coef
     if (
-        model.modest.n_coef
-        or len(model.random_effects) != 1
+        len(model.random_effects) != 1
         or len(model.penalties.blocks) != 1
         or model.penalties.n_penalties != 1
     ):
@@ -60,11 +60,13 @@ def prepare_indexed_operator_efs_start(
     term = model.random_effects[0]
     block = model.penalties.blocks[0]
     if (
-        term.col_start != 0
-        or term.n_coef != p
+        term.n_coef + len(model.modest_columns) != p
+        or set(model.modest_columns).intersection(
+            range(term.col_start, term.col_start + term.n_coef)
+        )
         or term.numeric_variables
-        or block.start != 0
-        or block.stop != p
+        or block.start != term.col_start
+        or block.stop != term.col_start + term.n_coef
         or block.sp_indices != (0,)
         or len(block.local_penalties) != 1
         or not isinstance(block.local_penalties[0], IdentityPenalty)
@@ -78,9 +80,8 @@ def prepare_indexed_operator_efs_start(
     reserved = model.metadata_bound_bytes + 64 * p + 8192
     if reserved + model.batch_workspace_bound(model.batch_rows) > memory_budget_bytes:
         raise MemoryError("Operator EFS start exceeds its memory budget.")
-    diagonal = np.zeros(p, dtype=np.float64)
+    diagonal = np.zeros(term.n_coef, dtype=np.float64)
     checked = _checked_fit_source(model, source, reserved, memory_budget_bytes)
-    batches = 0
     for batch in checked.scan(model.batch_rows):
         if (
             batch.y is None
@@ -92,7 +93,11 @@ def prepare_indexed_operator_efs_start(
             )
         rows = _evaluate_geometry(model, batch)
         ids, amplitude, start, width = rows.indexed_rows[0]
-        if start != 0 or width != p or not np.all(amplitude == 1.0):
+        if (
+            start != term.col_start
+            or width != term.n_coef
+            or not np.all(amplitude == 1.0)
+        ):
             raise NotImplementedError("Operator EFS start needs unit indexed rows.")
         initial = family.initial_working_state_cpu(
             batch.y, batch.weight, np.ones(len(batch.y), dtype=bool)
@@ -105,7 +110,6 @@ def prepare_indexed_operator_efs_start(
         if not np.all(np.isfinite(working) & (working >= 0)):
             raise ValueError("Operator EFS initial.spg weights are invalid.")
         np.add.at(diagonal, ids, working)
-        batches += 1
     if not np.all(np.isfinite(diagonal)) or not np.any(diagonal > 0):
         raise ValueError("Operator EFS start has no informative design diagonal.")
     initial = float(np.mean(diagonal) / scale)
@@ -126,7 +130,7 @@ def prepare_indexed_operator_efs_start(
     return OperatorEFSStart(
         np.log(np.array([initial], dtype=np.float64)),
         checked.completed_scans,
-        batches,
+        checked.yielded_batches,
         max(
             reserved + model.batch_workspace_bound(model.batch_rows),
             checked.peak_bound_bytes,

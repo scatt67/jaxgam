@@ -147,6 +147,113 @@ def test_operator_efs_calibrated_indexed_poisson_full_fit_strict(
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 @pytest.mark.parametrize(
+    ("levels", "seed", "multiplicity", "mode"),
+    [
+        (300, 32031, 2, "balanced"),
+        (257, 32032, 3, "balanced"),
+        (512, 32033, 3, "unbalanced"),
+    ],
+)
+def test_operator_efs_calibrated_coupled_poisson_full_fit_strict(
+    levels: int, seed: int, multiplicity: int, mode: str
+) -> None:
+    """Exact arrowhead EFS score, smoothing and deviance match pinned mgcv."""
+    from tests.test_execution.test_operator_efs_arrowhead import (
+        calibrated_coupled_case,
+    )
+
+    formula, frame, operator, dense, errors, bounds = calibrated_coupled_case(
+        levels, seed, multiplicity, mode
+    )
+    reference = RBridge(mode="rpy2").fit_efs(
+        formula,
+        frame,
+        "poisson",
+        initial_smoothing=np.array([0.8]),
+        controls={"epsilon": 1e-11},
+    )
+    selected = operator.accepted
+    assert operator.converged
+    assert dense.converged
+    assert bool(np.asarray(dense.pirls_result.converged))
+    assert reference["convergence"] == "full convergence"
+    assert reference["inner_converged"]
+    assert operator.outer_iterations == dense.n_iter == reference["outer_iterations"]
+    assert all(bound is not None for bound in bounds)
+    assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("score", selected.components.score.value, reference["reml_score"]),
+        ("smoothing", np.exp(selected.fit.log_lambda), reference["smoothing_params"]),
+        ("deviance", selected.fit.deviance, reference["deviance"]),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"coupled operator EFS levels={levels}, seed={seed}")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("levels", "seed", "multiplicity", "mode"),
+    [(300, 32031, 2, "balanced"), (512, 32033, 3, "unbalanced")],
+)
+def test_public_coupled_operator_efs_default_start_matches_pinned_r_strict(
+    levels: int, seed: int, multiplicity: int, mode: str
+) -> None:
+    """Public source initial.spg and final EFS fields match pinned mgcv."""
+    from jaxgam.control import OperatorControl
+    from tests.test_execution.test_operator_efs_arrowhead import (
+        calibrated_coupled_frame,
+    )
+
+    frame = calibrated_coupled_frame(levels, seed, multiplicity, mode)
+    formula = "y~x+s(g,bs='re')"
+    fitted = GAM(
+        formula,
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=64,
+            memory_budget_bytes=128 << 20,
+            efs=EFSControl(outer_limit=20, pirls_tolerance=1e-11),
+            operator=OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15),
+        ),
+    ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
+    reference = RBridge(mode="rpy2").fit_efs(
+        formula, frame, "poisson", controls={"epsilon": 1e-11}
+    )
+    assert fitted.converged
+    assert reference["convergence"] == "full convergence"
+    assert reference["inner_converged"]
+    assert fitted.n_iter == reference["outer_iterations"]
+    assert fitted.score_error_bound is not None
+    assert fitted.edf_total is not None
+    assert fitted.lambda_strategy == "efs_reml"
+    assert fitted.execution_route == "operator"
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("score", fitted.score, reference["reml_score"]),
+        ("smoothing", fitted.smoothing_params, reference["smoothing_params"]),
+        ("deviance", fitted.deviance, reference["deviance"]),
+        ("scale", fitted.scale, reference["scale"]),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"public coupled EFS levels={levels}, seed={seed}")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
     ("p", "seed", "multiplicity", "mode"),
     [
         (300, 907, 2, "balanced"),

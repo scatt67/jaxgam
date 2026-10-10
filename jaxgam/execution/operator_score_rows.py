@@ -134,7 +134,6 @@ class MatchedOperatorScoreReducer:
         )
         deviance = 0.0
         saturated = 0.0
-        batches = 0
         unit_weights = True
         zero_offset = True
         maximum_response = 0.0
@@ -177,7 +176,6 @@ class MatchedOperatorScoreReducer:
                 raise ValueError("Matched score saturated likelihood is invalid.")
             deviance += direct
             saturated += float(value)
-            batches += 1
             del batch, rows, quantities, y, weight, valid, value
         if checked.completed_scans != 1 or not np.all(
             np.isfinite([deviance, saturated])
@@ -189,7 +187,7 @@ class MatchedOperatorScoreReducer:
             deviance,
             penalty,
             checked.completed_scans,
-            batches,
+            checked.yielded_batches,
             checked.peak_bound_bytes,
             unit_weights,
             zero_offset,

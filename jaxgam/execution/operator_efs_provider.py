@@ -60,6 +60,7 @@ class MatchedOperatorEFSComponents:
     source_scans: int
     peak_bound_bytes: int
     fit_fingerprint: str
+    source_batches: int = 0
 
 
 def operator_efs_fit_fingerprint(
@@ -264,6 +265,7 @@ class MatchedOperatorEFSProvider:
         else:
             observed = logdet_provider.estimate()
         observed_scans = observed_system.diagnostics.completed_scans
+        observed_batches = observed_system.diagnostics.yielded_batches
         observed_peak = max(
             observed_system.construction_peak_bound_bytes,
             observed.diagnostics.peak_bound_bytes,
@@ -295,6 +297,7 @@ class MatchedOperatorEFSProvider:
                 control=self.solve_control,
             ).statistics(self.state.beta)
         fisher_scans = fisher_system.diagnostics.completed_scans
+        fisher_batches = fisher_system.diagnostics.yielded_batches
         fisher_peak = max(
             fisher_system.construction_peak_bound_bytes,
             fisher.diagnostics.peak_bound_bytes,
@@ -326,4 +329,5 @@ class MatchedOperatorEFSProvider:
                 self.state.beta,
                 self.log_lambda,
             ),
+            rows.source_batches + observed_batches + fisher_batches,
         )

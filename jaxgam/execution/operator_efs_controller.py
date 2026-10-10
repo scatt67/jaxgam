@@ -245,6 +245,82 @@ def _indexed_gaussian_score_bound(
     return float(bound) if math.isfinite(bound) else None
 
 
+def _arrowhead_poisson_score_bound(
+    fit: OperatorFitResult,
+    components: MatchedOperatorEFSComponents,
+    control: OperatorControl,
+) -> float | None:
+    """Empirical score envelope for a conditioned modest-indexed Poisson fit.
+
+    The structured determinant and Fisher trace have no probe or Krylov error.
+    The arithmetic allowance covers finite row/Schur/reduction effects in the
+    measured bounded regime. The local gradient allowance uses the Schur
+    spectral bracket and is conditional on the fitted convex neighborhood.
+    Neither allowance admits a general coupled or stochastic operator model.
+    """
+    model = fit.model
+    score = components.score
+    rows = components.score_rows
+    p, n = model.n_coef, model.n_obs
+    k = len(model.modest_columns)
+    indexed = model.random_effects[0].n_coef if model.random_effects else 0
+    if not (
+        256 < indexed <= 512
+        and 1 <= k <= 4
+        and 2 * indexed <= n <= 3 * indexed
+        and model.batch_rows == 64
+        and len(model.random_effects) == 1
+        and len(model.penalties.blocks) == 1
+        and isinstance(fit.family, Poisson)
+        and fit.family.is_canonical
+        and not fit.offset_was_nonzero
+        and rows.unit_weights
+        and rows.zero_offset
+        and rows.maximum_response <= 32
+        and score.strategy == "structured_arrowhead"
+        and components.fisher.diagnostics.strategy == "structured_arrowhead"
+        and fit.diagnostics.inner_status == CONVERGED
+        and control.tolerance <= 1e-7
+        and control.cg_rtol <= 1e-10
+        and control.cg_atol <= 1e-12
+    ):
+        return None
+    block = model.penalties.blocks[0]
+    effect = model.random_effects[0]
+    if (
+        block.start != effect.col_start
+        or block.size != effect.n_coef
+        or block.sp_indices != (0,)
+        or len(block.local_penalties) != 1
+        or not isinstance(block.local_penalties[0], IdentityPenalty)
+        or score.spectral_lower_bound is None
+        or score.spectral_lower_bound < 1e-3
+        or score.spectral_condition_bound is None
+        or score.spectral_condition_bound > 1e5
+        or score.minimum_diagonal is None
+        or score.minimum_diagonal < 1e-6
+        or np.max(np.abs(fit.coefficients)) > 20
+    ):
+        return None
+    gradient = fit.diagnostics.final_gradient_norm
+    if not math.isfinite(gradient) or gradient > 1e-5:
+        return None
+    terms = rows.terms
+    magnitude = math.fsum(
+        (
+            1.0,
+            abs(terms.penalized_deviance),
+            abs(terms.saturated_loglik),
+            abs(components.penalty.value),
+            abs(score.value),
+        )
+    )
+    arithmetic = 512 * np.finfo(np.float64).eps * (n + p + k * k) * magnitude
+    solve = p * gradient * gradient / score.spectral_lower_bound
+    bound = arithmetic + solve
+    return float(bound) if math.isfinite(bound) else None
+
+
 class OperatorEFSFitProvider(Protocol):
     """Refit and matched evaluation supplied by an operator backend."""
 
@@ -434,9 +510,7 @@ class SourceOperatorEFSFitProvider:
             max_y=self.max_y,
         ).evaluate()
         self.completed_source_scans += components.source_scans
-        self.completed_source_batches += components.source_scans * math.ceil(
-            fit.model.n_obs / fit.model.batch_rows
-        )
+        self.completed_source_batches += components.source_batches
         if self.score_error_bound is None:
             if fit.family.scale_known:
                 bound = _indexed_poisson_score_bound(fit, components, self.fit_control)
@@ -445,6 +519,12 @@ class SourceOperatorEFSFitProvider:
                     if bound is not None
                     else "unavailable"
                 )
+                if bound is None:
+                    bound = _arrowhead_poisson_score_bound(
+                        fit, components, self.fit_control
+                    )
+                    if bound is not None:
+                        method = "arrowhead_poisson_empirical_v1"
             else:
                 bound = _indexed_gaussian_score_bound(fit, components, self.fit_control)
                 method = (

@@ -25,6 +25,8 @@ class ExactArrowheadFactorization:
     coupling: np.ndarray
     indexed_diagonal: np.ndarray
     schur_lower: np.ndarray
+    spectral_lower_bound: float
+    spectral_condition_bound: float
     peak_bound_bytes: int
     source_scans: int
 
@@ -58,6 +60,41 @@ class ExactArrowheadFactorization:
         lower = np.linalg.cholesky((schur + schur.T) * 0.5)
         if not np.all(np.isfinite(lower)):
             raise FloatingPointError("Arrowhead Schur factor is nonfinite.")
+        # For 0 < t < min(D), H-tI is SPD exactly when its modest Schur
+        # complement is SPD. Bracket the smallest eigenvalue using only k-by-k
+        # Cholesky tests; no p-square matrix or additional source pass exists.
+        modest_matrix = modest_lower @ modest_lower.T
+        low, high = 0.0, float(np.min(d))
+        identity = np.eye(k, dtype=np.float64)
+        for _ in range(48):
+            midpoint = (low + high) * 0.5
+            if midpoint in (low, high):
+                break
+            scaled = coupling / np.sqrt(d - midpoint)[:, None]
+            shifted = modest_matrix - midpoint * identity - scaled.T @ scaled
+            if not np.all(np.isfinite(shifted)):
+                high = midpoint
+                continue
+            try:
+                np.linalg.cholesky((shifted + shifted.T) * 0.5)
+            except np.linalg.LinAlgError:
+                high = midpoint
+            else:
+                low = midpoint
+        spectral_lower = float(low * (1.0 - 64 * np.finfo(float).eps))
+        # Weyl's inequality bounds the coupling perturbation by ||B||_F.
+        spectral_upper = float(
+            max(np.linalg.eigvalsh(modest_matrix)[-1], np.max(d))
+            + np.linalg.norm(coupling, ord="fro")
+        )
+        condition = spectral_upper / spectral_lower
+        if not (
+            math.isfinite(spectral_lower)
+            and spectral_lower > 0
+            and math.isfinite(condition)
+            and condition >= 1
+        ):
+            raise FloatingPointError("Arrowhead spectral bound is invalid.")
         d.setflags(write=False)
         lower.setflags(write=False)
         return cls(
@@ -65,6 +102,8 @@ class ExactArrowheadFactorization:
             coupling,
             d,
             lower,
+            spectral_lower,
+            condition,
             required,
             system.diagnostics.completed_scans - scans_before,
         )
