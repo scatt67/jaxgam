@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import tempfile
+from decimal import Decimal, localcontext
 
 import jax
 import jax.numpy as jnp
@@ -320,6 +321,78 @@ class TestDevianceResidsVsR:
             rtol=STRICT.rtol,
             atol=STRICT.atol,
             err_msg="Gamma deviance residuals^2 vs R dev.resids",
+        )
+
+    def test_gamma_direct_deviance_near_mean_is_stable_and_jitted(self) -> None:
+        """Small source Gamma deviances remain positive across JIT and NumPy."""
+        family = Gamma()
+        mu = np.array([0.123456789, 0.764321, 1.23456789, 0.53, 0.71])
+        y = mu * np.array([1.0 + 1e-8, 1.0 - 1e-8, 1.0 + 1e-7, 1.001, 1.01])
+        weight = np.array([0.6, 1.2, 0.9, 1.1, 0.8])
+        with localcontext() as context:
+            context.prec = 80
+            expected = []
+            for response, mean, prior in zip(y, mu, weight, strict=True):
+                ratio = Decimal.from_float(float(response)) / Decimal.from_float(
+                    float(mean)
+                )
+                expected.append(
+                    float(
+                        2 * Decimal.from_float(float(prior)) * (ratio - 1 - ratio.ln())
+                    )
+                )
+        actual = family.deviance_contributions(y, mu, weight)
+        compiled = jax.jit(family.deviance_contributions)(
+            jnp.asarray(y), jnp.asarray(mu), jnp.asarray(weight)
+        )
+        # log1p and the final subtraction each round at the scale of r, not
+        # r^2. Budget 16 epsilon*w*|r| across residual formation, the log,
+        # subtraction and multiplication against the Decimal oracle. This
+        # tests roundoff at the cancellation scale without a field tolerance.
+        residual = (y - mu) / mu
+        roundoff_bound = 16.0 * np.finfo(float).eps * weight * np.abs(residual)
+        assert np.all(np.abs(np.asarray(actual) - expected) <= roundoff_bound)
+        assert np.all(np.abs(np.asarray(compiled) - expected) <= roundoff_bound)
+        assert np.all(np.asarray(compiled) > 0.0)
+
+    def test_gamma_direct_deviance_keeps_extreme_source_ratio_and_clamp(self) -> None:
+        """Far-from-mean rows never feed a rounded -1 into log1p's AD path."""
+        family = Gamma()
+        mu = np.array([1e20, 1e-10, 0.1])
+        y = np.array([1e-8, 1e-12, 0.9])
+        weight = np.array([0.6, 1.2, 0.9])
+        mu_safe = np.maximum(mu, 1e-10)
+        y_safe = np.maximum(y, 1e-10)
+        source = 2.0 * weight * (-np.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
+        compiled = jax.jit(family.deviance_derivative_contributions)(
+            jnp.asarray(y), jnp.asarray(mu), jnp.asarray(weight)
+        )
+        np.testing.assert_allclose(
+            family.deviance_derivative_contributions(y, mu, weight),
+            source,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(compiled, source, rtol=STRICT.rtol, atol=STRICT.atol)
+        np.testing.assert_allclose(
+            family.deviance_contributions(y, mu, weight),
+            np.maximum(source, 0.0),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        far_gradient = jax.jit(
+            jax.grad(
+                lambda mean: family.deviance_derivative_contributions(
+                    jnp.asarray(y[0]), mean, jnp.asarray(weight[0])
+                )
+            )
+        )(jnp.asarray(mu[0]))
+        assert np.isfinite(np.asarray(far_gradient))
+        np.testing.assert_allclose(
+            far_gradient,
+            2.0 * weight[0] * (mu[0] - y[0]) / mu[0] ** 2,
+            rtol=STRICT.rtol,
+            atol=0.0,
         )
 
 
