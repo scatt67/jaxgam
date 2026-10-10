@@ -15,7 +15,6 @@ R source reference: R/smooth.r smooth.construct.tensor.smooth.spec()
 from __future__ import annotations
 
 import copy
-import sys
 from functools import reduce
 
 import numpy as np
@@ -25,7 +24,10 @@ from scipy import linalg
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
-from jaxgam.smooths.source_penalty_coordinates import source_symmetric_max_eigenvalue
+from jaxgam.smooths.source_penalty_coordinates import (
+    scipy_uses_accelerate_lapack,
+    source_symmetric_max_eigenvalue,
+)
 from jaxgam.smooths.utils import row_tensor as _row_tensor
 
 # ---------------------------------------------------------------------------
@@ -298,7 +300,7 @@ class TensorProductSmooth(Smooth):
                 matrix = np.asarray(S_list[j], dtype=np.float64)
                 max_eigval = (
                     linalg.eigvalsh(matrix, lower=True, driver="evr")[-1]
-                    if sys.platform == "darwin"
+                    if scipy_uses_accelerate_lapack()
                     else source_symmetric_max_eigenvalue(matrix)
                 )
             else:

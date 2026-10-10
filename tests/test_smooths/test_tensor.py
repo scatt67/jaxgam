@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from jaxgam.formula.terms import SmoothSpec
+from jaxgam.smooths import source_penalty_coordinates
 from jaxgam.smooths.tensor import (
     TensorInteractionSmooth,
     TensorProductSmooth,
@@ -38,6 +39,23 @@ from tests.tolerances import (
     normalize_column_signs,
     normalize_symmetric_signs,
 )
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("Accelerate", True), ("scipy-openblas", False)],
+)
+def test_tensor_eigen_provider_uses_scipy_build_config(
+    monkeypatch: pytest.MonkeyPatch, provider: str, expected: bool
+) -> None:
+    """A macOS wheel using OpenBLAS must take the pinned provider path."""
+    monkeypatch.setattr(
+        source_penalty_coordinates.scipy_config,
+        "CONFIG",
+        {"Build Dependencies": {"lapack": {"name": provider}}},
+    )
+    assert source_penalty_coordinates.scipy_uses_accelerate_lapack() is expected
+
 
 # ===========================================================================
 # 1. Row-wise Kronecker product tests (STRICT)
