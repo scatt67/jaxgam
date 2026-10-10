@@ -20,6 +20,7 @@ from jaxgam.data.source import RowSource
 from jaxgam.execution.operator_efs_provider import (
     MatchedOperatorEFSComponents,
     MatchedOperatorEFSProvider,
+    operator_efs_fit_fingerprint,
 )
 from jaxgam.execution.operator_fit import OperatorFitResult, fit_operator_fixed_sp
 from jaxgam.execution.operator_logdet import OperatorLogDetControl
@@ -43,6 +44,14 @@ class OperatorEFSState:
             raise TypeError("Matched operator EFS components are required.")
         if self.components.trace_method != "exact":
             raise ValueError("Operator EFS update requires exact Fisher traces.")
+        expected_fingerprint = operator_efs_fit_fingerprint(
+            self.fit.model,
+            self.fit.family,
+            self.fit.coefficients,
+            self.fit.log_lambda,
+        )
+        if self.components.fit_fingerprint != expected_fingerprint:
+            raise ValueError("Operator EFS components do not match their fit state.")
         if self.components.penalty.derivative is None:
             raise ValueError("Operator EFS penalty derivative is missing.")
         m = self.fit.model.penalties.n_penalties
@@ -73,6 +82,15 @@ class OperatorEFSFitProvider(Protocol):
     ) -> OperatorEFSState:
         """Return matched statistics and a calibrated absolute score bound."""
 
+    def reserve(
+        self,
+        held: tuple[OperatorEFSState, ...],
+        *,
+        operation: str,
+        pending_fit: OperatorFitResult | None = None,
+    ) -> None:
+        """Reject a fit/evaluation before exceeding shared live ownership."""
+
 
 class SourceOperatorEFSFitProvider:
     """Compose bounded fixed-sp refits with frozen known-scale components.
@@ -91,6 +109,7 @@ class SourceOperatorEFSFitProvider:
         fit_control: OperatorControl,
         fit_budget_bytes: int,
         components_budget_bytes: int,
+        aggregate_budget_bytes: int,
         score_error_bound: Callable[
             [OperatorFitResult, MatchedOperatorEFSComponents], float | None
         ]
@@ -98,13 +117,80 @@ class SourceOperatorEFSFitProvider:
     ) -> None:
         if not family.scale_known:
             raise NotImplementedError("Known-scale operator EFS requires fixed scale.")
+        if (
+            fit_budget_bytes < 1
+            or components_budget_bytes < 1
+            or aggregate_budget_bytes < max(fit_budget_bytes, components_budget_bytes)
+        ):
+            raise ValueError("Operator EFS aggregate budget is insufficient.")
         self.model = model
         self.source = source
         self.family = family
         self.fit_control = fit_control
         self.fit_budget_bytes = fit_budget_bytes
         self.components_budget_bytes = components_budget_bytes
+        self.aggregate_budget_bytes = aggregate_budget_bytes
+        self.aggregate_peak_bound_bytes = 0
         self.score_error_bound = score_error_bound
+
+    @staticmethod
+    def _fit_retained_bound(fit: OperatorFitResult) -> int:
+        """Coefficient/family snapshot ownership, excluding shared model metadata."""
+        from jaxgam.execution.operator_fit import _family_ownership_bound
+
+        return (
+            2 * fit.coefficients.nbytes
+            + 2 * fit.log_lambda.nbytes
+            + _family_ownership_bound(fit.family)
+            + 8192
+        )
+
+    @classmethod
+    def _state_retained_bound(cls, state: OperatorEFSState) -> int:
+        components = state.components
+        arrays = [
+            components.score.per_probe,
+            components.penalty.block_values,
+            components.penalty.derivative,
+            components.fisher.traces,
+            components.fisher.quadratics,
+        ]
+        per_probe = getattr(components.fisher, "per_probe", None)
+        if per_probe is not None:
+            arrays.append(per_probe)
+            arrays.append(components.fisher.monte_carlo_standard_error)
+        return (
+            cls._fit_retained_bound(state.fit)
+            + sum(2 * array.nbytes for array in arrays if array is not None)
+            + 8192
+        )
+
+    def reserve(
+        self,
+        held: tuple[OperatorEFSState, ...],
+        *,
+        operation: str,
+        pending_fit: OperatorFitResult | None = None,
+    ) -> None:
+        """Bound shared accepted/trial storage plus the next complete workspace."""
+        if operation == "fit" and pending_fit is None:
+            active = self.fit_budget_bytes
+        elif operation == "evaluate" and pending_fit is not None:
+            active = self.components_budget_bytes + self._fit_retained_bound(
+                pending_fit
+            )
+        else:
+            raise ValueError("Invalid operator EFS reservation request.")
+        unique = {id(state): state for state in held}
+        required = active + sum(
+            self._state_retained_bound(state) for state in unique.values()
+        )
+        if required > self.aggregate_budget_bytes:
+            raise MemoryError(
+                f"Operator EFS requires {required} combined bytes; "
+                f"aggregate budget is {self.aggregate_budget_bytes}."
+            )
+        self.aggregate_peak_bound_bytes = max(self.aggregate_peak_bound_bytes, required)
 
     def fit(self, rho: np.ndarray, beta_start: np.ndarray | None) -> OperatorFitResult:
         with np.errstate(over="ignore", invalid="ignore"):
@@ -150,6 +236,7 @@ class OperatorEFSControllerResult:
     indeterminate_comparisons: int
     multiplier: float
     score_history: tuple[float, ...]
+    score_bound_history: tuple[float | None, ...]
 
 
 def _raw_ratio(state: OperatorEFSState) -> np.ndarray:
@@ -177,6 +264,28 @@ def _trial_rho(
     if not np.all(np.isfinite(rho)):
         raise FloatingPointError("Operator EFS trial rho is nonfinite.")
     return np.asarray(rho, dtype=np.float64)
+
+
+def _validate_fit_rho(fit: OperatorFitResult, rho: np.ndarray) -> None:
+    if not np.array_equal(fit.log_lambda, rho):
+        raise ValueError("Operator EFS provider fit has mismatched rho.")
+
+
+def _score_window_certified(
+    scores: tuple[float, ...], bounds: tuple[float | None, ...], tolerance: float
+) -> bool:
+    """Require every adjacent score change to remain small within its bounds."""
+    if len(scores) != 4 or len(bounds) != 4 or any(bound is None for bound in bounds):
+        return False
+    return (
+        max(
+            abs(scores[index + 1] - scores[index])
+            + float(bounds[index])
+            + float(bounds[index + 1])
+            for index in range(3)
+        )
+        < tolerance
+    )
 
 
 def run_operator_efs_known_scale(
@@ -211,17 +320,19 @@ def run_operator_efs_known_scale(
     ):
         raise ValueError("Accuracy caps must contain initial settings.")
     shifted = np.asarray(initial_log_lambda + 2.5, dtype=np.float64)
+    provider.reserve((), operation="fit")
     first_fit = provider.fit(shifted, None)
+    _validate_fit_rho(first_fit, shifted)
     if not first_fit.converged:
         raise RuntimeError("Initial operator EFS coefficient fit did not converge.")
+    provider.reserve((), operation="evaluate", pending_fit=first_fit)
     accepted = provider.evaluate(first_fit, initial_accuracy)
-    if not np.array_equal(accepted.fit.log_lambda, shifted):
-        raise ValueError("Initial provider fit has mismatched rho.")
     fits = 1
     refinements = indeterminate = 0
     multiplier = 1.0
     accuracy = initial_accuracy
     history: deque[float] = deque(maxlen=max(4, control.history_limit))
+    bound_history: deque[float | None] = deque(maxlen=max(4, control.history_limit))
     old_deviance: float | None = None
     stop = "iteration_limit"
 
@@ -244,7 +355,16 @@ def run_operator_efs_known_scale(
             if probes == current.probes and depth == current.lanczos_depth:
                 return old, trial, current, "indeterminate", count
             current = replace(current, probes=probes, lanczos_depth=depth)
-            old = provider.evaluate(old.fit, current)
+            provider.reserve(
+                (accepted, old, trial), operation="evaluate", pending_fit=old.fit
+            )
+            refined_old = provider.evaluate(old.fit, current)
+            provider.reserve(
+                (accepted, refined_old, trial),
+                operation="evaluate",
+                pending_fit=trial.fit,
+            )
+            old = refined_old
             trial = provider.evaluate(trial.fit, current)
             count += 1
 
@@ -257,30 +377,38 @@ def run_operator_efs_known_scale(
             break
         maximum_step = float(np.max(np.abs(rho - accepted.fit.log_lambda)))
         old = accepted
+        provider.reserve((old,), operation="fit")
         trial_fit = provider.fit(rho, old.fit.coefficients)
         fits += 1
+        _validate_fit_rho(trial_fit, rho)
         if not trial_fit.converged:
             stop = "inner_failure"
             break
+        provider.reserve((old,), operation="evaluate", pending_fit=trial_fit)
         candidate = provider.evaluate(trial_fit, accuracy)
-        if not np.array_equal(candidate.fit.log_lambda, rho):
-            raise ValueError("Trial provider fit has mismatched rho.")
         old, candidate, accuracy, decision, count = compare(old, candidate)
         refinements += count
         if decision == "indeterminate":
             indeterminate += 1
             stop = "indeterminate_score"
             break
-        if decision == "improvement":
+        if decision in {"improvement", "equal"}:
             if maximum_step < 0.05:
                 extended_rho = _trial_rho(
                     old, ratio, multiplier * 2, control.log_lambda_max
                 )
+                provider.reserve((accepted, old, candidate), operation="fit")
                 extension_fit = provider.fit(extended_rho, old.fit.coefficients)
                 fits += 1
+                _validate_fit_rho(extension_fit, extended_rho)
                 if not extension_fit.converged:
                     accepted = candidate
                 else:
+                    provider.reserve(
+                        (accepted, old, candidate),
+                        operation="evaluate",
+                        pending_fit=extension_fit,
+                    )
                     extension = provider.evaluate(extension_fit, accuracy)
                     candidate, extension, accuracy, extended_decision, count = compare(
                         candidate, extension
@@ -298,11 +426,18 @@ def run_operator_efs_known_scale(
             while decision == "worsening" and multiplier > 1:
                 multiplier /= 2
                 rho = _trial_rho(old, ratio, multiplier, control.log_lambda_max)
+                provider.reserve((accepted, old, candidate), operation="fit")
                 trial_fit = provider.fit(rho, old.fit.coefficients)
                 fits += 1
+                _validate_fit_rho(trial_fit, rho)
                 if not trial_fit.converged:
                     stop = "inner_failure"
                     break
+                provider.reserve(
+                    (accepted, old, candidate),
+                    operation="evaluate",
+                    pending_fit=trial_fit,
+                )
                 candidate = provider.evaluate(trial_fit, accuracy)
                 old, candidate, accuracy, decision, count = compare(old, candidate)
                 refinements += count
@@ -316,11 +451,13 @@ def run_operator_efs_known_scale(
             accepted = candidate
             multiplier = max(multiplier, 1.0)
         history.append(accepted.components.score.value)
-        if (
-            iteration > 3
-            and maximum_step < 0.05
-            and max(abs(np.diff(tuple(history)[-4:]))) < control.score_tolerance
-        ):
+        bound_history.append(accepted.score_error_bound)
+        window_scores = tuple(history)[-4:]
+        window_bounds = tuple(bound_history)[-4:]
+        score_window_certified = _score_window_certified(
+            window_scores, window_bounds, control.score_tolerance
+        )
+        if iteration > 3 and maximum_step < 0.05 and score_window_certified:
             stop = "score_window"
             break
         deviance = accepted.fit.deviance
@@ -344,4 +481,5 @@ def run_operator_efs_known_scale(
         indeterminate,
         multiplier,
         tuple(history)[-control.history_limit :],
+        tuple(bound_history)[-control.history_limit :],
     )

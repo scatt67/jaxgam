@@ -4,11 +4,13 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from jaxgam.control import EFSControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.operator_efs_controller import (
     SourceOperatorEFSFitProvider,
+    _score_window_certified,
     run_operator_efs_known_scale,
 )
 from jaxgam.execution.operator_logdet import OperatorLogDetControl
@@ -30,6 +32,11 @@ class _ControlledProvider:
         self.ratio = ratio
         self.fit_calls = []
         self.evaluations = []
+
+    def reserve(self, held, *, operation, pending_fit=None):
+        assert operation in {"fit", "evaluate"}
+        assert isinstance(held, tuple)
+        assert (pending_fit is None) == (operation == "fit")
 
     def fit(self, rho, beta_start):
         assert rho.dtype == np.float64
@@ -144,6 +151,41 @@ def test_operator_efs_extends_proven_small_step_from_same_old_fit():
     assert result.multiplier == 2.0
 
 
+def test_operator_efs_accepts_proven_equal_trial_but_not_equal_extension():
+    provider = _ControlledProvider(direction=0.0, bound=0.0, ratio=1.02)
+    result = _run(provider)
+    assert result.attempted_fits == 3
+    np.testing.assert_allclose(result.accepted.fit.log_lambda, [2.5 + np.log(1.02)])
+    assert result.multiplier == 1.0
+
+
+def test_score_window_requires_uncertainty_to_fit_inside_tolerance():
+    scores = (1.0, 1.0004, 1.0008, 1.0012)
+    assert _score_window_certified(scores, (0.0,) * 4, 0.001)
+    assert not _score_window_certified(scores, (0.0004,) * 4, 0.001)
+    assert not _score_window_certified(scores, (None,) * 4, 0.001)
+
+
+@pytest.mark.parametrize("wrong_call", [3, 5])
+def test_operator_efs_rejects_wrong_rho_on_extension_and_contraction(wrong_call):
+    optimum = 2.5 + 2 * np.log(1.02)
+
+    class _WrongRhoProvider(_ControlledProvider):
+        def fit(self, rho, beta_start):
+            fit = super().fit(rho, beta_start)
+            if len(self.fit_calls) == wrong_call:
+                fit.log_lambda[0] += 0.01
+            return fit
+
+    provider = _WrongRhoProvider(
+        direction=lambda rho: (rho - optimum) ** 2,
+        bound=0.0,
+        ratio=1.02,
+    )
+    with pytest.raises(ValueError, match="mismatched rho"):
+        _run(provider, outer_limit=2)
+
+
 def test_operator_efs_contracts_worse_extended_trial_then_accepts_minimum_step():
     optimum = 2.5 + 2 * np.log(1.02)
     provider = _ControlledProvider(
@@ -205,6 +247,7 @@ def test_operator_efs_source_refit_matches_dense_score_bound_at_moderate_p():
         fit_control=OperatorControl(),
         fit_budget_bytes=8 * 1024 * 1024,
         components_budget_bytes=16 * 1024 * 1024,
+        aggregate_budget_bytes=32 * 1024 * 1024,
         score_error_bound=oracle_bound,
     )
     result = run_operator_efs_known_scale(
@@ -233,3 +276,11 @@ def test_operator_efs_source_refit_matches_dense_score_bound_at_moderate_p():
     )
     assert uncalibrated.stop_reason == "indeterminate_score"
     np.testing.assert_allclose(uncalibrated.accepted.fit.log_lambda, [2.5])
+    assert provider.aggregate_peak_bound_bytes < provider.aggregate_budget_bytes
+    provider.aggregate_budget_bytes = provider.components_budget_bytes
+    with pytest.raises(MemoryError, match="combined bytes"):
+        provider.reserve(
+            (result.accepted,),
+            operation="evaluate",
+            pending_fit=result.accepted.fit,
+        )

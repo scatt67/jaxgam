@@ -124,6 +124,18 @@ def test_common_probe_difference_reports_noise_but_waits_for_calibration():
         ).status
         == "worsening"
     )
+    assert (
+        compare_operator_scores(
+            accepted, accepted, accepted_error_bound=0.0, trial_error_bound=0.0
+        ).status
+        == "equal"
+    )
+    assert (
+        compare_operator_scores(
+            accepted, accepted, accepted_error_bound=0.01, trial_error_bound=0.0
+        ).status
+        == "indeterminate"
+    )
 
 
 def test_unpaired_probe_or_invalid_bound_rejects_before_decision():

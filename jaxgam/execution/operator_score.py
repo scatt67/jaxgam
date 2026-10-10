@@ -158,7 +158,7 @@ class OperatorScoreComparison:
 
     difference: float
     paired_standard_error: float
-    status: Literal["improvement", "worsening", "indeterminate"]
+    status: Literal["improvement", "equal", "worsening", "indeterminate"]
 
 
 def compare_operator_scores(
@@ -203,11 +203,15 @@ def compare_operator_scores(
             or bound < 0
         ):
             raise ValueError("Calibrated score bounds must be finite nonnegative.")
-    status: Literal["improvement", "worsening", "indeterminate"] = "indeterminate"
+    status: Literal["improvement", "equal", "worsening", "indeterminate"] = (
+        "indeterminate"
+    )
     if accepted_error_bound is not None and trial_error_bound is not None:
         radius = accepted_error_bound + trial_error_bound
         if difference + radius < 0:
             status = "improvement"
+        elif difference == 0 and radius == 0:
+            status = "equal"
         elif difference - radius > 0:
             status = "worsening"
     return OperatorScoreComparison(difference, standard_error, status)

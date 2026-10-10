@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
+from jaxgam.execution.operator_efs_controller import OperatorEFSState
 from jaxgam.execution.operator_efs_provider import MatchedOperatorEFSProvider
 from jaxgam.execution.operator_fit import (
     FrozenOperatorWorkingState,
@@ -230,6 +231,15 @@ def test_from_fit_binds_rho_family_and_convergence_to_matched_components():
     result = provider.evaluate()
     assert np.isfinite(result.score.value)
     assert result.source_scans > 1
+    assert OperatorEFSState(fitted, result, None).components is result
+    shifted_beta = fitted.coefficients.copy()
+    shifted_beta[0] += 0.01
+    with pytest.raises(ValueError, match="do not match"):
+        OperatorEFSState(replace(fitted, coefficients=shifted_beta), result, None)
+    with pytest.raises(ValueError, match="do not match"):
+        OperatorEFSState(
+            replace(fitted, log_lambda=np.log(np.array([1.4]))), result, None
+        )
     with pytest.raises(ValueError, match="converged finite fit"):
         MatchedOperatorEFSProvider.from_fit(
             replace(fitted, converged=False),

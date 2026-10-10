@@ -8,6 +8,7 @@ converged coefficient state and preserve the incoming EFS score scale.
 
 from __future__ import annotations
 
+import hashlib
 import numbers
 from dataclasses import dataclass
 from typing import Literal
@@ -43,6 +44,7 @@ from jaxgam.execution.operator_score_rows import (
     MatchedOperatorScoreReducer,
     OperatorScoreReductions,
 )
+from jaxgam.fitting.family_execution import FamilyExecutionContext
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,26 @@ class MatchedOperatorEFSComponents:
     trace_method: Literal["exact", "stochastic"]
     source_scans: int
     peak_bound_bytes: int
+    fit_fingerprint: str
+
+
+def operator_efs_fit_fingerprint(
+    model, family, beta: np.ndarray, rho: np.ndarray
+) -> str:
+    """Bind component outputs to one source, coordinate, family and fit state."""
+    digest = hashlib.sha256()
+    for value in (
+        id(model),
+        model.source_fingerprint,
+        model.source_replay_digest,
+        repr(FamilyExecutionContext.from_family(family)),
+        repr(family.execution_parameter_snapshot()),
+    ):
+        digest.update(str(value).encode("utf-8"))
+        digest.update(b"\0")
+    digest.update(np.asarray(beta, dtype="<f8").tobytes())
+    digest.update(np.asarray(rho, dtype="<f8").tobytes())
+    return digest.hexdigest()
 
 
 class MatchedOperatorEFSProvider:
@@ -290,5 +312,11 @@ class MatchedOperatorEFSProvider:
                 penalty.peak_bound_bytes,
                 observed_peak,
                 fisher_peak,
+            ),
+            operator_efs_fit_fingerprint(
+                self.state.model,
+                self.state.family,
+                self.state.beta,
+                self.log_lambda,
             ),
         )
