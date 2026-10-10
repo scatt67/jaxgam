@@ -1198,6 +1198,7 @@ def _run_parameterized_stream_reml(
     control: StreamREMLControl,
     *,
     roundoff_stationary_completion: bool = False,
+    curvature_stationary_completion: bool = False,
     completion_inner_tolerance: float | None = None,
     local_score_change: Callable[
         [_AcceptedParameterizedTrialObjective[_TrialT], _TrialT, _TrialT, float],
@@ -1212,6 +1213,9 @@ def _run_parameterized_stream_reml(
     projected gradient is resolved but whose score differs by only one float64
     ULP. The optional completion policy retains its already reconverged trial
     across later line-search probes; callers charge that additional ownership.
+    A two-parameter roundoff stop can instead use a local curvature correction;
+    its trial is accepted only after a fresh exact fit satisfies the original
+    projected-gradient and inner-stationarity tolerances.
     """
     if not _same_rho(np.asarray(params_initial), objective.accepted.params):
         raise ValueError("Initial parameters do not match the exact accepted trial.")
@@ -1239,6 +1243,10 @@ def _run_parameterized_stream_reml(
         raise ValueError("Stationary completion requires an inner tolerance.")
     if local_score_change is not None and not roundoff_stationary_completion:
         raise ValueError("Local score comparison requires stationary completion.")
+    if curvature_stationary_completion and (
+        completion_inner_tolerance is None or completion_inner_tolerance <= 0.0
+    ):
+        raise ValueError("Curvature completion requires an inner tolerance.")
     _validate_max_step(max_step)
     stationary_trial: _TrialT | None = None
     stationary_norm = np.inf
@@ -1469,6 +1477,78 @@ def _run_parameterized_stream_reml(
                 f"projected gradient {candidate_norm:.3e}, "
                 f"inner valid {candidate_inner_valid}{comparison_detail}."
             )
+    if (
+        curvature_stationary_completion
+        and bool(result.success)
+        and not converged
+        and "RELATIVE REDUCTION OF F" in message
+        and len(result_params) == 2
+        and objective.n_evaluations + 5 <= control.maxfun
+    ):
+        center = np.asarray(objective.accepted.params, dtype=np.float64)
+        accepted_score = float(np.asarray(objective.accepted.score))
+        gradient = np.asarray(objective.accepted.gradient, dtype=np.float64)
+        curvature = np.empty((2, 2), dtype=np.float64)
+        for index in range(2):
+            width = 1e-4 * max(1.0, abs(center[index]))
+            direction = np.zeros(2, dtype=np.float64)
+            direction[index] = width
+            plus = center + direction
+            minus = center - direction
+            lower, upper = bounds[index]
+            if (lower is not None and minus[index] < lower) or (
+                upper is not None and plus[index] > upper
+            ):
+                break
+            _, plus_gradient = objective(plus)
+            _, minus_gradient = objective(minus)
+            curvature[:, index] = (plus_gradient - minus_gradient) / (2.0 * width)
+        else:
+            curvature = 0.5 * (curvature + curvature.T)
+            eigenvalues = (
+                np.linalg.eigvalsh(curvature)
+                if np.all(np.isfinite(curvature))
+                else np.array([np.nan, np.nan])
+            )
+            if eigenvalues[0] > max(1e-12, 1e-8 * eigenvalues[-1]):
+                correction = -np.linalg.solve(curvature, gradient)
+                corrected = center + correction
+                if np.max(np.abs(correction)) <= 1e-3 and all(
+                    (lower is None or value >= lower)
+                    and (upper is None or value <= upper)
+                    for value, (lower, upper) in zip(corrected, bounds, strict=True)
+                ):
+                    candidate_score, candidate_gradient = objective(corrected)
+                    candidate = objective.candidate
+                    candidate_norm = float(
+                        np.max(
+                            np.abs(
+                                _projected_gradient_for_bounds(
+                                    corrected, candidate_gradient, bounds
+                                )
+                            )
+                        )
+                    )
+                    if (
+                        candidate is not None
+                        and _same_rho(corrected, candidate.params)
+                        and candidate_norm <= control.gtol
+                        and inner_valid(candidate)
+                        and candidate_score - accepted_score
+                        <= np.spacing(abs(accepted_score))
+                    ):
+                        objective._check_source_unchanged()
+                        objective.accepted = candidate
+                        objective.candidate = None
+                        objective.n_accepted += 1
+                        objective._history.append(candidate_score)
+                        total_iterations += 1
+                        projected_gradient_inf = candidate_norm
+                        converged = True
+                        message = (
+                            f"{message}; exact curvature correction reached "
+                            "the original stationarity tolerances."
+                        )
     if bool(result.success) and not converged:
         message = (
             f"{message}; projected gradient {projected_gradient_inf:.3e} exceeds "

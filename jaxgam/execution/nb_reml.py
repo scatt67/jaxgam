@@ -1019,12 +1019,21 @@ def optimize_nb_stream_reml(
     # The log-theta completion records two host scalars per promotion; its
     # own trials reuse the accepted/candidate slots after L-BFGS-B returns.
     theta_secant_bytes = _THETA_SECANT_BYTES if theta_only else 0
+    # The two-coordinate completion holds a small finite-gradient curvature
+    # matrix, probe vectors, projected gradients and short-lived copies while
+    # accepted and candidate trials coexist.
+    curvature_completion_bytes = (
+        8 * (n_params * n_params + 24 * n_params)
+        if not pin_lambda and n_lambda == 1 and family.n_theta == 1
+        else 0
+    )
     outer_workspace_bytes = (
         retained_trial_bytes
         + stationary_trial_bytes
         + theta_secant_bytes
         + retained_history_bytes
         + lbfgs_workspace_bytes
+        + curvature_completion_bytes
     )
     if outer_workspace_bytes >= maximum_bytes:
         raise MemoryError(
@@ -1050,7 +1059,10 @@ def optimize_nb_stream_reml(
         bounds,
         reml_control,
         roundoff_stationary_completion=theta_only,
-        completion_inner_tolerance=pirls_control.tol if theta_only else None,
+        curvature_stationary_completion=(
+            not pin_lambda and n_lambda == 1 and family.n_theta == 1
+        ),
+        completion_inner_tolerance=(pirls_control.tol if family.n_theta == 1 else None),
         local_score_change=(_nb_local_stationary_score_change if theta_only else None),
         max_step=max_step,
     )

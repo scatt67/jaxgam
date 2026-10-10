@@ -347,7 +347,8 @@ def test_nb_optimizer_selected_trial_stationarity_and_nearby_dense_derivatives(
         _OPTIMIZER_CONTROL,
         _OPTIMIZER_PIRLS_CONTROL,
     )
-    assert result.outer_workspace_bytes == retained + history + lbfgs
+    curvature_bytes = 8 * (len(selected) ** 2 + 24 * len(selected)) if estimated else 0
+    assert result.outer_workspace_bytes == retained + history + lbfgs + curvature_bytes
     assert 0 < _retained_numeric_bytes(result.trial) <= retained
 
 
@@ -814,6 +815,23 @@ def test_nb_optimizer_preflights_retention_and_keeps_accepted_on_failed_candidat
         )
     evaluate.assert_not_called()
 
+    # The unpinned two-coordinate correction charges its host curvature and
+    # probe vectors before the first source replay as well.
+    curvature_bytes = 8 * (len(params) ** 2 + 24 * len(params))
+    with (
+        patch.object(nb_reml_execution, "evaluate_nb_stream_reml") as evaluate,
+        pytest.raises(MemoryError, match="retention"),
+    ):
+        optimize_nb_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=retained + history + lbfgs + curvature_bytes,
+            pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+            control=_OPTIMIZER_CONTROL,
+        )
+    evaluate.assert_not_called()
+
     initial = SimpleNamespace(
         params=np.array([0.0, 0.0]),
         score=jnp.array(2.0),
@@ -891,6 +909,103 @@ def test_nb_optimizer_rejects_non_boolean_pin_lambda_before_trial(
             pirls_control=_CONTROL,
         )
     evaluate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("curvature_sign", "valid_inner", "maxfun", "start_rho"),
+    [
+        (1.0, True, 500, 0.0),
+        (-1.0, True, 500, 0.0),
+        (1.0, False, 500, 0.0),
+        (1.0, True, 5, 0.0),
+        (1.0, True, 500, 40.0),
+    ],
+)
+def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
+    monkeypatch,
+    curvature_sign: float,
+    valid_inner: bool,
+    maxfun: int,
+    start_rho: float,
+) -> None:
+    """A rounded score admits only a well-conditioned, reconverged correction."""
+    start = np.array([start_rho, 0.0])
+    target = start + np.array([-1e-6 if start_rho == 40.0 else 1e-6, -1e-6])
+    hessian = np.diag([curvature_sign * 2.0, 3.0])
+    source = SimpleNamespace(fingerprint=lambda: "source")
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        params = np.asarray(params, dtype=np.float64)
+        return SimpleNamespace(
+            params=params.copy(),
+            score=jnp.array(1.0),
+            gradient=jnp.asarray(hessian @ (params - target)),
+            fit_result=SimpleNamespace(
+                state=SimpleNamespace(
+                    converged=True,
+                    line_search_failed=False,
+                    stationarity=(
+                        1e-8
+                        if not valid_inner and np.max(np.abs(params - target)) < 1e-10
+                        else 0.0
+                    ),
+                )
+            ),
+            source_scans=3,
+            batches_scanned=5,
+            source_fingerprint="source",
+        )
+
+    def rounded_stop(objective, params, **_kwargs):
+        objective(np.asarray(params))
+        return SimpleNamespace(
+            x=np.asarray(params),
+            success=True,
+            message="CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+            status=0,
+            nit=0,
+        )
+
+    monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", rounded_stop)
+    control = StreamREMLControl(gtol=1e-9, ftol=0.0, maxfun=maxfun)
+    objective = nb_reml_execution._AcceptedNBTrialObjective(
+        SimpleNamespace(source=source),
+        NegativeBinomial(theta=2.7),
+        start,
+        _CONTROL,
+        control,
+        1_000_000,
+        None,
+        None,
+    )
+    result = reml_execution._run_parameterized_stream_reml(
+        objective,
+        start,
+        [(-40.0, 40.0), (None, None)],
+        control,
+        curvature_stationary_completion=True,
+        completion_inner_tolerance=1e-11,
+    )
+    expect_converged = (
+        curvature_sign > 0.0 and valid_inner and maxfun > 5 and start_rho == 0.0
+    )
+    assert result.converged is expect_converged
+    assert result.n_evaluations == (
+        1 if maxfun <= 5 or start_rho == 40.0 else 5 if curvature_sign < 0.0 else 6
+    )
+    assert result.cumulative_source_scans == 3 * result.n_evaluations
+    assert result.cumulative_batches_scanned == 5 * result.n_evaluations
+    if expect_converged:
+        np.testing.assert_allclose(np.asarray(result.trial.params), target, atol=1e-15)
+        assert result.projected_gradient_inf <= control.gtol
+        assert result.n_accepted == 1
+        assert result.n_iter == result.n_accepted
+    else:
+        np.testing.assert_array_equal(result.trial.params, start)
+        assert result.projected_gradient_inf > control.gtol
+        assert result.n_accepted == 0
+        assert result.n_iter == 0
 
 
 @pytest.mark.parametrize("max_step", [0.0, np.inf, True])

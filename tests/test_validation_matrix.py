@@ -465,6 +465,7 @@ def _public_exact_nb_pinned_r(
     *,
     estimated: bool,
     smooth: bool,
+    initial_smoothing: float | None = None,
 ) -> dict[str, np.ndarray | float | bool]:
     """Use the live pinned-R bridge for one NB public release cell."""
     return RBridge(mode="rpy2").public_exact_reml_fit(
@@ -475,6 +476,7 @@ def _public_exact_nb_pinned_r(
         link,
         smooth=smooth,
         estimated_theta=estimated,
+        initial_smoothing=initial_smoothing,
     )
 
 
@@ -700,11 +702,35 @@ def test_public_estimated_nb_theta_modes_pinned_r(
     expected = _public_exact_nb_pinned_r(
         tmp_path, data, weight, offset, link, estimated=estimated, smooth=smooth
     )
+    if smooth and estimated and link == "sqrt":
+        # The default mgcv Newton start stops on score roundoff for these
+        # unchanged binary rows. Keep that result as a diagnostic, then use
+        # mgcv's documented in.out starting state for a converged R oracle.
+        assert expected["outer_status"] == "step failed"
+        default_score = expected["score"]
+        expected = _public_exact_nb_pinned_r(
+            tmp_path,
+            data,
+            weight,
+            offset,
+            link,
+            estimated=estimated,
+            smooth=smooth,
+            initial_smoothing=20.0,
+        )
+        assert expected["outer_status"] == "full convergence"
+        np.testing.assert_allclose(
+            default_score, expected["score"], rtol=STRICT.rtol, atol=STRICT.atol
+        )
     fitted = result.predict(data[["x"]], offset=offset)
     _, link_se = result.predict(
         data[["x"]], pred_type="link", se_fit=True, offset=offset
     )
     assert expected["inner_converged"]
+    if smooth and estimated and link == "sqrt":
+        assert result.converged
+        assert result.exact_optimizer_diagnostics is not None
+        assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-9
     if not result.converged:
         assert expected["outer_converged"]
         assert "projected gradient" in result.convergence_info

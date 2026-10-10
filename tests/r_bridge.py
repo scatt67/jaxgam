@@ -4242,17 +4242,24 @@ class RBridge:
         *,
         smooth: bool = True,
         estimated_theta: bool = False,
+        initial_smoothing: float | None = None,
     ) -> dict[str, Any]:
         """Fit the public cubic or linear REML model in live pinned mgcv.
 
         Both regular and NB release cells use the same source-matched Newton
-        controls and uncertainty.
+        controls and uncertainty. ``initial_smoothing`` maps to the documented
+        ``gam(in.out=list(sp=..., scale=1))`` initial state in ``estimate.gam``;
+        it leaves the rows, model, criterion and convergence controls intact.
         """
         self._require_rpy2()
         if family_name not in {"gaussian", "gamma", "poisson", "binomial", "nb"}:
             raise ValueError(f"Unsupported public exact R family: {family_name}")
         if len(data) != len(weight) or len(data) != len(offset):
             raise ValueError("Public exact R rows, weights and offsets differ.")
+        if initial_smoothing is not None and (
+            not smooth or not np.isfinite(initial_smoothing) or initial_smoothing <= 0.0
+        ):
+            raise ValueError("Initial R smoothing must be positive for a smooth fit.")
         ro = self._ro
         source_link = "1/mu^2" if link == "inverse_squared" else link
         if family_name == "nb":
@@ -4282,6 +4289,18 @@ class RBridge:
                 {"conv.tol": 1e-10, "maxNstep": 5.0, "maxSstep": 2.0, "maxHalf": 30}
             ),
         )
+        startup = (
+            {}
+            if initial_smoothing is None
+            else {
+                "in.out": ro.ListVector(
+                    {
+                        "sp": ro.FloatVector([initial_smoothing]),
+                        "scale": ro.FloatVector([1.0]),
+                    }
+                )
+            }
+        )
         fit = self._mgcv.gam(
             ro.Formula(formula),
             data=r_data,
@@ -4291,6 +4310,7 @@ class RBridge:
             method="REML",
             optimizer=ro.StrVector(["outer", "newton"]),
             control=control,
+            **startup,
         )
         score_scale = fit.rx2("reml.scale")
         if score_scale is ro.NULL:
@@ -4303,6 +4323,11 @@ class RBridge:
             outer is not ro.NULL
             and outer.rx2("conv") is not ro.NULL
             and str(outer.rx2("conv")[0]) == "full convergence"
+        )
+        outer_status = (
+            str(outer.rx2("conv")[0])
+            if outer is not ro.NULL and outer.rx2("conv") is not ro.NULL
+            else None
         )
         return {
             "theta": (
@@ -4318,6 +4343,7 @@ class RBridge:
             "edf": float(self._base.sum(fit.rx2("edf"))[0]),
             "inner_converged": bool(fit.rx2("converged")[0]),
             "outer_converged": outer_converged,
+            "outer_status": outer_status,
             "coefficients": np.asarray(fit.rx2("coefficients")).copy(),
             "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
             "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
