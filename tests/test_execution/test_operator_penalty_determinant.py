@@ -47,6 +47,22 @@ def _compare_model(formula: str, frame: pd.DataFrame, sp: np.ndarray) -> None:
     assert actual.rank == int(np.count_nonzero(positive))
     assert actual.null_dimension == model.n_coef - actual.rank
     assert not actual.block_values.flags.writeable
+    assert actual.derivative is not None
+    weighted = dense.penalties.materialize(rho)
+    inverse = np.linalg.pinv(weighted, hermitian=True)
+    expected_derivative = np.zeros(model.penalties.n_penalties)
+    for block in model.penalties.blocks:
+        local_inverse = inverse[block.start : block.stop, block.start : block.stop]
+        for sp_index, penalty in zip(
+            block.sp_indices, block.local_penalties, strict=True
+        ):
+            expected_derivative[sp_index] += np.exp(rho[sp_index]) * np.trace(
+                local_inverse @ penalty.dense()
+            )
+    np.testing.assert_allclose(
+        actual.derivative, expected_derivative, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert not actual.derivative.flags.writeable
 
 
 @pytest.mark.parametrize(
@@ -108,6 +124,7 @@ def test_large_indexed_identity_needs_no_coefficient_square(monkeypatch):
     )
     assert actual.rank == 2048
     assert actual.null_dimension == 1
+    np.testing.assert_array_equal(actual.derivative, [1024.0, 1024.0])
     assert actual.peak_bound_bytes < 2 * 1024 * 1024
     assert 8 * model.n_coef**2 > 2 * 1024 * 1024
 
@@ -137,6 +154,12 @@ def test_diagonal_penalty_range_and_budget_preflight():
     )
     assert result.rank == 3
     assert result.null_dimension == 1
+    np.testing.assert_allclose(
+        result.derivative,
+        [1.0 + 2.1 / 3.3, 1.0 + 1.2 / 3.3],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
     with pytest.raises(MemoryError, match="requires"):
         LocalOperatorPenaltyDeterminant(structure, memory_budget_bytes=1).evaluate(
             np.zeros(2, dtype=np.float64)
@@ -180,6 +203,7 @@ def test_zero_and_invalid_local_penalties_do_not_produce_fictitious_logdet():
     assert result.value == 0.0
     assert result.rank == 0
     assert result.null_dimension == 2
+    np.testing.assert_array_equal(result.derivative, [0.0])
     negative = PenaltyStructure(
         n_coef=2,
         blocks=(
@@ -222,6 +246,7 @@ def test_singleton_identity_uses_dense_efs_log_eigenvalue_floor():
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+    np.testing.assert_array_equal(actual.derivative, [3.0])
     with pytest.raises(FloatingPointError, match="nonfinite"):
         LocalOperatorPenaltyDeterminant(
             structure, memory_budget_bytes=100_000
@@ -248,6 +273,40 @@ def test_dense_multi_penalty_preflight_charges_each_live_local_matrix():
     )
     with pytest.raises(MemoryError, match="requires"):
         evaluator.evaluate(np.zeros(20, dtype=np.float64))
+
+
+def test_coupled_local_derivative_matches_pinned_mgcv_algebra(r_bridge):
+    first = np.array([[2.0, 0.4], [0.4, 1.0]])
+    second = np.array([[1.0, -0.3], [-0.3, 3.0]])
+    structure = PenaltyStructure(
+        n_coef=3,
+        blocks=(
+            PenaltyBlock(
+                1,
+                3,
+                (0, 1),
+                (DenseLocalPenalty(first), DenseLocalPenalty(second)),
+                IdentityTransform(2),
+                (2, 2),
+            ),
+        ),
+    )
+    rho = np.array([0.3, -0.5], dtype=np.float64)
+    actual = LocalOperatorPenaltyDeterminant(
+        structure, memory_budget_bytes=100_000
+    ).evaluate(rho)
+    roots = [np.linalg.cholesky(first), np.linalg.cholesky(second)]
+    oracle = r_bridge.efs_statistics_algebra(
+        rho,
+        roots,
+        [np.vstack((np.zeros((1, 2)), root)) for root in roots],
+        np.array([0.2, -0.8, 1.1]),
+        np.linalg.cholesky(np.eye(3) * 4),
+    )
+    np.testing.assert_allclose(
+        actual.derivative, oracle["d"], rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert actual.null_dimension == 1
 
 
 @pytest.mark.parametrize(
@@ -279,6 +338,9 @@ def test_coupled_local_range_remains_active_across_finite_scales(penalties):
     )
     assert result.rank == 2
     assert result.null_dimension == 0
+    np.testing.assert_allclose(
+        result.derivative, [1.0, 1.0], rtol=STRICT.rtol, atol=STRICT.atol
+    )
 
 
 def test_finite_block_determinants_cannot_overflow_total_score_component():

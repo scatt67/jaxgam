@@ -26,18 +26,23 @@ _LOG_FLOOR = 1e-30
 
 @dataclass(frozen=True)
 class OperatorPenaltyLogDet:
-    """Penalty pseudo-determinant and null dimension in fitted coordinates."""
+    """Penalty pseudo-determinant and log-sp gradient in fitted coordinates."""
 
     value: float
     rank: int
     null_dimension: int
     block_values: np.ndarray
     peak_bound_bytes: int
+    derivative: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         owned = np.array(self.block_values, dtype=np.float64, copy=True)
         owned.setflags(write=False)
         object.__setattr__(self, "block_values", owned)
+        if self.derivative is not None:
+            derivative = np.array(self.derivative, dtype=np.float64, copy=True)
+            derivative.setflags(write=False)
+            object.__setattr__(self, "derivative", derivative)
 
 
 def _penalty_diagonal(penalty: LocalPenalty) -> np.ndarray:
@@ -48,18 +53,14 @@ def _penalty_diagonal(penalty: LocalPenalty) -> np.ndarray:
     raise TypeError("A dense penalty cannot use diagonal-only storage.")
 
 
-def _singleton(penalty: LocalPenalty, rho: float) -> tuple[float, int]:
+def _singleton(penalty: LocalPenalty, rho: float) -> tuple[float, int, float]:
     if isinstance(penalty, IdentityPenalty):
         if not np.isfinite(penalty.scale) or penalty.scale < 0:
             raise ValueError("Local penalty must be positive semidefinite.")
-        return (
-            (
-                penalty.size * (rho + np.log(max(penalty.scale, _LOG_FLOOR))),
-                penalty.size,
-            )
-            if penalty.scale > 0
-            else (0.0, 0)
-        )
+        if penalty.scale == 0:
+            return 0.0, 0, 0.0
+        value = penalty.size * (rho + float(np.log(max(penalty.scale, _LOG_FLOOR))))
+        return value, penalty.size, float(penalty.size)
     if isinstance(penalty, DiagonalPenalty):
         eigenvalues = penalty.diagonal
     else:
@@ -74,12 +75,13 @@ def _singleton(penalty: LocalPenalty, rho: float) -> tuple[float, int]:
     return (
         rank * rho + float(np.sum(np.log(np.maximum(eigenvalues[active], _LOG_FLOOR)))),
         rank,
+        float(rank),
     )
 
 
 def _multidiagonal(
     penalties: tuple[LocalPenalty, ...], rho: np.ndarray
-) -> tuple[float, int]:
+) -> tuple[float, int, np.ndarray]:
     size = penalties[0].size
     range_weight = np.zeros(size, dtype=np.float64)
     log_scales = []
@@ -99,7 +101,7 @@ def _multidiagonal(
     active = range_weight > maximum * _RANK_TOLERANCE
     rank = int(np.count_nonzero(active))
     if not rank:
-        return 0.0, 0
+        return 0.0, 0, np.zeros(len(penalties), dtype=np.float64)
     offsets = rho + np.asarray(log_scales)
     offset = float(np.max(offsets))
     combined = np.zeros(rank, dtype=np.float64)
@@ -109,12 +111,23 @@ def _multidiagonal(
             combined += np.exp(weight - offset) * (diagonal[active] / maximum)
     if np.any(combined <= 0) or not np.all(np.isfinite(combined)):
         raise np.linalg.LinAlgError("Combined penalty lost its fixed range.")
-    return rank * offset + float(np.sum(np.log(combined))), rank
+    derivative = np.zeros(len(penalties), dtype=np.float64)
+    for index, (penalty, weight, maximum) in enumerate(
+        zip(penalties, offsets, maxima, strict=True)
+    ):
+        if np.isfinite(weight):
+            diagonal = _penalty_diagonal(penalty)
+            derivative[index] = float(
+                np.sum(
+                    np.exp(weight - offset) * (diagonal[active] / maximum) / combined
+                )
+            )
+    return rank * offset + float(np.sum(np.log(combined))), rank, derivative
 
 
 def _multidense(
     penalties: tuple[LocalPenalty, ...], rho: np.ndarray
-) -> tuple[float, int]:
+) -> tuple[float, int, np.ndarray]:
     size = penalties[0].size
     normalized = np.zeros((size, size), dtype=np.float64)
     matrices = []
@@ -139,18 +152,28 @@ def _multidense(
     active = eigenvalues > maximum * _RANK_TOLERANCE
     rank = int(np.count_nonzero(active))
     if not rank:
-        return 0.0, 0
+        return 0.0, 0, np.zeros(len(penalties), dtype=np.float64)
     range_basis = eigenvectors[:, active]
     offsets = rho + np.asarray(log_scales)
     offset = float(np.max(offsets))
     combined = np.zeros((rank, rank), dtype=np.float64)
+    contributions = []
     for matrix, weight in zip(matrices, offsets, strict=True):
         if np.isfinite(weight):
-            combined += np.exp(weight - offset) * (range_basis.T @ matrix @ range_basis)
+            contribution = np.exp(weight - offset) * (
+                range_basis.T @ matrix @ range_basis
+            )
+            combined += contribution
+            contributions.append(contribution)
+        else:
+            contributions.append(np.zeros((rank, rank), dtype=np.float64))
     sign, logabs = np.linalg.slogdet(combined)
     if sign <= 0 or not np.isfinite(logabs):
         raise np.linalg.LinAlgError("Combined penalty lost its fixed range.")
-    return rank * offset + float(logabs), rank
+    derivative = np.array(
+        [float(np.trace(np.linalg.solve(combined, term))) for term in contributions]
+    )
+    return rank * offset + float(logabs), rank, derivative
 
 
 class LocalOperatorPenaltyDeterminant:
@@ -200,7 +223,12 @@ class LocalOperatorPenaltyDeterminant:
                 else 48 * size + 32 * len(block.local_penalties)
             )
             largest = max(largest, 8 * entries)
-        return largest + 32 * len(self.structure.blocks) + 8192
+        return (
+            largest
+            + 32 * len(self.structure.blocks)
+            + 16 * self.structure.n_penalties
+            + 8192
+        )
 
     def evaluate(self, log_lambda: np.ndarray) -> OperatorPenaltyLogDet:
         """Evaluate fixed-range local pseudo-determinants at supplied rho."""
@@ -219,31 +247,40 @@ class LocalOperatorPenaltyDeterminant:
                 f"budget is {self.memory_budget_bytes}."
             )
         values = np.empty(len(self.structure.blocks), dtype=np.float64)
+        derivative = np.zeros(m, dtype=np.float64)
         rank = 0
         for index, block in enumerate(self.structure.blocks):
             penalties = block.local_penalties
             weights = log_lambda[list(block.sp_indices)]
             if len(penalties) == 1:
-                value, local_rank = _singleton(penalties[0], float(weights[0]))
+                value, local_rank, local_derivative = _singleton(
+                    penalties[0], float(weights[0])
+                )
             elif all(
                 isinstance(penalty, (IdentityPenalty, DiagonalPenalty))
                 for penalty in penalties
             ):
-                value, local_rank = _multidiagonal(penalties, weights)
+                value, local_rank, local_derivative = _multidiagonal(penalties, weights)
             else:
-                value, local_rank = _multidense(penalties, weights)
+                value, local_rank, local_derivative = _multidense(penalties, weights)
             if not np.isfinite(value):
                 raise FloatingPointError("Local penalty determinant is nonfinite.")
             values[index] = value
+            derivative[list(block.sp_indices)] += local_derivative
             rank += local_rank
         with np.errstate(over="ignore"):
             total = float(np.sum(values))
         if not np.isfinite(total):
             raise FloatingPointError("Total local penalty determinant is nonfinite.")
+        if not np.all(np.isfinite(derivative)):
+            raise FloatingPointError(
+                "Local penalty determinant derivative is nonfinite."
+            )
         return OperatorPenaltyLogDet(
             value=total,
             rank=rank,
             null_dimension=self.structure.n_coef - rank,
             block_values=values,
             peak_bound_bytes=required,
+            derivative=derivative,
         )
