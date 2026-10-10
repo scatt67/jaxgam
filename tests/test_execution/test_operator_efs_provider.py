@@ -5,6 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.special import gammaln, xlogy
 
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.operator_efs_controller import OperatorEFSState
@@ -14,6 +15,7 @@ from jaxgam.execution.operator_fit import (
     fit_operator_fixed_sp,
 )
 from jaxgam.execution.operator_logdet import OperatorLogDetControl
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gamma, Gaussian, Poisson
 from jaxgam.fitting.efs_operator_score import operator_reml_score
 from jaxgam.formula.design import ModelSetup
@@ -109,6 +111,80 @@ def test_matched_components_agree_with_dense_fixed_state_strict(family, phi):
     assert result.trace_method == "exact"
     assert result.source_scans > 1
     assert result.peak_bound_bytes < 16 * 1024 * 1024
+
+
+def test_fixed_theta_nb_large_p_observed_score_and_fisher_trace_match_dense():
+    p, n, theta = 300, 600, 2.7
+    rng = np.random.default_rng(419)
+    group = np.arange(n) % p
+    mean = np.exp(0.2 + 0.3 * np.sin(group / 31.0))
+    frame = pd.DataFrame(
+        {
+            "y": rng.negative_binomial(theta, theta / (theta + mean)),
+            "g": pd.Categorical(
+                [f"g{index}" for index in group],
+                categories=[f"g{index}" for index in range(p)],
+            ),
+        }
+    )
+    spec = parse_formula("y~0+s(g,bs='re')")
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        spec,
+        source,
+        control=OperatorPreparationControl(
+            batch_rows=64, memory_budget_bytes=4 * 1024 * 1024
+        ),
+    )
+    family = NegativeBinomial(theta=theta, fixed=True)
+    rho = np.log(np.array([0.8])) + 2.5
+    fit = fit_operator_fixed_sp(
+        model, source, family, np.exp(rho), memory_budget_bytes=16 * 1024 * 1024
+    )
+    assert fit.converged
+    result = MatchedOperatorEFSProvider.from_fit(
+        fit,
+        source,
+        score_phi=1.0,
+        memory_budget_bytes=32 * 1024 * 1024,
+        max_y=32,
+    ).evaluate()
+    dense = ModelSetup.build(spec, frame)
+    X = dense.X
+    beta = fit.coefficients
+    y = frame.y.to_numpy(dtype=float)
+    mu = np.exp(X @ beta)
+    deviance = float(np.sum(family.deviance_contributions(y, mu, np.ones(n))))
+    saturated = float(
+        np.sum(
+            gammaln(y + theta)
+            - gammaln(theta)
+            - gammaln(y + 1)
+            + theta * np.log(theta / (theta + y))
+            + xlogy(y, y / (theta + y))
+        )
+    )
+    penalty = dense.penalties.materialize(rho)
+    observed = theta * mu * (theta + y) / (theta + mu) ** 2
+    fisher = theta * mu / (theta + mu)
+    H_observed = X.T @ (observed[:, None] * X) + penalty
+    H_fisher = X.T @ (fisher[:, None] * X) + penalty
+    logdet = 2 * np.sum(np.log(np.diag(np.linalg.cholesky(H_observed))))
+    penalty_logdet = 2 * np.sum(np.log(np.diag(np.linalg.cholesky(penalty))))
+    exact = (
+        (deviance + beta @ penalty @ beta) / 2
+        - saturated
+        + (logdet - penalty_logdet) / 2
+    )
+    expected_trace = np.sum(1 / np.diag(H_fisher))
+    np.testing.assert_allclose(
+        result.score.value, exact, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_allclose(
+        result.fisher.traces[0], expected_trace, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert result.score.strategy == "structured_diagonal"
+    assert result.fisher.diagnostics.strategy == "structured_diagonal"
 
 
 def test_stochastic_trace_is_labeled_and_keeps_sampling_error_separate():
