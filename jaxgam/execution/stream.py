@@ -10,9 +10,15 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
-from jaxgam.families.standard import Binomial, Gaussian, Poisson
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import _to_jax_structure
+from jaxgam.fitting.family_execution import (
+    FamilyExecutionLineage,
+    FamilyExecutionParameters,
+    batch_execution_summary,
+    finalize_execution_summary,
+    merge_execution_summaries,
+)
 from jaxgam.fitting.reml import estimate_edf
 from jaxgam.fitting.state import StreamFitState
 from jaxgam.fitting.stream_kernels import (
@@ -20,7 +26,6 @@ from jaxgam.fitting.stream_kernels import (
     accumulate_working_statistics,
     coefficient_stationarity,
     empty_statistics,
-    positive_weight_count_reduction,
     saturated_loglik_reduction,
     solve_penalized_system,
     trial_deviance,
@@ -58,7 +63,7 @@ class StreamPIRLSControl:
 
 def _preflight(
     stream: StreamDesign, family: ExponentialFamily, control: StreamPIRLSControl
-) -> None:
+) -> FamilyExecutionLineage:
     prepared = stream.prepared
     if prepared.fitting is None:
         raise ValueError("Streamed PIRLS requires prepare_model(..., family=family).")
@@ -67,16 +72,31 @@ def _preflight(
             "Streamed PIRLS requires full rank in unpenalized directions; "
             "use the dense compatibility path or remove aliased columns."
         )
-    if not family.is_canonical or family.n_theta:
+    lineage = FamilyExecutionLineage.from_prepared(prepared, family)
+    capabilities = lineage.context.capabilities
+    if (
+        not capabilities.row_separable
+        or not capabilities.fisher_working_system
+        or not capabilities.direct_deviance
+        or not capabilities.saturated_loglikelihood
+    ):
         raise NotImplementedError(
-            "Streamed fixed-sp PIRLS currently supports canonical Gaussian "
-            "identity, Poisson log, and Binomial logit families only."
+            "Streamed PIRLS requires row-separable Fisher working, direct "
+            "deviance, and saturated-likelihood family capabilities."
         )
-    supported = isinstance(family, (Gaussian, Poisson, Binomial))
-    if not supported:
+    if (
+        capabilities.coefficient_system != "fisher"
+        or not capabilities.fisher_equals_observed_for_score
+    ):
         raise NotImplementedError(
-            "Streamed fixed-sp PIRLS currently supports Gaussian, Poisson, "
-            "and Binomial only."
+            "Streamed fixed-sp scoring currently requires a family that "
+            "explicitly declares Fisher and observed information equivalent."
+        )
+    policy = lineage.context.reduction_policy
+    if policy.reported_scale == "unsupported" or policy.score_scale == "unsupported":
+        raise NotImplementedError(
+            "This family's reported-scale/score reduction policy is not "
+            "implemented for streamed fixed-sp PIRLS."
         )
     if stream.source.fingerprint() != prepared.source_fingerprint:
         raise RuntimeError("RowSource changed after preparation; prepare again.")
@@ -84,15 +104,24 @@ def _preflight(
     # useful early failure for unsupported zero/negative batch sizes.
     if control.batch_rows <= 0:  # defensive: dataclass validation above
         raise ValueError("batch_rows must be positive.")
+    lineage.validate(prepared, family)
+    return lineage
 
 
-def _source_batches(stream: StreamDesign, batch_rows: int):
+def _source_batches(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
+    batch_rows: int,
+):
     """Yield validated real-row vectors and reject unsupported padded designs."""
     prepared = stream.prepared
-    if stream.source.fingerprint() != prepared.source_fingerprint:
+    lineage.validate(prepared, family)
+    if stream.source.fingerprint() != lineage.source_fingerprint:
         raise RuntimeError("RowSource changed after preparation; prepare again.")
     valid_rows = 0
     for batch in stream.source.scan(batch_rows):
+        lineage.validate(stream.prepared, family)
         if batch.y is None:
             raise ValueError("Streamed PIRLS requires response values in every batch.")
         valid = np.asarray(batch.valid, dtype=bool)
@@ -110,20 +139,28 @@ def _source_batches(stream: StreamDesign, batch_rows: int):
             raise ValueError("Streamed fitting prior weights must be non-negative.")
         valid_rows += int(np.sum(valid))
         yield batch, y, weight, offset, valid
-    if valid_rows != prepared.n_obs:
+    lineage.validate(stream.prepared, family)
+    if stream.source.fingerprint() != lineage.source_fingerprint:
+        raise RuntimeError(
+            "RowSource changed during streamed fitting scan; prepare again."
+        )
+    if valid_rows != stream.prepared.n_obs:
         raise RuntimeError(
             "RowSource scan changed its valid row count after preparation; "
             "prepare again."
         )
-    if stream.source.fingerprint() != prepared.source_fingerprint:
-        raise RuntimeError(
-            "RowSource changed during streamed fitting scan; prepare again."
-        )
 
 
-def _fitting_batches(stream: StreamDesign, batch_rows: int):
+def _fitting_batches(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
+    batch_rows: int,
+):
     """Yield bounded fitting-coordinate arrays; no source rows are retained."""
-    for batch, y, weight, offset, valid in _source_batches(stream, batch_rows):
+    for batch, y, weight, offset, valid in _source_batches(
+        stream, family, lineage, batch_rows
+    ):
         X = stream.prepared.evaluate_fitting_batch(batch)
         if not np.all(np.isfinite(X)):
             raise ValueError(
@@ -142,12 +179,17 @@ def _working_scan(
     stream: StreamDesign,
     beta: jax.Array,
     family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
+    parameters: FamilyExecutionParameters,
     control: StreamPIRLSControl,
     device: jax.Device | None,
 ) -> tuple[tuple[jax.Array, jax.Array, jax.Array, jax.Array], int]:
     statistics = jax.device_put(empty_statistics(stream.prepared.n_coef), device)
     batches = 0
-    for X, y, weight, offset, valid in _fitting_batches(stream, control.batch_rows):
+    for X, y, weight, offset, valid in _fitting_batches(
+        stream, family, lineage, control.batch_rows
+    ):
+        lineage.validate(stream.prepared, family)
         statistics = accumulate_working_statistics(
             statistics,
             jax.device_put(X, device),
@@ -156,7 +198,9 @@ def _working_scan(
             jax.device_put(offset, device),
             jax.device_put(valid, device),
             beta,
+            parameters,
             family,
+            lineage.context,
         )
         # Bound outstanding transfer/dispatch buffers to one batch.  This is
         # deliberately conservative until two-batch prefetch is instrumented.
@@ -169,13 +213,18 @@ def _trial_scan(
     stream: StreamDesign,
     beta: jax.Array,
     family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
+    parameters: FamilyExecutionParameters,
     control: StreamPIRLSControl,
     device: jax.Device | None,
 ) -> tuple[jax.Array, jax.Array, int]:
     deviance = jnp.array(0.0, dtype=jnp.float64)
     domain_ok = jnp.array(True)
     batches = 0
-    for X, y, weight, offset, valid in _fitting_batches(stream, control.batch_rows):
+    for X, y, weight, offset, valid in _fitting_batches(
+        stream, family, lineage, control.batch_rows
+    ):
+        lineage.validate(stream.prepared, family)
         batch_deviance, batch_domain = trial_deviance(
             jax.device_put(X, device),
             jax.device_put(y, device),
@@ -183,7 +232,9 @@ def _trial_scan(
             jax.device_put(offset, device),
             jax.device_put(valid, device),
             beta,
+            parameters,
             family,
+            lineage.context,
         )
         deviance = deviance + batch_deviance
         domain_ok = domain_ok & batch_domain
@@ -195,6 +246,8 @@ def _trial_scan(
 def _saturated_loglik_scan(
     stream: StreamDesign,
     family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
+    parameters: FamilyExecutionParameters,
     scale: jax.Array,
     control: StreamPIRLSControl,
     device: jax.Device | None,
@@ -202,36 +255,62 @@ def _saturated_loglik_scan(
     """Collect only the likelihood scalar required by later result modes."""
     saturated = jnp.array(0.0, dtype=jnp.float64)
     batches = 0
+    domain_ok = jnp.array(True)
     for _batch, y, weight, _offset, valid in _source_batches(
-        stream, control.batch_rows
+        stream, family, lineage, control.batch_rows
     ):
-        saturated = saturated + saturated_loglik_reduction(
+        lineage.validate(stream.prepared, family)
+        batch_value, batch_domain = saturated_loglik_reduction(
             jax.device_put(y, device),
             jax.device_put(weight, device),
             jax.device_put(valid, device),
             scale,
+            parameters,
             family,
+            lineage.context,
         )
+        saturated = saturated + batch_value
+        domain_ok = domain_ok & batch_domain
         jax.block_until_ready(saturated)
         batches += 1
+    if not bool(np.asarray(domain_ok)):
+        raise ValueError("Saturated likelihood scan left the family domain.")
     return saturated, batches
 
 
-def _positive_weight_count_scan(
-    stream: StreamDesign, control: StreamPIRLSControl, device: jax.Device | None
-) -> tuple[jax.Array, int]:
-    """Reduce the REML score's effective observation count in bounded scans."""
-    count = jnp.array(0, dtype=jnp.int64)
+def _execution_summary_scan(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    lineage: FamilyExecutionLineage,
+    control: StreamPIRLSControl,
+    device: jax.Device | None,
+) -> tuple[dict[str, float], int]:
+    """Reduce family-owned global metadata without retaining source rows."""
+    summary: tuple[jax.Array, ...] | None = None
     batches = 0
     for _batch, _y, weight, _offset, valid in _source_batches(
-        stream, control.batch_rows
+        stream, family, lineage, control.batch_rows
     ):
-        count = count + positive_weight_count_reduction(
-            jax.device_put(weight, device), jax.device_put(valid, device)
+        lineage.validate(stream.prepared, family)
+        batch_summary = batch_execution_summary(
+            jax.device_put(_y, device),
+            jax.device_put(weight, device),
+            jax.device_put(valid, device),
+            family,
+            lineage.context,
         )
-        jax.block_until_ready(count)
+        summary = (
+            batch_summary
+            if summary is None
+            else merge_execution_summaries(
+                summary, batch_summary, family, lineage.context
+            )
+        )
+        jax.block_until_ready(summary)
         batches += 1
-    return count, batches
+    if summary is None:
+        raise ValueError("Streamed fitting requires at least one source batch.")
+    return finalize_execution_summary(summary, family), batches
 
 
 def fit_streamed_pirls(
@@ -250,7 +329,7 @@ def fit_streamed_pirls(
     row-aligned outputs.
     """
     control = StreamPIRLSControl() if control is None else control
-    _preflight(stream, family, control)
+    lineage = _preflight(stream, family, control)
     prepared = stream.prepared
     assert prepared.fitting is not None
     structure = _to_jax_structure(prepared.fitting.penalty_structure, device)
@@ -268,6 +347,9 @@ def fit_streamed_pirls(
         raise ValueError(f"beta_init must have shape ({prepared.n_coef},).")
     if not np.all(np.isfinite(np.asarray(beta))):
         raise ValueError("beta_init must contain only finite values.")
+    parameters = jax.device_put(
+        FamilyExecutionParameters.from_snapshot(lineage.parameters), device
+    )
 
     scans = 0
     batches_scanned = 0
@@ -280,7 +362,9 @@ def fit_streamed_pirls(
     stationarity = np.inf
 
     for iteration in range(control.max_iter):
-        statistics, batch_count = _working_scan(stream, beta, family, control, device)
+        statistics, batch_count = _working_scan(
+            stream, beta, family, lineage, parameters, control, device
+        )
         scans += 1
         batches_scanned += batch_count
         G, b, deviance, domain_ok = statistics
@@ -303,7 +387,7 @@ def fit_streamed_pirls(
             if halving:
                 candidate = beta + 0.5**halving * (proposal - beta)
             candidate_deviance, candidate_domain, trial_batches = _trial_scan(
-                stream, candidate, family, control, device
+                stream, candidate, family, lineage, parameters, control, device
             )
             scans += 1
             batches_scanned += trial_batches
@@ -350,7 +434,7 @@ def fit_streamed_pirls(
             and deviance_change < control.tol
         ):
             final_statistics, batch_count = _working_scan(
-                stream, beta, family, control, device
+                stream, beta, family, lineage, parameters, control, device
             )
             scans += 1
             batches_scanned += batch_count
@@ -374,7 +458,7 @@ def fit_streamed_pirls(
 
     if final_statistics is None:
         final_statistics, batch_count = _working_scan(
-            stream, beta, family, control, device
+            stream, beta, family, lineage, parameters, control, device
         )
         scans += 1
         batches_scanned += batch_count
@@ -388,24 +472,31 @@ def fit_streamed_pirls(
     final_penalized = final_deviance + penalty_ops.quadratic(structure, beta, rho)
     stationarity = float(np.asarray(coefficient_stationarity(final_H, b, beta)))
     edf = estimate_edf(G, final_factor)
-    if not family.scale_known:
+    summary, batch_count = _execution_summary_scan(
+        stream, family, lineage, control, device
+    )
+    scans += 1
+    batches_scanned += batch_count
+    if int(summary["n_valid_rows"]) != prepared.n_obs:
+        raise RuntimeError(
+            "Family execution summary changed its valid row count after preparation."
+        )
+    policy = lineage.context.reduction_policy
+    if policy.reported_scale == "gaussian_fisher_edf_deviance":
         denominator = float(prepared.n_obs - np.asarray(edf))
         if not np.isfinite(denominator) or denominator <= 0:
             raise FloatingPointError(
                 "Invalid Fisher-EDF scale denominator in streamed fit."
             )
         scale = final_deviance / denominator
-    else:
+    elif policy.reported_scale == "known_one":
         scale = jnp.array(1.0, dtype=jnp.float64)
-    positive_weight_count, batch_count = _positive_weight_count_scan(
-        stream, control, device
-    )
-    scans += 1
-    batches_scanned += batch_count
-    if family.scale_known or structure.n_penalties == 0:
+    else:  # preflight makes this unreachable; keep an execution fail-closed.
+        raise NotImplementedError("Unsupported streamed reported-scale policy.")
+    if policy.score_scale == "reported_scale" or structure.n_penalties == 0:
         score_scale = scale
-    else:
-        score_denominator = int(np.asarray(positive_weight_count)) - (
+    elif policy.score_scale == "gaussian_fixed_sp":
+        score_denominator = int(summary["n_positive_weight"]) - (
             prepared.n_coef - prepared.fitting.total_penalty_rank
         )
         if score_denominator <= 0:
@@ -419,6 +510,8 @@ def fit_streamed_pirls(
             raise FloatingPointError(
                 "Invalid fixed-sp REML score scale in streamed fit."
             )
+    else:  # preflight makes this unreachable; keep an execution fail-closed.
+        raise NotImplementedError("Unsupported streamed score-scale policy.")
     valid_final = (
         bool(np.all(np.isfinite(np.asarray(beta))))
         and bool(np.all(np.isfinite(np.asarray(final_factor))))
@@ -432,7 +525,7 @@ def fit_streamed_pirls(
         )
     converged = converged and not line_search_failed and stationarity < control.tol
     saturated_loglik, batch_count = _saturated_loglik_scan(
-        stream, family, score_scale, control, device
+        stream, family, lineage, parameters, score_scale, control, device
     )
     scans += 1
     batches_scanned += batch_count

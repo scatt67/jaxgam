@@ -24,6 +24,7 @@ from jaxgam.families.base import (
     REAL,
     UNIT_INTERVAL,
     ExponentialFamily,
+    StreamReductionPolicy,
 )
 from jaxgam.jax_utils import array_module
 from jaxgam.links.links import IdentityLink, InverseLink, Link, LogitLink, LogLink
@@ -133,6 +134,19 @@ class Gaussian(ExponentialFamily):
         """All finite eta are valid for Gaussian."""
         xp = array_module(eta)
         return xp.isfinite(eta)
+
+    def stream_reduction_policy(self) -> StreamReductionPolicy:
+        """Expose the only unknown-scale policy validated by this route.
+
+        The score-scale identity below is specific to the canonical Gaussian
+        fixed-sp coefficient problem.  A noncanonical Gaussian must provide
+        its own observed-information policy rather than inheriting it.
+        """
+        if self.is_canonical:
+            return StreamReductionPolicy(
+                "gaussian_fisher_edf_deviance", "gaussian_fixed_sp"
+            )
+        return StreamReductionPolicy("unsupported", "unsupported")
 
 
 class Binomial(ExponentialFamily):

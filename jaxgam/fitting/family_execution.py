@@ -22,6 +22,7 @@ from jaxgam.families.base import (
     FamilyExecutionCapabilities,
     FamilyPadding,
     FamilyParameterSnapshot,
+    StreamReductionPolicy,
 )
 from jaxgam.fitting.pirls import _W_MAX, _W_MIN, canonical_working_quantities
 
@@ -36,6 +37,7 @@ class FamilyExecutionContext:
     static_config: tuple[object, ...]
     capabilities: FamilyExecutionCapabilities
     padding: FamilyPadding
+    reduction_policy: StreamReductionPolicy
     theta_mode: str
     phi_mode: str
 
@@ -46,6 +48,7 @@ class FamilyExecutionContext:
             static_config=family.execution_static_config(),
             capabilities=family.execution_capabilities(),
             padding=family.execution_padding(),
+            reduction_policy=family.stream_reduction_policy(),
             theta_mode=snapshot.theta_mode,
             phi_mode=snapshot.phi_mode,
         )
@@ -70,6 +73,27 @@ class FamilyExecutionLineage:
     def from_prepared(
         cls, prepared: PreparedModel, family: ExponentialFamily
     ) -> FamilyExecutionLineage:
+        fitting = prepared.fitting
+        if fitting is None:
+            raise ValueError("Family execution requires fitting preparation.")
+        if (
+            fitting.family_execution_static_config is None
+            or fitting.family_parameter_snapshot is None
+        ):
+            raise NotImplementedError(
+                "Prepared family lacks the CPU execution-contract snapshots "
+                "required by streamed fitting."
+            )
+        if fitting.family_execution_static_config != family.execution_static_config():
+            raise RuntimeError(
+                "Family or link static configuration changed after fitting "
+                "preparation; prepare again."
+            )
+        if fitting.family_parameter_snapshot != family.execution_parameter_snapshot():
+            raise RuntimeError(
+                "Family parameter state changed after fitting preparation; "
+                "prepare again."
+            )
         return cls(
             source_fingerprint=prepared.source_fingerprint,
             basis_fingerprint=prepared.basis_fingerprint,
@@ -84,6 +108,18 @@ class FamilyExecutionLineage:
         if prepared.basis_fingerprint != self.basis_fingerprint:
             raise RuntimeError(
                 "Prepared basis changed after family execution preparation."
+            )
+        fitting = prepared.fitting
+        if fitting is None:
+            raise RuntimeError(
+                "Prepared fitting metadata disappeared after preparation."
+            )
+        if (
+            fitting.family_name != family.family_name
+            or fitting.link_name != type(family.link).__qualname__
+        ):
+            raise RuntimeError(
+                "Prepared family/link metadata changed after preparation."
             )
         if FamilyExecutionContext.from_family(family) != self.context:
             raise RuntimeError(
@@ -177,7 +213,7 @@ def _require_capabilities(context: FamilyExecutionContext, *capabilities: str) -
         )
 
 
-def _sanitized_inputs(
+def sanitize_batch_inputs(
     X: jax.Array,
     y: jax.Array,
     prior_weight: jax.Array,
@@ -234,7 +270,7 @@ def batch_working_quantities(
         "direct_deviance",
         "differentiable_deviance",
     )
-    y_safe, weight_safe, offset_safe, eta, mu, domain_per_row = _sanitized_inputs(
+    y_safe, weight_safe, offset_safe, eta, mu, domain_per_row = sanitize_batch_inputs(
         X, y, prior_weight, offset, valid, beta, family, context
     )
     theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
