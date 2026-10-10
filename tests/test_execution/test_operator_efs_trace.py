@@ -190,10 +190,11 @@ def test_shared_probes_trace_large_diagonal_system_without_coefficient_square(
     )
     beta = np.zeros(model.n_coef, dtype=np.float64)
     beta[:3] = [0.2, -0.1, 0.3]
-    with pytest.raises(ValueError, match="coordinate cap"):
-        ExactOperatorPenaltyStatistics(
-            system, memory_budget_bytes=8 * 1024 * 1024
-        ).statistics(beta)
+    exact = ExactOperatorPenaltyStatistics(
+        system, memory_budget_bytes=8 * 1024 * 1024
+    ).statistics(beta)
+    assert exact.diagnostics.strategy == "structured_diagonal"
+    assert exact.diagnostics.completed_coordinates == 0
     result = StochasticOperatorPenaltyStatistics(
         system,
         memory_budget_bytes=8 * 1024 * 1024,
@@ -205,6 +206,8 @@ def test_shared_probes_trace_large_diagonal_system_without_coefficient_square(
     counts[:3] = [17, 17, 17]
     expected_trace = np.sum(scale / (counts + 0.8 * scale))
     expected_quadratic = scale * np.dot(beta, beta)
+    _assert_strict(exact.traces, [expected_trace])
+    _assert_strict(exact.quadratics, [expected_quadratic])
     _assert_strict(result.traces, [expected_trace])
     _assert_strict(result.quadratics, [expected_quadratic])
     _assert_strict(result.per_probe[:, 0], expected_trace)

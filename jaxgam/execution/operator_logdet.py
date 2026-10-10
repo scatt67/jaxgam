@@ -12,6 +12,8 @@ import hashlib
 import math
 import numbers
 from dataclasses import dataclass
+from decimal import Decimal, Inexact, localcontext
+from typing import Literal
 
 import jax
 import numpy as np
@@ -76,6 +78,10 @@ class OperatorLogDetDiagnostics:
     peak_bound_bytes: int
     n_coef: int
     probe_fingerprint: str
+    strategy: Literal["stochastic_lanczos", "structured_diagonal"] = (
+        "stochastic_lanczos"
+    )
+    rounding_error_bound: float | None = None
 
 
 @dataclass(frozen=True)
@@ -290,5 +296,60 @@ class FrozenOperatorLogDet:
                 peak_bound_bytes=required,
                 n_coef=p,
                 probe_fingerprint=probe_digest.hexdigest(),
+            ),
+        )
+
+    def exact_structured_diagonal(self) -> OperatorLogDetEstimate:
+        """Sum log of the certified single-index diagonal with a rounding budget.
+
+        Decimal logarithms are correctly rounded at 80 decimal digits. The
+        bound covers their rounding and final float conversion for the
+        assembled float64 diagonal; it does not certify source/JAX arithmetic.
+        """
+        if not self.system.has_exact_diagonal:
+            raise ValueError("Structured logdet requires a diagonal operator.")
+        p = self.system.model.n_coef
+        required = self.system.memory_budget_bytes + 24 * p + 8192
+        if required > self.memory_budget_bytes:
+            raise MemoryError("Structured diagonal logdet exceeds its budget.")
+        diagonal = self.system.exact_diagonal()
+        precision = 80
+        with localcontext() as context:
+            context.prec = 160
+            context.clear_flags()
+            total = Decimal(0)
+            rounding = Decimal(0)
+            for value in diagonal:
+                with localcontext() as log_context:
+                    log_context.prec = precision
+                    logarithm = Decimal.from_float(float(value)).ln()
+                total += logarithm
+                rounding += Decimal(5).scaleb(logarithm.adjusted() - precision)
+            if context.flags[Inexact]:
+                raise ArithmeticError("Structured decimal log sum lost precision.")
+        result = float(total)
+        bound = 2 * float(rounding) + math.ulp(result)
+        if not math.isfinite(result) or not math.isfinite(bound):
+            raise FloatingPointError("Structured diagonal logdet is nonfinite.")
+        digest = hashlib.sha256()
+        digest.update(b"structured-diagonal-v1")
+        digest.update(np.asarray([p], dtype="<i8").tobytes())
+        return OperatorLogDetEstimate(
+            value=result,
+            per_probe=np.array([result]),
+            diagnostics=OperatorLogDetDiagnostics(
+                probes=1,
+                lanczos_depth=1,
+                seed=0,
+                completed_actions=0,
+                source_scans=0,
+                exact_krylov_probes=0,
+                monte_carlo_standard_error=0.0,
+                maximum_depth_difference=0.0,
+                peak_bound_bytes=required,
+                n_coef=p,
+                probe_fingerprint=digest.hexdigest(),
+                strategy="structured_diagonal",
+                rounding_error_bound=bound,
             ),
         )

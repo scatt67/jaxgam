@@ -38,6 +38,7 @@ class ExactPenaltyDiagnostics:
     source_scans: int
     maximum_relative_residual: float
     peak_bound_bytes: int
+    strategy: str = "coordinate_solve"
 
 
 @dataclass(frozen=True)
@@ -47,12 +48,24 @@ class ExactPenaltyStatistics:
     traces: np.ndarray
     quadratics: np.ndarray
     diagnostics: ExactPenaltyDiagnostics
+    trace_rounding_bound: np.ndarray | None = None
+    quadratic_rounding_bound: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         for name in ("traces", "quadratics"):
             owned = np.array(getattr(self, name), dtype=np.float64, copy=True)
             owned.setflags(write=False)
             object.__setattr__(self, name, owned)
+        for name in ("trace_rounding_bound", "quadratic_rounding_bound"):
+            values = getattr(self, name)
+            if values is not None:
+                owned = np.array(values, dtype=np.float64, copy=True)
+                if owned.shape != self.traces.shape or not np.all(
+                    np.isfinite(owned) & (owned >= 0)
+                ):
+                    raise ValueError("Structured statistic bounds are invalid.")
+                owned.setflags(write=False)
+                object.__setattr__(self, name, owned)
 
 
 class ExactPenaltyTraceSolveError(RuntimeError):
@@ -138,6 +151,8 @@ class ExactOperatorPenaltyStatistics:
             or not np.all(np.isfinite(coefficients))
         ):
             raise ValueError("Fisher trace coefficients must be finite float64.")
+        if self.system.has_exact_diagonal:
+            return self._diagonal_statistics(coefficients)
         coordinates = sum(block.size for block in structure.blocks)
         if coordinates > self.max_trace_coordinates:
             raise ValueError(
@@ -208,6 +223,47 @@ class ExactOperatorPenaltyStatistics:
                 maximum_relative_residual,
                 required,
             ),
+        )
+
+    def _diagonal_statistics(self, coefficients: np.ndarray) -> ExactPenaltyStatistics:
+        """Contract a single indexed block without coefficient solves or p² work."""
+        structure = self.system.model.penalties
+        p, m = structure.n_coef, structure.n_penalties
+        required = self.system.memory_budget_bytes + 32 * p + 32 * m + 4096
+        if required > self.memory_budget_bytes:
+            raise MemoryError("Structured diagonal Fisher trace exceeds its budget.")
+        diagonal = self.system.exact_diagonal()
+        traces = np.zeros(m, dtype=np.float64)
+        quadratics = np.zeros(m, dtype=np.float64)
+        trace_bounds = np.zeros(m, dtype=np.float64)
+        quadratic_bounds = np.zeros(m, dtype=np.float64)
+        for block in structure.blocks:
+            local_coefficients = coefficients[block.start : block.stop]
+            for sp, penalty in zip(
+                block.sp_indices, block.local_penalties, strict=True
+            ):
+                if not isinstance(penalty, IdentityPenalty):
+                    raise ValueError("Structured indexed penalty must be identity.")
+                trace_terms = penalty.scale / diagonal[block.start : block.stop]
+                quadratic_terms = penalty.scale * local_coefficients**2
+                trace = math.fsum(float(value) for value in trace_terms)
+                quadratic = math.fsum(float(value) for value in quadratic_terms)
+                traces[sp] += trace
+                quadratics[sp] += quadratic
+                trace_bounds[sp] += math.fsum(
+                    math.ulp(value) for value in trace_terms
+                ) + math.ulp(trace)
+                quadratic_bounds[sp] += math.fsum(
+                    4 * math.ulp(value) for value in quadratic_terms
+                ) + math.ulp(quadratic)
+        if not np.all(np.isfinite(traces)) or not np.all(np.isfinite(quadratics)):
+            raise FloatingPointError("Structured Fisher statistics are nonfinite.")
+        return ExactPenaltyStatistics(
+            traces,
+            quadratics,
+            ExactPenaltyDiagnostics(0, 0, 0, 0, 0.0, required, "structured_diagonal"),
+            trace_bounds,
+            quadratic_bounds,
         )
 
 

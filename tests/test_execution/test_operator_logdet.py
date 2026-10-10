@@ -1,5 +1,7 @@
 """Bounded frozen-system log determinant and explicit uncertainty accounting."""
 
+from decimal import Decimal, localcontext
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -58,6 +60,32 @@ def test_diagonal_operator_logdet_matches_direct_strict(batch_rows):
     assert result.diagnostics.completed_actions == result.diagnostics.source_scans
     assert result.diagnostics.peak_bound_bytes < 4 * 1024 * 1024
     assert not result.per_probe.flags.writeable
+
+
+def test_structured_diagonal_logdet_rounding_bound_covers_high_precision_sum():
+    frame = pd.DataFrame(
+        {
+            "y": np.linspace(0.1, 1.0, 31),
+            "g": pd.Categorical(np.resize(["a", "b", "c", "d"], 31)),
+        }
+    )
+    system, _ = _system("y~0+s(g,bs='re')", frame, batch_rows=7)
+    diagonal = system.exact_diagonal()
+    estimate = FrozenOperatorLogDet(
+        system, memory_budget_bytes=4 * 1024 * 1024
+    ).exact_structured_diagonal()
+    with localcontext() as context:
+        context.prec = 160
+        reference = sum(
+            (Decimal.from_float(float(value)).ln() for value in diagonal),
+            Decimal(0),
+        )
+    assert abs(Decimal.from_float(estimate.value) - reference) <= Decimal.from_float(
+        estimate.diagnostics.rounding_error_bound
+    )
+    assert estimate.diagnostics.strategy == "structured_diagonal"
+    assert estimate.diagnostics.completed_actions == 0
+    assert estimate.diagnostics.source_scans == 0
 
 
 def test_each_fixed_probe_matches_dense_matrix_log_and_seed_replay():

@@ -15,6 +15,7 @@ from jaxgam.execution.operator_fit import (
 )
 from jaxgam.execution.operator_logdet import OperatorLogDetControl
 from jaxgam.families.standard import Gamma, Gaussian, Poisson
+from jaxgam.fitting.efs_operator_score import operator_reml_score
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.operator_prepare import (
     OperatorPreparationControl,
@@ -247,3 +248,67 @@ def test_from_fit_binds_rho_family_and_convergence_to_matched_components():
             score_phi=1.3,
             memory_budget_bytes=16 * 1024 * 1024,
         )
+
+
+def test_large_single_index_fit_uses_exact_diagonal_score_and_fisher_trace():
+    row = np.arange(51)
+    frame = pd.DataFrame(
+        {
+            "y": 1.0 + row / 51,
+            "g": pd.Categorical(
+                [f"g{index}" for index in row % 3],
+                categories=[f"g{index}" for index in range(300)],
+            ),
+        }
+    )
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        parse_formula("y~0+s(g,bs='re')"),
+        source,
+        control=OperatorPreparationControl(
+            batch_rows=11, memory_budget_bytes=2 * 1024 * 1024
+        ),
+    )
+    fitted = fit_operator_fixed_sp(
+        model,
+        source,
+        Gaussian(),
+        np.array([0.8], dtype=np.float64),
+        memory_budget_bytes=8 * 1024 * 1024,
+    )
+    assert fitted.converged
+    assert model.n_coef == 300
+    result = MatchedOperatorEFSProvider.from_fit(
+        fitted,
+        source,
+        score_phi=1.3,
+        memory_budget_bytes=16 * 1024 * 1024,
+        logdet_control=OperatorLogDetControl(probes=4, lanczos_depth=4),
+    ).evaluate()
+    scale = model.penalties.blocks[0].local_penalties[0].scale
+    diagonal = np.full(model.n_coef, 0.8 * scale)
+    diagonal[:3] += 17.0
+    expected_logdet = float(np.sum(np.log(diagonal)))
+    np.testing.assert_allclose(
+        result.fisher.traces,
+        [scale * np.sum(1.0 / diagonal)],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert result.score.strategy == "structured_diagonal"
+    assert result.fisher.diagnostics.strategy == "structured_diagonal"
+    assert result.fisher.diagnostics.normal_actions == 0
+    assert result.score.source_scans == 0
+    assert result.score.determinant_rounding_bound < 1e-10
+    expected_score = operator_reml_score(
+        result.score_rows.terms.penalized_deviance,
+        result.score_rows.terms.saturated_loglik,
+        1.3,
+        expected_logdet,
+        result.penalty.value,
+        result.penalty.null_dimension,
+    )
+    np.testing.assert_allclose(
+        result.score.value, expected_score, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert result.peak_bound_bytes < 16 * 1024 * 1024

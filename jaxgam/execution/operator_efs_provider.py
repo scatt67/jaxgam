@@ -252,16 +252,22 @@ class MatchedOperatorEFSProvider:
             curvature_from_rows=self.state.curvature,
             memory_budget_bytes=system_budget,
         )
-        observed = FrozenOperatorLogDet(
+        logdet_provider = FrozenOperatorLogDet(
             observed_system,
             memory_budget_bytes=component_budget,
             control=self.logdet_control,
-        ).estimate()
+        )
+        observed = (
+            logdet_provider.exact_structured_diagonal()
+            if observed_system.has_exact_diagonal
+            else logdet_provider.estimate()
+        )
         observed_scans = observed_system.diagnostics.completed_scans
         observed_peak = max(
             observed_system.construction_peak_bound_bytes,
             observed.diagnostics.peak_bound_bytes,
         )
+        del logdet_provider
         del observed_system
         score = assemble_operator_score(rows.terms, observed, penalty)
         del observed

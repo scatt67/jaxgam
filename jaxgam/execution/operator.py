@@ -252,6 +252,31 @@ class FrozenScanSystem:
     RSS are excluded; the caller must charge policy-owned state separately.
     """
 
+    @property
+    def has_exact_diagonal(self) -> bool:
+        """Whether each source row touches exactly one indexed coefficient."""
+        return (
+            not self.model.modest_columns
+            and len(self.model.random_effects) == 1
+            and self.model.random_effects[0].n_coef == self.model.n_coef
+            and not self.preconditioner.inverse.blocks
+            and self.preconditioner.inverse.coarse is None
+        )
+
+    def exact_diagonal(self) -> np.ndarray:
+        """Copy the certified assembled diagonal, without another source pass."""
+        if not self.has_exact_diagonal:
+            raise ValueError("Frozen operator is not a single indexed diagonal system.")
+        values = np.asarray(
+            self.preconditioner.inverse.diagonal, dtype=np.float64
+        ).copy()
+        if values.shape != (self.model.n_coef,) or not np.all(
+            np.isfinite(values) & (values > 0)
+        ):
+            raise FloatingPointError("Certified structured diagonal is invalid.")
+        values.setflags(write=False)
+        return values
+
     def __init__(
         self,
         model: PreparedOperatorModel,

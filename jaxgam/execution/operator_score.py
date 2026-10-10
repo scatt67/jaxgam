@@ -61,6 +61,10 @@ class OperatorScoreEstimate:
     lanczos_depth: int
     n_coef: int
     probe_fingerprint: str
+    strategy: Literal["stochastic_lanczos", "structured_diagonal"] = (
+        "stochastic_lanczos"
+    )
+    determinant_rounding_bound: float | None = None
 
     def __post_init__(self) -> None:
         values = np.array(self.per_probe, dtype=np.float64, copy=True)
@@ -94,6 +98,11 @@ class OperatorScoreEstimate:
             or self.maximum_depth_difference < 0
         ):
             raise ValueError("Score uncertainty diagnostics must be nonnegative.")
+        if self.determinant_rounding_bound is not None and (
+            not math.isfinite(self.determinant_rounding_bound)
+            or self.determinant_rounding_bound < 0
+        ):
+            raise ValueError("Determinant rounding bound must be finite nonnegative.")
         values.setflags(write=False)
         object.__setattr__(self, "per_probe", values)
 
@@ -149,6 +158,12 @@ def assemble_operator_score(
         lanczos_depth=observed.diagnostics.lanczos_depth,
         n_coef=observed.diagnostics.n_coef,
         probe_fingerprint=observed.diagnostics.probe_fingerprint,
+        strategy=observed.diagnostics.strategy,
+        determinant_rounding_bound=(
+            None
+            if observed.diagnostics.rounding_error_bound is None
+            else observed.diagnostics.rounding_error_bound / 2.0
+        ),
     )
 
 
@@ -182,6 +197,7 @@ def compare_operator_scores(
         or accepted.lanczos_depth != trial.lanczos_depth
         or accepted.n_coef != trial.n_coef
         or accepted.probe_fingerprint != trial.probe_fingerprint
+        or accepted.strategy != trial.strategy
         or accepted.per_probe.shape != trial.per_probe.shape
     ):
         raise ValueError("Paired score comparisons require identical probes.")
