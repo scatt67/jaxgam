@@ -277,6 +277,64 @@ class FrozenScanSystem:
         values.setflags(write=False)
         return values
 
+    @property
+    def has_exact_arrowhead(self) -> bool:
+        """One modest block coupled to one disjoint indexed identity block."""
+        modest = self.model.modest_columns
+        effects = self.model.random_effects
+        return (
+            0 < len(modest) <= 64
+            and len(effects) == 1
+            and effects[0].n_coef + len(modest) == self.model.n_coef
+            and len(self.preconditioner.inverse.blocks) == 1
+            and tuple(np.asarray(self.preconditioner.inverse.blocks[0].columns))
+            == modest
+            and set(modest).isdisjoint(
+                range(effects[0].col_start, effects[0].col_start + effects[0].n_coef)
+            )
+            and sum(
+                block.start == effects[0].col_start
+                and block.size == effects[0].n_coef
+                and len(block.local_penalties) == 1
+                and isinstance(block.local_penalties[0], IdentityPenalty)
+                for block in self.model.penalties.blocks
+            )
+            == 1
+        )
+
+    def exact_arrowhead_coupling(self, *, memory_budget_bytes: int) -> np.ndarray:
+        """Replay one checked source pass to recover the modest-index coupling."""
+        if not self.has_exact_arrowhead:
+            raise ValueError("Frozen operator is not a supported arrowhead system.")
+        p, k = self.model.n_coef, len(self.model.modest_columns)
+        required = self.memory_budget_bytes + 32 * p * k + 16 * p + 8192
+        if required > memory_budget_bytes:
+            raise MemoryError("Arrowhead coupling exceeds its memory budget.")
+        if self.source.fingerprint() != self.model.source_fingerprint:
+            raise RuntimeError("Frozen source changed before arrowhead replay.")
+        effect = self.model.random_effects[0]
+        coupling = np.zeros((effect.n_coef, k), dtype=np.float64)
+        digest = hashlib.sha256()
+        for batch in self._checked.scan(self.batch_rows):
+            rows = self._evaluate_rows(batch)
+            weight = self._weight(batch, rows)
+            digest.update(weight.tobytes())
+            indices, amplitude, start, count = rows.indexed_rows[0]
+            if start != effect.col_start or count != effect.n_coef:
+                raise RuntimeError("Indexed arrowhead geometry changed on replay.")
+            np.add.at(
+                coupling,
+                indices,
+                (weight * amplitude)[:, None] * rows.modest_values,
+            )
+            del batch, rows, weight
+        if digest.hexdigest() != self._curvature_digest:
+            raise RuntimeError("Frozen row curvature changed during arrowhead replay.")
+        if not np.all(np.isfinite(coupling)):
+            raise FloatingPointError("Arrowhead coupling is nonfinite.")
+        coupling.setflags(write=False)
+        return coupling
+
     def __init__(
         self,
         model: PreparedOperatorModel,

@@ -61,9 +61,9 @@ class OperatorScoreEstimate:
     lanczos_depth: int
     n_coef: int
     probe_fingerprint: str
-    strategy: Literal["stochastic_lanczos", "structured_diagonal"] = (
-        "stochastic_lanczos"
-    )
+    strategy: Literal[
+        "stochastic_lanczos", "structured_diagonal", "structured_arrowhead"
+    ] = "stochastic_lanczos"
     determinant_rounding_bound: float | None = None
     diagonal_condition_ratio: float | None = None
     minimum_diagonal: float | None = None

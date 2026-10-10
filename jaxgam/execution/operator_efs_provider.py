@@ -257,11 +257,12 @@ class MatchedOperatorEFSProvider:
             memory_budget_bytes=component_budget,
             control=self.logdet_control,
         )
-        observed = (
-            logdet_provider.exact_structured_diagonal()
-            if observed_system.has_exact_diagonal
-            else logdet_provider.estimate()
-        )
+        if observed_system.has_exact_diagonal:
+            observed = logdet_provider.exact_structured_diagonal()
+        elif observed_system.has_exact_arrowhead:
+            observed = logdet_provider.exact_structured_arrowhead()
+        else:
+            observed = logdet_provider.estimate()
         observed_scans = observed_system.diagnostics.completed_scans
         observed_peak = max(
             observed_system.construction_peak_bound_bytes,

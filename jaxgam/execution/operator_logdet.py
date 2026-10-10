@@ -19,6 +19,7 @@ import jax
 import numpy as np
 
 from jaxgam.execution.operator import FrozenScanSystem
+from jaxgam.execution.operator_arrowhead import ExactArrowheadFactorization
 
 
 @dataclass(frozen=True)
@@ -78,9 +79,9 @@ class OperatorLogDetDiagnostics:
     peak_bound_bytes: int
     n_coef: int
     probe_fingerprint: str
-    strategy: Literal["stochastic_lanczos", "structured_diagonal"] = (
-        "stochastic_lanczos"
-    )
+    strategy: Literal[
+        "stochastic_lanczos", "structured_diagonal", "structured_arrowhead"
+    ] = "stochastic_lanczos"
     rounding_error_bound: float | None = None
     diagonal_condition_ratio: float | None = None
     minimum_diagonal: float | None = None
@@ -355,5 +356,41 @@ class FrozenOperatorLogDet:
                 rounding_error_bound=bound,
                 diagonal_condition_ratio=float(np.max(diagonal) / np.min(diagonal)),
                 minimum_diagonal=float(np.min(diagonal)),
+            ),
+        )
+
+    def exact_structured_arrowhead(self) -> OperatorLogDetEstimate:
+        """Schur logdet for one modest block and one indexed identity block.
+
+        Its conditional floating result has no whole-score error calibration;
+        controllers must leave large-p decisions indeterminate until supplied
+        an independent score bound for the supported family and conditioning.
+        """
+        factor = ExactArrowheadFactorization.from_system(
+            self.system, memory_budget_bytes=self.memory_budget_bytes
+        )
+        result = factor.log_determinant
+        digest = hashlib.sha256()
+        digest.update(b"structured-arrowhead-v1")
+        digest.update(np.asarray([self.system.model.n_coef], dtype="<i8").tobytes())
+        diagonal = factor.indexed_diagonal
+        return OperatorLogDetEstimate(
+            value=result,
+            per_probe=np.array([result]),
+            diagnostics=OperatorLogDetDiagnostics(
+                probes=1,
+                lanczos_depth=1,
+                seed=0,
+                completed_actions=0,
+                source_scans=factor.source_scans,
+                exact_krylov_probes=0,
+                monte_carlo_standard_error=0.0,
+                maximum_depth_difference=0.0,
+                peak_bound_bytes=factor.peak_bound_bytes,
+                n_coef=self.system.model.n_coef,
+                probe_fingerprint=digest.hexdigest(),
+                strategy="structured_arrowhead",
+                minimum_diagonal=float(np.min(diagonal)),
+                diagonal_condition_ratio=float(np.max(diagonal) / np.min(diagonal)),
             ),
         )

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from jaxgam.execution.operator import FrozenScanSystem, PCGControl
+from jaxgam.execution.operator_arrowhead import ExactArrowheadFactorization
 from jaxgam.penalties.structure import (
     DenseLocalPenalty,
     DiagonalPenalty,
@@ -163,6 +164,8 @@ class ExactOperatorPenaltyStatistics:
             raise ValueError("Fisher trace coefficients must be finite float64.")
         if self.system.has_exact_diagonal:
             return self._diagonal_statistics(coefficients)
+        if self.system.has_exact_arrowhead:
+            return self._arrowhead_statistics(coefficients)
         coordinates = sum(block.size for block in structure.blocks)
         if coordinates > self.max_trace_coordinates:
             raise ValueError(
@@ -276,6 +279,75 @@ class ExactOperatorPenaltyStatistics:
             ExactPenaltyDiagnostics(0, 0, 0, 0, 0.0, required, "structured_diagonal"),
             trace_bounds,
             quadratic_bounds,
+        )
+
+    def _arrowhead_statistics(self, coefficients: np.ndarray) -> ExactPenaltyStatistics:
+        """Contract local penalties against a modest Schur and indexed diagonal."""
+        structure = self.system.model.penalties
+        p, m = structure.n_coef, structure.n_penalties
+        required = (
+            self.system.memory_budget_bytes
+            + 64 * p * len(self.system.model.modest_columns)
+            + 72 * p
+            + 128 * len(self.system.model.modest_columns) ** 2
+            + 32 * m
+            + 8192
+        )
+        if required > self.memory_budget_bytes:
+            raise MemoryError("Arrowhead Fisher statistics exceed their budget.")
+        factor = ExactArrowheadFactorization.from_system(
+            self.system, memory_budget_bytes=self.memory_budget_bytes
+        )
+        modest_inverse = factor.modest_inverse()
+        _, indexed_inverse = factor.inverse_diagonal()
+        effect = self.system.model.random_effects[0]
+        positions = {
+            column: position
+            for position, column in enumerate(self.system.model.modest_columns)
+        }
+        traces = np.zeros(m, dtype=np.float64)
+        quadratics = np.zeros(m, dtype=np.float64)
+        for block in structure.blocks:
+            local_coefficients = coefficients[block.start : block.stop]
+            indexed = block.start == effect.col_start
+            if not indexed:
+                local_positions = [
+                    positions[column] for column in range(block.start, block.stop)
+                ]
+                inverse = modest_inverse[np.ix_(local_positions, local_positions)]
+            for sp, penalty in zip(
+                block.sp_indices, block.local_penalties, strict=True
+            ):
+                if indexed:
+                    if not isinstance(penalty, IdentityPenalty):
+                        raise ValueError("Arrowhead indexed penalty must be identity.")
+                    local_start = block.start - effect.col_start
+                    local_stop = block.stop - effect.col_start
+                    traces[sp] += math.fsum(
+                        float(value)
+                        for value in penalty.scale
+                        * indexed_inverse[local_start:local_stop]
+                    )
+                    quadratics[sp] += math.fsum(
+                        float(value)
+                        for value in _identity_quadratic_terms(
+                            penalty.scale, local_coefficients
+                        )
+                    )
+                else:
+                    local_penalty = penalty.dense()
+                    traces[sp] += float(np.trace(inverse @ local_penalty))
+                    quadratics[sp] += float(
+                        local_coefficients @ local_penalty @ local_coefficients
+                    )
+        if not np.all(np.isfinite(traces)) or not np.all(np.isfinite(quadratics)):
+            raise FloatingPointError("Arrowhead Fisher statistics are nonfinite.")
+        return ExactPenaltyStatistics(
+            traces,
+            quadratics,
+            ExactPenaltyDiagnostics(
+                0, 0, 0, factor.source_scans, 0.0, required, "structured_arrowhead"
+            ),
         )
 
 

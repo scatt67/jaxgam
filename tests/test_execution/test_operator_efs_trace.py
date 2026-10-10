@@ -120,10 +120,16 @@ def test_exact_operator_fisher_trace_and_quadratic_match_pinned_r(
                 actual, expected
             ),
         )
-        assert result.diagnostics.completed_coordinates == sum(
-            block.size for block in model.penalties.blocks
-        )
-        assert result.diagnostics.normal_actions == result.diagnostics.source_scans
+        if system.has_exact_arrowhead:
+            assert result.diagnostics.strategy == "structured_arrowhead"
+            assert result.diagnostics.completed_coordinates == 0
+            assert result.diagnostics.source_scans == 1
+            assert result.diagnostics.normal_actions == 0
+        else:
+            assert result.diagnostics.completed_coordinates == sum(
+                block.size for block in model.penalties.blocks
+            )
+            assert result.diagnostics.normal_actions == result.diagnostics.source_scans
         assert not result.traces.flags.writeable
     collector.raise_if_any("Exact operator Fisher penalty statistics")
 
@@ -131,11 +137,15 @@ def test_exact_operator_fisher_trace_and_quadratic_match_pinned_r(
 def test_exact_trace_rejects_uncapped_work_and_budget_before_solve(monkeypatch):
     row = np.arange(29)
     frame = pd.DataFrame(
-        {"y": 1 + row / 29, "g": pd.Categorical(np.resize(["a", "b"], 29))}
+        {
+            "y": 1 + row / 29,
+            "g": pd.Categorical(np.resize(["a", "b"], 29)),
+            "h": pd.Categorical(np.resize(["a", "b", "c"], 29)),
+        }
     )
-    source, model = _model(frame, "y~s(g,bs='re')")
+    source, model = _model(frame, "y~s(g,bs='re')+s(h,bs='re')")
     system = FrozenScanSystem(
-        model, source, np.array([0.0]), memory_budget_bytes=1024 * 1024
+        model, source, np.array([0.0, 0.0]), memory_budget_bytes=1024 * 1024
     )
     monkeypatch.setattr(
         system, "solve", lambda *_a, **_k: pytest.fail("Fisher solve started")
@@ -158,11 +168,12 @@ def test_exact_trace_preserves_failed_solve_status_and_no_dense_penalty(monkeypa
             "y": 0.1 * row,
             "x": np.linspace(0, 1, len(row)),
             "g": pd.Categorical(np.resize(["a", "b", "c"], len(row))),
+            "h": pd.Categorical(np.resize(["a", "b"], len(row))),
         }
     )
-    source, model = _model(frame, "y~x+s(g,bs='re')")
+    source, model = _model(frame, "y~x+s(g,bs='re')+s(h,bs='re')")
     system = FrozenScanSystem(
-        model, source, np.array([0.0]), memory_budget_bytes=1024 * 1024
+        model, source, np.array([0.0, 0.0]), memory_budget_bytes=1024 * 1024
     )
     monkeypatch.setattr(
         PenaltyStructure,
