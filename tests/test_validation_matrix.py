@@ -21,9 +21,10 @@ Tolerance rationale (from AGENTS.md §Common Pitfalls, MEMORY.md):
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -31,14 +32,16 @@ import pytest
 from jax import clear_caches
 
 from jaxgam.api import GAM
+from jaxgam.control import FitControl
+from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda, efs_initial_log_scale
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.fitting.newton import NewtonOptimizer
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import SEED, _AssertCollector, r_available
-from tests.r_bridge import RBridge
+from tests.helpers import SEED, _AssertCollector, check_that, r_available
+from tests.r_bridge import RBridge, RBridgeError
 from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 
 # ---------------------------------------------------------------------------
@@ -780,6 +783,848 @@ class TestValidationMatrix:
 # ---------------------------------------------------------------------------
 # B. TestHardGateInvariants — structural invariants (no R required)
 # ---------------------------------------------------------------------------
+
+
+_PUBLIC_REGULAR_EFS_TRANSFORM = np.array(
+    [
+        [
+            -0.10084646645334684,
+            -1.5872439753048382,
+            -1.5149403149145282,
+            0.7234966544244805,
+            -0.3140116461486681,
+        ],
+        [
+            0.10236876609052073,
+            -3.9105443262306543,
+            -1.190320844008348,
+            -0.4198142664814773,
+            0.4164342835175478,
+        ],
+        [
+            0.3414144879573992,
+            -3.9105443262306565,
+            0.5513358735670422,
+            -0.419814266481478,
+            -0.474994460636809,
+        ],
+        [
+            0.6162906991472893,
+            -1.5872439753048448,
+            0.772773694637967,
+            0.7234966544244804,
+            0.2459953222195101,
+        ],
+        [
+            0.694962263357019,
+            3.6744007175401556,
+            -1.0006471340648064,
+            -0.26852628762908964,
+            -0.09170493222124834,
+        ],
+    ]
+)
+_PUBLIC_REGULAR_EFS_PENALTY = np.array(
+    [
+        [
+            9.937835741841669e-18,
+            1.6872378158651704e-16,
+            -2.4752486035416775e-17,
+            -2.192047912054851e-17,
+            7.056647794383049e-18,
+        ],
+        [
+            1.6872378158651704e-16,
+            1.0000000000000013,
+            9.745377350634318e-16,
+            -6.737150635018578e-17,
+            5.067830620666182e-16,
+        ],
+        [
+            -2.4752486035416775e-17,
+            9.745377350634318e-16,
+            1.000000000000001,
+            -5.302746651749044e-16,
+            -7.481211836555918e-17,
+        ],
+        [
+            -2.192047912054851e-17,
+            -6.737150635018578e-17,
+            -5.302746651749044e-16,
+            0.9999999999999993,
+            -2.086648644527683e-16,
+        ],
+        [
+            7.056647794383049e-18,
+            5.067830620666182e-16,
+            -7.481211836555918e-17,
+            -2.086648644527683e-16,
+            0.9999999999999994,
+        ],
+    ]
+)
+_PUBLIC_REGULAR_EFS_CENTERING = np.array(
+    [
+        [
+            -0.5151698058830185,
+            -0.4435469801400466,
+            -0.4435469801400465,
+            -0.5151698058830186,
+            -0.19459225964847143,
+        ],
+        [
+            0.7778322044614241,
+            -0.19128033838590863,
+            -0.19128033838590858,
+            -0.22216779553857588,
+            -0.08391822048046804,
+        ],
+        [
+            -0.19128033838590863,
+            0.8353129094865832,
+            -0.1646870905134167,
+            -0.19128033838590866,
+            -0.07225127103293447,
+        ],
+        [
+            -0.19128033838590858,
+            -0.16468709051341673,
+            0.8353129094865833,
+            -0.1912803383859086,
+            -0.07225127103293445,
+        ],
+        [
+            -0.2221677955385759,
+            -0.1912803383859087,
+            -0.19128033838590863,
+            0.7778322044614241,
+            -0.08391822048046806,
+        ],
+        [
+            -0.08391822048046804,
+            -0.07225127103293447,
+            -0.07225127103293445,
+            -0.08391822048046804,
+            0.9683020317524568,
+        ],
+    ]
+)
+
+_PUBLIC_REGULAR_EFS_REVIEWED_STARTS = {
+    ("poisson", "identity"): ((40.684535996984636,), 1.0),
+    ("binomial", "log"): ((26.259202947309102,), 1.0),
+}
+
+
+def _assert_public_regular_efs_numeric_metadata(prepared) -> None:
+    """Bind reviewed coordinate values without architecture-specific bytes."""
+    structure = prepared.fitting.penalty_structure
+    assert len(structure.blocks) == 1
+    block = structure.blocks[0]
+    assert len(block.local_penalties) == 1
+    np.testing.assert_allclose(
+        block.transform.dense(),
+        _PUBLIC_REGULAR_EFS_TRANSFORM,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        block.dense_penalties()[0],
+        _PUBLIC_REGULAR_EFS_PENALTY,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        prepared.predict_spec.coef_map.terms[1].Z_centering,
+        _PUBLIC_REGULAR_EFS_CENTERING,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def _public_regular_efs_start_descriptor(
+    family_name: str, link: str, startup
+) -> dict[str, object]:
+    """Bind reviewed derived starts numerically, then serialize their profile."""
+    smoothing = np.exp(np.asarray(startup.log_lambda, dtype=np.float64))
+    scale = float(startup.score_phi)
+    reviewed = _PUBLIC_REGULAR_EFS_REVIEWED_STARTS.get((family_name, link))
+    if reviewed is None:
+        return {
+            "scale_hex": scale.hex(),
+            "smoothing_hex": tuple(float(value).hex() for value in smoothing),
+        }
+    expected_smoothing, expected_scale = reviewed
+    np.testing.assert_allclose(
+        smoothing,
+        expected_smoothing,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        scale,
+        expected_scale,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    # Serialize the immutable reviewed descriptor after proving the actual
+    # architecture-local reduction lies on that same STRICT numerical profile.
+    return {
+        "scale_hex": float(expected_scale).hex(),
+        "smoothing_hex": tuple(float(value).hex() for value in expected_smoothing),
+    }
+
+
+def _public_regular_efs_profile_digest(
+    prepared, batch, offset, family_name, link, formula, control, startup
+) -> str:
+    """Bind a reviewed tolerance to raw rows, coordinates, starts and controls."""
+    _assert_public_regular_efs_numeric_metadata(prepared)
+    digest = hashlib.sha256()
+    for name, value, dtype in (
+        ("x", batch.columns["x"], "<f8"),
+        ("y", batch.y, "<f8"),
+        ("weight", batch.weight, "<f8"),
+        ("offset", offset, "<f8"),
+        ("valid", batch.valid, "u1"),
+        ("row_positions", batch.row_positions, "<i8"),
+    ):
+        array = np.asarray(value, dtype=dtype)
+        digest.update(name.encode())
+        digest.update(repr(array.shape).encode())
+        digest.update(array.tobytes(order="C"))
+    structure = prepared.fitting.penalty_structure
+    blocks = [
+        {
+            "local_penalties": tuple(
+                (type(penalty).__name__, (penalty.size, penalty.size))
+                for penalty in block.local_penalties
+            ),
+            "start": block.start,
+            "stop": block.stop,
+            "sp_indices": block.sp_indices,
+            "ranks": block.ranks,
+            "transform": (
+                type(block.transform).__name__,
+                (block.transform.size, block.transform.size),
+            ),
+        }
+        for block in structure.blocks
+    ]
+    coordinate_terms = tuple(
+        {
+            "col_start": term.col_start,
+            "del_index": term.del_index,
+            "label": term.label,
+            "n_coefs": term.n_coefs,
+            "n_coefs_raw": term.n_coefs_raw,
+            "smooth": type(term.smooth).__name__ if term.smooth is not None else None,
+            "term_type": term.term_type,
+            "z_shape": None if term.Z_centering is None else term.Z_centering.shape,
+        }
+        for term in prepared.predict_spec.coef_map.terms
+    )
+    start_descriptor = _public_regular_efs_start_descriptor(family_name, link, startup)
+    payload = {
+        "basis_fingerprint": prepared.basis_fingerprint,
+        "blocks": blocks,
+        "coordinate_terms": coordinate_terms,
+        "control": asdict(control),
+        "family": family_name,
+        "formula": formula,
+        "initial_scale_hex": start_descriptor["scale_hex"],
+        "initial_smoothing_hex": start_descriptor["smoothing_hex"],
+        "link": link,
+        "n_coef": prepared.n_coef,
+        "n_obs": prepared.n_obs,
+        "penalty_count": structure.n_penalties,
+        "term_names": prepared.predict_spec.term_names,
+        "source_fingerprint": prepared.source_fingerprint,
+    }
+    digest.update(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+    return digest.hexdigest()
+
+
+def test_public_regular_efs_profile_digest_binds_basis_controls_and_starts() -> None:
+    """A reviewed numerical profile cannot migrate to a nearby model."""
+    from jaxgam.control import EFSControl
+    from jaxgam.execution.efs_stream_provider import RegularStreamEFSProvider
+    from jaxgam.execution.efs_stream_start import prepare_stream_efs_start
+    from jaxgam.formula.design_provider import StreamDesign
+    from jaxgam.formula.prepare import prepare_model
+    from jaxgam.penalties.structure import DenseLocalPenalty, DenseTransform
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    family = Poisson("identity")
+    original = _regular(family)
+    batch = next(original.source.source.scan(original.prepared.n_obs))
+    data = pd.DataFrame({"x": np.asarray(batch.columns["x"]), "y": batch.y})
+    source = DataFrameRowSource(
+        data,
+        response="y",
+        weights=np.asarray(batch.weight),
+        offset=np.asarray(batch.offset),
+    )
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=11,
+        uncertainty="fisher",
+    )
+    prepared = prepare_model(parse_formula(formula), source, family=family)
+    startup = prepare_stream_efs_start(
+        RegularStreamEFSProvider.create(
+            StreamDesign(prepared, source),
+            family,
+            maximum_bytes=10_000_000,
+            batch_rows=11,
+            control=control.efs,
+        )
+    )
+
+    def digest(model, model_formula, model_control, model_startup):
+        return _public_regular_efs_profile_digest(
+            model,
+            batch,
+            np.asarray(batch.offset),
+            "poisson",
+            "identity",
+            model_formula,
+            model_control,
+            model_startup,
+        )
+
+    expected = digest(prepared, formula, control, startup)
+    assert (
+        expected == "60595632ad5693a8826346291064cb36f1462e28b7556dd38ba0fe552a35f747"
+    )
+    portable_start = replace(
+        startup,
+        log_lambda=np.nextafter(startup.log_lambda, np.inf),
+    )
+    assert not np.array_equal(
+        np.exp(portable_start.log_lambda),
+        np.exp(startup.log_lambda),
+    )
+    assert digest(prepared, formula, control, portable_start) == expected
+    changed_control = replace(control, efs=EFSControl(score_tolerance=0.01))
+    assert digest(prepared, formula, changed_control, startup) != expected
+    with pytest.raises(AssertionError):
+        digest(
+            prepared,
+            formula,
+            control,
+            replace(startup, log_lambda=startup.log_lambda + 0.01),
+        )
+    with pytest.raises(AssertionError):
+        digest(
+            prepared,
+            formula,
+            control,
+            replace(startup, score_phi=startup.score_phi + 0.01),
+        )
+    expected_smoothing = _PUBLIC_REGULAR_EFS_REVIEWED_STARTS[("poisson", "identity")][
+        0
+    ][0]
+    outside_strict = expected_smoothing + 2.0 * (
+        STRICT.atol + STRICT.rtol * abs(expected_smoothing)
+    )
+    with pytest.raises(AssertionError):
+        digest(
+            prepared,
+            formula,
+            control,
+            replace(startup, log_lambda=np.log(np.asarray([outside_strict]))),
+        )
+    structure = prepared.fitting.penalty_structure
+    block = structure.blocks[0]
+    changed_penalty = np.array(block.dense_penalties()[0], copy=True)
+    changed_penalty[0, 0] += 1e-3
+    penalty_block = replace(
+        block,
+        local_penalties=(DenseLocalPenalty(changed_penalty),),
+    )
+    penalty_prepared = replace(
+        prepared,
+        fitting=replace(
+            prepared.fitting,
+            penalty_structure=replace(structure, blocks=(penalty_block,)),
+        ),
+    )
+    with pytest.raises(AssertionError):
+        digest(penalty_prepared, formula, control, startup)
+    changed_transform = np.array(block.transform.dense(), copy=True)
+    changed_transform[0, 0] += 1e-3
+    transform_block = replace(block, transform=DenseTransform(changed_transform))
+    transform_prepared = replace(
+        prepared,
+        fitting=replace(
+            prepared.fitting,
+            penalty_structure=replace(structure, blocks=(transform_block,)),
+        ),
+    )
+    with pytest.raises(AssertionError):
+        digest(transform_prepared, formula, control, startup)
+    changed_formula = 'y ~ s(x, bs="cs", k=6)'
+    changed_prepared = prepare_model(
+        parse_formula(changed_formula), source, family=family
+    )
+    with pytest.raises(AssertionError):
+        digest(changed_prepared, changed_formula, control, startup)
+
+
+@pytest.mark.parametrize("family_name", ["gaussian", "gamma", "poisson", "binomial"])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "identity",
+        "log",
+        "logit",
+        "probit",
+        "cloglog",
+        "inverse",
+        "inverse_squared",
+        "sqrt",
+    ],
+)
+def test_public_streamed_efs_regular_family_link_inventory(
+    family_name: str, link: str
+) -> None:
+    """Every public regular cell has selected R parity or its pinned boundary."""
+    from jaxgam.execution.efs_stream_provider import RegularStreamEFSProvider
+    from jaxgam.execution.efs_stream_start import prepare_stream_efs_start
+    from jaxgam.families.standard import Binomial, Gamma
+    from jaxgam.formula.design_provider import StreamDesign
+    from jaxgam.formula.prepare import prepare_model
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    family = {
+        "gaussian": Gaussian,
+        "gamma": Gamma,
+        "poisson": Poisson,
+        "binomial": Binomial,
+    }[family_name](link=link)
+    stream = _regular(family)
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    data = pd.DataFrame({"x": np.asarray(batch.columns["x"]), "y": np.asarray(batch.y)})
+    offset = np.asarray(batch.offset)
+    if family_name == "binomial" and link == "log":
+        offset = np.full(len(data), -0.5)
+    elif family_name == "binomial" and link in {"inverse", "inverse_squared"}:
+        offset = np.full(len(data), 2.0)
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=11,
+        uncertainty="fisher",
+    )
+    model = GAM(
+        formula,
+        family=family,
+        optimizer="efs",
+        control=control,
+    )
+    source = DataFrameRowSource(
+        data,
+        response="y",
+        weights=np.asarray(batch.weight),
+        offset=offset,
+    )
+    if family_name == "poisson" and link in {"logit", "probit", "cloglog"}:
+        with pytest.raises(ValueError, match="finite null link mean"):
+            model.fit(source, result="prediction")
+        if r_available():
+            oracle_data = data.assign(w=np.asarray(batch.weight), off=offset)
+            expected_r_error = (
+                r"Value 1\.1 out of range"
+                if link == "logit"
+                else "missing value where TRUE/FALSE needed"
+            )
+            with pytest.raises(RBridgeError, match=expected_r_error):
+                RBridge(mode="rpy2").fit_efs(
+                    formula,
+                    oracle_data,
+                    f"{family_name}_{link}",
+                    weights="w",
+                    offset="off",
+                    initial_smoothing=np.array([0.4]),
+                    scale=1.0,
+                )
+        return
+
+    result = model.fit(source, result="prediction")
+    assert result.converged
+    assert result.lambda_strategy == "efs_reml"
+    assert result.execution_route == "stream_efs_qr"
+    assert result.optimizer_diagnostics is not None
+    assert result.optimizer_diagnostics.provider_source_scans > 0
+    assert np.all(np.isfinite(result.coefficients))
+    assert np.isfinite(result.deviance)
+    assert np.isfinite(result.score)
+    assert result.deviance >= -STRICT.atol
+    if not r_available():
+        return
+
+    prepared = prepare_model(parse_formula(formula), source, family=family)
+    startup = prepare_stream_efs_start(
+        RegularStreamEFSProvider.create(
+            StreamDesign(prepared, source),
+            family,
+            maximum_bytes=10_000_000,
+            batch_rows=11,
+            control=control.efs,
+        )
+    )
+    oracle_data = data.assign(w=np.asarray(batch.weight), off=offset)
+    oracle_arguments: dict[str, object] = {
+        "weights": "w",
+        "offset": "off",
+        "initial_smoothing": np.exp(startup.log_lambda),
+    }
+    if family.scale_known:
+        oracle_arguments["scale"] = 1.0
+    else:
+        oracle_arguments["initial_scale"] = startup.score_phi
+    bridge = RBridge(mode="rpy2")
+    if family_name == "binomial" and link in {"inverse", "inverse_squared"}:
+        # The selected efsudr fit is valid. Pinned estimate.gam subsequently
+        # refits an offset-only GLM solely to replace null.deviance, and that
+        # auxiliary bounded-link GLM rejects this input. Preserve both facts.
+        with pytest.raises(RBridgeError, match="no valid set of coefficients"):
+            bridge.fit_efs(
+                formula,
+                oracle_data,
+                f"{family_name}_{link}",
+                **oracle_arguments,
+            )
+        reference = bridge.fit_efs_selected_before_offset_null_deviance(
+            formula,
+            oracle_data,
+            f"{family_name}_{link}",
+            **oracle_arguments,
+        )
+    else:
+        reference = bridge.fit_efs(
+            formula,
+            oracle_data,
+            f"{family_name}_{link}",
+            **oracle_arguments,
+        )
+    prediction, prediction_se = result.predict(data, se_fit=True, offset=offset)
+    prediction_matrix = result.predict_matrix(data)
+    reference_link_se = np.sqrt(
+        np.maximum(
+            np.sum((prediction_matrix @ reference["Vp"]) * prediction_matrix, axis=1),
+            0.0,
+        )
+    )
+    reference_eta = np.asarray(family.link.link(reference["fitted_values"]))
+    reference_response_se = reference_link_se * np.abs(
+        np.asarray(family.link.mu_eta(reference_eta))
+    )
+    profile_digest = _public_regular_efs_profile_digest(
+        prepared,
+        batch,
+        offset,
+        family_name,
+        link,
+        formula,
+        control,
+        startup,
+    )
+    reviewed_profile = {
+        ("poisson", "identity"): (
+            "60595632ad5693a8826346291064cb36f1462e28b7556dd38ba0fe552a35f747",
+            "fc7066fc896ad7131ad8a105979163a6da1db6c30361397d8a3f72ef361b4a9f",
+            4,
+            {
+                "coefficients",
+                "fitted values",
+                "deviance",
+                "smoothing",
+                "total EDF",
+                "prediction SE",
+            },
+        ),
+        ("binomial", "log"): (
+            "dccbbe802c1344875fb8111c1b3c1939df649e1fd8f2be9277d724da0455e9e7",
+            "b85057b3ab7ac3340e364cfa1407f3887f5d00b5f53ee3e2af00c976f191c552",
+            15,
+            {
+                "coefficients",
+                "fitted values",
+                "deviance",
+                "score",
+                "smoothing",
+                "total EDF",
+                "prediction SE",
+            },
+        ),
+    }.get((family_name, link))
+    moderate_fields: set[str] = set()
+    if reviewed_profile is not None:
+        (
+            expected_profile_digest,
+            expected_data_hash,
+            expected_outer,
+            moderate_fields,
+        ) = reviewed_profile
+        # These are the two exact, reviewed B=11 profiles in the durable
+        # EFS5.2 numerical record. A fixture, formula, control or iteration
+        # change must not silently inherit their field-specific tolerance.
+        assert profile_digest == expected_profile_digest
+        assert reference["provenance"]["data_hash"] == expected_data_hash
+        assert result.n_iter == reference["outer_iterations"] == expected_outer
+    collector = _AssertCollector()
+    for field, actual, expected in (
+        ("coefficients", result.coefficients, reference["coefficients"]),
+        ("fitted values", prediction, reference["fitted_values"]),
+        ("deviance", result.deviance, reference["deviance"]),
+        ("score", result.score, reference["reml_score"]),
+        ("smoothing", result.smoothing_params, reference["smoothing_params"]),
+        ("scale", result.scale, reference["scale"]),
+        ("total EDF", result.edf_total, reference["edf_total"]),
+        ("prediction SE", prediction_se, reference_response_se),
+    ):
+        tolerance = MODERATE if field in moderate_fields else STRICT
+        collector.check(
+            field,
+            lambda a=actual, e=expected, t=tolerance: np.testing.assert_allclose(
+                a, e, rtol=t.rtol, atol=t.atol
+            ),
+        )
+    collector.check(
+        "outer iterations",
+        lambda: np.testing.assert_equal(result.n_iter, reference["outer_iterations"]),
+    )
+    collector.check(
+        "source convergence",
+        lambda: np.testing.assert_equal(reference["convergence"], "full convergence"),
+    )
+    collector.raise_if_any(f"public streamed {family_name}/{link} EFS")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    "case",
+    ["gaussian", "gamma", "poisson", "binomial"]
+    + [
+        f"nb-{link}-{mode}"
+        for link in ("log", "identity", "sqrt")
+        for mode in ("fixed", "estimated")
+    ],
+)
+def test_public_streamed_default_start_efs_matches_pinned_selected_fit(r_bridge, case):
+    """Public row-source results preserve the reviewed internal/R selected fit."""
+    from jaxgam.execution.efs_stream import fit_streamed_efs
+    from jaxgam.families.standard import Binomial, Gamma
+    from jaxgam.results import _prepared_transform_coefficients_cpu
+    from tests.test_execution.test_efs_stream_start import _regular
+    from tests.test_execution.test_nb_stream import _fixture
+
+    versions_match, reason = r_bridge.check_versions()
+    assert versions_match, reason
+    if case.startswith("nb-"):
+        _, link, mode = case.split("-")
+        stream, family = _fixture(link, estimated=mode == "estimated", smooth=True)
+        r_name = "nb"
+        theta = -2.7 if mode == "estimated" else 2.7
+    else:
+        family = {
+            "gaussian": Gaussian,
+            "gamma": Gamma,
+            "poisson": Poisson,
+            "binomial": Binomial,
+        }[case]()
+        stream = _regular(family)
+        r_name, link, theta = (
+            case,
+            {
+                "gaussian": "identity",
+                "gamma": "inverse",
+                "poisson": "log",
+                "binomial": "logit",
+            }[case],
+            1.0,
+        )
+    result = fit_streamed_efs(stream, family, maximum_bytes=10_000_000, batch_rows=11)
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    reference = RBridge(mode="rpy2").efs_streamed_default_start_reference(
+        batch.columns["x"],
+        batch.y,
+        batch.weight,
+        batch.offset,
+        family=r_name,
+        link=link,
+        theta=theta,
+        smoothing=np.exp(result.startup.log_lambda),
+        scale=result.startup.score_phi,
+    )
+    fit = result.fit
+    beta = _prepared_transform_coefficients_cpu(
+        stream.prepared, np.asarray(fit.pirls_result.coefficients)
+    )
+    mu = result.family.link.linkinv(
+        stream.prepared.evaluate_batch(batch) @ beta + batch.offset
+    )
+    public_data = pd.DataFrame(
+        {"x": np.asarray(batch.columns["x"]), "y": np.asarray(batch.y)}
+    )
+    public_family = copy.deepcopy(family)
+    public = GAM(
+        'y ~ s(x, bs="cr", k=6)',
+        family=public_family,
+        optimizer="efs",
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=11,
+        ),
+    ).fit(
+        DataFrameRowSource(
+            public_data,
+            response="y",
+            weights=np.asarray(batch.weight),
+            offset=np.asarray(batch.offset),
+        ),
+        result="prediction",
+    )
+    collector = _AssertCollector()
+    reference_fields = {
+        "beta": "coefficients",
+        "mu": "fitted_values",
+        "D": "deviance",
+        "score": "reml_score",
+        "sp": "smoothing_params",
+        "edf": "edf_total",
+        "scale": "scale",
+    }
+    for field, actual in (
+        ("beta", beta),
+        ("mu", mu),
+        ("D", fit.pirls_result.deviance),
+        ("score", fit.score),
+        ("sp", fit.smoothing_params),
+        ("edf", fit.edf),
+        ("scale", fit.scale),
+    ):
+        expected = np.asarray(reference[reference_fields[field]], dtype=float)
+        collector.check(
+            field,
+            lambda a=actual, e=expected: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.check(
+        "outer iterations",
+        lambda: np.testing.assert_equal(fit.n_iter, reference["outer_iterations"]),
+    )
+    collector.check(
+        "source convergence",
+        lambda: np.testing.assert_equal(reference["convergence"], "full convergence"),
+    )
+    collector.check(
+        "stream convergence", lambda: np.testing.assert_equal(fit.converged, True)
+    )
+    for field, actual, expected in (
+        ("public beta", public.coefficients, beta),
+        (
+            "public mu",
+            public.predict(public_data, offset=np.asarray(batch.offset)),
+            mu,
+        ),
+        ("public deviance", public.deviance, fit.pirls_result.deviance),
+        ("public score", public.score, fit.score),
+        ("public sp", public.smoothing_params, fit.smoothing_params),
+        ("public scale", public.scale, fit.scale),
+    ):
+        collector.check(
+            field,
+            lambda a=actual, e=expected: np.testing.assert_allclose(
+                a, e, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.check(
+        "public outer iterations",
+        lambda: np.testing.assert_equal(public.n_iter, fit.n_iter),
+    )
+    collector.check(
+        "public strategy",
+        lambda: np.testing.assert_equal(public.lambda_strategy, "efs_reml"),
+    )
+    collector.check(
+        "public diagnostics",
+        lambda: check_that(
+            public.optimizer_diagnostics is not None
+            and public.optimizer_diagnostics.provider_source_scans > 0
+            and public.optimizer_diagnostics.startup_source_scans == 2,
+            "public streamed EFS omitted source-cost diagnostics",
+        ),
+    )
+    if case.startswith("nb-"):
+        collector.check(
+            "theta",
+            lambda: np.testing.assert_allclose(
+                fit.theta,
+                np.asarray(reference["theta"]),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        collector.check(
+            "public theta",
+            lambda: np.testing.assert_allclose(
+                public.theta,
+                fit.theta,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        collector.check(
+            "public selected family",
+            lambda: np.testing.assert_allclose(
+                public.family.get_theta(transformed=True)[0],
+                fit.theta,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+    collector.raise_if_any(f"default-start streamed EFS {case}")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_streamed_regular_recovery_anchor_matches_pinned_efs_default(r_bridge):
+    """mgcv.r omits G$null.coef when dispatching every efsudr refit."""
+    versions_match, reason = r_bridge.check_versions()
+    assert versions_match, reason
+    from jaxgam.execution.efs_stream import fit_streamed_efs
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    family = Gaussian()
+    stream = _regular(family)
+    execution = fit_streamed_efs(
+        stream, family, maximum_bytes=10_000_000, batch_rows=11
+    )
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    reference = RBridge(mode="rpy2").efs_streamed_default_start_reference(
+        batch.columns["x"],
+        batch.y,
+        batch.weight,
+        batch.offset,
+        family="gaussian",
+        link="identity",
+        theta=1.0,
+        smoothing=np.exp(execution.startup.log_lambda),
+        scale=execution.startup.score_phi,
+        trace_null_coef=True,
+    )
+    trace = reference["null_coef_trace_summary"]
+    assert all(reference["null_coef_omitted"])
+    assert trace[0] > 1
+    assert trace[1] == stream.prepared.n_coef
+    assert trace[2] == 0
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")

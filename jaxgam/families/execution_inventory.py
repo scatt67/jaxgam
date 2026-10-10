@@ -377,16 +377,22 @@ def _entry(
             ("constructor accepts every registered Link via ExponentialFamily",),
         ),
     )
-    stream = (
-        "canonical_fixed_sp_current"
-        if key
-        in {
-            ("gaussian", "identity", "none"),
-            ("binomial", "logit", "none"),
-            ("poisson", "log", "none"),
-        }
-        else "not_yet_routed"
-    )
+    if _r_constructor_status(family, link) == "rejected":
+        stream = "r_constructor_rejected"
+    elif family == "poisson" and link in {"logit", "probit", "cloglog"}:
+        stream = "estimated_efs_prediction_default_start_boundary"
+    elif key in {
+        ("gaussian", "identity", "none"),
+        ("binomial", "logit", "none"),
+        ("poisson", "log", "none"),
+    }:
+        stream = "canonical_fixed_sp_and_estimated_efs_prediction_qr"
+    elif family == "nb" or _efs_cell_status(family, link, parameter_mode).startswith(
+        "internal_pinned_parity"
+    ):
+        stream = "estimated_efs_prediction_qr"
+    else:  # pragma: no cover - inventory construction is exhaustive today
+        stream = "not_yet_routed"
     return FamilyExecutionInventoryEntry(
         family=family,
         link=link,
@@ -413,6 +419,36 @@ def _entry(
         evidence=(
             *evidence,
             *_EFS_EVIDENCE.get(key, ()),
+            *(
+                (
+                    "tests/test_execution/test_efs_public_api.py::"
+                    "test_streamed_efs_static_regular_inventory_is_admitted",
+                    "tests/test_validation_matrix.py::"
+                    "test_public_streamed_efs_regular_family_link_inventory",
+                    "tests/test_validation_matrix.py::"
+                    "test_public_streamed_default_start_efs_matches_pinned_selected_fit",
+                )
+                if family != "nb"
+                else ()
+            ),
+            *(
+                (
+                    "tests/test_execution/test_efs_public_api.py::"
+                    "test_streamed_efs_static_nb_inventory_is_admitted",
+                    "tests/test_validation_matrix.py::"
+                    "test_public_streamed_default_start_efs_matches_pinned_selected_fit",
+                )
+                if family == "nb" and _r_constructor_status(family, link) == "accepted"
+                else ()
+            ),
+            *(
+                (
+                    "tests/test_execution/test_efs_public_api.py::"
+                    "test_streamed_efs_static_nb_inventory_rejects_unadvertised_links",
+                )
+                if family == "nb" and _r_constructor_status(family, link) == "rejected"
+                else ()
+            ),
             *(
                 (_EFS_FIXTURE_PROFILE,)
                 if _efs_cell_status(family, link, parameter_mode).startswith(

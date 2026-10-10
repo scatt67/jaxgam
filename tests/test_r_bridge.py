@@ -10,7 +10,7 @@ import pytest
 
 from tests.efs_oracle import make_efs_fixture
 from tests.helpers import _AssertCollector, make_smooth_spec
-from tests.r_bridge import RBridge, gp_config_to_mgcv_m
+from tests.r_bridge import RBridge, RBridgeError, gp_config_to_mgcv_m
 from tests.tolerances import MODERATE, STRICT
 
 
@@ -170,6 +170,49 @@ class TestRBridgeEFS:
             bridge.fit_efs(
                 fixture.formula, data, fixture.family, controls={"outer_limit": 3}
             )
+
+    def test_selected_efs_oracle_isolates_offset_null_deviance_failure(self) -> None:
+        """The bounded-link source clone neither mutates nor masks public R."""
+        x = np.linspace(-0.6, 0.7, 79)
+        rng = np.random.default_rng(17019)
+        y = rng.binomial(1, 0.5 + 0.1 * x).astype(float)
+        weights = rng.uniform(0.5, 1.5, len(x))
+        weights[::9] = 0.0
+        data = pd.DataFrame({"x": x, "y": y, "w": weights, "off": 2.0})
+        bridge = RBridge(mode="rpy2")
+        arguments = {
+            "weights": "w",
+            "offset": "off",
+            "initial_smoothing": np.array([13.427864978849476]),
+            "scale": 1.0,
+        }
+        for _ in range(2):
+            with pytest.raises(RBridgeError, match="no valid set of coefficients"):
+                bridge.fit_efs(
+                    'y ~ s(x, bs="cr", k=6)',
+                    data,
+                    "binomial_inverse",
+                    **arguments,
+                )
+            selected = bridge.fit_efs_selected_before_offset_null_deviance(
+                'y ~ s(x, bs="cr", k=6)',
+                data,
+                "binomial_inverse",
+                **arguments,
+            )
+            assert selected["oracle_stage"] == "selected_before_offset_null_deviance"
+            assert selected["outer_iterations"] == 54
+            for field in (
+                "coefficients",
+                "fitted_values",
+                "smoothing_params",
+                "Vp",
+                "deviance",
+                "reml_score",
+                "scale",
+                "edf_total",
+            ):
+                assert np.all(np.isfinite(selected[field])), field
 
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")

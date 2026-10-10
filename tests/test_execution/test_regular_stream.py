@@ -3,6 +3,7 @@
 import inspect
 import sys
 from dataclasses import replace
+from unittest.mock import patch
 
 import jax.numpy as jnp
 import numpy as np
@@ -12,6 +13,7 @@ import pytest
 import jaxgam.execution.regular_stream as regular_controller
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource
+from jaxgam.execution.null_coefficient import NullCoefficientProjection
 from jaxgam.execution.regular_stream import (
     _positive_signed_state,
     fit_regular_streamed_pirls,
@@ -20,7 +22,7 @@ from jaxgam.execution.regular_stream import (
 )
 from jaxgam.execution.signed_qr import solve_signed_qr
 from jaxgam.execution.stream import StreamPIRLSControl
-from jaxgam.families.standard import Gamma
+from jaxgam.families.standard import Gamma, Poisson
 from jaxgam.fitting.data import PreparedFittingMetadata
 from jaxgam.fitting.family_execution import (
     FamilyExecutionLineage,
@@ -32,6 +34,7 @@ from jaxgam.formula.fitting_prepare import qr_penalty_roots
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
 from jaxgam.results import GAMPredictionResult
+from tests.helpers import r_available
 from tests.tolerances import STRICT
 
 
@@ -86,6 +89,117 @@ def _fixture(link="identity"):
     prepared = prepare_model(parse_formula("y ~ x"), source, family=family)
     counted = _CountedSource(source)
     return StreamDesign(prepared, counted), family, data, w, off
+
+
+def test_explicit_source_null_rejects_complex_before_scanning() -> None:
+    stream, family, *_ = _fixture()
+    with pytest.raises(ValueError, match="finite fitting p-vector"):
+        fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=10_000_000,
+            score_scale=0.7,
+            control=StreamPIRLSControl(batch_rows=11, solver_policy="qr"),
+            null_coefficients=np.zeros(stream.prepared.n_coef, dtype=np.complex128),
+        )
+    assert stream.source.scans == 0
+
+
+def test_explicit_zero_null_preserves_raw_source_baseline_semantics() -> None:
+    x = np.linspace(-0.6, 0.7, 61)
+    data = pd.DataFrame({"x": x, "y": np.full(len(x), 2.0)})
+    control = StreamPIRLSControl(batch_rows=11, solver_policy="qr")
+
+    poisson = Poisson("identity")
+    poisson_source = DataFrameRowSource(data, response="y")
+    poisson_prepared = prepare_model(
+        parse_formula("y ~ x"), poisson_source, family=poisson
+    )
+    fitted = fit_regular_streamed_pirls(
+        StreamDesign(poisson_prepared, poisson_source),
+        poisson,
+        np.empty(0),
+        maximum_bytes=10_000_000,
+        score_scale=1.0,
+        control=control,
+        null_coefficients=np.zeros(poisson_prepared.n_coef),
+    )
+    assert fitted.state.converged
+    assert np.isposinf(fitted.accepted_penalized_history[0])
+
+    gamma = Gamma("identity")
+    gamma_source = DataFrameRowSource(data, response="y")
+    gamma_prepared = prepare_model(parse_formula("y ~ x"), gamma_source, family=gamma)
+    with pytest.raises(ValueError, match="null coefficient baseline"):
+        fit_regular_streamed_pirls(
+            StreamDesign(gamma_prepared, gamma_source),
+            gamma,
+            np.empty(0),
+            maximum_bytes=10_000_000,
+            score_scale=0.7,
+            control=control,
+            null_coefficients=np.zeros(gamma_prepared.n_coef),
+        )
+
+
+def test_default_null_preserves_original_domain_rejection() -> None:
+    """Only an explicit source anchor may retain a raw +Inf baseline."""
+    stream, family, *_ = _fixture()
+    p = stream.prepared.n_coef
+    invalid_projection = NullCoefficientProjection(
+        np.zeros(p), p, np.arange(p, dtype=np.int64)
+    )
+    with (
+        patch.object(
+            regular_controller,
+            "project_null_coefficients",
+            return_value=invalid_projection,
+        ),
+        pytest.raises(ValueError, match="anchor leaves the family domain"),
+    ):
+        fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=10_000_000,
+            score_scale=0.7,
+            control=StreamPIRLSControl(batch_rows=11, solver_policy="qr"),
+        )
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_explicit_zero_null_raw_baseline_matches_pinned_gam_fit3(r_bridge) -> None:
+    versions_match, reason = r_bridge.check_versions()
+    assert versions_match, reason
+    x = np.linspace(-0.6, 0.7, 61)
+    data = pd.DataFrame({"x": x, "y": np.full(len(x), 2.0)})
+    family = Poisson("identity")
+    source = DataFrameRowSource(data, response="y")
+    prepared = prepare_model(parse_formula("y ~ x"), source, family=family)
+    fitted = fit_regular_streamed_pirls(
+        StreamDesign(prepared, source),
+        family,
+        np.empty(0),
+        maximum_bytes=10_000_000,
+        score_scale=1.0,
+        control=StreamPIRLSControl(batch_rows=11, solver_policy="qr"),
+        null_coefficients=np.zeros(prepared.n_coef),
+    )
+    reference = r_bridge.regular_source_zero_null(x, data.y.to_numpy())
+    np.testing.assert_allclose(
+        fitted.state.coefficients,
+        reference["beta"],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        fitted.state.deviance,
+        reference["deviance"],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert reference["gamma_failed"]
 
 
 @pytest.mark.parametrize("batch_rows", [1, 7, 200])
@@ -165,6 +279,65 @@ def test_regular_budget_rejection_is_prospective():
         )
     assert stream.source.scans == 0
     assert stream.source.batches == 0
+
+
+def test_explicit_source_null_anchor_is_distinct_and_prospectively_charged():
+    stream, family, *_ = _fixture()
+    control = StreamPIRLSControl(batch_rows=17, solver_policy="qr", tol=1e-11)
+    ledger = preflight_regular_stream_workspace(stream, control, 10000000)
+    anchor = np.zeros(stream.prepared.n_coef)
+    anchor[0] = 0.2
+    with pytest.raises(MemoryError, match="explicit regular null anchor"):
+        fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=ledger.required_bytes + 8 * len(anchor) - 1,
+            score_scale=0.7,
+            control=control,
+            null_coefficients=anchor,
+        )
+    assert stream.source.scans == stream.source.batches == 0
+    with pytest.raises(ValueError, match="finite fitting p-vector"):
+        fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=10000000,
+            score_scale=0.7,
+            control=control,
+            null_coefficients=np.full(len(anchor), np.nan),
+        )
+    assert stream.source.scans == stream.source.batches == 0
+
+    with patch.object(
+        regular_controller,
+        "project_null_coefficients",
+        side_effect=AssertionError("explicit anchor must not be reprojected"),
+    ):
+        result = fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.empty(0),
+            maximum_bytes=10000000,
+            score_scale=0.7,
+            control=control,
+            null_coefficients=anchor,
+        )
+    np.testing.assert_array_equal(result.null_coefficients, anchor)
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    X = stream.prepared.evaluate_fitting_batch(batch)
+    expected = float(
+        family.dev_resids(
+            batch.y, family.link.linkinv(X @ anchor + batch.offset), batch.weight
+        )
+    )
+    np.testing.assert_allclose(
+        result.accepted_penalized_history[0],
+        expected,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
 
 
 def test_regular_iteration_history_is_prospectively_budgeted():

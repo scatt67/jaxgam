@@ -468,6 +468,107 @@ class RBridge:
                     return constructor(link=links[link])
         raise ValueError(f"Unknown EFS family: {family!r}")
 
+    def efs_nb_null_deviance(
+        self, y: np.ndarray, mu: float, weights: np.ndarray, theta: float
+    ) -> float:
+        """Evaluate pinned NB ``dev.resids`` with the source's R reduction."""
+        self._require_rpy2()
+        y = np.asarray(y, dtype=np.float64)
+        weights = np.asarray(weights, dtype=np.float64)
+        if y.ndim != 1 or weights.shape != y.shape:
+            raise ValueError("NB null-deviance inputs need matching vectors")
+        if not np.isfinite(mu) or not np.isfinite(theta) or theta <= 0:
+            raise ValueError("NB null-deviance needs finite mu and positive theta")
+        family = self._mgcv.nb(theta=float(theta))
+        deviance = family.rx2("dev.resids")(
+            self._to_r_vector(y),
+            self._base.rep(float(mu), len(y)),
+            self._to_r_vector(weights),
+            self._base.log(float(theta)),
+        )
+        return float(self._base.sum(deviance)[0])
+
+    def efs_startup_reference(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        weights: np.ndarray,
+        penalties: list[np.ndarray],
+        ranks: list[int],
+        offsets: list[int],
+        *,
+        family: str,
+        link: str,
+        theta: float,
+    ) -> dict[str, np.ndarray | float]:
+        """Run pinned ``get.null.coef`` and ``initial.spg`` on supplied arrays."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        weights = np.asarray(weights, dtype=np.float64)
+        if X.ndim != 2 or y.shape != (X.shape[0],) or weights.shape != y.shape:
+            raise ValueError("EFS startup arrays have incompatible dimensions")
+        if len(penalties) != len(ranks) or len(ranks) != len(offsets):
+            raise ValueError("EFS startup penalty metadata lengths differ")
+        if family == "nb":
+            r_family = self._mgcv.nb(theta=float(theta), link=link)
+        else:
+            constructors = {
+                "Gamma": self._stats.Gamma,
+                "gaussian": self._stats.gaussian,
+                "poisson": self._stats.poisson,
+                "binomial": self._stats.binomial,
+            }
+            try:
+                r_family = constructors[family](link=link)
+            except KeyError:
+                raise ValueError(
+                    f"Unsupported EFS startup family: {family!r}"
+                ) from None
+        r_family = self._call_internal("fix.family", r_family)
+        r_x = self._to_r_matrix(X)
+        r_y = self._to_r_vector(y)
+        r_weight = self._to_r_vector(weights)
+        r_penalties = rinterface.ListSexpVector(
+            [self._to_r_matrix(value) for value in penalties]
+        )
+        r_ranks = self._to_r_vector(np.asarray(ranks, dtype=np.int32))
+        r_offsets = self._to_r_vector(np.asarray(offsets, dtype=np.int32))
+        setup = self._ro.ListVector(
+            {
+                "X": r_x,
+                "y": r_y,
+                "w": r_weight,
+                "n": self._ro.IntVector([len(y)]),
+                "family": r_family,
+            }
+        )
+        null = self._call_internal("get.null.coef", setup)
+        sp = self._call_internal(
+            "initial.spg",
+            r_x,
+            r_y,
+            r_weight,
+            r_family,
+            r_penalties,
+            r_ranks,
+            r_offsets,
+        )
+        r_phi = (
+            self._ro.FloatVector([1.0])
+            if family in {"poisson", "binomial", "nb"}
+            else self._ro.r["/"](null.rx2("null.scale"), 10)
+        )
+        return {
+            "log_smoothing": np.asarray(self._base.log(sp), dtype=np.float64).copy(),
+            "null_coefficients": np.asarray(
+                null.rx2("null.coef"), dtype=np.float64
+            ).copy(),
+            "scale": float(np.asarray(r_phi, dtype=np.float64)[0]),
+        }
+
     def fit_gam(
         self,
         formula: str,
@@ -1001,6 +1102,357 @@ class RBridge:
             theta,
             skip_offset_null_deviance=False,
         )
+
+    def fit_efs_selected_before_offset_null_deviance(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        *,
+        weights: str | None = None,
+        offset: str | None = None,
+        controls: dict[str, float] | None = None,
+        initial_smoothing: np.ndarray | None = None,
+        initial_scale: float | None = None,
+        scale: float = -1.0,
+        theta: float | None = None,
+    ) -> dict[str, Any]:
+        """Return a selected EFS fit before offset null-deviance postprocessing.
+
+        Pinned ``estimate.gam`` refits an offset-only GLM after the complete
+        EFS fit. Some bounded noncanonical links reject that auxiliary GLM
+        even though ``efsudr`` and ``gam.fit3.post.proc`` returned a valid
+        selected model. This oracle clones the pinned closure and disables
+        only that post-fit assignment. Callers must separately preserve the
+        public ``gam`` rejection as boundary evidence.
+        """
+        self._require_pinned_efs_versions()
+        return self._fit_efs_rpy2(
+            formula,
+            data,
+            family,
+            weights,
+            offset,
+            controls,
+            initial_smoothing,
+            initial_scale,
+            False,
+            scale,
+            theta,
+            skip_offset_null_deviance=True,
+        )
+
+    def nb_theta_diagnostics(
+        self,
+        start: np.ndarray,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weight: np.ndarray,
+        link: str = "log",
+    ) -> dict[str, np.ndarray]:
+        """Read source contractions and the traced theta path through pinned R."""
+        from rpy2 import rinterface
+
+        from tests.r_ast import find_call_paths, instrument_function, symbol
+
+        self._require_rpy2()
+        start_r = self._to_r_vector(np.asarray(start, dtype=np.float64))
+        y_r = self._to_r_vector(np.asarray(y, dtype=np.float64))
+        mu_r = self._to_r_vector(np.asarray(mu, dtype=np.float64))
+        weight_r = self._to_r_vector(np.asarray(weight, dtype=np.float64))
+        base = self._ro.baseenv
+        family = self._mgcv.nb(theta=base["-"](self._base.exp(start_r)), link=link)
+
+        def fields(theta_r: Any) -> np.ndarray:
+            likelihood = family.rx2("ls")(y_r, w=weight_r, theta=theta_r, scale=1)
+            derivatives = family.rx2("Dd")(y_r, mu_r, theta_r, wt=weight_r, level=2)
+            deviance = self._base.sum(
+                family.rx2("dev.resids")(y_r, mu_r, weight_r, theta_r)
+            )
+            half = self._to_r_vector([2.0])
+            return np.asarray(
+                [
+                    base["-"](base["/"](deviance, half), likelihood.rx2("ls"))[0],
+                    base["-"](
+                        base["/"](self._base.sum(derivatives.rx2("Dth")), half),
+                        likelihood.rx2("lsth1"),
+                    )[0],
+                    base["-"](
+                        base["/"](self._base.sum(derivatives.rx2("Dth2")), half),
+                        likelihood.rx2("lsth2"),
+                    )[0],
+                ],
+                dtype=np.float64,
+            )
+
+        source = self._utils.getFromNamespace("estimate.theta", "mgcv")
+
+        def assignment_path(target: str, increment: str) -> tuple[int, ...]:
+            paths = find_call_paths(source, "<-", required_symbols=(target, increment))
+            matched = []
+            for path in paths:
+                node = self._ro.r["body"](source)
+                for index in path:
+                    node = node[index]
+                rhs = node[2]
+                if (
+                    node[1].rsame(symbol(target))
+                    and rhs.typeof == rinterface.RTYPES.LANGSXP
+                    and rhs[0].rsame(symbol("+"))
+                    and rhs[1].rsame(symbol(target))
+                    and (
+                        rhs[2].rsame(symbol(increment))
+                        if increment == "step"
+                        else float(rhs[2][0]) == 1.0
+                    )
+                ):
+                    matched.append(path)
+            if len(matched) != 1:
+                raise RBridgeError(f"Pinned estimate.theta {target} assignment changed")
+            return matched[0]
+
+        theta_path = [float(start_r[0])]
+        halvings = [0]
+        theta_assignment = assignment_path("theta", "step")
+        iter_assignment = assignment_path("iter", "iter")
+        traced = instrument_function(
+            source,
+            path=theta_assignment,
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=lambda theta: theta_path.append(float(theta[0])),
+            when="after",
+        )
+        traced = instrument_function(
+            traced,
+            path=iter_assignment,
+            expected_head="<-",
+            capture_symbols=("iter",),
+            callback=lambda _iter: halvings.__setitem__(0, halvings[0] + 1),
+            when="after",
+        )
+        end = traced(start_r, family, y_r, mu_r, scale=1, wt=weight_r)
+        return {
+            "initial": fields(start_r),
+            "final": np.r_[np.asarray(end, dtype=np.float64), fields(end)],
+            "path": np.asarray(theta_path, dtype=np.float64),
+            "halvings": np.asarray(halvings, dtype=np.float64),
+        }
+
+    def nb_pirls_controller_reference(
+        self,
+        X: np.ndarray,
+        X_public: np.ndarray,
+        transform: np.ndarray,
+        E: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        link: str,
+        start: np.ndarray | None,
+        rank: int,
+        tolerance: float,
+    ) -> dict[str, np.ndarray]:
+        """Trace a private pinned ``gam.fit4``/``estimate.theta`` controller."""
+        from rpy2 import rinterface
+
+        from tests.r_ast import (
+            clone_function,
+            find_call_paths,
+            instrument_function,
+            symbol,
+        )
+
+        self._require_rpy2()
+        ro, base = self._ro, self._ro.baseenv
+        r_X, r_X_public, r_transform, r_E = (
+            self._to_r_matrix(values) for values in (X, X_public, transform, E)
+        )
+        r_y, r_weight, r_offset = (
+            self._to_r_vector(values) for values in (y, weight, offset)
+        )
+        p = X.shape[1]
+        theta_initial = self._base.log(self._to_r_vector([0.7]))
+        family = self._call_internal(
+            "fix.family.link",
+            self._mgcv.nb(theta=base["-"](self._to_r_vector([0.7])), link=link),
+        )
+        U1 = (
+            self._base.eigen(self._base.crossprod(r_E), symmetric=True).rx2("vectors")
+            if rank
+            else self._base.diag(p)
+        )
+        if rank:
+            root = base["%*%"](
+                self._base.t(self._to_r_matrix(np.asarray(U1)[:, :rank])),
+                self._base.t(r_E),
+            )
+            roots = base["list"](root)
+        else:
+            roots = base["list"]()
+        target = self._base.rep(
+            family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
+        )
+        null = np.asarray(
+            self._base.qr_coef(self._base.qr(r_X_public), target),
+            dtype=np.float64,
+        ).copy()
+        null[np.isnan(null)] = 0.0
+        null_r = self._base.solve(r_transform, self._to_r_vector(null))
+
+        theta_updates = [0]
+        theta_history = [float(theta_initial[0])]
+        pre_theta = [float(theta_initial[0])]
+        recoveries = [0]
+        final_locals: dict[str, float] = {}
+
+        estimate = self._utils.getFromNamespace("estimate.theta", "mgcv")
+        theta_paths = find_call_paths(
+            estimate, "<-", required_symbols=("theta", "step")
+        )
+        accepted_paths = []
+        for path in theta_paths:
+            node = ro.r["body"](estimate)
+            for index in path:
+                node = node[index]
+            rhs = node[2]
+            if (
+                node[1].rsame(symbol("theta"))
+                and rhs.typeof == rinterface.RTYPES.LANGSXP
+                and rhs[0].rsame(symbol("+"))
+                and rhs[1].rsame(symbol("theta"))
+                and rhs[2].rsame(symbol("step"))
+            ):
+                accepted_paths.append(path)
+        if len(accepted_paths) != 1:
+            raise RBridgeError("Pinned estimate.theta accepted-step anchor changed")
+        traced_estimate = instrument_function(
+            estimate,
+            path=accepted_paths[0],
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=lambda _theta: theta_updates.__setitem__(0, theta_updates[0] + 1),
+            when="after",
+        )
+
+        fit_source = self._utils.getFromNamespace("gam.fit4", "mgcv")
+        theta_calls = find_call_paths(
+            fit_source, "<-", required_symbols=("theta", "estimate.theta")
+        )
+        if len(theta_calls) != 1:
+            raise RBridgeError("Pinned gam.fit4 theta-call anchor changed")
+        fit_source = instrument_function(
+            fit_source,
+            path=theta_calls[0],
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=lambda theta: pre_theta.__setitem__(0, float(theta[0])),
+            when="before",
+        )
+        theta_calls = find_call_paths(
+            fit_source, "<-", required_symbols=("theta", "estimate.theta")
+        )
+        if len(theta_calls) != 1:
+            raise RBridgeError("Pinned gam.fit4 theta return anchor changed")
+        fit_source = instrument_function(
+            fit_source,
+            path=theta_calls[0],
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=lambda theta: theta_history.append(float(theta[0])),
+            when="after",
+        )
+        recovery_paths = []
+        for path in find_call_paths(fit_source, "cat"):
+            node = ro.r["body"](fit_source)
+            for index in path:
+                node = node[index]
+            if (
+                len(node) > 1
+                and node[1].typeof == rinterface.RTYPES.STRSXP
+                and str(node[1][0]) == "**using positive weights\n"
+            ):
+                recovery_paths.append(path)
+        if len(recovery_paths) != 1:
+            raise RBridgeError("Pinned gam.fit4 positive-weight anchor changed")
+        fit_source = instrument_function(
+            fit_source,
+            path=recovery_paths[0],
+            expected_head="cat",
+            capture_symbols=(),
+            callback=lambda: recoveries.__setitem__(0, recoveries[0] + 1),
+        )
+        body = ro.r["body"](fit_source)
+        fit_source = instrument_function(
+            fit_source,
+            path=(len(body) - 1,),
+            expected_head="list",
+            capture_symbols=("oo", "pdev"),
+            callback=lambda oo, pdev: final_locals.update(
+                penalty=float(ro.ListVector(oo).rx2("P")[0]),
+                pdev=float(pdev[0]),
+            ),
+        )
+        private_environment = ro.r["new.env"](parent=ro.r["environment"](fit_source))
+        private_environment["estimate.theta"] = traced_estimate
+        fit_function = clone_function(fit_source, environment=private_environment)
+        smoothing = self._base.c(
+            theta_initial,
+            self._base.log(self._to_r_vector([0.35])) if rank else ro.FloatVector([]),
+        )
+        fit = fit_function(
+            x=r_X,
+            y=r_y,
+            sp=smoothing,
+            Eb=r_E,
+            UrS=roots,
+            weights=r_weight,
+            offset=r_offset,
+            start=ro.NULL if start is None else self._to_r_vector(start),
+            U1=U1,
+            Mp=p - rank,
+            family=family,
+            control=self._mgcv.gam_control(epsilon=tolerance, maxit=100, trace=True),
+            deriv=0,
+            scale=1,
+            scoreType="EFS",
+            **{"null.coef": null_r},
+        )
+        theta = family.rx2("getTheta")()
+        mean = fit.rx2("fitted.values")
+        derivatives = self._call_internal(
+            "dDeta", r_y, mean, r_weight, theta, family, 0
+        )
+        half = self._to_r_vector([0.5])
+        observed = self._base.crossprod(
+            r_X,
+            base["*"](base["*"](half, derivatives.rx2("Deta2")), r_X),
+        )
+        fisher = self._base.crossprod(
+            r_X,
+            base["*"](base["*"](half, derivatives.rx2("EDeta2")), r_X),
+        )
+        final_deviance = self._base.sum(
+            family.rx2("dev.resids")(r_y, mean, r_weight, theta)
+        )
+        return {
+            "beta": np.asarray(fit.rx2("coefficients")).copy(),
+            "theta": np.asarray(theta).copy(),
+            "source_deviance": np.asarray(fit.rx2("deviance")).copy(),
+            "final_deviance": np.asarray(final_deviance).copy(),
+            "source_theta": np.asarray(pre_theta, dtype=np.float64),
+            "gdi_penalty": np.asarray([final_locals["penalty"]]),
+            "score": np.asarray(fit.rx2("REML")).copy(),
+            "stopping_pdev": np.asarray([final_locals["pdev"]]),
+            "G": np.asarray(observed).copy(),
+            "F": np.asarray(fisher).copy(),
+            "V": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
+            "theta_history": np.asarray(theta_history, dtype=np.float64),
+            "iter": np.asarray(fit.rx2("iter")).copy(),
+            "theta_iter": np.asarray([theta_updates[0]]),
+            "null_coefficients": np.asarray(null_r).copy(),
+            "recoveries": np.asarray([recoveries[0]]),
+        }
 
     def nb_fixed_pirls_reference(
         self,
@@ -1874,6 +2326,57 @@ class RBridge:
             ),
         }
 
+    def regular_source_zero_null(self, x: np.ndarray, y: np.ndarray) -> dict[str, Any]:
+        """Compare a raw zero null anchor in pinned Poisson and Gamma fits."""
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        self._require_rpy2()
+        ro = self._ro
+        base = ro.baseenv
+        r_y = self._to_r_vector(np.asarray(y, dtype=np.float64))
+        r_X = base["cbind"](self._base.rep(1.0, times=len(y)), self._to_r_vector(x))
+        weight = self._base.rep(1.0, times=len(y))
+        offset = self._base.rep(0.0, times=len(y))
+        results = {}
+        for name, scale in (("poisson", 1), ("Gamma", 0)):
+            family = self._regular_source_family(name, "identity", fix_base=False)
+            environment = self._base.new_env(parent=ro.globalenv)
+            environment["family"] = family
+            environment["y"] = r_y
+            environment["weights"] = weight
+            environment["nobs"] = ro.IntVector([len(y)])
+            ro.r["evalq"](family.rx2("initialize"), envir=environment)
+            try:
+                fit = self._call_internal(
+                    "gam.fit3",
+                    x=r_X,
+                    y=environment["y"],
+                    sp=ro.FloatVector([]),
+                    Eb=0,
+                    UrS=base["list"](),
+                    weights=weight,
+                    offset=offset,
+                    U1=self._base.diag(self._base.ncol(r_X)),
+                    Mp=self._base.ncol(r_X),
+                    family=family,
+                    control=self._mgcv.gam_control(epsilon=1e-7, maxit=200),
+                    deriv=0,
+                    scale=scale,
+                    scoreType="REML",
+                    **{"null.coef": self._base.numeric(self._base.ncol(r_X))},
+                )
+            except RRuntimeError:
+                if name != "Gamma":
+                    raise
+                results["gamma_failed"] = True
+            else:
+                if name == "Gamma":
+                    results["gamma_failed"] = False
+                else:
+                    results["beta"] = np.asarray(fit.rx2("coefficients"))
+                    results["deviance"] = np.asarray(fit.rx2("deviance"))
+        return results
+
     def regular_source_gamma_fixed_trial(
         self,
         link: str,
@@ -2694,6 +3197,160 @@ class RBridge:
                 "eta_max": scalar(self._base.max(fit.rx2("linear.predictors"))),
             },
         }
+
+    def efs_streamed_default_start_reference(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        *,
+        family: str,
+        link: str,
+        theta: float,
+        smoothing: np.ndarray,
+        scale: float,
+        trace_null_coef: bool = False,
+    ) -> dict[str, Any]:
+        """Fit the pinned cubic EFS model with explicit source startup state."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        from tests.r_ast import clone_function, make_r_callback
+
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        weights = np.asarray(weights, dtype=np.float64)
+        offset = np.asarray(offset, dtype=np.float64)
+        smoothing = np.asarray(smoothing, dtype=np.float64)
+        if any(
+            value.ndim != 1 or value.shape != y.shape for value in (x, weights, offset)
+        ):
+            raise ValueError("EFS streamed reference columns must align")
+        if smoothing.ndim != 1 or smoothing.size == 0:
+            raise ValueError("EFS streamed reference needs smoothing parameters")
+        if family == "nb":
+            r_family = self._mgcv.nb(theta=float(theta), link=link)
+        else:
+            constructors = {
+                "gaussian": self._stats.gaussian,
+                "gamma": self._stats.Gamma,
+                "poisson": self._stats.poisson,
+                "binomial": self._stats.binomial,
+            }
+            try:
+                r_family = constructors[family](link=link)
+            except KeyError:
+                raise ValueError(
+                    f"Unsupported EFS streamed family: {family!r}"
+                ) from None
+        data = self._ro.DataFrame(
+            {
+                "x": self._to_r_vector(x),
+                "y": self._to_r_vector(y),
+                "w": self._to_r_vector(weights),
+                "off": self._to_r_vector(offset),
+            }
+        )
+        fit_args: dict[str, Any] = {
+            "data": data,
+            "weights": self._to_r_vector(weights),
+            "offset": self._to_r_vector(offset),
+            "family": r_family,
+            "method": "REML",
+            "optimizer": "efs",
+            "control": self._mgcv.gam_control(
+                epsilon=1e-7, maxit=200, efs_tol=0.1, efs_lspmax=15
+            ),
+            "in.out": self._ro.ListVector(
+                {
+                    "sp": self._to_r_vector(smoothing),
+                    "scale": self._ro.FloatVector([scale]),
+                }
+            ),
+        }
+        r_gam = self._mgcv.gam
+        null_trace: list[np.ndarray] = []
+        null_omitted: list[bool] = []
+        if trace_null_coef:
+            namespace = self._ro.r["getNamespace"]("mgcv")
+            private = self._ro.r["new.env"](parent=namespace)
+            fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
+            formals = self._ro.r["formals"](fit3)
+            default_null = formals[list(formals.names).index("null.coef")][0]
+            r_name = self._ro.r["as.name"]
+            if (
+                not default_null[0].rsame(r_name("rep"))
+                or float(np.asarray(default_null[1])[0]) != 0.0
+                or not default_null[2][0].rsame(r_name("ncol"))
+                or not default_null[2][1].rsame(r_name("x"))
+            ):
+                raise RBridgeError("Pinned gam.fit3 null-coef default changed")
+
+            def record_fit3(**arguments: Any) -> Any:
+                null_omitted.append("null.coef" not in arguments)
+                null_trace.append(
+                    np.array(
+                        arguments.get(
+                            "null.coef",
+                            self._base.rep(
+                                0.0, int(self._base.ncol(arguments["x"])[0])
+                            ),
+                        ),
+                        dtype=np.float64,
+                        copy=True,
+                    )
+                )
+                return fit3(**arguments)
+
+            fit_callback = make_r_callback(record_fit3)
+            private["gam.fit3"] = fit_callback
+            private["efsudr"] = clone_function(
+                self._utils.getFromNamespace("efsudr", "mgcv"), environment=private
+            )
+            private["gam.outer"] = clone_function(
+                self._utils.getFromNamespace("gam.outer", "mgcv"), environment=private
+            )
+            private["estimate.gam"] = clone_function(
+                self._utils.getFromNamespace("estimate.gam", "mgcv"),
+                environment=private,
+            )
+            r_gam = clone_function(
+                self._utils.getFromNamespace("gam", "mgcv"), environment=private
+            )
+        try:
+            model = r_gam(self._ro.Formula('y ~ s(x, bs="cr", k=6)'), **fit_args)
+        finally:
+            if trace_null_coef:
+                private["gam.fit3"] = self._ro.NULL
+                private["efsudr"] = self._ro.NULL
+                private["gam.outer"] = self._ro.NULL
+                private["estimate.gam"] = self._ro.NULL
+        reference = self._extract_fit_results_rpy2(model)
+        outer = model.rx2("outer.info")
+        reference.update(
+            outer_iterations=int(np.asarray(outer.rx2("iter"))[0]),
+            convergence=str(outer.rx2("conv")[0]),
+            null_coef_trace=tuple(null_trace),
+            null_coef_omitted=tuple(null_omitted),
+        )
+        if trace_null_coef:
+            if not null_trace:
+                raise RBridgeError("Pinned EFS produced no gam.fit3 null-coef trace")
+            r_trace = rinterface.ListSexpVector(
+                [self._to_r_vector(value) for value in null_trace]
+            )
+            reference["null_coef_trace_summary"] = np.asarray(
+                [
+                    int(self._base.length(r_trace)[0]),
+                    int(self._base.length(r_trace[0])[0]),
+                    float(
+                        self._base.max(self._base.abs(self._base.unlist(r_trace)))[0]
+                    ),
+                ],
+                dtype=np.float64,
+            )
+        return reference
 
     def efs_regular_gdi1_diagnostics(
         self,

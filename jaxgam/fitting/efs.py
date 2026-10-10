@@ -20,7 +20,7 @@ import numpy as np
 from jaxgam.fitting import penalty_ops
 
 if TYPE_CHECKING:
-    from jaxgam.fitting.data import FittingData
+    from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 
 
 _ROOT_EPS = np.finfo(float).eps ** (2.0 / 3.0)
@@ -179,7 +179,9 @@ def _root(matrix: np.ndarray) -> np.ndarray:
     return vectors[:, keep] * np.sqrt(eigvals[keep])[None, :]
 
 
-def prepare_efs_statistics(fitting_data: FittingData) -> EFSStatisticsPlan:
+def prepare_efs_statistics(
+    fitting_data: FittingData | PreparedFittingMetadata,
+) -> EFSStatisticsPlan:
     """Prepare local penalty roots once at the CPU-to-JAX boundary.
 
     The returned plan is a pytree: roots and projected matrices remain dynamic
