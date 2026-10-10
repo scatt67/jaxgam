@@ -426,14 +426,18 @@ class TestSaturatedAndAicVsRFormula:
         reference = float(
             np.sum(-gammaln(shape) + shape * np.log(shape) - shape - np.log(y))
         )
-        np.testing.assert_allclose(actual, reference, rtol=0.0, atol=2e-12)
+        np.testing.assert_allclose(
+            actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+        )
         derivative = float(jax.jit(jax.grad(score))(log_phi))
         expected_derivative = float(np.sum(shape * (digamma(shape) - np.log(shape))))
         np.testing.assert_allclose(
-            derivative, expected_derivative, rtol=1e-10, atol=1e-11
+            derivative, expected_derivative, rtol=STRICT.rtol, atol=STRICT.atol
         )
         step = 1e-8
         observed_change = float(score(log_phi + step) - score(log_phi))
+        # The linear prediction omits a second-order term proportional to
+        # step**2; this is a finite-step remainder check, not an R oracle.
         np.testing.assert_allclose(
             observed_change,
             derivative * step,
@@ -467,7 +471,7 @@ class TestSaturatedAndAicVsRFormula:
             np.asarray(y), np.asarray(weights), 1.0
         )
         expected = np.asarray([source[0], source[1], source[1] + source[2]])
-        np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
 
     def test_gamma_stirling_inactive_branches_are_finite_at_large_shape(
         self,
@@ -491,9 +495,14 @@ class TestSaturatedAndAicVsRFormula:
         )
         assert np.all(np.isfinite(actual))
         np.testing.assert_allclose(
-            actual[0], 0.5 * np.log(1e12 / (2.0 * np.pi)), atol=1e-11
+            actual[0],
+            0.5 * np.log(1e12 / (2.0 * np.pi)),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
         )
-        np.testing.assert_allclose(actual[1:], [-0.5, 0.0], atol=1e-9)
+        np.testing.assert_allclose(
+            actual[1:], [-0.5, 0.0], rtol=STRICT.rtol, atol=STRICT.atol
+        )
 
     def test_binomial_saturated_loglik_includes_lchoose(self) -> None:
         """Binomial ls adds lchoose(m, m*y); 0 for Bernoulli, nonzero grouped."""
