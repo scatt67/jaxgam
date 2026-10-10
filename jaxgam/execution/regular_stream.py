@@ -87,6 +87,7 @@ class RegularStreamWorkspace:
     penalty_bytes: int
     history_bytes: int
     null_projection_bytes: int
+    source_adjoint_bytes: int
 
     @property
     def required_bytes(self) -> int:
@@ -97,6 +98,7 @@ class RegularStreamWorkspace:
             + self.penalty_bytes
             + self.history_bytes
             + self.null_projection_bytes
+            + self.source_adjoint_bytes
         )
 
 
@@ -152,6 +154,13 @@ def preflight_regular_stream_workspace(
         # Householder vectors, alias-column shift temporary and local-D
         # conversion while the final source batch can remain alive.
         8 * (4 * B * p + 8 * p * p + 16 * B + 16 * p),
+        # The source coefficient solve has a distinct derivative role from
+        # the observed score determinant and Fisher reporting factors.  Keep
+        # its tagged absolute R, correction eigenvectors/values, pivots/keep
+        # and candidate coefficients alive on device, with explicit host
+        # construction/readonly-copy overlap.  Native QR/SVD scratch remains
+        # opaque and is excluded under the documented workspace contract.
+        8 * (4 * p * p + 10 * p),
     )
     if ledger.required_bytes > maximum_bytes:
         raise MemoryError(
@@ -345,9 +354,15 @@ class RegularStreamResult:
     null_coefficients: np.ndarray
     initial_coefficients_present: bool
     source_score: RegularSourceScore
+    source_coefficient_factor: SignedQRCoefficientFactor
+    source_solve_coefficients: np.ndarray
 
     def __post_init__(self) -> None:
-        for name in ("information_coefficients", "null_coefficients"):
+        for name in (
+            "information_coefficients",
+            "null_coefficients",
+            "source_solve_coefficients",
+        ):
             value = np.array(getattr(self, name), dtype=float, copy=True)
             value.setflags(write=False)
             object.__setattr__(self, name, value)
@@ -774,6 +789,12 @@ def fit_regular_streamed_pirls(
     ):
         raise FloatingPointError("regular final source refit is inadmissible")
     _, refit_domain = trial(refit.coefficients)
+    source_solve_beta = refit.coefficients.copy()
+    source_coefficient_factor = SignedQRCoefficientFactor(
+        _tag_absolute(refit.absolute_factor, device),
+        jax.device_put(refit.vectors, device),
+        jax.device_put(refit.correction, device),
+    )
     solve_penalty = penalized(refit.coefficients, 0.0)
     if refit_domain:
         beta = refit.coefficients
@@ -908,4 +929,6 @@ def fit_regular_streamed_pirls(
         RegularSourceScore(
             final_deviance, old_pdev, solve_penalty, refit_domain, phi, scale
         ),
+        source_coefficient_factor,
+        source_solve_beta,
     )
