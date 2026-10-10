@@ -912,13 +912,23 @@ def test_nb_optimizer_rejects_non_boolean_pin_lambda_before_trial(
 
 
 @pytest.mark.parametrize(
-    ("curvature_sign", "valid_inner", "maxfun", "start_rho"),
+    (
+        "curvature_sign",
+        "valid_inner",
+        "maxfun",
+        "start_rho",
+        "max_step",
+        "max_iter",
+        "reported_iter",
+    ),
     [
-        (1.0, True, 500, 0.0),
-        (-1.0, True, 500, 0.0),
-        (1.0, False, 500, 0.0),
-        (1.0, True, 5, 0.0),
-        (1.0, True, 500, 40.0),
+        (1.0, True, 500, 0.0, None, 100, 0),
+        (-1.0, True, 500, 0.0, None, 100, 0),
+        (1.0, False, 500, 0.0, None, 100, 0),
+        (1.0, True, 5, 0.0, None, 100, 0),
+        (1.0, True, 500, 40.0, None, 100, 0),
+        (1.0, True, 500, 0.0, 5e-7, 100, 0),
+        (1.0, True, 500, 0.0, None, 1, 1),
     ],
 )
 def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
@@ -927,6 +937,9 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
     valid_inner: bool,
     maxfun: int,
     start_rho: float,
+    max_step: float | None,
+    max_iter: int,
+    reported_iter: int,
 ) -> None:
     """A rounded score admits only a well-conditioned, reconverged correction."""
     start = np.array([start_rho, 0.0])
@@ -936,6 +949,8 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
 
     def evaluate(_stream, _family, params, **_kwargs):
         params = np.asarray(params, dtype=np.float64)
+        if max_step is not None:
+            assert np.max(np.abs(params - start)) <= max_step
         return SimpleNamespace(
             params=params.copy(),
             score=jnp.array(1.0),
@@ -963,12 +978,12 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
             success=True,
             message="CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
             status=0,
-            nit=0,
+            nit=reported_iter,
         )
 
     monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", evaluate)
     monkeypatch.setattr(reml_execution, "minimize", rounded_stop)
-    control = StreamREMLControl(gtol=1e-9, ftol=0.0, maxfun=maxfun)
+    control = StreamREMLControl(gtol=1e-9, ftol=0.0, maxfun=maxfun, max_iter=max_iter)
     objective = nb_reml_execution._AcceptedNBTrialObjective(
         SimpleNamespace(source=source),
         NegativeBinomial(theta=2.7),
@@ -986,13 +1001,23 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
         control,
         curvature_stationary_completion=True,
         completion_inner_tolerance=1e-11,
+        max_step=max_step,
     )
     expect_converged = (
-        curvature_sign > 0.0 and valid_inner and maxfun > 5 and start_rho == 0.0
+        curvature_sign > 0.0
+        and valid_inner
+        and maxfun > 5
+        and start_rho == 0.0
+        and max_step is None
+        and reported_iter < max_iter
     )
     assert result.converged is expect_converged
     assert result.n_evaluations == (
-        1 if maxfun <= 5 or start_rho == 40.0 else 5 if curvature_sign < 0.0 else 6
+        1
+        if maxfun <= 5 or start_rho == 40.0 or reported_iter >= max_iter
+        else 5
+        if curvature_sign < 0.0 or max_step is not None
+        else 6
     )
     assert result.cumulative_source_scans == 3 * result.n_evaluations
     assert result.cumulative_batches_scanned == 5 * result.n_evaluations
@@ -1005,7 +1030,7 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
         np.testing.assert_array_equal(result.trial.params, start)
         assert result.projected_gradient_inf > control.gtol
         assert result.n_accepted == 0
-        assert result.n_iter == 0
+        assert result.n_iter == reported_iter
 
 
 @pytest.mark.parametrize("max_step", [0.0, np.inf, True])

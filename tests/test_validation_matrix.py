@@ -703,10 +703,10 @@ def test_public_estimated_nb_theta_modes_pinned_r(
         tmp_path, data, weight, offset, link, estimated=estimated, smooth=smooth
     )
     if smooth and estimated and link == "sqrt":
-        # The default mgcv Newton start stops on score roundoff for these
-        # unchanged binary rows. Keep that result as a diagnostic, then use
-        # mgcv's documented in.out starting state for a converged R oracle.
-        assert expected["outer_status"] == "step failed"
+        # The default mgcv Newton start can stop on score roundoff for these
+        # unchanged binary rows, depending on the host. Record either truthful
+        # status, then always use a declared in.out start for field parity.
+        assert expected["outer_status"] in {"full convergence", "step failed"}
         default_score = expected["score"]
         expected = _public_exact_nb_pinned_r(
             tmp_path,

@@ -1483,6 +1483,7 @@ def _run_parameterized_stream_reml(
         and not converged
         and "RELATIVE REDUCTION OF F" in message
         and len(result_params) == 2
+        and total_iterations < control.max_iter
         and objective.n_evaluations + 5 <= control.maxfun
     ):
         center = np.asarray(objective.accepted.params, dtype=np.float64)
@@ -1491,6 +1492,8 @@ def _run_parameterized_stream_reml(
         curvature = np.empty((2, 2), dtype=np.float64)
         for index in range(2):
             width = 1e-4 * max(1.0, abs(center[index]))
+            if max_step is not None:
+                width = min(width, max_step)
             direction = np.zeros(2, dtype=np.float64)
             direction[index] = width
             plus = center + direction
@@ -1513,7 +1516,8 @@ def _run_parameterized_stream_reml(
             if eigenvalues[0] > max(1e-12, 1e-8 * eigenvalues[-1]):
                 correction = -np.linalg.solve(curvature, gradient)
                 corrected = center + correction
-                if np.max(np.abs(correction)) <= 1e-3 and all(
+                correction_limit = min(1e-3, max_step) if max_step is not None else 1e-3
+                if np.max(np.abs(correction)) <= correction_limit and all(
                     (lower is None or value >= lower)
                     and (upper is None or value <= upper)
                     for value, (lower, upper) in zip(corrected, bounds, strict=True)
