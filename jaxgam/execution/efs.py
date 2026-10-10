@@ -31,7 +31,9 @@ from jaxgam.fitting.efs import (
     prepare_efs_statistics,
 )
 from jaxgam.fitting.pirls import (
-    _EFS_STATUS_RETAINED_START_INVALID_TRIAL,
+    _EFS_STATUS_DIVERGENCE_RECOVERY_FAILED,
+    _EFS_STATUS_DOMAIN_RECOVERY_FAILED,
+    _EFS_STATUS_NONFINITE_RECOVERY_FAILED,
     _W_MAX,
     _W_MIN,
     PIRLSResult,
@@ -338,11 +340,16 @@ def _result_theta(state: EFSFitState, fd: FittingData) -> float | None:
 
 
 def _efs_fit_failure_label(state: EFSFitState) -> str:
-    """Give the EFS-only retained-start recovery gap an explicit outcome."""
-    if state.theta_loop_status is not None and int(
-        np.asarray(state.theta_loop_status)
-    ) == (_EFS_STATUS_RETAINED_START_INVALID_TRIAL):
-        return "retained_start_invalid_trial"
+    """Expose EFS beta-loop recovery failures without masking theta status."""
+    if state.theta_loop_status is not None:
+        recovery_labels = {
+            _EFS_STATUS_NONFINITE_RECOVERY_FAILED: "nonfinite_recovery_failed",
+            _EFS_STATUS_DOMAIN_RECOVERY_FAILED: "domain_recovery_failed",
+            _EFS_STATUS_DIVERGENCE_RECOVERY_FAILED: "divergence_recovery_failed",
+        }
+        label = recovery_labels.get(int(np.asarray(state.theta_loop_status)))
+        if label is not None:
+            return label
     return "inner_failure" if not state.inner_converged else "invalid_trial"
 
 

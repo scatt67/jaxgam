@@ -57,6 +57,19 @@ test-cov-ci: ## run CI coverage using an already-built Docker image
 		uv run pytest --tb=short --cov=jaxgam --cov-branch \
 		--cov-report=xml:/coverage/coverage.xml
 
+.PHONY: test-gaussian-ci
+test-gaussian-ci: ## run focused Gaussian CI diagnostics using a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_validation_matrix.py -k gp_2d-gaussian -s -x --tb=short
+
+.PHONY: test-efs-recovery-ci
+test-efs-recovery-ci: ## run focused EFS retained-start recovery using a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest \
+		tests/test_fitting/test_efs_theta_pirls.py::test_efs_retained_start_recovery_matches_pinned_source_once \
+		tests/test_fitting/test_efs_theta_pirls.py::test_efs_theta_pirls_nonsaturated_inner_contract_matches_pinned_r[weighted_ridge] \
+		-s -x --tb=short
+
 .PHONY: colima-start
 colima-start: ## start colima VM (no-op if already running)
 	@colima status 2>/dev/null || colima start --cpu $(COLIMA_CPU) --memory $(COLIMA_MEMORY)
