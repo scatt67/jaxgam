@@ -863,6 +863,9 @@ def _fit_stream_exact_reml(
             accepted_score_history=optimized.accepted_score_history,
             startup_source_scans=startup_source_scans,
             startup_batches_scanned=startup_batches_scanned,
+            cumulative_inner_iterations=optimized.cumulative_inner_iterations,
+            cumulative_final_refit_solves=optimized.cumulative_final_refit_solves,
+            cumulative_derivative_s=optimized.cumulative_derivative_s,
         ),
     )
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numbers
 import sys
+import time
 from dataclasses import dataclass, replace
 
 import jax
@@ -37,6 +38,7 @@ from jaxgam.execution.reml import (
     _projected_gradient_for_bounds,
     _run_parameterized_stream_reml,
     _ScaleNewtonCompletion,
+    _trial_inner_iterations,
     _valid_exact_trial,
     _validate_max_step,
 )
@@ -87,6 +89,8 @@ class NBStreamREMLTrial:
     basis_fingerprint: str
     family_name: str
     link_name: str
+    derivative_elapsed_s: float = 0.0
+    final_refit_solves: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,9 @@ class NBStreamREMLOptimization:
     outer_workspace_bytes: int
     theta_completion_steps: int = 0
     theta_completion_stop: str | None = None
+    cumulative_inner_iterations: int = 0
+    cumulative_final_refit_solves: int = 0
+    cumulative_derivative_s: float = 0.0
 
     @property
     def required_bytes(self) -> int:
@@ -325,6 +332,7 @@ def evaluate_nb_stream_reml(
         start_is_absent=initial is None,
         estimate_theta=False,
     )
+    derivative_started = time.perf_counter()
     state = result.state
     if (
         not state.converged
@@ -474,6 +482,8 @@ def evaluate_nb_stream_reml(
     lineage.validate(stream.prepared, family)
     if stream.source.fingerprint() != lineage.source_fingerprint:
         raise RuntimeError("RowSource changed during NB REML evaluation")
+    jax.block_until_ready((core.score, gradient))
+    derivative_elapsed_s = time.perf_counter() - derivative_started
     return NBStreamREMLTrial(
         params=jax.device_put(jnp.asarray(params, dtype=jnp.float64), device),
         score=core.score,
@@ -489,6 +499,8 @@ def evaluate_nb_stream_reml(
         basis_fingerprint=stream.prepared.basis_fingerprint,
         family_name=family.family_name,
         link_name=type(family.link).__qualname__,
+        derivative_elapsed_s=derivative_elapsed_s,
+        final_refit_solves=1,
     )
 
 
@@ -701,6 +713,11 @@ def _nb_local_stationary_score_change(
         objective.n_evaluations += 1
         objective.cumulative_source_scans += probe.source_scans
         objective.cumulative_batches_scanned += probe.batches_scanned
+        objective.cumulative_inner_iterations += _trial_inner_iterations(probe)
+        objective.cumulative_final_refit_solves += getattr(
+            probe, "final_refit_solves", 0
+        )
+        objective.cumulative_derivative_s += getattr(probe, "derivative_elapsed_s", 0.0)
         if (
             not np.array_equal(np.asarray(probe.params), probe_params)
             or any(
@@ -921,6 +938,9 @@ def _complete_pinned_nb_theta(
             cumulative_batches_scanned=objective.cumulative_batches_scanned,
             projected_gradient_inf=projected_gradient_inf,
             accepted_score_history=objective.accepted_score_history,
+            cumulative_inner_iterations=objective.cumulative_inner_iterations,
+            cumulative_final_refit_solves=objective.cumulative_final_refit_solves,
+            cumulative_derivative_s=objective.cumulative_derivative_s,
         ),
         completion,
     )
@@ -1097,4 +1117,7 @@ def optimize_nb_stream_reml(
         outer_workspace_bytes=outer_workspace_bytes,
         theta_completion_steps=0 if completion is None else completion.steps,
         theta_completion_stop=None if completion is None else completion.stop,
+        cumulative_inner_iterations=optimized.cumulative_inner_iterations,
+        cumulative_final_refit_solves=optimized.cumulative_final_refit_solves,
+        cumulative_derivative_s=optimized.cumulative_derivative_s,
     )

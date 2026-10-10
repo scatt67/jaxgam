@@ -939,9 +939,14 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
 
     public_iterations = int(cold_result.n_iter)
     efs_diagnostics = getattr(cold_result, "optimizer_diagnostics", None)
+    exact_diagnostics = getattr(cold_result, "exact_optimizer_diagnostics", None)
     if case.execution == "stream-exact":
         iteration_semantics = "outer exact-REML optimizer iterations"
-        inner_iterations = None
+        inner_iterations = (
+            None
+            if exact_diagnostics is None
+            else exact_diagnostics.cumulative_inner_iterations
+        )
         outer_iterations = public_iterations
     elif case.execution == "efs":
         iteration_semantics = "outer EFS optimizer iterations"
@@ -963,6 +968,17 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
         "n_iter": public_iterations,
         "n_iter_semantics": iteration_semantics,
         "inner_iterations": inner_iterations,
+        "inner_iteration_semantics": (
+            "sum of executed PIRLS loop passes across exact score/gradient "
+            "evaluations; final source refit solves recorded separately"
+            if case.execution == "stream-exact" and exact_diagnostics is not None
+            else None
+        ),
+        "final_refit_solves": (
+            None
+            if exact_diagnostics is None
+            else exact_diagnostics.cumulative_final_refit_solves
+        ),
         "outer_iterations": outer_iterations,
         "n_coef": int(coefficients.size),
         "n_penalties": int(np.asarray(cold_result.smoothing_params).size),
@@ -990,6 +1006,13 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
                 "startup_source_scans": (
                     cold_result.exact_optimizer_diagnostics.startup_source_scans
                 ),
+                "cumulative_inner_iterations": (
+                    exact_diagnostics.cumulative_inner_iterations
+                ),
+                "cumulative_final_refit_solves": (
+                    exact_diagnostics.cumulative_final_refit_solves
+                ),
+                "cumulative_derivative_s": exact_diagnostics.cumulative_derivative_s,
             }
         ),
         "coefficient_sha256": _array_sha256(coefficients),
@@ -1103,9 +1126,17 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
             "prediction_s": prediction_s,
             "prediction_se_s": prediction_se_s,
             "prediction_se_status": prediction_se_status,
-            "derivative_s": None,
+            "derivative_s": (
+                None
+                if exact_diagnostics is None
+                else exact_diagnostics.cumulative_derivative_s
+            ),
             "derivative_status": (
-                "public fit result does not expose separate derivative time"
+                "post-PIRLS exact score/adjoint/derivative host stage, synchronized "
+                "through score and gradient for every evaluated trial; excludes "
+                "coefficient fits, startup, public result finish and prediction"
+                if exact_diagnostics is not None
+                else "public fit result does not expose separate derivative time"
             ),
         },
         "memory": {

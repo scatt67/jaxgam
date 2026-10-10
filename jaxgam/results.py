@@ -250,7 +250,14 @@ class GAMInferenceResult(_FitDiagnostics):
 
 @dataclass(frozen=True)
 class StreamExactOptimizerDiagnostics:
-    """Bounded accepted-state diagnostics for exact streamed REML."""
+    """Bounded all-evaluation diagnostics for exact streamed REML.
+
+    Inner iterations sum executed PIRLS loop passes over initial, accepted,
+    rejected and local-probe trials. Final source refit solves are separate;
+    the startup scan prepares parameters but does not fit coefficients.
+    Derivative time covers host work after each PIRLS fit returns through
+    synchronized source score and gradient, including validation/replay.
+    """
 
     status: int
     n_evaluations: int
@@ -259,6 +266,9 @@ class StreamExactOptimizerDiagnostics:
     accepted_score_history: tuple[float, ...]
     startup_source_scans: int
     startup_batches_scanned: int
+    cumulative_inner_iterations: int = 0
+    cumulative_final_refit_solves: int = 0
+    cumulative_derivative_s: float = 0.0
 
 
 @dataclass(frozen=True)

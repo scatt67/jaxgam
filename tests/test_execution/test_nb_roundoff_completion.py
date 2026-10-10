@@ -312,6 +312,8 @@ def _local_probe_case(
         value.gradient = np.array([0.0, gradient])
         value.source_scans = 4
         value.batches_scanned = 44
+        value.derivative_elapsed_s = 0.125
+        value.final_refit_solves = 1
         value.source_fingerprint = source
         value.basis_fingerprint = "basis"
         value.family_name = "nb"
@@ -327,6 +329,7 @@ def _local_probe_case(
         state.converged = not invalid_inner
         state.line_search_failed = False
         state.stationarity = 1e-14
+        state.n_iter = 3
         state.saturated_loglik = -280.0
         state.coefficient_factor = factor
         value.fit_result = SimpleNamespace(
@@ -358,6 +361,9 @@ def _local_probe_case(
         n_evaluations=0,
         cumulative_source_scans=0,
         cumulative_batches_scanned=0,
+        cumulative_inner_iterations=0,
+        cumulative_final_refit_solves=0,
+        cumulative_derivative_s=0.0,
     )
     return objective, accepted, candidate, live
 
@@ -377,6 +383,9 @@ def test_nb_local_score_comparison_streams_three_probes_with_bounded_retention()
     assert objective.n_evaluations == 3
     assert objective.cumulative_source_scans == 12
     assert objective.cumulative_batches_scanned == 132
+    assert objective.cumulative_inner_iterations == 9
+    assert objective.cumulative_final_refit_solves == 3
+    assert objective.cumulative_derivative_s == 0.375
     for ownership in live.values():
         assert sum(item() is not None for item in ownership) == 2
 
@@ -479,6 +488,7 @@ def _profile_trial(params, *, score=None, gradient=None, **overrides):
         converged=overrides.pop("converged", True),
         line_search_failed=False,
         stationarity=1e-14,
+        n_iter=3,
         saturated_loglik=-280.0,
         coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 19.0),
     )
@@ -488,6 +498,8 @@ def _profile_trial(params, *, score=None, gradient=None, **overrides):
         gradient=np.array([0.3, exact_gradient if gradient is None else gradient]),
         source_scans=2,
         batches_scanned=5,
+        derivative_elapsed_s=0.25,
+        final_refit_solves=1,
         source_fingerprint="source",
         basis_fingerprint="basis",
         family_name="nb",
@@ -633,6 +645,10 @@ def test_theta_secant_completion_finishes_roundoff_stops(monkeypatch, message, s
     assert result.n_evaluations == len(profile.requests)
     assert result.cumulative_source_scans == 2 * len(profile.requests)
     assert result.cumulative_batches_scanned == 5 * len(profile.requests)
+    # Work counters include every completion trial.
+    assert result.cumulative_inner_iterations == 3 * len(profile.requests)
+    assert result.cumulative_final_refit_solves == len(profile.requests)
+    assert result.cumulative_derivative_s == 0.25 * len(profile.requests)
     assert result.n_accepted == 2 + result.theta_completion_steps
     history = np.asarray(result.accepted_score_history)
     assert history[-1] == float(result.trial.score)

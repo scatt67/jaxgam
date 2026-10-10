@@ -435,7 +435,16 @@ def test_tiny_public_exact_route_records_source_bytes_and_optimizer(
     assert result["source_scans"]["training_source_batch_bytes_during_prediction"] == 0
     assert result["exact_optimizer_diagnostics"]["n_evaluations"] > 0
     assert result["outer_iterations"] == result["n_iter"]
-    assert result["inner_iterations"] is None
+    assert (
+        result["inner_iterations"]
+        >= result["exact_optimizer_diagnostics"]["n_evaluations"]
+    )
+    assert (
+        result["final_refit_solves"]
+        == result["exact_optimizer_diagnostics"]["n_evaluations"]
+    )
+    assert result["exact_optimizer_diagnostics"]["cumulative_derivative_s"] > 0.0
+    assert record["fit"]["timings"]["derivative_s"] > 0.0
     assert result["n_iter_semantics"] == "outer exact-REML optimizer iterations"
     if r_available():
         parity = benchmark_scaling.compare_pinned_r_exact(case, record)

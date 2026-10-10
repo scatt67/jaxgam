@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numbers
 import sys
+import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -57,6 +58,8 @@ class StreamREMLTrial:
     basis_fingerprint: str
     family_name: str
     link_name: str
+    derivative_elapsed_s: float = 0.0
+    final_refit_solves: int = 0
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,8 @@ class RegularStreamREMLTrial:
     family_name: str
     link_name: str
     log_phi_curvature: float | None = None
+    derivative_elapsed_s: float = 0.0
+    final_refit_solves: int = 0
 
 
 @dataclass(frozen=True)
@@ -159,6 +164,9 @@ class StreamREMLOptimization:
     cumulative_batches_scanned: int
     projected_gradient_inf: float
     accepted_score_history: tuple[float, ...]
+    cumulative_inner_iterations: int = 0
+    cumulative_final_refit_solves: int = 0
+    cumulative_derivative_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -185,6 +193,9 @@ class RegularStreamREMLOptimization:
     outer_workspace_bytes: int
     scale_completion_steps: int = 0
     scale_completion_stop: str | None = None
+    cumulative_inner_iterations: int = 0
+    cumulative_final_refit_solves: int = 0
+    cumulative_derivative_s: float = 0.0
 
     @property
     def required_bytes(self) -> int:
@@ -201,6 +212,8 @@ class _ParameterizedTrial(Protocol):
     source_scans: int
     batches_scanned: int
     source_fingerprint: str
+    derivative_elapsed_s: float
+    final_refit_solves: int
 
 
 _TrialT = TypeVar("_TrialT", bound=_ParameterizedTrial)
@@ -221,6 +234,9 @@ class _ParameterizedOptimization(Generic[_TrialT]):
     cumulative_batches_scanned: int
     projected_gradient_inf: float
     accepted_score_history: tuple[float, ...]
+    cumulative_inner_iterations: int = 0
+    cumulative_final_refit_solves: int = 0
+    cumulative_derivative_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -429,6 +445,7 @@ def evaluate_regular_stream_reml(
         initial_coefficients=initial,
         device=device,
     )
+    derivative_started = time.perf_counter()
     state = result.state
     if (
         not state.converged
@@ -578,6 +595,8 @@ def evaluate_regular_stream_reml(
     lineage.validate(stream.prepared, family)
     if stream.source.fingerprint() != lineage.source_fingerprint:
         raise RuntimeError("RowSource changed during regular REML evaluation.")
+    jax.block_until_ready((core.score, gradient, log_phi_curvature))
+    derivative_elapsed_s = time.perf_counter() - derivative_started
     return RegularStreamREMLTrial(
         params=jax.device_put(jnp.asarray(params, dtype=jnp.float64), device),
         score=core.score,
@@ -596,6 +615,8 @@ def evaluate_regular_stream_reml(
         log_phi_curvature=(
             None if family.scale_known else float(np.asarray(log_phi_curvature))
         ),
+        derivative_elapsed_s=derivative_elapsed_s,
+        final_refit_solves=1,
     )
 
 
@@ -661,6 +682,7 @@ def evaluate_stream_reml(
         beta_init=beta_init,
         device=device,
     )
+    derivative_started = time.perf_counter()
     if (
         not state.converged
         or state.line_search_failed
@@ -745,6 +767,8 @@ def evaluate_stream_reml(
     lineage.validate(stream.prepared, family)
     if stream.source.fingerprint() != lineage.source_fingerprint:
         raise RuntimeError("RowSource changed during streamed REML evaluation.")
+    jax.block_until_ready((score, gradient))
+    derivative_elapsed_s = time.perf_counter() - derivative_started
     return StreamREMLTrial(
         rho=rho_device,
         score=score,
@@ -757,12 +781,22 @@ def evaluate_stream_reml(
         basis_fingerprint=stream.prepared.basis_fingerprint,
         family_name=family.family_name,
         link_name=type(family.link).__qualname__,
+        derivative_elapsed_s=derivative_elapsed_s,
     )
 
 
 def _same_rho(left: np.ndarray, right: jax.Array | np.ndarray) -> bool:
     """Compare host smoothing vectors exactly at an optimizer boundary."""
     return np.array_equal(left, np.asarray(right, dtype=np.float64))
+
+
+def _trial_inner_iterations(trial: object) -> int:
+    """Count completed PIRLS loop passes, excluding the final score refit."""
+    state = getattr(trial, "fit_state", None)
+    if state is None:
+        fit_result = getattr(trial, "fit_result", None)
+        state = getattr(fit_result, "state", None)
+    return int(getattr(state, "n_iter", 0))
 
 
 def _projected_gradient(
@@ -809,6 +843,13 @@ class _AcceptedTrialObjective:
         self.n_accepted = 0
         self.cumulative_source_scans = self.accepted.source_scans
         self.cumulative_batches_scanned = self.accepted.batches_scanned
+        self.cumulative_inner_iterations = _trial_inner_iterations(self.accepted)
+        self.cumulative_final_refit_solves = getattr(
+            self.accepted, "final_refit_solves", 0
+        )
+        self.cumulative_derivative_s = getattr(
+            self.accepted, "derivative_elapsed_s", 0.0
+        )
         self._history: deque[float] = deque(maxlen=reml_control.history_size)
         self._history.append(float(np.asarray(self.accepted.score)))
 
@@ -845,6 +886,11 @@ class _AcceptedTrialObjective:
             self.n_evaluations += 1
             self.cumulative_source_scans += trial.source_scans
             self.cumulative_batches_scanned += trial.batches_scanned
+            self.cumulative_inner_iterations += _trial_inner_iterations(trial)
+            self.cumulative_final_refit_solves += getattr(
+                trial, "final_refit_solves", 0
+            )
+            self.cumulative_derivative_s += getattr(trial, "derivative_elapsed_s", 0.0)
         score = float(np.asarray(trial.score))
         gradient = np.asarray(trial.gradient, dtype=np.float64)
         if not np.isfinite(score) or not np.all(np.isfinite(gradient)):
@@ -972,6 +1018,9 @@ def optimize_stream_reml(
         cumulative_batches_scanned=objective.cumulative_batches_scanned,
         projected_gradient_inf=projected_gradient_inf,
         accepted_score_history=objective.accepted_score_history,
+        cumulative_inner_iterations=objective.cumulative_inner_iterations,
+        cumulative_final_refit_solves=objective.cumulative_final_refit_solves,
+        cumulative_derivative_s=objective.cumulative_derivative_s,
     )
 
 
@@ -1000,6 +1049,13 @@ class _AcceptedParameterizedTrialObjective(Generic[_TrialT]):
         self.n_accepted = 0
         self.cumulative_source_scans = self.accepted.source_scans
         self.cumulative_batches_scanned = self.accepted.batches_scanned
+        self.cumulative_inner_iterations = _trial_inner_iterations(self.accepted)
+        self.cumulative_final_refit_solves = getattr(
+            self.accepted, "final_refit_solves", 0
+        )
+        self.cumulative_derivative_s = getattr(
+            self.accepted, "derivative_elapsed_s", 0.0
+        )
         self._history: deque[float] = deque(maxlen=reml_control.history_size)
         self._history.append(float(np.asarray(self.accepted.score)))
 
@@ -1023,6 +1079,9 @@ class _AcceptedParameterizedTrialObjective(Generic[_TrialT]):
         self.n_evaluations += 1
         self.cumulative_source_scans += trial.source_scans
         self.cumulative_batches_scanned += trial.batches_scanned
+        self.cumulative_inner_iterations += _trial_inner_iterations(trial)
+        self.cumulative_final_refit_solves += getattr(trial, "final_refit_solves", 0)
+        self.cumulative_derivative_s += getattr(trial, "derivative_elapsed_s", 0.0)
         return trial
 
     def _promote_candidate(self) -> None:
@@ -1236,6 +1295,9 @@ def _run_parameterized_stream_reml(
             cumulative_batches_scanned=objective.cumulative_batches_scanned,
             projected_gradient_inf=0.0,
             accepted_score_history=objective.accepted_score_history,
+            cumulative_inner_iterations=objective.cumulative_inner_iterations,
+            cumulative_final_refit_solves=objective.cumulative_final_refit_solves,
+            cumulative_derivative_s=objective.cumulative_derivative_s,
         )
     if roundoff_stationary_completion and (
         completion_inner_tolerance is None or completion_inner_tolerance <= 0.0
@@ -1599,6 +1661,9 @@ def _run_parameterized_stream_reml(
         cumulative_batches_scanned=objective.cumulative_batches_scanned,
         projected_gradient_inf=projected_gradient_inf,
         accepted_score_history=objective.accepted_score_history,
+        cumulative_inner_iterations=objective.cumulative_inner_iterations,
+        cumulative_final_refit_solves=objective.cumulative_final_refit_solves,
+        cumulative_derivative_s=objective.cumulative_derivative_s,
     )
 
 
@@ -1949,6 +2014,9 @@ def _complete_pinned_regular_scale(
             cumulative_batches_scanned=objective.cumulative_batches_scanned,
             projected_gradient_inf=projected_gradient_inf,
             accepted_score_history=objective.accepted_score_history,
+            cumulative_inner_iterations=objective.cumulative_inner_iterations,
+            cumulative_final_refit_solves=objective.cumulative_final_refit_solves,
+            cumulative_derivative_s=objective.cumulative_derivative_s,
         ),
         completion,
     )
@@ -2100,4 +2168,7 @@ def optimize_regular_stream_reml(
         outer_workspace_bytes=outer_workspace_bytes,
         scale_completion_steps=0 if completion is None else completion.steps,
         scale_completion_stop=None if completion is None else completion.stop,
+        cumulative_inner_iterations=optimized.cumulative_inner_iterations,
+        cumulative_final_refit_solves=optimized.cumulative_final_refit_solves,
+        cumulative_derivative_s=optimized.cumulative_derivative_s,
     )

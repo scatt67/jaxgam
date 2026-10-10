@@ -812,12 +812,21 @@ def test_regular_stream_reml_step_window_rejects_invalid_before_source_scan(
     [(Gaussian, "identity"), (Poisson, "log")],
 )
 def test_regular_stream_reml_optimizer_converges_and_matches_final_source_refit(
-    family_class, link
+    family_class, link, monkeypatch
 ) -> None:
     family, data, weight, offset, start, source, prepared, params, control = _problem(
         family_class, link
     )
     counted = _CountedSource(source)
+    actual_fit = reml_execution.fit_regular_streamed_pirls
+    evaluated_inner_iterations = []
+
+    def counted_fit(*args, **kwargs):
+        fit = actual_fit(*args, **kwargs)
+        evaluated_inner_iterations.append(fit.state.n_iter)
+        return fit
+
+    monkeypatch.setattr(reml_execution, "fit_regular_streamed_pirls", counted_fit)
     result = optimize_regular_stream_reml(
         StreamDesign(prepared, counted),
         family,
@@ -840,6 +849,11 @@ def test_regular_stream_reml_optimizer_converges_and_matches_final_source_refit(
     assert result.n_evaluations >= result.n_accepted + 1
     assert result.cumulative_source_scans == counted.scans
     assert result.cumulative_source_scans >= result.trial.source_scans
+    assert result.cumulative_inner_iterations == sum(evaluated_inner_iterations)
+    assert result.cumulative_final_refit_solves == len(evaluated_inner_iterations)
+    assert len(evaluated_inner_iterations) == result.n_evaluations
+    assert result.cumulative_inner_iterations >= result.trial.fit_result.state.n_iter
+    assert result.cumulative_derivative_s > 0.0
     assert result.required_bytes < 64_000_000
     assert np.all(np.diff(history) <= 1e-10)
     n_params = 1 + int(not family.scale_known)
