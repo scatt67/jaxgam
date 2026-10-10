@@ -1296,9 +1296,9 @@ def _run_parameterized_stream_reml(
         if max_step is None:
             local_bounds = bounds
         else:
-            # Pinned gam.fit3.r:newton caps each log-parameter proposal at
-            # maxNstep=5 and halves unsuccessful trials. A local L-BFGS-B
-            # window enforces the same step scale without evaluating an
+            # Pinned fast-REML.r:fast.REML.fit caps each log-parameter
+            # proposal at maxNstep=5 and halves unsuccessful trials. A local
+            # L-BFGS-B window enforces the same step scale without evaluating an
             # ill-conditioned distant derivative. Boundary optima reopen a
             # fresh window from the exact accepted trial.
             local_bounds = [
@@ -1345,10 +1345,32 @@ def _run_parameterized_stream_reml(
             result_params, gradient, local_bounds
         )
         local_gradient_inf = float(np.max(np.abs(local_projected)))
+        # A source-sized window is a step cap, not a parameter constraint.
+        # Continue from an accepted artificial edge whenever descent points
+        # beyond it, even if another free coordinate has not reached gtol.
+        # A true global bound must never be treated as a reason to reopen.
+        artificial_edge_descent = any(
+            (
+                local_lower is not None
+                and (global_lower is None or local_lower > global_lower)
+                and value <= local_lower
+                and derivative > control.gtol
+            )
+            or (
+                local_upper is not None
+                and (global_upper is None or local_upper < global_upper)
+                and value >= local_upper
+                and derivative < -control.gtol
+            )
+            for value, derivative, (local_lower, local_upper), (
+                global_lower,
+                global_upper,
+            ) in zip(result_params, gradient, local_bounds, bounds, strict=True)
+        )
         if not (
             max_step is not None
             and bool(result.success)
-            and local_gradient_inf <= control.gtol
+            and (local_gradient_inf <= control.gtol or artificial_edge_descent)
             and projected_gradient_inf > control.gtol
             and not _same_rho(result_params, center)
             and total_iterations < control.max_iter

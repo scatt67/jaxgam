@@ -677,6 +677,66 @@ def test_regular_stream_reml_step_windows_reopen_from_exact_accepted_trial(
     assert result.required_bytes < 1_000_000
 
 
+def test_regular_stream_reml_reopens_artificial_edge_with_other_free_gradient(
+    monkeypatch,
+) -> None:
+    """A free scale gradient must not strand rho at a source step cap."""
+    accepted: list[np.ndarray] = []
+    window_bounds: list[list[tuple[float | None, float | None]]] = []
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        rho, log_phi = np.asarray(params)
+        return SimpleNamespace(
+            params=np.asarray(params).copy(),
+            score=jnp.array((rho - 12.0) ** 2 + (log_phi - 1.0) ** 2),
+            gradient=jnp.array([2.0 * (rho - 12.0), 2.0 * (log_phi - 1.0)]),
+            source_scans=2,
+            batches_scanned=4,
+            source_fingerprint="source",
+            workspace=SimpleNamespace(required_bytes=128),
+        )
+
+    def minimize_call(objective, _center, *, bounds, callback, **_kwargs):
+        window_bounds.append(bounds)
+        rho = min(float(bounds[0][1]), 12.0)
+        # The first artificial rho edge has a residual free-scale gradient
+        # above gtol, as in the official 100,000-row Gaussian fit.
+        log_phi = 1.0 + 4.6e-6 if not accepted else 1.0
+        point = np.array([rho, log_phi])
+        objective(point)
+        callback(SimpleNamespace(x=point))
+        accepted.append(point)
+        return SimpleNamespace(
+            x=point,
+            success=True,
+            message="relative reduction",
+            status=0,
+            nit=1,
+        )
+
+    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", minimize_call)
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(
+            fitting=SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=1)),
+            n_coef=2,
+        ),
+    )
+    result = optimize_regular_stream_reml(
+        stream,
+        SimpleNamespace(scale_known=False),
+        np.array([0.0, 1.0]),
+        maximum_bytes=1_000_000,
+        max_step=5.0,
+    )
+    assert result.converged
+    assert result.message.endswith("3 source step window(s).")
+    assert window_bounds[0][0] == (-5.0, 5.0)
+    np.testing.assert_allclose(result.trial.params, [12.0, 1.0])
+    assert result.projected_gradient_inf == 0.0
+
+
 def test_regular_stream_reml_roundoff_window_stalls_truthfully(monkeypatch) -> None:
     calls = 0
 
