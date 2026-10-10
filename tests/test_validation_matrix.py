@@ -536,9 +536,11 @@ def test_public_estimated_regular_all_links_pinned_r(
         data[["x"]], pred_type="link", se_fit=True, offset=offset
     )
     assert expected["inner_converged"]
+    assert result.converged
     assert result.execution_route == "stream_exact_reml_qr"
     assert result.lambda_strategy == "exact_reml"
     assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-6
     assert result.source_scans >= 2 + result.exact_optimizer_diagnostics.n_evaluations
     assert result.known_workspace_bytes <= model.control.memory_budget_bytes
     assert result.n == source.n_rows
@@ -573,6 +575,100 @@ def test_public_estimated_regular_all_links_pinned_r(
             ),
         )
     checks.raise_if_any(f"public estimated {family.family_name}/{link} R parity")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_exact_gamma_inverse_squared_partition_stationarity(
+    tmp_path: Path,
+) -> None:
+    """Exact score reduction and convergence survive different batch cuts."""
+    data, weight, offset = _public_exact_regular_case(Gamma, "inverse_squared")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, "gamma", "inverse_squared"
+    )
+    checks = _AssertCollector()
+    for batch_rows in (13, 17, 32, 96):
+        model = GAM(
+            'y~s(x,bs="cr",k=6)',
+            family=Gamma("inverse_squared"),
+            control=FitControl(
+                execution="stream",
+                linear_solver="qr",
+                batch_rows=batch_rows,
+                uncertainty="fisher",
+            ),
+        )
+        result = model.fit(source, result="prediction")
+        assert result.converged, f"batch_rows={batch_rows}: {result.convergence_info}"
+        diagnostics = result.exact_optimizer_diagnostics
+        assert diagnostics is not None
+        assert diagnostics.projected_gradient_inf <= 1e-6
+        assert np.all(np.diff(diagnostics.accepted_score_history) <= STRICT.atol)
+        for name, actual, reference in (
+            ("score", result.score, expected["score"]),
+            ("smoothing", result.smoothing_params[0], expected["smoothing"]),
+            ("coefficients", result.coefficients, expected["coefficients"]),
+            ("scale", result.scale, expected["scale"]),
+            (
+                "link SE",
+                result.predict(
+                    data[["x"]], pred_type="link", se_fit=True, offset=offset
+                )[1],
+                expected["link_se"],
+            ),
+        ):
+            checks.check(
+                f"batch {batch_rows} {name}",
+                lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                    actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+    checks.raise_if_any("Gamma inverse-squared exact partition parity")
+
+
+def test_public_exact_large_row_fit_stays_within_stream_budget() -> None:
+    """The exact public route fits more rows than its dense-X byte budget."""
+    n = 8192
+    x = np.linspace(-1.0, 1.0, n)
+    mu = np.exp(0.2 + 0.5 * np.sin(4.0 * x))
+    y = np.random.default_rng(83083).poisson(mu)
+    data = pd.DataFrame({"x": x, "y": y})
+    source = DataFrameRowSource(data, response="y")
+    budget = 1_100_000
+    model = GAM(
+        'y~s(x,bs="cr",k=24)',
+        family=Poisson(),
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=128,
+            memory_budget_bytes=budget,
+            uncertainty="fisher",
+        ),
+    )
+    result = model.fit(source, result="prediction")
+    assert result.converged
+    assert result.execution_route == "stream_exact_reml_qr"
+    assert result.lambda_strategy == "exact_reml"
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-6
+    assert np.all(
+        np.diff(result.exact_optimizer_diagnostics.accepted_score_history)
+        <= STRICT.atol
+    )
+    assert result.source_scans >= 2 + result.exact_optimizer_diagnostics.n_evaluations
+    assert result.n == n
+    assert 0 < result.known_workspace_bytes <= budget
+    assert budget < n * result.coefficients.size * np.dtype(np.float64).itemsize
+    assert not any(
+        value.shape == (n,)
+        for value in result.__dict__.values()
+        if isinstance(value, np.ndarray)
+    )
+    fitted, se = result.predict(data[["x"]].iloc[:8], se_fit=True)
+    assert np.all(np.isfinite(fitted))
+    assert np.all(np.isfinite(se))
 
 
 @pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
@@ -727,21 +823,14 @@ def test_public_estimated_nb_theta_modes_pinned_r(
         data[["x"]], pred_type="link", se_fit=True, offset=offset
     )
     assert expected["inner_converged"]
-    if smooth and estimated and link == "sqrt":
-        assert result.converged
-        assert result.exact_optimizer_diagnostics is not None
-        assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-9
-    if not result.converged:
-        assert expected["outer_converged"]
-        assert "projected gradient" in result.convergence_info
-        assert result.exact_optimizer_diagnostics is not None
-        assert result.exact_optimizer_diagnostics.projected_gradient_inf > 1e-9
+    assert result.converged
     assert result.lambda_strategy == (
         "exact_reml_no_parameters" if not smooth and not estimated else "exact_reml"
     )
     assert result.execution_route == "stream_exact_reml_qr"
     if smooth or estimated:
         assert result.exact_optimizer_diagnostics is not None
+        assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-9
         assert (
             result.source_scans
             > result.exact_optimizer_diagnostics.startup_source_scans

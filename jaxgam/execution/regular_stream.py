@@ -544,6 +544,7 @@ def fit_regular_streamed_pirls(
         if not np.all(np.isfinite(beta)):
             return np.inf, False
         deviance = 0.0
+        deviance_correction = 0.0
         domain = True
         for batch, y, weight, offset, valid in _source_batches(
             stream, family, lineage, control.batch_rows
@@ -554,7 +555,9 @@ def fit_regular_streamed_pirls(
                 normalized_y = family.execution_initial_response_cpu(y, weight)
                 eta = X @ beta + offset
                 mu = np.asarray(family.link.inverse(eta))
-                deviance += _source_regular_deviance(family, normalized_y, mu, weight)
+                batch_deviance = _source_regular_deviance(
+                    family, normalized_y, mu, weight
+                )
                 domain = domain and bool(
                     np.all(family.valid_eta(eta)) and np.all(family.valid_mu(mu))
                 )
@@ -570,8 +573,19 @@ def fit_regular_streamed_pirls(
                     family,
                     lineage.context,
                 )
-                deviance += float(np.asarray(value))
+                batch_deviance = float(np.asarray(value))
                 domain = domain and bool(np.asarray(admissible))
+            if np.isfinite(deviance) and np.isfinite(batch_deviance):
+                addend = batch_deviance - deviance_correction
+                next_deviance = deviance + addend
+                deviance_correction = (next_deviance - deviance) - addend
+                deviance = next_deviance
+            else:
+                # gam.fit3 can retain a +Inf explicit-null baseline. Kahan's
+                # Inf-Inf correction must not turn that source sentinel into
+                # a NaN before the first working solve.
+                deviance += batch_deviance
+                deviance_correction = 0.0
             batches_scanned += 1
         scans += 1
         return deviance, domain and np.isfinite(deviance)
@@ -839,6 +853,7 @@ def fit_regular_streamed_pirls(
         raise FloatingPointError("regular final source score is nonfinite")
     fletcher = None
     saturated = 0.0
+    saturated_correction = 0.0
     for batch, y, weight, offset, valid in _source_batches(
         stream, family, lineage, control.batch_rows
     ):
@@ -877,7 +892,10 @@ def fit_regular_streamed_pirls(
         )
         if not bool(np.asarray(admissible)):
             raise FloatingPointError("regular saturated likelihood is inadmissible")
-        saturated += float(np.asarray(value))
+        addend = float(np.asarray(value)) - saturated_correction
+        next_saturated = saturated + addend
+        saturated_correction = (next_saturated - saturated) - addend
+        saturated = next_saturated
         batches_scanned += 1
     scans += 1
     if policy.reported_scale == "known_one":
