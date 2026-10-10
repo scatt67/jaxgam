@@ -20,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
+from scipy import __config__ as scipy_config
+from scipy import linalg
 
 _PROVIDER_VERSION = "0.3.26.0.4"
 _OPENBLAS_PREFIX = "OpenBLAS 0.3.26 "
@@ -33,6 +35,16 @@ _CBLAS_TRANS = 112
 _CBLAS_UPPER = 121
 _LAPACK_INT_MAX = np.iinfo(np.int32).max
 _LANCZOS_INT_MAX = np.iinfo(np.int64).max
+
+
+def scipy_uses_accelerate_lapack() -> bool:
+    """Inspect the installed SciPy LAPACK provider, independent of the OS."""
+    lapack = (
+        getattr(scipy_config, "CONFIG", {})
+        .get("Build Dependencies", {})
+        .get("lapack", {})
+    )
+    return lapack.get("name") == "Accelerate"
 
 
 @dataclass(frozen=True)
@@ -106,10 +118,11 @@ def cubic_shrinkage_workspace_bound(k: int) -> int:
     """Return a conservative peak byte bound beyond the retained input S.
 
     The eigensolve peak owns the overwritten input copy, eigenvectors, values,
-    support indices, and capped DSYEVR work arrays.  The reconstruction peak
-    owns eigenvectors, the scaled transposed factor, and the returned penalty.
-    The caps are checked against the provider's workspace query before either
-    full work array is allocated.
+    support indices, and capped DSYEVR work arrays on the pinned provider path.
+    SciPy's Accelerate EVR path has the same quadratic matrix ownership.  The
+    reconstruction peak owns eigenvectors, the scaled transposed factor, and
+    the returned penalty.  Pinned work queries are checked against the caps
+    before either full work array is allocated.
     """
     if isinstance(k, bool) or not isinstance(k, int) or k < 3:
         raise ValueError("Cubic shrinkage dimension must be an integer >= 3.")
@@ -751,72 +764,82 @@ def cubic_shrinkage_penalty(
     _check_input_finite(S)
 
     provider = _source_lapack()
-    lapack_int = ctypes.c_int
     double = ctypes.c_double
     double_pointer = ctypes.POINTER(double)
-    int_pointer = ctypes.POINTER(lapack_int)
-
-    a = np.array(S, dtype=np.float64, order="F", copy=True)
-    values = np.empty(k, dtype=np.float64)
-    vectors = np.empty((k, k), dtype=np.float64, order="F")
-    support = np.empty(2 * k, dtype=np.int32)
-    count = lapack_int(0)
-    work_query = np.empty(1, dtype=np.float64)
-    iwork_query = np.empty(1, dtype=np.int32)
-
-    def arguments(
-        matrix: np.ndarray,
-        support_array: np.ndarray,
-        work: np.ndarray,
-        iwork: np.ndarray,
-        lwork: int,
-        liwork: int,
-    ):
-        return (
-            _LAPACK_COL_MAJOR,
-            b"V",
-            b"A",
-            b"L",
-            k,
-            matrix.ctypes.data_as(double_pointer),
-            k,
-            0.0,
-            0.0,
-            0,
-            0,
-            0.0,
-            ctypes.byref(count),
-            values.ctypes.data_as(double_pointer),
-            vectors.ctypes.data_as(double_pointer),
-            k,
-            support_array.ctypes.data_as(int_pointer),
-            work.ctypes.data_as(double_pointer),
-            lwork,
-            iwork.ctypes.data_as(int_pointer),
-            liwork,
+    if scipy_uses_accelerate_lapack():
+        # Accelerate EVR preserves R's separate libRlapack cubic null gauge
+        # more closely.  The installed SciPy build selects this path.
+        a = np.array(S, dtype=np.float64, order="F", copy=True)
+        values, vectors = linalg.eigh(
+            a, lower=True, driver="evr", overwrite_a=True, check_finite=False
         )
+        del a
+    else:
+        lapack_int = ctypes.c_int
+        int_pointer = ctypes.POINTER(lapack_int)
+        a = np.array(S, dtype=np.float64, order="F", copy=True)
+        values = np.empty(k, dtype=np.float64)
+        vectors = np.empty((k, k), dtype=np.float64, order="F")
+        support = np.empty(2 * k, dtype=np.int32)
+        count = lapack_int(0)
+        work_query = np.empty(1, dtype=np.float64)
+        iwork_query = np.empty(1, dtype=np.int32)
 
-    status = provider.dsyevr_work(
-        *arguments(a, support, work_query, iwork_query, -1, -1)
-    )
-    if status != 0:
-        raise np.linalg.LinAlgError(
-            f"DSYEVR workspace query failed with info={status}."
+        def arguments(
+            matrix: np.ndarray,
+            support_array: np.ndarray,
+            work: np.ndarray,
+            iwork: np.ndarray,
+            lwork: int,
+            liwork: int,
+        ):
+            return (
+                _LAPACK_COL_MAJOR,
+                b"V",
+                b"A",
+                b"L",
+                k,
+                matrix.ctypes.data_as(double_pointer),
+                k,
+                0.0,
+                0.0,
+                0,
+                0,
+                0.0,
+                ctypes.byref(count),
+                values.ctypes.data_as(double_pointer),
+                vectors.ctypes.data_as(double_pointer),
+                k,
+                support_array.ctypes.data_as(int_pointer),
+                work.ctypes.data_as(double_pointer),
+                lwork,
+                iwork.ctypes.data_as(int_pointer),
+                liwork,
+            )
+
+        status = provider.dsyevr_work(
+            *arguments(a, support, work_query, iwork_query, -1, -1)
         )
-    lwork = _query_length(work_query[0], name="lwork", cap=64 * k)
-    liwork = _query_length(iwork_query[0], name="liwork", cap=32 * k)
-    work = np.empty(lwork, dtype=np.float64)
-    iwork = np.empty(liwork, dtype=np.int32)
-    np.copyto(a, S)
-    count.value = 0
-    status = provider.dsyevr_work(*arguments(a, support, work, iwork, lwork, liwork))
-    if status != 0:
-        raise np.linalg.LinAlgError(f"DSYEVR failed with info={status}.")
-    if count.value != k:
-        raise np.linalg.LinAlgError(
-            f"DSYEVR returned {count.value} eigenpairs for a {k} by {k} penalty."
+        if status != 0:
+            raise np.linalg.LinAlgError(
+                f"DSYEVR workspace query failed with info={status}."
+            )
+        lwork = _query_length(work_query[0], name="lwork", cap=64 * k)
+        liwork = _query_length(iwork_query[0], name="liwork", cap=32 * k)
+        work = np.empty(lwork, dtype=np.float64)
+        iwork = np.empty(liwork, dtype=np.int32)
+        np.copyto(a, S)
+        count.value = 0
+        status = provider.dsyevr_work(
+            *arguments(a, support, work, iwork, lwork, liwork)
         )
-    del a, support, work_query, iwork_query, work, iwork
+        if status != 0:
+            raise np.linalg.LinAlgError(f"DSYEVR failed with info={status}.")
+        if count.value != k:
+            raise np.linalg.LinAlgError(
+                f"DSYEVR returned {count.value} eigenpairs for a {k} by {k} penalty."
+            )
+        del a, support, work_query, iwork_query, work, iwork
     if not np.all(np.isfinite(values)) or not np.all(np.isfinite(vectors)):
         raise np.linalg.LinAlgError("DSYEVR returned non-finite eigenpairs.")
 

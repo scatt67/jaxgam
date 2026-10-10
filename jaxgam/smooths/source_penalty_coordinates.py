@@ -11,7 +11,6 @@ import ctypes
 
 import numpy as np
 import numpy.typing as npt
-from scipy import __config__ as scipy_config
 from scipy.linalg import blas
 
 from jaxgam.smooths.source_lapack import (
@@ -20,16 +19,12 @@ from jaxgam.smooths.source_lapack import (
     _query_length,
     _source_lapack,
 )
-
-
-def scipy_uses_accelerate_lapack() -> bool:
-    """Inspect the installed SciPy LAPACK provider, independent of the OS."""
-    lapack = (
-        getattr(scipy_config, "CONFIG", {})
-        .get("Build Dependencies", {})
-        .get("lapack", {})
-    )
-    return lapack.get("name") == "Accelerate"
+from jaxgam.smooths.source_lapack import (
+    scipy_config as scipy_config,
+)
+from jaxgam.smooths.source_lapack import (
+    scipy_uses_accelerate_lapack as scipy_uses_accelerate_lapack,
+)
 
 
 def _source_centering_reflector(design: npt.NDArray[np.float64]) -> np.ndarray:
