@@ -34,11 +34,15 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tests.r_bridge import RBridge, RBridgeError
+from tests.tolerances import MODERATE, STRICT
 
 _PINNED_R_VERSION = "4.5.2"
 _PINNED_MGCV_VERSION = "1.9.3"
 _PINNED_MGCV_COMMIT = "fb7e8e718377513e78ba6c6bf7e60757fc6a32a9"
-_TOLERANCES = {"STRICT": (1e-10, 1e-12), "MODERATE": (1e-4, 1e-6)}
+_TOLERANCES = {
+    "STRICT": (STRICT.rtol, STRICT.atol),
+    "MODERATE": (MODERATE.rtol, MODERATE.atol),
+}
 _APPROVED_SMOKE_SHA256 = (
     "8a49df584d593df11ed6ffc44e66ec72ab37f2352ab37b353e1c42c4232a26b9"
 )
@@ -435,7 +439,7 @@ def _r_worker(config_path: Path) -> dict[str, Any]:
     _load_input(config)
     control = config["efs_control"]
     try:
-        reference = RBridge().benchmark_efs(
+        reference = RBridge(mode="rpy2").benchmark_efs(
             config["formula"],
             Path(config["data_path"]),
             np.asarray(config["efs_initial_sp"], dtype=np.float64),

@@ -6,18 +6,34 @@ Usage::
 
 Instruments GAM.fit() to measure time spent in each stage:
 - Phase 1: parse_formula() + ModelSetup.build()
-- Phase 1→2: FittingData.from_setup()
+- Phase 1→2: FittingData.from_setup() plus device-transfer synchronization
 - Newton init: NewtonOptimizer.__init__() (includes _build_differentiable_fns)
 - Newton run: NewtonOptimizer.run() with per-iteration breakdown
-- Phase 2→3: _store_results()
+- Phase 2→3: coefficient transfer only (not complete result materialization)
 """
 
 from __future__ import annotations
 
 import time
+from dataclasses import fields, is_dataclass
 
 import numpy as np
 import pandas as pd
+
+
+def _block_result_until_ready(value: object) -> None:
+    """Synchronize every device array in a returned optimizer result."""
+    import jax
+
+    if hasattr(value, "block_until_ready"):
+        jax.block_until_ready(value)
+    elif is_dataclass(value):
+        for item_field in fields(value):
+            _block_result_until_ready(getattr(value, item_field.name))
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            _block_result_until_ready(item)
+
 
 # ---------------------------------------------------------------------------
 # Data generators (same as benchmark)
@@ -76,10 +92,18 @@ def profile_fit(
     setup = ModelSetup.build(spec, data)
     timings["phase1_setup"] = time.perf_counter() - t0
 
-    # Phase 1→2: FittingData.from_setup
+    # Phase 1→2: FittingData.from_setup plus the actual device transfer.
     family_obj = get_family(family_str)
     t0 = time.perf_counter()
     fd = FittingData.from_setup(setup, family_obj)
+    import jax
+
+    jax.block_until_ready(fd.X)
+    jax.block_until_ready(fd.y)
+    jax.block_until_ready(fd.wt)
+    jax.block_until_ready(fd.log_lambda_init)
+    if fd.beta_init is not None:
+        jax.block_until_ready(fd.beta_init)
     timings["phase1_to_2"] = time.perf_counter() - t0
 
     # Newton init (includes _build_differentiable_fns for non-Gaussian)
@@ -90,15 +114,16 @@ def profile_fit(
     # Newton run
     t0 = time.perf_counter()
     result = optimizer.run()
+    # Attribute all queued result work to Newton, rather than a later host
+    # conversion of whichever field happens to be accessed first.
+    _block_result_until_ready(result)
     timings["newton_run"] = time.perf_counter() - t0
 
-    # Phase 2→3: store_results (simplified — just measure back-transform)
+    # Phase 2→3 coefficient transfer only. The current adapter owns local
+    # transforms; do not reconstruct a removed global reparameterization.
     t0 = time.perf_counter()
     _ = np.asarray(result.pirls_result.coefficients)
-    if fd.repara_D is not None:
-        D = np.asarray(fd.repara_D)
-        _ = D @ np.asarray(result.pirls_result.coefficients)
-    timings["phase2_to_3"] = time.perf_counter() - t0
+    timings["phase2_to_3_coefficients"] = time.perf_counter() - t0
 
     timings["total"] = sum(timings.values())
     timings["n_iter"] = result.n_iter
@@ -137,7 +162,7 @@ def main() -> None:
     # Profile
     print(
         f"{'family':<10} {'n':>5} | {'phase1':>8} {'p1→2':>8} {'nwt_init':>8}"
-        f" {'nwt_run':>8} {'p2→3':>8} | {'total':>8} {'iters':>5}"
+        f" {'nwt_run':>8} {'coef_xfer':>8} | {'total':>8} {'iters':>5}"
     )
     print("-" * 85)
 
@@ -160,7 +185,7 @@ def main() -> None:
             f"{t['phase1_to_2'] * 1000:>7.1f}ms "
             f"{t['newton_init'] * 1000:>7.1f}ms "
             f"{t['newton_run'] * 1000:>7.1f}ms "
-            f"{t['phase2_to_3'] * 1000:>7.1f}ms | "
+            f"{t['phase2_to_3_coefficients'] * 1000:>7.1f}ms | "
             f"{t['total'] * 1000:>7.1f}ms "
             f"{t['n_iter']:>5}"
         )
