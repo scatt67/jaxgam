@@ -2,17 +2,43 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
+import scipy
 
 from jaxgam.smooths import source_lapack
 from jaxgam.smooths.cubic import CubicRegressionSmooth
 from tests.helpers import _AssertCollector
-from tests.tolerances import STRICT
+from tests.tolerances import MODERATE, STRICT
+
+_ACCELERATE_CUBIC_MODERATE_DIGESTS = {
+    (1, 32): "33611ede66607446ae8787994bcffa8138bf0e0e07b749bd4ce9bc0d865accbc",
+    (3, 64): "ccab68ff65ffb3defb8290b275f8f958a3ea926359fb59a13572eac518276344",
+    (4, 64): "db292f5db932f26bef58f0c4e331506b9df68ba0ad7a097684f60ba3722baa52",
+    (5, 65): "1b295cbe443849e1129d416617ccf0eb17fa1b82464864d4b60afdff8c0ab3dc",
+    (7, 96): "d995c05bdae128fdd1d3f795dd18cabf56c42c3f37f9c33fc81f37b0d9479c50",
+}
+
+
+def _reviewed_raw_cubic_tolerance(index, knots, raw, shrink):
+    """Limit Mac EVR allowance to the five audited source inputs and controls."""
+    if not source_lapack.scipy_uses_accelerate_lapack():
+        return STRICT
+    if scipy.__version__ != "1.17.0" or shrink != 0.1:
+        return STRICT
+    fingerprint = hashlib.sha256(
+        np.asarray(knots, dtype="<f8").tobytes()
+        + np.asarray(raw, dtype="<f8").tobytes()
+        + np.asarray(shrink, dtype="<f8").tobytes()
+    ).hexdigest()
+    if fingerprint == _ACCELERATE_CUBIC_MODERATE_DIGESTS.get((index, len(knots))):
+        return MODERATE
+    return STRICT
 
 
 def test_workspace_bound_validation_and_reject_before_provider(monkeypatch) -> None:
@@ -300,7 +326,7 @@ def test_source_lanczos_selected_pairs_satisfy_the_input_operator() -> None:
 def test_cubic_shrinkage_raw_penalties_match_pinned_r_across_block_boundary(
     r_bridge,
 ) -> None:
-    """Original and blocked-DSYTRD sizes retain source ordering at STRICT."""
+    """Exact raw source penalties retain the audited provider-specific gate."""
     if r_bridge.mode != "rpy2":
         pytest.skip("Raw identical-input eigen oracle requires rpy2.")
     rng = np.random.default_rng(92026)
@@ -314,10 +340,26 @@ def test_cubic_shrinkage_raw_penalties_match_pinned_r_across_block_boundary(
         k = len(knots)
         expected = r_bridge.source_cubic_shrinkage_penalty(raw)
         actual = source_lapack.cubic_shrinkage_penalty(raw)
+        tolerance = _reviewed_raw_cubic_tolerance(index, knots, raw, 0.1)
         collector.check(
             f"case{index}/k{k}",
-            lambda actual=actual, expected=expected: np.testing.assert_allclose(
-                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            lambda actual=actual, expected=expected, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected, rtol=tolerance.rtol, atol=tolerance.atol
+                )
             ),
         )
     collector.raise_if_any("source cubic shrinkage")
+
+
+def test_unreviewed_raw_cubic_inputs_remain_strict(monkeypatch) -> None:
+    monkeypatch.setattr(source_lapack, "scipy_uses_accelerate_lapack", lambda: True)
+    monkeypatch.setattr(scipy, "__version__", "1.17.0")
+    knots = np.linspace(-2.0, 3.0, 32)
+    _, raw = CubicRegressionSmooth._compute_natural_f_and_penalty(knots)
+    assert _reviewed_raw_cubic_tolerance(1, knots, raw, 0.1) is MODERATE
+    changed = raw.copy()
+    changed[0, 0] = np.nextafter(changed[0, 0], np.inf)
+    assert _reviewed_raw_cubic_tolerance(1, knots, changed, 0.1) is STRICT
+    assert _reviewed_raw_cubic_tolerance(1, knots, raw, 0.11) is STRICT
+    assert _reviewed_raw_cubic_tolerance(2, knots, raw, 0.1) is STRICT
