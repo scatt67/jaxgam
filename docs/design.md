@@ -3966,6 +3966,26 @@ geometry but not the source; absent score/EDF/unknown-scale providers are
 represented by `None`. Fixed theta and smoothing are required until the
 separately validated parameter, trace and score providers are integrated.
 
+**Operator bulk Fisher uncertainty.** A converged fixed-sp operator prediction
+result can explicitly construct a bulk variance provider with
+`result.bulk_link_variance(training_source, calibration_data, probes=..., seed=...,
+memory_budget_bytes=...)`. The caller replays the original training source;
+its content fingerprint and prepared-row digest, plus the fitted family/link,
+theta, coefficients and smoothing values, identify the accepted state. The
+result itself retains no source. Unknown-scale families require an externally
+established positive scale. The provider forms the family-owned expected
+Fisher curvature, draws coefficient covariance samples by streaming
+`X' sqrt(W)` noise and local `S^(1/2)` noise, and solves the certified Fisher
+system for each probe. It retains a budgeted coefficient-by-probe sketch,
+never a coefficient-square covariance. `estimate_iter(prediction_source)`
+streams link-scale variance and standard-error estimates in bounded batches;
+`calibrate(selected_data)` compares specified rows to exact Fisher solves.
+The output names its Monte Carlo standard error, seed/probe count, PCG
+residuals, source scans and memory bound. Monte Carlo error describes sampling
+variation, not iterative-solve bias or a universal guarantee for unselected
+rows. Ordinary `predict(se_fit=True)` remains an exact-uncertainty request and
+does not silently use this approximation.
+
 ### 10.2 Structured Penalty Representations
 
 **v1.4 fix:** v1.3's `PenaltySet.to_dense_jax()` built a full `(p, p)` dense matrix via `jnp.zeros((p, p))` + `jnp.diag(...)`, making the "structured penalty" narrative fiction. The solver consumed only a materialized matrix, so diagonal/Kronecker structure provided zero benefit.

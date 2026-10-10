@@ -12,6 +12,7 @@ Design doc reference: docs/refactor_gam_api/design.md §3.4, §4.1, §7
 from __future__ import annotations
 
 import copy
+import numbers
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
@@ -33,8 +34,12 @@ if TYPE_CHECKING:
 
     from jaxgam.data.source import RowSource
     from jaxgam.execution.discrete import DiscreteFit
+    from jaxgam.execution.operator_bulk_variance import (
+        BulkOperatorVariance,
+        BulkVarianceCalibration,
+    )
     from jaxgam.execution.operator_fit import OperatorFitDiagnostics, OperatorFitResult
-    from jaxgam.families.base import ExponentialFamily
+    from jaxgam.families.base import ExponentialFamily, FamilyParameterSnapshot
     from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
     from jaxgam.formula.continuous_metadata import ContinuousDiscretizationMetadata
@@ -397,6 +402,14 @@ class GAMPredictionResult:
     operator_diagnostics: OperatorFitDiagnostics | None = field(
         default=None, kw_only=True
     )
+    _operator_source_fingerprint: str | None = field(default=None, kw_only=True)
+    _operator_source_replay_digest: str | None = field(default=None, kw_only=True)
+    _operator_family_static_config: tuple[object, ...] | None = field(
+        default=None, kw_only=True
+    )
+    _operator_family_parameter_snapshot: FamilyParameterSnapshot | None = field(
+        default=None, kw_only=True
+    )
     n: int
     _batch_rows: int = 65_536
 
@@ -459,6 +472,129 @@ class GAMPredictionResult:
 
     def to_predictor(self) -> GAMPredictor:
         return self._predictor
+
+    def bulk_link_variance(
+        self,
+        training_source: RowSource,
+        calibration_data: Data,
+        *,
+        probes: int,
+        seed: int,
+        memory_budget_bytes: int,
+        scale: float | None = None,
+        max_calibration_standard_errors: float = 5.0,
+    ) -> tuple[BulkOperatorVariance, BulkVarianceCalibration]:
+        """Build calibrated bulk Fisher uncertainty for an operator fit.
+
+        The result retains no training rows or source. The caller replays the
+        original training source, whose fingerprint and row digest must match
+        the accepted fit. The returned provider streams arbitrary prediction
+        sources through ``estimate_iter`` and reports approximate link-scale
+        variances with Monte Carlo errors and solver/source diagnostics.
+        Unknown-scale families require an externally established scale.
+        Selected calibration checks those rows only; its Monte Carlo error
+        does not bound unselected rows or iterative-solve bias.
+        """
+        from jaxgam.data.source import RowSource
+        from jaxgam.execution.operator import FrozenScanSystem
+        from jaxgam.execution.operator_bulk_variance import BulkOperatorVariance
+        from jaxgam.execution.operator_fit import FrozenOperatorWorkingState
+        from jaxgam.formula.operator_prepare import (
+            OperatorPreparationControl,
+            prepare_operator_model,
+        )
+        from jaxgam.formula.parser import parse_formula
+
+        if (
+            self.execution_route != "operator"
+            or self._operator_source_fingerprint is None
+        ):
+            raise RuntimeError("Bulk Fisher uncertainty requires an operator result.")
+        if not self.converged:
+            raise RuntimeError("Bulk Fisher uncertainty requires a converged fit.")
+        if (
+            self.family.execution_static_config() != self._operator_family_static_config
+            or self.family.execution_parameter_snapshot()
+            != self._operator_family_parameter_snapshot
+        ):
+            raise RuntimeError("Family, link or theta changed after the operator fit.")
+        if not isinstance(training_source, RowSource):
+            raise TypeError(
+                "Bulk Fisher uncertainty requires a replayable training source."
+            )
+        if (
+            training_source.n_rows != self.n
+            or training_source.fingerprint() != self._operator_source_fingerprint
+        ):
+            raise RuntimeError(
+                "Training source differs from the accepted operator fit."
+            )
+        if self.scale is not None:
+            if scale is not None and scale != self.scale:
+                raise ValueError("Known-scale family requires its fitted Fisher scale.")
+            scale = self.scale
+        if scale is None:
+            raise ValueError("Unknown-scale family requires an explicit Fisher scale.")
+        if (
+            isinstance(max_calibration_standard_errors, bool)
+            or not isinstance(max_calibration_standard_errors, numbers.Real)
+            or not np.isfinite(max_calibration_standard_errors)
+            or max_calibration_standard_errors <= 0
+        ):
+            raise ValueError("Calibration standard-error limit must be positive.")
+        if (
+            isinstance(memory_budget_bytes, bool)
+            or not isinstance(memory_budget_bytes, int)
+            or memory_budget_bytes < 2
+        ):
+            raise ValueError("Bulk memory budget must be a positive integer.")
+        system_budget = memory_budget_bytes // 2
+        geometry = self._predictor._operator_geometry
+        assert geometry is not None
+        model = prepare_operator_model(
+            parse_formula(self.formula),
+            training_source,
+            control=OperatorPreparationControl(
+                self._batch_rows,
+                system_budget,
+                max(1, geometry.raw_width),
+            ),
+        )
+        if (
+            model.source_fingerprint != self._operator_source_fingerprint
+            or model.source_replay_digest != self._operator_source_replay_digest
+            or model.n_coef != len(self.coefficients)
+        ):
+            raise RuntimeError("Replayed operator model differs from the accepted fit.")
+        state = FrozenOperatorWorkingState(
+            model,
+            self.family,
+            np.asarray(self.coefficients, dtype=np.float64),
+            system_budget,
+            system_budget,
+        )
+        system = FrozenScanSystem(
+            model,
+            training_source,
+            np.log(self.smoothing_params),
+            curvature_from_rows=state.fisher_curvature,
+            memory_budget_bytes=system_budget,
+        )
+        provider = BulkOperatorVariance(
+            system,
+            scale=scale,
+            memory_budget_bytes=memory_budget_bytes,
+            probes=probes,
+            seed=seed,
+            replay_preparation_scans=model.completed_preparation_scans,
+        ).build()
+        calibration = provider.calibrate(calibration_data)
+        if calibration.maximum_standardized_error > max_calibration_standard_errors:
+            raise RuntimeError(
+                "Bulk Fisher approximation failed selected exact calibration: "
+                f"{calibration.maximum_standardized_error:.3g} standard errors."
+            )
+        return provider, calibration
 
     def materialize_covariance(self, memory_budget_bytes: int) -> np.ndarray:
         """Explicitly build public ``Vp`` only after a caller budgets it."""
@@ -654,6 +790,10 @@ class GAMPredictionResult:
             # operator_diagnostics.preparation_*.
             source_scans=fitted.diagnostics.source.started_scans,
             batches_scanned=fitted.diagnostics.source.yielded_batches,
+            _operator_source_fingerprint=model.source_fingerprint,
+            _operator_source_replay_digest=model.source_replay_digest,
+            _operator_family_static_config=fitted.family.execution_static_config(),
+            _operator_family_parameter_snapshot=snapshot,
             n=model.n_obs,
             _batch_rows=control.batch_rows,
         )

@@ -287,6 +287,10 @@ test-operator-fit:
 	docker build --target test -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest tests/test_fitting/test_operator_family.py tests/test_fitting/test_operators.py tests/test_execution/test_operator.py tests/test_execution/test_operator_fit.py tests/test_inference/test_operator_geometry.py -v
 
+.PHONY: test-operator-bulk-local
+test-operator-bulk-local: ## run calibrated operator bulk uncertainty and R gates
+	$(UV) run pytest tests/test_execution/test_operator_bulk_variance.py -q
+
 .PHONY: test-operator-adapters test-operator-adapters-local
 test-operator-adapters-local: ## run capped smooth adapter and shared constraint gates
 	$(UV) run pytest tests/test_formula/test_operator_modest.py tests/test_constraints.py -v
