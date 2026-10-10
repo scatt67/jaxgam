@@ -669,6 +669,101 @@ class RBridge:
             beta_old_init,
         )
 
+    def efs_conditional_theta_reference(
+        self,
+        y: np.ndarray,
+        eta: np.ndarray,
+        weights: np.ndarray,
+        start: float,
+        *,
+        mu: np.ndarray | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Trace pinned ``estimate.theta`` and its own nested likelihood closure."""
+        self._require_rpy2()
+        from tests.r_ast import clone_function, find_call_paths, instrument_function
+
+        r_y = self._to_r_vector(np.asarray(y, dtype=np.float64))
+        r_weights = self._to_r_vector(np.asarray(weights, dtype=np.float64))
+        r_mu = (
+            self._base.exp(self._to_r_vector(np.asarray(eta, dtype=np.float64)))
+            if mu is None
+            else self._to_r_vector(np.asarray(mu, dtype=np.float64))
+        )
+        r_start = self._to_r_vector(np.asarray([start], dtype=np.float64))
+        family = self._mgcv.nb(theta=self._ro.r["-"](self._base.exp(float(start))))
+        source = self._utils.getFromNamespace("estimate.theta", "mgcv")
+        body = self._ro.r["body"](source)
+        nlogl_assignment = body[2]
+        if (
+            str(nlogl_assignment[0]) != "<-"
+            or str(nlogl_assignment[1]) != "nlogl"
+            or str(nlogl_assignment[2][0]) != "function"
+        ):
+            raise RBridgeError("Pinned estimate.theta likelihood anchor changed")
+        private = self._ro.r["new.env"](parent=self._ro.r["getNamespace"]("mgcv"))
+        nlogl = self._ro.r["eval"](nlogl_assignment[2], envir=private)
+        trace: list[np.ndarray] = []
+
+        def record_theta(theta: Any) -> None:
+            trace.append(np.array(theta, dtype=np.float64, copy=True))
+
+        accepted_path = (12, 2, 3, 14)
+        if accepted_path not in find_call_paths(
+            source, "<-", required_symbols=("theta", "step")
+        ):
+            raise RBridgeError("Pinned estimate.theta accepted-step anchor changed")
+        traced = instrument_function(
+            clone_function(source, environment=private),
+            path=accepted_path,
+            expected_head="<-",
+            capture_symbols=("theta",),
+            callback=record_theta,
+            when="after",
+        )
+
+        def state(theta: Any) -> np.ndarray:
+            value = nlogl(theta, family, r_y, r_mu, scale=1, wt=r_weights, deriv=2)
+            return np.asarray(
+                [
+                    float(np.asarray(value.rx2("nll"))[0]),
+                    float(np.asarray(value.rx2("g"))[0]),
+                    float(np.asarray(value.rx2("H")).ravel()[0]),
+                ],
+                dtype=np.float64,
+            )
+
+        initial = state(r_start)
+        final_theta = traced(r_start, family, r_y, r_mu, scale=1, wt=r_weights)
+        final = np.concatenate(
+            (np.asarray(final_theta, dtype=np.float64), state(final_theta))
+        )
+        trace_values = np.asarray(trace, dtype=np.float64).reshape(-1)
+        trace_nll = np.asarray(
+            [
+                float(
+                    np.asarray(
+                        nlogl(
+                            self._to_r_vector(np.asarray([theta])),
+                            family,
+                            r_y,
+                            r_mu,
+                            scale=1,
+                            wt=r_weights,
+                            deriv=0,
+                        ).rx2("nll")
+                    )[0]
+                )
+                for theta in trace_values
+            ],
+            dtype=np.float64,
+        )
+        return {
+            "initial": initial,
+            "trace": trace_values,
+            "trace_nll": trace_nll,
+            "final": final,
+        }
+
     @staticmethod
     def _require_pinned_efs_versions() -> None:
         ok, reason = RBridge.check_versions()
