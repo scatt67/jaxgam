@@ -120,12 +120,12 @@ class OperatorScoreEstimate:
             not math.isfinite(self.spectral_lower_estimate)
             or self.spectral_lower_estimate <= 0
         ):
-            raise ValueError("Spectral lower bound must be finite positive.")
+            raise ValueError("Spectral lower estimate must be finite positive.")
         if self.spectral_condition_estimate is not None and (
             not math.isfinite(self.spectral_condition_estimate)
             or self.spectral_condition_estimate < 1
         ):
-            raise ValueError("Spectral condition bound must be finite and >= 1.")
+            raise ValueError("Spectral condition estimate must be finite and >= 1.")
         values.setflags(write=False)
         object.__setattr__(self, "per_probe", values)
 

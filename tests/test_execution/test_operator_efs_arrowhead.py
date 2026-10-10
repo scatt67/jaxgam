@@ -10,10 +10,12 @@ from scipy.special import gammaln, xlogy
 
 from jaxgam.control import EFSControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.efs import dense_efs_known_scale
+from jaxgam.execution.efs import _fit_state, dense_efs_known_scale
 from jaxgam.execution.operator_efs_controller import (
     SourceOperatorEFSFitProvider,
     _arrowhead_poisson_score_bound,
+    _raw_ratio,
+    _trial_rho,
     run_operator_efs_known_scale,
 )
 from jaxgam.execution.operator_efs_provider import MatchedOperatorEFSProvider
@@ -21,12 +23,14 @@ from jaxgam.execution.operator_fit import fit_operator_fixed_sp
 from jaxgam.execution.operator_logdet import OperatorLogDetControl
 from jaxgam.families.standard import Poisson
 from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.efs import efs_raw_update, prepare_efs_statistics
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.operator_prepare import (
     OperatorPreparationControl,
     prepare_operator_model,
 )
 from jaxgam.formula.parser import parse_formula
+from tests.helpers import _AssertCollector
 from tests.tolerances import STRICT
 
 
@@ -148,6 +152,105 @@ def calibrated_coupled_frame(
                 categories=[f"g{index}" for index in range(levels)],
             ),
         }
+    )
+
+
+def test_unbalanced_arrowhead_initial_shift_matches_dense_efs_state():
+    frame = calibrated_coupled_frame(512, 32033, 3, "unbalanced")
+    spec = parse_formula("y~x+s(g,bs='re')")
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        spec,
+        source,
+        control=OperatorPreparationControl(batch_rows=64, memory_budget_bytes=4 << 20),
+    )
+    dense_setup = ModelSetup.build(spec, frame)
+    dense_data = FittingData.from_setup(dense_setup, Poisson())
+    control = EFSControl(outer_limit=20, pirls_tolerance=1e-11)
+    rho = np.log(np.array([0.8])) + 2.5
+    dense = _fit_state(
+        dense_data,
+        prepare_efs_statistics(dense_data),
+        rho,
+        np.zeros(dense_data.n_coef),
+        control,
+        regular_start_present=False,
+    )
+    provider = SourceOperatorEFSFitProvider(
+        model,
+        source,
+        Poisson(),
+        fit_control=OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15),
+        fit_budget_bytes=16 << 20,
+        components_budget_bytes=32 << 20,
+        aggregate_budget_bytes=128 << 20,
+    )
+    operator = provider.evaluate(
+        provider.fit(rho, None), OperatorLogDetControl(probes=4, lanczos_depth=4)
+    )
+    assert dense.valid
+    assert operator.score_error_bound is not None
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("coefficients", operator.fit.coefficients, dense.pirls_result.coefficients),
+        ("deviance", operator.fit.deviance, dense.pirls_result.deviance),
+        ("score", operator.components.score.value, dense.score),
+        (
+            "determinant derivative",
+            operator.components.penalty.derivative,
+            dense.statistics.determinant_derivative,
+        ),
+        (
+            "Fisher trace",
+            operator.components.fisher.traces,
+            dense.statistics.fisher_trace,
+        ),
+        (
+            "quadratic",
+            operator.components.fisher.quadratics,
+            dense.statistics.quadratic,
+        ),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any("unbalanced arrowhead first shifted state")
+    dense_update = efs_raw_update(
+        rho,
+        dense.statistics,
+        np.array(1.0),
+        np.array(1.0),
+        np.array(control.log_lambda_max),
+    )
+    operator_trial_rho = _trial_rho(
+        operator, _raw_ratio(operator), 1.0, control.log_lambda_max
+    )
+    np.testing.assert_allclose(
+        operator_trial_rho,
+        dense_update.log_smoothing_trial,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    dense_trial = _fit_state(
+        dense_data,
+        prepare_efs_statistics(dense_data),
+        dense_update.log_smoothing_trial,
+        dense.pirls_result.coefficients,
+        control,
+    )
+    operator_trial = provider.evaluate(
+        provider.fit(operator_trial_rho, operator.fit.coefficients),
+        OperatorLogDetControl(probes=4, lanczos_depth=4),
+    )
+    assert dense_trial.valid
+    np.testing.assert_allclose(
+        operator_trial.components.score.value,
+        dense_trial.score,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
     )
 
 
