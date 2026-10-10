@@ -268,6 +268,64 @@ def test_public_coupled_operator_efs_default_start_matches_pinned_r_strict(
 
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize("family", ["gaussian", "poisson"])
+def test_public_fixed_sp_operator_prediction_result_matches_pinned_r_strict(
+    family: str,
+) -> None:
+    """The row-free public result preserves the fixed-sp pinned model fit."""
+    row = np.arange(67)
+    x = np.linspace(-1, 1, len(row))
+    response = (
+        1.0 + 0.3 * x + 0.1 * np.sin(row / 4)
+        if family == "gaussian"
+        else np.resize([0, 1, 2, 1, 3], len(row))
+    )
+    frame = pd.DataFrame(
+        {
+            "y": response,
+            "x": x,
+            "g": pd.Categorical(np.resize(["a", "b", "c", "d"], len(row))),
+        }
+    )
+    formula = "y~x+s(g,bs='re')"
+    fitted = GAM(
+        formula,
+        family=family,
+        sp=[0.8],
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=13,
+            memory_budget_bytes=16 << 20,
+        ),
+    ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
+    reference = RBridge(mode="rpy2").fit_fixed_sp(
+        formula, frame, family, np.array([0.8])
+    )
+    assert fitted.converged
+    assert reference["converged"]
+    assert fitted.execution_route == "operator"
+    assert fitted.lambda_strategy == "fixed"
+    assert fitted.score is None
+    assert fitted.edf_total is None
+    assert fitted.source_scans is not None
+    assert fitted.batches_scanned is not None
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("coefficients", fitted.coefficients, reference["coefficients"]),
+        ("deviance", fitted.deviance, reference["deviance"]),
+        ("predictions", fitted.predict(frame), reference["fitted_values"]),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"public fixed-sp operator {family}")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 @pytest.mark.parametrize(
     ("p", "seed", "multiplicity", "mode"),
     [

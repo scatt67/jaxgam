@@ -99,6 +99,77 @@ def test_public_fixed_sp_operator_counts_short_source_partitions_and_probes():
     )
 
 
+def test_public_fixed_sp_operator_solves_active_correlated_large_factor(monkeypatch):
+    levels = 2048
+    group = np.tile(np.arange(levels), 2)
+    row = np.arange(2 * levels)
+    x = np.sin(group / 29.0) + 0.05 * (row // levels - 0.5)
+    response = 1.0 + 0.4 * x + 0.2 * np.cos(group / 17.0)
+    response += 0.01 * np.sin(row / 5.0)
+    frame = pd.DataFrame(
+        {
+            "y": response,
+            "x": x,
+            "g": pd.Categorical(
+                [f"g{index}" for index in group],
+                categories=[f"g{index}" for index in range(levels)],
+            ),
+        }
+    )
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        parse_formula("y~x+s(g,bs='re')"),
+        source,
+        control=OperatorPreparationControl(
+            batch_rows=256, memory_budget_bytes=24 << 20
+        ),
+    )
+    assert model.n_coef == levels + 2
+    scale = model.penalties.blocks[0].local_penalties[0].scale
+    diagonal = np.bincount(group, minlength=levels) + 0.8 * scale
+    cross = np.column_stack(
+        (np.bincount(group, minlength=levels), np.bincount(group, weights=x))
+    )
+    modest = np.column_stack((np.ones(len(x)), x))
+    grouped_response = np.bincount(group, weights=response, minlength=levels)
+    schur = modest.T @ modest - cross.T @ (cross / diagonal[:, None])
+    rhs = modest.T @ response - cross.T @ (grouped_response / diagonal)
+    modest_coefficients = np.linalg.solve(schur, rhs)
+    indexed_coefficients = (grouped_response - cross @ modest_coefficients) / diagonal
+    expected = np.concatenate((modest_coefficients, indexed_coefficients))
+    monkeypatch.setattr(
+        PenaltyStructure,
+        "materialize",
+        lambda *_a, **_k: pytest.fail("Global coefficient-square penalty built"),
+    )
+    fitted = GAM(
+        "y~x+s(g,bs='re')",
+        family="gaussian",
+        sp=[0.8],
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=256,
+            memory_budget_bytes=24 << 20,
+            operator=OperatorControl(tolerance=1e-10, cg_rtol=1e-12),
+        ),
+    ).fit(source, result="prediction")
+    assert fitted.converged
+    assert fitted.operator_diagnostics is not None
+    assert fitted.operator_diagnostics.completed_solves > 0
+    assert fitted.operator_diagnostics.krylov_iterations < 1000
+    assert fitted.operator_diagnostics.peak_bound_bytes < 24 << 20
+    np.testing.assert_allclose(
+        fitted.coefficients, expected, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_allclose(
+        fitted.predict(frame.iloc[:64]),
+        (modest[:64] @ modest_coefficients) + indexed_coefficients[group[:64]],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
 @pytest.mark.parametrize("link", [LogLink(), InverseLink()])
 def test_global_gaussian_start_and_empty_batches_are_batch_invariant(link):
     y = np.array([-2.0, 0.0, 1.0, 4.0, 0.0, 3.0, 7.0, 2.0, 1.0])
