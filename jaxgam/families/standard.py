@@ -648,7 +648,35 @@ class Gamma(ExponentialFamily):
         inv_phi = wt_safe / scale  # 1 / phi_i = wt_i / scale
         phi = scale / wt_safe
 
-        k = -jsp.gammaln(inv_phi) - jnp.log(phi) * inv_phi - inv_phi
+        # R's large-shape expression subtracts terms of order x log(x) to
+        # obtain an O(log(x)) value.  The Stirling series cancels those terms
+        # symbolically, preserving score differences near the scale optimum.
+        # At x >= 32, the first omitted term is below float64 roundoff.
+        use_stirling = inv_phi >= 32.0
+        # Give each inactive branch a finite argument.  A maximum would have
+        # half a derivative exactly at 32; where preserves the selected
+        # Stirling derivative at that branch boundary.
+        large_shape = jnp.where(use_stirling, inv_phi, 32.0)
+        inverse_shape = 1.0 / large_shape
+        inverse_squared = inverse_shape * inverse_shape
+        stirling = 0.5 * (
+            jnp.log(large_shape) - jnp.log(2.0 * jnp.pi)
+        ) + inverse_shape * (
+            -1.0 / 12.0
+            + inverse_squared
+            * (
+                1.0 / 360.0
+                + inverse_squared * (-1.0 / 1260.0 + inverse_squared / 1680.0)
+            )
+        )
+        direct_shape = jnp.where(use_stirling, 32.0, inv_phi)
+        direct_phi = jnp.where(use_stirling, 1.0 / 32.0, phi)
+        direct = (
+            -jsp.gammaln(direct_shape)
+            - jnp.log(direct_phi) * direct_shape
+            - direct_shape
+        )
+        k = jnp.where(use_stirling, stirling, direct)
         y_safe = jnp.maximum(y, _LOG_EPS)
         return jnp.sum(jnp.where(wt > 0, k - jnp.log(y_safe), 0.0))
 
@@ -673,21 +701,35 @@ class Gamma(ExponentialFamily):
     def deviance_contributions(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
     ) -> np.ndarray:
-        """Direct Gamma deviance with the same positive-domain safeguards."""
+        """Direct Gamma deviance with stable source-equivalent ratio arithmetic."""
+        contribution = self._direct_deviance_contributions(y, mu, wt)
+        return array_module(y).maximum(contribution, 0.0)
+
+    def _direct_deviance_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Use stable arithmetic near the mean and source arithmetic elsewhere."""
         xp = array_module(y)
         mu_safe = xp.maximum(mu, _MU_EPS)
         y_safe = xp.maximum(y, _MU_EPS)
-        contribution = 2.0 * wt * (-xp.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
-        return xp.maximum(contribution, 0.0)
+        # stats::Gamma dev.resids is 2*w*(-log(y/mu)+(y-mu)/mu).
+        # Near the mean, forming y/mu first can swamp a small positive
+        # deviance. Far from the mean the residual can round to -1 even when
+        # y/mu is positive, so retain the original ratio/log expression.
+        # Also retain the original unclipped y in the linear term whenever
+        # y_safe differs from y. Mask log1p's inactive branch for finite AD.
+        relative_residual = (y - mu_safe) / mu_safe
+        near_mean = (y >= _MU_EPS) & (xp.abs(relative_residual) <= 0.25)
+        near_residual = xp.where(near_mean, relative_residual, 0.0)
+        near = -xp.log1p(near_residual) + near_residual
+        source = -xp.log(y_safe / mu_safe) + relative_residual
+        return 2.0 * wt * xp.where(near_mean, near, source)
 
     def deviance_derivative_contributions(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
     ) -> np.ndarray:
         """Interior Gamma deviance; unlike reporting it has no max kink."""
-        xp = array_module(y)
-        mu_safe = xp.maximum(mu, _MU_EPS)
-        y_safe = xp.maximum(y, _MU_EPS)
-        return 2.0 * wt * (-xp.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
+        return self._direct_deviance_contributions(y, mu, wt)
 
     def aic(
         self,

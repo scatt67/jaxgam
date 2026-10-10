@@ -162,8 +162,8 @@ class GAM:
         -------
         GAMResults or GAMInferenceResult
             Frozen full-diagnostic or lean-inference result. Streamed fitting
-            returns ``result='prediction'`` and supports either explicit fixed
-            ``sp`` or estimated EFS smoothing with the explicit QR solver.
+            returns ``result='prediction'`` and supports fixed smoothing
+            parameters across the family execution contracts or EFS with QR.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
@@ -308,7 +308,6 @@ class GAM:
     ) -> GAMPredictionResult:
         """Run the replayable-source prediction-result execution route."""
         from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
-        from jaxgam.families.standard import Binomial, Gaussian, Poisson
 
         if not isinstance(data, RowSource):
             raise TypeError(
@@ -336,13 +335,8 @@ class GAM:
                 "Streamed fitting currently requires explicit fixed sp; "
                 "streamed smoothing-parameter optimization is not implemented."
             )
-        elif not family.is_canonical or not isinstance(
-            family, (Gaussian, Poisson, Binomial)
-        ):
-            raise NotImplementedError(
-                "Streamed fixed-sp fitting currently supports canonical Gaussian "
-                "identity, Poisson log, and Binomial logit families only."
-            )
+        else:
+            _check_stream_fixed_family(family, self.control.linear_solver)
         spec = parse_formula(self.formula)
         prepared = prepare_model(spec, data, family=family)
         stream = StreamDesign(prepared, data)
@@ -379,7 +373,7 @@ class GAM:
                 selected_fit=execution.fit,
                 lambda_strategy="efs_reml",
             )
-        _preflight_stream_workspace(
+        known_workspace_bytes = _preflight_stream_workspace(
             prepared.n_coef,
             self.control.batch_rows,
             self.control.memory_budget_bytes,
@@ -387,6 +381,32 @@ class GAM:
         )
         metadata = PreparedFittingMetadata.from_prepared(prepared, family, jax_device)
         log_lambda = _fixed_log_smoothing_parameters(self.sp, metadata.n_penalties)
+        from jaxgam.families.negative_binomial import NegativeBinomial
+
+        if isinstance(family, NegativeBinomial):
+            return _fit_stream_fixed_nb(
+                stream,
+                family,
+                log_lambda,
+                metadata,
+                formula=self.formula,
+                method=self.method,
+                control=self.control,
+                device=jax_device,
+            )
+        if not _stream_legacy_fisher_eligible(family) or (
+            self.control.linear_solver == "qr" and family.scale_known
+        ):
+            return _fit_stream_fixed_regular(
+                stream,
+                family,
+                log_lambda,
+                metadata,
+                formula=self.formula,
+                method=self.method,
+                control=self.control,
+                device=jax_device,
+            )
         stream_state = fit_streamed_pirls(
             stream,
             family,
@@ -408,7 +428,261 @@ class GAM:
             execution_route=(
                 "stream_qr" if self.control.linear_solver == "qr" else "stream"
             ),
+            known_workspace_bytes=known_workspace_bytes,
         )
+
+
+def _stream_legacy_fisher_eligible(family: ExponentialFamily) -> bool:
+    """Match the existing bounded Fisher controller's declared contract."""
+    capabilities = family.execution_capabilities()
+    policy = family.stream_reduction_policy()
+    return (
+        capabilities.coefficient_system == "fisher"
+        and capabilities.fisher_equals_observed_for_score
+        and policy.reported_scale in {"known_one", "gaussian_fisher_edf_deviance"}
+        and policy.score_scale != "unsupported"
+    )
+
+
+def _check_stream_fixed_family(family: ExponentialFamily, linear_solver: str) -> None:
+    """Separate family contract, parameter mode and signed-solver policy."""
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.links.links import Link
+
+    capabilities = family.execution_capabilities()
+    policy = family.stream_reduction_policy()
+    if not all(
+        (
+            capabilities.row_separable,
+            capabilities.direct_deviance,
+            capabilities.saturated_loglikelihood,
+            capabilities.fisher_working_system,
+            capabilities.observed_information,
+        )
+    ):
+        raise NotImplementedError(
+            "Streamed fixed-sp fitting requires row-separable direct deviance, "
+            "saturated likelihood, and Fisher/observed information primitives."
+        )
+    if policy.reported_scale == "unsupported":
+        raise NotImplementedError(
+            "Streamed fixed-sp fitting requires an explicit reported-scale policy."
+        )
+    if type(family.link).second_derivative is Link.second_derivative:
+        raise NotImplementedError(
+            "Streamed observed-information initialization requires a link "
+            "second_derivative implementation."
+        )
+    if isinstance(family, NegativeBinomial):
+        from jaxgam.execution.nb_stream import _link_name
+
+        _link_name(family)
+        if linear_solver != "qr":
+            raise NotImplementedError(
+                "Streamed NB observed-information fitting requires linear_solver='qr'."
+            )
+        if family.n_theta and not capabilities.dynamic_theta:
+            raise NotImplementedError("Estimated NB lacks dynamic-theta capability.")
+        return
+    if capabilities.dynamic_theta or family.n_theta:
+        raise NotImplementedError(
+            "Streamed fixed-sp dynamic family parameters require an explicit "
+            "exact-parameter driver."
+        )
+    if linear_solver != "qr" and not _stream_legacy_fisher_eligible(family):
+        raise NotImplementedError(
+            "Streamed observed-information fitting requires linear_solver='qr'."
+        )
+    if not family.scale_known and not capabilities.differentiable_deviance:
+        raise NotImplementedError(
+            "Unknown-scale streamed fixed-sp fitting requires differentiable deviance."
+        )
+
+
+def _selected_stream_fit(
+    state,
+    score: float,
+    *,
+    converged: bool,
+    n_iter: int,
+    convergence_info: str,
+    theta: float | None = None,
+) -> NewtonResult:
+    """Pass reviewed scalar provenance to compact stream materialization."""
+    import jax.numpy as jnp
+
+    return NewtonResult(
+        log_lambda=state.log_lambda,
+        smoothing_params=jnp.exp(state.log_lambda),
+        converged=converged,
+        n_iter=n_iter,
+        score=jnp.asarray(score),
+        gradient=jnp.zeros_like(state.log_lambda),
+        edf=state.edf,
+        scale=state.scale,
+        pirls_result=state,
+        convergence_info=convergence_info,
+        theta=theta,
+    )
+
+
+def _fit_stream_fixed_regular(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    log_lambda: np.ndarray,
+    metadata: PreparedFittingMetadata,
+    *,
+    formula: str,
+    method: str,
+    control: FitControl,
+    device: jax.Device | None,
+) -> GAMPredictionResult:
+    from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
+    from jaxgam.execution.reml import optimize_regular_stream_reml
+    from jaxgam.execution.stream import StreamPIRLSControl
+
+    coefficient_control = StreamPIRLSControl(
+        batch_rows=control.batch_rows,
+        solver_policy="qr",
+        # Canonical and unknown-scale cells retain the tighter final state.
+        # Noncanonical known-scale boundary cells use the convergent 1e-9
+        # source control; forcing 1e-11 there falsely exhausts recovery.
+        tol=1e-9 if family.scale_known and not family.is_canonical else 1e-11,
+    )
+    selected = None
+    if family.scale_known:
+        fitted = fit_regular_streamed_pirls(
+            stream,
+            family,
+            log_lambda,
+            maximum_bytes=control.memory_budget_bytes,
+            control=coefficient_control,
+            device=device,
+        )
+        state = fitted.state
+        source_scans = state.source_scans
+        batches_scanned = state.batches_scanned
+        known_workspace_bytes = fitted.workspace.required_bytes
+    else:
+        optimized = optimize_regular_stream_reml(
+            stream,
+            family,
+            np.r_[log_lambda, 0.0],
+            maximum_bytes=control.memory_budget_bytes,
+            pin_lambda=True,
+            pirls_control=coefficient_control,
+            device=device,
+        )
+        state = optimized.trial.fit_result.state
+        source_scans = optimized.cumulative_source_scans
+        batches_scanned = optimized.cumulative_batches_scanned
+        known_workspace_bytes = optimized.required_bytes
+        selected = _selected_stream_fit(
+            state,
+            float(np.asarray(optimized.trial.score)),
+            converged=optimized.converged,
+            n_iter=optimized.n_iter,
+            convergence_info=optimized.message,
+        )
+    return GAMPredictionResult._from_stream_fit(
+        stream_state=state,
+        prepared=stream.prepared,
+        metadata=metadata,
+        family=family,
+        formula=formula,
+        method=method,
+        control=control,
+        execution_route="stream_qr",
+        selected_fit=selected,
+        source_scans=source_scans,
+        batches_scanned=batches_scanned,
+        known_workspace_bytes=known_workspace_bytes,
+    )
+
+
+def _fit_stream_fixed_nb(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    log_lambda: np.ndarray,
+    metadata: PreparedFittingMetadata,
+    *,
+    formula: str,
+    method: str,
+    control: FitControl,
+    device: jax.Device | None,
+) -> GAMPredictionResult:
+    from jaxgam.execution.nb_reml import optimize_nb_stream_reml
+    from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
+    from jaxgam.execution.reml import StreamREMLControl
+    from jaxgam.execution.stream import StreamPIRLSControl
+
+    coefficient_control = StreamPIRLSControl(
+        batch_rows=control.batch_rows, solver_policy="qr", tol=1e-11
+    )
+    if family.n_theta:
+        optimized = optimize_nb_stream_reml(
+            stream,
+            family,
+            np.r_[log_lambda, family.get_theta(transformed=False)],
+            maximum_bytes=control.memory_budget_bytes,
+            pin_lambda=True,
+            pirls_control=coefficient_control,
+            control=StreamREMLControl(gtol=1e-9, ftol=0.0),
+            device=device,
+        )
+        fitted = optimized.trial.fit_result
+        state = fitted.state
+        source_scans = optimized.cumulative_source_scans
+        batches_scanned = optimized.cumulative_batches_scanned
+        known_workspace_bytes = optimized.required_bytes
+        theta = float(np.exp(np.asarray(optimized.trial.params)[-1]))
+        family.put_theta(np.log(np.asarray([theta])))
+        selected = _selected_stream_fit(
+            state,
+            float(np.asarray(optimized.trial.score)),
+            converged=optimized.converged,
+            n_iter=optimized.n_iter,
+            convergence_info=optimized.message,
+            theta=theta,
+        )
+    else:
+        fitted = fit_nb_streamed_pirls(
+            stream,
+            family,
+            log_lambda,
+            maximum_bytes=control.memory_budget_bytes,
+            control=coefficient_control,
+            device=device,
+        )
+        state = fitted.state
+        source_scans = state.source_scans
+        batches_scanned = state.batches_scanned
+        known_workspace_bytes = fitted.workspace.required_bytes
+        selected = _selected_stream_fit(
+            state,
+            fitted.reml_score,
+            converged=state.converged,
+            n_iter=state.n_iter,
+            convergence_info=(
+                "fixed sp streamed PIRLS"
+                if state.converged
+                else "fixed sp streamed PIRLS did not converge"
+            ),
+        )
+    return GAMPredictionResult._from_stream_fit(
+        stream_state=state,
+        prepared=stream.prepared,
+        metadata=metadata,
+        family=family,
+        formula=formula,
+        method=method,
+        control=control,
+        execution_route="stream_qr",
+        selected_fit=selected,
+        source_scans=source_scans,
+        batches_scanned=batches_scanned,
+        known_workspace_bytes=known_workspace_bytes,
+    )
 
 
 def _check_stream_efs_family(family: ExponentialFamily) -> None:
@@ -544,7 +818,7 @@ def _preflight_stream_workspace(
     memory_budget_bytes: int,
     *,
     linear_solver: Literal["cholesky", "qr"] = "cholesky",
-) -> None:
+) -> int:
     """Reject stream fits whose known live fit workspace exceeds its budget.
 
     This conservatively allows old and candidate coefficient reductions,
@@ -577,6 +851,7 @@ def _preflight_stream_workspace(
             f"{required} bytes, exceeding FitControl.memory_budget_bytes="
             f"{memory_budget_bytes}. This budget does not cover CPU basis preparation."
         )
+    return required
 
 
 def _resolve_device(device: str | None) -> jax.Device | None:

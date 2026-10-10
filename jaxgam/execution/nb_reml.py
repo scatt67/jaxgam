@@ -27,6 +27,7 @@ from jaxgam.execution.regular_stream import (
 from jaxgam.execution.reml import (
     StreamREMLControl,
     _AcceptedParameterizedTrialObjective,
+    _LocalScoreChange,
     _parameterized_optimizer_workspace_bytes,
     _run_parameterized_stream_reml,
 )
@@ -516,6 +517,152 @@ class _AcceptedNBTrialObjective(
         )
 
 
+def _nb_local_stationary_score_change(
+    objective: _AcceptedNBTrialObjective,
+    accepted: NBStreamREMLTrial,
+    candidate: NBStreamREMLTrial,
+    inner_tolerance: float,
+) -> _LocalScoreChange | None:
+    """Estimate a representability-scale score change from local gradients.
+
+    This is an empirical *comparison* for a pinned, scalar-theta plateau,
+    not a replacement for either source score.  It assumes the exact REML
+    gradient is locally smooth and its evaluation error is no larger than
+    the inner stopping tolerance. Every endpoint/probe must therefore have
+    inner stationarity and source/observed factor residuals at or below that
+    tolerance. Quarter-point probes check that the observed gradient is
+    monotone and nearly linear over the very small interval.
+    Composite-vs-single Simpson disagreement plus the assumed
+    derivative error is reported separately; it is not a universal bound.
+    """
+    base = np.asarray(accepted.params, dtype=np.float64)
+    end = np.asarray(candidate.params, dtype=np.float64)
+    if (
+        base.ndim != 1
+        or base.shape != end.shape
+        or base.size < 1
+        or not np.array_equal(base[:-1], end[:-1])
+    ):
+        return None
+    step = float(end[-1] - base[-1])
+    if (
+        not np.isfinite(step)
+        or step == 0.0
+        or not np.isfinite(inner_tolerance)
+        or inner_tolerance <= 0.0
+        or abs(step) > np.sqrt(np.finfo(np.float64).eps) * (1.0 + abs(float(base[-1])))
+    ):
+        return None
+    source = objective._stream.source.fingerprint()
+    lineage_fields = (
+        "source_fingerprint",
+        "basis_fingerprint",
+        "family_name",
+        "link_name",
+    )
+    if accepted.source_fingerprint != source or any(
+        getattr(accepted, field) != getattr(candidate, field)
+        for field in lineage_fields
+    ):
+        raise RuntimeError("NB local score comparison changed source/family lineage")
+
+    def source_valid(trial: NBStreamREMLTrial) -> bool:
+        """Require every source/observed solve to support the error assumption."""
+        inner = trial.fit_result.state
+        residuals = (
+            inner.stationarity,
+            trial.source_factor_residual,
+            trial.observed_factor_residual,
+        )
+        return bool(
+            inner.converged
+            and not inner.line_search_failed
+            and np.all(np.isfinite(residuals))
+            and min(residuals) >= 0.0
+            and max(residuals) <= inner_tolerance
+            and np.isfinite(float(np.asarray(trial.score)))
+        )
+
+    if not source_valid(accepted) or not source_valid(candidate):
+        return None
+    endpoints = [
+        float(np.asarray(accepted.gradient)[-1]),
+        float(np.asarray(candidate.gradient)[-1]),
+    ]
+    if not np.all(np.isfinite(endpoints)):
+        return None
+    gradients = [endpoints[0]]
+    for fraction in (0.25, 0.5, 0.75):
+        probe_params = base.copy()
+        probe_params[-1] = base[-1] + fraction * step
+        if not min(base[-1], end[-1]) < probe_params[-1] < max(base[-1], end[-1]):
+            return None
+        probe = objective._evaluate(probe_params, accepted)
+        objective.n_evaluations += 1
+        objective.cumulative_source_scans += probe.source_scans
+        objective.cumulative_batches_scanned += probe.batches_scanned
+        if (
+            not np.array_equal(np.asarray(probe.params), probe_params)
+            or any(
+                getattr(probe, field) != getattr(accepted, field)
+                for field in lineage_fields
+            )
+            or probe.source_fingerprint != objective._stream.source.fingerprint()
+        ):
+            raise RuntimeError("NB local score probe changed source/family lineage")
+        gradient = float(np.asarray(probe.gradient)[-1])
+        if not source_valid(probe) or not np.isfinite(gradient):
+            return None
+        gradients.append(gradient)
+        del probe
+    gradients.append(endpoints[1])
+    slope = gradients[-1] - gradients[0]
+    differences = np.diff(gradients)
+    if np.any(differences * np.sign(slope) < -inner_tolerance):
+        return None
+    linearity_error = max(
+        abs(gradients[index] - (gradients[0] + slope * index / 4.0))
+        for index in range(1, 4)
+    )
+    if linearity_error > 0.01 * max(abs(slope), inner_tolerance):
+        return None
+    single = step * (gradients[0] + 4 * gradients[2] + gradients[4]) / 6.0
+    composite = (
+        step
+        * (
+            gradients[0]
+            + 4 * gradients[1]
+            + 2 * gradients[2]
+            + 4 * gradients[3]
+            + gradients[4]
+        )
+        / 12.0
+    )
+    error = abs(composite - single) / 15.0 + 2 * abs(step) * inner_tolerance
+    raw_change = float(np.asarray(candidate.score)) - float(np.asarray(accepted.score))
+    # The absolute criterion forms several O(deviance), O(saturated loglik),
+    # and determinant terms before subtraction.  This first-order float64
+    # envelope only rejects an inconsistent raw difference; the gradient
+    # path, not this envelope, decides local descent.
+    magnitudes = [
+        abs(float(np.asarray(trial.score)))
+        + abs(trial.fit_result.score_penalized_deviance)
+        + abs(float(np.asarray(trial.fit_result.state.saturated_loglik)))
+        + abs(
+            float(
+                np.asarray(trial.fit_result.state.coefficient_factor.logdet_hessian())
+            )
+        )
+        for trial in (accepted, candidate)
+    ]
+    roundoff_bound = 8 * np.finfo(np.float64).eps * sum(magnitudes)
+    if not np.all(np.isfinite((composite, error, raw_change, roundoff_bound))):
+        return None
+    return _LocalScoreChange(
+        composite, error, raw_change, roundoff_bound, linearity_error
+    )
+
+
 def optimize_nb_stream_reml(
     stream: StreamDesign,
     family: NegativeBinomial,
@@ -591,8 +738,20 @@ def optimize_nb_stream_reml(
             pirls_control,
         )
     )
+    # SciPy can discard a fully stationary free-theta trial when the score
+    # rises by one float64 ULP. Retaining that trial across subsequent probes
+    # adds one p²-owned result and its bounded penalized-deviance history
+    # alongside accepted and active candidate states.
+    stationary_trial_bytes = (
+        retained_trial_bytes + retained_history_bytes
+        if pin_lambda and family.n_theta == 1
+        else 0
+    )
     outer_workspace_bytes = (
-        retained_trial_bytes + retained_history_bytes + lbfgs_workspace_bytes
+        retained_trial_bytes
+        + stationary_trial_bytes
+        + retained_history_bytes
+        + lbfgs_workspace_bytes
     )
     if outer_workspace_bytes >= maximum_bytes:
         raise MemoryError(
@@ -616,6 +775,15 @@ def optimize_nb_stream_reml(
         params_initial,
         bounds,
         reml_control,
+        roundoff_stationary_completion=pin_lambda and family.n_theta == 1,
+        completion_inner_tolerance=(
+            pirls_control.tol if pin_lambda and family.n_theta == 1 else None
+        ),
+        local_score_change=(
+            _nb_local_stationary_score_change
+            if pin_lambda and family.n_theta == 1
+            else None
+        ),
     )
     trial = optimized.trial
     if family.n_theta and not np.array_equal(

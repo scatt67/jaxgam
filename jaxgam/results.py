@@ -272,6 +272,10 @@ class GAMPredictionResult:
     execution_path: str
     execution_route: str = field(default="dense", kw_only=True)
     execution_fallback_reason: str | None = field(default=None, kw_only=True)
+    score_scale: float | None = field(default=None, kw_only=True)
+    source_scans: int | None = field(default=None, kw_only=True)
+    batches_scanned: int | None = field(default=None, kw_only=True)
+    known_workspace_bytes: int | None = field(default=None, kw_only=True)
     optimizer_diagnostics: EFSOptimizerDiagnostics | None = field(
         default=None, kw_only=True
     )
@@ -394,6 +398,9 @@ class GAMPredictionResult:
         execution_route: str = "stream",
         selected_fit: ConsumedFitResult | None = None,
         lambda_strategy: str = "fixed",
+        source_scans: int | None = None,
+        batches_scanned: int | None = None,
+        known_workspace_bytes: int | None = None,
     ) -> GAMPredictionResult:
         """Build compact prediction state directly from row-free stream state.
 
@@ -594,6 +601,16 @@ class GAMPredictionResult:
             execution_path="jax",
             execution_route=execution_route,
             execution_fallback_reason=None,
+            score_scale=float(to_numpy(stream_state.score_scale)),
+            source_scans=(
+                stream_state.source_scans if source_scans is None else source_scans
+            ),
+            batches_scanned=(
+                stream_state.batches_scanned
+                if batches_scanned is None
+                else batches_scanned
+            ),
+            known_workspace_bytes=known_workspace_bytes,
             optimizer_diagnostics=optimizer_diagnostics,
             n=prepared.n_obs,
             _batch_rows=control.batch_rows,

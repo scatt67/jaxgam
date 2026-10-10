@@ -458,13 +458,13 @@ def test_streamed_static_rejections_precede_model_preparation(monkeypatch) -> No
             optimizer="efs",
             control=FitControl(execution="stream", linear_solver="qr"),
         ).fit(source, result="full")
-    with pytest.raises(NotImplementedError, match="canonical Gaussian"):
+    with pytest.raises(NotImplementedError, match="requires linear_solver='qr'"):
         GAM(
             "y ~ s(x, bs='cr', k=5)",
             family="gamma",
             optimizer="efs",
             sp=[0.4],
-            control=FitControl(execution="stream", linear_solver="qr"),
+            control=FitControl(execution="stream"),
         ).fit(source, result="prediction")
 
 

@@ -209,6 +209,17 @@ class _ParameterizedOptimization(Generic[_TrialT]):
     accepted_score_history: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class _LocalScoreChange:
+    """Independent small-step comparison; the trial's raw score is retained."""
+
+    change: float
+    error_estimate: float
+    raw_change: float
+    roundoff_bound: float
+    linearity_error: float
+
+
 def _preflight(
     stream: StreamDesign,
     family: ExponentialFamily,
@@ -1141,8 +1152,22 @@ def _run_parameterized_stream_reml(
     params_initial: np.ndarray,
     bounds: list[tuple[float | None, float | None]],
     control: StreamREMLControl,
+    *,
+    roundoff_stationary_completion: bool = False,
+    completion_inner_tolerance: float | None = None,
+    local_score_change: Callable[
+        [_AcceptedParameterizedTrialObjective[_TrialT], _TrialT, _TrialT, float],
+        _LocalScoreChange | None,
+    ]
+    | None = None,
 ) -> _ParameterizedOptimization[_TrialT]:
-    """Run the common exact accepted/candidate L-BFGS-B protocol."""
+    """Run the common exact accepted/candidate L-BFGS-B protocol.
+
+    A pinned, one-dimensional nuisance parameter can reach a point whose
+    projected gradient is resolved but whose score differs by only one float64
+    ULP. The optional completion policy retains its already reconverged trial
+    across later line-search probes; callers charge that additional ownership.
+    """
     if all(
         lower is not None and upper is not None and lower == upper
         for lower, upper in bounds
@@ -1161,8 +1186,55 @@ def _run_parameterized_stream_reml(
             projected_gradient_inf=0.0,
             accepted_score_history=objective.accepted_score_history,
         )
+    if roundoff_stationary_completion and (
+        completion_inner_tolerance is None or completion_inner_tolerance <= 0.0
+    ):
+        raise ValueError("Stationary completion requires an inner tolerance.")
+    if local_score_change is not None and not roundoff_stationary_completion:
+        raise ValueError("Local score comparison requires stationary completion.")
+    stationary_trial: _TrialT | None = None
+    stationary_norm = np.inf
+    stationary_raw_tie = False
+
+    def inner_valid(trial: _TrialT) -> bool:
+        inner = trial.fit_result.state
+        return bool(
+            inner.converged
+            and not inner.line_search_failed
+            and np.isfinite(inner.stationarity)
+            and inner.stationarity < completion_inner_tolerance
+        )
+
+    def observe(params: np.ndarray) -> tuple[float, np.ndarray]:
+        nonlocal stationary_trial, stationary_norm, stationary_raw_tie
+        score, gradient = objective(params)
+        projected = _projected_gradient_for_bounds(
+            np.asarray(params, dtype=np.float64), gradient, bounds
+        )
+        norm = float(np.max(np.abs(projected)))
+        accepted_score = float(np.asarray(objective.accepted.score))
+        score_ulp = float(np.spacing(abs(accepted_score)))
+        raw_tie = abs(score - accepted_score) <= score_ulp
+        prefer = (
+            stationary_trial is None
+            or (raw_tie and not stationary_raw_tie)
+            or (raw_tie == stationary_raw_tie and norm < stationary_norm)
+        )
+        if (
+            norm <= control.gtol
+            and prefer
+            and objective.candidate is not None
+            and _same_rho(np.asarray(params), objective.candidate.params)
+            and (raw_tie or local_score_change is not None)
+            and inner_valid(objective.candidate)
+        ):
+            stationary_trial = objective.candidate
+            stationary_norm = norm
+            stationary_raw_tie = raw_tie
+        return score, gradient
+
     result = minimize(
-        objective,
+        observe if roundoff_stationary_completion else objective,
         params_initial,
         method="L-BFGS-B",
         jac=True,
@@ -1189,6 +1261,114 @@ def _run_parameterized_stream_reml(
     projected_gradient_inf = float(np.max(np.abs(projected)))
     converged = bool(result.success) and projected_gradient_inf <= control.gtol
     message = str(result.message)
+    if (
+        roundoff_stationary_completion
+        and bool(result.success)
+        and not converged
+        and "RELATIVE REDUCTION OF F" in message
+        and stationary_trial is not None
+        and not _same_rho(stationary_trial.params, objective.accepted.params)
+    ):
+        accepted = objective.accepted
+        accepted_score = float(np.asarray(accepted.score))
+        candidate = stationary_trial
+        stationary_params = np.asarray(candidate.params, dtype=np.float64)
+        candidate_score = float(np.asarray(candidate.score))
+        candidate_gradient = np.asarray(candidate.gradient, dtype=np.float64)
+        source_fields = (
+            "source_fingerprint",
+            "basis_fingerprint",
+            "family_name",
+            "link_name",
+        )
+        if any(
+            getattr(candidate, field) != getattr(accepted, field)
+            for field in source_fields
+        ):
+            raise RuntimeError("Stationary completion changed source/family lineage.")
+        if candidate.source_fingerprint != objective._stream.source.fingerprint():
+            raise RuntimeError("Stationary completion source changed after evaluation.")
+        for value, (lower, upper) in zip(stationary_params, bounds, strict=True):
+            if (lower is not None and value < lower) or (
+                upper is not None and value > upper
+            ):
+                raise RuntimeError("Stationary completion violated a parameter bound.")
+        candidate_projected = _projected_gradient_for_bounds(
+            stationary_params, candidate_gradient, bounds
+        )
+        candidate_norm = float(np.max(np.abs(candidate_projected)))
+        candidate_inner_valid = inner_valid(candidate)
+        score_ulp = float(np.spacing(abs(accepted_score)))
+        comparison = None
+        if (
+            local_score_change is not None
+            and candidate_norm <= control.gtol
+            and candidate_inner_valid
+            and abs(candidate_score - accepted_score) > score_ulp
+        ):
+            # The callback can replay one trial at a time.  Release SciPy's
+            # last rejected candidate first; accepted and stationary states
+            # remain owned by this scope, so peak retention stays at three.
+            objective.candidate = None
+            comparison = local_score_change(
+                objective, accepted, candidate, completion_inner_tolerance
+            )
+        comparison_ok = bool(
+            comparison is not None
+            and np.isfinite(comparison.change)
+            and np.isfinite(comparison.error_estimate)
+            and np.isfinite(comparison.raw_change)
+            and np.isfinite(comparison.roundoff_bound)
+            and np.isfinite(comparison.linearity_error)
+            and comparison.error_estimate >= 0.0
+            and comparison.roundoff_bound >= 0.0
+            and comparison.change + comparison.error_estimate < 0.0
+            and abs(comparison.change) + comparison.error_estimate <= score_ulp
+            and abs(comparison.raw_change - comparison.change)
+            <= comparison.roundoff_bound
+        )
+        if (
+            np.isfinite(candidate_score)
+            and (abs(candidate_score - accepted_score) <= score_ulp or comparison_ok)
+            and candidate_norm <= control.gtol
+            and candidate_inner_valid
+        ):
+            objective.accepted = candidate
+            objective.candidate = None
+            objective.n_accepted += 1
+            objective._history.append(candidate_score)
+            projected_gradient_inf = candidate_norm
+            converged = True
+            if comparison_ok:
+                message = (
+                    f"{message}; retained exact stationary candidate by empirical "
+                    f"local-gradient comparison {comparison.change:.3e} ± "
+                    f"{comparison.error_estimate:.3e} under the one-ULP "
+                    f"comparison gate; raw source score change "
+                    f"{comparison.raw_change:.3e} remains reported."
+                )
+            else:
+                message = (
+                    f"{message}; retained exact stationary candidate within "
+                    "one score ULP after the line-search roundoff stop."
+                )
+        else:
+            comparison_detail = (
+                ""
+                if comparison is None
+                else (
+                    f", local change {comparison.change:.3e} ± "
+                    f"{comparison.error_estimate:.3e}, raw bound "
+                    f"{comparison.roundoff_bound:.3e}, linearity error "
+                    f"{comparison.linearity_error:.3e}"
+                )
+            )
+            message = (
+                f"{message}; stationary completion rejected: score change "
+                f"{candidate_score - accepted_score:.3e} (limit {score_ulp:.3e}), "
+                f"projected gradient {candidate_norm:.3e}, "
+                f"inner valid {candidate_inner_valid}{comparison_detail}."
+            )
     if bool(result.success) and not converged:
         message = (
             f"{message}; projected gradient {projected_gradient_inf:.3e} exceeds "
@@ -1215,6 +1395,7 @@ def optimize_regular_stream_reml(
     initial_params: np.ndarray | jax.Array,
     *,
     maximum_bytes: int,
+    pin_lambda: bool = False,
     pirls_control: StreamPIRLSControl | None = None,
     control: StreamREMLControl | None = None,
     initial_coefficients: np.ndarray | None = None,
@@ -1222,10 +1403,10 @@ def optimize_regular_stream_reml(
 ) -> RegularStreamREMLOptimization:
     """Optimize the exact regular source objective with bounded L-BFGS-B.
 
-    Unknown-scale families jointly optimize ``[rho, log_phi]``. Only smoothing
-    coordinates are box constrained; the scale coordinate retains the dense
-    joint-objective convention. Every accepted point owns a fully reconverged
-    source trial, and a rejected candidate can never become a warm start.
+    Unknown-scale families jointly optimize ``[rho, log_phi]``. With
+    ``pin_lambda=True`` the supplied rho is held exactly, including outside
+    the estimated-parameter bounds, while phi remains free. Every accepted
+    point owns a fully reconverged source trial.
     """
     reml_control = StreamREMLControl() if control is None else control
     if (
@@ -1239,9 +1420,11 @@ def optimize_regular_stream_reml(
     if fitting is None:
         raise ValueError("Regular streamed REML requires fitting preparation.")
     n_lambda = fitting.penalty_structure.n_penalties
-    if n_lambda == 0:
+    if not isinstance(pin_lambda, bool):
+        raise ValueError("pin_lambda must be bool")
+    if n_lambda == 0 and family.scale_known:
         raise NotImplementedError(
-            "Regular streamed REML L-BFGS-B requires a smoothing parameter."
+            "Regular streamed REML needs at least one free parameter."
         )
     n_params = n_lambda + int(not family.scale_known)
     params_initial = np.asarray(initial_params, dtype=np.float64)
@@ -1254,7 +1437,8 @@ def optimize_regular_stream_reml(
 
     lower, upper = -40.0, 40.0
     params_initial = params_initial.copy()
-    params_initial[:n_lambda] = np.clip(params_initial[:n_lambda], lower, upper)
+    if not pin_lambda:
+        params_initial[:n_lambda] = np.clip(params_initial[:n_lambda], lower, upper)
     base_pirls_control = (
         StreamPIRLSControl(solver_policy="qr")
         if pirls_control is None
@@ -1296,7 +1480,11 @@ def optimize_regular_stream_reml(
         initial_coefficients,
         device,
     )
-    bounds = [(lower, upper)] * n_lambda + [(None, None)] * (n_params - n_lambda)
+    bounds = (
+        [(float(value), float(value)) for value in params_initial[:n_lambda]]
+        if pin_lambda
+        else [(lower, upper)] * n_lambda
+    ) + [(None, None)] * (n_params - n_lambda)
     optimized = _run_parameterized_stream_reml(
         objective,
         params_initial,

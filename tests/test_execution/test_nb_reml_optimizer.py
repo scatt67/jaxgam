@@ -585,6 +585,15 @@ def test_nb_optimizer_pins_supplied_rho_outside_estimated_bounds(link, estimated
         assert result.n_iter > 0
         assert result.n_evaluations > 1
         assert result.projected_gradient_inf <= _OPTIMIZER_CONTROL.gtol
+        retained, history, lbfgs = (
+            reml_execution._parameterized_optimizer_workspace_bytes(
+                stream.prepared.n_coef,
+                len(supplied),
+                _OPTIMIZER_CONTROL,
+                _OPTIMIZER_PIRLS_CONTROL,
+            )
+        )
+        assert result.outer_workspace_bytes == 2 * retained + 2 * history + lbfgs
     else:
         reference = evaluate_nb_stream_reml(
             stream,
@@ -644,6 +653,64 @@ def test_nb_optimizer_dynamic_pinned_rho_matches_tight_pinned_source_state(link)
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
+
+
+def test_nb_local_stationary_comparison_replays_generated_source():
+    """The bounded comparison reads exact gradients from the original source."""
+    stream, family, initial = _optimizer_case("sqrt", estimated=True)
+    control = StreamREMLControl(gtol=1e-9, ftol=0.0)
+    selected = optimize_nb_stream_reml(
+        stream,
+        family,
+        initial,
+        maximum_bytes=_OPTIMIZER_MAXIMUM_BYTES,
+        pin_lambda=True,
+        pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+        control=control,
+    )
+    assert selected.converged
+    accepted_params = np.asarray(selected.trial.params).copy()
+    accepted_params[-1] += 3e-9
+    accepted = evaluate_nb_stream_reml(
+        stream,
+        family,
+        accepted_params,
+        maximum_bytes=_OPTIMIZER_MAXIMUM_BYTES,
+        control=_OPTIMIZER_PIRLS_CONTROL,
+        warm_start=selected.trial,
+    )
+    selected_theta_gradient = float(np.abs(np.asarray(selected.trial.gradient)[-1]))
+    assert selected_theta_gradient <= control.gtol
+    assert float(np.abs(np.asarray(accepted.gradient)[-1])) > control.gtol
+
+    def replay(params, warm_start):
+        return evaluate_nb_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=_OPTIMIZER_MAXIMUM_BYTES,
+            control=_OPTIMIZER_PIRLS_CONTROL,
+            warm_start=warm_start,
+        )
+
+    objective = SimpleNamespace(
+        _stream=stream,
+        _evaluate=replay,
+        n_evaluations=0,
+        cumulative_source_scans=0,
+        cumulative_batches_scanned=0,
+    )
+    comparison = nb_reml_execution._nb_local_stationary_score_change(
+        objective, accepted, selected.trial, _OPTIMIZER_PIRLS_CONTROL.tol
+    )
+    assert comparison is not None
+    score_ulp = float(np.spacing(abs(float(accepted.score))))
+    assert comparison.change + comparison.error_estimate < 0.0
+    assert abs(comparison.change) + comparison.error_estimate <= score_ulp
+    assert abs(comparison.raw_change - comparison.change) <= comparison.roundoff_bound
+    assert objective.n_evaluations == 3
+    assert objective.cumulative_source_scans > 0
+    assert objective.cumulative_batches_scanned > 0
 
 
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
@@ -715,6 +782,29 @@ def test_nb_optimizer_preflights_retention_and_keeps_accepted_on_failed_candidat
             params,
             maximum_bytes=1,
             pirls_control=_CONTROL,
+        )
+    evaluate.assert_not_called()
+
+    # The pinned free-theta roundoff completion may retain one validated
+    # candidate across later SciPy probes, on top of accepted and active fits.
+    retained, history, lbfgs = reml_execution._parameterized_optimizer_workspace_bytes(
+        stream.prepared.n_coef,
+        len(params),
+        _OPTIMIZER_CONTROL,
+        _OPTIMIZER_PIRLS_CONTROL,
+    )
+    with (
+        patch.object(nb_reml_execution, "evaluate_nb_stream_reml") as evaluate,
+        pytest.raises(MemoryError, match="retention"),
+    ):
+        optimize_nb_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=2 * retained + 2 * history + lbfgs,
+            pin_lambda=True,
+            pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+            control=_OPTIMIZER_CONTROL,
         )
     evaluate.assert_not_called()
 

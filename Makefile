@@ -127,6 +127,24 @@ test-efs-recovery-ci: ## run focused EFS retained-start recovery using a built i
 		tests/test_fitting/test_efs_theta_pirls.py::test_efs_theta_pirls_nonsaturated_inner_contract_matches_pinned_r[weighted_ridge] \
 		-s -x --tb=short
 
+.PHONY: test-nb-public-ci
+test-nb-public-ci: ## run public fixed-sp NB theta modes and pinned roundoff ownership in a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest \
+		tests/test_validation_matrix.py::test_public_fixed_sp_nb_theta_modes_pinned_r \
+		tests/test_execution/test_nb_reml_optimizer.py::test_nb_optimizer_dynamic_pinned_rho_matches_tight_pinned_source_state \
+		tests/test_execution/test_nb_roundoff_completion.py \
+		-s -x --tb=short
+
+.PHONY: test-regular-public-ci
+test-regular-public-ci: ## run public fixed-sp regular links and Gamma arithmetic on a built image
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest \
+		tests/test_validation_matrix.py::test_public_fixed_sp_regular_noncanonical_pinned_r \
+		tests/test_families.py::TestDevianceResidsVsR::test_gamma_direct_deviance_near_mean_is_stable_and_jitted \
+		tests/test_families.py::TestDevianceResidsVsR::test_gamma_direct_deviance_keeps_extreme_source_ratio_and_clamp \
+		-s -x --tb=short
+
 .PHONY: test-pr82-nb-batch
 test-pr82-nb-batch: docker-build ## run dynamic-theta NB batch derivative gates
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
