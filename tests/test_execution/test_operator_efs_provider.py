@@ -242,6 +242,51 @@ def test_source_provider_requires_bounded_counts_and_in_pirls_estimated_theta():
         )
 
 
+def test_gaussian_source_provider_preserves_incoming_and_fletcher_scales():
+    frame, weights, _, source, _, state = _case(Gaussian())
+    rho = np.log(np.array([1.3]))
+    fit = fit_operator_fixed_sp(
+        state.model,
+        source,
+        Gaussian(),
+        np.exp(rho),
+        memory_budget_bytes=8 * 1024 * 1024,
+    )
+    assert fit.converged
+    provider = SourceOperatorEFSFitProvider(
+        state.model,
+        source,
+        Gaussian(),
+        fit_control=OperatorControl(),
+        fit_budget_bytes=8 * 1024 * 1024,
+        components_budget_bytes=16 * 1024 * 1024,
+        aggregate_budget_bytes=64 * 1024 * 1024,
+    )
+    incoming_phi = 0.37
+    selected = provider.evaluate(fit, OperatorLogDetControl(), score_phi=incoming_phi)
+    expected_null = float(
+        np.sum(weights * (frame.y.to_numpy() - np.mean(frame.y)) ** 2) / len(frame)
+    )
+    expected_update = fit.deviance / (len(frame) - selected.components.edf_total)
+    np.testing.assert_allclose(
+        fit.diagnostics.initial_null_scale,
+        expected_null,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert selected.score_phi == incoming_phi
+    assert selected.components.score_rows.terms.score_phi == incoming_phi
+    np.testing.assert_allclose(
+        [selected.update_phi, selected.reported_phi, selected.carried_phi],
+        expected_update,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert selected.score_error_bound is None
+    with pytest.raises(ValueError, match="score phi"):
+        replace(selected, score_phi=incoming_phi * 2)
+
+
 def test_stochastic_trace_is_labeled_and_keeps_sampling_error_separate():
     _, _, _, source, _, state = _case(Poisson())
     result = MatchedOperatorEFSProvider(
@@ -363,7 +408,7 @@ def test_from_fit_binds_rho_family_and_convergence_to_matched_components():
     result = provider.evaluate()
     assert np.isfinite(result.score.value)
     assert result.source_scans > 1
-    assert OperatorEFSState(fitted, result, None).components is result
+    assert OperatorEFSState(fitted, result, None, score_phi=1.3).components is result
     shifted_beta = fitted.coefficients.copy()
     shifted_beta[0] += 0.01
     with pytest.raises(ValueError, match="do not match"):

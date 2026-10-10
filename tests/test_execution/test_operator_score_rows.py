@@ -93,6 +93,7 @@ def test_matched_reductions_match_dense_family_terms_strict(family, phi):
     assert result.unit_weights
     assert result.zero_offset
     assert result.maximum_response == float(np.max(y))
+    assert result.maximum_absolute_response == float(np.max(np.abs(y)))
 
 
 def test_reducer_preflight_rejects_budget_before_replaying(monkeypatch):
@@ -238,6 +239,7 @@ def test_weighted_offset_reductions_are_batch_invariant_and_match_dense(
         assert not result.unit_weights
         assert not result.zero_offset
         assert result.maximum_response == float(np.max(frame.y))
+        assert result.maximum_absolute_response == float(np.max(np.abs(frame.y)))
 
 
 def test_reducer_rechecks_frozen_family_and_source_on_replay():

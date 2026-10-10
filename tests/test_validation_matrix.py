@@ -145,6 +145,88 @@ def test_operator_efs_calibrated_indexed_poisson_full_fit_strict(
     checks.raise_if_any(f"calibrated operator EFS p={p}, seed={seed}")
 
 
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("p", "seed", "multiplicity", "mode"),
+    [
+        (300, 907, 2, "balanced"),
+        (300, 908, 2, "balanced"),
+        (400, 909, 2, "balanced"),
+        (512, 910, 3, "unbalanced"),
+    ],
+)
+def test_operator_efs_calibrated_indexed_gaussian_scale_full_fit_strict(
+    p: int, seed: int, multiplicity: int, mode: str
+) -> None:
+    """Match the source scale-carrying controller from the same initial state."""
+    from tests.test_execution.test_operator_efs_calibrated import (
+        calibrated_gaussian_scale_case,
+    )
+
+    formula, frame, operator, dense, errors, bounds = calibrated_gaussian_scale_case(
+        p, seed, multiplicity, mode
+    )
+    selected = operator.accepted
+    initial_null_scale = selected.fit.diagnostics.initial_null_scale
+    assert initial_null_scale is not None
+    reference = RBridge(mode="rpy2").fit_efs(
+        formula,
+        frame,
+        "gaussian",
+        initial_smoothing=np.array([0.8]),
+        initial_scale=initial_null_scale / 10,
+        controls={"epsilon": 1e-7},
+    )
+    assert operator.converged
+    assert selected.fit.converged
+    assert dense.converged
+    assert bool(np.asarray(dense.pirls_result.converged))
+    assert reference["convergence"] == "full convergence"
+    assert reference["inner_converged"]
+    assert all(bound is not None for bound in bounds)
+    assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))
+    checks = _AssertCollector()
+    for label, score, sp, deviance, scale in (
+        (
+            "dense EFS",
+            dense.score,
+            dense.smoothing_params,
+            dense.pirls_result.deviance,
+            dense.reported_phi,
+        ),
+        (
+            "pinned EFS",
+            reference["reml_score"],
+            reference["smoothing_params"],
+            reference["deviance"],
+            reference["scale"],
+        ),
+    ):
+        for field, actual, expected in (
+            ("score", selected.components.score.value, score),
+            ("smoothing", np.exp(selected.fit.log_lambda), sp),
+            ("deviance", selected.fit.deviance, deviance),
+            ("scale", selected.reported_phi, scale),
+        ):
+            checks.check(
+                f"{label} {field}",
+                lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                    actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+    checks.check(
+        "dense outer iterations",
+        lambda: np.testing.assert_equal(operator.outer_iterations, dense.n_iter),
+    )
+    checks.check(
+        "source outer iterations",
+        lambda: np.testing.assert_equal(
+            operator.outer_iterations, reference["outer_iterations"]
+        ),
+    )
+    checks.raise_if_any(f"calibrated Gaussian EFS p={p}, seed={seed}")
+
+
 # A named generated case, exact model controls, and a live pinned-R fit own
 # each reviewed PR7.6 MODERATE field. The generator is replayed at runtime so
 # changed data or source schemas cannot inherit that field's allowance.

@@ -12,11 +12,12 @@ from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.operator_efs_controller import (
     SourceOperatorEFSFitProvider,
     _score_window_certified,
+    run_operator_efs_gaussian_scale,
     run_operator_efs_known_scale,
 )
 from jaxgam.execution.operator_logdet import OperatorLogDetControl
 from jaxgam.execution.operator_score import OperatorScoreEstimate
-from jaxgam.families.standard import Poisson
+from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.fitting.efs_operator_score import operator_reml_score
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.operator_prepare import (
@@ -79,7 +80,13 @@ class _ControlledProvider:
             fisher=SimpleNamespace(traces=np.array([0.0]), quadratics=np.array([1.0])),
         )
         return SimpleNamespace(
-            fit=fit, components=components, score_error_bound=self.bound
+            fit=fit,
+            components=components,
+            score_error_bound=self.bound,
+            score_phi=1.0,
+            update_phi=1.0,
+            reported_phi=1.0,
+            carried_phi=1.0,
         )
 
 
@@ -91,6 +98,64 @@ def _run(provider, *, outer_limit=1, maximum_probes=2, maximum_depth=2):
         initial_accuracy=OperatorLogDetControl(probes=2, lanczos_depth=2),
         maximum_probes=maximum_probes,
         maximum_depth=maximum_depth,
+    )
+
+
+def test_gaussian_scale_controller_carries_incoming_phi_across_trial():
+    n = 45
+    group = np.arange(n) % 3
+    frame = pd.DataFrame(
+        {
+            "y": 1.2 + 0.4 * np.sin(np.arange(n) / 6),
+            "g": pd.Categorical(group),
+        }
+    )
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        parse_formula("y~0+s(g,bs='re')"),
+        source,
+        control=OperatorPreparationControl(
+            batch_rows=7, memory_budget_bytes=2 * 1024 * 1024
+        ),
+    )
+
+    class _RecordingProvider(SourceOperatorEFSFitProvider):
+        def __init__(self):
+            super().__init__(
+                model,
+                source,
+                Gaussian(),
+                fit_control=OperatorControl(),
+                fit_budget_bytes=8 * 1024 * 1024,
+                components_budget_bytes=16 * 1024 * 1024,
+                aggregate_budget_bytes=64 * 1024 * 1024,
+            )
+            self.phi_inputs = []
+
+        def evaluate(self, fit, control, *, score_phi=1.0):
+            self.phi_inputs.append(score_phi)
+            return super().evaluate(fit, control, score_phi=score_phi)
+
+    provider = _RecordingProvider()
+    result = run_operator_efs_gaussian_scale(
+        provider,
+        np.log(np.array([0.8])),
+        control=EFSControl(outer_limit=3),
+        initial_accuracy=OperatorLogDetControl(probes=2, lanczos_depth=2),
+        maximum_probes=2,
+        maximum_depth=2,
+    )
+    assert result.stop_reason == "indeterminate_score"
+    assert result.attempted_fits == 2
+    initial = result.accepted
+    np.testing.assert_allclose(
+        initial.score_phi,
+        initial.fit.diagnostics.initial_null_scale / 10,
+        rtol=1e-10,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        provider.phi_inputs, [initial.score_phi, initial.update_phi]
     )
 
 

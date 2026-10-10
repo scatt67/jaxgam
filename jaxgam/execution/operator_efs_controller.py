@@ -28,9 +28,10 @@ from jaxgam.execution.operator_logdet import OperatorLogDetControl
 from jaxgam.execution.operator_score import compare_operator_scores
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.families.standard import Poisson
+from jaxgam.families.standard import Gaussian, Poisson
 from jaxgam.fitting.iterative import CONVERGED
 from jaxgam.formula.operator_prepare import PreparedOperatorModel
+from jaxgam.links.links import IdentityLink
 from jaxgam.penalties.structure import IdentityPenalty
 
 
@@ -42,6 +43,10 @@ class OperatorEFSState:
     components: MatchedOperatorEFSComponents
     score_error_bound: float | None
     score_bound_method: str = "unavailable"
+    score_phi: float = 1.0
+    update_phi: float = 1.0
+    reported_phi: float = 1.0
+    carried_phi: float = 1.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.fit, OperatorFitResult) or not self.fit.converged:
@@ -77,6 +82,28 @@ class OperatorEFSState:
             raise ValueError("Score error bound must be finite and nonnegative.")
         if self.score_error_bound is None and self.score_bound_method != "unavailable":
             raise ValueError("Uncalibrated score cannot name a bound method.")
+        if any(
+            not math.isfinite(value) or value <= 0
+            for value in (
+                self.score_phi,
+                self.update_phi,
+                self.reported_phi,
+                self.carried_phi,
+            )
+        ):
+            raise ValueError("Operator EFS scales must be finite and positive.")
+        if self.components.score_rows.terms.score_phi != self.score_phi:
+            raise ValueError("Operator EFS score phi does not match row reductions.")
+        if self.fit.family.scale_known and any(
+            value != 1.0
+            for value in (
+                self.score_phi,
+                self.update_phi,
+                self.reported_phi,
+                self.carried_phi,
+            )
+        ):
+            raise ValueError("Known-scale operator EFS phi must remain one.")
 
 
 def _indexed_poisson_score_bound(
@@ -148,6 +175,76 @@ def _indexed_poisson_score_bound(
     return float(bound) if math.isfinite(bound) else None
 
 
+def _indexed_gaussian_score_bound(
+    fit: OperatorFitResult,
+    components: MatchedOperatorEFSComponents,
+    control: OperatorControl,
+) -> float | None:
+    """Conditional exact-diagonal Gaussian score envelope at incoming phi.
+
+    This deliberately admits only the measured single-index, bounded-row
+    regime. A separately measured floating arithmetic allowance covers the
+    likelihood, penalty and diagonal reductions. A residual allowance covers
+    coefficient error under the positive identity-penalty floor.
+    """
+    model = fit.model
+    score = components.score
+    rows = components.score_rows
+    phi = rows.terms.score_phi
+    p, n = model.n_coef, model.n_obs
+    if not (
+        256 < p <= 512
+        and 2 * p <= n <= 3 * p
+        and model.batch_rows == 64
+        and isinstance(fit.family, Gaussian)
+        and isinstance(fit.family.link, IdentityLink)
+        and rows.unit_weights
+        and rows.zero_offset
+        and rows.maximum_absolute_response <= 10
+        and 1e-8 <= phi <= 1e4
+        and score.strategy == "structured_diagonal"
+        and components.fisher.diagnostics.strategy == "structured_diagonal"
+        and fit.diagnostics.inner_status == CONVERGED
+        and control.tolerance <= 1e-7
+        and control.cg_rtol <= 1e-10
+        and control.cg_atol <= 1e-12
+        and len(model.penalties.blocks) == 1
+    ):
+        return None
+    block = model.penalties.blocks[0]
+    if (
+        block.sp_indices != (0,)
+        or len(block.local_penalties) != 1
+        or not isinstance(block.local_penalties[0], IdentityPenalty)
+        or score.diagonal_condition_ratio is None
+        or score.diagonal_condition_ratio > 1e4
+        or score.minimum_diagonal is None
+        or score.minimum_diagonal < 1e-6
+        or score.determinant_rounding_bound is None
+        or np.max(np.abs(fit.coefficients)) > 20
+    ):
+        return None
+    gradient = fit.diagnostics.final_gradient_norm
+    if not math.isfinite(gradient) or gradient > 1e-5:
+        return None
+    penalty_floor = math.exp(float(fit.log_lambda[0])) * block.local_penalties[0].scale
+    if not math.isfinite(penalty_floor) or penalty_floor < 1e-6:
+        return None
+    magnitude = math.fsum(
+        (
+            1.0,
+            abs(rows.terms.penalized_deviance / phi),
+            abs(rows.terms.saturated_loglik),
+            abs(components.penalty.value),
+            abs(score.value),
+        )
+    )
+    arithmetic = 512 * np.finfo(np.float64).eps * (n + p) * magnitude
+    solve = p * (gradient + gradient * gradient) / (penalty_floor * phi)
+    bound = arithmetic + solve + score.determinant_rounding_bound
+    return float(bound) if math.isfinite(bound) else None
+
+
 class OperatorEFSFitProvider(Protocol):
     """Refit and matched evaluation supplied by an operator backend."""
 
@@ -155,7 +252,11 @@ class OperatorEFSFitProvider(Protocol):
         """Return a converged coefficient fit at rho."""
 
     def evaluate(
-        self, fit: OperatorFitResult, control: OperatorLogDetControl
+        self,
+        fit: OperatorFitResult,
+        control: OperatorLogDetControl,
+        *,
+        score_phi: float = 1.0,
     ) -> OperatorEFSState:
         """Return matched statistics and a calibrated absolute score bound."""
 
@@ -194,8 +295,12 @@ class SourceOperatorEFSFitProvider:
         ]
         | None = None,
     ) -> None:
-        if not family.scale_known:
-            raise NotImplementedError("Known-scale operator EFS requires fixed scale.")
+        if not family.scale_known and not (
+            isinstance(family, Gaussian) and isinstance(family.link, IdentityLink)
+        ):
+            raise NotImplementedError(
+                "Unknown-scale operator EFS currently supports Gaussian identity."
+            )
         if isinstance(family, NegativeBinomial) and family.n_theta > 0:
             raise NotImplementedError(
                 "Estimated-theta operator EFS requires in-PIRLS theta updates."
@@ -307,25 +412,60 @@ class SourceOperatorEFSFitProvider:
         )
 
     def evaluate(
-        self, fit: OperatorFitResult, control: OperatorLogDetControl
+        self,
+        fit: OperatorFitResult,
+        control: OperatorLogDetControl,
+        *,
+        score_phi: float = 1.0,
     ) -> OperatorEFSState:
+        if not math.isfinite(score_phi) or score_phi <= 0:
+            raise ValueError("Operator EFS incoming score phi must be finite positive.")
         components = MatchedOperatorEFSProvider.from_fit(
             fit,
             self.source,
-            score_phi=1.0,
+            score_phi=score_phi,
             memory_budget_bytes=self.components_budget_bytes,
             logdet_control=control,
             max_y=self.max_y,
         ).evaluate()
         if self.score_error_bound is None:
-            bound = _indexed_poisson_score_bound(fit, components, self.fit_control)
-            method = (
-                "indexed_poisson_empirical_v1" if bound is not None else "unavailable"
-            )
+            if fit.family.scale_known:
+                bound = _indexed_poisson_score_bound(fit, components, self.fit_control)
+                method = (
+                    "indexed_poisson_empirical_v1"
+                    if bound is not None
+                    else "unavailable"
+                )
+            else:
+                bound = _indexed_gaussian_score_bound(fit, components, self.fit_control)
+                method = (
+                    "indexed_gaussian_empirical_v1"
+                    if bound is not None
+                    else "unavailable"
+                )
         else:
             bound = self.score_error_bound(fit, components)
             method = "external" if bound is not None else "unavailable"
-        return OperatorEFSState(fit, components, bound, method)
+        update_phi = 1.0
+        if not fit.family.scale_known:
+            denominator = fit.model.n_obs - components.edf_total
+            if not math.isfinite(denominator) or denominator <= 0:
+                raise FloatingPointError(
+                    "Operator EFS scale degrees of freedom invalid."
+                )
+            update_phi = fit.deviance / denominator
+            if not math.isfinite(update_phi) or update_phi <= 0:
+                raise FloatingPointError("Operator EFS Fletcher scale is invalid.")
+        return OperatorEFSState(
+            fit,
+            components,
+            bound,
+            method,
+            score_phi,
+            update_phi,
+            update_phi,
+            update_phi,
+        )
 
 
 @dataclass(frozen=True)
@@ -342,6 +482,8 @@ class OperatorEFSControllerResult:
     multiplier: float
     score_history: tuple[float, ...]
     score_bound_history: tuple[float | None, ...]
+    score_phi_history: tuple[float, ...] = ()
+    update_phi_history: tuple[float, ...] = ()
 
 
 def _raw_ratio(state: OperatorEFSState) -> np.ndarray:
@@ -353,7 +495,7 @@ def _raw_ratio(state: OperatorEFSState) -> np.ndarray:
     assert d is not None
     with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
         numerator = np.maximum(0.0, np.exp(-rho) * d - t)
-        ratio = numerator / np.maximum(0.0, q)
+        ratio = numerator / np.maximum(0.0, q) * state.update_phi
         ratio = np.where((numerator == 0) & (q == 0), 1.0, ratio)
         ratio = np.where(np.isfinite(ratio), ratio, 1e6)
     if not np.all(np.isfinite(ratio) & (ratio > 0)):
@@ -372,7 +514,12 @@ def _trial_rho(
 
 
 def _validate_fit_rho(fit: OperatorFitResult, rho: np.ndarray) -> None:
-    if not np.array_equal(fit.log_lambda, rho):
+    # The source provider accepts positive sp and returns log(sp), so the
+    # exp/log boundary can change the last few bits of a trial rho.
+    rounding = 8 * np.finfo(np.float64).eps * np.maximum(1.0, np.abs(rho))
+    if fit.log_lambda.shape != rho.shape or not np.all(
+        np.abs(fit.log_lambda - rho) <= rounding
+    ):
         raise ValueError("Operator EFS provider fit has mismatched rho.")
 
 
@@ -393,7 +540,7 @@ def _score_window_certified(
     )
 
 
-def run_operator_efs_known_scale(
+def _run_operator_efs(
     provider: OperatorEFSFitProvider,
     initial_log_lambda: np.ndarray,
     *,
@@ -401,8 +548,10 @@ def run_operator_efs_known_scale(
     initial_accuracy: OperatorLogDetControl,
     maximum_probes: int = 256,
     maximum_depth: int = 128,
+    estimate_scale: bool,
+    initial_score_phi: float | None,
 ) -> OperatorEFSControllerResult:
-    """Run known-scale EFS, retaining accepted state on uncertain comparisons.
+    """Run shared EFS policy, retaining accepted state on uncertain comparisons.
 
     The provider must supply a *calibrated absolute* score error bound at each
     requested accuracy; ``None`` means unavailable. Refinement reuses the same
@@ -420,15 +569,28 @@ def run_operator_efs_known_scale(
         or not np.all(np.isfinite(initial_log_lambda))
     ):
         raise ValueError("Initial EFS rho must be a finite float64 vector.")
+    if initial_score_phi is not None and (
+        not math.isfinite(initial_score_phi) or initial_score_phi <= 0
+    ):
+        raise ValueError("Initial EFS score phi must be finite positive.")
+    if not estimate_scale and initial_score_phi not in (None, 1.0):
+        raise ValueError("Known-scale EFS initial phi must be one.")
     if (
         not initial_accuracy.probes <= maximum_probes <= 256
         or not initial_accuracy.lanczos_depth <= maximum_depth <= 128
     ):
         raise ValueError("Accuracy caps must contain initial settings.")
     history_slots = min(control.outer_limit, max(4, control.history_limit))
-    # Two deques of Python score/bound objects, their returned tuple copies,
+    # Score/bound and score/update-phi deques, returned tuple copies,
     # accepted history metadata, and live rho/ratio/extension vectors.
-    controller_bytes = 8192 + 256 * history_slots + 128 * len(initial_log_lambda)
+    controller_bytes = 8192 + 384 * history_slots + 128 * len(initial_log_lambda)
+
+    def evaluate_state(
+        fit: OperatorFitResult, accuracy: OperatorLogDetControl, score_phi: float
+    ) -> OperatorEFSState:
+        if estimate_scale:
+            return provider.evaluate(fit, accuracy, score_phi=score_phi)
+        return provider.evaluate(fit, accuracy)
 
     def reserve(
         held: tuple[OperatorEFSState, ...],
@@ -450,8 +612,13 @@ def run_operator_efs_known_scale(
     del shifted
     if not first_fit.converged:
         raise RuntimeError("Initial operator EFS coefficient fit did not converge.")
+    if estimate_scale and initial_score_phi is None:
+        null_scale = first_fit.diagnostics.initial_null_scale
+        if null_scale is None or not math.isfinite(null_scale) or null_scale <= 0:
+            raise ValueError("Initial operator EFS null scale must be finite positive.")
+        initial_score_phi = null_scale / 10.0
     reserve((), operation="evaluate", pending_fit=first_fit)
-    accepted = provider.evaluate(first_fit, initial_accuracy)
+    accepted = evaluate_state(first_fit, initial_accuracy, initial_score_phi or 1.0)
     del first_fit
     fits = 1
     refinements = indeterminate = 0
@@ -459,6 +626,8 @@ def run_operator_efs_known_scale(
     accuracy = initial_accuracy
     history: deque[float] = deque(maxlen=max(4, control.history_limit))
     bound_history: deque[float | None] = deque(maxlen=max(4, control.history_limit))
+    score_phi_history: deque[float] = deque(maxlen=max(4, control.history_limit))
+    update_phi_history: deque[float] = deque(maxlen=max(4, control.history_limit))
     old_deviance: float | None = None
     stop = "iteration_limit"
 
@@ -499,7 +668,7 @@ def run_operator_efs_known_scale(
                 operation="evaluate",
                 pending_fit=old.fit,
             )
-            refined_old = provider.evaluate(old.fit, current)
+            refined_old = evaluate_state(old.fit, current, old.score_phi)
             reserve(
                 (
                     accepted,
@@ -514,7 +683,7 @@ def run_operator_efs_known_scale(
                 pending_fit=trial.fit,
             )
             old = refined_old
-            trial = provider.evaluate(trial.fit, current)
+            trial = evaluate_state(trial.fit, current, trial.score_phi)
             count += 1
 
     for iteration in range(1, control.outer_limit + 1):
@@ -534,7 +703,7 @@ def run_operator_efs_known_scale(
             stop = "inner_failure"
             break
         reserve((old,), operation="evaluate", pending_fit=trial_fit)
-        candidate = provider.evaluate(trial_fit, accuracy)
+        candidate = evaluate_state(trial_fit, accuracy, old.carried_phi)
         del trial_fit
         old, candidate, accuracy, decision, count = compare(old, candidate)
         refinements += count
@@ -559,13 +728,17 @@ def run_operator_efs_known_scale(
                         operation="evaluate",
                         pending_fit=extension_fit,
                     )
-                    extension = provider.evaluate(extension_fit, accuracy)
+                    extension = evaluate_state(extension_fit, accuracy, old.carried_phi)
                     candidate, extension, accuracy, extended_decision, count = compare(
                         candidate, extension, ambient=(old,)
                     )
                     refinements += count
                     if extended_decision == "improvement":
-                        accepted = extension
+                        accepted = (
+                            replace(extension, carried_phi=candidate.update_phi)
+                            if estimate_scale
+                            else extension
+                        )
                         multiplier *= 2
                     else:
                         accepted = candidate
@@ -590,7 +763,7 @@ def run_operator_efs_known_scale(
                     operation="evaluate",
                     pending_fit=trial_fit,
                 )
-                candidate = provider.evaluate(trial_fit, accuracy)
+                candidate = evaluate_state(trial_fit, accuracy, old.carried_phi)
                 del trial_fit
                 old, candidate, accuracy, decision, count = compare(old, candidate)
                 refinements += count
@@ -606,6 +779,8 @@ def run_operator_efs_known_scale(
         del candidate, old
         history.append(accepted.components.score.value)
         bound_history.append(accepted.score_error_bound)
+        score_phi_history.append(accepted.score_phi)
+        update_phi_history.append(accepted.update_phi)
         window_scores = tuple(history)[-4:]
         window_bounds = tuple(bound_history)[-4:]
         score_window_certified = _score_window_certified(
@@ -636,4 +811,55 @@ def run_operator_efs_known_scale(
         multiplier,
         tuple(history)[-control.history_limit :],
         tuple(bound_history)[-control.history_limit :],
+        tuple(score_phi_history)[-control.history_limit :],
+        tuple(update_phi_history)[-control.history_limit :],
+    )
+
+
+def run_operator_efs_known_scale(
+    provider: OperatorEFSFitProvider,
+    initial_log_lambda: np.ndarray,
+    *,
+    control: EFSControl,
+    initial_accuracy: OperatorLogDetControl,
+    maximum_probes: int = 256,
+    maximum_depth: int = 128,
+) -> OperatorEFSControllerResult:
+    """Run calibrated known-scale EFS through the shared controller."""
+    return _run_operator_efs(
+        provider,
+        initial_log_lambda,
+        control=control,
+        initial_accuracy=initial_accuracy,
+        maximum_probes=maximum_probes,
+        maximum_depth=maximum_depth,
+        estimate_scale=False,
+        initial_score_phi=None,
+    )
+
+
+def run_operator_efs_gaussian_scale(
+    provider: SourceOperatorEFSFitProvider,
+    initial_log_lambda: np.ndarray,
+    *,
+    control: EFSControl,
+    initial_accuracy: OperatorLogDetControl,
+    initial_score_phi: float | None = None,
+    maximum_probes: int = 256,
+    maximum_depth: int = 128,
+) -> OperatorEFSControllerResult:
+    """Carry source Gaussian identity Fletcher scale through EFS trials."""
+    if not isinstance(provider.family, Gaussian) or not isinstance(
+        provider.family.link, IdentityLink
+    ):
+        raise TypeError("Gaussian scale EFS needs a Gaussian identity provider.")
+    return _run_operator_efs(
+        provider,
+        initial_log_lambda,
+        control=control,
+        initial_accuracy=initial_accuracy,
+        maximum_probes=maximum_probes,
+        maximum_depth=maximum_depth,
+        estimate_scale=True,
+        initial_score_phi=initial_score_phi,
     )

@@ -37,6 +37,7 @@ class OperatorScoreReductions:
     unit_weights: bool = False
     zero_offset: bool = False
     maximum_response: float = float("inf")
+    maximum_absolute_response: float = float("inf")
 
 
 class MatchedOperatorScoreReducer:
@@ -137,6 +138,7 @@ class MatchedOperatorScoreReducer:
         unit_weights = True
         zero_offset = True
         maximum_response = 0.0
+        maximum_absolute_response = 0.0
         device = jax.devices("cpu")[0]
         padding = state.context.padding
         for batch in checked.scan(B):
@@ -144,6 +146,9 @@ class MatchedOperatorScoreReducer:
             zero_offset = zero_offset and bool(np.all(batch.offset == 0.0))
             if batch.y is not None:
                 maximum_response = max(maximum_response, float(np.max(batch.y)))
+                maximum_absolute_response = max(
+                    maximum_absolute_response, float(np.max(np.abs(batch.y)))
+                )
             rows = _evaluate_geometry(model, batch)
             _, quantities = state.evaluate(batch, rows)
             if not bool(quantities.input_ok) or not bool(quantities.domain_ok):
@@ -189,4 +194,5 @@ class MatchedOperatorScoreReducer:
             unit_weights,
             zero_offset,
             maximum_response,
+            maximum_absolute_response,
         )
