@@ -374,7 +374,12 @@ def test_public_fixed_sp_nb_theta_modes_pinned_r(
     if supertight_nb:
         _assert_pr76_nb_case(source, model, link)
     result = model.fit(source, result="prediction")
-    assert result.converged
+    assert result.converged, (
+        f"NB/{link} estimated={estimated} smooth={smooth}: "
+        f"{result.convergence_info}; outer iterations={result.n_iter}, "
+        f"source scans={result.source_scans}, batches={result.batches_scanned}, "
+        f"theta={result.theta}, score={result.score}"
+    )
     if supertight_nb and link == "log":
         assert expected["inner_converged"]
         assert expected["outer_status"] == "full convergence"
