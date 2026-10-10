@@ -764,6 +764,270 @@ class RBridge:
             "final": final,
         }
 
+    def efs_nb_inner_trace_reference(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        penalty: float,
+        log_theta: float,
+        *,
+        start: np.ndarray,
+        null_coef: np.ndarray,
+        maxit: int,
+    ) -> dict[str, Any]:
+        """Trace pinned ``gam.fit4`` through private, validated R AST hooks."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        from tests.r_ast import clone_function, find_call_paths, instrument_function
+
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        weights = np.asarray(weights, dtype=np.float64)
+        offset = np.asarray(offset, dtype=np.float64)
+        start = np.asarray(start, dtype=np.float64)
+        null_coef = np.asarray(null_coef, dtype=np.float64)
+        n, p = X.shape
+        if any(a.shape != (n,) for a in (y, weights, offset)) or any(
+            a.shape != (p,) for a in (start, null_coef)
+        ):
+            raise ValueError("R EFS inner oracle starts and rows must align with X")
+        r_x = self._to_r_matrix(X)
+        r_y = self._to_r_vector(y)
+        r_weights = self._to_r_vector(weights)
+        r_offset = self._to_r_vector(offset)
+        r_theta = self._to_r_vector(np.asarray([log_theta], dtype=np.float64))
+        family = self._mgcv.nb(theta=self._ro.r["-"](self._base.exp(r_theta)))
+        for name in ("fix.family.link", "fix.family.var", "fix.family.ls"):
+            family = self._call_internal(name, family)
+        trace: dict[str, list[Any]] = {
+            name: []
+            for name in (
+                "pre",
+                "post",
+                "theta",
+                "beta",
+                "raw_beta",
+                "raw_eta",
+                "raw_deviance",
+                "nonfinite",
+                "domain",
+                "divergence",
+                "retained",
+                "initial_factors",
+                "use_wy",
+            )
+        }
+
+        def copy(value: Any) -> np.ndarray:
+            return np.array(value, dtype=np.float64, copy=True).ravel(order="F")
+
+        def scalar(value: Any) -> float:
+            return float(np.asarray(value, dtype=np.float64).ravel()[0])
+
+        def record_raw(beta: Any, eta: Any, dev: Any) -> None:
+            trace["raw_beta"].append(copy(beta))
+            trace["raw_eta"].append(copy(eta))
+            trace["raw_deviance"].append(scalar(dev))
+
+        def record_pre(pdev: Any, _theta: Any, beta: Any) -> None:
+            trace["pre"].append(scalar(pdev))
+            trace["beta"].append(copy(beta)[:p])
+
+        source = self._utils.getFromNamespace("gam.fit4", "mgcv")
+        private = self._ro.r["new.env"](parent=self._ro.r["getNamespace"]("mgcv"))
+        fit4 = clone_function(source, environment=private)
+        anchors = (
+            (
+                (25,),
+                "<-",
+                ("coefold", "null.coef"),
+                ("start",),
+                lambda value: trace["retained"].append(
+                    not bool(self._base.is_null(value)[0])
+                ),
+                "before",
+            ),
+            (
+                (35,),
+                "<-",
+                ("good", "z", "w"),
+                ("w", "wz", "z"),
+                lambda w, wz, z: trace["initial_factors"].append(
+                    np.column_stack((copy(w), copy(wz), copy(z)))
+                ),
+                "before",
+            ),
+            (
+                (3, 2, 2),
+                "<-",
+                ("theta", "sp"),
+                ("theta",),
+                lambda value: trace["theta"].append(scalar(value)),
+                "after",
+            ),
+            (
+                (37, 3, 22, 2, 2, 2),
+                "<-",
+                ("theta", "estimate.theta"),
+                ("theta",),
+                lambda value: trace["theta"].append(scalar(value)),
+                "after",
+            ),
+            (
+                (37, 3, 16),
+                "if",
+                ("is.finite", "dev"),
+                ("start", "eta", "dev"),
+                record_raw,
+                "before",
+            ),
+            (
+                (37, 3, 22),
+                "if",
+                ("scoreType", "n.theta"),
+                ("pdev", "theta", "start"),
+                record_pre,
+                "before",
+            ),
+            (
+                (37, 3, 29),
+                "if",
+                ("scoreType", "n.theta"),
+                ("pdev", "theta", "start"),
+                record_pre,
+                "before",
+            ),
+            (
+                (37, 3, 29, 2, 2),
+                "<-",
+                ("old.pdev", "pdev"),
+                ("pdev",),
+                lambda value: trace["post"].append(scalar(value)),
+                "after",
+            ),
+            (
+                (37, 3, 16, 2, 3, 2, 3),
+                "<-",
+                ("start", "coefold"),
+                ("iter",),
+                lambda value: trace["nonfinite"].append(int(value[0])),
+                "before",
+            ),
+            (
+                (37, 3, 17, 2, 2, 2, 3),
+                "<-",
+                ("start", "coefold"),
+                ("iter",),
+                lambda value: trace["domain"].append(int(value[0])),
+                "before",
+            ),
+            (
+                (37, 3, 21, 2, 3, 2, 3),
+                "<-",
+                ("start", "coefold"),
+                ("iter",),
+                lambda value: trace["divergence"].append(int(value[0])),
+                "before",
+            ),
+            (
+                (37, 3, 3, 2, 1),
+                "<-",
+                ("use.wy",),
+                (),
+                lambda: trace["use_wy"].append(True),
+                "after",
+            ),
+            (
+                (37, 3, 9, 2, 8, 2, 1),
+                "<-",
+                ("use.wy",),
+                (),
+                lambda: trace["use_wy"].append(True),
+                "after",
+            ),
+        )
+        for path, head, required, captures, callback, when in sorted(
+            anchors, key=lambda item: len(item[0]), reverse=True
+        ):
+            if path not in find_call_paths(source, head, required_symbols=required):
+                raise RBridgeError(
+                    f"Pinned gam.fit4 inner trace anchor changed: {path!r}"
+                )
+            fit4 = instrument_function(
+                fit4,
+                path=path,
+                expected_head=head,
+                capture_symbols=captures,
+                callback=callback,
+                when=when,
+            )
+        fit = fit4(
+            x=r_x,
+            y=r_y,
+            sp=self._base.c(r_theta, self._base.log(float(penalty))),
+            Eb=self._base.diag(p),
+            UrS=rinterface.ListSexpVector([self._base.diag(p)]),
+            weights=r_weights,
+            offset=r_offset,
+            U1=self._base.diag(p),
+            Mp=0,
+            family=family,
+            control=self._mgcv.gam_control(epsilon=1e-7, maxit=maxit),
+            deriv=0,
+            scoreType="EFS",
+            scale=1,
+            start=self._to_r_vector(start),
+            **{"null.coef": self._to_r_vector(null_coef)},
+        )
+        final_theta = self._utils.tail(self._to_r_vector(np.asarray(trace["theta"])), 1)
+        mu = fit.rx2("fitted.values")
+        deviance = self._base.sum(
+            family.rx2("dev.resids")(r_y, mu, r_weights, final_theta)
+        )
+        derivative = family.rx2("Dd")(r_y, mu, final_theta, wt=r_weights, level=2)
+        saturated = family.rx2("ls")(r_y, w=r_weights, theta=final_theta, scale=1)
+        subtract, divide = self._ro.r["-"], self._ro.r["/"]
+        nll = subtract(divide(deviance, 2), saturated.rx2("ls"))
+        gradient = subtract(
+            divide(self._base.sum(derivative.rx2("Dth")), 2), saturated.rx2("lsth1")
+        )
+        threshold = self._ro.r["*"](1e-7, self._ro.r["+"](self._base.abs(nll), 1))
+        halvings = {
+            "retained": bool(trace["retained"][0]),
+            **{
+                name: len(trace[name]) for name in ("nonfinite", "domain", "divergence")
+            },
+            **{
+                f"first_{name}": sum(v == 1 for v in trace[name])
+                for name in ("nonfinite", "domain", "divergence")
+            },
+        }
+        return {
+            "coefficients": copy(fit.rx2("coefficients")),
+            "pre": np.asarray(trace["pre"], dtype=np.float64),
+            "post": np.asarray(trace["post"], dtype=np.float64),
+            "theta": np.asarray(trace["theta"], dtype=np.float64),
+            "beta": np.vstack(trace["beta"]),
+            "raw_beta": np.vstack(trace["raw_beta"]),
+            "raw_eta": np.vstack(trace["raw_eta"]),
+            "raw_deviance": np.asarray(trace["raw_deviance"], dtype=np.float64),
+            "halvings": halvings,
+            "initial_factors": trace["initial_factors"][0],
+            "use_wy": np.asarray(trace["use_wy"], dtype=bool),
+            "theta_state": {
+                "log_theta": scalar(final_theta),
+                "nll": scalar(nll),
+                "gradient": scalar(gradient),
+                "threshold": scalar(threshold),
+                "deviance": scalar(deviance),
+                "eta_min": scalar(self._base.min(fit.rx2("linear.predictors"))),
+                "eta_max": scalar(self._base.max(fit.rx2("linear.predictors"))),
+            },
+        }
+
     @staticmethod
     def _require_pinned_efs_versions() -> None:
         ok, reason = RBridge.check_versions()

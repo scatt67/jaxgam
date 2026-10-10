@@ -142,7 +142,13 @@ def _conditional_theta_nll_jit(
     max_y: int,
     integer_counts: bool,
 ) -> jax.Array:
-    """Negative conditional NB log likelihood at fixed linear predictor."""
+    """Inherited-family conditional NB objective at fixed linear predictor.
+
+    For integer responses and fractional responses at least one, this is the
+    pinned mgcv ``estimate.theta`` objective. The inherited NB deviance
+    convention differs from mgcv for ``0 < y < 1``; the controller rejects
+    that domain rather than claiming R-compatible convergence there.
+    """
     deviance = family.deviance_fn(y, wt)(eta, log_theta)
     saturated = family.saturated_loglik_theta(
         y,
@@ -167,7 +173,11 @@ def conditional_theta_nll(
     max_y: int,
     integer_counts: bool,
 ) -> jax.Array:
-    """Evaluate R's conditional NB objective with all theta terms explicit."""
+    """Evaluate the inherited-family conditional NB objective.
+
+    See ``_conditional_theta_nll_jit`` for the explicit pinned-R parity domain
+    and fractional-response compatibility restriction.
+    """
     _require_estimated_nb(family)
     _validate_static_inputs(
         log_theta,
