@@ -2,10 +2,12 @@
 
 from collections import Counter
 from types import SimpleNamespace
+from weakref import ref
 
 import numpy as np
 import pytest
 
+import jaxgam.execution.nb_reml as nb_reml_execution
 import jaxgam.execution.reml as reml_execution
 from jaxgam.execution.reml import StreamREMLControl
 
@@ -27,6 +29,7 @@ def _run_trace(
     stationary_params: np.ndarray = _STATIONARY,
     inner_converged: bool = True,
     later_worse_stationary: bool = False,
+    local_comparison=None,
 ):
     """Model the Linux score plateau with one immutable trial per evaluation."""
     calls = Counter()
@@ -96,6 +99,7 @@ def _run_trace(
         _CONTROL,
         roundoff_stationary_completion=True,
         completion_inner_tolerance=1e-11,
+        local_score_change=local_comparison,
     ), calls
 
 
@@ -164,3 +168,204 @@ def test_pinned_theta_roundoff_completion_keeps_useful_tie_over_worse_zero_gradi
     np.testing.assert_array_equal(result.trial.params, _STATIONARY)
     assert calls["stationary"] == 1
     assert result.n_evaluations == 4
+
+
+def _local_change(change, error=1e-17, raw=None):
+    if raw is None:
+        raw = 2 * np.spacing(_SCORE)
+
+    def compare(_objective, _accepted, _candidate, _inner_tolerance):
+        return reml_execution._LocalScoreChange(
+            change=change,
+            error_estimate=error,
+            raw_change=raw,
+            roundoff_bound=4 * np.spacing(_SCORE),
+            linearity_error=0.0,
+        )
+
+    return compare
+
+
+def test_pinned_theta_local_comparison_keeps_raw_source_score(monkeypatch):
+    result, _ = _run_trace(
+        monkeypatch,
+        stationary_score_ulps=2,
+        local_comparison=_local_change(-1e-16),
+    )
+    assert result.converged
+    assert float(result.trial.score) == _SCORE + 2 * np.spacing(_SCORE)
+    assert result.accepted_score_history[-1] == float(result.trial.score)
+    assert "empirical local-gradient comparison" in result.message
+    assert "raw source score change" in result.message
+    assert result.projected_gradient_inf <= _CONTROL.gtol
+
+
+def test_pinned_theta_local_comparison_does_not_bypass_invalid_inner_or_bounds(
+    monkeypatch,
+):
+    calls = Counter()
+
+    def compare(*_args):
+        calls["comparison"] += 1
+        return _local_change(-1e-16)(*_args)
+
+    result, _ = _run_trace(
+        monkeypatch,
+        stationary_score_ulps=2,
+        inner_converged=False,
+        local_comparison=compare,
+    )
+    assert not result.converged
+    assert calls["comparison"] == 0
+    moved_pin = _STATIONARY.copy()
+    moved_pin[0] += 1e-10
+    with pytest.raises(RuntimeError, match="violated a parameter bound"):
+        _run_trace(
+            monkeypatch,
+            stationary_score_ulps=2,
+            stationary_params=moved_pin,
+            local_comparison=compare,
+        )
+    assert calls["comparison"] == 0
+
+
+@pytest.mark.parametrize(
+    ("change", "error", "raw"),
+    [
+        (1e-16, 1e-17, 2 * np.spacing(_SCORE)),
+        (-1e-18, 1e-17, 2 * np.spacing(_SCORE)),
+        (-1e-16, 1e-17, 10 * np.spacing(_SCORE)),
+        (-np.inf, 1e-17, 2 * np.spacing(_SCORE)),
+        (-1e-16, -1e-17, 2 * np.spacing(_SCORE)),
+        (-1e-16, 1e-17, np.nan),
+    ],
+    ids=[
+        "ascending",
+        "error-dominated",
+        "inconsistent-raw",
+        "nonfinite-change",
+        "negative-error",
+        "nonfinite-raw",
+    ],
+)
+def test_pinned_theta_local_comparison_rejects_unsafe_change(
+    monkeypatch, change, error, raw
+):
+    result, _ = _run_trace(
+        monkeypatch,
+        stationary_score_ulps=2,
+        local_comparison=_local_change(change, error, raw),
+    )
+    assert not result.converged
+    np.testing.assert_array_equal(result.trial.params, _ACCEPTED)
+    assert "stationary completion rejected" in result.message
+
+
+def _local_probe_case(gradient_at, *, invalid_inner=False, changed_source=False):
+    """Scalar source replay with observable live-trial ownership."""
+    live = []
+    base = np.array([-np.log(2.0), 0.7])
+    end = base.copy()
+    end[-1] -= 3e-9
+
+    class Trial:
+        pass
+
+    def trial(params, gradient, *, source="source"):
+        value = Trial()
+        value.params = np.array(params, copy=True)
+        value.score = 400.0 + (2 * np.spacing(400.0) if source == "source" else 0)
+        value.gradient = np.array([0.0, gradient])
+        value.source_scans = 4
+        value.batches_scanned = 44
+        value.source_fingerprint = source
+        value.basis_fingerprint = "basis"
+        value.family_name = "nb"
+        value.link_name = "sqrt"
+        value.fit_result = SimpleNamespace(
+            score_penalized_deviance=190.0,
+            state=SimpleNamespace(
+                converged=not invalid_inner,
+                line_search_failed=False,
+                stationarity=1e-14,
+                saturated_loglik=-280.0,
+                coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 5.0),
+            ),
+        )
+        live.append(ref(value))
+        return value
+
+    accepted = trial(base, gradient_at(0.0))
+    accepted.score = 400.0
+    candidate = trial(end, gradient_at(1.0))
+
+    def evaluate(params, _warm_start):
+        assert sum(item() is not None for item in live) == 2
+        fraction = (params[-1] - base[-1]) / (end[-1] - base[-1])
+        return trial(
+            params,
+            gradient_at(fraction),
+            source="different" if changed_source else "source",
+        )
+
+    objective = SimpleNamespace(
+        _stream=SimpleNamespace(source=SimpleNamespace(fingerprint=lambda: "source")),
+        _evaluate=evaluate,
+        n_evaluations=0,
+        cumulative_source_scans=0,
+        cumulative_batches_scanned=0,
+    )
+    return objective, accepted, candidate, live
+
+
+def test_nb_local_score_comparison_streams_three_probes_with_bounded_retention():
+    objective, accepted, candidate, live = _local_probe_case(
+        lambda fraction: 8e-8 * (1.0 - fraction)
+    )
+    comparison = nb_reml_execution._nb_local_stationary_score_change(
+        objective, accepted, candidate, 1e-11
+    )
+    assert comparison is not None
+    assert comparison.change < 0
+    assert comparison.change + comparison.error_estimate < 0
+    assert abs(comparison.change) + comparison.error_estimate < np.spacing(400.0)
+    assert comparison.raw_change == 2 * np.spacing(400.0)
+    assert objective.n_evaluations == 3
+    assert objective.cumulative_source_scans == 12
+    assert objective.cumulative_batches_scanned == 132
+    assert sum(item() is not None for item in live) == 2
+
+
+@pytest.mark.parametrize(
+    ("gradient_at", "invalid_inner", "changed_source", "error"),
+    [
+        (lambda f: 8e-8 * (1 - f) + 1e-8 * np.sin(2 * np.pi * f), False, False, None),
+        (lambda f: 8e-8 * (1 - f), True, False, None),
+        (
+            lambda f: np.nan if np.isclose(f, 0.25) else 8e-8 * (1 - f),
+            False,
+            False,
+            None,
+        ),
+        (lambda f: 8e-8 * (1 - f), False, True, RuntimeError),
+    ],
+    ids=["nonlinear-path", "invalid-inner", "nonfinite-gradient", "changed-source"],
+)
+def test_nb_local_score_comparison_rejects_invalid_path(
+    gradient_at, invalid_inner, changed_source, error
+):
+    objective, accepted, candidate, _ = _local_probe_case(
+        gradient_at, invalid_inner=invalid_inner, changed_source=changed_source
+    )
+    if error is not None:
+        with pytest.raises(error, match="source/family lineage"):
+            nb_reml_execution._nb_local_stationary_score_change(
+                objective, accepted, candidate, 1e-11
+            )
+    else:
+        assert (
+            nb_reml_execution._nb_local_stationary_score_change(
+                objective, accepted, candidate, 1e-11
+            )
+            is None
+        )

@@ -209,6 +209,17 @@ class _ParameterizedOptimization(Generic[_TrialT]):
     accepted_score_history: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class _LocalScoreChange:
+    """Independent small-step comparison; the trial's raw score is retained."""
+
+    change: float
+    error_estimate: float
+    raw_change: float
+    roundoff_bound: float
+    linearity_error: float
+
+
 def _preflight(
     stream: StreamDesign,
     family: ExponentialFamily,
@@ -1144,6 +1155,11 @@ def _run_parameterized_stream_reml(
     *,
     roundoff_stationary_completion: bool = False,
     completion_inner_tolerance: float | None = None,
+    local_score_change: Callable[
+        [_AcceptedParameterizedTrialObjective[_TrialT], _TrialT, _TrialT, float],
+        _LocalScoreChange | None,
+    ]
+    | None = None,
 ) -> _ParameterizedOptimization[_TrialT]:
     """Run the common exact accepted/candidate L-BFGS-B protocol.
 
@@ -1174,8 +1190,11 @@ def _run_parameterized_stream_reml(
         completion_inner_tolerance is None or completion_inner_tolerance <= 0.0
     ):
         raise ValueError("Stationary completion requires an inner tolerance.")
+    if local_score_change is not None and not roundoff_stationary_completion:
+        raise ValueError("Local score comparison requires stationary completion.")
     stationary_trial: _TrialT | None = None
     stationary_norm = np.inf
+    stationary_raw_tie = False
 
     def inner_valid(trial: _TrialT) -> bool:
         inner = trial.fit_result.state
@@ -1187,7 +1206,7 @@ def _run_parameterized_stream_reml(
         )
 
     def observe(params: np.ndarray) -> tuple[float, np.ndarray]:
-        nonlocal stationary_trial, stationary_norm
+        nonlocal stationary_trial, stationary_norm, stationary_raw_tie
         score, gradient = objective(params)
         projected = _projected_gradient_for_bounds(
             np.asarray(params, dtype=np.float64), gradient, bounds
@@ -1195,16 +1214,23 @@ def _run_parameterized_stream_reml(
         norm = float(np.max(np.abs(projected)))
         accepted_score = float(np.asarray(objective.accepted.score))
         score_ulp = float(np.spacing(abs(accepted_score)))
+        raw_tie = abs(score - accepted_score) <= score_ulp
+        prefer = (
+            stationary_trial is None
+            or (raw_tie and not stationary_raw_tie)
+            or (raw_tie == stationary_raw_tie and norm < stationary_norm)
+        )
         if (
             norm <= control.gtol
-            and norm < stationary_norm
+            and prefer
             and objective.candidate is not None
             and _same_rho(np.asarray(params), objective.candidate.params)
-            and abs(score - accepted_score) <= score_ulp
+            and (raw_tie or local_score_change is not None)
             and inner_valid(objective.candidate)
         ):
             stationary_trial = objective.candidate
             stationary_norm = norm
+            stationary_raw_tie = raw_tie
         return score, gradient
 
     result = minimize(
@@ -1273,9 +1299,37 @@ def _run_parameterized_stream_reml(
         candidate_norm = float(np.max(np.abs(candidate_projected)))
         candidate_inner_valid = inner_valid(candidate)
         score_ulp = float(np.spacing(abs(accepted_score)))
+        comparison = None
+        if (
+            local_score_change is not None
+            and candidate_norm <= control.gtol
+            and candidate_inner_valid
+            and abs(candidate_score - accepted_score) > score_ulp
+        ):
+            # The callback can replay one trial at a time.  Release SciPy's
+            # last rejected candidate first; accepted and stationary states
+            # remain owned by this scope, so peak retention stays at three.
+            objective.candidate = None
+            comparison = local_score_change(
+                objective, accepted, candidate, completion_inner_tolerance
+            )
+        comparison_ok = bool(
+            comparison is not None
+            and np.isfinite(comparison.change)
+            and np.isfinite(comparison.error_estimate)
+            and np.isfinite(comparison.raw_change)
+            and np.isfinite(comparison.roundoff_bound)
+            and np.isfinite(comparison.linearity_error)
+            and comparison.error_estimate >= 0.0
+            and comparison.roundoff_bound >= 0.0
+            and comparison.change + comparison.error_estimate < 0.0
+            and abs(comparison.change) + comparison.error_estimate <= score_ulp
+            and abs(comparison.raw_change - comparison.change)
+            <= comparison.roundoff_bound
+        )
         if (
             np.isfinite(candidate_score)
-            and abs(candidate_score - accepted_score) <= score_ulp
+            and (abs(candidate_score - accepted_score) <= score_ulp or comparison_ok)
             and candidate_norm <= control.gtol
             and candidate_inner_valid
         ):
@@ -1285,16 +1339,35 @@ def _run_parameterized_stream_reml(
             objective._history.append(candidate_score)
             projected_gradient_inf = candidate_norm
             converged = True
-            message = (
-                f"{message}; retained exact stationary candidate within "
-                "one score ULP after the line-search roundoff stop."
-            )
+            if comparison_ok:
+                message = (
+                    f"{message}; retained exact stationary candidate by empirical "
+                    f"local-gradient comparison {comparison.change:.3e} ± "
+                    f"{comparison.error_estimate:.3e} under the one-ULP "
+                    f"comparison gate; raw source score change "
+                    f"{comparison.raw_change:.3e} remains reported."
+                )
+            else:
+                message = (
+                    f"{message}; retained exact stationary candidate within "
+                    "one score ULP after the line-search roundoff stop."
+                )
         else:
+            comparison_detail = (
+                ""
+                if comparison is None
+                else (
+                    f", local change {comparison.change:.3e} ± "
+                    f"{comparison.error_estimate:.3e}, raw bound "
+                    f"{comparison.roundoff_bound:.3e}, linearity error "
+                    f"{comparison.linearity_error:.3e}"
+                )
+            )
             message = (
                 f"{message}; stationary completion rejected: score change "
                 f"{candidate_score - accepted_score:.3e} (limit {score_ulp:.3e}), "
                 f"projected gradient {candidate_norm:.3e}, "
-                f"inner valid {candidate_inner_valid}."
+                f"inner valid {candidate_inner_valid}{comparison_detail}."
             )
     if bool(result.success) and not converged:
         message = (
