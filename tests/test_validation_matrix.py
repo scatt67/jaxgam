@@ -64,11 +64,17 @@ from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 
 @pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
 @pytest.mark.parametrize(
-    ("p", "seed", "multiplicity"),
-    [(300, 37, 2), (300, 49, 2), (400, 4024, 2), (257, 211, 3)],
+    ("p", "seed", "multiplicity", "mode"),
+    [
+        (300, 37, 2, "balanced"),
+        (300, 49, 2, "balanced"),
+        (400, 4024, 2, "balanced"),
+        (257, 211, 3, "balanced"),
+        (512, 712, 3, "unbalanced"),
+    ],
 )
 def test_operator_efs_calibrated_indexed_poisson_full_fit_strict(
-    p: int, seed: int, multiplicity: int
+    p: int, seed: int, multiplicity: int, mode: str
 ) -> None:
     """Complete operator EFS agrees with dense EFS and matched-control mgcv."""
     from tests.test_execution.test_operator_efs_calibrated import (
@@ -76,7 +82,7 @@ def test_operator_efs_calibrated_indexed_poisson_full_fit_strict(
     )
 
     formula, frame, operator, dense, errors, bounds = calibrated_single_index_case(
-        p, seed, multiplicity
+        p, seed, multiplicity, mode
     )
     reference = RBridge(mode="rpy2").fit_efs(
         formula,

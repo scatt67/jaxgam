@@ -32,20 +32,42 @@ _TIGHT_OPERATOR_CONTROL = OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_ato
 
 @pytest.fixture(
     scope="module",
-    params=[(300, 37, 2), (300, 49, 2), (400, 4024, 2), (257, 211, 3)],
+    params=[
+        (300, 37, 2),
+        (300, 49, 2),
+        (400, 4024, 2),
+        (257, 211, 3),
+        (512, 712, 3, "unbalanced"),
+    ],
 )
 def calibrated_single_index_fit(request):
     return calibrated_single_index_case(*request.param)
 
 
-def calibrated_single_index_case(p: int, seed: int, multiplicity: int):
+def calibrated_single_index_case(
+    p: int, seed: int, multiplicity: int, mode: str = "balanced"
+):
     """Build a reproducible complete fit and audit every accepted/trial score."""
     n = multiplicity * p
     rng = np.random.default_rng(seed)
-    group = np.arange(n) % p
+    if mode == "balanced":
+        group = np.arange(n) % p
+        mean = np.exp(0.2 + 0.3 * np.sin(group / 31.0))
+    elif mode == "unbalanced":
+        probabilities = 1.0 / (1.0 + np.arange(p)) ** 1.1
+        probabilities /= np.sum(probabilities)
+        group = np.concatenate(
+            (np.arange(p), rng.choice(p, size=n - p, p=probabilities))
+        )
+        mean = np.exp(1.5 + 0.7 * np.sin(group / 31.0))
+    else:
+        raise ValueError(f"Unknown calibration case mode: {mode}")
+    response = rng.poisson(mean)
+    if mode == "unbalanced":
+        response[0] = 31
     frame = pd.DataFrame(
         {
-            "y": rng.poisson(np.exp(0.2 + 0.3 * np.sin(group / 31.0))),
+            "y": response,
             "g": pd.Categorical(
                 [f"g{index}" for index in group],
                 categories=[f"g{index}" for index in range(p)],
@@ -103,11 +125,13 @@ def calibrated_single_index_case(p: int, seed: int, multiplicity: int):
     operator = run_operator_efs_known_scale(
         provider,
         initial,
-        control=EFSControl(outer_limit=20),
+        control=EFSControl(outer_limit=20, pirls_tolerance=1e-11),
         initial_accuracy=OperatorLogDetControl(probes=4, lanczos_depth=4, seed=seed),
     )
     dense = dense_efs_known_scale(
-        dense_data, initial_log_lambda=initial, control=EFSControl(outer_limit=20)
+        dense_data,
+        initial_log_lambda=initial,
+        control=EFSControl(outer_limit=20, pirls_tolerance=1e-11),
     )
     return formula, frame, operator, dense, observed_errors, observed_bounds
 
