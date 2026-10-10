@@ -81,6 +81,56 @@ def test_indexed_start_preflights_before_source_replay():
         )
 
 
+def test_indexed_start_rejects_changed_source_and_nonunit_rows():
+    frame = pd.DataFrame(
+        {"y": [1.0, 2.0, 3.0, 1.0], "g": pd.Categorical(["a", "b", "a", "b"])}
+    )
+    spec = parse_formula("y~0+s(g,bs='re')")
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        spec,
+        source,
+        control=OperatorPreparationControl(batch_rows=2, memory_budget_bytes=1 << 20),
+    )
+    changed = DataFrameRowSource(frame.assign(y=[2.0, 2.0, 3.0, 1.0]), response="y")
+    with pytest.raises(RuntimeError, match="source changed"):
+        prepare_indexed_operator_efs_start(
+            model, changed, Poisson(), memory_budget_bytes=1 << 20
+        )
+
+    weighted = DataFrameRowSource(frame, response="y", weights=[1.0, 2.0, 1.0, 1.0])
+    weighted_model = prepare_operator_model(
+        spec,
+        weighted,
+        control=OperatorPreparationControl(batch_rows=2, memory_budget_bytes=1 << 20),
+    )
+    with pytest.raises(NotImplementedError, match="unit, unoffset rows"):
+        prepare_indexed_operator_efs_start(
+            weighted_model, weighted, Poisson(), memory_budget_bytes=1 << 20
+        )
+
+
+def test_indexed_start_rejects_multiple_effects_before_replay():
+    frame = pd.DataFrame(
+        {
+            "y": [1.0, 2.0, 3.0, 1.0],
+            "g": pd.Categorical(["a", "b", "a", "b"]),
+            "h": pd.Categorical(["u", "u", "v", "v"]),
+        }
+    )
+    spec = parse_formula("y~0+s(g,bs='re')+s(h,bs='re')")
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        spec,
+        source,
+        control=OperatorPreparationControl(batch_rows=2, memory_budget_bytes=1 << 20),
+    )
+    with pytest.raises(NotImplementedError, match="one indexed effect"):
+        prepare_indexed_operator_efs_start(
+            model, source, Poisson(), memory_budget_bytes=1 << 20
+        )
+
+
 def test_public_indexed_operator_efs_retains_score_and_prediction():
     p, n = 300, 600
     rng = np.random.default_rng(37)
