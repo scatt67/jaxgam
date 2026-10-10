@@ -11,6 +11,7 @@ import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.fitting import penalty_ops
+from jaxgam.fitting.initialization import initialize_beta_cpu
 from jaxgam.jax_utils import to_jax
 from jaxgam.penalties.structure import (
     DenseLocalPenalty,
@@ -31,6 +32,9 @@ _EPS_TWO_THIRDS = np.finfo(float).eps ** (2.0 / 3.0)
 _LOG_FLOOR = 1e-30
 _ACTIVITY_THRESH = np.finfo(float).eps ** 0.8
 _MAX_SP_ADJUST_ITERS = 200
+
+# Keep initial-sp reductions bounded without changing its dense result.
+_INITIAL_SP_BATCH_ROWS = 8192
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,10 @@ class FittingData:
     max_y: int
     rank_deficit: int = 0
 
+    # Computed once in transformed fitting coordinates at the CPU-to-JAX
+    # boundary. Manual FittingData fixtures retain the compatibility fallback.
+    beta_init: jax.Array | None = None
+
     @property
     def n_penalties(self) -> int:
         return self.penalty_structure.n_penalties
@@ -89,6 +97,10 @@ class FittingData:
         log_sp_init = cls._initial_sp(setup.X, structure, setup.weights)
         transformed = _reparameterize_structure(structure)
         X_np = _apply_transforms_to_design(setup.X, transformed)
+        beta_init = to_jax(
+            initialize_beta_cpu(X_np, setup.y, setup.weights, family, setup.offset),
+            device=device,
+        )
         metadata = _build_block_metadata(transformed, device)
         ranks = tuple(rank for block in structure.blocks for rank in block.ranks)
         # Compatibility metadata historically came from a p-by-p Penalty, so
@@ -118,6 +130,7 @@ class FittingData:
             multi_block_S_local=metadata["multi_block_S_local"],
             max_y=int(np.max(setup.y)) if len(setup.y) else 0,
             rank_deficit=cls._unpenalized_rank_deficit(transformed, X_np),
+            beta_init=beta_init,
         )
 
     @staticmethod
@@ -127,7 +140,7 @@ class FittingData:
         """R ``initial.sp`` scaling, retaining its old global-padding cutoff."""
         if structure.n_penalties == 0:
             return np.zeros(0)
-        ldxx = np.sum((np.sqrt(np.maximum(weights, 0.0))[:, None] * X) ** 2, axis=0)
+        ldxx = FittingData._weighted_crossproduct_diag(X, weights)
         def_sp = np.zeros(structure.n_penalties)
         ldss = np.zeros_like(ldxx)
         pen = np.zeros(len(ldxx), dtype=bool)
@@ -164,6 +177,16 @@ class FittingData:
             def_sp /= 10
             ldss_s /= 10
         return np.log(np.maximum(def_sp, np.finfo(float).tiny))
+
+    @staticmethod
+    def _weighted_crossproduct_diag(X: np.ndarray, weights: np.ndarray) -> np.ndarray:
+        """Compute diag(X' diag(weights) X) in bounded row batches."""
+        diagonal = np.zeros(X.shape[1], dtype=np.float64)
+        for start in range(0, X.shape[0], _INITIAL_SP_BATCH_ROWS):
+            stop = min(start + _INITIAL_SP_BATCH_ROWS, X.shape[0])
+            weighted = np.sqrt(weights[start:stop])[:, None] * X[start:stop]
+            diagonal += np.sum(weighted * weighted, axis=0)
+        return diagonal
 
     @staticmethod
     def _unpenalized_rank_deficit(structure: PenaltyStructure, X: np.ndarray) -> int:

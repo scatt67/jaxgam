@@ -15,6 +15,11 @@ import numba
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+from scipy.spatial.distance import cdist
+
+# Bound temporary kernel/distance blocks while retaining the final dense model
+# matrix required by the current execution path.
+DISTANCE_BATCH_ROWS = 8192
 
 
 def is_factor(col: pd.Series | npt.NDArray) -> bool:
@@ -332,9 +337,9 @@ def _compute_distance_matrix(
     np.ndarray
         Distance matrix, shape ``(n1, n2)``.
     """
-    # Use broadcasting for efficiency
-    diff = X1[:, np.newaxis, :] - X2[np.newaxis, :, :]
-    return np.sqrt(np.sum(diff**2, axis=2))
+    # scipy's cdist computes directly into the n1-by-n2 result without an
+    # n1-by-n2-by-d broadcast temporary.
+    return cdist(X1, X2, metric="euclidean")
 
 
 def _get_unique_rows(

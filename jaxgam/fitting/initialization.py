@@ -15,13 +15,13 @@ import numpy as np
 from jaxgam.families.base import ExponentialFamily
 
 
-def initialize_beta(
+def initialize_beta_cpu(
     X: np.ndarray,
     y: np.ndarray,
     wt: np.ndarray,
     family: ExponentialFamily,
     offset: np.ndarray | None = None,
-) -> jax.Array:
+) -> np.ndarray:
     """Compute starting coefficients for PIRLS.
 
     Steps:
@@ -55,8 +55,8 @@ def initialize_beta(
 
     Returns
     -------
-    jax.Array, shape (p,)
-        Initial coefficient vector as a JAX array.
+    np.ndarray, shape (p,)
+        Initial coefficient vector in CPU fitting coordinates.
     """
     if offset is None:
         offset = np.zeros(len(y))
@@ -79,4 +79,15 @@ def initialize_beta(
         )
         beta_init, _, _, _ = np.linalg.lstsq(X, eta_const - offset, rcond=None)
 
-    return jnp.asarray(beta_init)
+    return beta_init
+
+
+def initialize_beta(
+    X: np.ndarray,
+    y: np.ndarray,
+    wt: np.ndarray,
+    family: ExponentialFamily,
+    offset: np.ndarray | None = None,
+) -> jax.Array:
+    """Compute a CPU start and transfer it to JAX for standalone callers."""
+    return jnp.asarray(initialize_beta_cpu(X, y, wt, family, offset))

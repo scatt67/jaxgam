@@ -492,15 +492,15 @@ def test_to_predictor_ownership_lazy_setup_and_memory_reduction() -> None:
         "full Vp still writeable",
         lambda: np.testing.assert_equal(full.Vp.flags.writeable, True),
     )
-    for attr in ("_X", "_S"):
+    for attr, retained in (("_X", False), ("_S", True)):
         collector.check(
-            f"setup retains {attr}",
-            lambda attr=attr: np.testing.assert_equal(
+            f"setup {attr} ownership",
+            lambda attr=attr, retained=retained: np.testing.assert_equal(
                 any(
                     hasattr(obj, attr) and getattr(obj, attr) is not None
                     for obj in setup_graph
                 ),
-                True,
+                retained,
             ),
         )
         collector.check(
@@ -534,7 +534,7 @@ def test_to_predictor_ownership_lazy_setup_and_memory_reduction() -> None:
         ),
     )
 
-    for label, memory_formula, memory_data, sp, max_ratio in _memory_cases():
+    for label, memory_formula, memory_data, sp, max_lean_bytes in _memory_cases():
         memory_model = GAM(memory_formula, sp=sp)
         full_memory = memory_model.fit(memory_data, result="full")
         lean_memory = memory_model.fit(memory_data, result="inference")
@@ -542,14 +542,20 @@ def test_to_predictor_ownership_lazy_setup_and_memory_reduction() -> None:
         lean_bytes = _retained_array_bytes(lean_memory)
         collector.check(
             f"{label} retained bytes",
-            lambda f=full_bytes, lean=lean_bytes, limit=max_ratio: (
-                np.testing.assert_equal(lean < limit * f, True)
+            lambda lean=lean_bytes, limit=max_lean_bytes: np.testing.assert_equal(
+                lean <= limit, True
+            ),
+        )
+        collector.check(
+            f"{label} training design savings",
+            lambda f=full_bytes, lean=lean_bytes, size=full_memory.setup.X.nbytes: (
+                np.testing.assert_equal(f - lean >= size, True)
             ),
         )
     collector.raise_if_any("to_predictor ownership and retained memory")
 
 
-def _memory_cases() -> list[tuple[str, str, pd.DataFrame, list[float], float]]:
+def _memory_cases() -> list[tuple[str, str, pd.DataFrame, list[float], int]]:
     rng = np.random.default_rng(SEED + 900)
     n = 220
     x1 = rng.uniform(size=n)
@@ -566,6 +572,8 @@ def _memory_cases() -> list[tuple[str, str, pd.DataFrame, list[float], float]]:
         {"x": x, "y": np.sin(2 * np.pi * x) + rng.normal(scale=0.2, size=n)}
     )
     return [
-        ("tensor", "y ~ te(x1, x2, k=8)", tensor_data, [1.0, 1.0], 0.25),
-        ("GP", "y ~ s(x, bs='gp', k=30)", gp_data, [1.0], 0.45),
+        # Baseline inference footprints: removing full-result basis copies
+        # must not relax the inference memory bound as its denominator shrinks.
+        ("tensor", "y ~ te(x1, x2, k=8)", tensor_data, [1.0, 1.0], 66_720),
+        ("GP", "y ~ s(x, bs='gp', k=30)", gp_data, [1.0], 65_472),
     ]
