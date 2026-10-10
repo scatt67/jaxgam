@@ -407,7 +407,7 @@ def test_regular_fixed_sp_pins_rho_outside_estimated_bounds(monkeypatch) -> None
     class CapturedBounds(Exception):
         pass
 
-    def capture(_objective, params, bounds, _control):
+    def capture(_objective, params, bounds, _control, **_kwargs):
         observed.append((np.asarray(params).copy(), tuple(bounds)))
         raise CapturedBounds
 
