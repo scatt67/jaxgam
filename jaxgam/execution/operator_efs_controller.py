@@ -159,6 +159,8 @@ class SourceOperatorEFSFitProvider:
         if per_probe is not None:
             arrays.append(per_probe)
             arrays.append(components.fisher.monte_carlo_standard_error)
+        arrays.append(getattr(components.fisher, "trace_rounding_bound", None))
+        arrays.append(getattr(components.fisher, "quadratic_rounding_bound", None))
         return (
             cls._fit_retained_bound(state.fit)
             + sum(2 * array.nbytes for array in arrays if array is not None)
@@ -327,6 +329,7 @@ def run_operator_efs_known_scale(
         raise RuntimeError("Initial operator EFS coefficient fit did not converge.")
     provider.reserve((), operation="evaluate", pending_fit=first_fit)
     accepted = provider.evaluate(first_fit, initial_accuracy)
+    del first_fit
     fits = 1
     refinements = indeterminate = 0
     multiplier = 1.0
@@ -337,10 +340,16 @@ def run_operator_efs_known_scale(
     stop = "iteration_limit"
 
     def compare(
-        old: OperatorEFSState, trial: OperatorEFSState
+        old: OperatorEFSState,
+        trial: OperatorEFSState,
+        *,
+        ambient: tuple[OperatorEFSState, ...] = (),
     ) -> tuple[OperatorEFSState, OperatorEFSState, OperatorLogDetControl, str, int]:
         current = accuracy
         count = 0
+        # Caller bindings remain live until this function returns, even after
+        # local refinement replaces old/trial. Charge both generations.
+        original_old, original_trial = old, trial
         while True:
             result = compare_operator_scores(
                 old.components.score,
@@ -356,11 +365,28 @@ def run_operator_efs_known_scale(
                 return old, trial, current, "indeterminate", count
             current = replace(current, probes=probes, lanczos_depth=depth)
             provider.reserve(
-                (accepted, old, trial), operation="evaluate", pending_fit=old.fit
+                (
+                    accepted,
+                    *ambient,
+                    original_old,
+                    original_trial,
+                    old,
+                    trial,
+                ),
+                operation="evaluate",
+                pending_fit=old.fit,
             )
             refined_old = provider.evaluate(old.fit, current)
             provider.reserve(
-                (accepted, refined_old, trial),
+                (
+                    accepted,
+                    *ambient,
+                    original_old,
+                    original_trial,
+                    old,
+                    trial,
+                    refined_old,
+                ),
                 operation="evaluate",
                 pending_fit=trial.fit,
             )
@@ -386,6 +412,7 @@ def run_operator_efs_known_scale(
             break
         provider.reserve((old,), operation="evaluate", pending_fit=trial_fit)
         candidate = provider.evaluate(trial_fit, accuracy)
+        del trial_fit
         old, candidate, accuracy, decision, count = compare(old, candidate)
         refinements += count
         if decision == "indeterminate":
@@ -411,7 +438,7 @@ def run_operator_efs_known_scale(
                     )
                     extension = provider.evaluate(extension_fit, accuracy)
                     candidate, extension, accuracy, extended_decision, count = compare(
-                        candidate, extension
+                        candidate, extension, ambient=(old,)
                     )
                     refinements += count
                     if extended_decision == "improvement":
@@ -420,6 +447,8 @@ def run_operator_efs_known_scale(
                     else:
                         accepted = candidate
                         indeterminate += extended_decision == "indeterminate"
+                    del extension
+                del extension_fit
             else:
                 accepted = candidate
         else:
@@ -439,6 +468,7 @@ def run_operator_efs_known_scale(
                     pending_fit=trial_fit,
                 )
                 candidate = provider.evaluate(trial_fit, accuracy)
+                del trial_fit
                 old, candidate, accuracy, decision, count = compare(old, candidate)
                 refinements += count
                 if decision == "indeterminate":
@@ -450,6 +480,7 @@ def run_operator_efs_known_scale(
             # Pinned efsudr allows a worsening minimum-multiplier step.
             accepted = candidate
             multiplier = max(multiplier, 1.0)
+        del candidate, old
         history.append(accepted.components.score.value)
         bound_history.append(accepted.score_error_bound)
         window_scores = tuple(history)[-4:]

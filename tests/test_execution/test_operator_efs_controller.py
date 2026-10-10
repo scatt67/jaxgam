@@ -1,5 +1,6 @@
 """Accepted/trial and adaptive score gates for internal operator EFS."""
 
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
@@ -118,6 +119,50 @@ def test_operator_efs_refines_same_fits_then_retains_accepted_on_indeterminate()
         (4, 4),
         (4, 4),
     ]
+
+
+def test_refinement_reserves_caller_and_new_large_vector_generations():
+    vector_bytes = 8 * 2048
+
+    class _BoundedProvider(_ControlledProvider):
+        max_held = 0
+
+        def fit(self, rho, beta_start):
+            fit = super().fit(rho, beta_start)
+            fit.coefficients = np.zeros(2048, dtype=np.float64)
+            return fit
+
+        def reserve(self, held, *, operation, pending_fit=None):
+            super().reserve(held, operation=operation, pending_fit=pending_fit)
+            unique = {id(state) for state in held}
+            self.max_held = max(self.max_held, len(unique))
+            if (len(unique) + 1) * vector_bytes > 70 * 1024:
+                raise MemoryError("Combined retained vectors exceed the budget.")
+
+    provider = _BoundedProvider(direction=-1.0, bound=None)
+    with pytest.raises(MemoryError, match="retained vectors"):
+        _run(provider, maximum_probes=8, maximum_depth=8)
+    assert provider.max_held == 4
+
+
+def test_replaced_initial_fit_is_released_before_later_refits():
+    class _WeakFit(SimpleNamespace):
+        pass
+
+    class _LifetimeProvider(_ControlledProvider):
+        first_reference = None
+
+        def fit(self, rho, beta_start):
+            fit = _WeakFit(**vars(super().fit(rho, beta_start)))
+            if len(self.fit_calls) == 1:
+                self.first_reference = weakref.ref(fit)
+            elif len(self.fit_calls) == 3:
+                assert self.first_reference() is None
+            return fit
+
+    provider = _LifetimeProvider(direction=-1.0, bound=0.0)
+    result = _run(provider, outer_limit=2)
+    assert result.attempted_fits == 3
 
 
 def test_operator_efs_keeps_pinned_minimum_multiplier_worsening_policy():
