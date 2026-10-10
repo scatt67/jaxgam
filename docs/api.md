@@ -50,6 +50,39 @@ null-space directions is rejected explicitly; it is not resolved by QR pivot
 choice or numerical jitter. Successful fits report
 `execution_route="stream_qr"`.
 
+### Extended Fellner--Schall fitting
+
+Select the dense extended Fellner--Schall controller explicitly with
+`optimizer="efs"`. It follows the pinned mgcv 1.9-3 `efsudr` update and keeps
+its controls inside the composed `FitControl` object:
+
+```python
+from jaxgam import EFSControl, FitControl, GAM
+
+result = GAM(
+    "y ~ s(x1) + s(x2)",
+    family="poisson",
+    optimizer="efs",
+    control=FitControl(efs=EFSControl(history_limit=8)),
+).fit(data)
+```
+
+The released EFS route is dense. It supports the built-in regular-family link
+constructors and negative binomial log, identity, and square-root links within
+their tested response/start domains. Estimated negative-binomial identity and
+square-root fits require an offset whose mean at the zero-coefficient recovery
+anchor is positive. A zero offset produces a zero mean for these links, so the
+public route rejects that input just as pinned mgcv does. Explicit fixed
+smoothing parameters and models without penalties keep their existing
+fixed/Newton routes. Estimated EFS smoothing rejects `RowSource` execution. The existing
+`gaussian_compression=True` availability guard remains unchanged.
+
+Every EFS result mode retains `optimizer_diagnostics`, an immutable compact
+record containing the pinned profile, exact trace and step policies, stop
+reason, outer, inner, and theta iteration counts, bounded accepted score/scale histories,
+final multiplier/update residual, movement maxima, and numerical event flags.
+Ordinary Newton and fixed-smoothing results set this field to `None`.
+
 ::: jaxgam.api.GAM
     options:
       members:
@@ -129,6 +162,8 @@ It retains `coefficients`, `Vp`, `family`, `formula`, `smooth_info`, and
 `smoothing_params`, `converged`, `n_iter`, `convergence_info`, `method`,
 `lambda_strategy`, `execution_path`, and `n`. The smooth and term metadata make
 the retained EDF arrays interpretable without retaining the training setup.
+EFS fits additionally retain the compact `optimizer_diagnostics` record
+described above; the field is `None` for ordinary and fixed-smoothing fits.
 
 ```python
 from jaxgam import GAM, GAMInferenceResult
@@ -521,3 +556,4 @@ not recursively frozen.
 | `theta` | `float \| None` | Estimated theta for NB (None for standard families) |
 | `method` | `str` | Smoothing parameter method (always `"REML"` in v1.0; `"ML"` raises `NotImplementedError`) |
 | `n` | `int` | Number of observations |
+| `optimizer_diagnostics` | `EFSOptimizerDiagnostics \| None` | Compact bounded EFS controller trace, or `None` for other routes |

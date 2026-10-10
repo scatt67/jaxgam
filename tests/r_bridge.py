@@ -20,8 +20,10 @@ import hashlib
 import os
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
@@ -296,6 +298,100 @@ class RBridge:
             family=r_family,
             method=method,
         )
+
+    def benchmark_efs(
+        self,
+        formula: str,
+        data_path: Path,
+        initial_sp: np.ndarray,
+        *,
+        repeats: int,
+        threads: int,
+        pirls_tolerance: float,
+        pirls_max_iter: int,
+        log_lambda_max: float,
+        score_tolerance: float,
+    ) -> dict[str, Any]:
+        """Measure repeated Poisson EFS fits of the saved benchmark input.
+
+        R still reads the identical saved CSV. Formula, data, family and
+        controls are prepared once; timings include the synchronous rpy2 call
+        boundary and the complete R fit, with result extraction afterward.
+        """
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        self._require_rpy2()
+        if repeats < 1 or threads < 1:
+            raise ValueError("Benchmark repeats and threads must be positive.")
+        r_data = self._utils.read_csv(str(data_path))
+        r_formula = self._ro.Formula(formula)
+        r_family = self._stats.poisson()
+        r_control = self._mgcv.gam_control(
+            epsilon=pirls_tolerance,
+            maxit=pirls_max_iter,
+            nthreads=threads,
+            **{"efs.lspmax": log_lambda_max, "efs.tol": score_tolerance},
+        )
+        initial = self._ro.ListVector(
+            {"sp": self._to_r_vector(initial_sp), "scale": self._ro.FloatVector([1.0])}
+        )
+        durations: list[float] = []
+        validity: list[bool] = []
+        for _ in range(repeats + 1):
+            start = time.perf_counter()
+            try:
+                model = self._mgcv.gam(
+                    r_formula,
+                    data=r_data,
+                    family=r_family,
+                    method="REML",
+                    optimizer="efs",
+                    scale=1.0,
+                    control=r_control,
+                    **{"in.out": initial},
+                )
+            except RRuntimeError as error:
+                raise RBridgeError(f"Pinned R benchmark failed: {error}") from error
+            durations.append(time.perf_counter() - start)
+            outer = model.rx2("outer.info")
+            converged = (
+                bool(model.rx2("converged")[0])
+                and str(outer.rx2("conv")[0]) == "full convergence"
+            )
+            finite = all(
+                np.all(np.isfinite(np.asarray(model.rx2(name), dtype=np.float64)))
+                for name in (
+                    "coefficients",
+                    "fitted.values",
+                    "sp",
+                    "edf",
+                    "Vp",
+                    "linear.predictors",
+                    "deviance",
+                    "gcv.ubre",
+                    "scale",
+                )
+            )
+            validity.append(bool(converged and finite))
+        summary = self._call_internal("summary.gam", model)
+        return {
+            "cold_seconds": durations[0],
+            "warm_seconds": durations[1:],
+            "validity": validity,
+            "result": {
+                "coefficients": np.asarray(model.rx2("coefficients")).tolist(),
+                "fitted_values": np.asarray(model.rx2("fitted.values")).tolist(),
+                "smoothing_params": np.asarray(model.rx2("sp")).tolist(),
+                "edf": np.asarray(summary.rx2("edf")).tolist(),
+                "deviance": float(model.rx2("deviance")[0]),
+                "score": float(model.rx2("gcv.ubre")[0]),
+                "scale": float(model.rx2("scale")[0]),
+                "outer_iterations": int(outer.rx2("iter")[0]),
+                "converged": converged,
+                "convergence_info": str(outer.rx2("conv")[0]),
+            },
+            "session_info": list(self._utils.capture_output(self._utils.sessionInfo())),
+        }
 
     def _get_r_family_rpy2(self, family: str) -> Any:
         """Map a Python family string to an R family function call."""
@@ -631,6 +727,101 @@ class RBridge:
             )[0]
         )
 
+    def source_gaussian_aic(
+        self, response: np.ndarray, mean: np.ndarray, weights: np.ndarray
+    ) -> float:
+        """Evaluate stats Gaussian raw AIC, including zero-weight boundaries."""
+        self._require_rpy2()
+        y = np.asarray(response, dtype=np.float64)
+        mu = np.asarray(mean, dtype=np.float64)
+        w = np.asarray(weights, dtype=np.float64)
+        if y.ndim != 1 or mu.shape != y.shape or w.shape != y.shape:
+            raise ValueError("Gaussian AIC oracle vectors must align")
+        family = self._stats.gaussian()
+        y_r, mu_r, w_r = map(self._to_r_vector, (y, mu, w))
+        deviance = self._base.sum(family.rx2("dev.resids")(y_r, mu_r, w_r))
+        result = family.rx2("aic")(
+            y_r, self._to_r_vector(np.ones(len(y))), mu_r, w_r, deviance
+        )
+        return float(result[0])
+
+    def source_gaussian_saturated_likelihood(
+        self, response: np.ndarray, weights: np.ndarray, scale: float
+    ) -> np.ndarray:
+        """Evaluate mgcv's patched Gaussian saturated likelihood derivatives."""
+        self._require_rpy2()
+        y = np.asarray(response, dtype=np.float64)
+        w = np.asarray(weights, dtype=np.float64)
+        if y.ndim != 1 or w.shape != y.shape or not np.isfinite(scale) or scale <= 0:
+            raise ValueError("Gaussian likelihood oracle inputs are invalid")
+        family = self._call_internal("fix.family.ls", self._stats.gaussian())
+        return np.asarray(
+            family.rx2("ls")(
+                self._to_r_vector(y), self._to_r_vector(w), len(y), float(scale)
+            ),
+            dtype=np.float64,
+        ).copy()
+
+    def source_gaussian_initial_values(
+        self, response: np.ndarray, link: str
+    ) -> tuple[float, np.ndarray]:
+        """Evaluate the installed family's ``initialize`` language object."""
+        self._require_rpy2()
+        y = np.asarray(response, dtype=np.float64)
+        if y.ndim != 1 or link not in {"log", "inverse"}:
+            raise ValueError("Gaussian initializer requires a response and known link")
+        family = self._call_internal("fix.family", self._stats.gaussian(link=link))
+        environment = self._base.new_env(parent=self._ro.globalenv)
+        environment["y"] = self._to_r_vector(y)
+        environment["nobs"] = self._to_r_vector(np.array([len(y)], dtype=np.int32))
+        environment["family"] = family
+        self._base.eval(family.rx2("initialize"), envir=environment)
+        return (
+            float(self._stats.sd(self._to_r_vector(y))[0]),
+            np.asarray(environment["mustart"], dtype=np.float64).copy(),
+        )
+
+    def source_gaussian_efs_initial(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        link: str,
+        weights: np.ndarray,
+    ) -> np.ndarray:
+        """Return pinned ``initial.spg`` and null scale from a setup object."""
+        self._require_rpy2()
+        weight_array = np.asarray(weights, dtype=np.float64)
+        if weight_array.shape != (len(data),) or link not in {"log", "inverse"}:
+            raise ValueError("Gaussian EFS initial oracle inputs are invalid")
+        setup = self._mgcv.gam(
+            self._ro.Formula(formula),
+            data=self._to_r_dataframe(data),
+            weights=self._to_r_vector(weight_array),
+            family=self._stats.gaussian(link=link),
+            fit=False,
+        )
+        patched = self._call_internal("fix.family", setup.rx2("family"))
+        setup = self._ro.baseenv["[[<-"](setup, "family", patched)
+        initial = self._call_internal(
+            "initial.spg",
+            setup.rx2("X"),
+            setup.rx2("y"),
+            setup.rx2("w"),
+            patched,
+            setup.rx2("S"),
+            setup.rx2("rank"),
+            setup.rx2("off"),
+        )
+        null = self._call_internal("get.null.coef", setup)
+        divide = self._ro.baseenv["/"]
+        return np.asarray(
+            self._base.c(
+                self._base.log(initial),
+                self._base.log(divide(null.rx2("null.scale"), 10.0)),
+            ),
+            dtype=np.float64,
+        ).copy()
+
     def source_weighted_stream_reml_fit(
         self,
         formula: str,
@@ -726,6 +917,60 @@ class RBridge:
                 result.rx2("ls")[0],
                 result.rx2("lsth1")[0],
                 result.rx2("lsth2")[0],
+            ],
+            dtype=np.float64,
+        )
+
+    def binomial_likelihood_aic(
+        self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
+    ) -> np.ndarray:
+        """Return pinned saturated likelihood and binomial AIC for one response."""
+        self._require_rpy2()
+        y_r, weight_r, mu_r = (self._to_r_vector(values) for values in (y, weight, mu))
+        trials = self._base.rep(1.0, times=len(y))
+        family = self._stats.binomial()
+        saturated = self._call_internal("fix.family.ls", family).rx2("ls")(
+            y_r, weight_r, trials, 1
+        )
+        aic = family.rx2("aic")(y_r, trials, mu_r, weight_r, 0)
+        return np.asarray([saturated[0], aic[0]], dtype=np.float64)
+
+    def binomial_deviance_curvature(
+        self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
+    ) -> np.ndarray:
+        """Evaluate stats binomial deviance and direct mean-scale curvature in R."""
+        self._require_rpy2()
+        y_r, weight_r, mu_r = (self._to_r_vector(values) for values in (y, weight, mu))
+        base = self._ro.baseenv
+        one = self._to_r_vector([1.0])
+        squared_mu = base["^"](mu_r, 2)
+        squared_complement = base["^"](base["-"](one, mu_r), 2)
+        curvature = base["*"](
+            weight_r,
+            base["+"](
+                base["/"](y_r, squared_mu),
+                base["/"](base["-"](one, y_r), squared_complement),
+            ),
+        )
+        deviance = self._stats.binomial().rx2("dev.resids")(y_r, mu_r, weight_r)
+        return np.column_stack((np.asarray(deviance), np.asarray(curvature)))
+
+    def binomial_aic_rows(
+        self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
+    ) -> np.ndarray:
+        """Call stats binomial AIC independently on each source row."""
+        self._require_rpy2()
+        aic = self._stats.binomial().rx2("aic")
+        return np.asarray(
+            [
+                aic(
+                    self._to_r_vector(y[index : index + 1]),
+                    self._to_r_vector([1.0]),
+                    self._to_r_vector(mu[index : index + 1]),
+                    self._to_r_vector(weight[index : index + 1]),
+                    0,
+                )[0]
+                for index in range(len(y))
             ],
             dtype=np.float64,
         )
@@ -826,6 +1071,86 @@ class RBridge:
                 else:
                     accepted[(name, link)] = True
         return accepted
+
+    def efs_nb_working_factors(
+        self,
+        link: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weights: np.ndarray,
+        theta: float,
+        offset: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned ``dDeta`` observed W and Wz for NB links."""
+        self._require_pinned_efs_versions()
+        if link not in {"identity", "sqrt"}:
+            raise ValueError("NB working-factor oracle link must be identity or sqrt")
+        arrays = [
+            np.asarray(value, dtype=np.float64) for value in (y, mu, weights, offset)
+        ]
+        if (
+            any(value.ndim != 1 for value in arrays)
+            or len({len(value) for value in arrays}) != 1
+        ):
+            raise ValueError("NB working-factor oracle inputs must be aligned vectors")
+        if not np.isfinite(theta) or theta <= 0.0:
+            raise ValueError(
+                "NB working-factor oracle theta must be finite and positive"
+            )
+        self._require_rpy2()
+        r_y, r_mu, r_weights, r_offset = map(self._to_r_vector, arrays)
+        r_family = self._call_internal("fix.family.link", self._mgcv.nb(link=link))
+        derivatives = self._call_internal(
+            "dDeta", r_y, r_mu, r_weights, self._base.log(theta), r_family, deriv=0
+        )
+        multiply = self._ro.r["*"]
+        subtract = self._ro.r["-"]
+        half = self._ro.FloatVector([0.5])
+        r_weight = multiply(half, derivatives.rx2("Deta2"))
+        r_response = subtract(
+            multiply(r_weight, subtract(r_family.rx2("linkfun")(r_mu), r_offset)),
+            multiply(half, derivatives.rx2("Deta")),
+        )
+        return {
+            "weight": np.asarray(r_weight, dtype=np.float64).copy(),
+            "weighted_response": np.asarray(r_response, dtype=np.float64).copy(),
+        }
+
+    def efs_nb_deviance_derivatives(
+        self,
+        link: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weights: np.ndarray,
+        theta: float,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned NB deviance and its first two eta derivatives."""
+        self._require_pinned_efs_versions()
+        if link not in {"identity", "sqrt"}:
+            raise ValueError("NB deviance oracle link must be identity or sqrt")
+        arrays = [np.asarray(value, dtype=np.float64) for value in (y, mu, weights)]
+        if (
+            any(value.ndim != 1 for value in arrays)
+            or len({len(value) for value in arrays}) != 1
+        ):
+            raise ValueError("NB deviance oracle inputs must be aligned vectors")
+        if not np.isfinite(theta) or theta <= 0.0:
+            raise ValueError("NB deviance oracle theta must be finite and positive")
+        self._require_rpy2()
+        r_y, r_mu, r_weights = map(self._to_r_vector, arrays)
+        r_theta = self._base.log(theta)
+        r_family = self._call_internal("fix.family.link", self._mgcv.nb(link=link))
+        derivatives = self._call_internal(
+            "dDeta", r_y, r_mu, r_weights, r_theta, r_family, deriv=0
+        )
+        return {
+            "deviance": np.asarray(
+                r_family.rx2("dev.resids")(r_y, r_mu, r_weights, r_theta),
+                dtype=np.float64,
+            ).copy(),
+            "deta": np.asarray(derivatives.rx2("Deta"), dtype=np.float64).copy(),
+            "deta2": np.asarray(derivatives.rx2("Deta2"), dtype=np.float64).copy(),
+        }
 
     def efs_diagnostics(
         self,
@@ -1353,6 +1678,214 @@ class RBridge:
                 "eta_max": scalar(self._base.max(fit.rx2("linear.predictors"))),
             },
         }
+
+    def efs_regular_gdi1_diagnostics(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        penalty: np.ndarray,
+        start: np.ndarray,
+        null_coef: np.ndarray,
+        *,
+        family: str = "gaussian",
+        link: str = "log",
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+        scale: float = 1.0,
+        tolerance: float = 1e-7,
+    ) -> dict[str, Any]:
+        """Trace one pinned regular-family ``gam.fit3`` final ``gdi1`` solve.
+
+        This narrow layer oracle uses a private pinned R closure. It
+        accepts one already materialized positive-semidefinite penalty so tests
+        can distinguish the PIRLS stopping state, C_gdi1 candidate state, and
+        returned feasible state without constructing a formula or outer loop.
+        """
+        self._require_pinned_efs_versions()
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        penalty = np.asarray(penalty, dtype=np.float64)
+        start = np.asarray(start, dtype=np.float64)
+        null_coef = np.asarray(null_coef, dtype=np.float64)
+        if weights is None:
+            weights = np.ones_like(y)
+        if offset is None:
+            offset = np.zeros_like(y)
+        weights = np.asarray(weights, dtype=np.float64)
+        offset = np.asarray(offset, dtype=np.float64)
+        if (
+            X.ndim != 2
+            or y.shape != (X.shape[0],)
+            or penalty.shape != (X.shape[1], X.shape[1])
+            or start.shape != (X.shape[1],)
+            or null_coef.shape != (X.shape[1],)
+            or weights.shape != y.shape
+            or offset.shape != y.shape
+        ):
+            raise ValueError("Regular gdi1 oracle inputs have incompatible shapes")
+        if not all(
+            np.all(np.isfinite(value))
+            for value in (X, y, penalty, start, null_coef, weights, offset)
+        ):
+            raise ValueError("Regular gdi1 oracle requires finite array inputs")
+        if np.any(weights <= 0.0) or not np.isfinite(scale) or scale <= 0.0:
+            raise ValueError("Regular gdi1 oracle requires positive weights and scale")
+        if not np.isfinite(tolerance) or tolerance <= 0.0:
+            raise ValueError("Regular gdi1 oracle requires a positive tolerance")
+        if (family, link) not in {("gaussian", "log"), ("poisson", "identity")}:
+            raise ValueError(
+                "Regular gdi1 oracle supports Gaussian/log or Poisson/identity"
+            )
+        np.testing.assert_allclose(penalty, penalty.T, rtol=0.0, atol=1e-14)
+        if np.min(np.linalg.eigvalsh(penalty)) < -1e-12:
+            raise ValueError(
+                "Regular gdi1 oracle penalty must be positive semidefinite"
+            )
+
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        from tests.r_ast import find_call_paths, instrument_function
+
+        r_x = self._to_r_matrix(X)
+        r_y = self._to_r_vector(y)
+        r_penalty = self._to_r_matrix(penalty)
+        r_start = self._to_r_vector(start)
+        r_null = self._to_r_vector(null_coef)
+        r_weight = self._to_r_vector(weights)
+        r_offset = self._to_r_vector(offset)
+        r_add = self._ro.r["+"]
+        r_divide = self._ro.r["/"]
+        r_multiply = self._ro.r["%*%"]
+        symmetric = r_divide(r_add(r_penalty, self._base.t(r_penalty)), 2)
+        eigen = self._base.eigen(symmetric, symmetric=True)
+        values = eigen.rx2("values")
+        machine_epsilon = self._ro.r[".Machine"].rx2("double.eps")
+        cutoff = self._ro.r["*"](
+            self._base.max(values), self._ro.r["^"](machine_epsilon, 0.75)
+        )
+        keep = np.asarray(self._ro.r[">"](values, cutoff), dtype=bool)
+        if not np.any(keep):
+            raise ValueError("regular gdi1 oracle requires a nonzero penalty")
+        r_keep = self._ro.BoolVector(keep)
+        bracket = self._ro.r["["]
+        vectors = eigen.rx2("vectors")
+        y_space = bracket(vectors, rinterface.MissingArg, r_keep, drop=False)
+        z_space = bracket(
+            vectors, rinterface.MissingArg, self._ro.BoolVector(~keep), drop=False
+        )
+        selected_values = bracket(eigen.rx2("values"), r_keep)
+        root = self._base.sweep(y_space, 2, self._base.sqrt(selected_values), "*")
+        eb = self._base.t(root)
+        u1 = self._base.cbind(y_space, z_space)
+        mp = int(self._base.ncol(z_space)[0])
+        ur_s = rinterface.ListSexpVector([r_multiply(self._base.t(y_space), root)])
+        r_family = (
+            self._stats.gaussian(link="log")
+            if (family, link) == ("gaussian", "log")
+            else self._stats.poisson(link="identity")
+        )
+        for function in ("fix.family.link", "fix.family.var", "fix.family.ls"):
+            r_family = self._call_internal(function, r_family)
+
+        captured: dict[str, np.ndarray | float] = {}
+
+        def copy(value: Any) -> np.ndarray:
+            return np.array(value, dtype=np.float64, copy=True).ravel(order="F")
+
+        def pre_gdi(
+            transform: Any,
+            current_start: Any,
+            eta: Any,
+            mu: Any,
+            dev: Any,
+            pdev: Any,
+        ) -> None:
+            captured["pre_beta"] = copy(
+                self._base.drop(r_multiply(transform, current_start))
+            )
+            captured["pre_eta"] = copy(eta)
+            captured["pre_mu"] = copy(mu)
+            captured["pre_deviance"] = float(np.asarray(dev).ravel()[0])
+            captured["pre_pdev"] = float(np.asarray(pdev).ravel()[0])
+
+        def gdi_candidate(transform: Any, current: Any) -> None:
+            current = self._ro.conversion.get_conversion().rpy2py(current)
+            captured["gdi_beta"] = copy(
+                self._base.drop(r_multiply(transform, current.rx2("beta")))
+            )
+            captured["gdi_penalty"] = float(np.asarray(current.rx2("conv.tol"))[0])
+
+        fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        for head, symbols, capture, callback, when in (
+            (
+                "<-",
+                ("wdr", "dev.resids", "y", "mu", "weights"),
+                ("T", "start", "eta", "mu", "dev", "pdev"),
+                pre_gdi,
+                "before",
+            ),
+            (
+                "<-",
+                ("coef", "oo", "beta"),
+                ("T", "oo"),
+                gdi_candidate,
+                "before",
+            ),
+        ):
+            paths = find_call_paths(fit3, head, required_symbols=symbols)
+            if len(paths) != 1:
+                raise RBridgeError("Pinned gam.fit3 regular gdi1 anchor changed")
+            fit3 = instrument_function(
+                fit3,
+                path=paths[0],
+                expected_head=head,
+                capture_symbols=capture,
+                callback=callback,
+                when=when,
+            )
+        fit = fit3(
+            r_x,
+            r_y,
+            sp=0,
+            Eb=eb,
+            UrS=ur_s,
+            weights=r_weight,
+            start=r_start,
+            offset=r_offset,
+            U1=u1,
+            Mp=mp,
+            family=r_family,
+            control=self._mgcv.gam_control(maxit=100, epsilon=float(tolerance)),
+            intercept=True,
+            deriv=0,
+            gamma=1,
+            scale=float(scale),
+            scoreType="EFS",
+            **{"null.coef": r_null, "n.true": len(y)},
+        )
+        observed = fit.rx2("working.weights")
+        fisher = fit.rx2("weights")
+        weighted = self._ro.r["*"]
+        captured.update(
+            reported_scale=float(np.asarray(fit.rx2("scale.est"))[0]),
+            score=float(np.asarray(fit.rx2("REML"))[0]),
+            selected_beta=copy(fit.rx2("coefficients")),
+            selected_eta=copy(fit.rx2("linear.predictors")),
+            selected_mu=copy(fit.rx2("fitted.values")),
+            observed_weight=copy(observed),
+            fisher_weight=copy(fisher),
+            XtWX=np.asarray(
+                self._base.crossprod(r_x, weighted(observed, r_x)),
+                dtype=np.float64,
+            ).copy(),
+            XtWX_fisher=np.asarray(
+                self._base.crossprod(r_x, weighted(fisher, r_x)),
+                dtype=np.float64,
+            ).copy(),
+            source_commit=_PINNED_MGCV_SOURCE_COMMIT,
+        )
+        return captured
 
     @staticmethod
     def _require_pinned_efs_versions() -> None:

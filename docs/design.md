@@ -3632,13 +3632,28 @@ optimizer. Its update uses the penalty-range determinant derivative,
 Fisher-covariance contractions, and penalty quadratic forms for each coupled
 penalty. A singleton-rank formula is therefore not a general implementation.
 
-EFS remains deferred until its dedicated, pinned-source implementation release,
-including regular-family scale handling and the separate NB theta path. Its
-reference policy is approved: Newton retains its existing objective-monotonicity
-contract, while a faithful EFS controller may accept a finite score increase
-after contraction reaches multiplier one, exactly as pinned mgcv does. EFS
-records its own branch trace and convergence reason; it must not be represented
-as a monotone Newton trajectory or as fREML.
+EFS is an authorized dense follow-on optimizer selected explicitly with
+``optimizer="efs"``. The released route covers the tested regular-family links,
+regular-family scale handling, and the separate fixed/estimated NB theta path
+for log, identity, and square-root links. Fixed smoothing and zero-penalty
+models retain their established dispatch precedence. Estimated EFS does not
+consume a ``RowSource``. The existing ``gaussian_compression=True``
+availability guard remains unchanged in this published stack.
+For estimated negative-binomial identity and square-root links, the pinned
+``gam.fit4`` default is a zero-coefficient recovery anchor. The public adapter
+accepts these links only when applying the supplied offset to that anchor gives
+strictly positive means; otherwise it rejects the same default-start boundary
+as pinned mgcv. Its EFS-only coefficient solve also follows ``gam.fit4`` by
+retrying an indefinite observed-information proposal with positive-curvature
+rows.
+
+Newton retains its existing objective-monotonicity contract, while the faithful
+EFS controller may accept a finite score increase after contraction reaches
+multiplier one, exactly as pinned mgcv does. EFS records an immutable compact
+profile with its exact trace and step policy, convergence reason, selected
+iteration counts, bounded accepted histories, movement maxima, and numerical
+event indicators. It is not represented as a monotone Newton trajectory or as
+fREML.
 
 ### 8.3 GCV and UBRE Criteria
 
@@ -6979,6 +6994,13 @@ def test_deviance_residual_identity(family_class, test_data):
 **Hard-gate invariants - never LOOSE (v1.15):**
 
 The tolerance strategy allows LOOSE comparisons vs R for quantities like p-values and EDF. But some mathematical invariants must hold regardless of mgcv comparison tolerance. These are correctness gates, not comparison tests - if they fail, the implementation is wrong, not merely imprecise:
+
+The penalized-objective monotonicity gate below applies to coefficient
+step-halving at fixed smoothing and nuisance parameters. Newton keeps its
+existing outer-score acceptance contract. The source-faithful EFS outer
+controller instead applies the finite-increase contraction rule documented in
+Section 8.2 and records that policy in its result diagnostics; its accepted
+outer score history is not required to be monotone.
 
 | Invariant | Tolerance | Rationale |
 |---|---|---|

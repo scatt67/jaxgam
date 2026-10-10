@@ -18,7 +18,7 @@ from dataclasses import replace
 import jax.numpy as jnp
 import jax.scipy.special as jsp
 import numpy as np
-from scipy.special import gammaln
+from scipy.special import gammaln, xlog1py, xlogy
 
 from jaxgam.families.base import (
     NON_NEGATIVE,
@@ -121,8 +121,17 @@ class Gaussian(ExponentialFamily):
         """
         nobs = len(y)
         dev = float(np.sum(wt * (y - mu) ** 2))
-        sum_log_wt = float(np.sum(np.log(wt[wt > 0])))
-        return float(nobs * (np.log(2 * np.pi * dev / nobs) + 1.0) + 2.0 - sum_log_wt)
+        # stats::gaussian$aic includes all prior weights. A real zero prior
+        # yields +Inf for positive deviance (and NaN at zero deviance), unlike
+        # fix.family.ls, whose saturated likelihood filters zero-prior rows.
+        # Preserve the source diagnostic instead of returning a finite AIC.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sum_log_wt = float(np.sum(np.log(wt)))
+            return float(
+                nobs * (np.log(np.divide(2 * np.pi * dev, nobs)) + 1.0)
+                + 2.0
+                - sum_log_wt
+            )
 
     def _initialize_impl(self, y: np.ndarray, wt: np.ndarray) -> np.ndarray:  # noqa: ARG002
         """Initialize mu = y for Gaussian."""
@@ -131,11 +140,13 @@ class Gaussian(ExponentialFamily):
     def execution_initial_input_ok_cpu(
         self, y: np.ndarray, prior_weight: np.ndarray
     ) -> np.ndarray:
-        """Match stats::gaussian's strict NULL-start link guard.
+        """Match unpatched stats::gaussian's strict NULL-start link guard.
 
         Legacy links intentionally clip at their numerical boundary.  R's
         ``gaussian()$initialize`` instead rejects nonpositive log starts and
-        zero inverse starts before ``gam.fit3`` can shrink a predictor.
+        zero inverse starts before ``gam.fit3`` can shrink a predictor. Public
+        mgcv patches this initializer through fix.family; that variant uses
+        the finalized global summary via the separate metadata hook below.
         """
         ok = super().execution_initial_input_ok_cpu(y, prior_weight)
         if isinstance(self.link, LogLink):
@@ -143,6 +154,85 @@ class Gaussian(ExponentialFamily):
         elif isinstance(self.link, InverseLink):
             ok &= y != 0.0
         return ok
+
+    def execution_initial_input_ok_from_summary_cpu(
+        self, y: np.ndarray, prior_weight: np.ndarray, summary: object | None
+    ) -> np.ndarray:
+        """Use mgcv's patched initializer after global SD is available."""
+        if isinstance(summary, dict) and "response_sd" in summary:
+            return super().execution_initial_input_ok_cpu(y, prior_weight)
+        return self.execution_initial_input_ok_cpu(y, prior_weight)
+
+    def execution_initial_mustart_from_summary_cpu(
+        self, y: np.ndarray, prior_weight: np.ndarray, summary: object | None
+    ) -> np.ndarray:
+        """Apply pinned fix.family using unweighted whole-response sd(y)."""
+        if isinstance(summary, dict) and "response_sd" in summary:
+            sd = float(summary["response_sd"])
+            if isinstance(self.link, LogLink):
+                return np.maximum(y, 0.01 * sd)
+            if isinstance(self.link, InverseLink):
+                return y + (y == 0.0) * sd * 0.01
+        return self.execution_initial_mustart_cpu(y, prior_weight)
+
+    def execution_summary_from_batch(
+        self, y: np.ndarray, wt: np.ndarray, valid: np.ndarray
+    ) -> tuple[np.ndarray, ...]:
+        """Append bounded unweighted moments required by Gaussian starts.
+
+        fix.family uses sd(y) over every real source response, including
+        zero-prior rows. Padding and empty batches do not contribute.
+        """
+        base = super().execution_summary_from_batch(y, wt, valid)
+        if not isinstance(self.link, (LogLink, InverseLink)):
+            return base
+        xp = array_module(y)
+        count = base[0]
+        safe_y = xp.where(valid & xp.isfinite(y), y, 0.0)
+        mean = xp.sum(safe_y) / xp.maximum(count, 1)
+        centered = xp.where(valid, safe_y - mean, 0.0)
+        return (*base, count, mean, xp.sum(centered * centered))
+
+    def merge_execution_summaries(
+        self, left: tuple[np.ndarray, ...], right: tuple[np.ndarray, ...]
+    ) -> tuple[np.ndarray, ...]:
+        """Merge Chan response moments alongside ordinary likelihood state."""
+        if len(left) == len(right) == 4:
+            return super().merge_execution_summaries(left, right)
+        if len(left) != 7 or len(right) != 7:
+            raise ValueError("Gaussian response-moment summary shape changed")
+        xp = array_module(left[4])
+        count = left[4] + right[4]
+        denominator = xp.maximum(count, 1)
+        delta = right[5] - left[5]
+        mean = left[5] + delta * right[4] / denominator
+        m2 = left[6] + right[6] + delta**2 * left[4] * right[4] / denominator
+        return (
+            *super().merge_execution_summaries(left[:4], right[:4]),
+            count,
+            mean,
+            m2,
+        )
+
+    def finalize_execution_summary(
+        self, summary: tuple[float, ...]
+    ) -> dict[str, float]:
+        """Finalize the sample SD once before replaying patched mustart."""
+        if len(summary) == 4:
+            return super().finalize_execution_summary(summary)
+        if len(summary) != 7:
+            raise ValueError("Gaussian response-moment summary shape changed")
+        result = super().finalize_execution_summary(summary[:4])
+        count, m2 = float(summary[4]), float(summary[6])
+        result["response_sd"] = np.sqrt(m2 / (count - 1)) if count > 1 else np.nan
+        return result
+
+    def execution_capabilities(self) -> FamilyExecutionCapabilities:
+        """Expose source Fletcher reporting for noncanonical Gaussian links."""
+        capabilities = super().execution_capabilities()
+        if not self.is_canonical:
+            capabilities = replace(capabilities, regular_fletcher_scale=True)
+        return capabilities
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """All finite mu are valid for Gaussian."""
@@ -155,17 +245,18 @@ class Gaussian(ExponentialFamily):
         return xp.isfinite(eta)
 
     def stream_reduction_policy(self) -> StreamReductionPolicy:
-        """Expose the only unknown-scale policy validated by this route.
+        """Separate general reporting from the canonical score shortcut.
 
         The score-scale identity below is specific to the canonical Gaussian
-        fixed-sp coefficient problem.  A noncanonical Gaussian must provide
-        its own observed-information policy rather than inheriting it.
+        fixed-sp coefficient problem. Noncanonical links use the source
+        Fletcher reporting reduction and retain their separate trial score
+        scale and observed-information determinant.
         """
         if self.is_canonical:
             return StreamReductionPolicy(
                 "gaussian_fisher_edf_deviance", "gaussian_fixed_sp"
             )
-        return StreamReductionPolicy("unsupported", "unsupported")
+        return StreamReductionPolicy("regular_fletcher", "unsupported")
 
 
 class Binomial(ExponentialFamily):
@@ -204,19 +295,12 @@ class Binomial(ExponentialFamily):
     ) -> float:
         """Saturated log-likelihood for Binomial.  Phase 2 only (JAX).
 
-        R: ``-binomial()$aic(y, n, y, w, 0) / 2`` which, at saturation mu=y,
-        equals ``sum(wt * [y*log(y) + (1-y)*log(1-y)]) + sum(lchoose(m, m*y))``.
+        R: ``-binomial()$aic(y, n, y, w, 0) / 2``. The single-column
+        response convention uses ``dbinom(round(w*y), round(w), prob=y)``.
         The binomial-coefficient term ``lchoose`` is zero for Bernoulli (wt=1)
         but a large nonzero constant for grouped/trial-count binomial (wt>1);
         omitting it makes the reported REML score wrong by that constant.
         """
-        y_safe = jnp.clip(y, _MU_EPS, 1.0 - _MU_EPS)
-        interior = (y > 0) & (y < 1)
-        ll = jnp.where(
-            interior,
-            y * jnp.log(y_safe) + (1.0 - y) * jnp.log(1.0 - y_safe),
-            0.0,
-        )
         # Binomial-coefficient term (R binomial()$aic via fix.family.ls):
         # m = trial count = prior weight wt; k = successes = round(m*y);
         # lchoose(m, k) = lgamma(m+1) - lgamma(k+1) - lgamma(m-k+1).
@@ -224,8 +308,9 @@ class Binomial(ExponentialFamily):
         m = jnp.round(wt)
         k = jnp.round(wt * y)
         lchoose = jsp.gammaln(m + 1.0) - jsp.gammaln(k + 1.0) - jsp.gammaln(m - k + 1.0)
-        lchoose = jnp.where(wt > 0, lchoose, 0.0)
-        return jnp.sum(wt * ll) + jnp.sum(lchoose)
+        probability = jnp.where(wt > 0, y, 0.5)
+        ll = lchoose + jsp.xlogy(k, probability) + jsp.xlog1py(m - k, -probability)
+        return jnp.sum(jnp.where(wt > 0, ll, 0.0))
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -238,7 +323,9 @@ class Binomial(ExponentialFamily):
         Matches R's binomial()$dev.resids.
         """
         xp = array_module(y)
-        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        mu_safe = xp.where(
+            (mu > 0.0) & (mu < 1.0), mu, xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        )
 
         y_pos = xp.where(y > 0, y, 1.0)
         y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
@@ -254,7 +341,9 @@ class Binomial(ExponentialFamily):
     ) -> np.ndarray:
         """Direct Binomial deviance with the same boundary arithmetic as PIRLS."""
         xp = array_module(y)
-        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        mu_safe = xp.where(
+            (mu > 0.0) & (mu < 1.0), mu, xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        )
         y_pos = xp.where(y > 0, y, 1.0)
         y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
         contribution = (
@@ -270,9 +359,14 @@ class Binomial(ExponentialFamily):
     def deviance_derivative_contributions(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
     ) -> np.ndarray:
-        """Interior Binomial deviance; unlike reporting it has no max kink."""
+        """Interior Binomial deviance with no clipping of valid means.
+
+        Clipping a valid mean near one flattens its observed AD curvature.
+        Invalid means use neutral operands; the execution domain check owns
+        rejection of those rows rather than differentiating that fallback.
+        """
         xp = array_module(y)
-        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        mu_safe = xp.where((mu > 0.0) & (mu < 1.0), mu, 0.5)
         y_pos = xp.where(y > 0, y, 1.0)
         y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
         return (
@@ -298,11 +392,14 @@ class Binomial(ExponentialFamily):
         with single-column trial count ``m = wt``. Expanding the binomial pmf
         gives the ``lchoose(m, m*y)`` term (zero for Bernoulli, wt=1).
         """
-        mu_safe = np.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
-        ll = wt * (y * np.log(mu_safe) + (1.0 - y) * np.log(1.0 - mu_safe))
+        # dbinom accepts actual probabilities through the closed interval.
+        # Clipping valid tail means changes public AIC; xlogy handles the
+        # source's zero-count endpoint terms without 0 * log(0) NaNs.
+        probability = np.where(wt > 0, mu, 0.5)
         m = np.round(wt)
         k = np.round(wt * y)
         lchoose = gammaln(m + 1.0) - gammaln(k + 1.0) - gammaln(m - k + 1.0)
+        ll = xlogy(k, probability) + xlog1py(m - k, -probability)
         lchoose = np.where(wt > 0, lchoose, 0.0)
         return float(-2.0 * (np.sum(ll) + np.sum(lchoose)))
 
