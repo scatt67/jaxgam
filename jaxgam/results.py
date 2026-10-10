@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -31,10 +31,12 @@ if TYPE_CHECKING:
 
     from jaxgam.data.source import RowSource
     from jaxgam.families.base import ExponentialFamily
-    from jaxgam.fitting.data import FittingData
+    from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.newton import NewtonResult
+    from jaxgam.fitting.state import StreamFitState
     from jaxgam.formula.design import ModelSetup, SmoothInfo
     from jaxgam.formula.predict_matrix import Data
+    from jaxgam.formula.prepare import PreparedModel
     from jaxgam.formula.terms import FormulaSpec
     from jaxgam.smooths.constraints import CoefficientMap
     from jaxgam.summary.summary import GAMSummary
@@ -59,6 +61,56 @@ def _transform_coefficients_cpu(
         result[block.start : block.stop] = (
             values @ local if transform.kind == "dense" else values * local
         )
+    return result
+
+
+def _prepared_transform_coefficients_cpu(
+    prepared, coefficients: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """Map prepared fitting coordinates to public coordinates without rows."""
+    from jaxgam.penalties.structure import DenseTransform, DiagonalTransform
+
+    assert prepared.fitting is not None
+    result = np.array(coefficients, copy=True)
+    for block in prepared.fitting.penalty_structure.blocks:
+        transform = block.transform
+        local = result[block.start : block.stop]
+        if isinstance(transform, DenseTransform):
+            result[block.start : block.stop] = transform.matrix @ local
+        elif isinstance(transform, DiagonalTransform):
+            result[block.start : block.stop] = transform.diagonal * local
+    return result
+
+
+def _prepared_fisher_transforms(
+    prepared,
+) -> tuple[tuple[int, int, str, npt.NDArray[np.floating]], ...]:
+    """Describe frozen local-D transforms for factor-based prediction SEs."""
+    from jaxgam.penalties.structure import DenseTransform, DiagonalTransform
+
+    assert prepared.fitting is not None
+    transforms = []
+    for block in prepared.fitting.penalty_structure.blocks:
+        transform = block.transform
+        if isinstance(transform, DenseTransform):
+            transforms.append((block.start, block.stop, "dense", transform.matrix))
+        elif isinstance(transform, DiagonalTransform):
+            transforms.append((block.start, block.stop, "diagonal", transform.diagonal))
+    return tuple(transforms)
+
+
+def _prepared_transform_covariance_cpu(
+    prepared, covariance: npt.NDArray[np.floating]
+) -> npt.NDArray[np.floating]:
+    """Apply all local-D transforms, retaining public cross-block covariance."""
+    result = np.array(covariance, copy=True)
+    for start, stop, kind, values in _prepared_fisher_transforms(prepared):
+        if kind == "dense":
+            result[start:stop, :] = values @ result[start:stop, :]
+            result[:, start:stop] = result[:, start:stop] @ values.T
+        else:
+            result[start:stop, :] *= values[:, None]
+            result[:, start:stop] *= values[None, :]
     return result
 
 
@@ -106,6 +158,8 @@ class _FitDiagnostics:
     method: str
     lambda_strategy: str
     execution_path: str
+    execution_route: str = field(default="dense", kw_only=True)
+    execution_fallback_reason: str | None = field(default=None, kw_only=True)
     n: int
 
 
@@ -212,6 +266,8 @@ class GAMPredictionResult:
     method: str
     lambda_strategy: str
     execution_path: str
+    execution_route: str = field(default="dense", kw_only=True)
+    execution_fallback_reason: str | None = field(default=None, kw_only=True)
     n: int
     _batch_rows: int = 65_536
 
@@ -307,6 +363,102 @@ class GAMPredictionResult:
         covariance.setflags(write=False)
         return covariance
 
+    @classmethod
+    def _from_stream_fit(
+        cls,
+        *,
+        stream_state: StreamFitState,
+        prepared: PreparedModel,
+        metadata: PreparedFittingMetadata,
+        family: ExponentialFamily,
+        formula: str,
+        method: str,
+        control: FitControl,
+    ) -> GAMPredictionResult:
+        """Build compact prediction state directly from row-free stream state."""
+        from jaxgam.fitting.reml import reml_criterion
+
+        coefficients_fit = to_numpy(stream_state.coefficients)
+        coefficients = _prepared_transform_coefficients_cpu(prepared, coefficients_fit)
+        scale = float(to_numpy(stream_state.scale))
+        phi = 1.0 if family.scale_known else scale
+        score = reml_criterion(
+            stream_state.log_lambda,
+            stream_state.xtwx,
+            stream_state.coefficients,
+            stream_state.deviance,
+            stream_state.saturated_loglik,
+            metadata.penalty_structure,
+            stream_state.score_scale,
+            metadata.total_penalty_null_dim,
+            metadata.singleton_sp_indices,
+            metadata.singleton_ranks,
+            metadata.singleton_eig_constants,
+            metadata.multi_block_sp_indices,
+            metadata.multi_block_ranks,
+            metadata.multi_block_proj_S,
+            metadata.rank_deficit,
+        )
+        factor = None
+        transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
+        covariance = None
+        if control.uncertainty != "none":
+            factor = to_numpy(stream_state.fisher_factor)
+            transforms = _prepared_fisher_transforms(prepared)
+            if control.uncertainty == "covariance":
+                p = factor.shape[0]
+                required = 3 * p * p * np.dtype(float).itemsize
+                if required > control.memory_budget_bytes:
+                    raise MemoryError(
+                        f"Vp requires {required} bytes, exceeding "
+                        "FitControl.memory_budget_bytes="
+                        f"{control.memory_budget_bytes}."
+                    )
+                Z = sla.solve_triangular(factor, np.eye(p), lower=True)
+                covariance = _prepared_transform_covariance_cpu(
+                    prepared, phi * (Z.T @ Z)
+                )
+                factor = None
+                transforms = ()
+        offset_reduction = prepared.fitting.response
+        predictor = GAMPredictor(
+            coefficients=coefficients,
+            Vp=covariance,
+            family=copy.deepcopy(family),
+            formula=formula,
+            offset_was_nonzero=not np.allclose(
+                (offset_reduction.offset_min, offset_reduction.offset_max), 0.0
+            ),
+            _predict_spec=prepared.predict_spec,
+            _fisher_factor=factor,
+            _fisher_transforms=transforms,
+            _fisher_scale=phi,
+            _output_budget_bytes=control.output_budget_bytes,
+            _memory_budget_bytes=control.memory_budget_bytes,
+        )
+        return cls(
+            _predictor=predictor,
+            deviance=float(to_numpy(stream_state.deviance)),
+            score=float(to_numpy(score)),
+            scale=scale,
+            theta=None,
+            smoothing_params=np.exp(to_numpy(stream_state.log_lambda)),
+            converged=stream_state.converged,
+            n_iter=stream_state.n_iter,
+            convergence_info=(
+                "fixed sp streamed PIRLS"
+                if stream_state.converged
+                else "fixed sp streamed PIRLS did not converge"
+            ),
+            method=method,
+            lambda_strategy="fixed",
+            execution_path="jax",
+            execution_route="stream",
+            execution_fallback_reason=None,
+            n=prepared.n_obs,
+            _batch_rows=control.batch_rows,
+        )
+
 
 @dataclass(frozen=True)
 class GAMResults(_FitDiagnostics):
@@ -353,6 +505,8 @@ class GAMResults(_FitDiagnostics):
         method: str,
         result_mode: Literal["full", "inference", "prediction"],
         control: FitControl | None = None,
+        execution_route: str = "dense",
+        execution_fallback_reason: str | None = None,
     ) -> GAMResults | GAMInferenceResult | GAMPredictionResult:
         """Construct the requested result materialization from raw fit output.
 
@@ -460,6 +614,8 @@ class GAMResults(_FitDiagnostics):
                 method=method,
                 lambda_strategy=lambda_strategy,
                 execution_path="jax",
+                execution_route=execution_route,
+                execution_fallback_reason=execution_fallback_reason,
                 n=setup.n_obs,
                 _batch_rows=control.batch_rows,
             )
@@ -522,6 +678,8 @@ class GAMResults(_FitDiagnostics):
             "method": method,
             "lambda_strategy": lambda_strategy,
             "execution_path": "jax",
+            "execution_route": execution_route,
+            "execution_fallback_reason": execution_fallback_reason,
             "n": setup.n_obs,
         }
 
