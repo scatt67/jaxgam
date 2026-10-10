@@ -253,10 +253,14 @@ class StreamExactOptimizerDiagnostics:
     """Bounded all-evaluation diagnostics for exact streamed REML.
 
     Inner iterations sum executed PIRLS loop passes over initial, accepted,
-    rejected and local-probe trials. Final source refit solves are separate;
-    the startup scan prepares parameters but does not fit coefficients.
+    rejected and local-probe trials. Final source coefficient solves for the
+    score are separate (one per regular/NB fit); observed/Fisher factor solves
+    are not counted in that field. The startup scans prepare parameters but
+    do not fit coefficients.
     Derivative time covers host work after each PIRLS fit returns through
-    synchronized source score and gradient, including validation/replay.
+    synchronized source score and gradient, including validation/replay and
+    first-use JIT compilation. Pending fit-owned device buffers are drained
+    before this timer starts.
     """
 
     status: int

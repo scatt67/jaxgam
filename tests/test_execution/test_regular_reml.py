@@ -254,6 +254,7 @@ def test_regular_source_gradient_matches_all_32_pinned_gdi_cells(family_class, l
         rtol=tolerance.rtol if approved_boundary else STRICT.rtol,
         atol=tolerance.atol if approved_boundary else STRICT.atol,
     )
+
     state = trial.fit_result.state
     actual_covariance = np.asarray(
         state.fisher_coefficient_factor.hessian_inverse(jnp.eye(prepared.n_coef))
@@ -293,6 +294,81 @@ def test_regular_source_gradient_matches_all_32_pinned_gdi_cells(family_class, l
     )
     assert trial.source_factor_residual < STRICT.atol
     assert trial.observed_factor_residual < STRICT.atol
+
+
+def test_regular_derivative_timer_starts_after_real_fit_device_barrier(
+    monkeypatch,
+) -> None:
+    family, _data, _weight, _offset, start, source, prepared, params, control = (
+        _problem(Gaussian, "identity")
+    )
+    events = []
+    actual_fit = reml_execution.fit_regular_streamed_pirls
+    actual_sync = reml_execution._synchronize_fitted_state
+    actual_block = jax.block_until_ready
+    actual_clock = reml_execution.time.perf_counter
+    actual_cotangents = reml_execution.regular_score_cotangents
+
+    def fit(*args, **kwargs):
+        result = actual_fit(*args, **kwargs)
+        events.append("fit_returned")
+        return result
+
+    def synchronize(*args):
+        assert events == ["fit_returned"]
+        state, source_factor = args
+        required = {
+            id(value)
+            for field in fields(state)
+            if isinstance(value := getattr(state, field.name), jax.Array)
+        }
+        for factor in (
+            state.coefficient_factor,
+            state.fisher_coefficient_factor,
+            source_factor,
+        ):
+            required.update(id(leaf) for leaf in jax.tree_util.tree_leaves(factor))
+
+        def block(values):
+            observed = {id(leaf) for leaf in jax.tree_util.tree_leaves(values)}
+            assert required <= observed
+            return actual_block(values)
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(jax, "block_until_ready", block)
+            actual_sync(*args)
+        events.append("fit_synchronized")
+
+    def clock():
+        events.append("timer")
+        return actual_clock()
+
+    def cotangents(*args, **kwargs):
+        assert events == ["fit_returned", "fit_synchronized", "timer"]
+        events.append("derivative")
+        return actual_cotangents(*args, **kwargs)
+
+    monkeypatch.setattr(reml_execution, "fit_regular_streamed_pirls", fit)
+    monkeypatch.setattr(reml_execution, "_synchronize_fitted_state", synchronize)
+    monkeypatch.setattr(reml_execution, "time", SimpleNamespace(perf_counter=clock))
+    monkeypatch.setattr(reml_execution, "regular_score_cotangents", cotangents)
+    trial = evaluate_regular_stream_reml(
+        StreamDesign(prepared, source),
+        family,
+        params,
+        maximum_bytes=64_000_000,
+        control=control,
+        initial_coefficients=start,
+    )
+
+    assert events == [
+        "fit_returned",
+        "fit_synchronized",
+        "timer",
+        "derivative",
+        "timer",
+    ]
+    assert trial.derivative_elapsed_s > 0.0
 
 
 @pytest.mark.parametrize("family_class", [Gaussian, Gamma, Poisson, Binomial])

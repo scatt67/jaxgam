@@ -7,7 +7,7 @@ import sys
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import Generic, Protocol, TypeVar
 
 import jax
@@ -401,6 +401,33 @@ def _factor_inverse_residual(
     return float(np.asarray(numerator / denominator))
 
 
+def _synchronize_fitted_state(
+    state: StreamFitState, *additional_factors: object
+) -> None:
+    """Finish fit-owned device transfers before timing the derivative stage.
+
+    ``StreamFitState`` itself is not a JAX pytree. Its array fields and both
+    registered coefficient-factor pytrees must be walked explicitly; regular
+    source scoring also owns a distinct final-refit factor.
+    """
+    pending = [
+        value
+        for entry in fields(state)
+        if isinstance(value := getattr(state, entry.name), jax.Array)
+    ]
+    for factor in (
+        state.coefficient_factor,
+        state.fisher_coefficient_factor,
+        *additional_factors,
+    ):
+        pending.extend(
+            leaf
+            for leaf in jax.tree_util.tree_leaves(factor)
+            if isinstance(leaf, jax.Array)
+        )
+    jax.block_until_ready(tuple(pending))
+
+
 def evaluate_regular_stream_reml(
     stream: StreamDesign,
     family: ExponentialFamily,
@@ -445,6 +472,7 @@ def evaluate_regular_stream_reml(
         initial_coefficients=initial,
         device=device,
     )
+    _synchronize_fitted_state(result.state, result.source_coefficient_factor)
     derivative_started = time.perf_counter()
     state = result.state
     if (
@@ -682,6 +710,7 @@ def evaluate_stream_reml(
         beta_init=beta_init,
         device=device,
     )
+    _synchronize_fitted_state(state)
     derivative_started = time.perf_counter()
     if (
         not state.converged

@@ -970,7 +970,8 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
         "inner_iterations": inner_iterations,
         "inner_iteration_semantics": (
             "sum of executed PIRLS loop passes across exact score/gradient "
-            "evaluations; final source refit solves recorded separately"
+            "evaluations; final source coefficient score solves recorded "
+            "separately, excluding observed/Fisher factor solves"
             if case.execution == "stream-exact" and exact_diagnostics is not None
             else None
         ),
@@ -1133,8 +1134,10 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
             ),
             "derivative_status": (
                 "post-PIRLS exact score/adjoint/derivative host stage, synchronized "
-                "through score and gradient for every evaluated trial; excludes "
-                "coefficient fits, startup, public result finish and prediction"
+                "through score and gradient for every evaluated trial; includes "
+                "first-use JIT compilation; starts after fit-owned device buffers "
+                "finish and excludes coefficient fits, startup, result finish "
+                "and prediction"
                 if exact_diagnostics is not None
                 else "public fit result does not expose separate derivative time"
             ),

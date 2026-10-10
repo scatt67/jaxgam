@@ -38,6 +38,7 @@ from jaxgam.execution.reml import (
     _projected_gradient_for_bounds,
     _run_parameterized_stream_reml,
     _ScaleNewtonCompletion,
+    _synchronize_fitted_state,
     _trial_inner_iterations,
     _valid_exact_trial,
     _validate_max_step,
@@ -332,6 +333,7 @@ def evaluate_nb_stream_reml(
         start_is_absent=initial is None,
         estimate_theta=False,
     )
+    _synchronize_fitted_state(result.state)
     derivative_started = time.perf_counter()
     state = result.state
     if (
