@@ -591,8 +591,20 @@ def optimize_nb_stream_reml(
             pirls_control,
         )
     )
+    # SciPy can discard a fully stationary free-theta trial when the score
+    # rises by one float64 ULP. Retaining that trial across subsequent probes
+    # adds one p²-owned result and its bounded penalized-deviance history
+    # alongside accepted and active candidate states.
+    stationary_trial_bytes = (
+        retained_trial_bytes + retained_history_bytes
+        if pin_lambda and family.n_theta == 1
+        else 0
+    )
     outer_workspace_bytes = (
-        retained_trial_bytes + retained_history_bytes + lbfgs_workspace_bytes
+        retained_trial_bytes
+        + stationary_trial_bytes
+        + retained_history_bytes
+        + lbfgs_workspace_bytes
     )
     if outer_workspace_bytes >= maximum_bytes:
         raise MemoryError(
@@ -616,6 +628,10 @@ def optimize_nb_stream_reml(
         params_initial,
         bounds,
         reml_control,
+        roundoff_stationary_completion=pin_lambda and family.n_theta == 1,
+        completion_inner_tolerance=(
+            pirls_control.tol if pin_lambda and family.n_theta == 1 else None
+        ),
     )
     trial = optimized.trial
     if family.n_theta and not np.array_equal(

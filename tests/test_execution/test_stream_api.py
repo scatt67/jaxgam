@@ -258,7 +258,10 @@ def test_public_stream_covariance_budget_and_route_guards() -> None:
         GAM(formula, sp=[0.2], control=FitControl(execution="stream")).fit(
             source, weights=np.ones(len(data)), result="prediction"
         )
-    with pytest.raises(NotImplementedError, match=r"Gaussian.*Poisson.*Binomial"):
+    with pytest.raises(
+        NotImplementedError,
+        match="NB observed-information fitting requires linear_solver='qr'",
+    ):
         GAM(formula, family="nb", sp=[0.2], control=FitControl(execution="stream")).fit(
             source, result="prediction"
         )

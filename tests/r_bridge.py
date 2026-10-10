@@ -1267,6 +1267,92 @@ class RBridge:
             skip_offset_null_deviance=True,
         )
 
+    def public_fixed_sp_fit(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+        *,
+        theta: float | None = None,
+        sp: float | None = None,
+        r_epsilon: float = 1e-11,
+        r_newton_tolerance: float = 1e-10,
+    ) -> dict[str, np.ndarray | float]:
+        """Run a tight pinned mgcv public fit for one fixed-sp release cell."""
+        self._require_rpy2()
+        ro = self._ro
+        source_link = "1/mu^2" if link == "inverse_squared" else link
+        constructors = {
+            "gamma": self._stats.Gamma,
+            "gaussian": self._stats.gaussian,
+            "poisson": self._stats.poisson,
+            "binomial": self._stats.binomial,
+        }
+        if family_name == "nb":
+            if theta is None:
+                raise ValueError("fixed-sp NB source oracle needs theta")
+            family = self._mgcv.nb(theta=theta, link=source_link)
+        else:
+            try:
+                constructor = constructors[family_name]
+            except KeyError:
+                raise ValueError("unsupported fixed-sp source family") from None
+            family = constructor(link=source_link)
+        r_data = self._to_r_dataframe(data)
+        smooth = sp is not None
+        control = self._mgcv.gam_control(
+            epsilon=r_epsilon,
+            maxit=200,
+            newton=ro.ListVector(
+                {
+                    "conv.tol": r_newton_tolerance,
+                    "maxNstep": 5.0,
+                    "maxSstep": 2.0,
+                    "maxHalf": 30,
+                }
+            ),
+        )
+        fit = self._mgcv.gam(
+            ro.Formula('y ~ s(x, bs="cr", k=8)' if smooth else "y ~ x"),
+            data=r_data,
+            weights=self._to_r_vector(weight),
+            offset=self._to_r_vector(offset),
+            family=family,
+            sp=self._to_r_vector([sp]) if smooth else ro.NULL,
+            method="REML",
+            control=control,
+        )
+        score_scale = fit.rx2("reml.scale")
+        if score_scale is ro.NULL:
+            score_scale = fit.rx2("sig2")
+        link_prediction = self._stats.predict(
+            fit, newdata=r_data, type="link", **{"se.fit": True}
+        )
+        outer = fit.rx2("outer.info")
+        outer_status = (
+            "none"
+            if outer is ro.NULL or outer.rx2("conv") is ro.NULL
+            else str(outer.rx2("conv")[0])
+        )
+        return {
+            "theta": (
+                float(fit.rx2("family").rx2("getTheta")(True)[0])
+                if family_name == "nb"
+                else np.nan
+            ),
+            "score": float(fit.rx2("gcv.ubre")[0]),
+            "scale": float(fit.rx2("sig2")[0]),
+            "score_scale": float(score_scale[0]),
+            "deviance": float(fit.rx2("deviance")[0]),
+            "coefficients": np.asarray(fit.rx2("coefficients")).copy(),
+            "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
+            "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
+            "inner_converged": bool(fit.rx2("converged")[0]),
+            "outer_status": outer_status,
+        }
+
     def nb_theta_diagnostics(
         self,
         start: np.ndarray,
@@ -2376,8 +2462,11 @@ class RBridge:
         tolerance: float = 1e-7,
         max_iter: int = 200,
         require_convergence: bool = True,
+        score_scale: float = 0.7,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Run pinned unpenalized ``gam.fit3`` with the natural QR null start."""
+        if not np.isfinite(score_scale) or score_scale <= 0:
+            raise ValueError("score_scale must be positive and finite")
         family, r_X, r_y, r_weight, r_offset, null, known_scale = (
             self._regular_gam_fit3_inputs(family_name, link, X, y, weight, offset)
         )
@@ -2388,7 +2477,7 @@ class RBridge:
             y=r_y,
             sp=ro.FloatVector([])
             if known_scale
-            else self._base.log(ro.FloatVector([0.7])),
+            else self._base.log(ro.FloatVector([score_scale])),
             Eb=ro.FloatVector([0.0]),
             UrS=ro.baseenv["list"](),
             weights=r_weight,
@@ -2418,6 +2507,42 @@ class RBridge:
         ]
         covariance = np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy()
         return reference, null, covariance, status
+
+    def regular_coefficient_fit(
+        self,
+        family_name: str,
+        link: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        start: np.ndarray | None = None,
+        *,
+        tolerance: float = 1e-7,
+        max_iter: int = 200,
+        require_convergence: bool = True,
+        score_scale: float = 0.7,
+    ) -> dict[str, np.ndarray]:
+        """Expose the shared pinned regular start reference by field name."""
+        reference, null, covariance, status = self.regular_gam_fit3_start(
+            family_name,
+            link,
+            X,
+            y,
+            weight,
+            offset,
+            start,
+            tolerance=tolerance,
+            max_iter=max_iter,
+            require_convergence=require_convergence,
+            score_scale=score_scale,
+        )
+        return {
+            "reference": reference,
+            "null": null,
+            "covariance": covariance,
+            "status": status,
+        }
 
     def regular_gam_fit3_penalized(
         self,

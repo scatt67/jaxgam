@@ -585,6 +585,15 @@ def test_nb_optimizer_pins_supplied_rho_outside_estimated_bounds(link, estimated
         assert result.n_iter > 0
         assert result.n_evaluations > 1
         assert result.projected_gradient_inf <= _OPTIMIZER_CONTROL.gtol
+        retained, history, lbfgs = (
+            reml_execution._parameterized_optimizer_workspace_bytes(
+                stream.prepared.n_coef,
+                len(supplied),
+                _OPTIMIZER_CONTROL,
+                _OPTIMIZER_PIRLS_CONTROL,
+            )
+        )
+        assert result.outer_workspace_bytes == 2 * retained + 2 * history + lbfgs
     else:
         reference = evaluate_nb_stream_reml(
             stream,
@@ -715,6 +724,29 @@ def test_nb_optimizer_preflights_retention_and_keeps_accepted_on_failed_candidat
             params,
             maximum_bytes=1,
             pirls_control=_CONTROL,
+        )
+    evaluate.assert_not_called()
+
+    # The pinned free-theta roundoff completion may retain one validated
+    # candidate across later SciPy probes, on top of accepted and active fits.
+    retained, history, lbfgs = reml_execution._parameterized_optimizer_workspace_bytes(
+        stream.prepared.n_coef,
+        len(params),
+        _OPTIMIZER_CONTROL,
+        _OPTIMIZER_PIRLS_CONTROL,
+    )
+    with (
+        patch.object(nb_reml_execution, "evaluate_nb_stream_reml") as evaluate,
+        pytest.raises(MemoryError, match="retention"),
+    ):
+        optimize_nb_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=2 * retained + 2 * history + lbfgs,
+            pin_lambda=True,
+            pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+            control=_OPTIMIZER_CONTROL,
         )
     evaluate.assert_not_called()
 
