@@ -325,6 +325,26 @@ class RBridge:
             return None
         return [int(index) - 1 for index in ind]
 
+    def nb_saturated_likelihood_derivatives(
+        self, y: np.ndarray, weight: np.ndarray, theta: float
+    ) -> np.ndarray:
+        """Return pinned ``nb()$ls`` contractions in log-theta coordinates."""
+        self._require_rpy2()
+        result = self._mgcv.nb().rx2("ls")(
+            self._to_r_vector(y),
+            self._to_r_vector(weight),
+            self._base.log(self._to_r_vector([theta])),
+            1,
+        )
+        return np.asarray(
+            [
+                result.rx2("ls")[0],
+                result.rx2("lsth1")[0],
+                result.rx2("lsth2")[0],
+            ],
+            dtype=np.float64,
+        )
+
     def _fit_rpy2(
         self,
         formula: str,

@@ -7,6 +7,7 @@ from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
@@ -38,6 +39,20 @@ _INITIAL_SP_BATCH_ROWS = 8192
 
 
 @dataclass(frozen=True)
+class CountPrefixPlan:
+    """Reusable NB count metadata prepared once at the CPU→device boundary.
+
+    ``indices`` is dynamic device data; the capacity and integer-domain flag
+    remain static so they key only the small compiled prefix-table shape.
+    """
+
+    indices: jax.Array
+    max_count: int
+    capacity: int
+    integer_counts: bool
+
+
+@dataclass(frozen=True)
 class FittingData:
     """Device data and local penalty algebra for dense fitting.
 
@@ -66,6 +81,7 @@ class FittingData:
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...]
     multi_block_S_local: tuple[tuple[jax.Array, ...], ...]
     max_y: int
+    count_prefix_plan: CountPrefixPlan | None = None
     rank_deficit: int = 0
 
     # Computed once in transformed fitting coordinates at the CPU-to-JAX
@@ -106,6 +122,40 @@ class FittingData:
         # Compatibility metadata historically came from a p-by-p Penalty, so
         # its nullity includes coefficient directions outside this local block.
         null_dims = tuple(setup.X.shape[1] - rank for rank in ranks)
+
+        # Only NB needs count metadata. Keeping max_y neutral for all other
+        # families prevents response maxima from needlessly splitting JIT
+        # cache entries. Fractional NB responses use the exact polygamma
+        # derivative path; they are never rounded into recurrence indices.
+        count_prefix_plan: CountPrefixPlan | None = None
+        max_y = 0
+        if family.family_name == "nb":
+            y_np = np.asarray(setup.y, dtype=np.float64)
+            integer_counts = bool(
+                np.all(np.isfinite(y_np)) and np.all(y_np == np.floor(y_np))
+            )
+            if integer_counts:
+                max_y = int(np.max(y_np)) if y_np.size else 0
+                int64_max = np.iinfo(np.int64).max
+                if max_y > int64_max:
+                    raise ValueError(
+                        "NB count-prefix indices require responses representable "
+                        f"as int64, got maximum count {max_y}."
+                    )
+                capacity = max(1, max_y)  # y_safe=1 is evaluated under where.
+                indices_np = y_np.astype(np.int64)
+            else:
+                capacity = 0
+                indices_np = np.zeros(y_np.shape, dtype=np.int64)
+            count_prefix_plan = CountPrefixPlan(
+                indices=jax.device_put(
+                    jnp.asarray(indices_np, dtype=jnp.int64), device
+                ),
+                max_count=max_y,
+                capacity=capacity,
+                integer_counts=integer_counts,
+            )
+
         return cls(
             X=to_jax(X_np, device=device),
             y=to_jax(setup.y, device=device),
@@ -128,7 +178,8 @@ class FittingData:
             multi_block_ranks=metadata["multi_block_ranks"],
             multi_block_proj_S=metadata["multi_block_proj_S"],
             multi_block_S_local=metadata["multi_block_S_local"],
-            max_y=int(np.max(setup.y)) if len(setup.y) else 0,
+            max_y=max_y,
+            count_prefix_plan=count_prefix_plan,
             rank_deficit=cls._unpenalized_rank_deficit(transformed, X_np),
             beta_init=beta_init,
         )
