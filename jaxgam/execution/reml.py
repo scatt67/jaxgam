@@ -1181,6 +1181,16 @@ def _projected_gradient_for_bounds(
     return projected
 
 
+def _validate_max_step(max_step: float | None) -> None:
+    if max_step is not None and (
+        isinstance(max_step, bool)
+        or not isinstance(max_step, numbers.Real)
+        or not np.isfinite(max_step)
+        or max_step <= 0.0
+    ):
+        raise ValueError("max_step must be finite and positive when supplied.")
+
+
 def _run_parameterized_stream_reml(
     objective: _AcceptedParameterizedTrialObjective[_TrialT],
     params_initial: np.ndarray,
@@ -1194,6 +1204,7 @@ def _run_parameterized_stream_reml(
         _LocalScoreChange | None,
     ]
     | None = None,
+    max_step: float | None = None,
 ) -> _ParameterizedOptimization[_TrialT]:
     """Run the common exact accepted/candidate L-BFGS-B protocol.
 
@@ -1202,6 +1213,8 @@ def _run_parameterized_stream_reml(
     ULP. The optional completion policy retains its already reconverged trial
     across later line-search probes; callers charge that additional ownership.
     """
+    if not _same_rho(np.asarray(params_initial), objective.accepted.params):
+        raise ValueError("Initial parameters do not match the exact accepted trial.")
     if all(
         lower is not None and upper is not None and lower == upper
         for lower, upper in bounds
@@ -1226,6 +1239,7 @@ def _run_parameterized_stream_reml(
         raise ValueError("Stationary completion requires an inner tolerance.")
     if local_score_change is not None and not roundoff_stationary_completion:
         raise ValueError("Local score comparison requires stationary completion.")
+    _validate_max_step(max_step)
     stationary_trial: _TrialT | None = None
     stationary_norm = np.inf
     stationary_raw_tie = False
@@ -1267,22 +1281,72 @@ def _run_parameterized_stream_reml(
             stationary_raw_tie = raw_tie
         return score, gradient
 
-    result = minimize(
-        observe if roundoff_stationary_completion else objective,
-        params_initial,
-        method="L-BFGS-B",
-        jac=True,
-        bounds=bounds,
-        callback=objective.callback,
-        options={
-            "maxiter": control.max_iter,
-            "maxfun": control.maxfun,
-            "maxcor": control.maxcor,
-            "maxls": control.maxls,
-            "gtol": control.gtol,
-            "ftol": control.ftol,
-        },
-    )
+    total_iterations = 0
+    windows = 0
+    while True:
+        center = np.asarray(objective.accepted.params, dtype=np.float64)
+        if max_step is None:
+            local_bounds = bounds
+        else:
+            # Pinned gam.fit3.r:newton caps each log-parameter proposal at
+            # maxNstep=5 and halves unsuccessful trials. A local L-BFGS-B
+            # window enforces the same step scale without evaluating an
+            # ill-conditioned distant derivative. Boundary optima reopen a
+            # fresh window from the exact accepted trial.
+            local_bounds = [
+                (
+                    max(lower, value - max_step)
+                    if lower is not None
+                    else value - max_step,
+                    min(upper, value + max_step)
+                    if upper is not None
+                    else value + max_step,
+                )
+                if not (lower is not None and upper is not None and lower == upper)
+                else (lower, upper)
+                for value, (lower, upper) in zip(center, bounds, strict=True)
+            ]
+        result = minimize(
+            observe if roundoff_stationary_completion else objective,
+            center,
+            method="L-BFGS-B",
+            jac=True,
+            bounds=local_bounds,
+            callback=objective.callback,
+            options={
+                "maxiter": max(1, control.max_iter - total_iterations),
+                "maxfun": max(1, control.maxfun - objective.n_evaluations + 1),
+                "maxcor": control.maxcor,
+                "maxls": control.maxls,
+                "gtol": control.gtol,
+                "ftol": control.ftol,
+            },
+        )
+        windows += 1
+        total_iterations += int(result.nit)
+        result_params = np.asarray(result.x, dtype=np.float64)
+        if not _same_rho(result_params, objective.accepted.params):
+            raise RuntimeError(
+                "L-BFGS-B returned a point without a matching accepted exact "
+                "streamed trial; no optimization result is available."
+            )
+        gradient = np.asarray(objective.accepted.gradient, dtype=np.float64)
+        projected = _projected_gradient_for_bounds(result_params, gradient, bounds)
+        projected_gradient_inf = float(np.max(np.abs(projected)))
+        local_projected = _projected_gradient_for_bounds(
+            result_params, gradient, local_bounds
+        )
+        local_gradient_inf = float(np.max(np.abs(local_projected)))
+        if not (
+            max_step is not None
+            and bool(result.success)
+            and local_gradient_inf <= control.gtol
+            and projected_gradient_inf > control.gtol
+            and not _same_rho(result_params, center)
+            and total_iterations < control.max_iter
+            and objective.n_evaluations < control.maxfun
+        ):
+            break
     result_params = np.asarray(result.x, dtype=np.float64)
     if not _same_rho(result_params, objective.accepted.params):
         raise RuntimeError(
@@ -1295,6 +1359,8 @@ def _run_parameterized_stream_reml(
     projected_gradient_inf = float(np.max(np.abs(projected)))
     converged = bool(result.success) and projected_gradient_inf <= control.gtol
     message = str(result.message)
+    if max_step is not None:
+        message = f"{message}; {windows} source step window(s)."
     if (
         roundoff_stationary_completion
         and bool(result.success)
@@ -1413,7 +1479,7 @@ def _run_parameterized_stream_reml(
         converged=converged,
         message=message,
         status=int(result.status),
-        n_iter=int(result.nit),
+        n_iter=total_iterations,
         n_evaluations=objective.n_evaluations,
         n_accepted=objective.n_accepted,
         cumulative_source_scans=objective.cumulative_source_scans,
@@ -1785,6 +1851,7 @@ def optimize_regular_stream_reml(
     pirls_control: StreamPIRLSControl | None = None,
     control: StreamREMLControl | None = None,
     initial_coefficients: np.ndarray | None = None,
+    max_step: float | None = None,
     device: jax.Device | None = None,
 ) -> RegularStreamREMLOptimization:
     """Optimize the exact regular source objective with bounded L-BFGS-B.
@@ -1795,6 +1862,7 @@ def optimize_regular_stream_reml(
     point owns a fully reconverged source trial.
     """
     reml_control = StreamREMLControl() if control is None else control
+    _validate_max_step(max_step)
     if (
         not isinstance(maximum_bytes, numbers.Integral)
         or isinstance(maximum_bytes, bool)
@@ -1871,11 +1939,13 @@ def optimize_regular_stream_reml(
         if pin_lambda
         else [(lower, upper)] * n_lambda
     ) + [(None, None)] * (n_params - n_lambda)
+    step_options = {} if max_step is None else {"max_step": max_step}
     optimized = _run_parameterized_stream_reml(
         objective,
         params_initial,
         bounds,
         reml_control,
+        **step_options,
     )
     completion = None
     if not family.scale_known and (pin_lambda or n_lambda == 0):

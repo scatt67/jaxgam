@@ -249,6 +249,19 @@ class GAMInferenceResult(_FitDiagnostics):
 
 
 @dataclass(frozen=True)
+class StreamExactOptimizerDiagnostics:
+    """Bounded accepted-state diagnostics for exact streamed REML."""
+
+    status: int
+    n_evaluations: int
+    n_accepted: int
+    projected_gradient_inf: float
+    accepted_score_history: tuple[float, ...]
+    startup_source_scans: int
+    startup_batches_scanned: int
+
+
+@dataclass(frozen=True)
 class GAMPredictionResult:
     """Small, picklable result surface for bounded new-data prediction.
 
@@ -277,6 +290,9 @@ class GAMPredictionResult:
     batches_scanned: int | None = field(default=None, kw_only=True)
     known_workspace_bytes: int | None = field(default=None, kw_only=True)
     optimizer_diagnostics: EFSOptimizerDiagnostics | None = field(
+        default=None, kw_only=True
+    )
+    exact_optimizer_diagnostics: StreamExactOptimizerDiagnostics | None = field(
         default=None, kw_only=True
     )
     n: int
@@ -401,6 +417,7 @@ class GAMPredictionResult:
         source_scans: int | None = None,
         batches_scanned: int | None = None,
         known_workspace_bytes: int | None = None,
+        exact_optimizer_diagnostics: StreamExactOptimizerDiagnostics | None = None,
     ) -> GAMPredictionResult:
         """Build compact prediction state directly from row-free stream state.
 
@@ -612,6 +629,7 @@ class GAMPredictionResult:
             ),
             known_workspace_bytes=known_workspace_bytes,
             optimizer_diagnostics=optimizer_diagnostics,
+            exact_optimizer_diagnostics=exact_optimizer_diagnostics,
             n=prepared.n_obs,
             _batch_rows=control.batch_rows,
         )

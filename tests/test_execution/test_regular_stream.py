@@ -22,7 +22,7 @@ from jaxgam.execution.regular_stream import (
 )
 from jaxgam.execution.signed_qr import solve_signed_qr
 from jaxgam.execution.stream import StreamPIRLSControl
-from jaxgam.families.standard import Gamma, Poisson
+from jaxgam.families.standard import Gamma, Gaussian, Poisson
 from jaxgam.fitting.data import PreparedFittingMetadata
 from jaxgam.fitting.family_execution import (
     FamilyExecutionLineage,
@@ -89,6 +89,36 @@ def _fixture(link="identity"):
     prepared = prepare_model(parse_formula("y ~ x"), source, family=family)
     counted = _CountedSource(source)
     return StreamDesign(prepared, counted), family, data, w, off
+
+
+def test_gaussian_identity_strictly_additive_accepts_first_source_step() -> None:
+    """Pinned gam.fit3 accepts one valid additive solve before gradient tests."""
+    x = np.linspace(-0.7, 0.8, 83)
+    data = pd.DataFrame({"x": x, "y": 0.5 + 0.15 * x + 0.025 * x * x})
+    control = StreamPIRLSControl(
+        batch_rows=17, solver_policy="qr", tol=1e-9, max_iter=5
+    )
+    for link, expected_converged in (("identity", True), ("sqrt", False)):
+        family = Gaussian(link)
+        source = DataFrameRowSource(data, response="y")
+        prepared = prepare_model(
+            parse_formula('y~s(x,bs="cr",k=6)'), source, family=family
+        )
+        stream = StreamDesign(prepared, _CountedSource(source))
+        fitted = fit_regular_streamed_pirls(
+            stream,
+            family,
+            np.array([24.0]),
+            maximum_bytes=10_000_000,
+            score_scale=0.001,
+            control=control,
+        )
+        assert family.execution_capabilities().single_step_pirls is (link == "identity")
+        assert fitted.state.converged is expected_converged
+        assert fitted.state.n_iter == (1 if expected_converged else control.max_iter)
+        assert not fitted.state.line_search_failed
+        assert np.isfinite(fitted.state.stationarity)
+        assert stream.source.scans == fitted.state.source_scans
 
 
 def test_explicit_source_null_rejects_complex_before_scanning() -> None:

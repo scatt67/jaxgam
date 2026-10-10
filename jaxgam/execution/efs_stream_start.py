@@ -11,8 +11,10 @@ from jaxgam.execution.efs_provider import EFSFitRequest
 from jaxgam.execution.efs_stream_provider import NBStreamEFSProvider
 from jaxgam.execution.null_coefficient import project_null_coefficients
 from jaxgam.execution.qr import qr_update
-from jaxgam.execution.stream import _source_batches
+from jaxgam.execution.stream import StreamPIRLSControl, _source_batches
+from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
+from jaxgam.fitting.family_execution import FamilyExecutionLineage
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.fitting_prepare import initial_log_sp_from_diagonal
 
@@ -99,7 +101,39 @@ class EFSStreamStartup:
         )
 
 
-def prepare_stream_efs_start(provider: NBStreamEFSProvider) -> EFSStreamStartup:
+@dataclass(frozen=True)
+class StreamREMLStartupContext:
+    """Minimal source and family provenance for exact-REML starts."""
+
+    stream: StreamDesign
+    family: ExponentialFamily
+    lineage: FamilyExecutionLineage
+    control: StreamPIRLSControl
+    maximum_bytes: int
+    provider_bytes: int = 0
+
+
+def prepare_stream_reml_start(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    *,
+    maximum_bytes: int,
+    batch_rows: int,
+) -> EFSStreamStartup:
+    """Use pinned initial.spg/get.null.coef starts without an EFS controller."""
+    context = StreamREMLStartupContext(
+        stream=stream,
+        family=family,
+        lineage=FamilyExecutionLineage.from_prepared(stream.prepared, family),
+        control=StreamPIRLSControl(batch_rows=batch_rows, solver_policy="qr"),
+        maximum_bytes=maximum_bytes,
+    )
+    return prepare_stream_efs_start(context)
+
+
+def prepare_stream_efs_start(
+    provider: NBStreamEFSProvider | StreamREMLStartupContext,
+) -> EFSStreamStartup:
     """Reduce pinned initial.spg/get.null.coef without materializing X or y.
 
     PUBLIC-coordinate diagonal weighting precedes the shared initial.sp

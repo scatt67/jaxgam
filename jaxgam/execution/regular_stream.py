@@ -754,6 +754,16 @@ def fit_regular_streamed_pirls(
         if not accepted:
             line_search_failed = True
             break
+        if capabilities.single_step_pirls:
+            # Pinned gam.fit3.r:227-228,445: a strictly additive working
+            # system is solved in one accepted step. In particular the
+            # normal-equation gradient check is not an extra stopping gate.
+            beta = candidate
+            current_deviance = candidate_deviance
+            old_pdev = candidate_pdev
+            history.append(old_pdev)
+            converged = True
+            break
         residual = G @ candidate + penalty_apply(candidate) - rhs
         if not np.all(np.isfinite(residual)):
             raise FloatingPointError("regular accepted-state gradient is nonfinite")

@@ -230,6 +230,11 @@ class Gaussian(ExponentialFamily):
     def execution_capabilities(self) -> FamilyExecutionCapabilities:
         """Expose source Fletcher reporting for noncanonical Gaussian links."""
         capabilities = super().execution_capabilities()
+        if self.is_canonical:
+            # gam.fit3's strictly.additive branch accepts the first valid
+            # Gaussian/identity coefficient solve without its later gradient
+            # and penalized-deviance stopping tests.
+            capabilities = replace(capabilities, single_step_pirls=True)
         if not self.is_canonical:
             capabilities = replace(capabilities, regular_fletcher_scale=True)
         return capabilities

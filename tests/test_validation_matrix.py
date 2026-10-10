@@ -27,6 +27,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -62,6 +63,102 @@ from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 # Unknown-scale score scales are judged by pinned R's own matched-state
 # stationarity instead (see _matched_r_score_scale_checks).
 _PR76_KNOWN_BOUNDARY_CASES = frozenset({(Poisson, "identity"), (Binomial, "log")})
+
+
+# PR8.3 field eligibility is named per generated model and the four-pass audit.
+# Every score remains STRICT. See the live RBridge comparison below.
+_PR83_REGULAR_MODERATE_FIELDS = {
+    ("gaussian", "identity"): frozenset(
+        ["coefficients", "score_scale", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("gaussian", "log"): frozenset(["coefficients", "smoothing"]),
+    ("gaussian", "inverse"): frozenset(
+        ["coefficients", "score_scale", "smoothing", "edf", "link_se"]
+    ),
+    ("gaussian", "sqrt"): frozenset(["smoothing"]),
+    ("gaussian", "logit"): frozenset(["coefficients", "smoothing"]),
+    ("gaussian", "probit"): frozenset(["coefficients", "smoothing"]),
+    ("gaussian", "cloglog"): frozenset(["score_scale", "smoothing"]),
+    ("gaussian", "inverse_squared"): frozenset(
+        ["coefficients", "score_scale", "smoothing", "edf", "link_se"]
+    ),
+    ("gamma", "identity"): frozenset(
+        ["coefficients", "score_scale", "smoothing", "edf", "link_se"]
+    ),
+    ("gamma", "log"): frozenset(["coefficients", "score_scale", "smoothing", "edf"]),
+    ("gamma", "inverse"): frozenset(
+        [
+            "coefficients",
+            "scale",
+            "score_scale",
+            "deviance",
+            "smoothing",
+            "edf",
+            "fitted_values",
+            "link_se",
+        ]
+    ),
+    ("gamma", "sqrt"): frozenset(["score_scale", "smoothing"]),
+    ("gamma", "logit"): frozenset(["coefficients", "smoothing", "edf", "link_se"]),
+    ("gamma", "probit"): frozenset(["coefficients", "smoothing", "edf", "link_se"]),
+    ("gamma", "cloglog"): frozenset(["coefficients", "score_scale", "smoothing"]),
+    ("poisson", "identity"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("poisson", "log"): frozenset(["coefficients", "smoothing"]),
+    ("poisson", "inverse"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("poisson", "sqrt"): frozenset(
+        ["coefficients", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("poisson", "inverse_squared"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "identity"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "log"): frozenset(["smoothing", "link_se"]),
+    ("binomial", "inverse"): frozenset(
+        ["coefficients", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "sqrt"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "logit"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "probit"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "cloglog"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "inverse_squared"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+}
+_PR83_NB_MODERATE_FIELDS = {
+    (True, False, "identity"): frozenset(
+        ["coefficients", "deviance", "edf", "fitted_values", "link_se", "smoothing"]
+    ),
+    (True, False, "sqrt"): frozenset(["edf", "fitted_values", "link_se", "smoothing"]),
+    (True, True, "log"): frozenset(
+        ["theta", "coefficients", "edf", "fitted_values", "link_se", "smoothing"]
+    ),
+    (True, True, "sqrt"): frozenset(
+        [
+            "theta",
+            "coefficients",
+            "deviance",
+            "edf",
+            "fitted_values",
+            "link_se",
+            "smoothing",
+        ]
+    ),
+}
+_PR83_ZERO_PENALTY_MODERATE_FIELDS = frozenset({"score_scale"})
 
 
 def _public_fixed_regular_case(family_class, link: str):
@@ -185,6 +282,492 @@ def test_pr76_nb_reviewed_case_rejects_changed_data_or_mode() -> None:
     changed_model = GAM('y~s(x,bs="cr",k=6)', family=family, sp=[0.5], control=control)
     with pytest.raises(AssertionError):
         _assert_pr76_nb_case(source, changed_model, "identity")
+
+
+def _public_exact_regular_case(family_class, _link: str):
+    """Generate the same nonlinear, noncanonical release rows in both runtimes."""
+    n = 96
+    x = np.linspace(-0.75, 0.75, n)
+    row = np.arange(n)
+    weight = 0.6 + 0.15 * (row % 5)
+    weight[[9, 47]] = 0.0
+    offset = 0.015 * np.sin(3.0 * x)
+    rng = np.random.default_rng(83076)
+    noise = rng.normal(0.0, 0.015, n)
+    y_real = np.clip(
+        0.5 + 0.20 * np.sin(5.3 * x) + 0.07 * np.cos(10.1 * x) + noise,
+        0.08,
+        0.92,
+    )
+    probability = np.clip(
+        0.46 + 0.35 * np.sin(5.3 * x) + 0.08 * np.cos(10.1 * x),
+        0.06,
+        0.94,
+    )
+    y_discrete = (rng.uniform(size=n) < probability).astype(float)
+    if family_class is Binomial:
+        y = np.round(20.0 * probability) / 20.0
+        weight = np.full(n, 20.0)
+        weight[[9, 47]] = 0.0
+    elif family_class is Poisson:
+        y = y_discrete
+    else:
+        y = y_real
+    return pd.DataFrame({"x": x, "y": y}), weight, offset
+
+
+def _assert_pr83_regular_case(
+    family_class, link, source, model, *, smooth: bool = True
+) -> None:
+    """Bind approved fields to generated rows and exact public controls."""
+    data, weight, offset = _public_exact_regular_case(family_class, link)
+    expected = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    assert source.n_rows == expected.n_rows == 96
+    assert source.fingerprint() == expected.fingerprint()
+    assert type(model.family) is family_class
+    assert type(model.family.link) is type(family_class(link).link)
+    assert model.formula == ('y~s(x,bs="cr",k=6)' if smooth else "y~x")
+    assert model.optimizer == "newton"
+    assert model.method == "REML"
+    assert model.sp is None
+    assert model.control == FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=17,
+        uncertainty="fisher",
+    )
+
+
+def _assert_pr83_nb_case(source, model, link, *, estimated, smooth) -> None:
+    """Bind reviewed NB fields to its generated theta/penalty profile."""
+    data, weight, offset = nb_optimizer_case_data()
+    expected = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    assert source.n_rows == expected.n_rows == 180
+    assert source.fingerprint() == expected.fingerprint()
+    assert type(model.family) is NegativeBinomial
+    assert model.family.n_theta == int(estimated)
+    assert type(model.family.link) is type(NegativeBinomial(link=link).link)
+    np.testing.assert_array_equal(model.family.get_theta(transformed=True), [2.7])
+    assert model.formula == ('y~s(x,bs="cr",k=8)' if smooth else "y~x")
+    assert model.optimizer == "newton"
+    assert model.method == "REML"
+    assert model.sp is None
+    assert model.control == FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=17,
+        uncertainty="fisher",
+    )
+
+
+def test_pr83_regular_tolerance_guard_rejects_data_model_control_changes() -> None:
+    data, weight, offset = _public_exact_regular_case(Gamma, "log")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=17,
+        uncertainty="fisher",
+    )
+    model = GAM('y~s(x,bs="cr",k=6)', family=Gamma("log"), control=control)
+    _assert_pr83_regular_case(Gamma, "log", source, model)
+    changed = data.copy()
+    changed.loc[0, "y"] = np.nextafter(changed.loc[0, "y"], np.inf)
+    with pytest.raises(AssertionError):
+        _assert_pr83_regular_case(
+            Gamma,
+            "log",
+            DataFrameRowSource(changed, response="y", weights=weight, offset=offset),
+            model,
+        )
+    for alternative in (
+        GAM('y~s(x,bs="cr",k=7)', family=Gamma("log"), control=control),
+        GAM(
+            'y~s(x,bs="cr",k=6)',
+            family=Gamma("log"),
+            control=replace(control, batch_rows=18),
+        ),
+        GAM('y~s(x,bs="cr",k=6)', family=Gamma("identity"), control=control),
+    ):
+        with pytest.raises(AssertionError):
+            _assert_pr83_regular_case(Gamma, "log", source, alternative)
+
+
+def test_pr83_nb_tolerance_guard_rejects_data_theta_mode_and_control() -> None:
+    data, weight, offset = nb_optimizer_case_data()
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=17,
+        uncertainty="fisher",
+    )
+    formula = 'y~s(x,bs="cr",k=8)'
+    model = GAM(
+        formula,
+        family=NegativeBinomial(theta=2.7, link="sqrt"),
+        control=control,
+    )
+    _assert_pr83_nb_case(source, model, "sqrt", estimated=True, smooth=True)
+    changed_weight = weight.copy()
+    changed_weight[1] = np.nextafter(changed_weight[1], np.inf)
+    with pytest.raises(AssertionError):
+        _assert_pr83_nb_case(
+            DataFrameRowSource(
+                data, response="y", weights=changed_weight, offset=offset
+            ),
+            model,
+            "sqrt",
+            estimated=True,
+            smooth=True,
+        )
+    for alternative in (
+        GAM(
+            formula,
+            family=NegativeBinomial(theta=2.7, fixed=True, link="sqrt"),
+            control=control,
+        ),
+        GAM(
+            formula,
+            family=NegativeBinomial(theta=2.7, link="sqrt"),
+            control=replace(control, batch_rows=18),
+        ),
+        GAM("y~x", family=NegativeBinomial(theta=2.7, link="sqrt"), control=control),
+    ):
+        with pytest.raises(AssertionError):
+            _assert_pr83_nb_case(
+                source, alternative, "sqrt", estimated=True, smooth=True
+            )
+
+
+def _public_exact_regular_pinned_r(
+    _tmp_path: Path,
+    data: pd.DataFrame,
+    weight: np.ndarray,
+    offset: np.ndarray,
+    family_name: str,
+    link: str,
+    *,
+    smooth: bool = True,
+) -> dict[str, np.ndarray | float | bool]:
+    """Use the live pinned-R bridge for one regular public release cell."""
+    return RBridge(mode="rpy2").public_exact_reml_fit(
+        data, weight, offset, family_name, link, smooth=smooth
+    )
+
+
+def _public_exact_nb_pinned_r(
+    _tmp_path: Path,
+    data: pd.DataFrame,
+    weight: np.ndarray,
+    offset: np.ndarray,
+    link: str,
+    *,
+    estimated: bool,
+    smooth: bool,
+) -> dict[str, np.ndarray | float | bool]:
+    """Use the live pinned-R bridge for one NB public release cell."""
+    return RBridge(mode="rpy2").public_exact_reml_fit(
+        data,
+        weight,
+        offset,
+        "nb",
+        link,
+        smooth=smooth,
+        estimated_theta=estimated,
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("family_class", [Gaussian, Gamma, Poisson, Binomial])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "identity",
+        "log",
+        "inverse",
+        "sqrt",
+        "logit",
+        "probit",
+        "cloglog",
+        "inverse_squared",
+    ],
+)
+def test_public_estimated_regular_all_links_pinned_r(
+    tmp_path: Path, family_class, link: str
+) -> None:
+    """Public exact selection retains each supported R family/link result."""
+    data, weight, offset = _public_exact_regular_case(family_class, link)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    family = family_class(link)
+    model = GAM(
+        'y~s(x,bs="cr",k=6)',
+        family=family,
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+    if family_class is Poisson and link in {"logit", "probit", "cloglog"}:
+        with pytest.raises(ValueError, match="startup mustart predictor"):
+            model.fit(source, result="prediction")
+        r_error = pytest.importorskip("rpy2.rinterface_lib.embedded").RRuntimeError
+        with pytest.raises(r_error, match=r"out of range|missing value"):
+            _public_exact_regular_pinned_r(
+                tmp_path, data, weight, offset, "poisson", link
+            )
+        return
+
+    moderate_fields = _PR83_REGULAR_MODERATE_FIELDS.get(
+        (family.family_name.lower(), link), frozenset()
+    )
+    if moderate_fields:
+        _assert_pr83_regular_case(family_class, link, source, model)
+    result = model.fit(source, result="prediction")
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, family.family_name.lower(), link
+    )
+    fitted = result.predict(data[["x"]], offset=offset)
+    _, link_se = result.predict(
+        data[["x"]], pred_type="link", se_fit=True, offset=offset
+    )
+    assert expected["inner_converged"]
+    assert result.execution_route == "stream_exact_reml_qr"
+    assert result.lambda_strategy == "exact_reml"
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.source_scans >= 2 + result.exact_optimizer_diagnostics.n_evaluations
+    assert result.known_workspace_bytes <= model.control.memory_budget_bytes
+    assert result.n == source.n_rows
+    assert result.deviance >= -STRICT.atol
+    checks = _AssertCollector()
+    for name, actual in (
+        ("coefficients", result.coefficients),
+        ("score", result.score),
+        ("reported scale", result.scale),
+        ("score scale", result.score_scale),
+        ("deviance", result.deviance),
+        ("smoothing", result.smoothing_params[0]),
+        ("total EDF", result.edf_total),
+        ("fitted values", fitted),
+        ("link SE", link_se),
+    ):
+        field = {
+            "reported scale": "scale",
+            "score scale": "score_scale",
+            "smoothing": "smoothing",
+            "total EDF": "edf",
+            "fitted values": "fitted_values",
+            "link SE": "link_se",
+        }.get(name, name)
+        tolerance = MODERATE if field in moderate_fields else STRICT
+        checks.check(
+            name,
+            lambda actual=actual, field=field, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
+                )
+            ),
+        )
+    checks.raise_if_any(f"public estimated {family.family_name}/{link} R parity")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("family_class", [Gaussian, Gamma])
+def test_public_exact_zero_penalty_unknown_scale_pinned_r(
+    tmp_path: Path, family_class
+) -> None:
+    """An unpenalized unknown-scale model still selects its score scale."""
+    data, weight, offset = _public_exact_regular_case(family_class, "identity")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    model = GAM(
+        "y~x",
+        family=family_class("identity"),
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+    _assert_pr83_regular_case(family_class, "identity", source, model, smooth=False)
+    result = model.fit(source, result="prediction")
+    expected = _public_exact_regular_pinned_r(
+        tmp_path,
+        data,
+        weight,
+        offset,
+        family_class.__name__.lower(),
+        "identity",
+        smooth=False,
+    )
+    assert result.converged
+    assert result.lambda_strategy == "exact_reml"
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.startup_source_scans == 0
+    assert result.smoothing_params.size == 0
+    checks = _AssertCollector()
+    for name, actual in (
+        ("score", result.score),
+        ("scale", result.scale),
+        ("score scale", result.score_scale),
+        ("coefficients", result.coefficients),
+        ("fitted values", result.predict(data[["x"]], offset=offset)),
+    ):
+        field = {
+            "score scale": "score_scale",
+            "fitted values": "fitted_values",
+        }.get(name, name)
+        tolerance = MODERATE if field in _PR83_ZERO_PENALTY_MODERATE_FIELDS else STRICT
+        checks.check(
+            name,
+            lambda actual=actual, field=field, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
+                )
+            ),
+        )
+    checks.raise_if_any(f"zero-penalty {family_class.__name__} exact selection")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_exact_original_gaussian_recovery_case_pinned_r(
+    tmp_path: Path,
+) -> None:
+    """The original flat-score source case must finish its coefficient fit."""
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    stream = _regular(Gaussian())
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    data = pd.DataFrame({"x": np.asarray(batch.columns["x"]), "y": batch.y})
+    weight = np.asarray(batch.weight)
+    offset = np.asarray(batch.offset)
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, "gaussian", "identity"
+    )
+    result = GAM(
+        'y~s(x,bs="cr",k=6)',
+        family=Gaussian(),
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=11,
+            uncertainty="fisher",
+        ),
+    ).fit(
+        DataFrameRowSource(data, response="y", weights=weight, offset=offset),
+        result="prediction",
+    )
+    assert expected["inner_converged"]
+    assert expected["outer_converged"]
+    assert result.converged
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-6
+    assert result.source_scans > result.exact_optimizer_diagnostics.startup_source_scans
+    assert np.isfinite(result.score)
+    assert np.all(np.isfinite(result.coefficients))
+    assert np.all(np.isfinite(result.predict(data[["x"]], offset=offset)))
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
+@pytest.mark.parametrize("estimated", [False, True])
+@pytest.mark.parametrize("smooth", [False, True])
+def test_public_estimated_nb_theta_modes_pinned_r(
+    tmp_path: Path, link: str, estimated: bool, smooth: bool
+) -> None:
+    """Public NB selection jointly retains theta with or without penalties."""
+    data, weight, offset = nb_optimizer_case_data()
+    family = NegativeBinomial(theta=2.7, fixed=not estimated, link=link)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    model = GAM(
+        'y~s(x,bs="cr",k=8)' if smooth else "y~x",
+        family=family,
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+    moderate_fields = _PR83_NB_MODERATE_FIELDS.get(
+        (smooth, estimated, link), frozenset()
+    )
+    if moderate_fields:
+        _assert_pr83_nb_case(source, model, link, estimated=estimated, smooth=smooth)
+    result = model.fit(source, result="prediction")
+    expected = _public_exact_nb_pinned_r(
+        tmp_path, data, weight, offset, link, estimated=estimated, smooth=smooth
+    )
+    fitted = result.predict(data[["x"]], offset=offset)
+    _, link_se = result.predict(
+        data[["x"]], pred_type="link", se_fit=True, offset=offset
+    )
+    assert expected["inner_converged"]
+    if not result.converged:
+        assert expected["outer_converged"]
+        assert "projected gradient" in result.convergence_info
+        assert result.exact_optimizer_diagnostics is not None
+        assert result.exact_optimizer_diagnostics.projected_gradient_inf > 1e-9
+    assert result.lambda_strategy == (
+        "exact_reml_no_parameters" if not smooth and not estimated else "exact_reml"
+    )
+    assert result.execution_route == "stream_exact_reml_qr"
+    if smooth or estimated:
+        assert result.exact_optimizer_diagnostics is not None
+        assert (
+            result.source_scans
+            > result.exact_optimizer_diagnostics.startup_source_scans
+        )
+    assert result.known_workspace_bytes <= model.control.memory_budget_bytes
+    if estimated:
+        assert result.theta is not None
+        assert result.family.n_theta == 1
+        np.testing.assert_array_equal(
+            result.family.get_theta(transformed=True), [result.theta]
+        )
+    else:
+        assert result.theta is None
+    checks = _AssertCollector()
+    for name, actual in (
+        ("theta", result.family.get_theta(transformed=True)[0]),
+        ("coefficients", result.coefficients),
+        ("score", result.score),
+        ("scale", result.scale),
+        ("deviance", result.deviance),
+        ("EDF", result.edf_total),
+        ("fitted values", fitted),
+        ("link SE", link_se),
+    ):
+        field = {
+            "EDF": "edf",
+            "fitted values": "fitted_values",
+            "link SE": "link_se",
+        }.get(name, name)
+        tolerance = MODERATE if field in moderate_fields else STRICT
+        checks.check(
+            name,
+            lambda actual=actual, field=field, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
+                )
+            ),
+        )
+    if smooth:
+        smoothing_tolerance = MODERATE if "smoothing" in moderate_fields else STRICT
+        checks.check(
+            "smoothing",
+            lambda: np.testing.assert_allclose(
+                result.smoothing_params,
+                [expected["smoothing"]],
+                rtol=smoothing_tolerance.rtol,
+                atol=smoothing_tolerance.atol,
+            ),
+        )
+    else:
+        np.testing.assert_array_equal(result.smoothing_params, [])
+    checks.raise_if_any(f"public estimated NB/{link} {estimated=} {smooth=}")
 
 
 @pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")

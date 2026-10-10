@@ -891,3 +891,19 @@ def test_nb_optimizer_rejects_non_boolean_pin_lambda_before_trial(
             pirls_control=_CONTROL,
         )
     evaluate.assert_not_called()
+
+
+@pytest.mark.parametrize("max_step", [0.0, np.inf, True])
+def test_nb_optimizer_rejects_invalid_step_window_before_source_scan(
+    max_step,
+) -> None:
+    stream, family, initial = _optimizer_case("log", estimated=True)
+    with pytest.raises(ValueError, match="max_step must be finite and positive"):
+        optimize_nb_stream_reml(
+            stream,
+            family,
+            initial,
+            maximum_bytes=_OPTIMIZER_MAXIMUM_BYTES,
+            max_step=max_step,
+        )
+    assert stream.source.scans == 0

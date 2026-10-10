@@ -633,6 +633,119 @@ def test_regular_stream_reml_optimizer_preserves_joint_scale_and_bounds_rho_only
     assert result.required_bytes < 1_000_000
 
 
+def test_regular_stream_reml_step_windows_reopen_from_exact_accepted_trial(
+    monkeypatch,
+) -> None:
+    evaluated: list[float] = []
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        rho = float(np.asarray(params)[0])
+        evaluated.append(rho)
+        return SimpleNamespace(
+            params=np.asarray(params).copy(),
+            score=jnp.array((rho - 12.0) ** 2),
+            gradient=jnp.array([2.0 * (rho - 12.0)]),
+            source_scans=2,
+            batches_scanned=4,
+            source_fingerprint="source",
+            workspace=SimpleNamespace(required_bytes=128),
+        )
+
+    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(
+            fitting=SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=1)),
+            n_coef=2,
+        ),
+    )
+    result = optimize_regular_stream_reml(
+        stream,
+        SimpleNamespace(scale_known=True),
+        np.array([0.0]),
+        maximum_bytes=1_000_000,
+        max_step=5.0,
+    )
+    assert result.converged
+    assert result.message.endswith("3 source step window(s).")
+    np.testing.assert_allclose(result.trial.params, [12.0], atol=1e-10)
+    assert max(evaluated) <= 15.0
+    assert result.cumulative_source_scans == 2 * len(evaluated)
+    assert result.cumulative_batches_scanned == 4 * len(evaluated)
+    assert result.n_evaluations == len(evaluated)
+    assert result.n_accepted >= 3
+    assert result.required_bytes < 1_000_000
+
+
+def test_regular_stream_reml_roundoff_window_stalls_truthfully(monkeypatch) -> None:
+    calls = 0
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        return SimpleNamespace(
+            params=np.asarray(params).copy(),
+            score=jnp.array(1.0),
+            gradient=jnp.array([1.0]),
+            source_scans=2,
+            batches_scanned=4,
+            source_fingerprint="source",
+            workspace=SimpleNamespace(required_bytes=128),
+        )
+
+    def stationary_on_rounded_window(_objective, params, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert kwargs["bounds"] == [(40.0, 40.0)]
+        return SimpleNamespace(
+            x=np.asarray(params),
+            success=True,
+            message="local projected gradient",
+            status=0,
+            nit=0,
+        )
+
+    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", stationary_on_rounded_window)
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(
+            fitting=SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=1)),
+            n_coef=2,
+        ),
+    )
+    result = optimize_regular_stream_reml(
+        stream,
+        SimpleNamespace(scale_known=True),
+        np.array([40.0]),
+        maximum_bytes=1_000_000,
+        max_step=1e-300,
+    )
+    assert calls == 1
+    assert not result.converged
+    assert result.projected_gradient_inf == 1.0
+    assert result.n_evaluations == 1
+    assert result.cumulative_source_scans == 2
+
+
+@pytest.mark.parametrize("max_step", [0.0, np.inf, True])
+def test_regular_stream_reml_step_window_rejects_invalid_before_source_scan(
+    max_step,
+) -> None:
+    stream = SimpleNamespace(
+        prepared=SimpleNamespace(
+            fitting=SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=1)),
+            n_coef=2,
+        ),
+    )
+    with pytest.raises(ValueError, match="max_step must be finite and positive"):
+        optimize_regular_stream_reml(
+            stream,
+            SimpleNamespace(scale_known=True),
+            np.array([0.0]),
+            maximum_bytes=1_000_000,
+            max_step=max_step,
+        )
+
+
 @pytest.mark.usefixtures("r_bridge")
 @pytest.mark.parametrize(
     ("family_class", "link"),
@@ -921,8 +1034,10 @@ def test_regular_stream_reml_optimizer_does_not_accept_failed_trial(
     assert objective.cumulative_batches_scanned == 12
 
 
+@pytest.mark.parametrize("max_step", [None, 5.0])
 def test_regular_stream_reml_optimizer_keeps_accepted_on_line_search_failure(
     monkeypatch,
+    max_step,
 ) -> None:
     initial = SimpleNamespace(
         params=np.array([0.0]),
@@ -972,6 +1087,7 @@ def test_regular_stream_reml_optimizer_keeps_accepted_on_line_search_failure(
         SimpleNamespace(scale_known=True),
         np.array([0.0]),
         maximum_bytes=1_000_000,
+        max_step=max_step,
     )
     assert result.trial is initial
     assert not result.converged

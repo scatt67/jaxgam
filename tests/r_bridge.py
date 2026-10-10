@@ -4232,6 +4232,97 @@ class RBridge:
         if not ok:
             raise RBridgeError(f"Pinned EFS oracle unavailable: {reason}")
 
+    def public_exact_reml_fit(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+        *,
+        smooth: bool = True,
+        estimated_theta: bool = False,
+    ) -> dict[str, Any]:
+        """Fit the public cubic or linear REML model in live pinned mgcv.
+
+        Both regular and NB release cells use the same source-matched Newton
+        controls and uncertainty.
+        """
+        self._require_rpy2()
+        if family_name not in {"gaussian", "gamma", "poisson", "binomial", "nb"}:
+            raise ValueError(f"Unsupported public exact R family: {family_name}")
+        if len(data) != len(weight) or len(data) != len(offset):
+            raise ValueError("Public exact R rows, weights and offsets differ.")
+        ro = self._ro
+        source_link = "1/mu^2" if link == "inverse_squared" else link
+        if family_name == "nb":
+            family = self._mgcv.nb(
+                theta=-2.7 if estimated_theta else 2.7, link=source_link
+            )
+        else:
+            constructors = {
+                "gaussian": self._stats.gaussian,
+                "gamma": self._stats.Gamma,
+                "poisson": self._stats.poisson,
+                "binomial": self._stats.binomial,
+            }
+            family = constructors[family_name](link=source_link)
+        formula = (
+            "y ~ x"
+            if not smooth
+            else 'y ~ s(x, bs="cr", k=8)'
+            if family_name == "nb"
+            else 'y ~ s(x, bs="cr", k=6)'
+        )
+        r_data = self._to_r_dataframe(data)
+        control = self._mgcv.gam_control(
+            epsilon=1e-11,
+            maxit=200,
+            newton=ro.ListVector(
+                {"conv.tol": 1e-10, "maxNstep": 5.0, "maxSstep": 2.0, "maxHalf": 30}
+            ),
+        )
+        fit = self._mgcv.gam(
+            ro.Formula(formula),
+            data=r_data,
+            weights=self._to_r_vector(weight),
+            offset=self._to_r_vector(offset),
+            family=family,
+            method="REML",
+            optimizer=ro.StrVector(["outer", "newton"]),
+            control=control,
+        )
+        score_scale = fit.rx2("reml.scale")
+        if score_scale is ro.NULL:
+            score_scale = fit.rx2("sig2")
+        link_prediction = self._stats.predict(
+            fit, newdata=r_data, type="link", **{"se.fit": True}
+        )
+        outer = fit.rx2("outer.info")
+        outer_converged = (
+            outer is not ro.NULL
+            and outer.rx2("conv") is not ro.NULL
+            and str(outer.rx2("conv")[0]) == "full convergence"
+        )
+        return {
+            "theta": (
+                float(fit.rx2("family").rx2("getTheta")(True)[0])
+                if family_name == "nb"
+                else np.nan
+            ),
+            "score": float(fit.rx2("gcv.ubre")[0]),
+            "scale": float(fit.rx2("sig2")[0]),
+            "score_scale": float(score_scale[0]),
+            "deviance": float(fit.rx2("deviance")[0]),
+            "smoothing": float(fit.rx2("sp")[0]) if smooth else np.nan,
+            "edf": float(self._base.sum(fit.rx2("edf"))[0]),
+            "inner_converged": bool(fit.rx2("converged")[0]),
+            "outer_converged": outer_converged,
+            "coefficients": np.asarray(fit.rx2("coefficients")).copy(),
+            "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
+            "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
+        }
+
     def efs_statistics_algebra(
         self,
         log_smoothing: np.ndarray,

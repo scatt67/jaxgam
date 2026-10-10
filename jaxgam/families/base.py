@@ -102,6 +102,7 @@ class FamilyExecutionCapabilities:
     coefficient_system: Literal["fisher", "observed"] = "fisher"
     fisher_equals_observed_for_score: bool = False
     regular_fletcher_scale: bool = False
+    single_step_pirls: bool = False
     initial_alpha_resolution: Literal[
         "no_known_resolution_gap", "unresolved_near_zero"
     ] = "no_known_resolution_gap"

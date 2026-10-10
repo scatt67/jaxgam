@@ -38,6 +38,7 @@ from jaxgam.execution.reml import (
     _run_parameterized_stream_reml,
     _ScaleNewtonCompletion,
     _valid_exact_trial,
+    _validate_max_step,
 )
 from jaxgam.execution.stream import (
     StreamPIRLSControl,
@@ -935,6 +936,7 @@ def optimize_nb_stream_reml(
     pirls_control: StreamPIRLSControl | None = None,
     control: StreamREMLControl | None = None,
     initial_coefficients: np.ndarray | None = None,
+    max_step: float | None = None,
     device: jax.Device | None = None,
 ) -> NBStreamREMLOptimization:
     """Optimize exact NB REML jointly over smoothing and free theta.
@@ -948,6 +950,7 @@ def optimize_nb_stream_reml(
     follow the L-BFGS-B stage.
     """
     reml_control = StreamREMLControl() if control is None else control
+    _validate_max_step(max_step)
     if (
         not isinstance(maximum_bytes, numbers.Integral)
         or isinstance(maximum_bytes, bool)
@@ -1049,6 +1052,7 @@ def optimize_nb_stream_reml(
         roundoff_stationary_completion=theta_only,
         completion_inner_tolerance=pirls_control.tol if theta_only else None,
         local_score_change=(_nb_local_stationary_score_change if theta_only else None),
+        max_step=max_step,
     )
     completion = None
     if theta_only:
