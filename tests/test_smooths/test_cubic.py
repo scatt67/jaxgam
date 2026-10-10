@@ -288,12 +288,19 @@ class TestRComparison:
             atol=STRICT.atol,
         )
 
-    def test_cr_source_extrapolation_matches_r_strict(self) -> None:
-        """Grouped source-order basis evaluation retains crspl extrapolation."""
+    @pytest.mark.parametrize("n_interior", [3, 1021])
+    def test_cr_source_extrapolation_matches_r_strict(self, n_interior: int) -> None:
+        """Source-order evaluation matches R at boundaries and dense batches."""
         from tests.r_bridge import RBridge
 
         x = np.linspace(-0.7, 1.3, 53, dtype=np.float64)
-        new_x = np.array([-1.2, -0.7, -0.1, 1.3, 1.9], dtype=np.float64)
+        new_x = np.concatenate(
+            (
+                np.array([-1.2, -0.7]),
+                np.linspace(-0.7, 1.3, n_interior),
+                np.array([1.3, 1.9]),
+            )
+        )
         bridge = RBridge(mode="rpy2")
         expected = bridge.source_cubic_prediction(x, new_x, k=6)
         smooth = CubicRegressionSmooth(make_smooth_spec(["x"], bs="cr", k=6))

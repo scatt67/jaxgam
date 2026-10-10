@@ -23,6 +23,7 @@ import platform
 import sys
 import warnings
 
+import numba
 import numpy as np
 import numpy.typing as npt
 from scipy.linalg import blas
@@ -57,6 +58,59 @@ def _source_getfs_multiply_add():
     if sys.platform.startswith("linux") and platform.machine() == "x86_64":
         return lambda a, b, c: a * b + c
     return _source_fma()
+
+
+@functools.lru_cache(maxsize=1)
+def _compiled_source_cubic_basis():
+    """Compile the source-ordered FMA row loop once for macOS construction."""
+    fused = ctypes.CDLL(None).fma
+    fused.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double]
+    fused.restype = ctypes.c_double
+
+    @numba.njit
+    def fill(x, knots, F, intervals, X):
+        n_basis = len(knots)
+        for row in range(len(x)):
+            xi = x[row]
+            interval = int(intervals[row])
+            if xi < knots[0]:
+                h = knots[1] - knots[0]
+                xik = xi - knots[0]
+                cjm = -xik * h / 3.0
+                cjp = -xik * h / 6.0
+                for column in range(n_basis):
+                    X[row, column] = fused(cjm, F[0, column], cjp * F[1, column])
+                X[row, 0] += 1.0 - xik / h
+                X[row, 1] += xik / h
+            elif xi > knots[-1]:
+                h = knots[-1] - knots[-2]
+                xik = xi - knots[-1]
+                cjm = xik * h / 6.0
+                cjp = xik * h / 3.0
+                left = n_basis - 2
+                right = n_basis - 1
+                for column in range(n_basis):
+                    X[row, column] = fused(cjm, F[left, column], cjp * F[right, column])
+                X[row, left] += -xik / h
+                X[row, right] += 1.0 + xik / h
+            else:
+                xj = knots[interval]
+                xj1 = knots[interval + 1]
+                h = xj1 - xj
+                ajm = xj1 - xi
+                ajp = xi - xj
+                cjm = (ajm * (ajm * ajm / h - h)) / 6.0
+                cjp = (ajp * (ajp * ajp / h - h)) / 6.0
+                ajm /= h
+                ajp /= h
+                for column in range(n_basis):
+                    X[row, column] = fused(
+                        cjm, F[interval, column], cjp * F[interval + 1, column]
+                    )
+                X[row, interval] += ajm
+                X[row, interval + 1] += ajp
+
+    return fill
 
 
 class CubicRegressionSmooth(Smooth):
@@ -417,48 +471,7 @@ class CubicRegressionSmooth(Smooth):
                     X[rows, interval + 1] += ajp / h
                 return X
 
-            multiply_add = _source_getfs_multiply_add()
-            for row, xi in enumerate(x):
-                interval = int(j[row])
-                if xi < knots[0]:
-                    h = knots[1] - knots[0]
-                    xik = xi - knots[0]
-                    cjm = -xik * h / 3.0
-                    cjp = -xik * h / 6.0
-                    for column in range(n_basis):
-                        X[row, column] = multiply_add(
-                            cjm, F[0, column], cjp * F[1, column]
-                        )
-                    X[row, 0] += 1.0 - xik / h
-                    X[row, 1] += xik / h
-                elif xi > knots[-1]:
-                    h = knots[-1] - knots[-2]
-                    xik = xi - knots[-1]
-                    cjm = xik * h / 6.0
-                    cjp = xik * h / 3.0
-                    left, right = n_basis - 2, n_basis - 1
-                    for column in range(n_basis):
-                        X[row, column] = multiply_add(
-                            cjm, F[left, column], cjp * F[right, column]
-                        )
-                    X[row, left] += -xik / h
-                    X[row, right] += 1.0 + xik / h
-                else:
-                    xj = knots[interval]
-                    xj1 = knots[interval + 1]
-                    h = xj1 - xj
-                    ajm = xj1 - xi
-                    ajp = xi - xj
-                    cjm = (ajm * (ajm * ajm / h - h)) / 6.0
-                    cjp = (ajp * (ajp * ajp / h - h)) / 6.0
-                    ajm /= h
-                    ajp /= h
-                    for column in range(n_basis):
-                        X[row, column] = multiply_add(
-                            cjm, F[interval, column], cjp * F[interval + 1, column]
-                        )
-                    X[row, interval] += ajm
-                    X[row, interval + 1] += ajp
+            _compiled_source_cubic_basis()(x, knots, F, j, X)
             return X
 
         ajm, ajp, cjm, cjp, j = self._compute_base_functions(x, knots)
