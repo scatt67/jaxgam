@@ -8,6 +8,7 @@ refines common probes/depth before declaring a comparison indeterminate.
 from __future__ import annotations
 
 import math
+import numbers
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -26,6 +27,7 @@ from jaxgam.execution.operator_fit import OperatorFitResult, fit_operator_fixed_
 from jaxgam.execution.operator_logdet import OperatorLogDetControl
 from jaxgam.execution.operator_score import compare_operator_scores
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Poisson
 from jaxgam.fitting.iterative import CONVERGED
 from jaxgam.formula.operator_prepare import PreparedOperatorModel
@@ -186,6 +188,7 @@ class SourceOperatorEFSFitProvider:
         fit_budget_bytes: int,
         components_budget_bytes: int,
         aggregate_budget_bytes: int,
+        max_y: int = 0,
         score_error_bound: Callable[
             [OperatorFitResult, MatchedOperatorEFSComponents], float | None
         ]
@@ -193,6 +196,10 @@ class SourceOperatorEFSFitProvider:
     ) -> None:
         if not family.scale_known:
             raise NotImplementedError("Known-scale operator EFS requires fixed scale.")
+        if isinstance(family, NegativeBinomial) and family.n_theta > 0:
+            raise NotImplementedError(
+                "Estimated-theta operator EFS requires in-PIRLS theta updates."
+            )
         if model.penalties.n_penalties == 0:
             raise ValueError("Operator EFS requires at least one penalty.")
         if (
@@ -201,6 +208,14 @@ class SourceOperatorEFSFitProvider:
             or aggregate_budget_bytes < max(fit_budget_bytes, components_budget_bytes)
         ):
             raise ValueError("Operator EFS aggregate budget is insufficient.")
+        if (
+            isinstance(max_y, bool)
+            or not isinstance(max_y, numbers.Integral)
+            or not 0 <= max_y <= 32
+        ):
+            raise ValueError("Operator EFS max_y must be an integer in [0, 32].")
+        if isinstance(family, NegativeBinomial) and max_y == 0:
+            raise ValueError("Fixed-theta NB operator EFS requires a positive max_y.")
         self.model = model
         self.source = source
         self.family = family
@@ -208,6 +223,7 @@ class SourceOperatorEFSFitProvider:
         self.fit_budget_bytes = fit_budget_bytes
         self.components_budget_bytes = components_budget_bytes
         self.aggregate_budget_bytes = aggregate_budget_bytes
+        self.max_y = int(max_y)
         self.aggregate_peak_bound_bytes = 0
         self.score_error_bound = score_error_bound
 
@@ -299,6 +315,7 @@ class SourceOperatorEFSFitProvider:
             score_phi=1.0,
             memory_budget_bytes=self.components_budget_bytes,
             logdet_control=control,
+            max_y=self.max_y,
         ).evaluate()
         if self.score_error_bound is None:
             bound = _indexed_poisson_score_bound(fit, components, self.fit_control)

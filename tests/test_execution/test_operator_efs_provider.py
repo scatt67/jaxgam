@@ -7,8 +7,12 @@ import pandas as pd
 import pytest
 from scipy.special import gammaln, xlogy
 
+from jaxgam.control import OperatorControl
 from jaxgam.data.source import DataFrameRowSource
-from jaxgam.execution.operator_efs_controller import OperatorEFSState
+from jaxgam.execution.operator_efs_controller import (
+    OperatorEFSState,
+    SourceOperatorEFSFitProvider,
+)
 from jaxgam.execution.operator_efs_provider import MatchedOperatorEFSProvider
 from jaxgam.execution.operator_fit import (
     FrozenOperatorWorkingState,
@@ -185,6 +189,57 @@ def test_fixed_theta_nb_large_p_observed_score_and_fisher_trace_match_dense():
     )
     assert result.score.strategy == "structured_diagonal"
     assert result.fisher.diagnostics.strategy == "structured_diagonal"
+    source_provider = SourceOperatorEFSFitProvider(
+        model,
+        source,
+        family,
+        fit_control=OperatorControl(),
+        fit_budget_bytes=16 * 1024 * 1024,
+        components_budget_bytes=32 * 1024 * 1024,
+        aggregate_budget_bytes=128 * 1024 * 1024,
+        max_y=32,
+    )
+    source_state = source_provider.evaluate(fit, OperatorLogDetControl())
+    assert source_state.score_error_bound is None
+    np.testing.assert_allclose(
+        source_state.components.score.value,
+        exact,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_source_provider_requires_bounded_counts_and_in_pirls_estimated_theta():
+    _, _, _, source, _, state = _case(NegativeBinomial(theta=2.7, fixed=True))
+    arguments = {
+        "fit_control": OperatorControl(),
+        "fit_budget_bytes": 8 * 1024 * 1024,
+        "components_budget_bytes": 16 * 1024 * 1024,
+        "aggregate_budget_bytes": 64 * 1024 * 1024,
+    }
+    with pytest.raises(ValueError, match="positive max_y"):
+        SourceOperatorEFSFitProvider(
+            state.model,
+            source,
+            NegativeBinomial(theta=2.7, fixed=True),
+            **arguments,
+        )
+    with pytest.raises(ValueError, match=r"\[0, 32\]"):
+        SourceOperatorEFSFitProvider(
+            state.model,
+            source,
+            NegativeBinomial(theta=2.7, fixed=True),
+            max_y=33,
+            **arguments,
+        )
+    with pytest.raises(NotImplementedError, match="in-PIRLS theta"):
+        SourceOperatorEFSFitProvider(
+            state.model,
+            source,
+            NegativeBinomial(theta=2.7),
+            max_y=32,
+            **arguments,
+        )
 
 
 def test_stochastic_trace_is_labeled_and_keeps_sampling_error_separate():
