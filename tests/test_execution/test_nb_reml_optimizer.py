@@ -775,6 +775,55 @@ def test_nb_optimizer_supports_parametric_theta_only_and_zero_coordinate_cases(
         assert "exact evaluation" in result.message
 
 
+def test_parametric_theta_only_charges_and_enables_roundoff_retention(monkeypatch):
+    """No penalty leaves the same one free theta coordinate as pinned rho."""
+    stream, family, params = _optimizer_case("log", estimated=True, smooth=False)
+    retained, history, lbfgs = reml_execution._parameterized_optimizer_workspace_bytes(
+        stream.prepared.n_coef,
+        len(params),
+        _OPTIMIZER_CONTROL,
+        _OPTIMIZER_PIRLS_CONTROL,
+    )
+    # The theta-only route also charges the log-theta completion's two
+    # recorded secant scalars.
+    required = (
+        2 * retained + 2 * history + lbfgs + nb_reml_execution._THETA_SECANT_BYTES
+    )
+    with (
+        patch.object(nb_reml_execution, "evaluate_nb_stream_reml") as evaluate,
+        pytest.raises(MemoryError, match="retention"),
+    ):
+        optimize_nb_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=required,
+            pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+            control=_OPTIMIZER_CONTROL,
+        )
+    evaluate.assert_not_called()
+
+    original = nb_reml_execution._run_parameterized_stream_reml
+    policies: list[bool] = []
+
+    def capture(*args, **kwargs):
+        policies.append(kwargs["roundoff_stationary_completion"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(nb_reml_execution, "_run_parameterized_stream_reml", capture)
+    result = optimize_nb_stream_reml(
+        stream,
+        family,
+        params,
+        maximum_bytes=64_000_000,
+        pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+        control=_OPTIMIZER_CONTROL,
+    )
+    assert policies == [True]
+    assert result.outer_workspace_bytes == required
+    assert result.converged
+
+
 def test_nb_optimizer_preflights_retention_and_keeps_accepted_on_failed_candidate(
     monkeypatch,
 ):

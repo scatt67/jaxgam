@@ -1007,11 +1007,11 @@ def optimize_nb_stream_reml(
         )
     )
     # SciPy can discard a fully stationary free-theta trial when the score
-    # rises by one float64 ULP. Retaining that trial across subsequent probes
+    # rises by one float64 ULP. A model with no penalties has the same single
+    # free theta coordinate as a pinned-smoothing model, matching the regular
+    # single-free-log-scale rule. Retaining that trial across subsequent probes
     # adds one p²-owned result and its bounded penalized-deviance history
     # alongside accepted and active candidate states.
-    # Log theta is the only free coordinate when every rho is pinned or none
-    # exists, matching the regular single-free-log-scale rule.
     theta_only = family.n_theta == 1 and (pin_lambda or n_lambda == 0)
     stationary_trial_bytes = (
         retained_trial_bytes + retained_history_bytes if theta_only else 0
