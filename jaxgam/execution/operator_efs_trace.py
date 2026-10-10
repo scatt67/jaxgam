@@ -91,6 +91,16 @@ def _local_action(penalty: LocalPenalty, vector: np.ndarray) -> np.ndarray:
     raise TypeError("Unknown local penalty representation.")
 
 
+def _identity_quadratic_terms(scale: float, coefficients: np.ndarray) -> np.ndarray:
+    """Keep finite scaled identity quadratics across squared-value extremes."""
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        weighted = math.sqrt(scale) * coefficients
+        terms = weighted * weighted
+    if not np.all(np.isfinite(terms)):
+        raise FloatingPointError("Structured Fisher quadratic is nonfinite.")
+    return terms
+
+
 def _local_row_contract(
     penalty: LocalPenalty, local_row: int, inverse_column: np.ndarray
 ) -> float:
@@ -245,7 +255,9 @@ class ExactOperatorPenaltyStatistics:
                 if not isinstance(penalty, IdentityPenalty):
                     raise ValueError("Structured indexed penalty must be identity.")
                 trace_terms = penalty.scale / diagonal[block.start : block.stop]
-                quadratic_terms = penalty.scale * local_coefficients**2
+                quadratic_terms = _identity_quadratic_terms(
+                    penalty.scale, local_coefficients
+                )
                 trace = math.fsum(float(value) for value in trace_terms)
                 quadratic = math.fsum(float(value) for value in quadratic_terms)
                 traces[sp] += trace

@@ -11,6 +11,7 @@ from jaxgam.execution.operator_efs_trace import (
     ExactPenaltyTraceSolveError,
     StochasticOperatorPenaltyStatistics,
     StochasticPenaltyTraceSolveError,
+    _identity_quadratic_terms,
 )
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.operator_prepare import (
@@ -35,6 +36,20 @@ def _model(frame, formula, *, batch_rows=7):
         control=OperatorPreparationControl(batch_rows=batch_rows),
     )
     return source, model
+
+
+@pytest.mark.parametrize(
+    ("scale", "coefficient", "expected"),
+    [
+        (1e-300, 1e200, 1e100),
+        (1e300, 1e-200, 1e-100),
+    ],
+)
+def test_structured_identity_quadratic_preserves_finite_scale_extremes(
+    scale, coefficient, expected
+):
+    actual = _identity_quadratic_terms(scale, np.array([coefficient], dtype=np.float64))
+    np.testing.assert_allclose(actual, [expected], rtol=STRICT.rtol, atol=0)
 
 
 @pytest.mark.parametrize(
