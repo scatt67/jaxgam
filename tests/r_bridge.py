@@ -325,6 +325,50 @@ class RBridge:
             return None
         return [int(index) - 1 for index in ind]
 
+    def source_weighted_stream_reml_fit(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family_name: str,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        *,
+        newton_tolerance: float,
+    ) -> tuple[float, float, np.ndarray]:
+        """Fit the installed regular mgcv family with explicit REML controls."""
+        from rpy2.robjects import ListVector
+
+        self._require_rpy2()
+        constructors = {
+            "poisson": self._stats.poisson,
+            "binomial": self._stats.binomial,
+        }
+        if family_name not in constructors:
+            raise ValueError("Stream REML oracle supports Poisson or Binomial")
+        w = np.asarray(weights, dtype=np.float64)
+        off = np.asarray(offset, dtype=np.float64)
+        if w.shape != (len(data),) or off.shape != w.shape:
+            raise ValueError("Stream REML oracle weights and offset must align")
+        control = self._mgcv.gam_control(
+            newton=ListVector(
+                [("conv.tol", self._to_r_vector(np.array([newton_tolerance])))]
+            )
+        )
+        fit = self._mgcv.gam(
+            self._ro.Formula(formula),
+            data=self._to_r_dataframe(data),
+            weights=self._to_r_vector(w),
+            offset=self._to_r_vector(off),
+            family=constructors[family_name](),
+            method="REML",
+            control=control,
+        )
+        return (
+            float(fit.rx2("gcv.ubre")[0]),
+            float(fit.rx2("deviance")[0]),
+            np.asarray(fit.rx2("fitted.values"), dtype=np.float64).copy(),
+        )
+
     def nb_saturated_likelihood_derivatives(
         self, y: np.ndarray, weight: np.ndarray, theta: float
     ) -> np.ndarray:
