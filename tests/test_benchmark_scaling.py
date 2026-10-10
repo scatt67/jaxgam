@@ -1,6 +1,7 @@
 """Unit tests for scaling-evidence metadata and cache isolation."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -145,6 +146,66 @@ def test_loaded_source_identity_rejects_another_checkout(tmp_path: Path) -> None
 
     with pytest.raises(RuntimeError, match="not requested checkout"):
         benchmark_scaling.loaded_source_identity(module, Path.cwd())
+
+
+def test_typed_reference_imports_are_bound_to_selected_checkout(tmp_path: Path) -> None:
+    benchmark_scaling._check_reference_imports(Path.cwd(), r_parity=True)
+    with pytest.raises(RuntimeError, match="not selected checkout"):
+        benchmark_scaling._check_reference_imports(tmp_path, r_parity=True)
+
+
+def test_cli_child_selects_checkout_before_tolerance_import(
+    tmp_path: Path, minimal_git_checkout: Path
+) -> None:
+    decoy = tmp_path / "stale" / "tests"
+    decoy.mkdir(parents=True)
+    (decoy / "__init__.py").write_text("")
+    (decoy / "tolerances.py").write_text(
+        'raise RuntimeError("stale tolerance import")\n'
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path.cwd() / "scripts" / "benchmark_scaling.py"),
+            "--checkout",
+            str(minimal_git_checkout),
+            "--child",
+            "setup",
+            "--case",
+            json.dumps({"n_rows": 12, "basis_dimension": 4}),
+        ],
+        cwd=minimal_git_checkout,
+        env=os.environ | {"PYTHONPATH": str(decoy.parent)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    record = json.loads(completed.stdout)
+    assert record["runtime"]["loaded_package"] == str(minimal_git_checkout / "jaxgam")
+
+
+def test_main_smoke_uses_selected_current_checkout(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "run_public_smoke",
+        lambda root: {"checkout": str(root)},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_scaling.py",
+            "--smoke",
+            "--checkout",
+            str(tmp_path),
+            "--current-checkout",
+            str(Path.cwd()),
+        ],
+    )
+    benchmark_scaling.main()
+    assert json.loads(capsys.readouterr().out) == {"checkout": str(Path.cwd())}
 
 
 def test_harness_identity_hashes_the_executed_script() -> None:

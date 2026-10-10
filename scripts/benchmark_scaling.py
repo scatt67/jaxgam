@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import os
 import platform
@@ -26,13 +27,27 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from tests.tolerances import MODERATE, STRICT
-
 _MAX_COMPARISON_COEFFICIENTS = 2_048
 
 
 def _tolerance_record(tolerance: Any) -> dict[str, float]:
     return {"rtol": tolerance.rtol, "atol": tolerance.atol}
+
+
+def _check_reference_imports(root: Path, *, r_parity: bool) -> None:
+    """Require typed test references from the selected checkout, not uv's link."""
+    names = ["tolerances.py"]
+    if r_parity:
+        names.append("r_bridge.py")
+    for filename in names:
+        module = importlib.import_module(f"tests.{filename.removesuffix('.py')}")
+        actual = Path(module.__file__).resolve()
+        expected = (root / "tests" / filename).resolve()
+        if actual != expected:
+            raise RuntimeError(
+                f"Imported {module.__name__} from {actual}, "
+                f"not selected checkout {expected}."
+            )
 
 
 @dataclass(frozen=True)
@@ -329,6 +344,8 @@ def _model_contract(
 
 def _numeric_comparison(left: Any, right: Any) -> dict[str, Any]:
     """Return explicit strict/moderate parity evidence for bounded observables."""
+    from tests.tolerances import MODERATE, STRICT
+
     left_array = np.asarray(left, dtype=float)
     right_array = np.asarray(right, dtype=float)
     same_shape = left_array.shape == right_array.shape
@@ -1171,6 +1188,8 @@ def compare_checkouts(
     baseline: dict[str, Any], current: dict[str, Any]
 ) -> dict[str, Any]:
     """Report parity only when baseline/current use the identical route contract."""
+    from tests.tolerances import MODERATE, STRICT
+
     baseline_setup = baseline["setup"]
     current_setup = current["setup"]
     baseline_fit = baseline["fit"]
@@ -1281,6 +1300,8 @@ def compare_checkouts(
 
 def compare_pinned_r_exact(case: ScalingCase, record: dict[str, Any]) -> dict[str, Any]:
     """Compare a bounded public exact-REML case with typed pinned RBridge."""
+    from tests.tolerances import MODERATE, STRICT
+
     if case.execution != "stream-exact":
         raise ValueError("Pinned-R parity requires execution='stream-exact'.")
     if case.n_rows > 10_000 or case.smooth_count * case.basis_dimension > 256:
@@ -1454,13 +1475,15 @@ def main() -> None:
     )
     args = parser.parse_args()
     root = args.checkout or Path(__file__).resolve().parents[1]
+    current_root = args.current_checkout or root
     # ``uv run python scripts/...`` starts with scripts/ on sys.path. Select
     # the requested checkout before any JaxGAM import, even when the active
     # uv environment was installed editable from another worktree.
-    sys.path.insert(0, str(root.resolve()))
+    sys.path.insert(0, str(current_root.resolve()))
+    _check_reference_imports(current_root, r_parity=args.r_parity)
 
     if args.smoke:
-        print(json.dumps(run_public_smoke(root), sort_keys=True))
+        print(json.dumps(run_public_smoke(current_root), sort_keys=True))
         return
 
     if args.child is not None:
@@ -1468,9 +1491,9 @@ def main() -> None:
             raise ValueError("Child mode requires a serialized case.")
         child_case = ScalingCase(**json.loads(args.case))
         record = (
-            run_setup(child_case, root)
+            run_setup(child_case, current_root)
             if args.child == "setup"
-            else run_case(child_case, root)
+            else run_case(child_case, current_root)
         )
         print(json.dumps(record, sort_keys=True))
         return
@@ -1484,7 +1507,6 @@ def main() -> None:
         result_mode=args.result_mode,
         smooth_count=args.smooth_count,
     )
-    current_root = args.current_checkout or root
     if args.memory_pair_n is not None:
         if args.r_parity or args.baseline_checkout is not None:
             raise ValueError(
