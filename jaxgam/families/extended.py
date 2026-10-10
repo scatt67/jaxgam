@@ -33,8 +33,9 @@ class ExtendedFamily(ExponentialFamily):
     - ``saturated_loglik_theta``: explicit-theta saturated log-likelihood
       for the REML criterion AD trace
 
-    The fitting code branches on ``family.n_theta > 0`` (compile-time check
-    via static ``family`` arg) to select the extended custom_jvp path.
+    Fitting uses this observed-curvature path for estimated parameters. The
+    EFS controller can explicitly opt in for fixed NB, matching mgcv's
+    ``gam.fit4`` information split without introducing a theta coordinate.
 
     R source reference: efam.r (extended family objects)
     """
