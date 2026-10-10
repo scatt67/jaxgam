@@ -87,6 +87,17 @@ class Gaussian(ExponentialFamily):
         d = wt * (y - mu) ** 2
         return xp.sign(y - mu) * xp.sqrt(d)
 
+    def deviance_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Direct Gaussian deviance, avoiding residual-square AD singularities."""
+        return wt * (y - mu) ** 2
+
+    def deviance_derivative_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        return wt * (y - mu) ** 2
+
     def aic(
         self,
         y: np.ndarray,
@@ -205,6 +216,41 @@ class Binomial(ExponentialFamily):
         d = xp.maximum(d, 0.0)
         return xp.sign(y - mu_safe) * xp.sqrt(d)
 
+    def deviance_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Direct Binomial deviance with the same boundary arithmetic as PIRLS."""
+        xp = array_module(y)
+        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        y_pos = xp.where(y > 0, y, 1.0)
+        y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
+        contribution = (
+            2.0
+            * wt
+            * (
+                y * xp.log(y_pos / mu_safe)
+                + (1.0 - y) * xp.log(y1_pos / (1.0 - mu_safe))
+            )
+        )
+        return xp.maximum(contribution, 0.0)
+
+    def deviance_derivative_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Interior Binomial deviance; unlike reporting it has no max kink."""
+        xp = array_module(y)
+        mu_safe = xp.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
+        y_pos = xp.where(y > 0, y, 1.0)
+        y1_pos = xp.where(y < 1, 1.0 - y, 1.0)
+        return (
+            2.0
+            * wt
+            * (
+                y * xp.log(y_pos / mu_safe)
+                + (1.0 - y) * xp.log(y1_pos / (1.0 - mu_safe))
+            )
+        )
+
     def aic(
         self,
         y: np.ndarray,
@@ -312,6 +358,25 @@ class Poisson(ExponentialFamily):
         d = 2.0 * wt * (term1 - (y - mu_safe))
         d = xp.maximum(d, 0.0)
         return xp.sign(y - mu_safe) * xp.sqrt(d)
+
+    def deviance_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Direct Poisson deviance with the existing zero-count convention."""
+        xp = array_module(y)
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_pos = xp.where(y > 0, y, 1.0)
+        contribution = 2.0 * wt * (y * xp.log(y_pos / mu_safe) - (y - mu_safe))
+        return xp.maximum(contribution, 0.0)
+
+    def deviance_derivative_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Interior Poisson deviance; unlike reporting it has no max kink."""
+        xp = array_module(y)
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_pos = xp.where(y > 0, y, 1.0)
+        return 2.0 * wt * (y * xp.log(y_pos / mu_safe) - (y - mu_safe))
 
     def aic(
         self,
@@ -422,6 +487,25 @@ class Gamma(ExponentialFamily):
         d = 2.0 * wt * (-xp.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
         d = xp.maximum(d, 0.0)
         return xp.sign(y - mu_safe) * xp.sqrt(d)
+
+    def deviance_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Direct Gamma deviance with the same positive-domain safeguards."""
+        xp = array_module(y)
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_safe = xp.maximum(y, _MU_EPS)
+        contribution = 2.0 * wt * (-xp.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
+        return xp.maximum(contribution, 0.0)
+
+    def deviance_derivative_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Interior Gamma deviance; unlike reporting it has no max kink."""
+        xp = array_module(y)
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_safe = xp.maximum(y, _MU_EPS)
+        return 2.0 * wt * (-xp.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
 
     def aic(
         self,

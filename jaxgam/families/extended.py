@@ -39,6 +39,16 @@ class ExtendedFamily(ExponentialFamily):
     R source reference: efam.r (extended family objects)
     """
 
+    def execution_dynamic_config_attributes(self) -> frozenset[str]:
+        """Keep mutable distribution parameters out of static JIT context.
+
+        Concrete extended families expose their values through
+        ``execution_parameter_snapshot`` and the fitting-side dynamic pytree.
+        A new family with differently named mutable state may override this
+        method without teaching a backend its storage details.
+        """
+        return frozenset({"_log_theta"})
+
     @abstractmethod
     def get_theta(self, transformed: bool = False) -> np.ndarray:
         """Extra parameter vector, shape ``(n_theta,)``.
