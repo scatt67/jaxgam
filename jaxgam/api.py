@@ -13,6 +13,7 @@ Design doc reference: docs/refactor_gam_api/design.md §3.3
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, overload
 
@@ -155,8 +156,9 @@ class GAM:
             Data frame containing the variables in the formula. A replayable
             ``RowSource`` is accepted with ``execution='stream'``,
             ``execution='operator'`` or the explicitly configured
-            ``execution='discrete'`` route. The operator route requires explicit
-            fixed ``sp``, ``linear_solver='pcg'`` and prediction-only retention.
+            ``execution='discrete'`` route. The operator route requires
+            ``linear_solver='pcg'`` and prediction-only retention. It accepts
+            explicit fixed ``sp`` or calibrated indexed Poisson EFS.
         weights : np.ndarray, optional
             Prior weights, shape ``(n,)``.
         offset : np.ndarray, optional
@@ -368,7 +370,7 @@ class GAM:
         result: Literal["full", "inference", "prediction"],
         family: ExponentialFamily,
     ) -> GAMPredictionResult:
-        """Run explicit fixed-sp, CPU operator fitting with compact prediction."""
+        """Run CPU operator fitting with compact prediction retention."""
         import numbers
 
         from jaxgam.execution.operator_fit import fit_operator_fixed_sp
@@ -388,7 +390,8 @@ class GAM:
             raise NotImplementedError(
                 "Operator uncertainty needs a planned selected-variance provider."
             )
-        if self.sp is None:
+        estimated_efs = self.sp is None and self.optimizer == "efs"
+        if self.sp is None and not estimated_efs:
             raise NotImplementedError("Operator fitting requires explicit fixed sp.")
         snapshot = family.execution_parameter_snapshot()
         if snapshot.theta_mode == "estimated":
@@ -403,6 +406,8 @@ class GAM:
             raise TypeError("Operator fitting requires a replayable RowSource.")
         if weights is not None or offset is not None:
             raise ValueError("Operator weights/offset must be owned by the RowSource.")
+        if estimated_efs:
+            return self._fit_operator_efs(data, family)
         spec = parse_formula(self.formula)
         expected = (
             len(spec.smooth_terms)
@@ -448,6 +453,115 @@ class GAM:
             formula=self.formula,
             method=self.method,
             control=self.control,
+        )
+
+    def _fit_operator_efs(
+        self, source: RowSource, family: ExponentialFamily
+    ) -> GAMPredictionResult:
+        """Materialize the calibrated indexed Poisson operator EFS regime."""
+        from jaxgam.execution.operator_efs_controller import (
+            SourceOperatorEFSFitProvider,
+            run_operator_efs_known_scale,
+        )
+        from jaxgam.execution.operator_efs_start import (
+            prepare_indexed_operator_efs_start,
+        )
+        from jaxgam.execution.operator_logdet import OperatorLogDetControl
+        from jaxgam.families.standard import Poisson
+        from jaxgam.formula.operator_prepare import (
+            OperatorPreparationControl,
+            prepare_operator_model,
+        )
+
+        if not isinstance(family, Poisson) or not family.is_canonical:
+            raise NotImplementedError(
+                "Operator EFS currently supports calibrated Poisson/log indexed fits."
+            )
+        if self.control.batch_rows != 64:
+            raise NotImplementedError(
+                "Calibrated operator EFS currently requires batch_rows=64."
+            )
+        spec = parse_formula(self.formula)
+        total = self.control.memory_budget_bytes
+        preparation_budget = total // 8
+        model = prepare_operator_model(
+            spec,
+            source,
+            control=OperatorPreparationControl(
+                self.control.batch_rows,
+                preparation_budget,
+                self.control.operator.max_modest_coefficients,
+            ),
+        )
+        if (
+            not 256 < model.n_coef <= 512
+            or not 2 * model.n_coef <= model.n_obs <= 3 * model.n_coef
+        ):
+            raise NotImplementedError(
+                "Calibrated operator EFS requires 257-512 coefficients "
+                "and 2-3 rows per coefficient."
+            )
+        start = prepare_indexed_operator_efs_start(
+            model, source, family, memory_budget_bytes=preparation_budget
+        )
+        # Final prediction geometry and coefficients coexist with the accepted
+        # score/trace state during materialization. Keep that ownership outside
+        # the controller's aggregate fit/score reservation.
+        result_reserve = 2 * model.metadata_bound_bytes + 32 * model.n_coef + 8192 + 16
+        if result_reserve + start.log_lambda.nbytes >= total:
+            raise MemoryError("Operator EFS result ownership exceeds its budget.")
+        provider = SourceOperatorEFSFitProvider(
+            model,
+            source,
+            family,
+            fit_control=self.control.operator,
+            fit_budget_bytes=total // 4,
+            components_budget_bytes=total // 2,
+            aggregate_budget_bytes=total - result_reserve - start.log_lambda.nbytes,
+            max_y=32,
+        )
+        execution = run_operator_efs_known_scale(
+            provider,
+            start.log_lambda,
+            control=self.control.efs,
+            initial_accuracy=OperatorLogDetControl(probes=4, lanczos_depth=4),
+        )
+        selected = execution.accepted
+        base = GAMPredictionResult._from_operator_fit(
+            fitted=selected.fit,
+            sp=np.exp(selected.fit.log_lambda),
+            formula=self.formula,
+            method=self.method,
+            control=self.control,
+        )
+        return replace(
+            base,
+            score=selected.components.score.value,
+            score_error_bound=selected.score_error_bound,
+            scale=selected.reported_phi,
+            score_scale=selected.score_phi,
+            edf_total=selected.components.edf_total,
+            converged=execution.converged,
+            n_iter=execution.outer_iterations,
+            convergence_info=execution.stop_reason,
+            lambda_strategy="efs_reml",
+            execution_route="operator",
+            source_scans=(
+                model.completed_preparation_scans
+                + start.source_scans
+                + provider.completed_source_scans
+            ),
+            batches_scanned=(
+                model.completed_preparation_scans
+                * math.ceil(model.n_obs / model.batch_rows)
+                + start.source_batches
+                + provider.completed_source_batches
+            ),
+            known_workspace_bytes=max(
+                model.preparation_peak_bound_bytes,
+                start.peak_bound_bytes,
+                result_reserve + provider.aggregate_peak_bound_bytes,
+            ),
         )
 
     def _fit_stream(

@@ -39,7 +39,7 @@ from jax import clear_caches
 from scipy import __config__ as scipy_config
 
 from jaxgam.api import GAM
-from jaxgam.control import FitControl
+from jaxgam.control import EFSControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda, efs_initial_log_scale
 from jaxgam.execution.reml import StreamREMLControl, evaluate_regular_stream_reml
@@ -225,6 +225,114 @@ def test_operator_efs_calibrated_indexed_gaussian_scale_full_fit_strict(
         ),
     )
     checks.raise_if_any(f"calibrated Gaussian EFS p={p}, seed={seed}")
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("p", "seed", "multiplicity", "mode"),
+    [(300, 37, 2, "balanced"), (512, 712, 3, "unbalanced")],
+)
+def test_public_indexed_operator_efs_poisson_default_start_matches_pinned_r(
+    p: int, seed: int, multiplicity: int, mode: str
+):
+    """The opt-in source route owns initial.spg and final prediction scalars."""
+    from jaxgam.control import OperatorControl
+    from jaxgam.execution.efs import dense_efs_known_scale
+    from jaxgam.fitting.data import FittingData
+
+    n = p * multiplicity
+    rng = np.random.default_rng(seed)
+    if mode == "balanced":
+        group = np.arange(n) % p
+        mean = np.exp(0.2 + 0.3 * np.sin(group / 31))
+    else:
+        probabilities = 1.0 / (1.0 + np.arange(p)) ** 1.1
+        probabilities /= np.sum(probabilities)
+        group = np.concatenate(
+            (np.arange(p), rng.choice(p, size=n - p, p=probabilities))
+        )
+        mean = np.exp(1.5 + 0.7 * np.sin(group / 31))
+    response = rng.poisson(mean)
+    if mode == "unbalanced":
+        response[0] = 31
+    frame = pd.DataFrame(
+        {
+            "y": response,
+            "g": pd.Categorical(
+                [f"g{index}" for index in group],
+                categories=[f"g{index}" for index in range(p)],
+            ),
+        }
+    )
+    formula = "y~0+s(g,bs='re')"
+    result = GAM(
+        formula,
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=64,
+            memory_budget_bytes=128 << 20,
+            efs=EFSControl(pirls_tolerance=1e-11),
+            operator=OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15),
+        ),
+    ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
+    reference = RBridge(mode="rpy2").fit_efs(
+        formula, frame, "poisson", controls={"epsilon": 1e-11}
+    )
+    setup = ModelSetup.build(parse_formula(formula), frame)
+    dense = dense_efs_known_scale(
+        FittingData.from_setup(setup, Poisson()),
+        initial_log_lambda=efs_initial_log_lambda(setup, Poisson()),
+        control=EFSControl(pirls_tolerance=1e-11),
+    )
+    assert result.converged
+    assert result.score_error_bound is not None
+    assert result.known_workspace_bytes is not None
+    assert result.known_workspace_bytes <= 128 << 20
+    assert dense.converged
+    assert bool(np.asarray(dense.pirls_result.converged))
+    assert reference["inner_converged"]
+    assert reference["convergence"] == "full convergence"
+    checks = _AssertCollector()
+    for label, score, sp, deviance, scale in (
+        (
+            "dense",
+            dense.score,
+            dense.smoothing_params,
+            dense.pirls_result.deviance,
+            dense.scale,
+        ),
+        (
+            "pinned R",
+            reference["reml_score"],
+            reference["smoothing_params"],
+            reference["deviance"],
+            reference["scale"],
+        ),
+    ):
+        for field, actual, expected in (
+            ("score", result.score, score),
+            ("smoothing", result.smoothing_params, sp),
+            ("deviance", result.deviance, deviance),
+            ("scale", result.scale, scale),
+        ):
+            checks.check(
+                f"{label} {field}",
+                lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                    actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+    checks.check(
+        "outer iterations",
+        lambda: np.testing.assert_equal(result.n_iter, reference["outer_iterations"]),
+    )
+    checks.check(
+        "dense iterations",
+        lambda: np.testing.assert_equal(result.n_iter, dense.n_iter),
+    )
+    checks.raise_if_any(f"public indexed Poisson operator EFS p={p}, seed={seed}")
 
 
 # A named generated case, exact model controls, and a live pinned-R fit own

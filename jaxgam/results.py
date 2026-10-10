@@ -367,6 +367,7 @@ class GAMPredictionResult:
     execution_route: str = field(default="dense", kw_only=True)
     execution_fallback_reason: str | None = field(default=None, kw_only=True)
     score_scale: float | None = field(default=None, kw_only=True)
+    score_error_bound: float | None = field(default=None, kw_only=True)
     source_scans: int | None = field(default=None, kw_only=True)
     batches_scanned: int | None = field(default=None, kw_only=True)
     known_workspace_bytes: int | None = field(default=None, kw_only=True)

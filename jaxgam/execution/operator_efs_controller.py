@@ -330,6 +330,8 @@ class SourceOperatorEFSFitProvider:
         self.aggregate_budget_bytes = aggregate_budget_bytes
         self.max_y = int(max_y)
         self.aggregate_peak_bound_bytes = 0
+        self.completed_source_scans = 0
+        self.completed_source_batches = 0
         self.score_error_bound = score_error_bound
 
     @staticmethod
@@ -401,7 +403,7 @@ class SourceOperatorEFSFitProvider:
     def fit(self, rho: np.ndarray, beta_start: np.ndarray | None) -> OperatorFitResult:
         with np.errstate(over="ignore", invalid="ignore"):
             sp = np.exp(rho)
-        return fit_operator_fixed_sp(
+        fitted = fit_operator_fixed_sp(
             self.model,
             self.source,
             self.family,
@@ -410,6 +412,9 @@ class SourceOperatorEFSFitProvider:
             memory_budget_bytes=self.fit_budget_bytes,
             beta_start=beta_start,
         )
+        self.completed_source_scans += fitted.diagnostics.source.completed_scans
+        self.completed_source_batches += fitted.diagnostics.source.yielded_batches
+        return fitted
 
     def evaluate(
         self,
@@ -428,6 +433,10 @@ class SourceOperatorEFSFitProvider:
             logdet_control=control,
             max_y=self.max_y,
         ).evaluate()
+        self.completed_source_scans += components.source_scans
+        self.completed_source_batches += components.source_scans * math.ceil(
+            fit.model.n_obs / fit.model.batch_rows
+        )
         if self.score_error_bound is None:
             if fit.family.scale_known:
                 bound = _indexed_poisson_score_bound(fit, components, self.fit_control)
