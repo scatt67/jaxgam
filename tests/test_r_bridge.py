@@ -315,7 +315,11 @@ class TestRBridgeFitGam:
             "reml_score",
             "theta",
         }
-        assert set(result.keys()) == expected_keys
+        assert expected_keys <= set(result)
+        if bridge.mode == "rpy2":
+            assert isinstance(result["inner_converged"], bool)
+            assert isinstance(result["outer_converged"], bool)
+            assert isinstance(result["outer_status"], str | None)
 
     def test_fit_gaussian_types(self, gaussian_data: pd.DataFrame) -> None:
         bridge = RBridge()

@@ -594,6 +594,8 @@ class RBridge:
         dict
             Keys: coefficients, fitted_values, smoothing_params, edf,
             deviance, null_deviance, scale, reml_scale, Vp, reml_score.
+            The typed rpy2 route also returns inner_converged,
+            outer_converged, and outer_status from the fitted R object.
         """
         if self.mode == "rpy2":
             return self._fit_rpy2(formula, data, family, method)
@@ -5207,6 +5209,12 @@ class RBridge:
         edf = np.array(r_summary.rx2("edf"), dtype=np.float64)
         edf_total = float(np.sum(np.array(r_model.rx2("edf"), dtype=np.float64)))
         null_deviance = float(np.array(r_model.rx2("null.deviance"))[0])
+        outer = r_model.rx2("outer.info")
+        outer_status = (
+            str(outer.rx2("conv")[0])
+            if outer is not self._ro.NULL and outer.rx2("conv") is not self._ro.NULL
+            else None
+        )
 
         # Extract theta for extended families (e.g. NB)
         theta = None
@@ -5231,6 +5239,9 @@ class RBridge:
             "Vp": vp,
             "reml_score": reml_score,
             "theta": theta,
+            "inner_converged": bool(r_model.rx2("converged")[0]),
+            "outer_converged": outer_status == "full convergence",
+            "outer_status": outer_status,
         }
 
     def _fit_subprocess(

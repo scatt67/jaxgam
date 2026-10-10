@@ -373,6 +373,38 @@ def _timed_fit(fit: Callable[[], Any]) -> tuple[Any, float]:
     return result, time.perf_counter() - started
 
 
+def _fit_validity(result: Any) -> dict[str, Any]:
+    """Check a completed timed fit before using its latency as evidence."""
+    values = {
+        "coefficients": result.coefficients,
+        "smoothing_params": result.smoothing_params,
+        "score": result.score,
+        "deviance": result.deviance,
+        "scale": result.scale,
+        "edf_total": result.edf_total,
+    }
+    if getattr(result, "score_scale", None) is not None:
+        values["score_scale"] = result.score_scale
+    finite_fields = {
+        name: bool(np.all(np.isfinite(np.asarray(value))))
+        for name, value in values.items()
+    }
+    converged = bool(result.converged)
+    return {
+        "valid": converged and all(finite_fields.values()),
+        "converged": converged,
+        "finite_fields": finite_fields,
+        "status": str(result.convergence_info),
+    }
+
+
+def _require_valid_timed_fit(result: Any, *, label: str) -> dict[str, Any]:
+    validity = _fit_validity(result)
+    if not validity["valid"]:
+        raise RuntimeError(f"{label} returned an invalid fit: {validity}")
+    return validity
+
+
 def _partial_public_dataclass_array_inventory(value: Any) -> dict[str, int]:
     """Count direct dataclass arrays; this is not a retained-object graph size."""
     seen: set[int] = set()
@@ -428,34 +460,8 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
     if case.execution == "efs":
 
         def fit() -> Any:
-            # EFS is intentionally internal. This adapter is narrow: Poisson/log
-            # with an estimated smoothing parameter and a prediction-only result.
-            from jaxgam.control import FitControl
-            from jaxgam.execution.efs import dense_efs_known_scale
-            from jaxgam.families.registry import get_family
-            from jaxgam.fitting.data import FittingData
-            from jaxgam.formula.design import ModelSetup
-            from jaxgam.formula.parser import parse_formula
-            from jaxgam.results import GAMResults
-
-            spec = parse_formula(formula)
-            family = get_family("poisson")
-            setup = ModelSetup.build(spec, data)
-            fitting_data = FittingData.from_setup(setup, family)
-            efs_result = dense_efs_known_scale(fitting_data)
-            return GAMResults._from_fit(
-                fit_result=efs_result,
-                setup=setup,
-                spec=spec,
-                data=data,
-                family=family,
-                fd=fitting_data,
-                lambda_strategy="efs_internal",
-                formula=formula,
-                method="REML",
-                result_mode="prediction",
-                control=FitControl(),
-                execution_route="dense_efs_internal",
+            return GAM(formula, family="poisson", optimizer="efs").fit(
+                data, result="prediction"
             )
 
         return _FitPlan(fit, formula, None)
@@ -498,34 +504,14 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
         return _FitPlan(fit, formula, source)
 
     def fit() -> Any:
-        # QR is a separately named internal adapter. It must not fall back to
-        # the public Cholesky route when an older checkout lacks QR support.
-        from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
-        from jaxgam.families.registry import get_family
-        from jaxgam.fitting.data import PreparedFittingMetadata
-        from jaxgam.formula.design_provider import StreamDesign
-        from jaxgam.formula.parser import parse_formula
-        from jaxgam.formula.prepare import prepare_model
-        from jaxgam.results import GAMPredictionResult
-
-        family = get_family("gaussian")
-        spec = parse_formula(formula)
-        prepared = prepare_model(spec, source, family=family)
-        metadata = PreparedFittingMetadata.from_prepared(prepared, family)
-        state = fit_streamed_pirls(
-            StreamDesign(prepared, source),
-            family,
-            np.log(np.asarray(fixed_sp, dtype=float)),
-            control=StreamPIRLSControl(batch_rows=case.batch_rows, solver_policy="qr"),
+        qr_control = FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=case.batch_rows,
+            uncertainty="fisher",
         )
-        return GAMPredictionResult._from_stream_fit(
-            stream_state=state,
-            prepared=prepared,
-            metadata=metadata,
-            family=family,
-            formula=formula,
-            method="REML",
-            control=control,
+        return GAM(formula, family="gaussian", sp=fixed_sp, control=qr_control).fit(
+            source, result="prediction"
         )
 
     return _FitPlan(fit, formula, source)
@@ -545,7 +531,7 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
             "result_mode": "prediction",
         },
         "stream-qr": {
-            "adapter": "internal",
+            "adapter": "public",
             "strategy": "fixed-sp streamed pivoted-QR PIRLS",
             "result_mode": "prediction",
         },
@@ -555,7 +541,7 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
             "result_mode": "prediction",
         },
         "efs": {
-            "adapter": "internal",
+            "adapter": "public",
             "strategy": "dense Poisson/log EFS with estimated smoothing",
             "result_mode": "prediction",
         },
@@ -872,6 +858,7 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
     cold_scan_before = _source_scan_count(fit_plan.source)
     cold_bytes_before = _source_batch_bytes(fit_plan.source)
     cold_result, cold_fit_s = _timed_fit(fit)
+    cold_validity = _require_valid_timed_fit(cold_result, label="cold fit")
     cold_scan_delta = _source_scan_delta(fit_plan.source, cold_scan_before)
     cold_bytes_delta = _source_batch_bytes_delta(fit_plan.source, cold_bytes_before)
     rss_high_water_after_cold = peak_rss_bytes()
@@ -890,8 +877,8 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
         fit_plan.source, prediction_bytes_before
     )
     prediction_se_s: float | None = None
-    prediction_se_status = "not requested for this internal adapter"
-    if case.execution in {"dense", "stream", "stream-exact"}:
+    prediction_se_status = "not requested for the EFS prediction-only route"
+    if case.execution in {"dense", "stream", "stream-qr", "stream-exact"}:
         started = time.perf_counter()
         _, standard_error = cold_result.predict(data.iloc[:128], se_fit=True)
         prediction_se_s = time.perf_counter() - started
@@ -921,6 +908,7 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
         inner_iterations = None
         outer_iterations = None
     result_metadata = {
+        "cold_fit_validity": cold_validity,
         "converged": bool(cold_result.converged),
         "status": str(cold_result.convergence_info),
         "n_iter": public_iterations,
@@ -987,7 +975,7 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
             "cold_fit_batch_bytes": cold_bytes_delta,
             "cold_fit_scope": (
                 "end-to-end fit call; includes preparation performed inside the "
-                "public/internal adapter"
+                "public route"
             ),
             "warm_fit_deltas": [],
             "warm_fit_batch_bytes": [],
@@ -1016,12 +1004,16 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
     del cold_result
 
     warm_times: list[float] = []
+    warm_validity: list[dict[str, Any]] = []
     warm_scan_deltas: list[int | None] = []
     warm_batch_bytes: list[int | None] = []
-    for _ in range(case.repeats):
+    for repeat in range(case.repeats):
         warm_scan_before = _source_scan_count(fit_plan.source)
         warm_bytes_before = _source_batch_bytes(fit_plan.source)
         warm_result, elapsed = _timed_fit(fit)
+        warm_validity.append(
+            _require_valid_timed_fit(warm_result, label=f"warm fit {repeat + 1}")
+        )
         warm_times.append(elapsed)
         warm_scan_deltas.append(_source_scan_delta(fit_plan.source, warm_scan_before))
         warm_batch_bytes.append(
@@ -1030,6 +1022,7 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
         del warm_result
     result_metadata["source_scans"]["warm_fit_deltas"] = warm_scan_deltas
     result_metadata["source_scans"]["warm_fit_batch_bytes"] = warm_batch_bytes
+    result_metadata["warm_fit_validity"] = warm_validity
 
     rss_high_water_after_warm = peak_rss_bytes()
     rss_current_after_warm = current_rss_bytes()
@@ -1309,6 +1302,15 @@ def compare_pinned_r_exact(case: ScalingCase, record: dict[str, Any]) -> dict[st
         ),
         "edf_total": _numeric_comparison(actual["edf_total"], reference["edf_total"]),
     }
+    within_run_consistent = bool(
+        record.get("within_run_consistency", {}).get("valid", False)
+    )
+    reference_converged = bool(
+        reference["inner_converged"] and reference["outer_converged"]
+    )
+    valid_pair = (
+        bool(actual["converged"]) and within_run_consistent and reference_converged
+    )
     return {
         "reference": "R 4.5.2 / mgcv 1.9-3 via RBridge(mode='rpy2')",
         "formula": formula,
@@ -1325,9 +1327,13 @@ def compare_pinned_r_exact(case: ScalingCase, record: dict[str, Any]) -> dict[st
         },
         "fields": fields,
         "jaxgam_converged": bool(actual["converged"]),
-        "strict_complete": bool(actual["converged"])
+        "within_run_consistent": within_run_consistent,
+        "r_inner_converged": bool(reference["inner_converged"]),
+        "r_outer_converged": bool(reference["outer_converged"]),
+        "r_outer_status": reference["outer_status"],
+        "strict_complete": valid_pair
         and all(field["strict_allclose"] for field in fields.values()),
-        "moderate_numerical_match": bool(actual["converged"])
+        "moderate_numerical_match": valid_pair
         and all(field["moderate_allclose"] for field in fields.values()),
         "moderate_acceptance_status": (
             "diagnostic_only; requires four recorded source/numerical correction "

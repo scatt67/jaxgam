@@ -196,8 +196,8 @@ def test_canonical_penalty_contract_matches_legacy_global_and_local_storage() ->
     [
         ("dense", "public", "full"),
         ("stream", "public", "prediction"),
-        ("stream-qr", "internal", "prediction"),
-        ("efs", "internal", "prediction"),
+        ("stream-qr", "public", "prediction"),
+        ("efs", "public", "prediction"),
     ],
 )
 def test_route_contracts_explicitly_name_adapter_and_result_semantics(
@@ -328,7 +328,7 @@ def test_build_fit_constructs_dense_and_stream_public_routes() -> None:
     assert stream_plan.source is not None
 
 
-def test_tiny_internal_stream_qr_adapter_runs_without_public_fallback(
+def test_tiny_public_stream_qr_adapter_uses_published_route(
     minimal_git_checkout: Path,
 ) -> None:
     record = benchmark_scaling.run_isolated(
@@ -341,8 +341,8 @@ def test_tiny_internal_stream_qr_adapter_runs_without_public_fallback(
     result = record["fit"]["result"]
 
     assert record["within_run_consistency"]["valid"]
-    assert record["setup"]["route"]["adapter"] == "internal"
-    assert result["execution_route"] == "stream"
+    assert record["setup"]["route"]["adapter"] == "public"
+    assert result["execution_route"] == "stream_qr"
     assert result["converged"]
     assert result["source_scans"]["available"]
     assert result["source_scans"]["cold_fit_delta"] > 0
@@ -405,6 +405,9 @@ def test_pinned_r_exact_parity_uses_typed_bridge_and_reports_every_field(
         "scale": 5.0,
         "reml_scale": 6.0,
         "edf_total": 1.5,
+        "inner_converged": True,
+        "outer_converged": True,
+        "outer_status": "full convergence",
     }
 
     class PinnedBridge:
@@ -423,6 +426,7 @@ def test_pinned_r_exact_parity_uses_typed_bridge_and_reports_every_field(
 
     monkeypatch.setattr(r_bridge, "RBridge", PinnedBridge)
     record = {
+        "within_run_consistency": {"valid": True},
         "fit": {
             "result": {
                 "comparison_vectors": {
@@ -437,7 +441,7 @@ def test_pinned_r_exact_parity_uses_typed_bridge_and_reports_every_field(
                 "edf_total": response["edf_total"],
                 "converged": True,
             }
-        }
+        },
     }
 
     parity = benchmark_scaling.compare_pinned_r_exact(case, record)
@@ -455,11 +459,23 @@ def test_pinned_r_exact_parity_uses_typed_bridge_and_reports_every_field(
     assert all(field["strict_allclose"] for field in parity["fields"].values())
     assert parity["strict_complete"]
     assert parity["moderate_numerical_match"]
+    assert parity["r_inner_converged"]
+    assert parity["r_outer_converged"]
+    assert parity["within_run_consistent"]
     assert "four recorded" in parity["moderate_acceptance_status"]
     record["fit"]["result"]["converged"] = False
     nonconverged = benchmark_scaling.compare_pinned_r_exact(case, record)
     assert not nonconverged["strict_complete"]
     assert not nonconverged["moderate_numerical_match"]
+    record["fit"]["result"]["converged"] = True
+    record["within_run_consistency"]["valid"] = False
+    assert not benchmark_scaling.compare_pinned_r_exact(case, record)["strict_complete"]
+    record["within_run_consistency"]["valid"] = True
+    response["outer_converged"] = False
+    assert not benchmark_scaling.compare_pinned_r_exact(case, record)["strict_complete"]
+    response["outer_converged"] = True
+    response["inner_converged"] = False
+    assert not benchmark_scaling.compare_pinned_r_exact(case, record)["strict_complete"]
 
 
 def test_pinned_r_exact_parity_requires_pinned_versions(
@@ -632,7 +648,7 @@ def test_tiny_additive_stream_routes_record_fit_scan_deltas_only(
     assert "original training RowSource" in scans["prediction_source_scope"]
 
 
-def test_tiny_internal_efs_adapter_runs_without_public_fallback(
+def test_tiny_public_efs_adapter_uses_published_route(
     minimal_git_checkout: Path,
 ) -> None:
     record = benchmark_scaling.run_isolated(
@@ -643,8 +659,8 @@ def test_tiny_internal_efs_adapter_runs_without_public_fallback(
     result = record["fit"]["result"]
 
     assert record["within_run_consistency"]["valid"]
-    assert record["setup"]["route"]["adapter"] == "internal"
-    assert result["execution_route"] == "dense_efs_internal"
+    assert record["setup"]["route"]["adapter"] == "public"
+    assert result["execution_route"] == "dense"
     assert result["n_penalties"] == 1
 
 
@@ -844,6 +860,8 @@ def test_run_case_records_completed_timing_and_honest_diagnostics(
     )
 
     assert record["result"]["execution_route"] == "stream"
+    assert record["result"]["cold_fit_validity"]["valid"]
+    assert all(item["valid"] for item in record["result"]["warm_fit_validity"])
     assert record["result"]["route"]["strategy"] == "fixed-sp streamed Cholesky PIRLS"
     assert (
         record["result"]["partial_public_dataclass_array_inventory"]["array_bytes"]
@@ -852,6 +870,20 @@ def test_run_case_records_completed_timing_and_honest_diagnostics(
     assert record["timings"]["result_finish_s"] is None
     assert record["basis_comparison"]["status"] == "not_checked"
     assert not record["result"]["source_scans"]["available"]
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        SimpleNamespace(**{**_Result().__dict__, "converged": False}),
+        SimpleNamespace(**{**_Result().__dict__, "score": float("nan")}),
+    ],
+)
+def test_timed_fit_validity_rejects_nonconvergence_and_nonfinite_fields(
+    invalid: SimpleNamespace,
+) -> None:
+    with pytest.raises(RuntimeError, match="warm fit 1 returned an invalid fit"):
+        benchmark_scaling._require_valid_timed_fit(invalid, label="warm fit 1")
 
 
 def _paired_record() -> dict[str, object]:
