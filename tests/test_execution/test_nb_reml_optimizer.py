@@ -1061,13 +1061,15 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
         and reported_iter < max_iter
     )
     assert result.converged is expect_converged
-    assert result.n_evaluations == (
-        1
-        if maxfun <= 5 or start_rho == 40.0 or reported_iter >= max_iter
-        else 5
-        if curvature_sign < 0.0 or max_step is not None
-        else 6
-    )
+    if maxfun <= 5 or start_rho == 40.0 or reported_iter >= max_iter:
+        expected_evaluations = 1
+    elif curvature_sign < 0.0 or max_step is not None:
+        expected_evaluations = 5
+    else:
+        # An invalid inner fit rejects the full correction. All three shorter
+        # steps are then evaluated but fail the original gradient gate.
+        expected_evaluations = 6 if valid_inner else 9
+    assert result.n_evaluations == expected_evaluations
     assert result.cumulative_source_scans == 3 * result.n_evaluations
     assert result.cumulative_batches_scanned == 5 * result.n_evaluations
     if expect_converged:
