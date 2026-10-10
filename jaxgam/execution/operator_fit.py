@@ -1178,6 +1178,7 @@ def fit_operator_fixed_sp(
     *,
     control: OperatorControl = _DEFAULT_OPERATOR_CONTROL,
     memory_budget_bytes: int,
+    beta_start: np.ndarray | None = None,
 ) -> OperatorFitResult:
     """Host Newton fitting with actual observed rows and certified CPU PCG.
 
@@ -1205,6 +1206,15 @@ def fit_operator_fixed_sp(
     ):
         raise ValueError("Fixed sp must be a matching positive float64 vector.")
     p, B = model.n_coef, model.batch_rows
+    if beta_start is not None and (
+        not isinstance(beta_start, np.ndarray)
+        or beta_start.dtype != np.float64
+        or beta_start.shape != (p,)
+        or not np.all(np.isfinite(beta_start))
+    ):
+        raise ValueError(
+            "Operator beta start must be a finite float64 coefficient vector."
+        )
     if model.modest_raw_width > control.max_modest_coefficients:
         raise MemoryError("Prepared modest block exceeds the independent fit cap.")
     family_bound = _family_ownership_bound(family)
@@ -1310,6 +1320,8 @@ def fit_operator_fixed_sp(
         reserved=extra,
         budget=memory_budget_bytes,
     )
+    if beta_start is not None:
+        beta = beta_start.copy()
     initialization_scans = diagnostics.completed_scans - before_initialization_scans
     null_scale = 1.0
     if not family.scale_known:
