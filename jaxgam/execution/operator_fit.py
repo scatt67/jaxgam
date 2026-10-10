@@ -192,6 +192,24 @@ class FrozenOperatorWorkingState:
             raise FloatingPointError("Family observed working system is nonfinite.")
         return np.asarray(quantities.observed_weight)[: len(batch.row_positions)]
 
+    def fisher_curvature(self, batch: RowBatch, rows: OperatorBatch) -> np.ndarray:
+        """Expected curvature at this frozen beta/theta, without row retention."""
+        _, quantities = self.evaluate(batch, rows)
+        if not bool(quantities.input_ok) or not bool(quantities.domain_ok):
+            raise ValueError("Family Fisher rows have invalid real inputs/domain.")
+        n = len(batch.row_positions)
+        mu_eta = np.asarray(self.family.link.mu_eta(quantities.eta))[:n]
+        variance = np.asarray(self.family.variance(quantities.mu))[:n]
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            weight = np.where(
+                batch.weight > 0,
+                batch.weight * mu_eta**2 / variance,
+                0.0,
+            )
+        if not np.all(np.isfinite(weight)) or np.any(weight < 0):
+            raise FloatingPointError("Frozen family Fisher curvature is invalid.")
+        return weight
+
 
 def _evaluate_geometry(model: PreparedOperatorModel, batch: RowBatch) -> OperatorBatch:
     spec = model.modest.predict_spec
@@ -1083,6 +1101,7 @@ class OperatorFitResult:
     """Private row-free fit handoff; public retention is built separately."""
 
     coefficients: np.ndarray
+    log_lambda: np.ndarray
     model: PreparedOperatorModel
     family: ExponentialFamily
     deviance: float
@@ -1096,6 +1115,9 @@ class OperatorFitResult:
         beta = self.coefficients.copy()
         beta.setflags(write=False)
         object.__setattr__(self, "coefficients", beta)
+        rho = self.log_lambda.copy()
+        rho.setflags(write=False)
+        object.__setattr__(self, "log_lambda", rho)
 
 
 #: Residual refinements of a strictly additive (single-step) operator solve.
@@ -1108,6 +1130,16 @@ def _remaining_memory(budget: int, reserved: int) -> int:
             "Combined accepted/trial operator storage exceeds its budget."
         )
     return budget - reserved
+
+
+def _operator_family_row_bound(model: PreparedOperatorModel) -> int:
+    """Shared working-family transfer/replay allowance for one operator batch."""
+    B = model.batch_rows
+    return (
+        model.batch_workspace_bound(B)
+        + 64 * B * (len(model.modest_columns) + 2 * len(model.random_effects))
+        + 256 * B
+    )
 
 
 def _family_ownership_bound(family: ExponentialFamily) -> int:
@@ -1186,11 +1218,7 @@ def fit_operator_fixed_sp(
     # Row allowance covers the additional family geometry transfer, padded
     # inputs, eta, AD row outputs and host curvature copy while normal-action
     # geometry remains live. Native compiler/source backing are excluded.
-    row_bound = (
-        model.batch_workspace_bound(B)
-        + 64 * B * (len(model.modest_columns) + 2 * len(model.random_effects))
-        + 256 * B
-    )
+    row_bound = _operator_family_row_bound(model)
     fit_bound = (
         model.metadata_bound_bytes
         + family_bound
@@ -1496,6 +1524,7 @@ def fit_operator_fixed_sp(
     )
     return OperatorFitResult(
         beta,
+        rho,
         model,
         family,
         deviance,

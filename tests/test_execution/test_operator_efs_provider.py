@@ -1,0 +1,239 @@
+"""Matched observed-score and Fisher-statistic operator EFS components."""
+
+from dataclasses import replace
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from jaxgam.data.source import DataFrameRowSource
+from jaxgam.execution.operator_efs_provider import MatchedOperatorEFSProvider
+from jaxgam.execution.operator_fit import (
+    FrozenOperatorWorkingState,
+    fit_operator_fixed_sp,
+)
+from jaxgam.execution.operator_logdet import OperatorLogDetControl
+from jaxgam.families.standard import Gamma, Gaussian, Poisson
+from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.operator_prepare import (
+    OperatorPreparationControl,
+    prepare_operator_model,
+)
+from jaxgam.formula.parser import parse_formula
+from tests.tolerances import STRICT
+
+
+def _case(family, *, batch_rows=7):
+    row = np.arange(27)
+    frame = pd.DataFrame(
+        {
+            "y": (
+                1.2 + 0.2 * np.sin(row)
+                if isinstance(family, Gaussian)
+                else np.asarray(row % 4, dtype=float)
+            ),
+            "g": pd.Categorical(np.resize(["a", "b", "c"], len(row))),
+        }
+    )
+    weights = np.resize([0.0, 1.0, 2.0, 0.5], len(row))
+    offsets = 0.05 * np.sin(row)
+    source = DataFrameRowSource(frame, response="y", weights=weights, offset=offsets)
+    spec = parse_formula("y~0+s(g,bs='re')")
+    model = prepare_operator_model(
+        spec,
+        source,
+        control=OperatorPreparationControl(
+            batch_rows=batch_rows, memory_budget_bytes=2 * 1024 * 1024
+        ),
+    )
+    beta = np.array([0.1, 0.3, -0.2], dtype=np.float64)
+    state = FrozenOperatorWorkingState(
+        model,
+        family,
+        beta,
+        row_memory_budget_bytes=2 * 1024 * 1024,
+        state_memory_budget_bytes=2 * 1024 * 1024,
+    )
+    return frame, weights, offsets, source, spec, state
+
+
+@pytest.mark.parametrize(("family", "phi"), [(Gaussian(), 1.3), (Poisson(), 1.0)])
+def test_matched_components_agree_with_dense_fixed_state_strict(family, phi):
+    frame, weights, offsets, source, spec, state = _case(family)
+    rho = np.array([np.log(1.3)], dtype=np.float64)
+    result = MatchedOperatorEFSProvider(
+        state,
+        source,
+        rho,
+        score_phi=phi,
+        memory_budget_bytes=16 * 1024 * 1024,
+        logdet_control=OperatorLogDetControl(probes=4, lanczos_depth=3, seed=17),
+    ).evaluate()
+    dense = ModelSetup.build(spec, frame)
+    X = dense.X
+    eta = X @ state.beta + offsets
+    mu = np.asarray(family.link.inverse(eta))
+    working = weights if isinstance(family, Gaussian) else weights * mu
+    S = dense.penalties.materialize(rho)
+    H = X.T @ (working[:, None] * X) + S
+    inverse = np.linalg.inv(H)
+    S_unscaled = S / np.exp(rho[0])
+    expected_trace = np.trace(inverse @ S_unscaled)
+    expected_quadratic = state.beta @ S_unscaled @ state.beta
+    expected_deviance = float(
+        np.sum(family.deviance_contributions(frame.y.to_numpy(), mu, weights))
+    )
+    expected_saturated = float(
+        np.asarray(family.saturated_loglik(frame.y.to_numpy(), weights, phi))
+    )
+    expected_score = (
+        (expected_deviance + np.exp(rho[0]) * expected_quadratic) / (2 * phi)
+        - expected_saturated
+        + (np.linalg.slogdet(H)[1] - result.penalty.value) / 2
+    )
+    np.testing.assert_allclose(
+        [result.score.value, result.fisher.traces[0], result.fisher.quadratics[0]],
+        [expected_score, expected_trace, expected_quadratic],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        result.edf_total,
+        state.model.n_coef - np.exp(rho[0]) * expected_trace,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_array_equal(result.penalty.derivative, [3.0])
+    assert result.trace_method == "exact"
+    assert result.source_scans > 1
+    assert result.peak_bound_bytes < 16 * 1024 * 1024
+
+
+def test_stochastic_trace_is_labeled_and_keeps_sampling_error_separate():
+    _, _, _, source, _, state = _case(Poisson())
+    result = MatchedOperatorEFSProvider(
+        state,
+        source,
+        np.zeros(1, dtype=np.float64),
+        score_phi=1.0,
+        memory_budget_bytes=16 * 1024 * 1024,
+        trace_method="stochastic",
+        trace_probes=4,
+        trace_seed=31,
+        logdet_control=OperatorLogDetControl(probes=4, lanczos_depth=3, seed=13),
+    ).evaluate()
+    assert result.trace_method == "stochastic"
+    assert result.fisher.per_probe.shape == (4, 1)
+    assert result.fisher.monte_carlo_standard_error.shape == (1,)
+    assert (
+        result.fisher.diagnostics.normal_actions
+        == result.fisher.diagnostics.source_scans
+    )
+
+
+def test_noncanonical_gamma_keeps_observed_score_and_fisher_trace_distinct():
+    row = np.arange(27)
+    frame = pd.DataFrame(
+        {
+            "y": 1.2 + 0.2 * np.sin(row),
+            "g": pd.Categorical(np.resize(["a", "b", "c"], len(row))),
+        }
+    )
+    weights = np.resize([0.0, 1.0, 2.0, 0.5], len(row))
+    source = DataFrameRowSource(frame, response="y", weights=weights)
+    spec = parse_formula("y~0+s(g,bs='re')")
+    model = prepare_operator_model(
+        spec,
+        source,
+        control=OperatorPreparationControl(
+            batch_rows=7, memory_budget_bytes=2 * 1024 * 1024
+        ),
+    )
+    family = Gamma(link="log")
+    beta = np.array([0.1, 0.3, -0.2], dtype=np.float64)
+    rho = np.array([np.log(1.3)], dtype=np.float64)
+    phi = 1.7
+    state = FrozenOperatorWorkingState(
+        model, family, beta, 2 * 1024 * 1024, 2 * 1024 * 1024
+    )
+    result = MatchedOperatorEFSProvider(
+        state,
+        source,
+        rho,
+        score_phi=phi,
+        memory_budget_bytes=16 * 1024 * 1024,
+        logdet_control=OperatorLogDetControl(probes=4, lanczos_depth=3),
+    ).evaluate()
+    dense = ModelSetup.build(spec, frame)
+    X = dense.X
+    mu = np.exp(X @ beta)
+    S = dense.penalties.materialize(rho)
+    observed = X.T @ ((weights * frame.y.to_numpy() / mu)[:, None] * X) + S
+    fisher = X.T @ (weights[:, None] * X) + S
+    S_unscaled = S / np.exp(rho[0])
+    expected_trace = np.trace(np.linalg.inv(fisher) @ S_unscaled)
+    expected_score = (
+        result.score_rows.terms.penalized_deviance / (2 * phi)
+        - result.score_rows.terms.saturated_loglik
+        + (np.linalg.slogdet(observed)[1] - result.penalty.value) / 2
+    )
+    np.testing.assert_allclose(
+        [result.score.value, result.fisher.traces[0]],
+        [expected_score, expected_trace],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert not np.isclose(np.linalg.slogdet(observed)[1], np.linalg.slogdet(fisher)[1])
+
+
+def test_matched_provider_preflights_rho_and_total_budget_before_replay(monkeypatch):
+    _, _, _, source, _, state = _case(Poisson())
+    monkeypatch.setattr(source, "scan", lambda *_: pytest.fail("source replay started"))
+    with pytest.raises(ValueError, match="rho"):
+        MatchedOperatorEFSProvider(
+            state,
+            source,
+            np.zeros(1, dtype=np.float32),
+            score_phi=1.0,
+            memory_budget_bytes=16 * 1024 * 1024,
+        )
+    with pytest.raises(MemoryError, match="total budget"):
+        MatchedOperatorEFSProvider(
+            state,
+            source,
+            np.zeros(1, dtype=np.float64),
+            score_phi=1.0,
+            memory_budget_bytes=1,
+        )
+
+
+def test_from_fit_binds_rho_family_and_convergence_to_matched_components():
+    _, _, _, source, _, state = _case(Gaussian())
+    sp = np.array([1.3], dtype=np.float64)
+    fitted = fit_operator_fixed_sp(
+        state.model,
+        source,
+        Gaussian(),
+        sp,
+        memory_budget_bytes=8 * 1024 * 1024,
+    )
+    assert fitted.converged
+    np.testing.assert_array_equal(fitted.log_lambda, np.log(sp))
+    assert not fitted.log_lambda.flags.writeable
+    provider = MatchedOperatorEFSProvider.from_fit(
+        fitted,
+        source,
+        score_phi=1.3,
+        memory_budget_bytes=16 * 1024 * 1024,
+        logdet_control=OperatorLogDetControl(probes=4, lanczos_depth=3),
+    )
+    result = provider.evaluate()
+    assert np.isfinite(result.score.value)
+    assert result.source_scans > 1
+    with pytest.raises(ValueError, match="converged finite fit"):
+        MatchedOperatorEFSProvider.from_fit(
+            replace(fitted, converged=False),
+            source,
+            score_phi=1.3,
+            memory_budget_bytes=16 * 1024 * 1024,
+        )
