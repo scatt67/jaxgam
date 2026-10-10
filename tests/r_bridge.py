@@ -1305,7 +1305,7 @@ class RBridge:
         sp: float | None = None,
         r_epsilon: float = 1e-11,
         r_newton_tolerance: float = 1e-10,
-    ) -> dict[str, np.ndarray | float]:
+    ) -> dict[str, Any]:
         """Run a tight pinned mgcv public fit for one fixed-sp release cell."""
         self._require_rpy2()
         ro = self._ro
@@ -1362,6 +1362,16 @@ class RBridge:
             if outer is ro.NULL or outer.rx2("conv") is ro.NULL
             else str(outer.rx2("conv")[0])
         )
+        outer_gradient = (
+            None
+            if outer is ro.NULL or outer.rx2("grad") is ro.NULL
+            else np.asarray(outer.rx2("grad"), dtype=np.float64).copy()
+        )
+        outer_hessian = (
+            None
+            if outer is ro.NULL or outer.rx2("hess") is ro.NULL
+            else np.asarray(outer.rx2("hess"), dtype=np.float64).copy()
+        )
         return {
             "theta": (
                 float(fit.rx2("family").rx2("getTheta")(True)[0])
@@ -1376,7 +1386,17 @@ class RBridge:
             "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
             "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
             "inner_converged": bool(fit.rx2("converged")[0]),
+            "inner_iterations": int(fit.rx2("iter")[0]),
             "outer_status": outer_status,
+            "outer_gradient": outer_gradient,
+            "outer_hessian": outer_hessian,
+            "outer_iterations": (
+                None
+                if outer is ro.NULL or outer.rx2("iter") is ro.NULL
+                else int(outer.rx2("iter")[0])
+            ),
+            "r_epsilon": r_epsilon,
+            "r_newton_tolerance": r_newton_tolerance,
         }
 
     def nb_theta_diagnostics(
