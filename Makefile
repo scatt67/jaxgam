@@ -127,6 +127,27 @@ test-efs-recovery-ci: ## run focused EFS retained-start recovery using a built i
 		tests/test_fitting/test_efs_theta_pirls.py::test_efs_theta_pirls_nonsaturated_inner_contract_matches_pinned_r[weighted_ridge] \
 		-s -x --tb=short
 
+.PHONY: test-pr82-nb-batch
+test-pr82-nb-batch: docker-build ## run dynamic-theta NB batch derivative gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_fitting/test_nb_stream_reml.py -x --tb=short -v
+
+.PHONY: test-pr82-nb-host
+test-pr82-nb-host: docker-build ## run exact fixed-state NB host derivative gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_fitting/test_nb_stream_reml.py \
+		tests/test_execution/test_nb_reml.py \
+		tests/test_execution/test_nb_stream.py \
+		tests/test_execution/test_nb_theta_stream.py::test_count_budget_is_checked_after_summary_before_theta_dispatch \
+		-x --tb=short -q
+
+.PHONY: test-pr82-nb-optimizer
+test-pr82-nb-optimizer: docker-build ## run joint exact NB streamed REML optimizer gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_execution/test_nb_reml_optimizer.py \
+		tests/test_execution/test_nb_reml.py tests/test_execution/test_regular_reml.py \
+		-x --tb=short -q
+
 .PHONY: colima-start
 colima-start: ## start colima VM (no-op if already running)
 	@colima status 2>/dev/null || colima start --cpu $(COLIMA_CPU) --memory $(COLIMA_MEMORY)

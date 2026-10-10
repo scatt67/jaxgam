@@ -5,7 +5,9 @@ from __future__ import annotations
 import numbers
 import sys
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import Generic, Protocol, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -174,6 +176,37 @@ class RegularStreamREMLOptimization:
     def required_bytes(self) -> int:
         """Known trial plus retained optimizer workspace at the peak."""
         return self.trial.workspace.required_bytes + self.outer_workspace_bytes
+
+
+class _ParameterizedTrial(Protocol):
+    """Structural contract shared by exact regular and NB trial states."""
+
+    params: jax.Array
+    score: jax.Array
+    gradient: jax.Array
+    source_scans: int
+    batches_scanned: int
+    source_fingerprint: str
+
+
+_TrialT = TypeVar("_TrialT", bound=_ParameterizedTrial)
+
+
+@dataclass(frozen=True)
+class _ParameterizedOptimization(Generic[_TrialT]):
+    """Common bounded L-BFGS-B outcome before family-specific wrapping."""
+
+    trial: _TrialT
+    converged: bool
+    message: str
+    status: int
+    n_iter: int
+    n_evaluations: int
+    n_accepted: int
+    cumulative_source_scans: int
+    cumulative_batches_scanned: int
+    projected_gradient_inf: float
+    accepted_score_history: tuple[float, ...]
 
 
 def _preflight(
@@ -910,35 +943,27 @@ def optimize_stream_reml(
     )
 
 
-class _AcceptedRegularTrialObjective:
-    """Joint regular objective retaining only accepted and candidate trials."""
+class _AcceptedParameterizedTrialObjective(Generic[_TrialT]):
+    """Common exact objective retaining only accepted and candidate trials."""
 
     def __init__(
         self,
         stream: StreamDesign,
-        family: ExponentialFamily,
         params_initial: np.ndarray,
-        pirls_control: StreamPIRLSControl,
         reml_control: StreamREMLControl,
-        maximum_bytes: int,
-        initial_coefficients: np.ndarray | None,
-        device: jax.Device | None,
+        evaluator: Callable[[np.ndarray, _TrialT | None], _TrialT],
+        *,
+        objective_name: str,
+        source_name: str,
+        trial_name: str,
     ) -> None:
         self._stream = stream
-        self._family = family
-        self._pirls_control = pirls_control
-        self._maximum_bytes = maximum_bytes
-        self._device = device
-        self.accepted = evaluate_regular_stream_reml(
-            stream,
-            family,
-            params_initial,
-            maximum_bytes=maximum_bytes,
-            control=pirls_control,
-            initial_coefficients=initial_coefficients,
-            device=device,
-        )
-        self.candidate: RegularStreamREMLTrial | None = None
+        self._evaluate = evaluator
+        self._objective_name = objective_name
+        self._source_name = source_name
+        self._trial_name = trial_name
+        self.accepted = evaluator(params_initial, None)
+        self.candidate: _TrialT | None = None
         self.n_evaluations = 1
         self.n_accepted = 0
         self.cumulative_source_scans = self.accepted.source_scans
@@ -953,11 +978,11 @@ class _AcceptedRegularTrialObjective:
     def _check_source_unchanged(self) -> None:
         if self._stream.source.fingerprint() != self.accepted.source_fingerprint:
             raise RuntimeError(
-                "RowSource changed during regular streamed REML optimization."
+                f"RowSource changed during {self._source_name} optimization."
             )
 
     def __call__(self, params: np.ndarray) -> tuple[float, np.ndarray]:
-        """Evaluate from the last callback-accepted regular coefficient state."""
+        """Evaluate from the last callback-accepted coefficient state."""
         self._check_source_unchanged()
         params_host = np.asarray(params, dtype=np.float64)
         if _same_rho(params_host, self.accepted.params):
@@ -968,15 +993,7 @@ class _AcceptedRegularTrialObjective:
             trial = self.candidate
         else:
             self.candidate = None
-            trial = evaluate_regular_stream_reml(
-                self._stream,
-                self._family,
-                params_host,
-                maximum_bytes=self._maximum_bytes,
-                control=self._pirls_control,
-                warm_start=self.accepted,
-                device=self._device,
-            )
+            trial = self._evaluate(params_host, self.accepted)
             self.candidate = trial
             self.n_evaluations += 1
             self.cumulative_source_scans += trial.source_scans
@@ -985,20 +1002,20 @@ class _AcceptedRegularTrialObjective:
         gradient = np.asarray(trial.gradient, dtype=np.float64)
         if not np.isfinite(score) or not np.all(np.isfinite(gradient)):
             raise FloatingPointError(
-                "Regular streamed REML optimizer received a non-finite trial."
+                f"{self._objective_name} optimizer received a non-finite trial."
             )
         return score, gradient
 
     def callback(self, intermediate_result: OptimizeResult) -> None:
-        """Promote only the exact regular trial accepted by L-BFGS-B."""
+        """Promote only the exact trial accepted by L-BFGS-B."""
         self._check_source_unchanged()
         params = np.asarray(intermediate_result.x, dtype=np.float64)
         if _same_rho(params, self.accepted.params):
             return
         if self.candidate is None or not _same_rho(params, self.candidate.params):
             raise RuntimeError(
-                "L-BFGS-B accepted a point without the matching exact regular "
-                "streamed trial; refusing an unverified warm start."
+                "L-BFGS-B accepted a point without the matching exact "
+                f"{self._trial_name} trial; refusing an unverified warm start."
             )
         self.accepted = self.candidate
         self.candidate = None
@@ -1006,13 +1023,58 @@ class _AcceptedRegularTrialObjective:
         self._history.append(float(np.asarray(self.accepted.score)))
 
 
-def _regular_optimizer_workspace_bytes(
+class _AcceptedRegularTrialObjective(
+    _AcceptedParameterizedTrialObjective[RegularStreamREMLTrial]
+):
+    """Regular adapter for the common accepted/candidate trial driver."""
+
+    def __init__(
+        self,
+        stream: StreamDesign,
+        family: ExponentialFamily,
+        params_initial: np.ndarray,
+        pirls_control: StreamPIRLSControl,
+        reml_control: StreamREMLControl,
+        maximum_bytes: int,
+        initial_coefficients: np.ndarray | None,
+        device: jax.Device | None,
+    ) -> None:
+        def evaluate(
+            params: np.ndarray,
+            warm_start: RegularStreamREMLTrial | None,
+        ) -> RegularStreamREMLTrial:
+            return evaluate_regular_stream_reml(
+                stream,
+                family,
+                params,
+                maximum_bytes=self._maximum_bytes,
+                control=pirls_control,
+                warm_start=warm_start,
+                initial_coefficients=(
+                    initial_coefficients if warm_start is None else None
+                ),
+                device=device,
+            )
+
+        self._maximum_bytes = maximum_bytes
+        super().__init__(
+            stream,
+            params_initial,
+            reml_control,
+            evaluate,
+            objective_name="Regular streamed REML",
+            source_name="regular streamed REML",
+            trial_name="regular streamed",
+        )
+
+
+def _parameterized_optimizer_workspace_bytes(
     p: int,
     n_params: int,
     control: StreamREMLControl,
     pirls_control: StreamPIRLSControl,
 ) -> tuple[int, int, int]:
-    """Return retained accepted-trial and bounded L-BFGS-B workspace bytes."""
+    """Return retained exact-trial and bounded L-BFGS-B workspace bytes."""
     # The retained result owns observed, Fisher and source factors, their
     # compact corrections, two information matrices, coefficient roles,
     # parameters/gradient and scalar source diagnostics.  Twelve p-square and
@@ -1039,6 +1101,112 @@ def _regular_optimizer_workspace_bytes(
         + sys.getsizeof(())
     )
     return retained_trial_bytes, retained_history_bytes, lbfgs_workspace_bytes
+
+
+def _regular_optimizer_workspace_bytes(
+    p: int,
+    n_params: int,
+    control: StreamREMLControl,
+    pirls_control: StreamPIRLSControl,
+) -> tuple[int, int, int]:
+    """Compatibility name for the shared parameterized optimizer ledger."""
+    return _parameterized_optimizer_workspace_bytes(
+        p,
+        n_params,
+        control,
+        pirls_control,
+    )
+
+
+def _projected_gradient_for_bounds(
+    params: np.ndarray,
+    gradient: np.ndarray,
+    bounds: list[tuple[float | None, float | None]],
+) -> np.ndarray:
+    """Apply minimization projected-gradient rules to general box bounds."""
+    projected = np.array(gradient, dtype=np.float64, copy=True)
+    for index, (value, bound) in enumerate(zip(params, bounds, strict=True)):
+        lower, upper = bound
+        if lower is not None and upper is not None and lower == upper:
+            projected[index] = 0.0
+        elif lower is not None and value <= lower:
+            projected[index] = min(projected[index], 0.0)
+        elif upper is not None and value >= upper:
+            projected[index] = max(projected[index], 0.0)
+    return projected
+
+
+def _run_parameterized_stream_reml(
+    objective: _AcceptedParameterizedTrialObjective[_TrialT],
+    params_initial: np.ndarray,
+    bounds: list[tuple[float | None, float | None]],
+    control: StreamREMLControl,
+) -> _ParameterizedOptimization[_TrialT]:
+    """Run the common exact accepted/candidate L-BFGS-B protocol."""
+    if all(
+        lower is not None and upper is not None and lower == upper
+        for lower, upper in bounds
+    ):
+        objective._check_source_unchanged()
+        return _ParameterizedOptimization(
+            trial=objective.accepted,
+            converged=True,
+            message="All parameter coordinates are fixed; returned exact evaluation.",
+            status=0,
+            n_iter=0,
+            n_evaluations=objective.n_evaluations,
+            n_accepted=objective.n_accepted,
+            cumulative_source_scans=objective.cumulative_source_scans,
+            cumulative_batches_scanned=objective.cumulative_batches_scanned,
+            projected_gradient_inf=0.0,
+            accepted_score_history=objective.accepted_score_history,
+        )
+    result = minimize(
+        objective,
+        params_initial,
+        method="L-BFGS-B",
+        jac=True,
+        bounds=bounds,
+        callback=objective.callback,
+        options={
+            "maxiter": control.max_iter,
+            "maxfun": control.maxfun,
+            "maxcor": control.maxcor,
+            "maxls": control.maxls,
+            "gtol": control.gtol,
+            "ftol": control.ftol,
+        },
+    )
+    result_params = np.asarray(result.x, dtype=np.float64)
+    if not _same_rho(result_params, objective.accepted.params):
+        raise RuntimeError(
+            "L-BFGS-B returned a point without a matching accepted exact "
+            "streamed trial; no optimization result is available."
+        )
+    objective._check_source_unchanged()
+    gradient = np.asarray(objective.accepted.gradient, dtype=np.float64)
+    projected = _projected_gradient_for_bounds(result_params, gradient, bounds)
+    projected_gradient_inf = float(np.max(np.abs(projected)))
+    converged = bool(result.success) and projected_gradient_inf <= control.gtol
+    message = str(result.message)
+    if bool(result.success) and not converged:
+        message = (
+            f"{message}; projected gradient {projected_gradient_inf:.3e} exceeds "
+            f"gtol {control.gtol:.3e}."
+        )
+    return _ParameterizedOptimization(
+        trial=objective.accepted,
+        converged=converged,
+        message=message,
+        status=int(result.status),
+        n_iter=int(result.nit),
+        n_evaluations=objective.n_evaluations,
+        n_accepted=objective.n_accepted,
+        cumulative_source_scans=objective.cumulative_source_scans,
+        cumulative_batches_scanned=objective.cumulative_batches_scanned,
+        projected_gradient_inf=projected_gradient_inf,
+        accepted_score_history=objective.accepted_score_history,
+    )
 
 
 def optimize_regular_stream_reml(
@@ -1104,7 +1272,9 @@ def optimize_regular_stream_reml(
     # SciPy's bounded correction/history work. Opaque native scratch follows
     # the existing workspace convention.
     retained_trial_bytes, retained_history_bytes, lbfgs_workspace_bytes = (
-        _regular_optimizer_workspace_bytes(p, n_params, reml_control, pirls_control)
+        _parameterized_optimizer_workspace_bytes(
+            p, n_params, reml_control, pirls_control
+        )
     )
     outer_workspace_bytes = (
         retained_trial_bytes + retained_history_bytes + lbfgs_workspace_bytes
@@ -1127,56 +1297,23 @@ def optimize_regular_stream_reml(
         device,
     )
     bounds = [(lower, upper)] * n_lambda + [(None, None)] * (n_params - n_lambda)
-    result = minimize(
+    optimized = _run_parameterized_stream_reml(
         objective,
         params_initial,
-        method="L-BFGS-B",
-        jac=True,
-        bounds=bounds,
-        callback=objective.callback,
-        options={
-            "maxiter": reml_control.max_iter,
-            "maxfun": reml_control.maxfun,
-            "maxcor": reml_control.maxcor,
-            "maxls": reml_control.maxls,
-            "gtol": reml_control.gtol,
-            "ftol": reml_control.ftol,
-        },
+        bounds,
+        reml_control,
     )
-    result_params = np.asarray(result.x, dtype=np.float64)
-    if not _same_rho(result_params, objective.accepted.params):
-        raise RuntimeError(
-            "L-BFGS-B returned a point without a matching accepted regular "
-            "streamed trial; no optimization result is available."
-        )
-    objective._check_source_unchanged()
-    gradient = np.asarray(objective.accepted.gradient, dtype=np.float64)
-    projected = gradient.copy()
-    projected[:n_lambda] = _projected_gradient(
-        result_params[:n_lambda],
-        gradient[:n_lambda],
-        lower=lower,
-        upper=upper,
-    )
-    projected_gradient_inf = float(np.max(np.abs(projected)))
-    converged = bool(result.success) and projected_gradient_inf <= reml_control.gtol
-    message = str(result.message)
-    if bool(result.success) and not converged:
-        message = (
-            f"{message}; projected gradient {projected_gradient_inf:.3e} exceeds "
-            f"gtol {reml_control.gtol:.3e}."
-        )
     return RegularStreamREMLOptimization(
-        trial=objective.accepted,
-        converged=converged,
-        message=message,
-        status=int(result.status),
-        n_iter=int(result.nit),
-        n_evaluations=objective.n_evaluations,
-        n_accepted=objective.n_accepted,
-        cumulative_source_scans=objective.cumulative_source_scans,
-        cumulative_batches_scanned=objective.cumulative_batches_scanned,
-        projected_gradient_inf=projected_gradient_inf,
-        accepted_score_history=objective.accepted_score_history,
+        trial=optimized.trial,
+        converged=optimized.converged,
+        message=optimized.message,
+        status=optimized.status,
+        n_iter=optimized.n_iter,
+        n_evaluations=optimized.n_evaluations,
+        n_accepted=optimized.n_accepted,
+        cumulative_source_scans=optimized.cumulative_source_scans,
+        cumulative_batches_scanned=optimized.cumulative_batches_scanned,
+        projected_gradient_inf=optimized.projected_gradient_inf,
+        accepted_score_history=optimized.accepted_score_history,
         outer_workspace_bytes=outer_workspace_bytes,
     )
