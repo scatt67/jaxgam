@@ -158,6 +158,13 @@ _PR83_NB_MODERATE_FIELDS = {
         ]
     ),
 }
+
+# Reviewed Linux bytes from the four-pass Gamma endpoint audit. Host libm
+# produces different low-bit trigonometric offsets and stays STRICT for these
+# two additional fields. The digest covers x, y, weights, and offset in order.
+_PR83_GAMMA_LINUX_ENDPOINT_DIGEST = (
+    "7e9f4c8eed03d50a5cf29c7def6dc76839e8c62066dad5c4047d114fb9e427b9"
+)
 _PR83_ZERO_PENALTY_MODERATE_FIELDS = frozenset({"score_scale"})
 
 
@@ -317,7 +324,7 @@ def _public_exact_regular_case(family_class, _link: str):
 
 
 def _assert_pr83_regular_case(
-    family_class, link, source, model, *, smooth: bool = True
+    family_class, link, source, model, *, smooth: bool = True, batch_rows: int = 17
 ) -> None:
     """Bind approved fields to generated rows and exact public controls."""
     data, weight, offset = _public_exact_regular_case(family_class, link)
@@ -333,9 +340,144 @@ def _assert_pr83_regular_case(
     assert model.control == FitControl(
         execution="stream",
         linear_solver="qr",
-        batch_rows=17,
+        batch_rows=batch_rows,
         uncertainty="fisher",
     )
+
+
+def _pr83_gamma_linux_endpoint_fields(
+    family_class,
+    link: str,
+    source: DataFrameRowSource,
+    model: GAM,
+    expected: dict,
+    data: pd.DataFrame,
+    weight: np.ndarray,
+    offset: np.ndarray,
+    *,
+    partition: bool = False,
+) -> frozenset[str]:
+    """Grant only reviewed Linux field endpoints on exact bytes and controls."""
+    if family_class is not Gamma or link not in {"logit", "inverse_squared"}:
+        return frozenset()
+    digest = hashlib.sha256(
+        b"".join(
+            np.asarray(value, dtype="<f8").tobytes()
+            for value in (data["x"], data["y"], weight, offset)
+        )
+    ).hexdigest()
+    if digest != _PR83_GAMMA_LINUX_ENDPOINT_DIGEST:
+        return frozenset()
+    batch_rows = model.control.batch_rows
+    if partition:
+        assert link == "inverse_squared"
+        assert batch_rows in (13, 17, 32, 96)
+    else:
+        assert batch_rows == 17
+    _assert_pr83_regular_case(family_class, link, source, model, batch_rows=batch_rows)
+    assert bool(expected["inner_converged"])
+    if link == "logit":
+        assert bool(expected["outer_converged"])
+        assert expected["outer_status"] == "full convergence"
+        return frozenset({"score_scale"})
+    assert not bool(expected["outer_converged"])
+    assert expected["outer_status"] == "step failed"
+    return frozenset({"smoothing"})
+
+
+def test_pr83_gamma_endpoint_guard_requires_reviewed_bytes_controls_and_r_status(
+    monkeypatch,
+) -> None:
+    """A changed row/control or R endpoint cannot inherit the narrow fields."""
+    data, weight, offset = _public_exact_regular_case(Gamma, "logit")
+    digest = hashlib.sha256(
+        b"".join(
+            np.asarray(value, dtype="<f8").tobytes()
+            for value in (data["x"], data["y"], weight, offset)
+        )
+    ).hexdigest()
+    monkeypatch.setitem(globals(), "_PR83_GAMMA_LINUX_ENDPOINT_DIGEST", digest)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    control = FitControl(
+        execution="stream", linear_solver="qr", batch_rows=17, uncertainty="fisher"
+    )
+    model = GAM('y~s(x,bs="cr",k=6)', family=Gamma("logit"), control=control)
+    r_status = {
+        "inner_converged": True,
+        "outer_converged": True,
+        "outer_status": "full convergence",
+    }
+    assert _pr83_gamma_linux_endpoint_fields(
+        Gamma, "logit", source, model, r_status, data, weight, offset
+    ) == frozenset({"score_scale"})
+    changed_offset = offset.copy()
+    changed_offset[0] = np.nextafter(changed_offset[0], np.inf)
+    assert not _pr83_gamma_linux_endpoint_fields(
+        Gamma, "logit", source, model, r_status, data, weight, changed_offset
+    )
+    with pytest.raises(AssertionError):
+        _pr83_gamma_linux_endpoint_fields(
+            Gamma,
+            "logit",
+            source,
+            GAM(
+                'y~s(x,bs="cr",k=6)',
+                family=Gamma("logit"),
+                control=replace(control, batch_rows=18),
+            ),
+            r_status,
+            data,
+            weight,
+            offset,
+        )
+    inverse_status = {
+        "inner_converged": True,
+        "outer_converged": False,
+        "outer_status": "step failed",
+    }
+    inverse_model = GAM(
+        'y~s(x,bs="cr",k=6)',
+        family=Gamma("inverse_squared"),
+        control=replace(control, batch_rows=13),
+    )
+    assert _pr83_gamma_linux_endpoint_fields(
+        Gamma,
+        "inverse_squared",
+        source,
+        inverse_model,
+        inverse_status,
+        data,
+        weight,
+        offset,
+        partition=True,
+    ) == frozenset({"smoothing"})
+    with pytest.raises(AssertionError):
+        _pr83_gamma_linux_endpoint_fields(
+            Gamma,
+            "inverse_squared",
+            source,
+            GAM(
+                'y~s(x,bs="cr",k=6)',
+                family=Gamma("inverse_squared"),
+                control=replace(control, batch_rows=31),
+            ),
+            inverse_status,
+            data,
+            weight,
+            offset,
+            partition=True,
+        )
+    with pytest.raises(AssertionError):
+        _pr83_gamma_linux_endpoint_fields(
+            Gamma,
+            "logit",
+            source,
+            model,
+            {**r_status, "outer_converged": False},
+            data,
+            weight,
+            offset,
+        )
 
 
 def _assert_pr83_nb_case(source, model, link, *, estimated, smooth) -> None:
@@ -531,6 +673,9 @@ def test_public_estimated_regular_all_links_pinned_r(
     expected = _public_exact_regular_pinned_r(
         tmp_path, data, weight, offset, family.family_name.lower(), link
     )
+    moderate_fields = moderate_fields | _pr83_gamma_linux_endpoint_fields(
+        family_class, link, source, model, expected, data, weight, offset
+    )
     fitted = result.predict(data[["x"]], offset=offset)
     _, link_se = result.predict(
         data[["x"]], pred_type="link", se_fit=True, offset=offset
@@ -587,6 +732,7 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
     expected = _public_exact_regular_pinned_r(
         tmp_path, data, weight, offset, "gamma", "inverse_squared"
     )
+    assert expected["inner_converged"]
     checks = _AssertCollector()
     for batch_rows in (13, 17, 32, 96):
         model = GAM(
@@ -598,6 +744,17 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
                 batch_rows=batch_rows,
                 uncertainty="fisher",
             ),
+        )
+        moderate_fields = _pr83_gamma_linux_endpoint_fields(
+            Gamma,
+            "inverse_squared",
+            source,
+            model,
+            expected,
+            data,
+            weight,
+            offset,
+            partition=True,
         )
         result = model.fit(source, result="prediction")
         assert result.converged, f"batch_rows={batch_rows}: {result.convergence_info}"
@@ -618,10 +775,16 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
                 expected["link_se"],
             ),
         ):
+            tolerance = MODERATE if name in moderate_fields else STRICT
             checks.check(
                 f"batch {batch_rows} {name}",
-                lambda actual=actual, reference=reference: np.testing.assert_allclose(
-                    actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+                lambda actual=actual, reference=reference, tolerance=tolerance: (
+                    np.testing.assert_allclose(
+                        actual,
+                        reference,
+                        rtol=tolerance.rtol,
+                        atol=tolerance.atol,
+                    )
                 ),
             )
     checks.raise_if_any("Gamma inverse-squared exact partition parity")
