@@ -169,6 +169,16 @@ def test_gaussian_operator_fit_matches_weighted_dense_system_across_batches():
             ),
         )
         diagnostics = fitted.diagnostics
+        mean = float(np.mean(frame.y))
+        expected_null_scale = float(
+            np.sum(weights * (frame.y.to_numpy() - mean) ** 2) / len(frame)
+        )
+        np.testing.assert_allclose(
+            diagnostics.initial_null_scale,
+            expected_null_scale,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
         assert diagnostics.certificate_scans == 1
         assert diagnostics.completed_solves == 1
         assert diagnostics.source.completed_scans == (

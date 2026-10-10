@@ -1096,6 +1096,7 @@ class OperatorFitDiagnostics:
     accepted_objectives: tuple[float, ...]
     inner_status: int | None
     final_gradient_norm: float
+    initial_null_scale: float | None
 
 
 @dataclass(frozen=True)
@@ -1537,6 +1538,7 @@ def fit_operator_fixed_sp(
         tuple(objectives),
         status,
         float(gradient_norm),
+        None if family.scale_known else float(null_scale),
     )
     return OperatorFitResult(
         beta,
