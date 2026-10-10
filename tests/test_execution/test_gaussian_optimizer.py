@@ -431,6 +431,42 @@ def test_lbfgs_terminal_failure_policy_uses_exact_final_gradient(
     assert provider.finalize_calls == 1
 
 
+def test_lbfgs_abnormal_line_search_profiles_gaussian_scale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fitting = _problem()
+    provider = build_dense_gaussian_qr_provider(fitting)
+    newton = NewtonOptimizer(
+        fitting, score_provider=build_dense_gaussian_qr_provider(fitting)
+    ).run()
+    assert newton.converged
+    reference = np.r_[np.asarray(newton.log_lambda), 0.0]
+    state, _ = provider.evaluate(jax.numpy.asarray(reference))
+    score_state = state.score_state
+    scale_df = (
+        float(score_state.n_positive_weights) - provider._kwargs["penalty_nullity"]
+    )
+    optimal_scale = float(score_state.penalized_residual_sum_squares) / scale_df
+    stalled = np.r_[reference[:-1], np.log(optimal_scale) + 1e-8]
+
+    def abnormal_line_search(objective, _initial, **_kwargs):
+        _, gradient = objective(stalled)
+        assert abs(gradient[-1]) > 1e-10 * (1.0 + abs(float(newton.score)))
+        return OptimizeResult(
+            x=stalled, success=False, status=2, nit=17, message="ABNORMAL"
+        )
+
+    monkeypatch.setattr(gaussian_optimizer_module, "minimize", abnormal_line_search)
+    result = optimize_gaussian_qr_lbfgs(fitting, provider)
+    assert result.converged
+    assert result.convergence_info == "full convergence"
+    np.testing.assert_allclose(result.log_lambda, stalled[:-1], rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        result.score, newton.score, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert provider.finalize_calls == 1
+
+
 def test_provider_direct_constructor_rejects_nonidentity_coordinate_map() -> None:
     fitting = _problem()
     p = fitting.n_coef

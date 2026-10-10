@@ -517,12 +517,47 @@ def optimize_gaussian_qr_lbfgs(
                 "ftol": reml_control.ftol,
             },
         )
-        score, free_gradient = objective(np.asarray(result.x, dtype=np.float64))
-        del score
+        terminal_params = np.asarray(result.x, dtype=np.float64)
+        score, free_gradient = objective(terminal_params)
+        if int(result.status) == 2 and not fitting.family.scale_known:
+            # At a flat optimum L-BFGS-B can exhaust its line search before
+            # moving the Gaussian log scale by even one part in a billion.
+            # Its conditional minimum is exact: phi = penalized RSS / (n-Mp).
+            # Re-evaluate the same frozen statistics there, then apply the
+            # ordinary full-coordinate gradient convergence check below.
+            terminal_trial = objective.trial
+            if terminal_trial is None:  # pragma: no cover - objective just ran.
+                raise RuntimeError("Gaussian L-BFGS produced no terminal trial.")
+            score_state = terminal_trial.state.score_state
+            scale_df = (
+                float(np.asarray(score_state.n_positive_weights))
+                - provider._kwargs["penalty_nullity"]
+            )
+            penalized_rss = float(
+                np.asarray(score_state.penalized_residual_sum_squares)
+            )
+            if not np.isfinite(scale_df) or scale_df <= 0.0:
+                raise FloatingPointError(
+                    "Gaussian scale profile has invalid degrees of freedom."
+                )
+            optimal_scale = penalized_rss / scale_df
+            if not np.isfinite(optimal_scale) or optimal_scale <= 0.0:
+                raise FloatingPointError(
+                    "Gaussian scale profile is not positive and finite."
+                )
+            terminal_params = terminal_params.copy()
+            terminal_params[-1] = np.log(optimal_scale)
+            previous_score = score
+            score, free_gradient = objective(terminal_params)
+            roundoff = 16.0 * np.finfo(np.float64).eps * (1.0 + abs(previous_score))
+            if score > previous_score + roundoff:
+                raise FloatingPointError(
+                    "Gaussian scale profile increased the criterion."
+                )
         projected = np.asarray(free_gradient, dtype=np.float64).copy()
         if not pin_lambda:
             projected[: fitting.n_penalties] = _projected_gradient(
-                np.asarray(result.x[: fitting.n_penalties]),
+                terminal_params[: fitting.n_penalties],
                 projected[: fitting.n_penalties],
                 lower=-40.0,
                 upper=40.0,
