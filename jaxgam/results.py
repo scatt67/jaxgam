@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
     from jaxgam.data.source import RowSource
     from jaxgam.execution.discrete import DiscreteFit
+    from jaxgam.execution.operator import PCGControl
     from jaxgam.execution.operator_bulk_variance import (
         BulkOperatorVariance,
         BulkVarianceCalibration,
@@ -481,6 +482,7 @@ class GAMPredictionResult:
         probes: int,
         seed: int,
         memory_budget_bytes: int,
+        control: PCGControl | None = None,
         scale: float | None = None,
         max_calibration_standard_errors: float = 5.0,
     ) -> tuple[BulkOperatorVariance, BulkVarianceCalibration]:
@@ -496,7 +498,7 @@ class GAMPredictionResult:
         does not bound unselected rows or iterative-solve bias.
         """
         from jaxgam.data.source import RowSource
-        from jaxgam.execution.operator import FrozenScanSystem
+        from jaxgam.execution.operator import FrozenScanSystem, PCGControl
         from jaxgam.execution.operator_bulk_variance import BulkOperatorVariance
         from jaxgam.execution.operator_fit import FrozenOperatorWorkingState
         from jaxgam.formula.operator_prepare import (
@@ -504,6 +506,7 @@ class GAMPredictionResult:
             prepare_operator_model,
         )
         from jaxgam.formula.parser import parse_formula
+        from jaxgam.inference.operator_geometry import _rows
 
         if (
             self.execution_route != "operator"
@@ -529,6 +532,8 @@ class GAMPredictionResult:
             raise RuntimeError(
                 "Training source differs from the accepted operator fit."
             )
+        if _rows(calibration_data) < 1:
+            raise ValueError("Selected exact calibration requires at least one row.")
         if self.scale is not None:
             if scale is not None and scale != self.scale:
                 raise ValueError("Known-scale family requires its fitted Fisher scale.")
@@ -548,6 +553,10 @@ class GAMPredictionResult:
             or memory_budget_bytes < 2
         ):
             raise ValueError("Bulk memory budget must be a positive integer.")
+        if control is not None and not isinstance(control, PCGControl):
+            raise TypeError("Bulk variance requires PCGControl.")
+        if control is None:
+            control = PCGControl()
         system_budget = memory_budget_bytes // 2
         geometry = self._predictor._operator_geometry
         assert geometry is not None
@@ -587,6 +596,7 @@ class GAMPredictionResult:
             probes=probes,
             seed=seed,
             replay_preparation_scans=model.completed_preparation_scans,
+            control=control,
         ).build()
         calibration = provider.calibrate(calibration_data)
         if calibration.maximum_standardized_error > max_calibration_standard_errors:

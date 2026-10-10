@@ -131,6 +131,9 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
                 control=PCGControl(rtol=1e-11, max_iterations=200),
             ).build()
             held_out_calibration = held_out.calibrate(selected)
+            assert held_out.diagnostics.fisher_construction_scans == (
+                provider.diagnostics.fisher_construction_scans
+            )
             np.testing.assert_allclose(
                 held_out_calibration.exact,
                 calibration.exact,
@@ -228,6 +231,14 @@ def test_bulk_symbolic_large_p_preflights_and_never_materializes_covariance(
         seed=3,
     ).build()
     assert provider.diagnostics.peak_bound_bytes < 16 * 1024 * 1024
+    with pytest.raises(MemoryError, match="requires"):
+        BulkOperatorVariance(
+            system,
+            scale=1,
+            memory_budget_bytes=provider.peak_bound_bytes - 1,
+            probes=4,
+            seed=3,
+        )
     batches = list(provider.estimate_iter(source))
     assert len(np.concatenate([batch.variance for batch in batches])) == n
     assert provider.diagnostics.normal_actions == (
@@ -247,7 +258,7 @@ def test_bulk_symbolic_large_p_preflights_and_never_materializes_covariance(
     )
 
 
-def test_public_operator_bulk_result_replays_fit_and_reports_approximation():
+def test_public_operator_bulk_result_replays_fit_and_reports_approximation(monkeypatch):
     row = np.arange(37)
     frame = pd.DataFrame(
         {
@@ -268,16 +279,43 @@ def test_public_operator_bulk_result_replays_fit_and_reports_approximation():
         ),
     ).fit(source, result="prediction")
     selected = frame.iloc[[0, 3, 9, 20]].copy()
+    control = PCGControl(rtol=1e-11, max_iterations=200)
+    seen_controls = []
+    solve = FrozenScanSystem.solve
+
+    def capture(self, rhs, *, initial=None, control):
+        seen_controls.append(control)
+        return solve(self, rhs, initial=initial, control=control)
+
+    monkeypatch.setattr(FrozenScanSystem, "solve", capture)
     provider, calibration = result.bulk_link_variance(
         source,
         selected,
         probes=32,
         seed=29,
         memory_budget_bytes=16 * 1024 * 1024,
+        control=control,
     )
+    assert provider.control is control
+    assert len(seen_controls) == 32 + len(selected)
+    assert all(observed is control for observed in seen_controls)
     assert provider.diagnostics.approximation == "fisher_covariance_monte_carlo"
     assert provider.diagnostics.replay_preparation_scans >= 1
+    assert provider.diagnostics.fisher_construction_scans >= 1
+    assert provider.system.diagnostics.completed_scans == (
+        provider.diagnostics.fisher_construction_scans
+        + provider.diagnostics.training_source_scans
+        + provider.diagnostics.calibration_source_scans
+    )
     assert calibration.maximum_standardized_error <= 5
+    with pytest.raises(ValueError, match="at least one row"):
+        result.bulk_link_variance(
+            source,
+            frame.iloc[[]],
+            probes=2,
+            seed=29,
+            memory_budget_bytes=16 * 1024 * 1024,
+        )
     chunks = list(provider.estimate_iter(source))
     assert sum(len(chunk.positions) for chunk in chunks) == len(frame)
     assert provider.diagnostics.prediction_source_scans == 1

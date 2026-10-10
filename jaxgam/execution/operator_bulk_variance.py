@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
 import numpy as np
+from scipy.linalg.lapack import dsyevr, dsyevr_lwork
 
 from jaxgam.data.source import RowSource
 from jaxgam.execution.operator import FrozenScanSystem, PCGControl
@@ -36,6 +37,7 @@ class BulkVarianceDiagnostics:
     probes: int
     seed: int
     replay_preparation_scans: int
+    fisher_construction_scans: int
     completed_solves: int
     krylov_iterations: int
     normal_actions: int
@@ -100,6 +102,26 @@ class BulkVarianceSolveError(RuntimeError):
         )
 
 
+def _dense_penalty_eigh_workspace(size: int) -> int:
+    """Bound live local arrays using the selected LAPACK driver's work query."""
+    if size == 0:
+        return 0
+    work, iwork, info = dsyevr_lwork(size)
+    if info != 0:
+        raise np.linalg.LinAlgError("Local penalty eigensolver work query failed.")
+    # During assembly: local, penalty.dense() and its scaled copy (3 n²).
+    # During decomposition: local, Fortran symmetric input and returned
+    # eigenvectors (3 n²). Two extra n² slots cover input/wrapper copies.
+    # dsyevr allocates the queried double/integer work arrays, n eigenvalues,
+    # 2n support indices, and O(n) draw/scaling/output vectors.
+    return int(
+        8 * (5 * size * size + int(work) + 8 * size)
+        + max(np.dtype(np.intp).itemsize, np.dtype(np.intc).itemsize)
+        * (int(iwork) + 2 * size)
+        + 4096
+    )
+
+
 def _penalty_noise(
     block: PenaltyBlock, log_sp: np.ndarray, rng: np.random.Generator
 ) -> np.ndarray:
@@ -130,7 +152,20 @@ def _penalty_noise(
     local = np.zeros((size, size))
     for index, penalty in zip(block.sp_indices, block.local_penalties, strict=True):
         local += np.exp(log_sp[index]) * penalty.dense()
-    eigenvalues, vectors = np.linalg.eigh((local + local.T) * 0.5)
+    symmetric = np.array(local, order="F")
+    symmetric += local.T
+    symmetric *= 0.5
+    work, iwork, info = dsyevr_lwork(size)
+    if info != 0:
+        raise np.linalg.LinAlgError("Local penalty eigensolver work query failed.")
+    eigenvalues, vectors, _, _, info = dsyevr(
+        symmetric,
+        lwork=int(work),
+        liwork=int(iwork),
+        overwrite_a=1,
+    )
+    if info != 0:
+        raise np.linalg.LinAlgError("Local penalty eigensolver failed.")
     tolerance = 64 * np.finfo(float).eps * max(1.0, np.max(np.abs(eigenvalues)))
     if np.any(eigenvalues < -tolerance):
         raise ValueError("Local Fisher penalty is not positive semidefinite.")
@@ -198,16 +233,30 @@ class BulkOperatorVariance:
         self.replay_preparation_scans = int(replay_preparation_scans)
         self.control = control
         p, B, K = model.n_coef, model.batch_rows, len(model.modest_columns)
+        largest_dense_penalty = max(
+            (
+                block.size
+                for block in model.penalties.blocks
+                if any(
+                    not isinstance(penalty, (IdentityPenalty, DiagonalPenalty))
+                    for penalty in block.local_penalties
+                )
+            ),
+            default=0,
+        )
+        if largest_dense_penalty > K:
+            raise MemoryError("Dense local penalty exceeds the modest column cap.")
         # Retained sketch, current RHS/solve, local penalty eigensystem,
         # bulk and exact-calibration geometries, and four simultaneous
-        # B-by-probe prediction products.
+        # B-by-probe prediction products and the probes-by-K modest gather.
         # In particular the p-by-probe sketch remains charged while an exact
         # selected calibration solve or a prediction batch is evaluated.
         self.peak_bound_bytes = (
             fisher_system.memory_budget_bytes
             + 8 * p * (self.probes + 4)
             + 2 * self.geometry.workspace_bound(B)
-            + 32 * K**2
+            + _dense_penalty_eigh_workspace(largest_dense_penalty)
+            + 8 * self.probes * K
             + 32 * B * self.probes
             + 32 * B
             + 4096
@@ -288,6 +337,7 @@ class BulkOperatorVariance:
             self.probes,
             self.seed,
             self.replay_preparation_scans,
+            self.system.construction_source_scans,
             self.probes,
             iterations,
             actions,
@@ -367,7 +417,10 @@ class BulkOperatorVariance:
         """Compare selected rows to exact Fisher solves without changing probes."""
         if self._samples is None:
             raise RuntimeError("Build the bulk Fisher sketch first.")
-        if _rows(selected) > min(256, self.geometry.batch_rows):
+        selected_rows = _rows(selected)
+        if selected_rows < 1:
+            raise ValueError("Selected exact calibration requires at least one row.")
+        if selected_rows > min(256, self.geometry.batch_rows):
             raise ValueError("Calibration exceeds the bounded selected-row batch.")
         exact = SelectedOperatorVariance(
             self.system,
@@ -375,6 +428,7 @@ class BulkOperatorVariance:
             memory_budget_bytes=(
                 self.memory_budget_bytes - 8 * self.probes * self.geometry.n_coef
             ),
+            control=self.control,
         ).variance(selected)
         estimated, error = self._batch_estimate(selected)
         residual = np.abs(estimated - exact.variance)
@@ -397,6 +451,6 @@ class BulkOperatorVariance:
                 self.diagnostics.calibration_source_scans
                 + exact.diagnostics.source_scans
             ),
-            calibration_rows=self.diagnostics.calibration_rows + _rows(selected),
+            calibration_rows=self.diagnostics.calibration_rows + selected_rows,
         )
         return calibration

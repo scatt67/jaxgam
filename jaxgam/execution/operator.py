@@ -795,6 +795,7 @@ class FrozenScanSystem:
             self._checked.peak_bound_bytes,
         )
         self._checked.reserved_bytes = self.action_peak_bound_bytes
+        self.construction_source_scans = self.diagnostics.completed_scans
 
     def _certify_sparse_negative_rows(
         self,
