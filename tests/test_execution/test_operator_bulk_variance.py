@@ -458,3 +458,72 @@ def test_bulk_prediction_rejects_broken_replay_and_invalid_positions():
 
     with pytest.raises(ValueError, match="nonnegative integers"):
         list(provider.estimate_iter(NegativePositionReplay()))
+
+
+def test_public_tensor_tprs_bulk_variance_uses_source_matched_basis(r_bridge):
+    """The composed source TPRS chain also supports public bulk variance."""
+    from jaxgam import GAM, FitControl
+
+    n = 61
+    x = np.linspace(-1.3, 1.7, n)
+    z = np.sin(np.linspace(-0.8, 2.2, n)) + np.linspace(0, 0.1, n)
+    frame = pd.DataFrame(
+        {
+            "x": x,
+            "z": z,
+            "y": np.cos(1.7 * x) + 0.2 * z,
+            "w": np.linspace(0.6, 1.4, n),
+            "o": 0.05 * x,
+        }
+    )
+    frame.loc[::9, "w"] = 0.0
+    sp = np.array([0.7, 0.7])
+    reference = r_bridge.fit_fixed_sp(
+        "y~ti(x,z,bs='tp',k=c(4,4))",
+        frame,
+        "gaussian",
+        sp,
+        weights="w",
+        offset="o",
+        with_uncertainty=True,
+    )
+    source = DataFrameRowSource(
+        frame, response="y", weights=frame.w.to_numpy(), offset=frame.o.to_numpy()
+    )
+    result = GAM(
+        "y~ti(x,z,bs='tp',k=4)",
+        family=Gaussian(),
+        sp=sp,
+        control=FitControl(execution="operator", linear_solver="pcg", batch_rows=7),
+    ).fit(source, result="prediction")
+    assert result.converged
+    np.testing.assert_allclose(
+        result.coefficients,
+        reference["coefficients"],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    positions = np.array([0, 11, 29, 60])
+    provider, calibration = result.bulk_link_variance(
+        source,
+        frame.iloc[positions],
+        scale=reference["scale"],
+        probes=64,
+        seed=2901,
+        memory_budget_bytes=16 * 1024 * 1024,
+    )
+    np.testing.assert_allclose(
+        calibration.exact,
+        reference["link_se"][positions] ** 2,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    prediction = DataFrameRowSource(frame.iloc[[0, 11, 0, 60]])
+    batches = list(provider.estimate_iter(prediction))
+    variance = np.concatenate([batch.variance for batch in batches])
+    error = np.concatenate([batch.monte_carlo_se for batch in batches])
+    assert np.all(
+        np.abs(variance - reference["link_se"][[0, 11, 0, 60]] ** 2)
+        <= 5 * error + STRICT.atol
+    )
+    np.testing.assert_array_equal(variance[[0, 2]], variance[0])
