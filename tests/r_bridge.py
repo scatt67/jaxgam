@@ -456,6 +456,75 @@ class RBridge:
             dtype=np.float64,
         )
 
+    def regular_first_iteration_source(
+        self, family_name: str, link: str, y: np.ndarray
+    ) -> dict[str, np.ndarray]:
+        """Capture pinned ``gam.fit3`` W/z before its first PLS C call."""
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        from tests.r_ast import find_call_paths, instrument_function
+
+        self._require_rpy2()
+        constructors = {
+            "gaussian": self._stats.gaussian,
+            "binomial": self._stats.binomial,
+            "poisson": self._stats.poisson,
+            "gamma": self._stats.Gamma,
+        }
+        if family_name not in constructors:
+            raise ValueError("unsupported pinned first-iteration family")
+        family = self._call_internal(
+            "fix.family.var",
+            self._call_internal(
+                "fix.family.link", constructors[family_name](link=link)
+            ),
+        )
+        source = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        calls = find_call_paths(source, ".C", required_symbols=("C_pls_fit1",))
+        if len(calls) != 2:
+            raise RBridgeError("Pinned gam.fit3 first PLS call anchors changed")
+        captured: dict[str, np.ndarray] = {}
+
+        def collect(eta: Any, mu: Any, weight: Any, response: Any) -> None:
+            captured.update(
+                eta=np.asarray(eta).copy(),
+                mu=np.asarray(mu).copy(),
+                weight=np.asarray(weight).copy(),
+                z=np.asarray(response).copy(),
+            )
+
+        fit_function = instrument_function(
+            source,
+            path=calls[0],
+            expected_head=".C",
+            capture_symbols=("eta", "mu", "w", "z"),
+            callback=collect,
+        )
+        try:
+            fit_function(
+                x=self._base.diag(3),
+                y=self._to_r_vector(y),
+                sp=self._ro.FloatVector([]),
+                Eb=self._to_r_matrix(np.zeros((3, 3))),
+                UrS=self._ro.baseenv["list"](),
+                weights=self._to_r_vector([1.0, 0.8, 1.3]),
+                offset=self._to_r_vector([0.1, -0.1, 0.05]),
+                U1=self._base.diag(3),
+                Mp=0,
+                family=family,
+                control=self._mgcv.gam_control(maxit=1),
+                deriv=0,
+                scale=1,
+                scoreType="GCV.Cp",
+                **{"null.coef": self._to_r_vector([1.0, 1.0, 1.0])},
+            )
+        except RRuntimeError:
+            if not captured:
+                raise
+        if set(captured) != {"eta", "mu", "weight", "z"}:
+            raise RBridgeError("Pinned gam.fit3 did not reach its first PLS call")
+        return captured
+
     def family_constructor_acceptance(
         self, links: tuple[str, ...]
     ) -> dict[tuple[str, str], bool]:
