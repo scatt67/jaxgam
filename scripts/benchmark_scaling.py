@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 _MAX_COMPARISON_COEFFICIENTS = 2_048
+_MAX_CHILD_DIAGNOSTIC_CHARS = 4_096
 
 
 def _tolerance_record(tolerance: Any) -> dict[str, float]:
@@ -99,14 +100,31 @@ class ScalingCase:
 
 
 class ChildRunError(RuntimeError):
-    """A failed isolated child, retaining its diagnostic streams."""
+    """A failed isolated child with bounded, visible diagnostic streams."""
 
-    def __init__(self, child_mode: str, root: Path, stdout: str, stderr: str) -> None:
-        super().__init__(f"{child_mode} child failed for {root}")
+    def __init__(
+        self, child_mode: str, root: Path, returncode: int, stdout: str, stderr: str
+    ) -> None:
         self.child_mode = child_mode
         self.root = root
-        self.stdout = stdout
-        self.stderr = stderr
+        self.returncode = returncode
+        self.stdout = _bounded_child_diagnostic(stdout)
+        self.stderr = _bounded_child_diagnostic(stderr)
+        message = f"{child_mode} child failed for {root} (exit {returncode})"
+        if self.stderr:
+            message += f"\nchild stderr:\n{self.stderr}"
+        if self.stdout:
+            message += f"\nchild stdout:\n{self.stdout}"
+        super().__init__(message)
+
+
+def _bounded_child_diagnostic(stream: str) -> str:
+    """Retain the error-bearing tail without flooding the parent CLI log."""
+    if len(stream) <= _MAX_CHILD_DIAGNOSTIC_CHARS:
+        return stream
+    omitted = len(stream) - _MAX_CHILD_DIAGNOSTIC_CHARS
+    tail = stream[-_MAX_CHILD_DIAGNOSTIC_CHARS:]
+    return f"[{omitted} earlier characters omitted]\n{tail}"
 
 
 @dataclass(frozen=True)
@@ -1152,7 +1170,9 @@ def _run_child(case: ScalingCase, root: Path, child_mode: str) -> dict[str, Any]
             text=True,
         )
     if completed.returncode:
-        raise ChildRunError(child_mode, root, completed.stdout, completed.stderr)
+        raise ChildRunError(
+            child_mode, root, completed.returncode, completed.stdout, completed.stderr
+        )
     return json.loads(completed.stdout)
 
 

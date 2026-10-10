@@ -1167,7 +1167,7 @@ def test_run_child_preserves_actionable_failure_streams(
         benchmark_scaling.subprocess,
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=1, stdout="child stdout", stderr="child stderr"
+            returncode=7, stdout="child stdout", stderr="child stderr"
         ),
     )
 
@@ -1176,6 +1176,58 @@ def test_run_child_preserves_actionable_failure_streams(
 
     assert error.value.stdout == "child stdout"
     assert error.value.stderr == "child stderr"
+    assert error.value.returncode == 7
+    assert "exit 7" in str(error.value)
+    assert "child stderr" in str(error.value)
+
+
+def test_failed_child_diagnostics_keep_bounded_error_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        benchmark_scaling.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=2,
+            stdout="ignored setup output\n",
+            stderr="old log line\n" * 1_000 + "projected gradient 23.5 > 1e-6\n",
+        ),
+    )
+
+    with pytest.raises(benchmark_scaling.ChildRunError) as error:
+        benchmark_scaling._run_child(ScalingCase(4, 3), Path.cwd(), "fit")
+
+    assert "projected gradient 23.5 > 1e-6" in str(error.value)
+    assert "earlier characters omitted" in error.value.stderr
+    assert len(error.value.stderr) < 4_200
+    assert "old log line" not in error.value.stderr.splitlines()[0]
+
+
+def test_cli_reports_failed_child_stderr(minimal_git_checkout: Path) -> None:
+    (minimal_git_checkout / "jaxgam" / "__init__.py").write_text(
+        'raise RuntimeError("CHILD_DIAGNOSTIC")\n'
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path.cwd() / "scripts" / "benchmark_scaling.py"),
+            "--n",
+            "8",
+            "--k",
+            "3",
+            "--checkout",
+            str(minimal_git_checkout),
+        ],
+        cwd=minimal_git_checkout,
+        env=os.environ | {"PYTHONPATH": str(minimal_git_checkout)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "setup child failed" in completed.stderr
+    assert "child stderr:" in completed.stderr
+    assert "CHILD_DIAGNOSTIC" in completed.stderr
 
 
 def test_run_isolated_delegates_setup_and_fit(monkeypatch: pytest.MonkeyPatch) -> None:
