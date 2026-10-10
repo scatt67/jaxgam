@@ -727,6 +727,61 @@ class RBridge:
             )[0]
         )
 
+    def source_signed_pls_fit1(
+        self,
+        design: np.ndarray,
+        weights: np.ndarray,
+        pseudodata: np.ndarray,
+        weighted_response: np.ndarray,
+        penalty_root: np.ndarray,
+        *,
+        use_weighted_response: bool,
+    ) -> tuple[int, bool, np.ndarray]:
+        """Call pinned ``C_pls_fit1`` with its original typed ``.C`` arguments."""
+        self._require_rpy2()
+        X = np.asarray(design, dtype=np.float64)
+        w = np.asarray(weights, dtype=np.float64)
+        z = np.asarray(pseudodata, dtype=np.float64)
+        wz = np.asarray(weighted_response, dtype=np.float64)
+        E = np.asarray(penalty_root, dtype=np.float64)
+        if (
+            X.ndim != 2
+            or w.shape != (len(X),)
+            or z.shape != w.shape
+            or wz.shape != w.shape
+            or E.ndim != 2
+            or E.shape[1] != X.shape[1]
+        ):
+            raise ValueError("Signed fitter oracle dimensions are incompatible")
+        symbol = self._utils.getFromNamespace("C_pls_fit1", "mgcv")
+        call = self._ro.baseenv[".C"]
+        result = call(
+            symbol,
+            y=self._to_r_vector(z),
+            X=self._to_r_vector(X.ravel(order="F")),
+            w=self._to_r_vector(w),
+            wy=self._to_r_vector(wz),
+            E=self._to_r_vector(E.ravel(order="F")),
+            Es=self._to_r_vector(E.ravel(order="F")),
+            n=self._to_r_vector(np.array([len(X)], dtype=np.int32)),
+            q=self._to_r_vector(np.array([X.shape[1]], dtype=np.int32)),
+            rE=self._to_r_vector(np.array([E.shape[0]], dtype=np.int32)),
+            eta=self._to_r_vector(z),
+            penalty=self._to_r_vector(np.array([1.0])),
+            **{"rank.tol": self._to_r_vector(np.array([100 * np.finfo(float).eps]))},
+            nt=self._to_r_vector(np.array([1], dtype=np.int32)),
+            **{
+                "use.wy": self._to_r_vector(
+                    np.array([int(use_weighted_response)], dtype=np.int32)
+                )
+            },
+        )
+        return (
+            int(result.rx2("n")[0]),
+            bool(result.rx2("use.wy")[0]),
+            np.asarray(result.rx2("y"), dtype=np.float64)[: X.shape[1]].copy(),
+        )
+
     def source_gaussian_aic(
         self, response: np.ndarray, mean: np.ndarray, weights: np.ndarray
     ) -> float:
@@ -780,6 +835,52 @@ class RBridge:
             float(self._stats.sd(self._to_r_vector(y))[0]),
             np.asarray(environment["mustart"], dtype=np.float64).copy(),
         )
+
+    def source_gaussian_public_fit(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        link: str,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        *,
+        epsilon: float,
+    ) -> dict[str, Any]:
+        """Fit pinned Gaussian GAM with an explicit link and convergence control."""
+        self._require_rpy2()
+        weight_array = np.asarray(weights, dtype=np.float64)
+        offset_array = np.asarray(offset, dtype=np.float64)
+        if (
+            weight_array.shape != (len(data),)
+            or offset_array.shape != (len(data),)
+            or link not in {"log", "inverse"}
+            or not np.isfinite(epsilon)
+            or epsilon <= 0
+        ):
+            raise ValueError("Gaussian public fit oracle inputs are invalid")
+        fit = self._mgcv.gam(
+            self._ro.Formula(formula),
+            data=self._to_r_dataframe(data),
+            weights=self._to_r_vector(weight_array),
+            offset=self._to_r_vector(offset_array),
+            family=self._stats.gaussian(link=link),
+            method="REML",
+            control=self._mgcv.gam_control(epsilon=float(epsilon)),
+        )
+        if not bool(fit.rx2("converged")[0]):
+            raise RBridgeError("Pinned Gaussian GAM did not converge")
+        return {
+            "coefficients": np.asarray(
+                fit.rx2("coefficients"), dtype=np.float64
+            ).copy(),
+            "deviance": float(fit.rx2("deviance")[0]),
+            "scale": float(fit.rx2("sig2")[0]),
+            "edf": float(self._base.sum(fit.rx2("edf"))[0]),
+            "score": float(fit.rx2("gcv.ubre")[0]),
+            "fitted": np.asarray(fit.rx2("fitted.values"), dtype=np.float64).copy(),
+            "covariance": np.asarray(fit.rx2("Vp"), dtype=np.float64).copy(),
+            "reml_scale": float(fit.rx2("reml.scale")[0]),
+        }
 
     def source_gaussian_efs_initial(
         self,
@@ -975,6 +1076,110 @@ class RBridge:
             dtype=np.float64,
         )
 
+    def binomial_log_initial_terms(
+        self,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        *,
+        eta: np.ndarray | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate pinned ``gam.fit3`` Binomial/log initial raw W/z algebra."""
+        from tests.r_ast import call, symbol
+
+        self._require_rpy2()
+        ro, base = self._ro, self._ro.baseenv
+        family = self._call_internal(
+            "fix.family.link",
+            self._call_internal("fix.family.var", self._stats.binomial(link="log")),
+        )
+        r_y, r_weight, r_offset = (
+            self._to_r_vector(values) for values in (y, weight, offset)
+        )
+        if eta is None:
+            environment = ro.r["new.env"](parent=ro.r["globalenv"]())
+            environment["family"] = family
+            environment["y"] = r_y
+            environment["weights"] = r_weight
+            environment["nobs"] = ro.IntVector([len(y)])
+            environment["mustart"] = ro.NULL
+            environment[".jaxgam_initialize"] = family.rx2("initialize")
+            # Evaluate only the installed family expression object in its data
+            # environment; the call itself is constructed as an R AST.
+            ro.r["eval"](
+                call("quote", call("eval", symbol(".jaxgam_initialize"))),
+                envir=environment,
+            )
+            r_eta = family.rx2("linkfun")(environment["mustart"])
+        else:
+            r_eta = self._to_r_vector(eta)
+        mu = family.rx2("linkinv")(r_eta)
+        variance = family.rx2("variance")(mu)
+        mu_eta = family.rx2("mu.eta")(r_eta)
+        dvar = family.rx2("dvar")(mu)
+        d2link = family.rx2("d2link")(mu)
+        residual = base["-"](r_y, mu)
+        one = self._to_r_vector([1.0])
+        alpha_raw = base["+"](
+            one,
+            base["*"](
+                residual,
+                base["+"](base["/"](dvar, variance), base["*"](d2link, mu_eta)),
+            ),
+        )
+        machine_epsilon = ro.r[".Machine"].rx2("double.eps")
+        alpha = base["ifelse"](base["=="](alpha_raw, 0), machine_epsilon, alpha_raw)
+        working_weight = base["/"](
+            base["*"](base["*"](r_weight, alpha), base["^"](mu_eta, 2)),
+            variance,
+        )
+        response = base["+"](
+            base["-"](r_eta, r_offset),
+            base["/"](residual, base["*"](mu_eta, alpha)),
+        )
+        return {
+            name: np.asarray(value).copy()
+            for name, value in (
+                ("eta", r_eta),
+                ("mu", mu),
+                ("variance", variance),
+                ("mu_eta", mu_eta),
+                ("dvar", dvar),
+                ("d2link", d2link),
+                ("alpha_raw", alpha_raw),
+                ("alpha", alpha),
+                ("weight", working_weight),
+                ("response", response),
+            )
+        }
+
+    def binomial_log_cancellation_terms(self) -> dict[str, np.ndarray]:
+        """Build the pinned five-row cancellation case with R arithmetic."""
+        self._require_rpy2()
+        base = self._ro.baseenv
+        one = self._to_r_vector([1.0])
+        epsilon = self._ro.r[".Machine"].rx2("double.eps")
+        neighbor = base["-"](one, base["/"](epsilon, 2))
+        near_one = base["-"](one, self._to_r_vector([1e-12]))
+        y = base["c"](one, neighbor, near_one, one, neighbor)
+        thirteen_eighteenths = base["/"](
+            self._to_r_vector([13.0]), self._to_r_vector([18.0])
+        )
+        eta = self._base.log(
+            base["c"](
+                thirteen_eighteenths,
+                thirteen_eighteenths,
+                thirteen_eighteenths,
+                self._to_r_vector([0.3, 0.9]),
+            )
+        )
+        return self.binomial_log_initial_terms(
+            np.asarray(y),
+            np.asarray([0.8, 1.7, 0.25, 2.3, 0.4]),
+            np.asarray([-0.1, 0.2, 0.0, -0.4, 0.7]),
+            eta=np.asarray(eta),
+        )
+
     def regular_first_iteration_source(
         self, family_name: str, link: str, y: np.ndarray
     ) -> dict[str, np.ndarray]:
@@ -1044,6 +1249,154 @@ class RBridge:
             raise RBridgeError("Pinned gam.fit3 did not reach its first PLS call")
         return captured
 
+    def binomial_log_admission_reference(
+        self, y: np.ndarray, weight: np.ndarray, tolerance: float
+    ) -> dict[str, Any]:
+        """Run the pinned intercept-only ``gam.fit3`` boundary model."""
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        self._require_rpy2()
+        family = self._call_internal(
+            "fix.family.ls",
+            self._call_internal(
+                "fix.family.var",
+                self._call_internal(
+                    "fix.family.link", self._stats.binomial(link="log")
+                ),
+            ),
+        )
+        r_y = self._to_r_vector(y)
+        r_weight = self._to_r_vector(weight)
+        try:
+            fit = self._call_internal(
+                "gam.fit3",
+                x=self._to_r_matrix(np.ones((len(y), 1))),
+                y=r_y,
+                sp=self._ro.FloatVector([]),
+                Eb=self._to_r_vector([0.0]),
+                UrS=self._ro.baseenv["list"](),
+                weights=r_weight,
+                offset=self._to_r_vector(np.zeros(len(y))),
+                Mp=1,
+                family=family,
+                control=self._mgcv.gam_control(epsilon=tolerance, maxit=100),
+                deriv=0,
+                scale=1,
+                scoreType="REML",
+                **{
+                    "null.coef": self._base.log(self._base.mean(r_y)),
+                },
+            )
+        except RRuntimeError as error:
+            return {"error": str(error)}
+        if not bool(fit.rx2("converged")[0]):
+            raise RBridgeError("Pinned Binomial/log admission fit did not converge")
+        return {
+            "reference": np.r_[
+                np.asarray(fit.rx2("coefficients")),
+                fit.rx2("deviance")[0],
+                1.0,
+                fit.rx2("trA")[0],
+                fit.rx2("REML")[0],
+            ],
+            "covariance": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
+            "fitted": np.asarray(fit.rx2("fitted.values")).copy(),
+        }
+
+    def gamma_fisher_recovery_reference(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+    ) -> dict[str, Any]:
+        """Trace the pinned Gamma/identity switch from observed to Fisher W."""
+        from tests.r_ast import find_call_paths, instrument_function, symbol
+
+        self._require_rpy2()
+        ro = self._ro
+        source = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        paths = find_call_paths(source, "<", required_symbols=("oo", "n"))
+        if len(paths) != 1:
+            raise RBridgeError("Pinned gam.fit3 indefinite-PLS anchor changed")
+        node = ro.r["body"](source)
+        for index in paths[0]:
+            node = node[index]
+        if not (
+            node[1][0].rsame(symbol("$"))
+            and node[1][1].rsame(symbol("oo"))
+            and node[1][2].rsame(symbol("n"))
+        ):
+            raise RBridgeError("Pinned gam.fit3 indefinite-PLS condition changed")
+        recoveries = [0]
+
+        def record(oo: Any) -> None:
+            if int(ro.ListVector(oo).rx2("n")[0]) < 0:
+                recoveries[0] += 1
+
+        fit_function = instrument_function(
+            source,
+            path=paths[0],
+            expected_head="<",
+            capture_symbols=("oo",),
+            callback=record,
+        )
+        family = self._call_internal(
+            "fix.family.ls",
+            self._call_internal(
+                "fix.family.var",
+                self._call_internal(
+                    "fix.family.link", self._stats.Gamma(link="identity")
+                ),
+            ),
+        )
+        r_X = self._to_r_matrix(X)
+        r_y, r_weight, r_offset = (
+            self._to_r_vector(values) for values in (y, weight, offset)
+        )
+        null = self._base.c(
+            family.rx2("linkfun")(self._base.mean(r_y)),
+            self._to_r_vector([0.0]),
+        )
+
+        def run(max_iter: int) -> Any:
+            return fit_function(
+                x=r_X,
+                y=r_y,
+                sp=self._base.log(self._to_r_vector([0.7])),
+                Eb=self._to_r_vector([0.0]),
+                UrS=ro.baseenv["list"](),
+                weights=r_weight,
+                offset=r_offset,
+                Mp=2,
+                family=family,
+                control=self._mgcv.gam_control(epsilon=1e-10, maxit=max_iter),
+                deriv=0,
+                scale=0,
+                scoreType="REML",
+                **{"null.coef": null},
+            )
+
+        fit = run(100)
+        successful_recoveries = recoveries[0]
+        if not bool(fit.rx2("converged")[0]) or successful_recoveries <= 0:
+            raise RBridgeError("Pinned Gamma source recovery did not converge")
+        limited = run(2)
+        if bool(limited.rx2("converged")[0]):
+            raise RBridgeError("Pinned Gamma limited control unexpectedly converged")
+        return {
+            "reference": np.r_[
+                np.asarray(fit.rx2("coefficients")),
+                fit.rx2("deviance")[0],
+                fit.rx2("scale.est")[0],
+                fit.rx2("trA")[0],
+                fit.rx2("REML")[0],
+            ],
+            "covariance": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
+            "fitted": np.asarray(fit.rx2("fitted.values")).copy(),
+            "recoveries": successful_recoveries,
+        }
+
     def family_constructor_acceptance(
         self, links: tuple[str, ...]
     ) -> dict[tuple[str, str], bool]:
@@ -1071,6 +1424,458 @@ class RBridge:
                 else:
                     accepted[(name, link)] = True
         return accepted
+
+    def qr_null_projection(
+        self, X: np.ndarray, target: float
+    ) -> tuple[int, np.ndarray, np.ndarray]:
+        """Return pinned R QR rank, natural pivots and null coefficients."""
+        self._require_rpy2()
+        r_X = self._to_r_matrix(X)
+        factor = self._base.qr(r_X)
+        coefficients = np.asarray(
+            self._base.qr_coef(
+                factor, self._base.rep(target, times=np.asarray(X).shape[0])
+            ),
+            dtype=np.float64,
+        ).copy()
+        coefficients[np.isnan(coefficients)] = 0.0
+        return (
+            int(factor.rx2("rank")[0]),
+            np.asarray(factor.rx2("pivot"), dtype=np.int32) - 1,
+            coefficients,
+        )
+
+    def _regular_source_family(
+        self, family_name: str, link: str, *, fix_base: bool
+    ) -> Any:
+        """Construct the installed family with a caller-owned source modifier set."""
+        self._require_rpy2()
+        constructors = {
+            "gaussian": self._stats.gaussian,
+            "gamma": self._stats.Gamma,
+            "poisson": self._stats.poisson,
+            "binomial": self._stats.binomial,
+        }
+        family_key = family_name.lower()
+        if family_key not in constructors:
+            raise ValueError("unsupported regular source family")
+        source_link = "1/mu^2" if link == "inverse_squared" else link
+        family = constructors[family_key](link=source_link)
+        modifiers = ["fix.family.link", "fix.family.var", "fix.family.ls"]
+        if fix_base:
+            modifiers.insert(0, "fix.family")
+        for modifier in modifiers:
+            family = self._call_internal(modifier, family)
+        return family
+
+    def _regular_gam_fit3_inputs(
+        self,
+        family_name: str,
+        link: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+    ) -> tuple[Any, Any, Any, Any, Any, np.ndarray, bool]:
+        """Initialize a pinned family and project its natural null start."""
+        family = self._regular_source_family(family_name, link, fix_base=True)
+        ro = self._ro
+        r_X = self._to_r_matrix(X)
+        r_y, r_weight, r_offset = (
+            self._to_r_vector(values) for values in (y, weight, offset)
+        )
+        # Pinned get.null.coef evaluates the installed initialization expression
+        # in a local data environment before projecting its normalized response.
+        initialization = ro.r["new.env"](parent=ro.r["globalenv"]())
+        initialization["family"] = family
+        initialization["y"] = r_y
+        initialization["weights"] = r_weight
+        initialization["nobs"] = ro.IntVector([len(y)])
+        ro.r["evalq"](family.rx2("initialize"), envir=initialization)
+        r_y = initialization["y"]
+        normalized_target = self._base.rep(
+            family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
+        )
+        null = np.asarray(
+            self._base.qr_coef(self._base.qr(r_X), normalized_target),
+            dtype=np.float64,
+        ).copy()
+        null[np.isnan(null)] = 0.0
+        known_scale = family_name.lower() in {"binomial", "poisson"}
+        return family, r_X, r_y, r_weight, r_offset, null, known_scale
+
+    def regular_gam_fit3_start(
+        self,
+        family_name: str,
+        link: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        start: np.ndarray | None = None,
+        *,
+        tolerance: float = 1e-7,
+        max_iter: int = 200,
+        require_convergence: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Run pinned unpenalized ``gam.fit3`` with the natural QR null start."""
+        family, r_X, r_y, r_weight, r_offset, null, known_scale = (
+            self._regular_gam_fit3_inputs(family_name, link, X, y, weight, offset)
+        )
+        ro = self._ro
+        fit = self._call_internal(
+            "gam.fit3",
+            x=r_X,
+            y=r_y,
+            sp=ro.FloatVector([])
+            if known_scale
+            else self._base.log(ro.FloatVector([0.7])),
+            Eb=ro.FloatVector([0.0]),
+            UrS=ro.baseenv["list"](),
+            weights=r_weight,
+            offset=r_offset,
+            U1=self._base.diag(X.shape[1]),
+            Mp=X.shape[1],
+            family=family,
+            control=self._mgcv.gam_control(epsilon=tolerance, maxit=max_iter),
+            deriv=0,
+            scale=1 if known_scale else 0,
+            scoreType="REML",
+            **{"null.coef": self._to_r_vector(null)},
+            start=ro.NULL if start is None else self._to_r_vector(start),
+        )
+        status = np.asarray(
+            [bool(fit.rx2("converged")[0]), int(fit.rx2("iter")[0])],
+            dtype=np.float64,
+        )
+        if require_convergence and not bool(status[0]):
+            raise RBridgeError("Pinned gam.fit3 start oracle did not converge")
+        reference = np.r_[  # same source field order as the old binary oracle
+            np.asarray(fit.rx2("coefficients")),
+            float(fit.rx2("deviance")[0]),
+            1.0 if known_scale else float(fit.rx2("scale.est")[0]),
+            float(fit.rx2("trA")[0]),
+            float(fit.rx2("REML")[0]),
+        ]
+        covariance = np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy()
+        return reference, null, covariance, status
+
+    def regular_gam_fit3_penalized(
+        self,
+        family_name: str,
+        link: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        start: np.ndarray,
+        rho: np.ndarray,
+        *,
+        score_phi: float = 0.7,
+        derivatives: bool = False,
+    ) -> dict[str, np.ndarray]:
+        """Run the pinned rank-one regular system and inspect its gdi candidate."""
+        from tests.r_ast import find_call_paths, instrument_function
+
+        family, r_X, r_y, r_weight, r_offset, null, known_scale = (
+            self._regular_gam_fit3_inputs(family_name, link, X, y, weight, offset)
+        )
+        ro = self._ro
+        source = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        paths = find_call_paths(source, "<-", required_symbols=("oo", "C_gdi1"))
+        if len(paths) != 1:
+            raise RBridgeError("Pinned gam.fit3 gdi candidate assignment changed")
+        candidates: list[bool] = []
+
+        def capture(
+            output: Any,
+            matrix: Any,
+            model_offset: Any,
+            valid_eta: Any,
+            valid_mu: Any,
+            inverse_link: Any,
+        ) -> None:
+            beta = ro.ListVector(output).rx2("beta")
+            base = ro.baseenv
+            candidate_eta = base["drop"](
+                base["+"](base["%*%"](matrix, beta), model_offset)
+            )
+            candidates.append(
+                bool(valid_eta(candidate_eta)[0])
+                and bool(valid_mu(inverse_link(candidate_eta))[0])
+            )
+
+        fit_source = instrument_function(
+            source,
+            path=paths[0],
+            expected_head="<-",
+            capture_symbols=("oo", "x", "offset", "valideta", "validmu", "linkinv"),
+            callback=capture,
+            when="after",
+        )
+        weighted_rho = self._to_r_vector(np.atleast_1d(rho))
+        if not known_scale:
+            weighted_rho = self._base.c(
+                weighted_rho, self._base.log(self._to_r_vector([score_phi]))
+            )
+        penalty_root = self._base.matrix(self._to_r_vector([0.0, 1.0]), 1, 2)
+        coordinates = self._base.matrix(self._to_r_vector([0.0, 1.0, 1.0, 0.0]), 2, 2)
+        fit = fit_source(
+            x=r_X,
+            y=r_y,
+            sp=weighted_rho,
+            Eb=penalty_root,
+            UrS=ro.baseenv["list"](self._base.matrix(self._to_r_vector([1.0]), 1, 1)),
+            weights=r_weight,
+            offset=r_offset,
+            U1=coordinates,
+            Mp=1,
+            family=family,
+            control=self._mgcv.gam_control(epsilon=1e-7, maxit=200),
+            deriv=int(derivatives),
+            scale=1 if known_scale else 0,
+            scoreType="REML",
+            **{"null.coef": self._to_r_vector(null)},
+            start=self._to_r_vector(start),
+        )
+        if not bool(fit.rx2("converged")[0]):
+            raise RBridgeError("Pinned penalized gam.fit3 oracle did not converge")
+        reference = np.r_[
+            np.asarray(fit.rx2("coefficients")),
+            float(fit.rx2("deviance")[0]),
+            1.0 if known_scale else float(fit.rx2("scale.est")[0]),
+            float(fit.rx2("trA")[0]),
+            float(fit.rx2("REML")[0]),
+        ]
+        return {
+            "reference": reference,
+            "null": null,
+            "covariance": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
+            "status": np.asarray(
+                [bool(fit.rx2("converged")[0]), int(fit.rx2("iter")[0])],
+                dtype=np.float64,
+            ),
+            "candidate_valid": np.asarray(candidates[-1:], dtype=np.float64),
+            "gradient": (
+                np.asarray(fit.rx2("REML1"), dtype=np.float64)
+                if derivatives
+                else np.empty(0)
+            ),
+        }
+
+    def regular_source_gamma_fixed_trial(
+        self,
+        link: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+    ) -> np.ndarray:
+        """Evaluate pinned Gamma ``gam.fit3`` with the declared scale trial."""
+        self._require_rpy2()
+        ro = self._ro
+        family = self._regular_source_family("Gamma", link, fix_base=False)
+        r_X = self._to_r_matrix(X)
+        r_y = self._to_r_vector(np.asarray(y, dtype=np.float64))
+        null = self._base.c(
+            family.rx2("linkfun")(self._base.mean(r_y)), self._to_r_vector([0.0])
+        )
+        fit = self._call_internal(
+            "gam.fit3",
+            x=r_X,
+            y=r_y,
+            sp=self._base.log(self._to_r_vector([0.7])),
+            Eb=0,
+            UrS=ro.baseenv["list"](),
+            weights=self._to_r_vector(np.asarray(weight, dtype=np.float64)),
+            offset=self._to_r_vector(np.asarray(offset, dtype=np.float64)),
+            U1=self._base.diag(2),
+            Mp=2,
+            family=family,
+            control=self._mgcv.gam_control(epsilon=1e-12),
+            deriv=0,
+            scale=0,
+            scoreType="REML",
+            **{"null.coef": null},
+        )
+        return np.r_[
+            np.asarray(fit.rx2("coefficients")),
+            np.asarray(fit.rx2("deviance")),
+            np.asarray(fit.rx2("scale.est")),
+            np.asarray(fit.rx2("trA")),
+            np.asarray(fit.rx2("REML")),
+        ]
+
+    def regular_source_penalized_gamma_score(
+        self,
+        X: np.ndarray,
+        E: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        *,
+        controlled_invalid_refit: bool,
+    ) -> dict[str, np.ndarray]:
+        """Trace one private pinned gdi return, with an optional invalid solve."""
+        from rpy2 import rinterface
+
+        from tests.r_ast import (
+            call,
+            find_call_paths,
+            make_r_callback,
+            replace_call,
+            symbol,
+        )
+
+        self._require_rpy2()
+        ro = self._ro
+        base = ro.baseenv
+        r_X, r_E = self._to_r_matrix(X), self._to_r_matrix(E)
+        r_y, r_weight, r_offset = (
+            self._to_r_vector(np.asarray(values, dtype=np.float64))
+            for values in (y, weight, offset)
+        )
+        width, rank = X.shape[1], E.shape[0]
+        coordinates = self._base.eigen(self._base.crossprod(r_E), symmetric=True).rx2(
+            "vectors"
+        )
+        range_coordinates = base["["](
+            coordinates,
+            rinterface.MissingArg,
+            self._base.seq_len(rank),
+            drop=False,
+        )
+        root = base["%*%"](self._base.t(range_coordinates), self._base.t(r_E))
+        family = self._regular_source_family("Gamma", "identity", fix_base=False)
+        null = self._base.c(
+            family.rx2("linkfun")(self._base.mean(r_y)),
+            self._base.rep(0.0, times=width - 1),
+        )
+        source = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        paths = find_call_paths(source, "<-", required_symbols=("oo", "C_gdi1"))
+        if len(paths) != 1:
+            raise RBridgeError("Pinned gam.fit3 gdi return assignment changed")
+        captured: list[np.ndarray] = []
+
+        def inspect_return(
+            output: Any,
+            raw_deviance: Any,
+            stopping_pdev: Any,
+            score_phi: Any,
+            transform: Any,
+            penalty: Any,
+            matrix: Any,
+            model_offset: Any,
+            valid_eta: Any,
+            valid_mu: Any,
+            inverse_link: Any,
+        ) -> Any:
+            result = ro.ListVector(output)
+            if controlled_invalid_refit:
+                bad = self._to_r_vector(np.r_[-10.0, 3.0, np.zeros(width - 2)])
+                beta = self._base.c(self._base.crossprod(transform, bad))
+                result = base["$<-"](result, "beta", value=beta)
+                penalized = base["drop"](
+                    base["%*%"](base["%*%"](self._base.t(beta), penalty), beta)
+                )
+                result = base["$<-"](result, "conv.tol", value=penalized)
+            candidate_eta = base["drop"](
+                base["+"](base["%*%"](matrix, result.rx2("beta")), model_offset)
+            )
+            valid = bool(valid_eta(candidate_eta)[0]) and bool(
+                valid_mu(inverse_link(candidate_eta))[0]
+            )
+            captured.append(
+                np.asarray(
+                    [
+                        raw_deviance[0],
+                        stopping_pdev[0],
+                        result.rx2("conv.tol")[0],
+                        valid,
+                        score_phi[0],
+                    ],
+                    dtype=np.float64,
+                )
+            )
+            return result
+
+        callback = make_r_callback(inspect_return)
+        original = ro.r["body"](source)
+        assignment = original
+        for index in paths[0]:
+            assignment = assignment[index]
+        replacement = call(
+            "{",
+            assignment,
+            call(
+                "<-",
+                symbol("oo"),
+                call(
+                    callback,
+                    *(
+                        symbol(name)
+                        for name in (
+                            "oo",
+                            "dev",
+                            "pdev",
+                            "scale",
+                            "T",
+                            "St",
+                            "x",
+                            "offset",
+                            "valideta",
+                            "validmu",
+                            "linkinv",
+                        )
+                    ),
+                ),
+            ),
+            symbol("oo"),
+        )
+        private = replace_call(
+            source,
+            path=paths[0],
+            expected_head="<-",
+            replacement=replacement,
+        )
+        private._jaxgam_callback_handles = (inspect_return, callback)
+        fit = private(
+            x=r_X,
+            y=r_y,
+            sp=self._base.c(
+                self._base.log(self._to_r_vector([0.35])),
+                self._base.log(self._to_r_vector([0.7])),
+            ),
+            Eb=r_E,
+            UrS=base["list"](root),
+            weights=r_weight,
+            offset=r_offset,
+            U1=coordinates,
+            Mp=width - rank,
+            family=family,
+            control=self._mgcv.gam_control(epsilon=1e-12),
+            deriv=0,
+            scale=0,
+            scoreType="REML",
+            **{"null.coef": null},
+        )
+        if not bool(fit.rx2("converged")[0]):
+            raise RBridgeError("Pinned signed-score gam.fit3 oracle did not converge")
+        if not captured:
+            raise RBridgeError("Pinned signed-score gdi return was not reached")
+        return {
+            "reference": np.r_[
+                np.asarray(fit.rx2("coefficients")),
+                np.asarray(fit.rx2("deviance")),
+                np.asarray(fit.rx2("scale.est")),
+                np.asarray(fit.rx2("trA")),
+                np.asarray(fit.rx2("REML")),
+            ],
+            "fisher_inverse": np.asarray(
+                self._base.tcrossprod(fit.rx2("rV")), dtype=np.float64
+            ),
+            "source_payload": np.r_[captured[-1], np.asarray(fit.rx2("scale.est"))],
+        }
 
     def efs_nb_working_factors(
         self,

@@ -25,6 +25,7 @@ from jaxgam.families.base import (
     StreamReductionPolicy,
 )
 from jaxgam.fitting.pirls import _W_MAX, _W_MIN, canonical_working_quantities
+from jaxgam.jax_utils import _materialize_source_operation
 
 if TYPE_CHECKING:
     from jaxgam.formula.prepare import PreparedModel
@@ -194,6 +195,8 @@ class InitialBatchWorkingQuantities:
     not clipped, absolutized, or sent to a positive-definite solver here.
     A later signed-system route must decide whether the step is indefinite
     and reproduce mgcv's step-local Fisher fallback.
+    ``informative_mask`` is the source ``good`` selection, independent of
+    whether a selected or observed curvature is numerically zero.
     """
 
     eta: jax.Array
@@ -209,6 +212,7 @@ class InitialBatchWorkingQuantities:
     domain_ok: jax.Array
     alpha_resolution_unresolved: jax.Array
     working_inputs_ok: jax.Array
+    informative_mask: jax.Array
     informative_count: jax.Array
     fisher_system_ok: jax.Array
     newton_system_ok: jax.Array
@@ -540,7 +544,48 @@ def batch_working_quantities(
     )
 
 
-@partial(jax.jit, static_argnames=("family", "context"))
+def _initial_materialize(value: jax.Array) -> jax.Array:
+    """Keep an R vector operation rounded before the next operation.
+
+    nextafter(x, x) preserves every finite value exactly. Unlike an XLA
+    optimization barrier alone, its bit-level lowering prevents CPU fusion
+    from changing cancellation across these source-owned boundaries.
+    """
+    return _materialize_source_operation(value)
+
+
+@jax.jit
+def _initial_newton_quantities(
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    eta: jax.Array,
+    mu: jax.Array,
+    variance: jax.Array,
+    mu_eta: jax.Array,
+    dvar: jax.Array,
+    d2link: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Literal gam.fit3 first-system arithmetic from materialized inputs."""
+    residual = _initial_materialize(y - mu)
+    variance_term = _initial_materialize(dvar / variance)
+    link_term = _initial_materialize(d2link * mu_eta)
+    alpha_terms = _initial_materialize(variance_term + link_term)
+    correction = _initial_materialize(residual * alpha_terms)
+    alpha_raw = _initial_materialize(1.0 + correction)
+    alpha = jnp.where(alpha_raw == 0.0, jnp.finfo(jnp.float64).eps, alpha_raw)
+    weighted_alpha = _initial_materialize(prior_weight * alpha)
+    mu_eta_squared = _initial_materialize(mu_eta**2)
+    numerator = _initial_materialize(weighted_alpha * mu_eta_squared)
+    weight = _initial_materialize(numerator / variance)
+    denominator = _initial_materialize(mu_eta * alpha)
+    response_correction = _initial_materialize(residual / denominator)
+    linear_predictor = _initial_materialize(eta - offset)
+    response = _initial_materialize(linear_predictor + response_correction)
+    return alpha_raw, alpha, weight, response
+
+
+@partial(jax.jit, static_argnames=("family", "context", "source_signed_recovery"))
 def batch_initial_working_quantities(
     y: jax.Array,
     prior_weight: jax.Array,
@@ -550,6 +595,8 @@ def batch_initial_working_quantities(
     parameters: FamilyExecutionParameters,
     family: ExponentialFamily,
     context: FamilyExecutionContext,
+    *,
+    source_signed_recovery: bool = False,
 ) -> InitialBatchWorkingQuantities:
     """Evaluate first W/z from an explicit dynamic per-row starting eta.
 
@@ -557,6 +604,11 @@ def batch_initial_working_quantities(
     first loop uses ``eta = linkfun(mustart)`` before a weighted least-squares
     coefficient exists.  Padding is made finite before inverse-link or
     direct-deviance arithmetic and masked only after raw W/z are formed.
+
+    Only a source-style signed controller may enable unresolved-roundoff
+    recovery. The raw diagnostic and literal alpha arithmetic remain intact;
+    that controller must own factor admissibility, Fisher retry, trial-domain
+    backtracking, and final observed-score/Fisher-reporting checks.
     """
     _validate_context(family, context)
     _require_capabilities(
@@ -592,7 +644,7 @@ def batch_initial_working_quantities(
     mu_domain = family.valid_mu(mu_candidate)
     domain_rows = real_input & eta_domain & mu_domain & jnp.isfinite(mu_candidate)
 
-    variance_candidate = family.variance(mu_candidate)
+    variance_candidate = family.execution_initial_variance(mu_candidate)
     mu_eta_candidate = family.link.mu_eta(eta_safe)
     positive_domain = domain_rows & (weight_safe > 0.0)
     variance_ok = jnp.isfinite(variance_candidate) & (variance_candidate != 0.0)
@@ -611,9 +663,10 @@ def batch_initial_working_quantities(
     weight_work = jnp.where(informative, weight_safe, 0.0)
     offset_work = jnp.where(informative, offset_safe, 0.0)
     eta_work = jnp.where(informative, eta_safe, padding.eta)
-    mu = family.link.inverse(eta_work)
-    variance = family.variance(mu)
-    mu_eta = family.link.mu_eta(eta_work)
+    # Materialize the named gam.fit3 vectors before forming alpha.
+    mu = _initial_materialize(family.link.inverse(eta_work))
+    variance = _initial_materialize(family.execution_initial_variance(mu))
+    mu_eta = _initial_materialize(family.link.mu_eta(eta_work))
     fisher_weight = weight_work * mu_eta**2 / variance
     fisher_response = (eta_work - offset_work) + (y_work - mu) / mu_eta
 
@@ -631,19 +684,11 @@ def batch_initial_working_quantities(
     gradient = jax.grad(_deviance_at_eta)
     _, second = jax.jvp(gradient, (eta_work,), (jnp.ones_like(eta_work),))
     observed_weight = 0.5 * second
-    d2link = family.link.second_derivative(mu)
-    alpha_terms = family.dvar(mu) / variance + d2link * mu_eta
-    # R evaluates this expression in separate vector operations before its
-    # exact-zero replacement. Keep a materialization barrier so XLA does not
-    # turn a mathematically zero alpha into a fused-roundoff residue.
-    alpha_correction = jax.lax.optimization_barrier((y_work - mu) * alpha_terms)
-    alpha_raw = jax.lax.optimization_barrier(1.0 + alpha_correction)
-    # This is the literal gam.fit3 alpha==0 replacement only. A separate
-    # family-owned diagnostic reports XLA/R cancellation gaps; it never
-    # changes a small signed alpha into a positive working weight.
-    alpha = jnp.where(alpha_raw == 0.0, jnp.finfo(jnp.float64).eps, alpha_raw)
-    newton_weight = weight_work * alpha * mu_eta**2 / variance
-    newton_response = (eta_work - offset_work) + (y_work - mu) / (mu_eta * alpha)
+    dvar = _initial_materialize(family.execution_initial_dvar(mu))
+    d2link = _initial_materialize(family.link.second_derivative(mu))
+    alpha_raw, alpha, newton_weight, newton_response = _initial_newton_quantities(
+        y_work, weight_work, offset_work, eta_work, mu, variance, mu_eta, dvar, d2link
+    )
 
     theta_finite = jnp.all(jnp.isfinite(parameters.log_theta))
     input_ok = jnp.all(~valid | real_input)
@@ -675,7 +720,7 @@ def batch_initial_working_quantities(
         domain_ok
         & working_inputs_ok
         & selected_system_ok
-        & ~selected_alpha_resolution_unresolved
+        & (source_signed_recovery | ~selected_alpha_resolution_unresolved)
     )
     return InitialBatchWorkingQuantities(
         eta=eta_safe,
@@ -691,12 +736,38 @@ def batch_initial_working_quantities(
         domain_ok=domain_ok,
         alpha_resolution_unresolved=alpha_resolution_unresolved,
         working_inputs_ok=working_inputs_ok,
-        informative_count=jnp.sum(informative, dtype=jnp.int32),
+        informative_mask=informative,
+        informative_count=jnp.sum(informative, dtype=jnp.int64),
         fisher_system_ok=fisher_system_ok,
         newton_system_ok=newton_system_ok,
         observed_information_ok=observed_information_ok,
         working_system_admissible=working_system_admissible,
     )
+
+
+InitialWorkingStatus = tuple[jax.Array, jax.Array]
+
+
+@jax.jit
+def initial_working_status(
+    batch: InitialBatchWorkingQuantities,
+) -> InitialWorkingStatus:
+    """Project one batch to selected-system validity and informative count."""
+    return batch.working_system_admissible, batch.informative_count
+
+
+@jax.jit
+def merge_initial_working_status(
+    left: InitialWorkingStatus, right: InitialWorkingStatus
+) -> InitialWorkingStatus:
+    """Compose bounded batch status without treating empty batches as failures."""
+    return left[0] & right[0], left[1] + right[1]
+
+
+@jax.jit
+def finalize_initial_working_status(status: InitialWorkingStatus) -> jax.Array:
+    """Require global selected-system validity and at least one informative row."""
+    return status[0] & (status[1] > 0)
 
 
 @partial(jax.jit, static_argnames=("family", "context", "max_y"))

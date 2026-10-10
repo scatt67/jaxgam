@@ -672,6 +672,14 @@ class ExponentialFamily(ABC):
         """
         return self.execution_initial_mustart_cpu(y, prior_weight)
 
+    def execution_initial_variance(self, mu: np.ndarray) -> np.ndarray:
+        """Variance arithmetic for the opt-in source-ordered first system."""
+        return self.variance(mu)
+
+    def execution_initial_dvar(self, mu: np.ndarray) -> np.ndarray:
+        """Variance-derivative arithmetic for the opt-in first system."""
+        return self.dvar(mu)
+
     def initial_working_state_cpu(
         self,
         y: np.ndarray,

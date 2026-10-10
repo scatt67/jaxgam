@@ -458,6 +458,8 @@ def reml_criterion_from_penalized_deviance(
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     rank_deficit: int = 0,
+    *,
+    log_det_hessian: jax.Array | None = None,
 ) -> jax.Array:
     """Evaluate REML from an explicit source-provenance ``Dp`` value.
 
@@ -466,20 +468,40 @@ def reml_criterion_from_penalized_deviance(
     represented faithfully by a single coefficient/deviance pair when the
     final candidate is rejected on a family-domain check, so the EFS adapter
     passes the resulting penalized deviance explicitly through this function.
+
+    A supplied frozen observed-factor determinant avoids rebuilding its
+    normal matrix. As for ``reml_criterion_with_logdet_hessian``, this requires
+    the full identifiable subspace and is not a free-rho objective.
     """
-    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
-    log_det_H, log_det_S = _criterion_log_determinants(
-        log_lambda,
-        XtWX,
-        S_lambda,
-        singleton_sp_indices,
-        singleton_ranks,
-        singleton_eig_constants,
-        multi_block_sp_indices,
-        multi_block_ranks,
-        multi_block_proj_S,
-        rank_deficit,
-    )
+    if log_det_hessian is None:
+        S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
+        log_det_H, log_det_S = _criterion_log_determinants(
+            log_lambda,
+            XtWX,
+            S_lambda,
+            singleton_sp_indices,
+            singleton_ranks,
+            singleton_eig_constants,
+            multi_block_sp_indices,
+            multi_block_ranks,
+            multi_block_proj_S,
+            rank_deficit,
+        )
+    else:
+        if rank_deficit != 0:
+            raise NotImplementedError(
+                "Supplied-Hessian REML requires the full identifiable subspace."
+            )
+        log_det_H = log_det_hessian
+        log_det_S = penalty_ops.log_pdet(
+            log_lambda,
+            singleton_sp_indices,
+            singleton_ranks,
+            singleton_eig_constants,
+            multi_block_sp_indices,
+            multi_block_ranks,
+            multi_block_proj_S,
+        )
     core = penalized_deviance / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
