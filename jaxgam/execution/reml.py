@@ -1484,7 +1484,7 @@ def _run_parameterized_stream_reml(
         and "RELATIVE REDUCTION OF F" in message
         and len(result_params) == 2
         and total_iterations < control.max_iter
-        and objective.n_evaluations + 5 <= control.maxfun
+        and objective.n_evaluations + 8 <= control.maxfun
     ):
         center = np.asarray(objective.accepted.params, dtype=np.float64)
         accepted_score = float(np.asarray(objective.accepted.score))
@@ -1522,37 +1522,44 @@ def _run_parameterized_stream_reml(
                     and (upper is None or value <= upper)
                     for value, (lower, upper) in zip(corrected, bounds, strict=True)
                 ):
-                    candidate_score, candidate_gradient = objective(corrected)
-                    candidate = objective.candidate
-                    candidate_norm = float(
-                        np.max(
-                            np.abs(
-                                _projected_gradient_for_bounds(
-                                    corrected, candidate_gradient, bounds
+                    # A full Newton correction can change a flat exact score
+                    # by a few ULPs even when its gradient vanishes. Short
+                    # step-halving retains a decreasing exact trial that also
+                    # meets the original projected-gradient/inner gates.
+                    for fraction in (1.0, 0.5, 0.25, 0.125):
+                        trial_params = center + fraction * correction
+                        candidate_score, candidate_gradient = objective(trial_params)
+                        candidate = objective.candidate
+                        candidate_norm = float(
+                            np.max(
+                                np.abs(
+                                    _projected_gradient_for_bounds(
+                                        trial_params, candidate_gradient, bounds
+                                    )
                                 )
                             )
                         )
-                    )
-                    if (
-                        candidate is not None
-                        and _same_rho(corrected, candidate.params)
-                        and candidate_norm <= control.gtol
-                        and inner_valid(candidate)
-                        and candidate_score - accepted_score
-                        <= np.spacing(abs(accepted_score))
-                    ):
-                        objective._check_source_unchanged()
-                        objective.accepted = candidate
-                        objective.candidate = None
-                        objective.n_accepted += 1
-                        objective._history.append(candidate_score)
-                        total_iterations += 1
-                        projected_gradient_inf = candidate_norm
-                        converged = True
-                        message = (
-                            f"{message}; exact curvature correction reached "
-                            "the original stationarity tolerances."
-                        )
+                        if (
+                            candidate is not None
+                            and _same_rho(trial_params, candidate.params)
+                            and candidate_norm <= control.gtol
+                            and inner_valid(candidate)
+                            and candidate_score - accepted_score
+                            <= np.spacing(abs(accepted_score))
+                        ):
+                            objective._check_source_unchanged()
+                            objective.accepted = candidate
+                            objective.candidate = None
+                            objective.n_accepted += 1
+                            objective._history.append(candidate_score)
+                            total_iterations += 1
+                            projected_gradient_inf = candidate_norm
+                            converged = True
+                            message = (
+                                f"{message}; exact curvature correction reached "
+                                "the original stationarity tolerances."
+                            )
+                            break
     if bool(result.success) and not converged:
         message = (
             f"{message}; projected gradient {projected_gradient_inf:.3e} exceeds "
@@ -1998,8 +2005,19 @@ def optimize_regular_stream_reml(
             p, n_params, reml_control, pirls_control
         )
     )
+    # The unknown-scale one-penalty case has two free coordinates. Its local
+    # stationarity correction retains two gradient-probe vectors, a curvature
+    # matrix, and short-lived parameter/gradient copies alongside the accepted
+    # and candidate trials.
+    curvature_completion = not pin_lambda and n_lambda == 1 and not family.scale_known
+    curvature_completion_bytes = (
+        8 * (n_params * n_params + 24 * n_params) if curvature_completion else 0
+    )
     outer_workspace_bytes = (
-        retained_trial_bytes + retained_history_bytes + lbfgs_workspace_bytes
+        retained_trial_bytes
+        + retained_history_bytes
+        + lbfgs_workspace_bytes
+        + curvature_completion_bytes
     )
     if outer_workspace_bytes >= maximum_bytes:
         raise MemoryError(
@@ -2029,6 +2047,10 @@ def optimize_regular_stream_reml(
         params_initial,
         bounds,
         reml_control,
+        curvature_stationary_completion=curvature_completion,
+        completion_inner_tolerance=(
+            pirls_control.tol if curvature_completion else None
+        ),
         **step_options,
     )
     completion = None

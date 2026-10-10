@@ -956,6 +956,17 @@ def test_regular_stream_reml_optimizer_charges_retained_inner_history(
             control=StreamREMLControl(history_size=3),
             initial_coefficients=start,
         )
+    curvature_bytes = 8 * (len(params) ** 2 + 24 * len(params))
+    with pytest.raises(MemoryError, match="retention"):
+        optimize_regular_stream_reml(
+            StreamDesign(prepared, source),
+            family,
+            params,
+            maximum_bytes=sum(workspace_parts) + curvature_bytes,
+            pirls_control=long_control,
+            control=StreamREMLControl(history_size=3),
+            initial_coefficients=start,
+        )
     assert evaluations == 0
 
 
