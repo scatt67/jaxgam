@@ -207,6 +207,16 @@ def parametric_setup(parametric_data) -> ModelSetup:
 # ---------------------------------------------------------------------------
 
 
+def test_fully_penalized_random_effect_has_no_unpenalized_rank_deficit():
+    frame = pd.DataFrame(
+        {"y": [1.0, 2.0, 3.0, 1.5], "g": pd.Categorical(["a", "b", "a", "b"])}
+    )
+    setup = ModelSetup.build(parse_formula("y~0+s(g,bs='re')"), frame)
+    fitted = FittingData.from_setup(setup, Gaussian())
+    assert fitted.n_coef == 2
+    assert fitted.rank_deficit == 0
+
+
 class TestFromSetupBasic:
     """Test that from_setup transfers arrays correctly."""
 

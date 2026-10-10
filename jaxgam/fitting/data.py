@@ -308,6 +308,8 @@ class FittingData:
                     ),
                 ]
             )
+        if design_null.shape[1] == 0:
+            return 0
         return design_null.shape[1] - int(np.linalg.matrix_rank(design_null))
 
 
