@@ -428,10 +428,6 @@ class SourceOperatorEFSFitProvider:
             logdet_control=control,
             max_y=self.max_y,
         ).evaluate()
-        self.completed_source_scans += components.source_scans
-        self.completed_source_batches += components.source_scans * math.ceil(
-            fit.model.n_obs / fit.model.batch_rows
-        )
         if self.score_error_bound is None:
             if fit.family.scale_known:
                 bound = _indexed_poisson_score_bound(fit, components, self.fit_control)
