@@ -9,12 +9,12 @@ for a starting coefficient vector.
 from __future__ import annotations
 
 import math
-import sys
 from dataclasses import dataclass
 from itertools import pairwise
 
 import numpy as np
 import numpy.typing as npt
+from scipy import __config__ as scipy_config
 from scipy import linalg
 
 from jaxgam.penalties.structure import (
@@ -214,7 +214,14 @@ class GlobalPenaltyCoordinates:
 
 def _symmetric_eigh(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Use mgcv's lower-triangle DSYEVR coordinate gauge."""
-    if sys.platform == "darwin":
+    lapack = (
+        getattr(scipy_config, "CONFIG", {})
+        .get("Build Dependencies", {})
+        .get("lapack", {})
+    )
+    if lapack.get("name") == "Accelerate":
+        # The locked macOS SciPy wheel shares R's Accelerate gauge. Other
+        # SciPy builds use the declared source-coordinate provider below.
         return linalg.eigh(
             np.asarray(matrix, dtype=np.float64), lower=True, driver="evr"
         )
