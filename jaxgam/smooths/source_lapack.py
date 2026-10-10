@@ -121,8 +121,8 @@ def cubic_shrinkage_workspace_bound(k: int) -> int:
     support indices, and capped DSYEVR work arrays on the pinned provider path.
     SciPy's Accelerate EVR path has the same quadratic matrix ownership.  The
     reconstruction peak owns eigenvectors, the scaled transposed factor, and
-    the returned penalty.  Pinned work queries are checked against the caps
-    before either full work array is allocated.
+    the returned penalty.  Both providers' work queries are checked against
+    the caps before either full work array is allocated.
     """
     if isinstance(k, bool) or not isinstance(k, int) or k < 3:
         raise ValueError("Cubic shrinkage dimension must be an integer >= 3.")
@@ -769,6 +769,13 @@ def cubic_shrinkage_penalty(
     if scipy_uses_accelerate_lapack():
         # Accelerate EVR preserves R's separate libRlapack cubic null gauge
         # more closely.  The installed SciPy build selects this path.
+        lwork, liwork, status = linalg.lapack.dsyevr_lwork(k, lower=1)
+        if status != 0:
+            raise np.linalg.LinAlgError(
+                f"Accelerate DSYEVR workspace query failed with info={status}."
+            )
+        _query_length(lwork, name="lwork", cap=64 * k)
+        _query_length(liwork, name="liwork", cap=32 * k)
         a = np.array(S, dtype=np.float64, order="F", copy=True)
         values, vectors = linalg.eigh(
             a, lower=True, driver="evr", overwrite_a=True, check_finite=False

@@ -59,6 +59,22 @@ def test_workspace_bound_validation_and_reject_before_provider(monkeypatch) -> N
     provider.assert_not_called()
 
 
+def test_accelerate_evr_rejects_unbounded_workspace_before_matrix_copy(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_lapack, "scipy_uses_accelerate_lapack", lambda: True)
+    monkeypatch.setattr(
+        source_lapack.linalg.lapack,
+        "dsyevr_lwork",
+        lambda k, **_kwargs: (65 * k, 10 * k, 0),
+    )
+    eigen = Mock(side_effect=AssertionError("eigensolve must not allocate"))
+    monkeypatch.setattr(source_lapack.linalg, "eigh", eigen)
+    with pytest.raises(RuntimeError, match="lwork"):
+        source_lapack.cubic_shrinkage_penalty(np.eye(5))
+    eigen.assert_not_called()
+
+
 def test_lanczos_workspace_rejects_before_mask_or_provider(monkeypatch) -> None:
     required = source_lapack.source_lanczos_workspace_bound(7, 4)
     assert required == 8 * (7 * 7 * 7 + 2 * 7 * 4 + 19 * 7 + 35)
@@ -357,6 +373,12 @@ def test_unreviewed_raw_cubic_inputs_remain_strict(monkeypatch) -> None:
     monkeypatch.setattr(scipy, "__version__", "1.17.0")
     knots = np.linspace(-2.0, 3.0, 32)
     _, raw = CubicRegressionSmooth._compute_natural_f_and_penalty(knots)
+    fingerprint = hashlib.sha256(
+        np.asarray(knots, dtype="<f8").tobytes()
+        + np.asarray(raw, dtype="<f8").tobytes()
+        + np.asarray(0.1, dtype="<f8").tobytes()
+    ).hexdigest()
+    monkeypatch.setitem(_ACCELERATE_CUBIC_MODERATE_DIGESTS, (1, 32), fingerprint)
     assert _reviewed_raw_cubic_tolerance(1, knots, raw, 0.1) is MODERATE
     changed = raw.copy()
     changed[0, 0] = np.nextafter(changed[0, 0], np.inf)
