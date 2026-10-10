@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from jaxgam.control import OperatorControl
+from jaxgam.api import GAM
+from jaxgam.control import FitControl, OperatorControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.operator_fit import (
     FrozenOperatorWorkingState,
@@ -51,6 +52,51 @@ class _EmptyBatches:
                 row_positions=batch.row_positions[:0],
             )
             yield batch
+
+
+def test_public_fixed_sp_operator_counts_short_source_partitions_and_probes():
+    n = 36
+    frame = pd.DataFrame(
+        {
+            "x": np.linspace(-1, 1, n),
+            "y": np.resize([0, 1, 2, 1], n),
+            "g": pd.Categorical(np.resize(["a", "b", "c"], n)),
+        }
+    )
+
+    class PartitionedSource(DataFrameRowSource):
+        def __init__(self):
+            super().__init__(frame, response="y")
+            self.scans = 0
+            self.batches = 0
+
+        def scan(self, batch_rows):
+            self.scans += 1
+            for batch in super().scan(min(batch_rows, 3)):
+                self.batches += 1
+                yield batch
+
+    source = PartitionedSource()
+    fitted = GAM(
+        "y~x+s(g,bs='re')",
+        family="poisson",
+        sp=[0.8],
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=8,
+            memory_budget_bytes=32 << 20,
+        ),
+    ).fit(source, result="prediction")
+    assert fitted.converged
+    assert fitted.source_scans == source.scans
+    assert fitted.batches_scanned == source.batches
+    assert fitted.batches_scanned > fitted.source_scans * ((n + 7) // 8)
+    assert fitted.operator_diagnostics is not None
+    assert fitted.source_scans > (
+        fitted.operator_diagnostics.preparation_scans
+        + fitted.operator_diagnostics.source.started_scans
+    )
 
 
 @pytest.mark.parametrize("link", [LogLink(), InverseLink()])

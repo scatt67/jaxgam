@@ -642,6 +642,14 @@ class GAMPredictionResult:
             execution_path="jax",
             execution_route="operator",
             operator_diagnostics=fitted.diagnostics,
+            source_scans=(
+                model.started_preparation_scans
+                + fitted.diagnostics.source.started_scans
+            ),
+            batches_scanned=(
+                model.preparation_yielded_batches
+                + fitted.diagnostics.source.yielded_batches
+            ),
             n=model.n_obs,
             _batch_rows=control.batch_rows,
         )
