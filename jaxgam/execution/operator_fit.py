@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import numbers
 from dataclasses import dataclass, replace
 
@@ -1094,6 +1095,7 @@ class OperatorFitDiagnostics:
     adjoint_executable_temporary_bytes: int
     accepted_objectives: tuple[float, ...]
     inner_status: int | None
+    final_gradient_norm: float
 
 
 @dataclass(frozen=True)
@@ -1356,6 +1358,7 @@ def fit_operator_fixed_sp(
     peak = extra
     status = None
     converged = False
+    gradient_norm = math.inf
     info = "Maximum operator iterations reached."
     for iteration in range(1, control.max_iterations + 1):
         working = state(None if iteration == 1 else beta)
@@ -1533,6 +1536,7 @@ def fit_operator_fixed_sp(
         adjoint_scratch,
         tuple(objectives),
         status,
+        float(gradient_norm),
     )
     return OperatorFitResult(
         beta,

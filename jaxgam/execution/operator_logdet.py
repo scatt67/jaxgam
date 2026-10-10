@@ -82,6 +82,8 @@ class OperatorLogDetDiagnostics:
         "stochastic_lanczos"
     )
     rounding_error_bound: float | None = None
+    diagonal_condition_ratio: float | None = None
+    minimum_diagonal: float | None = None
 
 
 @dataclass(frozen=True)
@@ -351,5 +353,7 @@ class FrozenOperatorLogDet:
                 probe_fingerprint=digest.hexdigest(),
                 strategy="structured_diagonal",
                 rounding_error_bound=bound,
+                diagonal_condition_ratio=float(np.max(diagonal) / np.min(diagonal)),
+                minimum_diagonal=float(np.min(diagonal)),
             ),
         )

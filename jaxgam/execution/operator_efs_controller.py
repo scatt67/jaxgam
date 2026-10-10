@@ -26,7 +26,10 @@ from jaxgam.execution.operator_fit import OperatorFitResult, fit_operator_fixed_
 from jaxgam.execution.operator_logdet import OperatorLogDetControl
 from jaxgam.execution.operator_score import compare_operator_scores
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.standard import Poisson
+from jaxgam.fitting.iterative import CONVERGED
 from jaxgam.formula.operator_prepare import PreparedOperatorModel
+from jaxgam.penalties.structure import IdentityPenalty
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class OperatorEFSState:
     fit: OperatorFitResult
     components: MatchedOperatorEFSComponents
     score_error_bound: float | None
+    score_bound_method: str = "unavailable"
 
     def __post_init__(self) -> None:
         if not isinstance(self.fit, OperatorFitResult) or not self.fit.converged:
@@ -69,6 +73,77 @@ class OperatorEFSState:
             not math.isfinite(self.score_error_bound) or self.score_error_bound < 0
         ):
             raise ValueError("Score error bound must be finite and nonnegative.")
+        if self.score_error_bound is None and self.score_bound_method != "unavailable":
+            raise ValueError("Uncalibrated score cannot name a bound method.")
+
+
+def _indexed_poisson_score_bound(
+    fit: OperatorFitResult,
+    components: MatchedOperatorEFSComponents,
+    control: OperatorControl,
+) -> float | None:
+    """Empirical score envelope for bounded, well-conditioned pure indexed fits.
+
+    The arithmetic allowance is a conservative float64 row/diagonal envelope
+    calibrated against independent dense matched states and full EFS paths.
+    The residual allowance uses the observed final gradient and the identity
+    penalty's strong-convexity floor. This is not a general stochastic bound.
+    """
+    model = fit.model
+    score = components.score
+    p, n = model.n_coef, model.n_obs
+    if not (
+        256 < p <= 512
+        and 2 * p <= n <= 3 * p
+        and model.batch_rows == 64
+        and isinstance(fit.family, Poisson)
+        and fit.family.is_canonical
+        and not fit.offset_was_nonzero
+        and score.strategy == "structured_diagonal"
+        and components.fisher.diagnostics.strategy == "structured_diagonal"
+        and fit.diagnostics.inner_status == CONVERGED
+        and control.tolerance <= 1e-7
+        and control.cg_rtol <= 1e-10
+        and control.cg_atol <= 1e-12
+        and len(model.penalties.blocks) == 1
+        and components.score_rows.unit_weights
+        and components.score_rows.zero_offset
+        and components.score_rows.maximum_response <= 32
+    ):
+        return None
+    block = model.penalties.blocks[0]
+    if (
+        block.sp_indices != (0,)
+        or len(block.local_penalties) != 1
+        or not isinstance(block.local_penalties[0], IdentityPenalty)
+        or score.diagonal_condition_ratio is None
+        or score.diagonal_condition_ratio > 1e4
+        or score.minimum_diagonal is None
+        or score.minimum_diagonal < 1e-6
+        or score.determinant_rounding_bound is None
+        or np.max(np.abs(fit.coefficients)) > 20
+    ):
+        return None
+    gradient = fit.diagnostics.final_gradient_norm
+    if not math.isfinite(gradient) or gradient > 1e-5:
+        return None
+    penalty_floor = math.exp(float(fit.log_lambda[0])) * block.local_penalties[0].scale
+    if not math.isfinite(penalty_floor) or penalty_floor < 1e-6:
+        return None
+    terms = components.score_rows.terms
+    magnitude = math.fsum(
+        (
+            1.0,
+            abs(terms.penalized_deviance),
+            abs(terms.saturated_loglik),
+            abs(components.penalty.value),
+            abs(score.value),
+        )
+    )
+    arithmetic = 512 * np.finfo(np.float64).eps * (n + p) * magnitude
+    solve = p * (gradient + gradient * gradient) / penalty_floor
+    bound = arithmetic + solve + score.determinant_rounding_bound
+    return float(bound) if math.isfinite(bound) else None
 
 
 class OperatorEFSFitProvider(Protocol):
@@ -225,12 +300,15 @@ class SourceOperatorEFSFitProvider:
             memory_budget_bytes=self.components_budget_bytes,
             logdet_control=control,
         ).evaluate()
-        bound = (
-            None
-            if self.score_error_bound is None
-            else self.score_error_bound(fit, components)
-        )
-        return OperatorEFSState(fit, components, bound)
+        if self.score_error_bound is None:
+            bound = _indexed_poisson_score_bound(fit, components, self.fit_control)
+            method = (
+                "indexed_poisson_empirical_v1" if bound is not None else "unavailable"
+            )
+        else:
+            bound = self.score_error_bound(fit, components)
+            method = "external" if bound is not None else "unavailable"
+        return OperatorEFSState(fit, components, bound, method)
 
 
 @dataclass(frozen=True)

@@ -65,6 +65,8 @@ class OperatorScoreEstimate:
         "stochastic_lanczos"
     )
     determinant_rounding_bound: float | None = None
+    diagonal_condition_ratio: float | None = None
+    minimum_diagonal: float | None = None
 
     def __post_init__(self) -> None:
         values = np.array(self.per_probe, dtype=np.float64, copy=True)
@@ -103,6 +105,15 @@ class OperatorScoreEstimate:
             or self.determinant_rounding_bound < 0
         ):
             raise ValueError("Determinant rounding bound must be finite nonnegative.")
+        if self.diagonal_condition_ratio is not None and (
+            not math.isfinite(self.diagonal_condition_ratio)
+            or self.diagonal_condition_ratio < 1
+        ):
+            raise ValueError("Diagonal condition ratio must be finite and >= 1.")
+        if self.minimum_diagonal is not None and (
+            not math.isfinite(self.minimum_diagonal) or self.minimum_diagonal <= 0
+        ):
+            raise ValueError("Minimum diagonal must be finite positive.")
         values.setflags(write=False)
         object.__setattr__(self, "per_probe", values)
 
@@ -164,6 +175,8 @@ def assemble_operator_score(
             if observed.diagnostics.rounding_error_bound is None
             else observed.diagnostics.rounding_error_bound / 2.0
         ),
+        diagonal_condition_ratio=observed.diagnostics.diagonal_condition_ratio,
+        minimum_diagonal=observed.diagnostics.minimum_diagonal,
     )
 
 
