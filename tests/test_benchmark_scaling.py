@@ -360,6 +360,11 @@ def test_tiny_public_exact_route_records_source_bytes_and_optimizer(
     assert record["setup"]["route"]["adapter"] == "public"
     assert record["setup"]["route"]["fixed_smoothing_parameter_values"] is None
     assert record["setup"]["source_scans"]["setup_batch_bytes"] > 0
+    assert (
+        record["setup"]["memory"]["rss_high_water_after_setup_bytes"]
+        >= record["setup"]["memory"]["rss_high_water_before_setup_bytes"]
+    )
+    assert "prepare_model" in record["setup"]["memory"]["rss_scope"]
     result = record["fit"]["result"]
     assert result["execution_route"] == "stream_exact_reml_qr"
     assert result["converged"]
@@ -763,18 +768,30 @@ def test_run_setup_dense_uses_model_matrix_fingerprint(
         X=np.arange(12.0).reshape(4, 3),
         penalties=SimpleNamespace(n_penalties=2),
     )
-    monkeypatch.setattr(
-        ModelSetup, "build", classmethod(lambda _cls, _spec, _data: fake_setup)
-    )
-    monkeypatch.setattr(
-        FittingData,
-        "from_setup",
-        classmethod(
-            lambda _cls, _setup, _family: SimpleNamespace(
-                penalty_structure=SimpleNamespace(n_penalties=2), rank_deficit=0
-            )
-        ),
-    )
+    events: list[str] = []
+
+    def build_setup(_cls, _spec, _data):
+        events.append("build")
+        return fake_setup
+
+    def build_fitting(_cls, _setup, _family):
+        events.append("fitting")
+        return SimpleNamespace(
+            penalty_structure=SimpleNamespace(n_penalties=2), rank_deficit=0
+        )
+
+    def peak_rss() -> int:
+        events.append("peak")
+        return 100 if events.count("peak") == 1 else 120
+
+    def current_rss() -> int:
+        events.append("current")
+        return 90 if events.count("current") == 1 else 110
+
+    monkeypatch.setattr(ModelSetup, "build", classmethod(build_setup))
+    monkeypatch.setattr(FittingData, "from_setup", classmethod(build_fitting))
+    monkeypatch.setattr(benchmark_scaling, "peak_rss_bytes", peak_rss)
+    monkeypatch.setattr(benchmark_scaling, "current_rss_bytes", current_rss)
     monkeypatch.setattr(
         benchmark_scaling,
         "_canonical_penalty_contract",
@@ -802,6 +819,13 @@ def test_run_setup_dense_uses_model_matrix_fingerprint(
     assert record["model"]["n_coef"] == 3
     assert record["model"]["n_penalties"] == 2
     assert record["model"]["basis_fingerprint_kind"] == "dense_model_matrix_sha256"
+    assert events[:5] == ["peak", "current", "build", "peak", "current"]
+    assert events.index("fitting") > 4
+    assert record["memory"]["rss_high_water_before_setup_bytes"] == 100
+    assert record["memory"]["rss_current_before_setup_bytes"] == 90
+    assert record["memory"]["rss_high_water_after_setup_bytes"] == 120
+    assert record["memory"]["rss_current_after_setup_bytes"] == 110
+    assert "excludes later FittingData" in record["memory"]["rss_scope"]
 
 
 @dataclass(frozen=True)

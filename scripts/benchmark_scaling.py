@@ -739,6 +739,8 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
     data = _make_data(case)
     formula = _formula(case)
     family_name = "poisson" if case.execution == "efs" else "gaussian"
+    rss_high_water_before_setup = peak_rss_bytes()
+    rss_current_before_setup = current_rss_bytes()
     started = time.perf_counter()
     spec = parse_formula(formula)
     if case.execution in {"dense", "efs"}:
@@ -747,6 +749,8 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
 
         setup = ModelSetup.build(spec, data)
         setup_s = time.perf_counter() - started
+        rss_high_water_after_setup = peak_rss_bytes()
+        rss_current_after_setup = current_rss_bytes()
         basis_fingerprint = _array_sha256(setup.X)
         n_coef = int(setup.X.shape[1])
         n_penalties = 0 if setup.penalties is None else setup.penalties.n_penalties
@@ -770,6 +774,8 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         source_scans_after = source.scan_calls
         source_bytes_after = source.batch_bytes
         setup_s = time.perf_counter() - started
+        rss_high_water_after_setup = peak_rss_bytes()
+        rss_current_after_setup = current_rss_bytes()
         basis_fingerprint = prepared.basis_fingerprint
         n_coef = prepared.n_coef
         assert prepared.fitting is not None
@@ -799,8 +805,16 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
             "frozen_contract": frozen_contract,
         },
         "memory": {
-            "rss_high_water_after_setup_bytes": peak_rss_bytes(),
-            "rss_current_after_setup_bytes": current_rss_bytes(),
+            "rss_high_water_before_setup_bytes": rss_high_water_before_setup,
+            "rss_current_before_setup_bytes": rss_current_before_setup,
+            "rss_high_water_after_setup_bytes": rss_high_water_after_setup,
+            "rss_current_after_setup_bytes": rss_current_after_setup,
+            "rss_scope": (
+                "fresh-process high-water/current RSS sampled immediately after "
+                "parse_formula and ModelSetup.build or prepare_model; includes "
+                "imports and generated input, excludes later FittingData, "
+                "penalty fingerprint and record assembly"
+            ),
             "input_bytes": int(data.memory_usage(index=True, deep=True).sum()),
         },
         "source_scans": {
