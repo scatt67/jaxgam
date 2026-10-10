@@ -255,7 +255,8 @@ def _arrowhead_poisson_score_bound(
     The structured determinant and Fisher trace have no probe or Krylov error.
     The arithmetic allowance covers finite row/Schur/reduction effects in the
     measured bounded regime. The local gradient allowance uses the Schur
-    spectral bracket and is conditional on the fitted convex neighborhood.
+    empirically buffered spectral estimate and is conditional on the fitted
+    convex neighborhood. This is not a deterministic eigenvalue certificate.
     Neither allowance admits a general coupled or stochastic operator model.
     """
     model = fit.model
@@ -293,10 +294,10 @@ def _arrowhead_poisson_score_bound(
         or block.sp_indices != (0,)
         or len(block.local_penalties) != 1
         or not isinstance(block.local_penalties[0], IdentityPenalty)
-        or score.spectral_lower_bound is None
-        or score.spectral_lower_bound < 1e-3
-        or score.spectral_condition_bound is None
-        or score.spectral_condition_bound > 1e5
+        or score.spectral_lower_estimate is None
+        or score.spectral_lower_estimate < 1e-3
+        or score.spectral_condition_estimate is None
+        or score.spectral_condition_estimate > 1e5
         or score.minimum_diagonal is None
         or score.minimum_diagonal < 1e-6
         or np.max(np.abs(fit.coefficients)) > 20
@@ -316,7 +317,7 @@ def _arrowhead_poisson_score_bound(
         )
     )
     arithmetic = 512 * np.finfo(np.float64).eps * (n + p + k * k) * magnitude
-    solve = p * gradient * gradient / score.spectral_lower_bound
+    solve = p * gradient * gradient / score.spectral_lower_estimate
     bound = arithmetic + solve
     return float(bound) if math.isfinite(bound) else None
 

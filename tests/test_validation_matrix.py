@@ -179,10 +179,23 @@ def test_operator_efs_calibrated_coupled_poisson_full_fit_strict(
     assert reference["convergence"] == "full convergence"
     assert reference["inner_converged"]
     assert operator.outer_iterations == dense.n_iter == reference["outer_iterations"]
+    assert selected.score_bound_method == "arrowhead_poisson_empirical_v1"
+    assert operator.attempted_fits == len(errors)
     assert all(bound is not None for bound in bounds)
     assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))
     checks = _AssertCollector()
     for name, actual, expected in (
+        ("dense EFS score", selected.components.score.value, dense.score),
+        (
+            "dense EFS smoothing",
+            np.exp(selected.fit.log_lambda),
+            dense.smoothing_params,
+        ),
+        (
+            "dense EFS deviance",
+            selected.fit.deviance,
+            dense.pirls_result.deviance,
+        ),
         ("score", selected.components.score.value, reference["reml_score"]),
         ("smoothing", np.exp(selected.fit.log_lambda), reference["smoothing_params"]),
         ("deviance", selected.fit.deviance, reference["deviance"]),
@@ -242,6 +255,8 @@ def test_public_coupled_operator_efs_default_start_matches_pinned_r_strict(
         ("smoothing", fitted.smoothing_params, reference["smoothing_params"]),
         ("deviance", fitted.deviance, reference["deviance"]),
         ("scale", fitted.scale, reference["scale"]),
+        ("total EDF", fitted.edf_total, reference["edf_total"]),
+        ("fitted values", fitted.predict(frame), reference["fitted_values"]),
     ):
         checks.check(
             name,

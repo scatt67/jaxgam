@@ -25,8 +25,8 @@ class ExactArrowheadFactorization:
     coupling: np.ndarray
     indexed_diagonal: np.ndarray
     schur_lower: np.ndarray
-    spectral_lower_bound: float
-    spectral_condition_bound: float
+    spectral_lower_estimate: float
+    spectral_condition_estimate: float
     peak_bound_bytes: int
     source_scans: int
 
@@ -61,8 +61,9 @@ class ExactArrowheadFactorization:
         if not np.all(np.isfinite(lower)):
             raise FloatingPointError("Arrowhead Schur factor is nonfinite.")
         # For 0 < t < min(D), H-tI is SPD exactly when its modest Schur
-        # complement is SPD. Bracket the smallest eigenvalue using only k-by-k
-        # Cholesky tests; no p-square matrix or additional source pass exists.
+        # complement is SPD. Floating Cholesky tests only give an empirical
+        # spectral estimate, not a certified lower bound. The score admission
+        # halves the positive bracket to account for its uncertainty.
         modest_matrix = modest_lower @ modest_lower.T
         low, high = 0.0, float(np.min(d))
         identity = np.eye(k, dtype=np.float64)
@@ -81,20 +82,17 @@ class ExactArrowheadFactorization:
                 high = midpoint
             else:
                 low = midpoint
-        spectral_lower = float(low * (1.0 - 64 * np.finfo(float).eps))
+        spectral_lower = float(low * 0.5)
+        if not math.isfinite(spectral_lower) or spectral_lower <= 0:
+            raise FloatingPointError("Arrowhead spectral estimate is invalid.")
         # Weyl's inequality bounds the coupling perturbation by ||B||_F.
         spectral_upper = float(
             max(np.linalg.eigvalsh(modest_matrix)[-1], np.max(d))
             + np.linalg.norm(coupling, ord="fro")
         )
         condition = spectral_upper / spectral_lower
-        if not (
-            math.isfinite(spectral_lower)
-            and spectral_lower > 0
-            and math.isfinite(condition)
-            and condition >= 1
-        ):
-            raise FloatingPointError("Arrowhead spectral bound is invalid.")
+        if not math.isfinite(condition) or condition < 1:
+            raise FloatingPointError("Arrowhead spectral estimate is invalid.")
         d.setflags(write=False)
         lower.setflags(write=False)
         return cls(

@@ -85,8 +85,8 @@ class OperatorLogDetDiagnostics:
     rounding_error_bound: float | None = None
     diagonal_condition_ratio: float | None = None
     minimum_diagonal: float | None = None
-    spectral_lower_bound: float | None = None
-    spectral_condition_bound: float | None = None
+    spectral_lower_estimate: float | None = None
+    spectral_condition_estimate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -394,7 +394,7 @@ class FrozenOperatorLogDet:
                 strategy="structured_arrowhead",
                 minimum_diagonal=float(np.min(diagonal)),
                 diagonal_condition_ratio=float(np.max(diagonal) / np.min(diagonal)),
-                spectral_lower_bound=factor.spectral_lower_bound,
-                spectral_condition_bound=factor.spectral_condition_bound,
+                spectral_lower_estimate=factor.spectral_lower_estimate,
+                spectral_condition_estimate=factor.spectral_condition_estimate,
             ),
         )

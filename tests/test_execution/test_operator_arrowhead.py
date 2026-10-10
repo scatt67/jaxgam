@@ -95,8 +95,8 @@ def test_arrowhead_logdet_and_inverse_match_dense_at_coupled_sizes(levels):
     assert not factor.coupling.flags.writeable
     assert factor.peak_bound_bytes < 16 * 1024 * 1024
     eigenvalues = np.linalg.eigvalsh(hessian)
-    assert 0 < factor.spectral_lower_bound <= eigenvalues[0] * (1 + 1e-10)
-    assert factor.spectral_condition_bound >= (eigenvalues[-1] / eigenvalues[0]) * (
+    assert 0 < factor.spectral_lower_estimate <= eigenvalues[0] * (1 + 1e-10)
+    assert factor.spectral_condition_estimate >= (eigenvalues[-1] / eigenvalues[0]) * (
         1 - 1e-10
     )
 
@@ -138,8 +138,8 @@ def test_arrowhead_logdet_and_fisher_penalties_share_exact_dense_target(levels):
     )
     assert observed.diagnostics.strategy == "structured_arrowhead"
     assert observed.diagnostics.rounding_error_bound is None
-    assert observed.diagnostics.spectral_lower_bound is not None
-    assert observed.diagnostics.spectral_condition_bound is not None
+    assert observed.diagnostics.spectral_lower_estimate is not None
+    assert observed.diagnostics.spectral_condition_estimate is not None
     assert observed.diagnostics.completed_actions == 0
     assert observed.diagnostics.source_scans == 1
     assert fisher.diagnostics.strategy == "structured_arrowhead"
@@ -172,6 +172,26 @@ def test_arrowhead_replay_detects_changed_curvature(monkeypatch):
         ExactArrowheadFactorization.from_system(
             system, memory_budget_bytes=16 * 1024 * 1024
         )
+
+
+def test_arrowhead_rejects_zero_spectral_bracket_without_dividing(monkeypatch):
+    system, _ = _system(8)
+    cholesky = np.linalg.cholesky
+    calls = 0
+
+    def unstable_shifted_cholesky(matrix):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise np.linalg.LinAlgError("shifted factor is numerically unresolved")
+        return cholesky(matrix)
+
+    monkeypatch.setattr(np.linalg, "cholesky", unstable_shifted_cholesky)
+    with pytest.raises(FloatingPointError, match="spectral estimate"):
+        ExactArrowheadFactorization.from_system(
+            system, memory_budget_bytes=16 * 1024 * 1024
+        )
+    assert calls > 1
 
 
 def test_diagonal_system_is_not_arrowhead():

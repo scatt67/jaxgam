@@ -112,8 +112,8 @@ def test_matched_arrowhead_score_and_trace_match_independent_dense_state(
         matched.fisher.traces, [expected_trace], rtol=STRICT.rtol, atol=STRICT.atol
     )
     assert matched.score.strategy == "structured_arrowhead"
-    assert matched.score.spectral_lower_bound is not None
-    assert matched.score.spectral_condition_bound is not None
+    assert matched.score.spectral_lower_estimate is not None
+    assert matched.score.spectral_condition_estimate is not None
     assert matched.fisher.diagnostics.strategy == "structured_arrowhead"
     assert matched.source_scans == 5
 
@@ -221,60 +221,30 @@ def calibrated_coupled_case(
     return formula, frame, operator, dense, errors, bounds
 
 
-@pytest.fixture(
-    scope="module",
-    params=[
-        (300, 32031, 2, "balanced"),
-        (257, 32032, 3, "balanced"),
-        (512, 32033, 3, "unbalanced"),
-    ],
-)
-def calibrated_coupled_fit(request):
-    return calibrated_coupled_case(*request.param)
-
-
-def test_calibrated_arrowhead_complete_fit_matches_dense_efs(calibrated_coupled_fit):
-    _, _, operator, dense, errors, bounds = calibrated_coupled_fit
-    selected = operator.accepted
-    assert operator.converged
-    assert dense.converged
-    assert bool(np.asarray(dense.pirls_result.converged))
-    assert selected.score_bound_method == "arrowhead_poisson_empirical_v1"
-    assert operator.outer_iterations == dense.n_iter
-    assert operator.attempted_fits == len(errors)
-    assert all(bound is not None for bound in bounds)
-    assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))
-    np.testing.assert_allclose(
-        selected.components.score.value,
-        dense.score,
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
+def test_arrowhead_calibration_refuses_invalid_condition_and_weights():
+    frame = calibrated_coupled_frame(300, 32031, 2)
+    source = DataFrameRowSource(frame, response="y")
+    model = prepare_operator_model(
+        parse_formula("y~x+s(g,bs='re')"),
+        source,
+        control=OperatorPreparationControl(batch_rows=64, memory_budget_bytes=4 << 20),
     )
-    if selected.fit.model.random_effects[0].n_coef != 512:
-        np.testing.assert_allclose(
-            np.exp(selected.fit.log_lambda),
-            dense.smoothing_params,
-            rtol=STRICT.rtol,
-            atol=STRICT.atol,
-        )
-    # The unbalanced 512-level dense EFS sp differs by 2.18e-10 relative on
-    # this flat score surface. The canonical smoothing comparison is pinned R
-    # in the validation matrix; no tolerance is widened for this dense check.
-    np.testing.assert_allclose(
-        selected.fit.deviance,
-        dense.pirls_result.deviance,
-        rtol=STRICT.rtol,
-        atol=STRICT.atol,
-    )
-
-
-def test_arrowhead_calibration_refuses_invalid_condition_and_weights(
-    calibrated_coupled_fit,
-):
-    _, _, operator, _, _, _ = calibrated_coupled_fit
-    state = operator.accepted
     control = OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15)
-    score = replace(state.components.score, spectral_condition_bound=1e6)
+    provider = SourceOperatorEFSFitProvider(
+        model,
+        source,
+        Poisson(),
+        fit_control=control,
+        fit_budget_bytes=16 << 20,
+        components_budget_bytes=32 << 20,
+        aggregate_budget_bytes=128 << 20,
+    )
+    state = provider.evaluate(
+        provider.fit(np.log(np.array([0.8])), None),
+        OperatorLogDetControl(probes=4, lanczos_depth=4),
+    )
+    assert state.score_error_bound is not None
+    score = replace(state.components.score, spectral_condition_estimate=1e6)
     assert (
         _arrowhead_poisson_score_bound(
             state.fit, replace(state.components, score=score), control
