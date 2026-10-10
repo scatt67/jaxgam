@@ -261,9 +261,17 @@ def test_pinned_theta_local_comparison_rejects_unsafe_change(
     assert "stationary completion rejected" in result.message
 
 
-def _local_probe_case(gradient_at, *, invalid_inner=False, changed_source=False):
-    """Scalar source replay with observable live-trial ownership."""
-    live = []
+def _local_probe_case(
+    gradient_at,
+    *,
+    invalid_inner=False,
+    changed_source=False,
+    source_residual_at=None,
+    observed_residual_at=None,
+    residual_value=1e-8,
+):
+    """Scalar source replay with observable live trial/state/factor ownership."""
+    live = {name: [] for name in ("trial", "state", "factor")}
     base = np.array([-np.log(2.0), 0.7])
     end = base.copy()
     end[-1] -= 3e-9
@@ -271,7 +279,14 @@ def _local_probe_case(gradient_at, *, invalid_inner=False, changed_source=False)
     class Trial:
         pass
 
-    def trial(params, gradient, *, source="source"):
+    class State:
+        pass
+
+    class Factor:
+        def logdet_hessian(self):
+            return 5.0
+
+    def trial(params, gradient, *, source="source", role="probe"):
         value = Trial()
         value.params = np.array(params, copy=True)
         value.score = 400.0 + (2 * np.spacing(400.0) if source == "source" else 0)
@@ -282,25 +297,35 @@ def _local_probe_case(gradient_at, *, invalid_inner=False, changed_source=False)
         value.basis_fingerprint = "basis"
         value.family_name = "nb"
         value.link_name = "sqrt"
+        value.source_factor_residual = (
+            residual_value if source_residual_at == role else 1e-14
+        )
+        value.observed_factor_residual = (
+            residual_value if observed_residual_at == role else 1e-14
+        )
+        state = State()
+        factor = Factor()
+        state.converged = not invalid_inner
+        state.line_search_failed = False
+        state.stationarity = 1e-14
+        state.saturated_loglik = -280.0
+        state.coefficient_factor = factor
         value.fit_result = SimpleNamespace(
             score_penalized_deviance=190.0,
-            state=SimpleNamespace(
-                converged=not invalid_inner,
-                line_search_failed=False,
-                stationarity=1e-14,
-                saturated_loglik=-280.0,
-                coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 5.0),
-            ),
+            state=state,
         )
-        live.append(ref(value))
+        live["trial"].append(ref(value))
+        live["state"].append(ref(state))
+        live["factor"].append(ref(factor))
         return value
 
-    accepted = trial(base, gradient_at(0.0))
+    accepted = trial(base, gradient_at(0.0), role="accepted")
     accepted.score = 400.0
-    candidate = trial(end, gradient_at(1.0))
+    candidate = trial(end, gradient_at(1.0), role="candidate")
 
     def evaluate(params, _warm_start):
-        assert sum(item() is not None for item in live) == 2
+        for ownership in live.values():
+            assert sum(item() is not None for item in ownership) == 2
         fraction = (params[-1] - base[-1]) / (end[-1] - base[-1])
         return trial(
             params,
@@ -333,7 +358,44 @@ def test_nb_local_score_comparison_streams_three_probes_with_bounded_retention()
     assert objective.n_evaluations == 3
     assert objective.cumulative_source_scans == 12
     assert objective.cumulative_batches_scanned == 132
-    assert sum(item() is not None for item in live) == 2
+    for ownership in live.values():
+        assert sum(item() is not None for item in ownership) == 2
+
+
+@pytest.mark.parametrize(
+    ("source_at", "observed_at", "residual", "expected_evaluations"),
+    [
+        ("accepted", None, 2e-11, 0),
+        (None, "candidate", 2e-11, 0),
+        ("probe", None, 2e-11, 1),
+        (None, "probe", 2e-11, 1),
+        ("probe", None, np.nan, 1),
+    ],
+    ids=[
+        "source-endpoint",
+        "observed-endpoint",
+        "source-probe",
+        "observed-probe",
+        "nonfinite-probe",
+    ],
+)
+def test_nb_local_score_comparison_rejects_unresolved_factor_residuals(
+    source_at, observed_at, residual, expected_evaluations
+):
+    objective, accepted, candidate, _ = _local_probe_case(
+        lambda fraction: 8e-8 * (1.0 - fraction),
+        source_residual_at=source_at,
+        observed_residual_at=observed_at,
+        residual_value=residual,
+    )
+    assert (
+        nb_reml_execution._nb_local_stationary_score_change(
+            objective, accepted, candidate, 1e-11
+        )
+        is None
+    )
+    assert objective.n_evaluations == expected_evaluations
+    assert objective.cumulative_source_scans == 4 * expected_evaluations
 
 
 @pytest.mark.parametrize(

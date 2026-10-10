@@ -528,9 +528,11 @@ def _nb_local_stationary_score_change(
     This is an empirical *comparison* for a pinned, scalar-theta plateau,
     not a replacement for either source score.  It assumes the exact REML
     gradient is locally smooth and its evaluation error is no larger than
-    the inner stopping tolerance.  Quarter-point probes check that the
-    observed gradient is monotone and nearly linear over the very small
-    interval.  Composite-vs-single Simpson disagreement plus the assumed
+    the inner stopping tolerance. Every endpoint/probe must therefore have
+    inner stationarity and source/observed factor residuals at or below that
+    tolerance. Quarter-point probes check that the observed gradient is
+    monotone and nearly linear over the very small interval.
+    Composite-vs-single Simpson disagreement plus the assumed
     derivative error is reported separately; it is not a universal bound.
     """
     base = np.asarray(accepted.params, dtype=np.float64)
@@ -563,16 +565,26 @@ def _nb_local_stationary_score_change(
         for field in lineage_fields
     ):
         raise RuntimeError("NB local score comparison changed source/family lineage")
-    for trial in (accepted, candidate):
+
+    def source_valid(trial: NBStreamREMLTrial) -> bool:
+        """Require every source/observed solve to support the error assumption."""
         inner = trial.fit_result.state
-        if (
-            not inner.converged
-            or inner.line_search_failed
-            or not np.isfinite(inner.stationarity)
-            or inner.stationarity >= inner_tolerance
-            or not np.isfinite(float(np.asarray(trial.score)))
-        ):
-            return None
+        residuals = (
+            inner.stationarity,
+            trial.source_factor_residual,
+            trial.observed_factor_residual,
+        )
+        return bool(
+            inner.converged
+            and not inner.line_search_failed
+            and np.all(np.isfinite(residuals))
+            and min(residuals) >= 0.0
+            and max(residuals) <= inner_tolerance
+            and np.isfinite(float(np.asarray(trial.score)))
+        )
+
+    if not source_valid(accepted) or not source_valid(candidate):
+        return None
     endpoints = [
         float(np.asarray(accepted.gradient)[-1]),
         float(np.asarray(candidate.gradient)[-1]),
@@ -598,16 +610,8 @@ def _nb_local_stationary_score_change(
             or probe.source_fingerprint != objective._stream.source.fingerprint()
         ):
             raise RuntimeError("NB local score probe changed source/family lineage")
-        inner = probe.fit_result.state
         gradient = float(np.asarray(probe.gradient)[-1])
-        if (
-            not inner.converged
-            or inner.line_search_failed
-            or not np.isfinite(inner.stationarity)
-            or inner.stationarity >= inner_tolerance
-            or not np.isfinite(gradient)
-            or not np.isfinite(float(np.asarray(probe.score)))
-        ):
+        if not source_valid(probe) or not np.isfinite(gradient):
             return None
         gradients.append(gradient)
         del probe
