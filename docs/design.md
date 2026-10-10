@@ -3624,53 +3624,21 @@ def optimize_smoothing_parameters(provider, penalty_set, family, weights,
     return jnp.exp(log_lambda), pirls_result
 ```
 
-### 8.2 Fellner-Schall Method (Fast REML for bam)
+### 8.2 Extended Fellner--Schall smoothing updates
 
-```python
-# fitting/fellner_schall.py
+Extended Fellner--Schall (EFS) is a separate REML outer-controller, based on
+mgcv's `efsudr`; it is neither `bam(method="fREML")` nor the Newton REML
+optimizer. Its update uses the penalty-range determinant derivative,
+Fisher-covariance contractions, and penalty quadratic forms for each coupled
+penalty. A singleton-rank formula is therefore not a general implementation.
 
-def fellner_schall_update(lambda_j, S_j, beta, F_inv, n, p):
-    """
-    Fellner-Schall update for smoothing parameter λ_j.
-
-    This is the fast update used in bam() and as an alternative
-    in gam(). It's a one-step update that avoids computing
-    the full Hessian of the REML criterion.
-
-    λ_j^{new} = (p_j / (β^T S_j β)) * λ_j
-
-    where p_j = rank(S_j) - λ_j * tr(F^{-1} S_j)
-    is the effective degrees of freedom consumed by penalty j.
-
-    F = X^T W X + S_λ is the penalized Fisher information.
-    """
-    # tr(F^{-1} S_j) - computed efficiently
-    if sparse.issparse(S_j):
-        trace_term = np.sum(F_inv * S_j.toarray())
-    else:
-        trace_term = np.trace(F_inv @ S_j)
-
-    rank_Sj = np.linalg.matrix_rank(
-        S_j.toarray() if sparse.issparse(S_j) else S_j
-    )
-    p_j = rank_Sj - lambda_j * trace_term
-    beta_S_beta = beta @ (S_j @ beta)
-
-    # Update
-    lambda_new = max(p_j / max(beta_S_beta, 1e-10), 1e-10)
-    return lambda_new
-
-
-def extended_fellner_schall_update(lambda_j, S_j, beta, grad_ll,
-                                   hess_ll, theta, family):
-    """
-    Extended Fellner-Schall for extended families.
-    Uses log-likelihood derivatives (from autodiff) instead of
-    deviance-based quantities.
-    """
-    # Similar structure but uses full log-likelihood Hessian
-    pass
-```
+EFS remains deferred until its dedicated, pinned-source implementation release,
+including regular-family scale handling and the separate NB theta path. Its
+reference policy is approved: Newton retains its existing objective-monotonicity
+contract, while a faithful EFS controller may accept a finite score increase
+after contraction reaches multiplier one, exactly as pinned mgcv does. EFS
+records its own branch trace and convergence reason; it must not be represented
+as a monotone Newton trajectory or as fREML.
 
 ### 8.3 GCV and UBRE Criteria
 
