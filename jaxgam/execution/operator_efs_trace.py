@@ -10,6 +10,8 @@ remain separate dependencies of the EFS controller.
 
 from __future__ import annotations
 
+import hashlib
+import math
 import numbers
 from dataclasses import dataclass
 
@@ -200,6 +202,190 @@ class ExactOperatorPenaltyStatistics:
             quadratics,
             ExactPenaltyDiagnostics(
                 completed,
+                iterations,
+                actions,
+                scans,
+                maximum_relative_residual,
+                required,
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class StochasticPenaltyDiagnostics:
+    """Separate sampling error from PCG residuals and actual source work."""
+
+    probes: int
+    seed: int
+    probe_fingerprint: str
+    krylov_iterations: int
+    normal_actions: int
+    source_scans: int
+    maximum_relative_residual: float
+    peak_bound_bytes: int
+
+
+@dataclass(frozen=True)
+class StochasticPenaltyStatistics:
+    """Shared-probe Fisher traces, exact local q, and per-penalty sampling SE."""
+
+    traces: np.ndarray
+    quadratics: np.ndarray
+    per_probe: np.ndarray
+    monte_carlo_standard_error: np.ndarray
+    diagnostics: StochasticPenaltyDiagnostics
+
+    def __post_init__(self) -> None:
+        for name in ("traces", "quadratics", "per_probe", "monte_carlo_standard_error"):
+            owned = np.array(getattr(self, name), dtype=np.float64, copy=True)
+            owned.setflags(write=False)
+            object.__setattr__(self, name, owned)
+
+
+class StochasticPenaltyTraceSolveError(RuntimeError):
+    """One probe solve failed; no partial Fisher trace is returned."""
+
+    def __init__(self, probe: int, status: int, iterations: int) -> None:
+        self.probe = probe
+        self.status = status
+        self.iterations = iterations
+        super().__init__(
+            f"Fisher trace probe {probe} failed: status {status} "
+            f"after {iterations} iterations."
+        )
+
+
+class StochasticOperatorPenaltyStatistics:
+    """Solve one shared Rademacher RHS per probe, regardless of penalty count.
+
+    The supplied frozen system must contain Fisher row curvature at the same
+    beta/theta/rho as the local penalties. Its generic type alone cannot prove
+    that semantic condition. Empirical SE never certifies PCG bias, so a later
+    controller must calibrate both before using this estimate in an EFS ratio.
+    """
+
+    def __init__(
+        self,
+        fisher_system: FrozenScanSystem,
+        *,
+        memory_budget_bytes: int,
+        probes: int = 32,
+        seed: int = 0,
+        control: PCGControl = _DEFAULT_TRACE_CONTROL,
+    ) -> None:
+        if not isinstance(fisher_system, FrozenScanSystem):
+            raise TypeError("A frozen Fisher operator system is required.")
+        for name, value in (
+            ("memory_budget_bytes", memory_budget_bytes),
+            ("probes", probes),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, numbers.Integral)
+                or value < 1
+            ):
+                raise ValueError(f"{name} must be a positive integer.")
+        if probes > 256:
+            raise ValueError("Fisher trace probes may not exceed 256.")
+        if isinstance(seed, bool) or not isinstance(seed, numbers.Integral) or seed < 0:
+            raise ValueError("Fisher trace seed must be a nonnegative integer.")
+        if not isinstance(control, PCGControl):
+            raise TypeError("Stochastic trace requires PCGControl.")
+        self.system = fisher_system
+        self.memory_budget_bytes = int(memory_budget_bytes)
+        self.probes = int(probes)
+        self.seed = int(seed)
+        self.control = control
+
+    def statistics(self, coefficients: np.ndarray) -> StochasticPenaltyStatistics:
+        """Return unclamped t_j samples and q_j with bounded retained arrays."""
+        structure = self.system.model.penalties
+        p, m = structure.n_coef, structure.n_penalties
+        if (
+            not isinstance(coefficients, np.ndarray)
+            or coefficients.shape != (p,)
+            or coefficients.dtype != np.float64
+            or not np.all(np.isfinite(coefficients))
+        ):
+            raise ValueError("Fisher trace coefficients must be finite float64.")
+        required = (
+            self.system.memory_budget_bytes
+            + 32 * p
+            + 32 * m
+            + 32 * self.probes * m
+            + 8192
+        )
+        if required > self.memory_budget_bytes:
+            raise MemoryError(
+                f"Stochastic Fisher traces require {required} bytes; "
+                f"budget is {self.memory_budget_bytes}."
+            )
+        quadratics = np.zeros(m, dtype=np.float64)
+        for block in structure.blocks:
+            local_beta = coefficients[block.start : block.stop]
+            for sp, penalty in zip(
+                block.sp_indices, block.local_penalties, strict=True
+            ):
+                quadratics[sp] += float(local_beta @ _local_action(penalty, local_beta))
+        samples = np.empty((self.probes, m), dtype=np.float64)
+        rng = np.random.default_rng(self.seed)
+        digest = hashlib.sha256()
+        digest.update(np.asarray([p, self.probes], dtype="<i8").tobytes())
+        iterations = actions = scans = 0
+        maximum_relative_residual = 0.0
+        for probe in range(self.probes):
+            signs = rng.integers(0, 2, size=p, dtype=np.int8)
+            digest.update(signs.tobytes())
+            rhs = 2 * signs.astype(np.float64) - 1
+            before_actions = self.system.diagnostics.normal_actions
+            before_scans = self.system.diagnostics.completed_scans
+            solved = self.system.solve(rhs, control=self.control)
+            action_count = self.system.diagnostics.normal_actions - before_actions
+            scan_count = self.system.diagnostics.completed_scans - before_scans
+            if action_count != solved.matvec_count or scan_count != action_count:
+                raise RuntimeError(
+                    "Fisher trace source-pass accounting is inconsistent."
+                )
+            actions += action_count
+            scans += scan_count
+            iterations += solved.iterations
+            maximum_relative_residual = max(
+                maximum_relative_residual, solved.relative_residual
+            )
+            if not solved.converged:
+                raise StochasticPenaltyTraceSolveError(
+                    probe, solved.status, solved.iterations
+                )
+            samples[probe] = 0.0
+            for block in structure.blocks:
+                local_rhs = rhs[block.start : block.stop]
+                local_solution = solved.solution[block.start : block.stop]
+                for sp, penalty in zip(
+                    block.sp_indices, block.local_penalties, strict=True
+                ):
+                    samples[probe, sp] += float(
+                        local_rhs @ _local_action(penalty, local_solution)
+                    )
+            del signs, rhs, solved
+        traces = np.mean(samples, axis=0)
+        standard_error = (
+            np.std(samples, axis=0, ddof=1) / math.sqrt(self.probes)
+            if self.probes > 1
+            else np.full(m, np.inf)
+        )
+        if not np.all(np.isfinite(traces)) or not np.all(np.isfinite(quadratics)):
+            raise FloatingPointError(
+                "Stochastic Fisher penalty statistics are nonfinite."
+            )
+        return StochasticPenaltyStatistics(
+            traces,
+            quadratics,
+            samples,
+            standard_error,
+            StochasticPenaltyDiagnostics(
+                self.probes,
+                self.seed,
+                digest.hexdigest(),
                 iterations,
                 actions,
                 scans,
