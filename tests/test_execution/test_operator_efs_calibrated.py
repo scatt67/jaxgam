@@ -24,9 +24,10 @@ from jaxgam.formula.operator_prepare import (
     prepare_operator_model,
 )
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import _AssertCollector, r_available
-from tests.r_bridge import RBridge
-from tests.tolerances import MODERATE, STRICT
+from tests.helpers import _AssertCollector
+from tests.tolerances import STRICT
+
+_TIGHT_OPERATOR_CONTROL = OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15)
 
 
 @pytest.fixture(
@@ -34,7 +35,11 @@ from tests.tolerances import MODERATE, STRICT
     params=[(300, 37, 2), (300, 49, 2), (400, 4024, 2), (257, 211, 3)],
 )
 def calibrated_single_index_fit(request):
-    p, seed, multiplicity = request.param
+    return calibrated_single_index_case(*request.param)
+
+
+def calibrated_single_index_case(p: int, seed: int, multiplicity: int):
+    """Build a reproducible complete fit and audit every accepted/trial score."""
     n = multiplicity * p
     rng = np.random.default_rng(seed)
     group = np.arange(n) % p
@@ -89,7 +94,7 @@ def calibrated_single_index_fit(request):
         model,
         source,
         Poisson(),
-        fit_control=OperatorControl(),
+        fit_control=_TIGHT_OPERATOR_CONTROL,
         fit_budget_bytes=16 * 1024 * 1024,
         components_budget_bytes=32 * 1024 * 1024,
         aggregate_budget_bytes=128 * 1024 * 1024,
@@ -112,6 +117,10 @@ def test_calibrated_operator_complete_fit_matches_dense_efs(
 ):
     _, frame, operator, dense, errors, bounds = calibrated_single_index_fit
     selected = operator.accepted
+    assert operator.converged
+    assert dense.converged
+    assert bool(np.asarray(dense.pirls_result.converged))
+    assert selected.fit.converged
     assert selected.score_bound_method == "indexed_poisson_empirical_v1"
     assert operator.stop_reason == "score_window"
     assert operator.outer_iterations == dense.n_iter
@@ -134,8 +143,8 @@ def test_calibrated_operator_complete_fit_matches_dense_efs(
         lambda: np.testing.assert_allclose(
             np.exp(selected.fit.log_lambda),
             dense.smoothing_params,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
         ),
     )
     collector.check(
@@ -143,52 +152,12 @@ def test_calibrated_operator_complete_fit_matches_dense_efs(
         lambda: np.testing.assert_allclose(
             selected.fit.deviance,
             dense.pirls_result.deviance,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
         ),
     )
     collector.raise_if_any(f"calibrated diagonal EFS p={selected.fit.model.n_coef}")
     assert 2 * selected.fit.model.n_coef <= len(frame) <= 3 * selected.fit.model.n_coef
-
-
-@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
-def test_calibrated_operator_complete_fit_matches_pinned_efs(
-    calibrated_single_index_fit,
-):
-    formula, frame, operator, _, _, _ = calibrated_single_index_fit
-    reference = RBridge(mode="rpy2").fit_efs(
-        formula, frame, "poisson", initial_smoothing=np.array([0.8])
-    )
-    selected = operator.accepted
-    collector = _AssertCollector()
-    collector.check(
-        "R score",
-        lambda: np.testing.assert_allclose(
-            selected.components.score.value,
-            reference["reml_score"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-        ),
-    )
-    collector.check(
-        "R smoothing",
-        lambda: np.testing.assert_allclose(
-            np.exp(selected.fit.log_lambda),
-            reference["smoothing_params"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-        ),
-    )
-    collector.check(
-        "R deviance",
-        lambda: np.testing.assert_allclose(
-            selected.fit.deviance,
-            reference["deviance"],
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-        ),
-    )
-    collector.raise_if_any(f"pinned diagonal EFS p={selected.fit.model.n_coef}")
 
 
 @pytest.mark.parametrize(
@@ -207,6 +176,6 @@ def test_score_envelope_refuses_unvalidated_row_domain(
     rows = replace(selected.components.score_rows, **unsupported_rows)
     components = replace(selected.components, score_rows=rows)
     assert (
-        _indexed_poisson_score_bound(selected.fit, components, OperatorControl())
+        _indexed_poisson_score_bound(selected.fit, components, _TIGHT_OPERATOR_CONTROL)
         is None
     )

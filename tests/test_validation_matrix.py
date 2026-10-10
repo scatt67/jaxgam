@@ -61,6 +61,84 @@ from tests.helpers import (
 from tests.r_bridge import RBridge, RBridgeError
 from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+@pytest.mark.parametrize(
+    ("p", "seed", "multiplicity"),
+    [(300, 37, 2), (300, 49, 2), (400, 4024, 2), (257, 211, 3)],
+)
+def test_operator_efs_calibrated_indexed_poisson_full_fit_strict(
+    p: int, seed: int, multiplicity: int
+) -> None:
+    """Complete operator EFS agrees with dense EFS and matched-control mgcv."""
+    from tests.test_execution.test_operator_efs_calibrated import (
+        calibrated_single_index_case,
+    )
+
+    formula, frame, operator, dense, errors, bounds = calibrated_single_index_case(
+        p, seed, multiplicity
+    )
+    reference = RBridge(mode="rpy2").fit_efs(
+        formula,
+        frame,
+        "poisson",
+        initial_smoothing=np.array([0.8]),
+        controls={"epsilon": 1e-11},
+    )
+    selected = operator.accepted
+    assert operator.converged
+    assert selected.fit.converged
+    assert dense.converged
+    assert bool(np.asarray(dense.pirls_result.converged))
+    assert reference["convergence"] == "full convergence"
+    assert reference["inner_converged"]
+    assert operator.outer_iterations == dense.n_iter == reference["outer_iterations"]
+    assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))
+    checks = _AssertCollector()
+    for label, score, sp, deviance in (
+        (
+            "dense EFS",
+            dense.score,
+            dense.smoothing_params,
+            dense.pirls_result.deviance,
+        ),
+        (
+            "pinned EFS",
+            reference["reml_score"],
+            reference["smoothing_params"],
+            reference["deviance"],
+        ),
+    ):
+        checks.check(
+            f"{label} score",
+            lambda score=score: np.testing.assert_allclose(
+                selected.components.score.value,
+                score,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        checks.check(
+            f"{label} smoothing",
+            lambda sp=sp: np.testing.assert_allclose(
+                np.exp(selected.fit.log_lambda),
+                sp,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        checks.check(
+            f"{label} deviance",
+            lambda deviance=deviance: np.testing.assert_allclose(
+                selected.fit.deviance,
+                deviance,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+    checks.raise_if_any(f"calibrated operator EFS p={p}, seed={seed}")
+
+
 # A named generated case, exact model controls, and a live pinned-R fit own
 # each reviewed PR7.6 MODERATE field. The generator is replayed at runtime so
 # changed data or source schemas cannot inherit that field's allowance.

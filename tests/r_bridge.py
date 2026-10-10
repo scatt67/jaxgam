@@ -5557,7 +5557,7 @@ class RBridge:
                 raise ValueError(
                     f"{label} column {column_name!r} is not present in data"
                 )
-        allowed = {"efs_lspmax", "efs_tol"}
+        allowed = {"efs_lspmax", "efs_tol", "epsilon"}
         resolved = {"efs_lspmax": 15.0, "efs_tol": 0.1}
         if controls is not None:
             unknown = set(controls) - allowed
@@ -5567,8 +5567,9 @@ class RBridge:
         if (
             not all(np.isfinite(value) for value in resolved.values())
             or resolved["efs_tol"] <= 0
+            or resolved.get("epsilon", 1e-7) <= 0
         ):
-            raise ValueError("EFS controls must be finite and efs_tol must be positive")
+            raise ValueError("EFS controls must be finite with positive tolerances")
         if initial_smoothing is None:
             return resolved, None
         initial = np.asarray(initial_smoothing, dtype=np.float64)
@@ -5689,7 +5690,9 @@ class RBridge:
             "method": "REML",
             "optimizer": "efs",
             "control": self._mgcv.gam_control(
-                efs_lspmax=resolved["efs_lspmax"], efs_tol=resolved["efs_tol"]
+                efs_lspmax=resolved["efs_lspmax"],
+                efs_tol=resolved["efs_tol"],
+                epsilon=resolved.get("epsilon", 1e-7),
             ),
             "scale": float(scale),
         }
@@ -5719,6 +5722,7 @@ class RBridge:
         outer = model.rx2("outer.info")
         result.update(
             outer_iterations=int(_r_array(outer.rx2("iter"))[0]),
+            inner_converged=bool(model.rx2("converged")[0]),
             score_history=_r_array(outer.rx2("score.hist"), dtype=np.float64).ravel(
                 order="F"
             ),
@@ -6087,7 +6091,9 @@ class RBridge:
             "scale": fit_scale,
             "Mp": mp,
             "control": self._mgcv.gam_control(
-                efs_lspmax=resolved["efs_lspmax"], efs_tol=resolved["efs_tol"]
+                efs_lspmax=resolved["efs_lspmax"],
+                efs_tol=resolved["efs_tol"],
+                epsilon=resolved.get("epsilon", 1e-7),
             ),
             "n.true": setup.rx2("n.true"),
         }

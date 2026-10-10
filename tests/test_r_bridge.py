@@ -279,6 +279,7 @@ class TestRBridgeEFS:
         assert first["provenance"]["data_hash"] == fixture.data_hash
         assert first["provenance"]["source_commit"] == fixture.source_commit
         assert first["outer_iterations"] > 0
+        assert first["inner_converged"]
         assert first["convergence"] in {"full convergence", "iteration limit reached"}
         np.testing.assert_allclose(
             first["coefficients"],
@@ -292,6 +293,16 @@ class TestRBridgeEFS:
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
+
+    def test_efs_pirls_tolerance_rejects_nonpositive_value(self) -> None:
+        data, fixture = make_efs_fixture(seed=91, n=48)
+        with pytest.raises(ValueError, match="positive tolerances"):
+            RBridge(mode="rpy2").fit_efs(
+                fixture.formula,
+                data,
+                family=fixture.family,
+                controls={"epsilon": 0.0},
+            )
 
     def test_efs_diagnostics_uses_real_penalty_and_pirls_statistics(self) -> None:
         data, fixture = make_efs_fixture(seed=92, n=48)
