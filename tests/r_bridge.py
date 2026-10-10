@@ -325,6 +325,73 @@ class RBridge:
             return None
         return [int(index) - 1 for index in ind]
 
+    def source_qr_update(
+        self,
+        design: np.ndarray,
+        response: np.ndarray,
+        split_rows: int,
+        penalty_root: np.ndarray,
+    ) -> dict[str, np.ndarray | float]:
+        """Replay pinned ``qr_update`` batches and a penalty-root append."""
+        self._require_rpy2()
+        X = np.asarray(design, dtype=np.float64)
+        y = np.asarray(response, dtype=np.float64)
+        root = np.asarray(penalty_root, dtype=np.float64)
+        if (
+            X.ndim != 2
+            or y.shape != (len(X),)
+            or root.ndim != 2
+            or root.shape[1] != X.shape[1]
+            or not 0 < split_rows < len(X)
+        ):
+            raise ValueError("QR update oracle dimensions or split are invalid")
+        first = self._call_internal(
+            "qr_update",
+            self._to_r_matrix(X[:split_rows]),
+            self._to_r_vector(y[:split_rows]),
+        )
+        second = self._call_internal(
+            "qr_update",
+            self._to_r_matrix(X[split_rows:]),
+            self._to_r_vector(y[split_rows:]),
+            first.rx2("R"),
+            first.rx2("f"),
+            first.rx2("y.norm2"),
+        )
+        penalized = self._call_internal(
+            "qr_update",
+            self._to_r_matrix(root),
+            self._to_r_vector(np.zeros(root.shape[0])),
+            second.rx2("R"),
+            second.rx2("f"),
+            second.rx2("y.norm2"),
+        )
+        factor = penalized.rx2("R")
+        crossprod = self._base.crossprod
+        normal = crossprod(factor)
+        rhs = crossprod(factor, penalized.rx2("f"))
+        coefficients = self._base.solve(normal, rhs)
+        return {
+            "R": np.asarray(second.rx2("R"), dtype=np.float64).copy(),
+            "f": np.asarray(second.rx2("f"), dtype=np.float64).copy(),
+            "y_norm2": float(second.rx2("y.norm2")[0]),
+            "penalized_coefficients": np.asarray(coefficients, dtype=np.float64)
+            .ravel()
+            .copy(),
+        }
+
+    def source_triangular_rank(self, matrix: np.ndarray, tolerance: float) -> int:
+        """Call pinned ``Rrank`` on a caller-supplied triangular matrix."""
+        self._require_rpy2()
+        triangular = np.asarray(matrix, dtype=np.float64)
+        if triangular.ndim != 2 or not np.isfinite(tolerance) or tolerance <= 0:
+            raise ValueError("Rrank oracle requires a matrix and positive tolerance")
+        return int(
+            self._call_internal(
+                "Rrank", self._to_r_matrix(triangular), tol=float(tolerance)
+            )[0]
+        )
+
     def source_weighted_stream_reml_fit(
         self,
         formula: str,
