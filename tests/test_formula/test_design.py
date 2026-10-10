@@ -236,38 +236,32 @@ class TestFactorBy:
 
 
 # ===========================================================================
-# TestPenaltyEmbedding — global penalty structure
+# TestPenaltyStructure — local penalty structure
 # ===========================================================================
 
 
-class TestPenaltyEmbedding:
-    """Test global penalty structure after embedding."""
+class TestPenaltyStructure:
+    """Test local penalty structure without global zero padding."""
 
-    def test_embedded_penalty_shape(self, data) -> None:
-        """Each embedded penalty is (total_p, total_p)."""
+    def test_penalty_is_local_to_owning_block(self, data) -> None:
+        """Each descriptor holds only its owning smooth coefficient block."""
         spec = parse_formula("y ~ s(x1, k=10)")
         setup = ModelSetup.build(spec, data)
 
         assert setup.penalties is not None
-        total_p = setup.coef_map.total_coefs
-        for pen in setup.penalties.penalties:
-            assert pen.S.shape == (total_p, total_p)
+        for block in setup.penalties.blocks:
+            for pen in block.local_penalties:
+                assert pen.dense().shape == (block.size, block.size)
+                assert block.size < setup.coef_map.total_coefs
 
-    def test_penalty_nonzero_block(self, data) -> None:
-        """Embedded penalty has nonzeros in the correct block."""
+    def test_penalty_nonzero_local_block(self, data) -> None:
+        """The local smooth penalty has nonzero entries."""
         spec = parse_formula("y ~ s(x1, k=10)")
         setup = ModelSetup.build(spec, data)
 
         assert setup.penalties is not None
-        pen = setup.penalties.penalties[0]
-
-        # Intercept block should be zero
-        np.testing.assert_allclose(pen.S[0, :], 0.0, rtol=STRICT.rtol, atol=STRICT.atol)
-        np.testing.assert_allclose(pen.S[:, 0], 0.0, rtol=STRICT.rtol, atol=STRICT.atol)
-
-        # Smooth block should have nonzeros
-        smooth_block = pen.S[1:, 1:]
-        assert np.any(np.abs(smooth_block) > 1e-10)
+        pen = setup.penalties.blocks[0].local_penalties[0].dense()
+        assert np.any(np.abs(pen) > 1e-10)
 
     def test_penalty_count(self, data) -> None:
         """Penalty count matches sum of per-smooth penalties."""
@@ -279,25 +273,26 @@ class TestPenaltyEmbedding:
         assert setup.penalties.n_penalties == total_penalties
 
     def test_penalty_psd(self, data) -> None:
-        """Embedded penalties are PSD (eigenvalues >= 0)."""
+        """Local penalties are PSD (eigenvalues >= 0)."""
         spec = parse_formula("y ~ s(x1, k=10)")
         setup = ModelSetup.build(spec, data)
 
         assert setup.penalties is not None
-        for pen in setup.penalties.penalties:
-            eigvals = np.linalg.eigvalsh(pen.S)
-            assert np.all(eigvals >= -STRICT.atol), (
-                f"Penalty has negative eigenvalue: {np.min(eigvals)}"
-            )
+        for block in setup.penalties.blocks:
+            for pen in block.local_penalties:
+                eigvals = np.linalg.eigvalsh(pen.dense())
+                assert np.all(eigvals >= -STRICT.atol), (
+                    f"Penalty has negative eigenvalue: {np.min(eigvals)}"
+                )
 
-    def test_weighted_penalty_works(self, data) -> None:
-        """CompositePenalty.weighted_penalty() works on embedded penalties."""
+    def test_explicit_materialization_works(self, data) -> None:
+        """The direct-solver compatibility materialization is one matrix."""
         spec = parse_formula("y ~ s(x1, k=10) + s(x2, k=10)")
         setup = ModelSetup.build(spec, data)
 
         assert setup.penalties is not None
         total_p = setup.coef_map.total_coefs
-        S_lambda = setup.penalties.weighted_penalty()
+        S_lambda = setup.penalties.materialize()
         assert S_lambda.shape == (total_p, total_p)
 
 
@@ -527,13 +522,16 @@ class TestRComparison:
         spec = parse_formula(formula)
         setup = ModelSetup.build(spec, data)
 
-        si = setup.smooth_info[0]
-        pen_idx = next(iter(setup.smooth_penalty_indices(si.label)))
-        S_global = setup.penalties.penalties[pen_idx].S
-        S_block = S_global[si.first_coef : si.last_coef, si.first_coef : si.last_coef]
+        block = setup.penalties.blocks[0]
+        S_block = block.dense_penalties()[0]
 
-        assert S_block.shape == r_pen.shape, (
-            f"Penalty shape: Python {S_block.shape} != R {r_pen.shape}"
+        assert S_block.shape == r_pen.shape
+        np.testing.assert_allclose(
+            S_block,
+            r_pen,
+            rtol=MODERATE.rtol,
+            atol=MODERATE.atol,
+            err_msg="Local constrained penalty differs from R",
         )
 
     def test_no_nesting_no_deletion(self, r_bridge, data) -> None:
@@ -1203,7 +1201,7 @@ class TestRepeatedSmoothLabels:
 
         blocks = [t for t in setup.coef_map.terms if t.term_type == "smooth"]
         si0, si1 = setup.smooth_info
-        pens = setup.penalties.penalties
+        penalty_blocks = setup.penalties.blocks
         c = _AssertCollector()
 
         c.check(
@@ -1225,11 +1223,12 @@ class TestRepeatedSmoothLabels:
         )
 
         def _pen_in_block(i: int) -> None:
-            lo, hi = self._pen_support(pens[i].S)
             b = blocks[i]
             check_that(
-                b.col_start <= lo and hi < b.col_start + b.n_coefs,
-                f"penalty {i} support ({lo},{hi}) escapes block "
+                penalty_blocks[i].start == b.col_start
+                and penalty_blocks[i].stop == b.col_start + b.n_coefs,
+                f"local penalty {i} interval [{penalty_blocks[i].start},"
+                f"{penalty_blocks[i].stop}) does not match owning block "
                 f"[{b.col_start},{b.col_start + b.n_coefs})",
             )
 

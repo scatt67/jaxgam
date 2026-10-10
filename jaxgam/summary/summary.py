@@ -528,12 +528,9 @@ def _re_test(
     # as Vp / penalties / coefficients (all constrained model-matrix space).
     R = np.linalg.qr(Xw, mode="r")
 
-    # recov (rind empty, m>0): total weighted penalty S1 = sum_k sp_k * S_k.
-    S1 = np.zeros((p, p))
-    for sp_k, pen in zip(
-        gam.smoothing_params, gam.setup.penalties.penalties, strict=True
-    ):
-        S1 = S1 + float(sp_k) * pen.S
+    # recov (rind empty, m>0): explicit one-matrix materialization at this
+    # Phase-3 consumer. Setup itself retains only local penalty descriptors.
+    S1 = _materialize_summary_penalty(gam, set(range(len(gam.smoothing_params))))
 
     ind = np.arange(si.first_coef, si.last_coef)
     k = int(ind.shape[0])
@@ -631,17 +628,16 @@ def _re_test_general(
     p1 = len(fcols)
 
     # Total penalty of the fixed block (S1) and the other-RE block (S2).
-    pens = gam.setup.penalties.penalties
-    sp = gam.smoothing_params
-    s1_full = np.zeros((p, p))
-    s2_full = np.zeros((p, p))
+    s1_indices: set[int] = set()
+    s2_indices: set[int] = set()
     for j, sj in enumerate(smooth_info):
         for pk in range(sj.first_penalty, sj.first_penalty + sj.n_penalties):
-            contrib = float(sp[pk]) * pens[pk].S
             if j in rind_set:
-                s2_full = s2_full + contrib
+                s2_indices.add(pk)
             else:
-                s1_full = s1_full + contrib
+                s1_indices.add(pk)
+    s1_full = _materialize_summary_penalty(gam, s1_indices)
+    s2_full = _materialize_summary_penalty(gam, s2_indices)
     S1 = s1_full[np.ix_(fcols, fcols)]
     S2 = s2_full[np.ix_(rcols, rcols)]
     R1 = R[:, fcols]  # (p, p1)
@@ -680,6 +676,24 @@ def _re_test_general(
     return _re_pvalue(
         Rm, Ve[np.ix_(cols_m, cols_m)], gam.coefficients[cols_m], sig2, est_disp, res_df
     )
+
+
+def _materialize_summary_penalty(gam: GAMResults, sp_indices: set[int]) -> np.ndarray:
+    """Materialize a selected weighted penalty only for recov's dense algebra."""
+    p = gam.X.shape[1]
+    result = np.zeros((p, p))
+    structure = gam.setup.penalties
+    if structure is None:
+        return result
+    for block in structure.blocks:
+        local = np.zeros((block.size, block.size))
+        for sp_index, penalty in zip(
+            block.sp_indices, block.local_penalties, strict=True
+        ):
+            if sp_index in sp_indices:
+                local += float(gam.smoothing_params[sp_index]) * penalty.dense()
+        result[block.start : block.stop, block.start : block.stop] += local
+    return result
 
 
 # ---------------------------------------------------------------------------
