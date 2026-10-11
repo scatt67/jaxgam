@@ -421,6 +421,8 @@ def test_tiny_public_exact_route_records_source_bytes_and_optimizer(
     assert record["setup"]["route"]["adapter"] == "public"
     assert record["setup"]["route"]["fixed_smoothing_parameter_values"] is None
     assert record["setup"]["source_scans"]["setup_batch_bytes"] > 0
+    assert record["setup"]["source_scans"]["setup_batch_rows_requested"] == 7
+    assert record["setup"]["source_scans"]["setup_max_batch_rows"] == 7
     assert (
         record["setup"]["memory"]["rss_high_water_after_setup_bytes"]
         >= record["setup"]["memory"]["rss_high_water_before_setup_bytes"]
@@ -828,6 +830,98 @@ def test_counting_source_proxy_delegates_and_counts_scan_calls() -> None:
     )
 
 
+def test_counting_source_proxy_records_largest_yielded_batch() -> None:
+    from jaxgam.data.source import ArrayRowSource
+
+    proxy = benchmark_scaling._CountingArrayRowSource(
+        ArrayRowSource({"x": np.linspace(0.0, 1.0, 10)}, y=np.arange(10.0))
+    )
+
+    assert proxy.max_batch_rows == 0
+    assert [len(batch.row_positions) for batch in proxy.scan(4)] == [4, 4, 2]
+    assert proxy.max_batch_rows == 4
+    assert [len(batch.row_positions) for batch in proxy.scan(3)] == [3, 3, 3, 1]
+    assert proxy.max_batch_rows == 4
+    list(proxy.scan(6))
+    assert proxy.max_batch_rows == 6
+    assert proxy.rows_yielded == 30
+
+
+def _pin_setup_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "source_identity",
+        lambda _root: {"commit": "a" * 40, "dirty_sha256": "b" * 64},
+    )
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "loaded_source_identity",
+        lambda _module, _root: {
+            "loaded_package": "jaxgam",
+            "loaded_source_sha256": "c" * 64,
+        },
+    )
+
+
+@pytest.mark.parametrize("execution", ["stream", "stream-qr", "stream-exact"])
+def test_run_setup_stream_uses_case_batch_and_memory_controls(
+    execution: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Setup runs under the batch and budget controls of the public fit."""
+    from jaxgam.control import FitControl
+    from jaxgam.formula import prepare as prepare_module
+
+    real_prepare = prepare_module.prepare_model
+    calls: list[dict[str, object]] = []
+
+    def recording_prepare(spec, source, **kwargs):
+        calls.append(kwargs)
+        return real_prepare(spec, source, **kwargs)
+
+    monkeypatch.setattr(prepare_module, "prepare_model", recording_prepare)
+    _pin_setup_provenance(monkeypatch)
+    case = ScalingCase(
+        31, 6, execution=execution, batch_rows=7, result_mode="prediction"
+    )
+    record = benchmark_scaling.run_setup(case, Path.cwd())
+
+    # GAM.fit threads these FitControl fields into prepare_model.
+    control = FitControl(execution="stream", batch_rows=case.batch_rows)
+    assert len(calls) == 1
+    assert calls[0]["batch_rows"] == control.batch_rows == case.batch_rows
+    assert calls[0]["maximum_bytes"] == control.memory_budget_bytes
+    scans = record["source_scans"]
+    assert scans["setup_batch_rows_requested"] == case.batch_rows
+    assert scans["setup_memory_budget_bytes"] == control.memory_budget_bytes
+    # Thirty-one rows exceed seven, so every full scan is cut at the case's
+    # batch size; the former 65,536-row setup default yielded all 31 at once.
+    assert scans["setup_max_batch_rows"] == case.batch_rows
+    assert scans["setup_delta"] > 0
+
+
+def test_run_setup_rejects_batches_larger_than_the_case(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jaxgam.formula import prepare as prepare_module
+
+    def oversized_prepare(_spec, source, **kwargs):
+        for _batch in source.scan(int(kwargs["batch_rows"]) + 1):
+            pass
+        # No prepared-model fields: the harness must reject before using it.
+        return SimpleNamespace()
+
+    monkeypatch.setattr(prepare_module, "prepare_model", oversized_prepare)
+    _pin_setup_provenance(monkeypatch)
+    case = ScalingCase(
+        31, 6, execution="stream", batch_rows=7, result_mode="prediction"
+    )
+
+    with pytest.raises(
+        RuntimeError, match="8-row batch, exceeding the case's batch_rows=7"
+    ):
+        benchmark_scaling.run_setup(case, Path.cwd())
+
+
 def test_run_setup_dense_uses_model_matrix_fingerprint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -896,6 +990,8 @@ def test_run_setup_dense_uses_model_matrix_fingerprint(
     assert record["memory"]["rss_high_water_after_setup_bytes"] == 120
     assert record["memory"]["rss_current_after_setup_bytes"] == 110
     assert "excludes later FittingData" in record["memory"]["rss_scope"]
+    assert record["source_scans"]["setup_max_batch_rows"] is None
+    assert record["source_scans"]["setup_memory_budget_bytes"] is None
 
 
 @dataclass(frozen=True)

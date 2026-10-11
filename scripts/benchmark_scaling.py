@@ -665,13 +665,18 @@ def _device_peak_memory(jax: Any) -> tuple[int | None, str]:
 
 
 class _CountingArrayRowSource:
-    """Count started scans and numeric bytes exposed by yielded row batches."""
+    """Count started scans, yielded rows and numeric bytes of row batches.
+
+    ``max_batch_rows`` records the largest batch any scan yielded, so a
+    caller can verify that the requested batch size bounded every scan.
+    """
 
     def __init__(self, source: Any) -> None:
         self._source = source
         self.scan_calls = 0
         self.batch_bytes = 0
         self.rows_yielded = 0
+        self.max_batch_rows = 0
 
     @property
     def n_rows(self) -> int:
@@ -694,7 +699,9 @@ class _CountingArrayRowSource:
             self.batch_bytes += sum(
                 np.asarray(value).nbytes for value in values if value is not None
             )
-            self.rows_yielded += len(batch.row_positions)
+            batch_rows_yielded = len(batch.row_positions)
+            self.rows_yielded += batch_rows_yielded
+            self.max_batch_rows = max(self.max_batch_rows, batch_rows_yielded)
             yield batch
 
 
@@ -794,6 +801,7 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         public_penalties = setup.penalties
         rank_deficit = fitting_data.rank_deficit
     else:
+        from jaxgam.control import FitControl
         from jaxgam.data.source import ArrayRowSource
         from jaxgam.formula.prepare import prepare_model
 
@@ -803,14 +811,32 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
                 y=data.y.to_numpy(),
             )
         )
+        # Public streamed fits thread FitControl.batch_rows and
+        # memory_budget_bytes into Phase-1 setup; measure setup under the
+        # same controls the case's public fit uses.
+        setup_control = FitControl(execution="stream", batch_rows=case.batch_rows)
         source_scans_before = source.scan_calls
         source_bytes_before = source.batch_bytes
-        prepared = prepare_model(spec, source, family=get_family(family_name))
+        prepared = prepare_model(
+            spec,
+            source,
+            family=get_family(family_name),
+            batch_rows=setup_control.batch_rows,
+            maximum_bytes=setup_control.memory_budget_bytes,
+        )
         source_scans_after = source.scan_calls
         source_bytes_after = source.batch_bytes
         setup_s = time.perf_counter() - started
         rss_high_water_after_setup = peak_rss_bytes()
         rss_current_after_setup = current_rss_bytes()
+        setup_max_batch_rows = source.max_batch_rows
+        if setup_max_batch_rows > case.batch_rows:
+            raise RuntimeError(
+                f"Streamed setup yielded a {setup_max_batch_rows}-row batch, "
+                f"exceeding the case's batch_rows={case.batch_rows}."
+            )
+        setup_batch_rows_requested = setup_control.batch_rows
+        setup_memory_budget_bytes = setup_control.memory_budget_bytes
         basis_fingerprint = prepared.basis_fingerprint
         n_coef = prepared.n_coef
         assert prepared.fitting is not None
@@ -823,6 +849,9 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         source_scans_after = None
         source_bytes_before = None
         source_bytes_after = None
+        setup_max_batch_rows = None
+        setup_batch_rows_requested = None
+        setup_memory_budget_bytes = None
     frozen_contract = _model_contract(
         basis_fingerprint, n_coef, public_penalties, rank_deficit
     )
@@ -868,6 +897,9 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
                 "sum of numeric array nbytes exposed by yielded RowBatch fields; "
                 "not physical disk reads or unique backing storage"
             ),
+            "setup_batch_rows_requested": setup_batch_rows_requested,
+            "setup_memory_budget_bytes": setup_memory_budget_bytes,
+            "setup_max_batch_rows": setup_max_batch_rows,
             "status": (
                 "measured RowSource.scan invocations during streamed preparation"
                 " (started scan iterations)"
