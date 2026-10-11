@@ -36,11 +36,43 @@ result = GAM(
 ).fit(source, result="prediction")
 ```
 
-This route is currently released for the canonical Gaussian/identity,
-Poisson/log, and Binomial/logit families. It factors the positive Fisher
-working rows and local penalty roots without forming the coefficient normal
-equations used by the Cholesky route. Signed working curvature belongs to the
-separate signed-system solver and is rejected here.
+Fixed smoothing parameters support Gaussian, Gamma, Poisson and Binomial
+with their built-in link constructors, plus negative binomial with log,
+identity and square-root links. Inputs must satisfy the family's response,
+mean and initialization domain; invalid default starts still reject.
+Noncanonical and NB fits require `linear_solver="qr"`. The existing canonical
+Gaussian/identity, Poisson/log and Binomial/logit Cholesky route remains
+available.
+
+Canonical QR fits factor positive Fisher working rows and local penalty
+roots. Other regular and NB links use signed observed-information fitting,
+with separate Fisher factors for EDF and optional prediction uncertainty.
+Unknown-scale regular families estimate the REML scale while keeping every
+supplied smoothing parameter fixed. `NegativeBinomial(fixed=False)` estimates
+theta with the exact REML parameter driver, including an unpenalized model
+specified with `sp=[]`; `fixed=True` preserves the supplied theta. The fitted
+result owns a family snapshot and does not mutate the caller's family.
+
+With every smoothing parameter fixed, the scale is the only free REML
+coordinate. After the limited-memory stage, the fit continues mgcv's exact
+log-scale Newton step on fully refitted source trials until the next
+correction is no longer representable, so `score_scale` is the stationary
+REML scale. Supplied smoothing parameters are never changed.
+
+Inspect `converged` and `convergence_info`: a finite fit with an exhausted
+optimizer is reported as nonconverged. `score_scale` records the scale used
+by the returned REML score separately from the reported `scale`.
+`source_scans`, `batches_scanned` and `known_workspace_bytes` describe the
+executed fit and its conservative fit-workspace bound. Request
+`uncertainty="fisher"` for batched standard errors.
+
+Preparation scans also honor `FitControl.batch_rows` and
+`memory_budget_bytes`. Setup requests at most `batch_rows` rows per scan and
+shrinks that size until its prospective workspace, including the bounded
+SQLite scope used for exact cubic knots, fits the budget. A budget too small
+for one row is rejected before any full data scan. Knot, alias and rank
+decisions do not depend on the batch size. The source's own storage is
+outside these bounds.
 
 Model preparation fixes the identifiable coefficient subspace before fitting.
 Exactly aliased numeric parametric columns follow the same retained-column and
