@@ -90,9 +90,14 @@ def test_regular_batch_vjp_matches_independent_family_derivative(family_class, l
         return jnp.sum(observed_bar * observed) + deviance_bar * deviance_eta(eta)
 
     expected_beta = jax.grad(independent_score)(beta)
-    expected_phi = saturated_bar * jax.grad(
-        lambda value: family.saturated_loglik(y, weight, jnp.exp(value))
-    )(log_phi)
+
+    def saturated_log_phi(value):
+        return family.saturated_loglik(y, weight, jnp.exp(value))
+
+    expected_phi = saturated_bar * jax.grad(saturated_log_phi)(log_phi)
+    expected_curvature = saturated_bar * jax.jacfwd(jax.grad(saturated_log_phi))(
+        log_phi
+    )
     arguments = (
         beta,
         log_phi,
@@ -119,6 +124,12 @@ def test_regular_batch_vjp_matches_independent_family_derivative(family_class, l
         )
         np.testing.assert_allclose(
             result.log_phi, expected_phi, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        np.testing.assert_allclose(
+            result.log_phi_curvature,
+            expected_curvature,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
         )
 
 
@@ -155,6 +166,8 @@ def test_regular_batch_vjp_padding_and_invalid_real_rows():
     assert int(neutral.informative_count) == 0
     np.testing.assert_array_equal(neutral.beta, np.zeros(2))
     assert float(neutral.log_phi) == 0.0
+    assert float(neutral.log_phi_curvature) == 0.0
+    assert np.isfinite(float(padded.log_phi_curvature))
 
 
 def test_regular_batch_vjp_preserves_unresolved_binomial_log_boundary():
@@ -285,3 +298,62 @@ def test_regular_batch_vjp_matches_pinned_gdi_derivative_ratios(r_bridge):
                 ),
             )
     collector.raise_if_any("Pinned gdi1 regular batch derivatives")
+
+
+def test_regular_batch_log_phi_curvature_matches_pinned_saturated_likelihood(
+    r_bridge,
+):
+    """Batch scale curvature is gam.fit3's ``-ls[3] phi^2 - ls[2] phi`` term.
+
+    Gaussian and Gamma are the regular unknown-scale families. Gamma is
+    checked in its direct branch and, at a small scale, in the Stirling
+    branch whose analytic derivatives R evaluates with digamma/trigamma.
+    """
+    assert r_bridge.check_versions()[0]
+    collector = _AssertCollector()
+    saturated_bar = -0.6
+    oracles = {
+        Gaussian: r_bridge.source_gaussian_saturated_likelihood,
+        Gamma: r_bridge.source_gamma_saturated_likelihood,
+    }
+    for family_class, oracle in oracles.items():
+        for link in _LINKS:
+            family, data, weight, offset, beta = _case(family_class, link)
+            y = np.asarray(family.execution_initial_response(data.y.to_numpy(), weight))
+            X = np.column_stack([np.ones(len(y)), data.x])
+            context = FamilyExecutionContext.from_family(family)
+            for phi in (0.8, 0.005):
+                ls = oracle(y, weight, phi)
+                result = regular_batch_statistics_vjp(
+                    jnp.asarray(beta),
+                    jnp.log(phi),
+                    jnp.asarray(X),
+                    jnp.asarray(y),
+                    jnp.asarray(weight),
+                    jnp.asarray(offset),
+                    jnp.ones(len(y), dtype=bool),
+                    jnp.zeros((2, 2)),
+                    jnp.array(0.0),
+                    jnp.array(saturated_bar),
+                    FamilyExecutionParameters(jnp.empty(0)),
+                    family,
+                    context,
+                )
+                name = f"{family.family_name}/{link} phi={phi}"
+                for label, actual, expected in (
+                    ("log_phi", result.log_phi, saturated_bar * ls[1] * phi),
+                    (
+                        "log_phi_curvature",
+                        result.log_phi_curvature,
+                        saturated_bar * (ls[2] * phi**2 + ls[1] * phi),
+                    ),
+                ):
+                    collector.check(
+                        f"{name} {label}",
+                        lambda actual=actual, expected=expected: (
+                            np.testing.assert_allclose(
+                                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+                            )
+                        ),
+                    )
+    collector.raise_if_any("Pinned fix.family.ls scale curvature")

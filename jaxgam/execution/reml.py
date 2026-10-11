@@ -73,7 +73,12 @@ class RegularREMLWorkspace:
 
 @dataclass(frozen=True)
 class RegularStreamREMLTrial:
-    """One source-timed regular score and exact first derivative."""
+    """One source-timed regular score and exact first derivative.
+
+    ``log_phi_curvature`` is the exact second derivative of the score in
+    free log scale at fixed rho (gam.fit3's ``d2lr.d2lphi``), or ``None``
+    for known-scale families.
+    """
 
     params: jax.Array
     score: jax.Array
@@ -89,6 +94,7 @@ class RegularStreamREMLTrial:
     basis_fingerprint: str
     family_name: str
     link_name: str
+    log_phi_curvature: float | None = None
 
 
 @dataclass(frozen=True)
@@ -312,9 +318,11 @@ def _preflight_regular_reml(
     B = controller.batch_rows
     # During the derivative scan, one fitting batch and its compiled copy can
     # coexist with observed/source inverse actions, cotangents and residuals.
-    # This charge is prospective and excludes opaque XLA/BLAS scratch under
-    # the same documented numerical-workspace contract as the controller.
-    adjoint_bytes = 8 * (2 * B * p + 4 * p * p + 18 * p + 8 * n_params + 16 * B)
+    # Four scalar slots cover the batch/accumulated log-scale curvature and
+    # its forward tangent. This charge is prospective and excludes opaque
+    # XLA/BLAS scratch under the same documented numerical-workspace contract
+    # as the controller.
+    adjoint_bytes = 8 * (2 * B * p + 4 * p * p + 18 * p + 8 * n_params + 16 * B + 4)
     workspace = RegularREMLWorkspace(controller, adjoint_bytes)
     if workspace.required_bytes > maximum_bytes:
         raise MemoryError(
@@ -483,6 +491,7 @@ def evaluate_regular_stream_reml(
 
     beta_bar = core.source_beta
     log_phi_bar = core.log_phi
+    log_phi_curvature = core.log_phi_curvature
     informative_count = 0
     vjp_batches = 0
     alpha_roundoff_recovered = False
@@ -521,6 +530,7 @@ def evaluate_regular_stream_reml(
             alpha_roundoff_recovered = True
         beta_bar = beta_bar + batch.beta
         log_phi_bar = log_phi_bar + batch.log_phi
+        log_phi_curvature = log_phi_curvature + batch.log_phi_curvature
         informative_count += int(np.asarray(batch.informative_count))
         jax.block_until_ready(beta_bar)
         vjp_batches += 1
@@ -575,6 +585,9 @@ def evaluate_regular_stream_reml(
         basis_fingerprint=stream.prepared.basis_fingerprint,
         family_name=family.family_name,
         link_name=type(family.link).__qualname__,
+        log_phi_curvature=(
+            None if family.scale_known else float(np.asarray(log_phi_curvature))
+        ),
     )
 
 

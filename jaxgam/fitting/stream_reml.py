@@ -37,6 +37,11 @@ class RegularBatchScoreVJP(NamedTuple):
     ``alpha_exact_zero`` is diagnostic only: pinned R substitutes epsilon for
     that row and a mixed-success global system can remain full rank. No source
     iterator or coefficient-fit tape is retained.
+
+    ``log_phi_curvature`` is the saturated-likelihood contribution to the
+    exact second log-scale derivative, ``saturated_cotangent * d2 ls/dlog_phi2``
+    (gam.fit3's ``-ls[3]*scale^2 - ls[2]*scale`` term). It is diagnostic for
+    callers that own a scale curvature policy and is not an admission input.
     """
 
     beta: jax.Array
@@ -46,10 +51,17 @@ class RegularBatchScoreVJP(NamedTuple):
     structural_admissible: jax.Array
     alpha_unresolved: jax.Array
     alpha_exact_zero: jax.Array
+    log_phi_curvature: jax.Array
 
 
 class RegularScoreCotangents(NamedTuple):
-    """Scalar source score and explicit coefficient/statistic cotangents."""
+    """Scalar source score and explicit coefficient/statistic cotangents.
+
+    ``log_phi_curvature`` is the explicit second log-scale derivative of the
+    penalized-deviance term, ``Dp / (2 phi)``. With rho fixed, coefficients
+    and log determinants are scale-free, so adding the saturated-likelihood
+    batch curvature gives gam.fit3's exact ``d2lr.d2lphi``.
+    """
 
     score: jax.Array
     rho: jax.Array
@@ -58,6 +70,7 @@ class RegularScoreCotangents(NamedTuple):
     deviance: jax.Array
     saturated: jax.Array
     log_phi: jax.Array
+    log_phi_curvature: jax.Array
 
 
 @partial(jax.jit, static_argnames=("family", "context"))
@@ -139,7 +152,11 @@ def regular_batch_statistics_vjp(
         )
         return value
 
-    saturated_value, saturated_derivative = jax.value_and_grad(saturated)(log_phi)
+    # One forward-over-reverse pass returns the value, the first log-scale
+    # derivative and its exact second derivative for this scalar parameter.
+    (saturated_value, saturated_derivative), (_, saturated_curvature) = jax.jvp(
+        jax.value_and_grad(saturated), (log_phi,), (jnp.ones_like(log_phi),)
+    )
     working = batch_initial_working_quantities(
         normalized_y,
         prior_weight,
@@ -195,6 +212,7 @@ def regular_batch_statistics_vjp(
         structural_admissible,
         alpha_unresolved,
         alpha_exact_zero,
+        saturated_cotangent * saturated_curvature,
     )
 
 
@@ -284,6 +302,7 @@ def regular_score_cotangents(
         deviance_bar,
         saturated_bar,
         log_phi_bar,
+        penalized_deviance / (2.0 * phi),
     )
 
 
