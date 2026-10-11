@@ -706,6 +706,9 @@ def test_nb_local_stationary_comparison_replays_generated_source():
         n_evaluations=0,
         cumulative_source_scans=0,
         cumulative_batches_scanned=0,
+        cumulative_inner_iterations=0,
+        cumulative_final_refit_solves=0,
+        cumulative_derivative_s=0.0,
     )
     comparison = nb_reml_execution._nb_local_stationary_score_change(
         objective, accepted, selected.trial, _OPTIMIZER_PIRLS_CONTROL.tol
@@ -718,6 +721,10 @@ def test_nb_local_stationary_comparison_replays_generated_source():
     assert objective.n_evaluations == 3
     assert objective.cumulative_source_scans > 0
     assert objective.cumulative_batches_scanned > 0
+    # Every reconverged probe is charged as real fit and derivative work.
+    assert objective.cumulative_inner_iterations > 0
+    assert objective.cumulative_final_refit_solves == objective.n_evaluations
+    assert objective.cumulative_derivative_s > 0.0
 
 
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
