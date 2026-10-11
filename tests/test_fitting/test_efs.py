@@ -13,6 +13,7 @@ from jaxgam.fitting.efs import (
     EFSRoot,
     EFSStatistics,
     EFSStatisticsPlan,
+    efs_fisher_factor,
     efs_raw_update,
     efs_statistics,
     prepare_efs_statistics,
@@ -101,6 +102,52 @@ def test_statistics_match_dense_independent_algebra_and_jit() -> None:
         actual.determinant_derivative, expected_d, rtol=STRICT.rtol, atol=STRICT.atol
     )
     assert bool(actual.determinant_valid)
+
+
+def test_efs_fisher_factor_jit_exact_and_rejects_invalid_information() -> None:
+    """The EFS Fisher factor compiles, adds no jitter and never repairs input."""
+    from jaxgam.jax_utils import penalized_cholesky
+
+    assert hasattr(efs_fisher_factor, "lower")
+    compiled = efs_fisher_factor.lower(
+        jax.ShapeDtypeStruct((2, 2), jnp.float64),
+        jax.ShapeDtypeStruct((2, 2), jnp.float64),
+    ).compile()
+    crossproduct = jnp.diag(jnp.array([1e-8, 4.0]))
+    penalty = jnp.zeros((2, 2))
+    lower, valid = compiled(crossproduct, penalty)
+    assert bool(valid)
+    # The shared coefficient factor's scale-relative jitter moves this pivot
+    # by about 1e-8 relative; the EFS factor must reproduce exact algebra.
+    np.testing.assert_allclose(
+        np.asarray(lower),
+        np.diag([1e-4, 2.0]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    jittered, _ = penalized_cholesky(crossproduct, penalty)
+    assert not np.allclose(
+        np.asarray(jittered), np.asarray(lower), rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    # A coupled SPD system matches an independent unjittered NumPy factor.
+    fisher = np.array([[4.0, 0.6, 0.1], [0.6, 2.5, -0.3], [0.1, -0.3, 1.5]])
+    coupled_penalty = np.array([[0.0, 0.0, 0.0], [0.0, 2.0, 0.5], [0.0, 0.5, 1.0]])
+    lower, valid = efs_fisher_factor(jnp.asarray(fisher), jnp.asarray(coupled_penalty))
+    assert bool(valid)
+    np.testing.assert_allclose(
+        np.asarray(lower),
+        np.linalg.cholesky(fisher + coupled_penalty),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    for invalid in (
+        jnp.diag(jnp.array([0.0, 4.0])),  # exactly singular information
+        jnp.array([[1.0, 2.0], [2.0, 1.0]]),  # indefinite information
+        jnp.diag(jnp.array([jnp.nan, 4.0])),  # non-finite information
+        jnp.diag(jnp.array([jnp.inf, 4.0])),
+    ):
+        _, invalid_valid = efs_fisher_factor(invalid, penalty)
+        assert not bool(invalid_valid)
 
 
 def test_dynamic_plan_leaves_change_statistics_without_recompile_contract() -> None:

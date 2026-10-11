@@ -27,6 +27,35 @@ _ROOT_EPS = np.finfo(float).eps ** (2.0 / 3.0)
 _RHS_COLUMN_BUDGET = 32
 
 
+@jax.jit
+def efs_fisher_factor(
+    fisher_crossproduct: jax.Array, penalty: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """Factor the final EFS Fisher penalized information without jitter.
+
+    Pinned mgcv 1.9-3 returns the EFS covariance root ``rV`` from an
+    unjittered pivoted QR of ``[sqrt(wf) X; E]`` with final Fisher weights
+    (``src/gdi.c::gdi1`` Fisher branch for ``gam.fit3`` and ``gdi2`` for
+    ``gam.fit4``); ``R/gam.fit4.r::efsudr`` contracts that root for
+    ``trVS`` and ``edf``.  On the identifiable full-rank EFS domain this is
+    ``lower^-1`` for ``lower = chol(X'W_F X + S_lambda)``.  The shared PIRLS
+    coefficient factor adds scale-relative jitter, so it is deliberately not
+    reused here.
+
+    Returns the lower factor and a validity flag.  Invalid or singular
+    information (non-finite input, failed or nonpositive pivots) is reported,
+    never repaired: callers must reject the fit rather than score it.
+    """
+    hessian = fisher_crossproduct + penalty
+    lower = jnp.linalg.cholesky(hessian)
+    valid = (
+        jnp.all(jnp.isfinite(hessian))
+        & jnp.all(jnp.isfinite(lower))
+        & jnp.all(jnp.diag(lower) > 0)
+    )
+    return lower, valid
+
+
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class EFSRoot:
