@@ -861,11 +861,14 @@ def test_public_fixed_sp_nb_theta_modes_pinned_r(
     if supertight_nb:
         _assert_pr76_nb_case(source, model, link)
     result = model.fit(source, result="prediction")
+    # For estimated theta the optimizer report names the L-BFGS-B task, the
+    # log-theta completion outcome, its final proposed and last accepted
+    # log-theta steps, the projected gradient against gtol and the curvature.
     assert result.converged, (
-        f"NB/{link} estimated={estimated} smooth={smooth}: "
-        f"{result.convergence_info}; outer iterations={result.n_iter}, "
+        f"NB/{link} estimated={estimated} smooth={smooth}: optimizer report "
+        f"[{result.convergence_info}]; outer iterations={result.n_iter}, "
         f"source scans={result.source_scans}, batches={result.batches_scanned}, "
-        f"theta={result.theta}, score={result.score}"
+        f"theta={result.theta!r}, score={result.score!r}"
     )
     if supertight_nb and link == "log":
         assert expected["inner_converged"]
