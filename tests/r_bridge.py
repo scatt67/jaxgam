@@ -1293,7 +1293,7 @@ class RBridge:
             skip_offset_null_deviance=True,
         )
 
-    def public_fixed_sp_fit(
+    def _public_fixed_sp_gam_arguments(
         self,
         data: pd.DataFrame,
         weight: np.ndarray,
@@ -1301,13 +1301,12 @@ class RBridge:
         family_name: str,
         link: str,
         *,
-        theta: float | None = None,
-        sp: float | None = None,
-        r_epsilon: float = 1e-11,
-        r_newton_tolerance: float = 1e-10,
-    ) -> dict[str, Any]:
-        """Run a tight pinned mgcv public fit for one fixed-sp release cell."""
-        self._require_rpy2()
+        theta: float | None,
+        sp: float | None,
+        r_epsilon: float,
+        r_newton_tolerance: float,
+    ) -> tuple[Any, dict[str, Any]]:
+        """Build the pinned public fixed-sp ``gam`` formula and arguments."""
         ro = self._ro
         source_link = "1/mu^2" if link == "inverse_squared" else link
         constructors = {
@@ -1326,7 +1325,6 @@ class RBridge:
             except KeyError:
                 raise ValueError("unsupported fixed-sp source family") from None
             family = constructor(link=source_link)
-        r_data = self._to_r_dataframe(data)
         smooth = sp is not None
         control = self._mgcv.gam_control(
             epsilon=r_epsilon,
@@ -1340,16 +1338,150 @@ class RBridge:
                 }
             ),
         )
-        fit = self._mgcv.gam(
-            ro.Formula('y ~ s(x, bs="cr", k=8)' if smooth else "y ~ x"),
-            data=r_data,
-            weights=self._to_r_vector(weight),
-            offset=self._to_r_vector(offset),
-            family=family,
-            sp=self._to_r_vector([sp]) if smooth else ro.NULL,
-            method="REML",
-            control=control,
+        formula = ro.Formula('y ~ s(x, bs="cr", k=8)' if smooth else "y ~ x")
+        return formula, {
+            "data": self._to_r_dataframe(data),
+            "weights": self._to_r_vector(weight),
+            "offset": self._to_r_vector(offset),
+            "family": family,
+            "sp": self._to_r_vector([sp]) if smooth else ro.NULL,
+            "method": "REML",
+            "control": control,
+        }
+
+    def public_fixed_sp_scale_derivatives(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+        *,
+        sp: float,
+        scale: float | None = None,
+        r_epsilon: float = 1e-11,
+        r_newton_tolerance: float = 1e-10,
+    ) -> dict[str, Any]:
+        """Evaluate pinned gam.fit3's log-scale REML derivatives at one scale.
+
+        The public fit of :meth:`public_fixed_sp_fit` runs through private
+        clones of ``gam`` -> ``estimate.gam`` -> ``gam.outer`` -> ``newton``
+        whose ``gam.fit3`` records newton's first call: the prepared model
+        matrix, penalty roots, null coefficients, fixed family, weights,
+        offset and newton's tightened control. One fresh ``gam.fit3``
+        (``deriv=2``) at ``sp = c(log(sp), log(scale))`` then returns the
+        objective newton differentiates, independent of newton's path or of
+        the trial object it may return after a step failure. ``scale=None``
+        evaluates at the fit's own returned ``reml.scale``.
+        """
+        self._require_rpy2()
+        from tests.r_ast import clone_function, make_r_callback
+
+        if family_name not in {"gaussian", "gamma"}:
+            raise ValueError("scale derivatives need an unknown-scale regular family")
+        formula, arguments = self._public_fixed_sp_gam_arguments(
+            data,
+            weight,
+            offset,
+            family_name,
+            link,
+            theta=None,
+            sp=sp,
+            r_epsilon=r_epsilon,
+            r_newton_tolerance=r_newton_tolerance,
         )
+        ro = self._ro
+        fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        recorded: list[dict[str, Any]] = []
+
+        def record_fit3(**fit_arguments: Any) -> Any:
+            if not recorded:
+                recorded.append(dict(fit_arguments))
+            return fit3(**fit_arguments)
+
+        namespace = ro.r["getNamespace"]("mgcv")
+        private = ro.r["new.env"](parent=namespace)
+        callback = make_r_callback(record_fit3)
+        names = ("newton", "gam.outer", "estimate.gam")
+        try:
+            private["gam.fit3"] = callback
+            for name in names:
+                private[name] = clone_function(
+                    self._utils.getFromNamespace(name, "mgcv"), environment=private
+                )
+            r_gam = clone_function(
+                self._utils.getFromNamespace("gam", "mgcv"), environment=private
+            )
+            fit = r_gam(formula, **arguments)
+        finally:
+            for name in ("gam.fit3", *names):
+                private[name] = ro.NULL
+        outer = fit.rx2("outer.info")
+        if not recorded or outer is ro.NULL:
+            raise RBridgeError("Pinned public fit did not call newton's gam.fit3")
+        first = recorded[0]
+        recorded_sp = np.asarray(first["sp"], dtype=np.float64).ravel()
+        if recorded_sp.shape != (2,) or abs(recorded_sp[0] - np.log(sp)) > 4 * (
+            np.spacing(abs(np.log(sp)))
+        ):
+            raise RBridgeError("newton's gam.fit3 sp is not c(log(sp), log(scale))")
+        returned_scale = float(fit.rx2("reml.scale")[0])
+        evaluation_scale = returned_scale if scale is None else float(scale)
+        if not np.isfinite(evaluation_scale) or evaluation_scale <= 0.0:
+            raise ValueError("scale must be finite and positive")
+        evaluated = fit3(
+            **{
+                **first,
+                "sp": self._to_r_vector(
+                    np.array([recorded_sp[0], np.log(evaluation_scale)])
+                ),
+                "deriv": 2,
+            }
+        )
+        gradient = np.asarray(evaluated.rx2("REML1"), dtype=np.float64)
+        hessian = np.asarray(evaluated.rx2("REML2"), dtype=np.float64)
+        return {
+            "scale": evaluation_scale,
+            "reml_scale": float(evaluated.rx2("reml.scale")[0]),
+            "returned_scale": returned_scale,
+            "outer_status": str(outer.rx2("conv")[0]),
+            "outer_gradient": float(np.ravel(outer.rx2("grad"))[-1]),
+            "outer_hessian": float(np.ravel(outer.rx2("hess"))[-1]),
+            "score": float(evaluated.rx2("REML")[0]),
+            "gradient": float(gradient[-1]),
+            "hessian": float(hessian[-1, -1]),
+            "inner_converged": bool(evaluated.rx2("converged")[0]),
+        }
+
+    def public_fixed_sp_fit(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+        *,
+        theta: float | None = None,
+        sp: float | None = None,
+        r_epsilon: float = 1e-11,
+        r_newton_tolerance: float = 1e-10,
+    ) -> dict[str, Any]:
+        """Run a tight pinned mgcv public fit for one fixed-sp release cell."""
+        self._require_rpy2()
+        ro = self._ro
+        formula, arguments = self._public_fixed_sp_gam_arguments(
+            data,
+            weight,
+            offset,
+            family_name,
+            link,
+            theta=theta,
+            sp=sp,
+            r_epsilon=r_epsilon,
+            r_newton_tolerance=r_newton_tolerance,
+        )
+        r_data = arguments["data"]
+        fit = self._mgcv.gam(formula, **arguments)
         score_scale = fit.rx2("reml.scale")
         if score_scale is ro.NULL:
             score_scale = fit.rx2("sig2")
@@ -1382,6 +1514,7 @@ class RBridge:
             "scale": float(fit.rx2("sig2")[0]),
             "score_scale": float(score_scale[0]),
             "deviance": float(fit.rx2("deviance")[0]),
+            "edf": float(np.sum(np.asarray(fit.rx2("edf"), dtype=np.float64))),
             "coefficients": np.asarray(fit.rx2("coefficients")).copy(),
             "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
             "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
