@@ -31,6 +31,7 @@ from jaxgam.fitting.efs import (
     EFSRawUpdate,
     EFSStatistics,
     EFSStatisticsPlan,
+    efs_fisher_factor,
     efs_raw_update,
     efs_statistics,
     prepare_efs_statistics,
@@ -745,6 +746,7 @@ def _fit_state(
     gdi1_candidate_valid: jax.Array | None = None
     positive_curvature_retry_count: jax.Array | None = None
     score_pdev: jax.Array | None = None
+    exact_fisher_factor = False
     if _estimated_theta_nb(fd):
         if log_theta_start is None or beta_old_init is None:
             raise ValueError(
@@ -844,6 +846,10 @@ def _fit_state(
         gdi1_candidate_valid = regular_result.gdi1_candidate_valid
         score_pdev = pre_gdi1_deviance + gdi1_penalty
         stopping_pdev = pre_gdi1_pdev
+        # This source loop already forms its gdi1 observed and Fisher
+        # factors by plain Cholesky; ``statistics.input_valid`` rejects them
+        # if either Fisher pivot fails.
+        exact_fisher_factor = True
     else:
         pr = pirls_loop(
             fd.X,
@@ -858,6 +864,28 @@ def _fit_state(
             extended_observed=(
                 isinstance(fd.family, NegativeBinomial) and fd.family.n_theta == 0
             ),
+        )
+    fisher_factor_valid = jnp.array(True)
+    if not exact_fisher_factor:
+        # Factor ownership (pinned gdi1/gdi2 + efsudr): the Fisher trace,
+        # EDF and returned covariance use the *unjittered* final Fisher
+        # penalized information; the score's log|H| keeps the observed
+        # curvature in ``pr.XtWX``.  The shared PIRLS/theta coefficient solve
+        # is unchanged; only its post-convergence stabilized Fisher factor is
+        # superseded.  The observed slot may share the new factor only when
+        # the family's observed information *is* its Fisher information
+        # (regular canonical links, where PIRLS already aliases L/L_fisher);
+        # otherwise the observed factor is retained.  The new factor replaces
+        # a slot rather than adding one, so retained fit states hold no extra
+        # p x p array; the Hessian/factor pair is transient workspace.
+        fisher_lower, fisher_factor_valid = efs_fisher_factor(pr.XtWX_fisher, penalty)
+        observed_is_fisher = (
+            fd.family.execution_capabilities().fisher_equals_observed_for_score
+        )
+        pr = replace(
+            pr,
+            L=fisher_lower if observed_is_fisher else pr.L,
+            L_fisher=fisher_lower,
         )
     statistics = _jit_efs_statistics(plan, pr.coefficients, pr.L_fisher, rho)
     score = _scalar_score(
@@ -901,6 +929,7 @@ def _fit_state(
         and regular_ok
         and theta_ok
         and bool(np.asarray(statistics.input_valid))
+        and bool(np.asarray(fisher_factor_valid))
         and bool(np.asarray(jnp.isfinite(score_phi) & (score_phi > 0)))
         and bool(np.asarray(jnp.isfinite(update_phi) & (update_phi > 0)))
     )

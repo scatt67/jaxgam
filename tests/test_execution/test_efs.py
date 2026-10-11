@@ -1164,14 +1164,144 @@ def test_invalid_initial_fisher_factor_is_not_an_inner_failure(monkeypatch) -> N
         fd.beta_init,
         EFSControl(),
     )
+    # EFS owns its Fisher factor: it refactors the final Fisher information
+    # instead of consuming the shared PIRLS factor, so invalidate the former.
     bad_fit = replace(
         base.pirls_result,
-        L_fisher=jax.numpy.full_like(base.pirls_result.L_fisher, jax.numpy.nan),
+        XtWX_fisher=jax.numpy.full_like(base.pirls_result.XtWX_fisher, jax.numpy.nan),
     )
     monkeypatch.setattr(execution_efs, "pirls_loop", lambda *_args, **_kwargs: bad_fit)
     result = dense_efs_known_scale(fd)
     assert result.convergence_info == "invalid_initial"
     assert not result.converged
+
+
+def _recording_loop(monkeypatch, name: str) -> list:
+    """Record the raw coefficient-loop result consumed by ``_fit_state``."""
+    original = getattr(execution_efs, name)
+    records = []
+
+    def recorded(*args, **kwargs):
+        result = original(*args, **kwargs)
+        records.append(result)
+        return result
+
+    monkeypatch.setattr(execution_efs, name, recorded)
+    return records
+
+
+@pytest.mark.parametrize(
+    ("case", "loop_name"),
+    [
+        ("poisson_log", "pirls_loop"),
+        ("poisson_sqrt", "efs_regular_pirls_loop"),
+        ("fixed_nb_log", "efs_theta_pirls_loop"),
+    ],
+)
+def test_efs_fisher_factor_ownership_by_information_regime(
+    monkeypatch, case: str, loop_name: str
+) -> None:
+    """Trace/EDF use exact Fisher information; observed curvature is retained.
+
+    The coefficient solve is the loop's own (bitwise). Only a canonical
+    regular family, whose observed information is its Fisher information, may
+    share the refactored Fisher factor in the observed slot.
+    """
+    if case == "fixed_nb_log":
+        data = _fixed_nb_data(n=60)
+        family = NegativeBinomial(theta=2.7, fixed=True)
+    else:
+        data = _oracle_data("poisson")
+        family = Poisson() if case == "poisson_log" else Poisson("sqrt")
+    _, fd = _build("y ~ s(x, bs='cr', k=6) + s(z, bs='cr', k=5)", data, family)
+    records = _recording_loop(monkeypatch, loop_name)
+    rho = fd.log_lambda_init + 2.5
+    state = _fit_state(fd, prepare_efs_statistics(fd), rho, fd.beta_init, EFSControl())
+    raw = records[-1]
+    raw = getattr(raw, "pirls_result", raw)
+    fitted = state.pirls_result
+    assert state.valid
+    for field in ("coefficients", "mu", "eta", "deviance", "XtWX", "XtWX_fisher"):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(fitted, field)), np.asarray(getattr(raw, field))
+        )
+    penalty = np.asarray(penalty_ops.materialize(fd.penalty_structure, rho))
+    fisher_hessian = np.asarray(fitted.XtWX_fisher) + penalty
+    observed_hessian = np.asarray(fitted.XtWX) + penalty
+    np.testing.assert_allclose(
+        np.asarray(fitted.L_fisher),
+        np.linalg.cholesky(fisher_hessian),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    observed_is_fisher = (
+        family.execution_capabilities().fisher_equals_observed_for_score
+    )
+    assert observed_is_fisher == (case == "poisson_log")
+    if observed_is_fisher:
+        np.testing.assert_array_equal(
+            np.asarray(fitted.XtWX), np.asarray(fitted.XtWX_fisher)
+        )
+        np.testing.assert_array_equal(np.asarray(fitted.L), np.asarray(fitted.L_fisher))
+    else:
+        # Observed curvature differs materially and keeps the loop's factor.
+        assert not np.allclose(
+            observed_hessian, fisher_hessian, rtol=MODERATE.rtol, atol=MODERATE.atol
+        )
+        np.testing.assert_array_equal(np.asarray(fitted.L), np.asarray(raw.L))
+        observed_lower = np.asarray(fitted.L)
+        np.testing.assert_allclose(
+            observed_lower @ observed_lower.T,
+            observed_hessian,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+    inverse = np.linalg.inv(fisher_hessian)
+    np.testing.assert_allclose(
+        np.asarray(state.edf),
+        np.trace(inverse @ np.asarray(fitted.XtWX_fisher)),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_singular_efs_fisher_information_rejects_trial_without_new_score(
+    monkeypatch,
+) -> None:
+    """A singular Fisher system stops as an invalid trial on the old state."""
+    _, fd = _build("y ~ s(x,bs='cr',k=6)", _oracle_data("poisson"), Poisson())
+    initial = _fit_state(
+        fd,
+        prepare_efs_statistics(fd),
+        fd.log_lambda_init + 2.5,
+        fd.beta_init,
+        EFSControl(),
+    )
+    calls = 0
+
+    def singular_after_first(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = pirls_loop(*args, **kwargs)
+        if calls == 1:
+            return result
+        # The penalty alone has the unpenalized intercept/linear null space,
+        # so this Fisher information is exactly singular.
+        return replace(result, XtWX_fisher=jax.numpy.zeros_like(result.XtWX_fisher))
+
+    monkeypatch.setattr(execution_efs, "pirls_loop", singular_after_first)
+    result = dense_efs_known_scale(fd, control=EFSControl(outer_limit=3))
+    assert calls == 2
+    assert result.convergence_info == "invalid_trial"
+    assert not result.converged
+    assert result.n_iter == 1
+    assert result.optimizer_diagnostics.invalid_fit_seen
+    assert result.score_history == ()
+    np.testing.assert_array_equal(
+        np.asarray(result.pirls_result.coefficients),
+        np.asarray(initial.pirls_result.coefficients),
+    )
+    np.testing.assert_array_equal(np.asarray(result.score), np.asarray(initial.score))
 
 
 @pytest.mark.parametrize("weight", [0.0, 1e-11, 1e11, np.nan])
