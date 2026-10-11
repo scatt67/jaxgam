@@ -6,7 +6,7 @@ import numbers
 import sys
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Generic, Protocol, TypeVar
 
 import jax
@@ -1367,10 +1367,10 @@ def _run_parameterized_stream_reml(
             and candidate_norm <= control.gtol
             and candidate_inner_valid
         ):
-            objective.accepted = candidate
-            objective.candidate = None
-            objective.n_accepted += 1
-            objective._history.append(candidate_score)
+            # Promote through the objective so adapters observe every
+            # accepted state; this releases the candidate slot as before.
+            objective.candidate = candidate
+            objective._promote_candidate()
             projected_gradient_inf = candidate_norm
             converged = True
             if comparison_ok:
@@ -1436,10 +1436,17 @@ _SCALE_NEWTON_MAX_STEPS = 8
 
 @dataclass(frozen=True)
 class _ScaleNewtonCompletion:
-    """Outcome of the pinned free-log-scale Newton completion."""
+    """Outcome of a pinned single-free-coordinate Newton completion.
+
+    Equality compares the accepted step count and stop reason only.
+    ``last_step`` is the final proposed coordinate step (``None`` when no
+    step was proposed) and ``last_step_accepted`` whether it was accepted.
+    """
 
     steps: int
     stop: str
+    last_step: float | None = field(default=None, compare=False)
+    last_step_accepted: bool = field(default=False, compare=False)
 
 
 def _regular_score_roundoff(trial: RegularStreamREMLTrial) -> float:
@@ -1460,30 +1467,41 @@ def _regular_score_roundoff(trial: RegularStreamREMLTrial) -> float:
     return 8.0 * float(np.finfo(np.float64).eps) * magnitude
 
 
-def _scale_newton_rejection(
-    accepted: RegularStreamREMLTrial,
-    trial: RegularStreamREMLTrial,
+def _pinned_newton_rejection(
+    accepted: _TrialT,
+    trial: _TrialT,
     step: float,
     pinned: np.ndarray,
+    *,
+    label: str,
+    curvature_old: float | None,
+    curvature_new: float | None,
+    integrated_change: Callable[[float, float, float, float, float], float],
+    score_roundoff: Callable[[_TrialT], float],
 ) -> str | None:
-    """Return why a pinned log-scale Newton trial is not acceptable."""
+    """Return why a pinned single-coordinate Newton trial is not acceptable.
+
+    ``integrated_change(step, g_old, g_new, c_old, c_new)`` measures the score
+    change from exact endpoint gradients (and curvatures), because near the
+    optimum the raw change is far below the float64 resolution of the O(n)
+    score. newton()'s descent and quadratic-model tests are applied to that
+    measured change; the raw score may not rise beyond ``score_roundoff``.
+    """
     trial_params = np.asarray(trial.params, dtype=np.float64)
     if not np.array_equal(trial_params[:-1], pinned):
-        raise RuntimeError("Pinned log-scale completion changed supplied rho.")
-    for field in (
+        raise RuntimeError(f"Pinned {label} completion changed supplied rho.")
+    for name in (
         "source_fingerprint",
         "basis_fingerprint",
         "family_name",
         "link_name",
     ):
-        if getattr(trial, field) != getattr(accepted, field):
-            raise RuntimeError("Pinned log-scale completion changed lineage.")
+        if getattr(trial, name) != getattr(accepted, name):
+            raise RuntimeError(f"Pinned {label} completion changed lineage.")
     score_old = float(np.asarray(accepted.score))
     score_new = float(np.asarray(trial.score))
     gradient_old = float(np.asarray(accepted.gradient)[-1])
     gradient_new = float(np.asarray(trial.gradient)[-1])
-    curvature_old = accepted.log_phi_curvature
-    curvature_new = trial.log_phi_curvature
     if (
         curvature_old is None
         or curvature_new is None
@@ -1505,24 +1523,114 @@ def _scale_newton_rejection(
         return "nonpositive trial curvature"
     if abs(gradient_new) >= abs(gradient_old):
         return "no gradient reduction"
-    # Near the optimum the raw score change of a Newton step is far below
-    # the float64 resolution of the O(n) score. The cubic Hermite integral of
-    # the exact first and second derivatives measures it instead; its
-    # truncation error is O(step^5). newton()'s descent and quadratic-model
-    # tests are applied to that measured change.
     predicted = gradient_old * step + 0.5 * curvature_old * step * step
-    change = 0.5 * step * (gradient_old + gradient_new) + (
-        step * step * (curvature_old - curvature_new) / 12.0
+    change = integrated_change(
+        step, gradient_old, gradient_new, curvature_old, curvature_new
     )
     if not change < 0.0:
         return "no derivative-integrated descent"
     qerror = abs(predicted - change) / max(abs(predicted), abs(change))
     if not qerror < _SCALE_NEWTON_QERROR:
         return "quadratic model error"
-    envelope = _regular_score_roundoff(accepted) + _regular_score_roundoff(trial)
+    envelope = score_roundoff(accepted) + score_roundoff(trial)
     if not score_new - score_old <= envelope:
         return "measurable score increase"
     return None
+
+
+def _hermite_change(
+    step: float,
+    gradient_old: float,
+    gradient_new: float,
+    curvature_old: float,
+    curvature_new: float,
+) -> float:
+    """Cubic Hermite integral of exact endpoint gradients and curvatures.
+
+    Its truncation error is O(step^5).
+    """
+    return 0.5 * step * (gradient_old + gradient_new) + (
+        step * step * (curvature_old - curvature_new) / 12.0
+    )
+
+
+def _scale_newton_rejection(
+    accepted: RegularStreamREMLTrial,
+    trial: RegularStreamREMLTrial,
+    step: float,
+    pinned: np.ndarray,
+) -> str | None:
+    """Return why a pinned log-scale Newton trial is not acceptable."""
+    return _pinned_newton_rejection(
+        accepted,
+        trial,
+        step,
+        pinned,
+        label="log-scale",
+        curvature_old=accepted.log_phi_curvature,
+        curvature_new=trial.log_phi_curvature,
+        integrated_change=_hermite_change,
+        score_roundoff=_regular_score_roundoff,
+    )
+
+
+def _complete_pinned_coordinate(
+    objective: _AcceptedParameterizedTrialObjective[_TrialT],
+    pinned: np.ndarray,
+    *,
+    label: str,
+    max_steps: int,
+    curvature: Callable[[_TrialT], float | str | None],
+    rejection: Callable[[_TrialT, _TrialT, float, float], str | None],
+) -> _ScaleNewtonCompletion:
+    """Continue pinned ``newton()`` on the only free (final) coordinate.
+
+    ``curvature(accepted)`` returns the positive curvature newton() would use
+    at the accepted trial, or a stop reason when none is usable. Each step is
+    newton()'s ``-g/curvature``, capped at ``maxNstep``; its fully
+    reconverged exact source trial is accepted only when ``rejection``
+    returns ``None``. The completion stops at the first rejection, when the
+    next step is no longer representable, or at ``max_steps``. At most the
+    accepted and one candidate trial are retained. Rho is never optimized:
+    every candidate differs from the accepted parameters only in the final
+    coordinate.
+    """
+    steps = 0
+    last_step: float | None = None
+    for _ in range(max_steps):
+        objective._check_source_unchanged()
+        accepted = objective.accepted
+        params = np.asarray(accepted.params, dtype=np.float64)
+        if not np.array_equal(params[:-1], pinned):
+            raise RuntimeError(f"Pinned {label} completion changed supplied rho.")
+        gradient = float(np.asarray(accepted.gradient)[-1])
+        value = curvature(accepted)
+        if isinstance(value, str):
+            return _ScaleNewtonCompletion(steps, value, last_step, steps > 0)
+        if value is None or not np.isfinite(value) or value <= 0.0:
+            return _ScaleNewtonCompletion(
+                steps, "nonpositive curvature", last_step, steps > 0
+            )
+        if not np.isfinite(gradient):
+            return _ScaleNewtonCompletion(
+                steps, "nonfinite gradient", last_step, steps > 0
+            )
+        step = float(
+            np.clip(-gradient / value, -_SCALE_NEWTON_MAX_STEP, _SCALE_NEWTON_MAX_STEP)
+        )
+        trial_params = params.copy()
+        trial_params[-1] = params[-1] + step
+        if trial_params[-1] == params[-1]:
+            return _ScaleNewtonCompletion(steps, "resolved", last_step, steps > 0)
+        last_step = step
+        trial = objective._evaluate_candidate(trial_params)
+        reason = rejection(accepted, trial, step, value)
+        if reason is not None:
+            objective.candidate = None
+            return _ScaleNewtonCompletion(steps, reason, last_step, False)
+        objective._promote_candidate()
+        steps += 1
+    return _ScaleNewtonCompletion(steps, "step limit", last_step, steps > 0)
 
 
 def _complete_pinned_log_scale(
@@ -1553,36 +1661,16 @@ def _complete_pinned_log_scale(
     gradient's evaluation floor. Rho is never optimized: every candidate
     differs from the accepted parameters only in the final coordinate.
     """
-    steps = 0
-    for _ in range(max_steps):
-        objective._check_source_unchanged()
-        accepted = objective.accepted
-        params = np.asarray(accepted.params, dtype=np.float64)
-        if not np.array_equal(params[:-1], pinned):
-            raise RuntimeError("Pinned log-scale completion changed supplied rho.")
-        gradient = float(np.asarray(accepted.gradient)[-1])
-        curvature = accepted.log_phi_curvature
-        if curvature is None or not np.isfinite(curvature) or curvature <= 0.0:
-            return _ScaleNewtonCompletion(steps, "nonpositive curvature")
-        if not np.isfinite(gradient):
-            return _ScaleNewtonCompletion(steps, "nonfinite gradient")
-        step = float(
-            np.clip(
-                -gradient / curvature, -_SCALE_NEWTON_MAX_STEP, _SCALE_NEWTON_MAX_STEP
-            )
-        )
-        trial_params = params.copy()
-        trial_params[-1] = params[-1] + step
-        if trial_params[-1] == params[-1]:
-            return _ScaleNewtonCompletion(steps, "resolved")
-        trial = objective._evaluate_candidate(trial_params)
-        reason = _scale_newton_rejection(accepted, trial, step, pinned)
-        if reason is not None:
-            objective.candidate = None
-            return _ScaleNewtonCompletion(steps, reason)
-        objective._promote_candidate()
-        steps += 1
-    return _ScaleNewtonCompletion(steps, "step limit")
+    return _complete_pinned_coordinate(
+        objective,
+        pinned,
+        label="log-scale",
+        max_steps=max_steps,
+        curvature=lambda accepted: accepted.log_phi_curvature,
+        rejection=lambda accepted, trial, step, _curvature: _scale_newton_rejection(
+            accepted, trial, step, pinned
+        ),
+    )
 
 
 def _complete_pinned_regular_scale(
