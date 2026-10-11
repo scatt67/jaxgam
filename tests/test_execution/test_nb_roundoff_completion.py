@@ -1,15 +1,33 @@
 """Finite-precision completion checks for pinned streamed NB theta."""
 
+import re
 from collections import Counter
+from dataclasses import replace
 from types import SimpleNamespace
 from weakref import ref
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
+from scipy.optimize import OptimizeResult
+from scipy.optimize import minimize as scipy_minimize
 
 import jaxgam.execution.nb_reml as nb_reml_execution
 import jaxgam.execution.reml as reml_execution
+from jaxgam import GAM, FitControl
+from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.reml import StreamREMLControl
+from jaxgam.execution.stream import StreamPIRLSControl
+from jaxgam.families.negative_binomial import NegativeBinomial
+from tests.helpers import _AssertCollector, nb_optimizer_case_data, r_available
+from tests.test_execution.test_nb_reml import _LINKS
+from tests.test_execution.test_nb_reml_optimizer import (
+    _OPTIMIZER_MAXIMUM_BYTES,
+    _OPTIMIZER_PIRLS_CONTROL,
+    _optimizer_case,
+    _pinned_selected_reference,
+)
+from tests.tolerances import STRICT
 
 _ACCEPTED = np.array([-0.6931471805599453, 0.7061978415958204])
 _STATIONARY = np.array([-0.6931471805599453, 0.7061978383114913])
@@ -431,3 +449,604 @@ def test_nb_local_score_comparison_rejects_invalid_path(
             )
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Pinned log-theta secant Newton completion after an L-BFGS-B roundoff stop
+# ---------------------------------------------------------------------------
+
+# A smooth, strictly convex non-quadratic fixed-rho profile in t = log theta:
+# f(t) = C + K (expm1(d) - d), g(t) = K expm1(d), f''(t) = K exp(d), d = t - t*.
+_T_STAR = 0.7061978383114954
+_K = 24.78
+_PROFILE_SCORE = 388.0
+_PINNED_RHO = np.array([-0.6931471805599453])
+_INNER_TOLERANCE = 1e-11
+_PUBLIC_CONTROL = StreamREMLControl(gtol=1e-9, ftol=0.0)
+
+
+class _ProfileTrial(SimpleNamespace):
+    """Weak-referenceable immutable-by-convention synthetic exact trial."""
+
+
+def _profile_trial(params, *, score=None, gradient=None, **overrides):
+    params = np.array(params, dtype=np.float64, copy=True)
+    d = float(params[-1]) - _T_STAR
+    exact_score = _PROFILE_SCORE + _K * (np.expm1(d) - d)
+    exact_gradient = _K * np.expm1(d)
+    state = SimpleNamespace(
+        converged=overrides.pop("converged", True),
+        line_search_failed=False,
+        stationarity=1e-14,
+        saturated_loglik=-280.0,
+        coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 19.0),
+    )
+    trial = _ProfileTrial(
+        params=params,
+        score=np.float64(exact_score if score is None else score),
+        gradient=np.array([0.3, exact_gradient if gradient is None else gradient]),
+        source_scans=2,
+        batches_scanned=5,
+        source_fingerprint="source",
+        basis_fingerprint="basis",
+        family_name="nb",
+        link_name="IdentityLink",
+        source_factor_residual=1e-15,
+        observed_factor_residual=1e-15,
+        workspace=SimpleNamespace(required_bytes=256),
+        fit_result=SimpleNamespace(
+            log_theta=params[-1:].copy(),
+            score_penalized_deviance=190.0,
+            state=state,
+        ),
+    )
+    for name, value in overrides.items():
+        setattr(trial, name, value)
+    return trial
+
+
+class _ThetaProfile:
+    """Exact profile evaluator recording requests and live trial ownership."""
+
+    def __init__(self, scripted=None):
+        self.requests = []
+        self.scripted = dict(scripted or {})
+        self.live = []
+        self.peak_live = 0
+
+    def __call__(self, _stream, _family, params, **_kwargs):
+        alive = sum(item() is not None for item in self.live)
+        self.peak_live = max(self.peak_live, alive)
+        params = np.asarray(params, dtype=np.float64)
+        self.requests.append(params.copy())
+        override = self.scripted.get(len(self.requests), {})
+        trial = (
+            override(params)
+            if callable(override)
+            else _profile_trial(params, **override)
+        )
+        self.live.append(ref(trial))
+        return trial
+
+
+def _theta_params(d):
+    return np.r_[_PINNED_RHO, _T_STAR + d]
+
+
+def _scripted_lbfgsb(accepted_offsets, *, message, status, success=None, probes=()):
+    """Accept exact iterates through the callback, probe, then stop."""
+
+    def minimize_call(fun, x0, **kwargs):
+        assert kwargs["bounds"][0] == (_PINNED_RHO[0], _PINNED_RHO[0])
+        fun(np.asarray(x0))
+        x = np.asarray(x0)
+        for offset in accepted_offsets:
+            x = _theta_params(offset)
+            fun(x)
+            kwargs["callback"](OptimizeResult(x=x.copy(), fun=0.0))
+        for offset in probes:
+            fun(_theta_params(offset))
+        return SimpleNamespace(
+            x=x.copy(),
+            success=(status == 0) if success is None else success,
+            status=status,
+            message=message,
+            nit=len(accepted_offsets),
+        )
+
+    return minimize_call
+
+
+def _theta_stream():
+    fitting = SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=1))
+    return SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(fitting=fitting, n_coef=2),
+    )
+
+
+def _optimize_profile(
+    monkeypatch,
+    profile,
+    *,
+    start=0.3,
+    accepted=(0.02, 3e-4),
+    message="ABNORMAL: ",
+    status=2,
+    probes=(3e-4 - 1e-12,),
+):
+    monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", profile)
+    monkeypatch.setattr(
+        reml_execution,
+        "minimize",
+        _scripted_lbfgsb(accepted, message=message, status=status, probes=probes),
+    )
+    return nb_reml_execution.optimize_nb_stream_reml(
+        _theta_stream(),
+        NegativeBinomial(theta=2.7, fixed=False, link="identity"),
+        _theta_params(start),
+        maximum_bytes=1_000_000,
+        pin_lambda=True,
+        pirls_control=StreamPIRLSControl(solver_policy="qr", tol=_INNER_TOLERANCE),
+        control=_PUBLIC_CONTROL,
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "status"),
+    [
+        ("ABNORMAL: ", 2),
+        ("ABNORMAL_TERMINATION_IN_LNSRCH", 2),
+        ("CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH", 0),
+    ],
+    ids=["abnormal", "legacy-abnormal", "relative-reduction"],
+)
+def test_theta_secant_completion_finishes_roundoff_stops(monkeypatch, message, status):
+    profile = _ThetaProfile()
+    result = _optimize_profile(monkeypatch, profile, message=message, status=status)
+
+    assert result.converged
+    assert result.status == status
+    assert result.theta_completion_steps >= 2
+    assert result.theta_completion_stop in {
+        "resolved",
+        "no gradient reduction",
+        "quadratic model error",
+    }
+    assert message in result.message
+    assert "secant Newton completion" in result.message
+    assert "projected gradient" in result.message
+    # Rho is bitwise pinned in every exact trial, including completion steps.
+    for request in profile.requests:
+        np.testing.assert_array_equal(request[:-1], _PINNED_RHO)
+    t = float(result.trial.params[-1])
+    assert abs(t - _T_STAR) <= 4 * np.spacing(_T_STAR)
+    assert result.projected_gradient_inf <= _PUBLIC_CONTROL.gtol
+    # The returned score and gradient belong to the returned theta.
+    expected = _profile_trial(result.trial.params)
+    assert float(result.trial.score) == float(expected.score)
+    np.testing.assert_array_equal(result.trial.gradient, expected.gradient)
+    np.testing.assert_array_equal(result.trial.fit_result.log_theta, [t])
+    # Accepted (and at most one other) trial at every new evaluation.
+    assert profile.peak_live <= 2
+    assert result.n_evaluations == len(profile.requests)
+    assert result.cumulative_source_scans == 2 * len(profile.requests)
+    assert result.cumulative_batches_scanned == 5 * len(profile.requests)
+    assert result.n_accepted == 2 + result.theta_completion_steps
+    history = np.asarray(result.accepted_score_history)
+    assert history[-1] == float(result.trial.score)
+    assert np.all(np.diff(history) <= 0.0)
+
+
+def test_theta_secant_completion_steps_from_previous_accepted_secant(monkeypatch):
+    profile = _ThetaProfile()
+    result = _optimize_profile(monkeypatch, profile, probes=())
+    completion_requests = profile.requests[3:]
+    first = float(completion_requests[0][-1])
+    previous, accepted = _T_STAR + 0.02, _T_STAR + 3e-4
+    secant = _K * (np.expm1(3e-4) - np.expm1(0.02)) / (accepted - previous)
+    np.testing.assert_allclose(
+        first - accepted,
+        -_K * np.expm1(3e-4) / secant,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert result.converged
+
+
+def test_theta_secant_completion_caps_step_like_newton(monkeypatch):
+    # A resolved but nearly flat secant asks for a step beyond maxNstep = 5.
+    profile = _ThetaProfile({1: {"gradient": 1.0}, 2: {"gradient": 1.0 + 1e-10}})
+    _optimize_profile(monkeypatch, profile, start=0.0, accepted=(1e-3,), probes=())
+    assert float(profile.requests[2][-1]) == _T_STAR + 1e-3 - 5.0
+
+
+@pytest.mark.parametrize(
+    ("message", "status", "stop"),
+    [
+        ("STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT", 1, "limit or error"),
+        ("ERROR: STPMAX < STPMIN", 2, "limit or error"),
+        ("CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL", 0, "stage converged"),
+    ],
+    ids=["iteration-limit", "error", "converged"],
+)
+def test_theta_secant_completion_only_follows_roundoff_stops(
+    monkeypatch, message, status, stop
+):
+    profile = _ThetaProfile()
+    accepted = (0.02, 3e-4) if status else (0.02, 3e-4, 1e-12)
+    result = _optimize_profile(
+        monkeypatch, profile, message=message, status=status, accepted=accepted
+    )
+    assert result.theta_completion_steps == 0
+    assert stop in result.theta_completion_stop
+    assert result.theta_completion_stop.startswith("not run")
+    assert len(profile.requests) == 1 + len(accepted) + 1
+    assert result.converged == (status == 0)
+    assert "not run" in result.message
+
+
+@pytest.mark.parametrize(
+    ("accepted", "stop"),
+    [
+        ((), "no resolved secant"),
+        # A gradient change below twice the inner tolerance is not a secant.
+        ((1e-3 + 1e-14,), "no resolved secant"),
+    ],
+    ids=["initial-point", "unresolved-pair"],
+)
+def test_theta_secant_completion_requires_resolved_secant(monkeypatch, accepted, stop):
+    profile = _ThetaProfile()
+    result = _optimize_profile(
+        monkeypatch, profile, start=1e-3 if accepted else 0.3, accepted=accepted
+    )
+    assert not result.converged
+    assert result.theta_completion_stop == stop
+    assert result.theta_completion_steps == 0
+    assert "no positive resolved log-theta curvature" in result.message
+    assert len(profile.requests) == 1 + len(accepted) + 1
+
+
+def test_theta_secant_completion_reports_nonpositive_secant(monkeypatch):
+    # The accepted pair's gradient falls as log theta rises: concave secant.
+    profile = _ThetaProfile({1: {"gradient": 0.5}, 2: {"gradient": 0.4}})
+    result = _optimize_profile(
+        monkeypatch, profile, start=0.01, accepted=(0.02,), probes=()
+    )
+    assert not result.converged
+    assert result.theta_completion_stop == "nonpositive curvature"
+    assert result.message.endswith("no positive resolved log-theta curvature.")
+    assert len(profile.requests) == 2
+
+
+def _rejected_completion_candidate(reason):
+    accepted_gradient = _K * np.expm1(3e-4)
+    if reason == "no gradient reduction":
+        return {"gradient": -2.0 * accepted_gradient}
+    if reason == "measurable score increase":
+        return {"score": _PROFILE_SCORE + 1e-3}
+    if reason == "nonfinite trial":
+        return {"score": np.nan}
+    if reason == "nonpositive trial curvature":
+        return {"gradient": 1.01 * accepted_gradient}
+    # With a positive secant and a smaller gradient the trapezoid change of a
+    # -g/c step is always negative; an overshoot to r = g_new/g_old <= -0.8
+    # fails newton()'s quadratic-model test instead.
+    if reason == "quadratic model error":
+        return {"gradient": -0.9 * accepted_gradient}
+    raise AssertionError(reason)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "no gradient reduction",
+        "measurable score increase",
+        "nonfinite trial",
+        "nonpositive trial curvature",
+        "quadratic model error",
+    ],
+)
+def test_theta_secant_completion_rejects_candidate_and_keeps_accepted(
+    monkeypatch, reason
+):
+    profile = _ThetaProfile({4: _rejected_completion_candidate(reason)})
+    result = _optimize_profile(monkeypatch, profile, probes=())
+    assert not result.converged
+    assert result.theta_completion_stop == reason
+    assert result.theta_completion_steps == 0
+    np.testing.assert_array_equal(result.trial.params, _theta_params(3e-4))
+    assert result.n_accepted == 2
+    assert result.n_evaluations == 4
+    # A failed public fit explains itself: L-BFGS-B task, completion outcome,
+    # final proposed and last accepted log-theta steps, projected gradient.
+    step = float(profile.requests[3][-1] - result.trial.params[-1])
+    for part in (
+        "L-BFGS-B stage: ABNORMAL: ",
+        f"secant Newton completion: {reason}, 0 accepted step(s)",
+        f"final proposed step {step:+.6e} (rejected)",
+        f"last accepted log-theta step {3e-4 - 0.02:+.6e}",
+        f"projected gradient {_K * np.expm1(3e-4):.6e} (gtol 1.000e-09)",
+        "not converged: projected gradient",
+    ):
+        assert part in result.message, (part, result.message)
+
+
+@pytest.mark.parametrize(
+    ("override", "match"),
+    [
+        (lambda params: _profile_trial(np.r_[0.0, params[-1]]), "changed supplied rho"),
+        (lambda params: _profile_trial(params, link_name="LogLink"), "lineage"),
+        (
+            lambda params: _profile_trial(params, source_fingerprint="other"),
+            "lineage",
+        ),
+    ],
+)
+def test_theta_secant_completion_refuses_changed_rho_or_lineage(
+    monkeypatch, override, match
+):
+    profile = _ThetaProfile({4: override})
+    with pytest.raises(RuntimeError, match=match):
+        _optimize_profile(monkeypatch, profile, probes=())
+
+
+def test_theta_secant_completion_refuses_accepted_state_with_moved_rho(monkeypatch):
+    profile = _ThetaProfile()
+    monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", profile)
+
+    def moved_pin(fun, x0, **kwargs):
+        moved = np.r_[_PINNED_RHO + 1e-12, _T_STAR + 1e-3]
+        fun(np.asarray(x0))
+        fun(moved)
+        kwargs["callback"](OptimizeResult(x=moved.copy(), fun=0.0))
+        return SimpleNamespace(
+            x=moved, success=False, status=2, message="ABNORMAL: ", nit=1
+        )
+
+    monkeypatch.setattr(reml_execution, "minimize", moved_pin)
+    with pytest.raises(RuntimeError, match="changed supplied rho"):
+        nb_reml_execution.optimize_nb_stream_reml(
+            _theta_stream(),
+            NegativeBinomial(theta=2.7, fixed=False, link="identity"),
+            _theta_params(0.3),
+            maximum_bytes=1_000_000,
+            pin_lambda=True,
+            pirls_control=StreamPIRLSControl(solver_policy="qr", tol=_INNER_TOLERANCE),
+            control=_PUBLIC_CONTROL,
+        )
+    assert len(profile.requests) == 2
+
+
+def test_theta_secant_completion_refuses_invalid_accepted_trial(monkeypatch):
+    profile = _ThetaProfile({3: {"converged": False}})
+    result = _optimize_profile(monkeypatch, profile, probes=())
+    assert not result.converged
+    assert result.theta_completion_stop == "not run: accepted trial is invalid"
+    assert len(profile.requests) == 3
+
+
+def test_resolved_theta_secant_rejects_unusable_pairs():
+    secant = nb_reml_execution._resolved_theta_secant
+    old = _profile_trial(_theta_params(1e-3))
+    new = _profile_trial(_theta_params(2e-3))
+    expected = (new.gradient[-1] - old.gradient[-1]) / (new.params[-1] - old.params[-1])
+    assert secant(old, new, _INNER_TOLERANCE) == expected
+    moved = _profile_trial(np.r_[0.0, new.params[-1]])
+    assert secant(old, moved, _INNER_TOLERANCE) is None
+    assert secant(old, _profile_trial(np.r_[0.0, 1.0, 2.0]), 1e-11) is None
+    assert secant(old, old, _INNER_TOLERANCE) is None
+    assert secant(old, new, 1.0) is None
+    nonfinite = _profile_trial(new.params, gradient=np.inf)
+    assert secant(old, nonfinite, _INNER_TOLERANCE) is None
+
+
+def test_nb_objective_rejects_invalid_secant_gradient_error(monkeypatch):
+    monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", _ThetaProfile())
+    for value in (0.0, -1.0, np.nan, np.inf):
+        with pytest.raises(ValueError, match="secant_gradient_error"):
+            nb_reml_execution._AcceptedNBTrialObjective(
+                _theta_stream(),
+                NegativeBinomial(theta=2.7, fixed=False),
+                _theta_params(0.1),
+                StreamPIRLSControl(solver_policy="qr"),
+                _PUBLIC_CONTROL,
+                1_000_000,
+                None,
+                None,
+                secant_gradient_error=value,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Real generated source: forced roundoff stops on the public free-theta model
+# ---------------------------------------------------------------------------
+
+
+def _plateau_then_abnormal(record):
+    """Run real L-BFGS-B into the score plateau, then stop as native AMD64 did.
+
+    The native run accepted an iterate with |g| ~ 8e-8 whose remaining score
+    decrease (~g^2/2c ~ 1e-16) is far below one score ULP; its line search
+    then failed every sufficient-decrease test and ended ABNORMAL.
+    """
+
+    def minimize_call(fun, x0, **kwargs):
+        options = {**kwargs["options"], "gtol": 1e-6}
+        plateau = scipy_minimize(fun, x0, **{**kwargs, "options": options})
+        assert plateau.success
+        record["plateau_gradient"] = float(np.asarray(plateau.jac)[-1])
+        return SimpleNamespace(
+            x=np.asarray(plateau.x),
+            success=False,
+            status=2,
+            message="ABNORMAL: ",
+            nit=int(plateau.nit),
+        )
+
+    return minimize_call
+
+
+def _optimize_generated(link, monkeypatch=None, record=None):
+    stream, family, initial = _optimizer_case(link, estimated=True)
+    if monkeypatch is not None:
+        monkeypatch.setattr(reml_execution, "minimize", _plateau_then_abnormal(record))
+    result = nb_reml_execution.optimize_nb_stream_reml(
+        stream,
+        family,
+        initial,
+        maximum_bytes=_OPTIMIZER_MAXIMUM_BYTES,
+        pin_lambda=True,
+        pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+        control=_PUBLIC_CONTROL,
+    )
+    return stream, initial, result
+
+
+@pytest.mark.parametrize("link", _LINKS)
+def test_generated_abnormal_stop_completes_to_unforced_stationary_theta(
+    monkeypatch, link
+):
+    _, _, reference = _optimize_generated(link)
+    record = {}
+    _, initial, forced = _optimize_generated(link, monkeypatch, record)
+
+    # The completion starts from a valid plateau trial that misses gtol.
+    assert abs(record["plateau_gradient"]) > _PUBLIC_CONTROL.gtol
+    assert reference.converged
+    assert forced.status == 2
+    assert forced.message.startswith("L-BFGS-B stage: ABNORMAL")
+    assert forced.converged, forced.message
+    assert forced.theta_completion_steps >= 1
+    assert forced.projected_gradient_inf <= _PUBLIC_CONTROL.gtol
+    np.testing.assert_array_equal(np.asarray(forced.trial.params)[:-1], initial[:-1])
+    np.testing.assert_array_equal(
+        forced.trial.fit_result.log_theta, np.asarray(forced.trial.params)[-1:]
+    )
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("log theta", forced.trial.params, reference.trial.params),
+        ("score", forced.trial.score, reference.trial.score),
+        (
+            "coefficients",
+            forced.trial.fit_result.state.coefficients,
+            reference.trial.fit_result.state.coefficients,
+        ),
+        (
+            "deviance",
+            forced.trial.fit_result.state.deviance,
+            reference.trial.fit_result.state.deviance,
+        ),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"forced ABNORMAL NB/{link} completion")
+
+
+@pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
+@pytest.mark.parametrize("link", _LINKS)
+def test_generated_abnormal_completion_is_pinned_gam_fit4_stationary(monkeypatch, link):
+    """Pinned R's exact source state at the completed theta is stationary."""
+    stream, _, forced = _optimize_generated(link, monkeypatch, {})
+    assert forced.converged, forced.message
+    expected = _pinned_selected_reference(
+        stream,
+        link,
+        np.asarray(forced.trial.params),
+        estimated=True,
+        epsilon=1e-12,
+        max_iter=400,
+    )
+    state = forced.trial.fit_result.state
+    checks = _AssertCollector()
+    for name, actual, reference in (
+        ("score", forced.trial.score, expected["score"]),
+        ("gradient", forced.trial.gradient, expected["gradient"]),
+        ("coefficients", state.coefficients, expected["beta"]),
+        ("deviance", state.deviance, expected["deviance"]),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"forced ABNORMAL NB/{link} pinned gam.fit4 state")
+    # R's own exact log-theta derivative certifies the completed theta.
+    assert abs(float(expected["gradient"][-1])) <= _PUBLIC_CONTROL.gtol
+
+
+# Stationary exact trials read this many ULPs high. It exceeds the few-ULP
+# warm-trial score scatter, so L-BFGS-B can never accept them, and stays
+# inside the documented float64 score envelope (about 55 ULPs here).
+_STATIONARY_SCORE_ULPS = 40
+
+
+@pytest.mark.parametrize("link", _LINKS)
+def test_public_free_theta_completes_when_stationary_scores_read_high(
+    monkeypatch, link
+):
+    """Score roundoff on the plateau cannot leave the public fit unconverged."""
+    data, weight, offset = nb_optimizer_case_data()
+
+    def fit():
+        model = GAM(
+            'y~s(x,bs="cr",k=8)',
+            family=NegativeBinomial(theta=2.7, fixed=False, link=link),
+            sp=[0.5],
+            control=FitControl(
+                execution="stream",
+                linear_solver="qr",
+                batch_rows=17,
+                uncertainty="fisher",
+            ),
+        )
+        source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+        return model.fit(source, result="prediction")
+
+    reference = fit()
+    exact = nb_reml_execution.evaluate_nb_stream_reml
+    forced_trials = []
+
+    def high_stationary_score(*args, **kwargs):
+        trial = exact(*args, **kwargs)
+        if abs(float(np.asarray(trial.gradient)[-1])) < _PUBLIC_CONTROL.gtol:
+            score = float(np.asarray(trial.score))
+            forced_trials.append(score)
+            trial = replace(
+                trial,
+                score=jnp.asarray(score + _STATIONARY_SCORE_ULPS * np.spacing(score)),
+            )
+        return trial
+
+    monkeypatch.setattr(
+        nb_reml_execution, "evaluate_nb_stream_reml", high_stationary_score
+    )
+    forced = fit()
+    info = forced.convergence_info
+    assert reference.converged, reference.convergence_info
+    assert forced_trials
+    assert forced.converged, info
+    # L-BFGS-B never accepts a stationary trial here; a completion must.
+    assert "NORM OF PROJECTED GRADIENT" not in info
+    assert "retained exact stationary candidate" in info or re.search(
+        r"completion: [a-z ]+, [1-9]\d* accepted step", info
+    ), info
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("theta", forced.theta, reference.theta),
+        ("coefficients", forced.coefficients, reference.coefficients),
+        ("score", forced.score, reference.score),
+        ("deviance", forced.deviance, reference.deviance),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"public NB/{link} forced plateau completion")

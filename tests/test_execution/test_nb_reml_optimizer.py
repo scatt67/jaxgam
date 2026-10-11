@@ -593,7 +593,13 @@ def test_nb_optimizer_pins_supplied_rho_outside_estimated_bounds(link, estimated
                 _OPTIMIZER_PIRLS_CONTROL,
             )
         )
-        assert result.outer_workspace_bytes == 2 * retained + 2 * history + lbfgs
+        assert (
+            result.outer_workspace_bytes
+            == 2 * retained
+            + 2 * history
+            + lbfgs
+            + nb_reml_execution._THETA_SECANT_BYTES
+        )
     else:
         reference = evaluate_nb_stream_reml(
             stream,

@@ -9,6 +9,7 @@ host never invokes EFS conditional-theta updates.
 from __future__ import annotations
 
 import numbers
+import sys
 from dataclasses import dataclass, replace
 
 import jax
@@ -27,9 +28,14 @@ from jaxgam.execution.regular_stream import (
 from jaxgam.execution.reml import (
     StreamREMLControl,
     _AcceptedParameterizedTrialObjective,
+    _complete_pinned_coordinate,
     _LocalScoreChange,
     _parameterized_optimizer_workspace_bytes,
+    _ParameterizedOptimization,
+    _pinned_newton_rejection,
+    _projected_gradient_for_bounds,
     _run_parameterized_stream_reml,
+    _ScaleNewtonCompletion,
 )
 from jaxgam.execution.stream import (
     StreamPIRLSControl,
@@ -82,7 +88,14 @@ class NBStreamREMLTrial:
 
 @dataclass(frozen=True)
 class NBStreamREMLOptimization:
-    """Diagnostic outcome of exact joint NB streamed optimization."""
+    """Diagnostic outcome of exact joint NB streamed optimization.
+
+    ``status`` is the L-BFGS-B status. With every smoothing parameter pinned
+    and theta free, ``theta_completion_steps`` counts the accepted exact
+    secant-Newton log-theta steps that follow L-BFGS-B and
+    ``theta_completion_stop`` records why that completion ended or was not
+    run; ``converged`` is restated on the returned trial.
+    """
 
     trial: NBStreamREMLTrial
     converged: bool
@@ -96,6 +109,8 @@ class NBStreamREMLOptimization:
     projected_gradient_inf: float
     accepted_score_history: tuple[float, ...]
     outer_workspace_bytes: int
+    theta_completion_steps: int = 0
+    theta_completion_stop: str | None = None
 
     @property
     def required_bytes(self) -> int:
@@ -473,10 +488,47 @@ def evaluate_nb_stream_reml(
     )
 
 
+def _resolved_theta_secant(
+    old: NBStreamREMLTrial,
+    new: NBStreamREMLTrial,
+    gradient_error: float,
+) -> float | None:
+    """Return the log-theta secant curvature between two exact pinned trials.
+
+    Both gradients are exact source derivatives of fully reconverged trials.
+    Assuming each is evaluated within ``gradient_error`` (the inner stopping
+    tolerance), the secant is resolved only when the gradient change exceeds
+    their combined error; otherwise ``None`` is returned.
+    """
+    old_params = np.asarray(old.params, dtype=np.float64)
+    new_params = np.asarray(new.params, dtype=np.float64)
+    if old_params.shape != new_params.shape or not np.array_equal(
+        old_params[:-1], new_params[:-1]
+    ):
+        return None
+    step = float(new_params[-1] - old_params[-1])
+    change = float(np.asarray(new.gradient)[-1]) - float(np.asarray(old.gradient)[-1])
+    if (
+        not np.isfinite(step)
+        or not np.isfinite(change)
+        or step == 0.0
+        or not abs(change) > 2.0 * gradient_error
+    ):
+        return None
+    secant = change / step
+    return float(secant) if np.isfinite(secant) else None
+
+
 class _AcceptedNBTrialObjective(
     _AcceptedParameterizedTrialObjective[NBStreamREMLTrial]
 ):
-    """NB adapter for the common accepted/candidate trial driver."""
+    """NB adapter for the common accepted/candidate trial driver.
+
+    With ``secant_gradient_error`` set (pinned rho, free log theta), every
+    promotion also records two host scalars: the accepted log-theta step and
+    the most recent *resolved* secant curvature between consecutive accepted
+    exact trials. No earlier trial is retained.
+    """
 
     def __init__(
         self,
@@ -488,7 +540,17 @@ class _AcceptedNBTrialObjective(
         maximum_bytes: int,
         initial_coefficients: np.ndarray | None,
         device: jax.Device | None,
+        *,
+        secant_gradient_error: float | None = None,
     ) -> None:
+        if secant_gradient_error is not None and not (
+            np.isfinite(secant_gradient_error) and secant_gradient_error > 0.0
+        ):
+            raise ValueError("secant_gradient_error must be finite and positive")
+        self._secant_gradient_error = secant_gradient_error
+        self.theta_secant: float | None = None
+        self.last_theta_step: float | None = None
+
         def evaluate(
             params: np.ndarray,
             warm_start: NBStreamREMLTrial | None,
@@ -515,6 +577,40 @@ class _AcceptedNBTrialObjective(
             source_name="NB streamed REML",
             trial_name="NB streamed",
         )
+
+    def _promote_candidate(self) -> None:
+        """Promote the candidate and record its pinned log-theta secant."""
+        previous = self.accepted
+        super()._promote_candidate()
+        if self._secant_gradient_error is None:
+            return
+        self.last_theta_step = float(
+            np.asarray(self.accepted.params)[-1] - np.asarray(previous.params)[-1]
+        )
+        secant = _resolved_theta_secant(
+            previous, self.accepted, self._secant_gradient_error
+        )
+        if secant is not None:
+            self.theta_secant = secant
+
+
+def _nb_score_magnitude(trial: NBStreamREMLTrial) -> float:
+    """Sum of the O(n) terms whose float64 difference forms one NB score."""
+    return (
+        abs(float(np.asarray(trial.score)))
+        + abs(trial.fit_result.score_penalized_deviance)
+        + abs(float(np.asarray(trial.fit_result.state.saturated_loglik)))
+        + abs(
+            float(
+                np.asarray(trial.fit_result.state.coefficient_factor.logdet_hessian())
+            )
+        )
+    )
+
+
+def _nb_score_roundoff(trial: NBStreamREMLTrial) -> float:
+    """First-order float64 envelope for one NB source score value."""
+    return 8 * float(np.finfo(np.float64).eps) * _nb_score_magnitude(trial)
 
 
 def _nb_local_stationary_score_change(
@@ -644,22 +740,198 @@ def _nb_local_stationary_score_change(
     # and determinant terms before subtraction.  This first-order float64
     # envelope only rejects an inconsistent raw difference; the gradient
     # path, not this envelope, decides local descent.
-    magnitudes = [
-        abs(float(np.asarray(trial.score)))
-        + abs(trial.fit_result.score_penalized_deviance)
-        + abs(float(np.asarray(trial.fit_result.state.saturated_loglik)))
-        + abs(
-            float(
-                np.asarray(trial.fit_result.state.coefficient_factor.logdet_hessian())
-            )
-        )
-        for trial in (accepted, candidate)
-    ]
+    magnitudes = [_nb_score_magnitude(trial) for trial in (accepted, candidate)]
     roundoff_bound = 8 * np.finfo(np.float64).eps * sum(magnitudes)
     if not np.all(np.isfinite((composite, error, raw_change, roundoff_bound))):
         return None
     return _LocalScoreChange(
         composite, error, raw_change, roundoff_bound, linearity_error
+    )
+
+
+# Secant steps converge superlinearly; from an L-BFGS-B stop the float64
+# gradient floor is normally reached in one to three steps. This bound only
+# guarantees termination.
+_THETA_SECANT_MAX_STEPS = 12
+# The accepted log-theta step and the latest resolved secant curvature are the
+# only extra state the pinned free-theta completion records during L-BFGS-B.
+_THETA_SECANT_BYTES = 2 * sys.getsizeof(0.0)
+
+
+def _trapezoid_change(
+    step: float,
+    gradient_old: float,
+    gradient_new: float,
+    _curvature_old: float,
+    _curvature_new: float,
+) -> float:
+    """Integral of the secant model through two exact endpoint gradients.
+
+    With the trial secant ``(g_new - g_old)/step`` this is the exact change of
+    that quadratic; its truncation error is O(step^3 g'').
+    """
+    return 0.5 * step * (gradient_old + gradient_new)
+
+
+def _nb_theta_secant_rejection(
+    accepted: NBStreamREMLTrial,
+    trial: NBStreamREMLTrial,
+    step: float,
+    curvature: float,
+    pinned: np.ndarray,
+) -> str | None:
+    """Apply newton()'s acceptance tests with secant curvature to one step."""
+    gradient_change = float(np.asarray(trial.gradient)[-1]) - float(
+        np.asarray(accepted.gradient)[-1]
+    )
+    return _pinned_newton_rejection(
+        accepted,
+        trial,
+        step,
+        pinned,
+        label="log-theta",
+        curvature_old=curvature,
+        curvature_new=gradient_change / step,
+        integrated_change=_trapezoid_change,
+        score_roundoff=_nb_score_roundoff,
+    )
+
+
+def _nb_trial_inner_valid(trial: NBStreamREMLTrial, inner_tolerance: float) -> bool:
+    """Require the converged inner state that every exact trial must own."""
+    inner = trial.fit_result.state
+    return bool(
+        inner.converged
+        and not inner.line_search_failed
+        and np.isfinite(inner.stationarity)
+        and inner.stationarity < inner_tolerance
+        and np.isfinite(float(np.asarray(trial.score)))
+        and np.all(np.isfinite(np.asarray(trial.gradient)))
+    )
+
+
+def _complete_pinned_nb_theta(
+    objective: _AcceptedNBTrialObjective,
+    optimized: _ParameterizedOptimization[NBStreamREMLTrial],
+    pinned: np.ndarray,
+    bounds: list[tuple[float | None, float | None]],
+    control: StreamREMLControl,
+    inner_tolerance: float,
+) -> tuple[_ParameterizedOptimization[NBStreamREMLTrial], _ScaleNewtonCompletion]:
+    """Continue pinned ``newton()`` on log theta after the L-BFGS-B stage.
+
+    With every smoothing parameter supplied, pinned mgcv's ``gam.outer``
+    calls ``newton()`` on the NB log theta alone (``G$L`` keeps only the theta
+    column; the supplied log sps enter through ``lsp0``). newton() steps by
+    ``-g/|H|`` from exact first and second derivatives, caps the step at
+    ``maxNstep = 5``, accepts on score decrease with quadratic-model error
+    below 0.8 and step-halves otherwise.
+
+    The exact NB trial provides the exact log-theta gradient but no second
+    derivative, so curvature is the latest resolved secant between
+    consecutive accepted exact trials (the curvature L-BFGS-B itself uses in
+    one dimension). Near the optimum the remaining score decrease is far
+    below one ULP of the O(n) score, so L-BFGS-B's Moré-Thuente line search
+    can stop on raw-score roundoff: by relative reduction, or ABNORMAL after
+    ``maxls`` failed sufficient-decrease tests. After either stop, from a
+    valid accepted trial, each secant step's fully reconverged trial is
+    accepted only with a positive trial secant, a smaller exact gradient,
+    newton()'s descent and quadratic-model tests on the trapezoid integral
+    of the exact gradients, and no measurable raw score increase. Rho stays
+    bitwise pinned; at most the accepted and one candidate trial are held.
+    Convergence is restated on the returned trial: projected gradient at or
+    below ``gtol`` and a positive resolved secant curvature.
+    """
+    lbfgsb_message = optimized.message
+    admissible = optimized.status == 0 or lbfgsb_message.startswith("ABNORMAL")
+    accepted = objective.accepted
+    if optimized.converged:
+        completion = _ScaleNewtonCompletion(0, "not run: L-BFGS-B stage converged")
+    elif not admissible:
+        completion = _ScaleNewtonCompletion(
+            0, "not run: L-BFGS-B stopped by an iteration/evaluation limit or error"
+        )
+    elif not np.array_equal(np.asarray(accepted.params, dtype=np.float64)[:-1], pinned):
+        raise RuntimeError("Pinned log-theta completion changed supplied rho.")
+    elif not _nb_trial_inner_valid(accepted, inner_tolerance):
+        completion = _ScaleNewtonCompletion(0, "not run: accepted trial is invalid")
+    else:
+        # Release SciPy's last rejected line-search trial: the completion
+        # holds the accepted and at most one candidate trial.
+        objective.candidate = None
+        completion = _complete_pinned_coordinate(
+            objective,
+            pinned,
+            label="log-theta",
+            max_steps=_THETA_SECANT_MAX_STEPS,
+            curvature=lambda _accepted: (
+                "no resolved secant"
+                if objective.theta_secant is None
+                else objective.theta_secant
+            ),
+            rejection=lambda old, trial, step, curvature: _nb_theta_secant_rejection(
+                old, trial, step, curvature, pinned
+            ),
+        )
+    objective._check_source_unchanged()
+    trial = objective.accepted
+    projected_gradient_inf = float(
+        np.max(
+            np.abs(
+                _projected_gradient_for_bounds(
+                    np.asarray(trial.params, dtype=np.float64),
+                    np.asarray(trial.gradient, dtype=np.float64),
+                    bounds,
+                )
+            )
+        )
+    )
+    curvature = objective.theta_secant
+    curvature_positive = bool(
+        curvature is not None and np.isfinite(curvature) and curvature > 0.0
+    )
+    ran = not completion.stop.startswith("not run")
+    converged = (
+        projected_gradient_inf <= control.gtol and curvature_positive
+        if ran
+        else optimized.converged
+    )
+    if completion.last_step is None:
+        proposed = "none"
+    else:
+        outcome = "accepted" if completion.last_step_accepted else "rejected"
+        proposed = f"{completion.last_step:+.6e} ({outcome})"
+    last_step = objective.last_theta_step
+    message = (
+        f"L-BFGS-B stage: {lbfgsb_message}; pinned log-theta secant Newton "
+        f"completion: {completion.stop}, {completion.steps} accepted step(s), "
+        f"final proposed step {proposed}; last accepted log-theta step "
+        f"{'none' if last_step is None else f'{last_step:+.6e}'}; "
+        f"projected gradient {projected_gradient_inf:.6e} (gtol {control.gtol:.3e}); "
+        f"secant curvature "
+        f"{'unresolved' if curvature is None else f'{curvature:.10g}'}"
+    )
+    if ran and not curvature_positive:
+        message = f"{message}; no positive resolved log-theta curvature."
+    elif not converged:
+        message = (
+            f"{message}; not converged: projected gradient "
+            f"{projected_gradient_inf:.3e} vs gtol {control.gtol:.3e}."
+        )
+    return (
+        replace(
+            optimized,
+            trial=trial,
+            converged=converged,
+            message=message,
+            n_evaluations=objective.n_evaluations,
+            n_accepted=objective.n_accepted,
+            cumulative_source_scans=objective.cumulative_source_scans,
+            cumulative_batches_scanned=objective.cumulative_batches_scanned,
+            projected_gradient_inf=projected_gradient_inf,
+            accepted_score_history=objective.accepted_score_history,
+        ),
+        completion,
     )
 
 
@@ -742,14 +1014,17 @@ def optimize_nb_stream_reml(
     # rises by one float64 ULP. Retaining that trial across subsequent probes
     # adds one p²-owned result and its bounded penalized-deviance history
     # alongside accepted and active candidate states.
+    pinned_theta = pin_lambda and family.n_theta == 1
     stationary_trial_bytes = (
-        retained_trial_bytes + retained_history_bytes
-        if pin_lambda and family.n_theta == 1
-        else 0
+        retained_trial_bytes + retained_history_bytes if pinned_theta else 0
     )
+    # The log-theta completion records two host scalars per promotion; its
+    # own trials reuse the accepted/candidate slots after L-BFGS-B returns.
+    theta_secant_bytes = _THETA_SECANT_BYTES if pinned_theta else 0
     outer_workspace_bytes = (
         retained_trial_bytes
         + stationary_trial_bytes
+        + theta_secant_bytes
         + retained_history_bytes
         + lbfgs_workspace_bytes
     )
@@ -769,22 +1044,29 @@ def optimize_nb_stream_reml(
         trial_budget,
         initial_coefficients,
         device,
+        secant_gradient_error=pirls_control.tol if pinned_theta else None,
     )
     optimized = _run_parameterized_stream_reml(
         objective,
         params_initial,
         bounds,
         reml_control,
-        roundoff_stationary_completion=pin_lambda and family.n_theta == 1,
-        completion_inner_tolerance=(
-            pirls_control.tol if pin_lambda and family.n_theta == 1 else None
-        ),
+        roundoff_stationary_completion=pinned_theta,
+        completion_inner_tolerance=pirls_control.tol if pinned_theta else None,
         local_score_change=(
-            _nb_local_stationary_score_change
-            if pin_lambda and family.n_theta == 1
-            else None
+            _nb_local_stationary_score_change if pinned_theta else None
         ),
     )
+    completion = None
+    if pinned_theta:
+        optimized, completion = _complete_pinned_nb_theta(
+            objective,
+            optimized,
+            params_initial[:n_lambda],
+            bounds,
+            reml_control,
+            pirls_control.tol,
+        )
     trial = optimized.trial
     if family.n_theta and not np.array_equal(
         np.asarray(trial.fit_result.log_theta),
@@ -804,4 +1086,6 @@ def optimize_nb_stream_reml(
         projected_gradient_inf=optimized.projected_gradient_inf,
         accepted_score_history=optimized.accepted_score_history,
         outer_workspace_bytes=outer_workspace_bytes,
+        theta_completion_steps=0 if completion is None else completion.steps,
+        theta_completion_stop=None if completion is None else completion.stop,
     )
