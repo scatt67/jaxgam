@@ -791,24 +791,38 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
 
 
 def test_public_exact_large_row_fit_stays_within_stream_budget() -> None:
-    """The exact public route fits more rows than its dense-X byte budget."""
+    """The exact public fit workspace stays below its dense-X byte budget.
+
+    FitControl.memory_budget_bytes also budgets Phase-1 setup, whose exact
+    cubic-knot scan holds a fixed SQLite scope independent of the row count.
+    A public budget below this model's dense X is therefore rejected by setup
+    first. The fit-stage known workspace does not depend on the budget and
+    must still fit the dense-X budget.
+    """
     n = 8192
     x = np.linspace(-1.0, 1.0, n)
     mu = np.exp(0.2 + 0.5 * np.sin(4.0 * x))
     y = np.random.default_rng(83083).poisson(mu)
     data = pd.DataFrame({"x": x, "y": y})
     source = DataFrameRowSource(data, response="y")
-    budget = 1_100_000
+    fit_budget = 1_100_000
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=128,
+        memory_budget_bytes=fit_budget,
+        uncertainty="fisher",
+    )
+    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+        GAM('y~s(x,bs="cr",k=24)', family=Poisson(), control=control).fit(
+            source, result="prediction"
+        )
+    # A budget that admits setup's fixed knot-scan scope.
+    budget = 20_000_000
     model = GAM(
         'y~s(x,bs="cr",k=24)',
         family=Poisson(),
-        control=FitControl(
-            execution="stream",
-            linear_solver="qr",
-            batch_rows=128,
-            memory_budget_bytes=budget,
-            uncertainty="fisher",
-        ),
+        control=replace(control, memory_budget_bytes=budget),
     )
     result = model.fit(source, result="prediction")
     assert result.converged
@@ -823,7 +837,8 @@ def test_public_exact_large_row_fit_stays_within_stream_budget() -> None:
     assert result.source_scans >= 2 + result.exact_optimizer_diagnostics.n_evaluations
     assert result.n == n
     assert 0 < result.known_workspace_bytes <= budget
-    assert budget < n * result.coefficients.size * np.dtype(np.float64).itemsize
+    assert result.known_workspace_bytes <= fit_budget
+    assert fit_budget < n * result.coefficients.size * np.dtype(np.float64).itemsize
     assert not any(
         value.shape == (n,)
         for value in result.__dict__.values()
