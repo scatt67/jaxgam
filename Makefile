@@ -137,10 +137,13 @@ test-nb-public-ci: ## run public fixed-sp NB theta modes and pinned roundoff own
 		-s -x --tb=short
 
 .PHONY: test-regular-public-ci
-test-regular-public-ci: ## run public fixed-sp regular links and Gamma arithmetic on a built image
+test-regular-public-ci: ## run public fixed-sp regular links, smooth scale parity and Gamma arithmetic on a built image
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
 		uv run pytest \
 		tests/test_validation_matrix.py::test_public_fixed_sp_regular_noncanonical_pinned_r \
+		tests/test_validation_matrix.py::test_public_fixed_nonzero_sp_regular_smooth_pinned_r \
+		tests/test_validation_matrix.py::test_public_fixed_nonzero_sp_regular_smooth_interior_pinned_r \
+		tests/test_execution/test_regular_scale_curvature.py \
 		tests/test_families.py::TestDevianceResidsVsR::test_gamma_direct_deviance_near_mean_is_stable_and_jitted \
 		tests/test_families.py::TestDevianceResidsVsR::test_gamma_direct_deviance_keeps_extreme_source_ratio_and_clamp \
 		-s -x --tb=short
