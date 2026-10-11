@@ -20,6 +20,7 @@ from jaxgam.execution.reml import StreamREMLControl
 from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.negative_binomial import NegativeBinomial
 from tests.helpers import _AssertCollector, nb_optimizer_case_data, r_available
+from tests.r_bridge import RBridge
 from tests.test_execution.test_nb_reml import _LINKS
 from tests.test_execution.test_nb_reml_optimizer import (
     _OPTIMIZER_MAXIMUM_BYTES,
@@ -863,24 +864,32 @@ def test_nb_objective_rejects_invalid_secant_gradient_error(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _plateau_then_abnormal(record):
+_ROUNDOFF_STOPS = {
+    "abnormal": ("ABNORMAL: ", 2),
+    "relative-reduction": ("CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH", 0),
+}
+
+
+def _plateau_then_abnormal(record, stop="abnormal", plateau_gtol=1e-6):
     """Run real L-BFGS-B into the score plateau, then stop as native AMD64 did.
 
     The native run accepted an iterate with |g| ~ 8e-8 whose remaining score
     decrease (~g^2/2c ~ 1e-16) is far below one score ULP; its line search
-    then failed every sufficient-decrease test and ended ABNORMAL.
+    then failed every sufficient-decrease test and ended ABNORMAL. A
+    relative-reduction stop leaves the same accepted plateau trial.
     """
+    message, status = _ROUNDOFF_STOPS[stop]
 
     def minimize_call(fun, x0, **kwargs):
-        options = {**kwargs["options"], "gtol": 1e-6}
+        options = {**kwargs["options"], "gtol": plateau_gtol}
         plateau = scipy_minimize(fun, x0, **{**kwargs, "options": options})
         assert plateau.success
         record["plateau_gradient"] = float(np.asarray(plateau.jac)[-1])
         return SimpleNamespace(
             x=np.asarray(plateau.x),
-            success=False,
-            status=2,
-            message="ABNORMAL: ",
+            success=status == 0,
+            status=status,
+            message=message,
             nit=int(plateau.nit),
         )
 
@@ -1050,3 +1059,113 @@ def test_public_free_theta_completes_when_stationary_scores_read_high(
             ),
         )
     checks.raise_if_any(f"public NB/{link} forced plateau completion")
+
+
+def _optimize_no_smooth(link, monkeypatch=None, record=None, stop="abnormal"):
+    """Estimated theta without smoothing: log theta is the only coordinate."""
+    stream, family, initial = _optimizer_case(link, estimated=True, smooth=False)
+    assert stream.prepared.fitting.penalty_structure.n_penalties == 0
+    assert initial.shape == (1,)
+    if monkeypatch is not None:
+        # Without a smooth the first-order stage converges faster; a looser
+        # scripted stage still leaves a plateau trial above gtol.
+        monkeypatch.setattr(
+            reml_execution,
+            "minimize",
+            _plateau_then_abnormal(record, stop, plateau_gtol=1e-3),
+        )
+    return nb_reml_execution.optimize_nb_stream_reml(
+        stream,
+        family,
+        initial,
+        maximum_bytes=_OPTIMIZER_MAXIMUM_BYTES,
+        pin_lambda=False,
+        pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+        control=_PUBLIC_CONTROL,
+    )
+
+
+def _assert_forced_completion(forced, record, stop):
+    message, status = _ROUNDOFF_STOPS[stop]
+    # The completion starts from a valid plateau trial that misses gtol.
+    assert abs(record["plateau_gradient"]) > _PUBLIC_CONTROL.gtol
+    assert forced.status == status
+    assert forced.message.startswith(f"L-BFGS-B stage: {message}")
+    assert forced.converged, forced.message
+    assert forced.theta_completion_steps >= 1
+    assert forced.projected_gradient_inf <= _PUBLIC_CONTROL.gtol
+    np.testing.assert_array_equal(
+        forced.trial.fit_result.log_theta, np.asarray(forced.trial.params)
+    )
+
+
+@pytest.mark.parametrize("stop", sorted(_ROUNDOFF_STOPS))
+@pytest.mark.parametrize("link", _LINKS)
+def test_no_smooth_estimated_theta_roundoff_stop_completes_to_unforced_endpoint(
+    monkeypatch, link, stop
+):
+    reference = _optimize_no_smooth(link)
+    record = {}
+    forced = _optimize_no_smooth(link, monkeypatch, record, stop)
+    assert reference.converged, reference.message
+    _assert_forced_completion(forced, record, stop)
+    # The theta-only route charges the retained stationary trial and the two
+    # recorded secant scalars, exactly as the pinned-rho route does.
+    retained, history, lbfgs = reml_execution._parameterized_optimizer_workspace_bytes(
+        2, 1, _PUBLIC_CONTROL, _OPTIMIZER_PIRLS_CONTROL
+    )
+    assert forced.outer_workspace_bytes == (
+        2 * retained + 2 * history + lbfgs + nb_reml_execution._THETA_SECANT_BYTES
+    )
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("log theta", forced.trial.params, reference.trial.params),
+        ("score", forced.trial.score, reference.trial.score),
+        (
+            "coefficients",
+            forced.trial.fit_result.state.coefficients,
+            reference.trial.fit_result.state.coefficients,
+        ),
+        (
+            "deviance",
+            forced.trial.fit_result.state.deviance,
+            reference.trial.fit_result.state.deviance,
+        ),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"no-smooth NB/{link} forced {stop} completion")
+
+
+@pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
+@pytest.mark.parametrize("link", _LINKS)
+def test_no_smooth_estimated_theta_abnormal_completion_matches_pinned_r(
+    monkeypatch, link
+):
+    """Pinned mgcv's own theta-only newton() fit agrees at STRICT."""
+    record = {}
+    forced = _optimize_no_smooth(link, monkeypatch, record)
+    _assert_forced_completion(forced, record, "abnormal")
+    data, weight, offset = nb_optimizer_case_data()
+    expected = RBridge(mode="rpy2").public_fixed_sp_fit(
+        data, weight, offset, "nb", link, theta=-2.7, sp=None
+    )
+    state = forced.trial.fit_result.state
+    checks = _AssertCollector()
+    for name, actual, reference in (
+        ("theta", np.exp(np.asarray(forced.trial.params)[-1]), expected["theta"]),
+        ("coefficients", state.coefficients, expected["coefficients"]),
+        ("score", forced.trial.score, expected["score"]),
+        ("deviance", state.deviance, expected["deviance"]),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"no-smooth NB/{link} forced ABNORMAL pinned R parity")

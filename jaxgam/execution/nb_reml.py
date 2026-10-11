@@ -92,11 +92,12 @@ class NBStreamREMLTrial:
 class NBStreamREMLOptimization:
     """Diagnostic outcome of exact joint NB streamed optimization.
 
-    ``status`` is the L-BFGS-B status. With every smoothing parameter pinned
-    and theta free, ``theta_completion_steps`` counts the accepted exact
-    secant-Newton log-theta steps that follow L-BFGS-B and
-    ``theta_completion_stop`` records why that completion ended or was not
-    run; ``converged`` is restated on the returned trial.
+    ``status`` is the L-BFGS-B status. When log theta is the only free
+    coordinate (every smoothing parameter pinned, or none exists),
+    ``theta_completion_steps`` counts the accepted exact secant-Newton
+    log-theta steps that follow L-BFGS-B and ``theta_completion_stop``
+    records why that completion ended or was not run; ``converged`` is
+    restated on the returned trial.
     """
 
     trial: NBStreamREMLTrial
@@ -526,10 +527,10 @@ class _AcceptedNBTrialObjective(
 ):
     """NB adapter for the common accepted/candidate trial driver.
 
-    With ``secant_gradient_error`` set (pinned rho, free log theta), every
-    promotion also records two host scalars: the accepted log-theta step and
-    the most recent *resolved* secant curvature between consecutive accepted
-    exact trials. No earlier trial is retained.
+    With ``secant_gradient_error`` set (log theta the only free coordinate),
+    every promotion also records two host scalars: the accepted log-theta
+    step and the most recent *resolved* secant curvature between consecutive
+    accepted exact trials. No earlier trial is retained.
     """
 
     def __init__(
@@ -809,12 +810,12 @@ def _complete_pinned_nb_theta(
 ) -> tuple[_ParameterizedOptimization[NBStreamREMLTrial], _ScaleNewtonCompletion]:
     """Continue pinned ``newton()`` on log theta after the L-BFGS-B stage.
 
-    With every smoothing parameter supplied, pinned mgcv's ``gam.outer``
-    calls ``newton()`` on the NB log theta alone (``G$L`` keeps only the theta
-    column; the supplied log sps enter through ``lsp0``). newton() steps by
-    ``-g/|H|`` from exact first and second derivatives, caps the step at
-    ``maxNstep = 5``, accepts on score decrease with quadratic-model error
-    below 0.8 and step-halves otherwise.
+    With every smoothing parameter supplied, or none in the model, pinned
+    mgcv's ``gam.outer`` calls ``newton()`` on the NB log theta alone (``G$L``
+    keeps only the theta column; supplied log sps enter through ``lsp0``).
+    newton() steps by ``-g/|H|`` from exact first and second derivatives,
+    caps the step at ``maxNstep = 5``, accepts on score decrease with
+    quadratic-model error below 0.8 and step-halves otherwise.
 
     The exact NB trial provides the exact log-theta gradient but no second
     derivative, so curvature is the latest resolved secant between
@@ -941,7 +942,10 @@ def optimize_nb_stream_reml(
     Dynamic-theta families use ``[rho, log_theta]``. Fixed-theta families
     optimize rho only. With ``pin_lambda=True``, each supplied rho is held at
     its exact value, including values outside the estimated-rho box, while
-    log-theta remains free and unbounded.
+    log-theta remains free and unbounded. Whenever log theta is the only free
+    coordinate (every rho pinned, or no smoothing parameter at all), the
+    roundoff stationary comparison and the log-theta secant Newton completion
+    follow the L-BFGS-B stage.
     """
     reml_control = StreamREMLControl() if control is None else control
     if (
@@ -1003,13 +1007,15 @@ def optimize_nb_stream_reml(
     # rises by one float64 ULP. Retaining that trial across subsequent probes
     # adds one p²-owned result and its bounded penalized-deviance history
     # alongside accepted and active candidate states.
-    pinned_theta = pin_lambda and family.n_theta == 1
+    # Log theta is the only free coordinate when every rho is pinned or none
+    # exists, matching the regular single-free-log-scale rule.
+    theta_only = family.n_theta == 1 and (pin_lambda or n_lambda == 0)
     stationary_trial_bytes = (
-        retained_trial_bytes + retained_history_bytes if pinned_theta else 0
+        retained_trial_bytes + retained_history_bytes if theta_only else 0
     )
     # The log-theta completion records two host scalars per promotion; its
     # own trials reuse the accepted/candidate slots after L-BFGS-B returns.
-    theta_secant_bytes = _THETA_SECANT_BYTES if pinned_theta else 0
+    theta_secant_bytes = _THETA_SECANT_BYTES if theta_only else 0
     outer_workspace_bytes = (
         retained_trial_bytes
         + stationary_trial_bytes
@@ -1033,21 +1039,19 @@ def optimize_nb_stream_reml(
         trial_budget,
         initial_coefficients,
         device,
-        secant_gradient_error=pirls_control.tol if pinned_theta else None,
+        secant_gradient_error=pirls_control.tol if theta_only else None,
     )
     optimized = _run_parameterized_stream_reml(
         objective,
         params_initial,
         bounds,
         reml_control,
-        roundoff_stationary_completion=pinned_theta,
-        completion_inner_tolerance=pirls_control.tol if pinned_theta else None,
-        local_score_change=(
-            _nb_local_stationary_score_change if pinned_theta else None
-        ),
+        roundoff_stationary_completion=theta_only,
+        completion_inner_tolerance=pirls_control.tol if theta_only else None,
+        local_score_change=(_nb_local_stationary_score_change if theta_only else None),
     )
     completion = None
-    if pinned_theta:
+    if theta_only:
         optimized, completion = _complete_pinned_nb_theta(
             objective,
             optimized,
