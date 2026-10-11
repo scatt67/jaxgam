@@ -744,7 +744,9 @@ def test_regular_stream_reml_step_windows_reopen_from_exact_accepted_trial(
     )
     assert result.converged
     assert result.message.endswith("3 source step window(s).")
-    np.testing.assert_allclose(result.trial.params, [12.0], atol=1e-10)
+    np.testing.assert_allclose(
+        result.trial.params, [12.0], rtol=STRICT.rtol, atol=STRICT.atol
+    )
     assert max(evaluated) <= 15.0
     assert result.cumulative_source_scans == 2 * len(evaluated)
     assert result.cumulative_batches_scanned == 4 * len(evaluated)

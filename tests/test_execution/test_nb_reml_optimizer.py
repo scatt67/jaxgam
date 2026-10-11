@@ -1073,7 +1073,14 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
     assert result.cumulative_source_scans == 3 * result.n_evaluations
     assert result.cumulative_batches_scanned == 5 * result.n_evaluations
     if expect_converged:
-        np.testing.assert_allclose(np.asarray(result.trial.params), target, atol=1e-15)
+        # The completion must land on the synthetic quadratic's minimizer to
+        # float64 roundoff; a missing or halved step is >= 5e-7 away.
+        np.testing.assert_allclose(
+            np.asarray(result.trial.params),
+            target,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
         assert result.projected_gradient_inf <= control.gtol
         assert result.n_accepted == 1
         assert result.n_iter == result.n_accepted

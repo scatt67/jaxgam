@@ -197,7 +197,9 @@ def test_fixed_nb_family_snapshot_and_prediction_uncertainty(link: str) -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
-    assert result.family.get_theta(transformed=True)[0] == pytest.approx(2.7)
+    assert result.family.get_theta(transformed=True)[0] == pytest.approx(
+        2.7, rel=STRICT.rtol, abs=STRICT.atol
+    )
     assert result.score_scale == 1.0
     assert result.source_scans > 0
     assert result.known_workspace_bytes > 0
@@ -229,7 +231,9 @@ def test_estimated_nb_zero_penalty_theta_snapshot_and_pickle() -> None:
     )
     assert result.theta is not None
     assert result.smoothing_params.size == 0
-    assert result.family.get_theta(transformed=True)[0] == pytest.approx(result.theta)
+    assert result.family.get_theta(transformed=True)[0] == pytest.approx(
+        result.theta, rel=STRICT.rtol, abs=STRICT.atol
+    )
     original = result.predict(data[["x"]], offset=offset)
     family.put_theta(np.asarray([np.log(0.9)]))
     restored = pickle.loads(pickle.dumps(result))
@@ -269,7 +273,9 @@ def test_public_exact_nb_zero_penalty_theta_snapshot_and_pickle() -> None:
     assert result.exact_optimizer_diagnostics.startup_source_scans == 0
     assert result.theta is not None
     assert result.smoothing_params.size == 0
-    assert result.family.get_theta(transformed=True)[0] == pytest.approx(result.theta)
+    assert result.family.get_theta(transformed=True)[0] == pytest.approx(
+        result.theta, rel=STRICT.rtol, abs=STRICT.atol
+    )
     original = result.predict(data[["x"]], offset=offset)
     family.put_theta(np.asarray([np.log(0.9)]))
     restored = pickle.loads(pickle.dumps(result))
@@ -279,7 +285,9 @@ def test_public_exact_nb_zero_penalty_theta_snapshot_and_pickle() -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
-    assert restored.family.get_theta(transformed=True)[0] == pytest.approx(result.theta)
+    assert restored.family.get_theta(transformed=True)[0] == pytest.approx(
+        result.theta, rel=STRICT.rtol, abs=STRICT.atol
+    )
     _, se = restored.predict(data[["x"]], pred_type="link", se_fit=True, offset=offset)
     assert np.all(np.isfinite(se))
 
