@@ -338,7 +338,13 @@ class GAM:
         else:
             _check_stream_fixed_family(family, self.control.linear_solver)
         spec = parse_formula(self.formula)
-        prepared = prepare_model(spec, data, family=family)
+        prepared = prepare_model(
+            spec,
+            data,
+            family=family,
+            batch_rows=self.control.batch_rows,
+            maximum_bytes=self.control.memory_budget_bytes,
+        )
         stream = StreamDesign(prepared, data)
         jax_device = _resolve_device(self.device)
         if estimated_efs:
@@ -849,7 +855,7 @@ def _preflight_stream_workspace(
         raise MemoryError(
             f"Known streamed{solver_label} PIRLS workspace requires "
             f"{required} bytes, exceeding FitControl.memory_budget_bytes="
-            f"{memory_budget_bytes}. This budget does not cover CPU basis preparation."
+            f"{memory_budget_bytes}. Phase-1 setup scans are budgeted separately."
         )
     return required
 

@@ -227,12 +227,26 @@ def test_public_stream_covariance_budget_and_route_guards() -> None:
     data = _data("gaussian")
     source = DataFrameRowSource(data, response="y")
     formula = 'y ~ s(x, bs="cr", k=6)'
-    with pytest.raises(MemoryError, match="Known streamed PIRLS workspace"):
+    # Phase-1 setup is the first budgeted stage: one byte cannot scan a row.
+    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
         GAM(
             formula,
             sp=[0.2],
             control=FitControl(
                 execution="stream", uncertainty="covariance", memory_budget_bytes=1
+            ),
+        ).fit(source, result="prediction")
+    # A budget that admits setup's batches still rejects the PIRLS workspace
+    # its requested 200,000-row fit batches would need.
+    with pytest.raises(MemoryError, match="Known streamed PIRLS workspace"):
+        GAM(
+            formula,
+            sp=[0.2],
+            control=FitControl(
+                execution="stream",
+                uncertainty="covariance",
+                batch_rows=200_000,
+                memory_budget_bytes=20_000_000,
             ),
         ).fit(source, result="prediction")
     covariance = GAM(
