@@ -82,6 +82,42 @@ null-space directions is rejected explicitly; it is not resolved by QR pivot
 choice or numerical jitter. Successful fits report
 `execution_route="stream_qr"`.
 
+### Estimated smoothing with exact streamed REML
+
+Omit `sp` with the default optimizer to select smoothing parameters by exact
+REML over a replayable source:
+
+```python
+from jaxgam import FitControl, GAM
+
+result = GAM(
+    'y ~ x + s(z, bs="cr", k=10)',
+    family="gamma",
+    control=FitControl(
+        execution="stream", linear_solver="qr", batch_rows=4096
+    ),
+).fit(source, result="prediction")
+```
+
+Each trial refits the coefficients by streamed PIRLS and evaluates the exact
+REML score and gradient with a batched adjoint. A bounded-memory L-BFGS-B
+optimizer then updates the log smoothing parameters, together with the log
+scale for Gaussian and Gamma and the log theta for
+`NegativeBinomial(fixed=False)`. No full smoothing-parameter Hessian or
+training design is formed. The objective is the dense REML criterion, but the
+optimization path differs from the dense Newton optimizer, so fits agree at
+the optimum to numerical tolerance rather than step by step. The supported
+families and links are those of the fixed-sp route, and `linear_solver="qr"`
+is required. A model with no smoothing, scale or theta parameter to select
+falls back to a plain coefficient fit.
+
+Successful fits report `execution_route="stream_exact_reml_qr"` and
+`lambda_strategy="exact_reml"`. `converged` requires the projected gradient
+to meet the optimizer tolerance. `exact_optimizer_diagnostics` records the
+optimizer status, trial evaluations, accepted steps, final projected gradient,
+accepted score history, startup scans, cumulative PIRLS passes, final score
+refits and derivative time.
+
 ### Extended Fellner--Schall fitting
 
 Select the dense extended Fellner--Schall controller explicitly with
