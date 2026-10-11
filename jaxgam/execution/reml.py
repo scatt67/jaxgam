@@ -1673,16 +1673,57 @@ def _complete_pinned_log_scale(
     )
 
 
+def _abnormal_line_search_stop(
+    optimized: _ParameterizedOptimization[_TrialT],
+) -> bool:
+    """Whether L-BFGS-B ended ABNORMAL after failed line searches.
+
+    SciPy reports ``ABNORMAL: `` (``ABNORMAL_TERMINATION_IN_LNSRCH`` before
+    its C translation) when ``maxls`` evaluations fail the Moré-Thuente tests
+    with no correction pairs left, and restores the last accepted iterate.
+    Near a pinned single-coordinate optimum these tests compare raw-score
+    roundoff, so this stop does not mean the accepted trial is unusable.
+    """
+    return optimized.status != 0 and optimized.message.startswith("ABNORMAL")
+
+
+def _valid_exact_trial(trial: _TrialT, inner_tolerance: float) -> bool:
+    """Require the converged inner state and finite score every trial owns."""
+    inner = trial.fit_result.state
+    return bool(
+        inner.converged
+        and not inner.line_search_failed
+        and np.isfinite(inner.stationarity)
+        and inner.stationarity < inner_tolerance
+        and np.isfinite(float(np.asarray(trial.score)))
+        and np.all(np.isfinite(np.asarray(trial.gradient)))
+    )
+
+
 def _complete_pinned_regular_scale(
     objective: _AcceptedRegularTrialObjective,
     optimized: _ParameterizedOptimization[RegularStreamREMLTrial],
     pinned: np.ndarray,
     bounds: list[tuple[float | None, float | None]],
     control: StreamREMLControl,
+    *,
+    inner_tolerance: float,
 ) -> tuple[_ParameterizedOptimization[RegularStreamREMLTrial], _ScaleNewtonCompletion]:
-    """Apply the log-scale completion and restate the final accepted status."""
-    if optimized.status != 0:
+    """Apply the log-scale completion and restate the final accepted status.
+
+    It runs after every status-0 L-BFGS-B stage, converged or not, because
+    the first-order ``gtol`` leaves a relative scale error ``|g|/curvature``
+    that pinned newton() would remove. It also runs after an ABNORMAL
+    line-search stop from a valid accepted exact trial. It never runs after
+    iteration/evaluation limits or other errors.
+    """
+    abnormal = _abnormal_line_search_stop(optimized)
+    if optimized.status != 0 and not abnormal:
         return optimized, _ScaleNewtonCompletion(0, "not run: L-BFGS-B failed")
+    if abnormal and not _valid_exact_trial(objective.accepted, inner_tolerance):
+        return optimized, _ScaleNewtonCompletion(
+            0, "not run: accepted trial is invalid"
+        )
     # Only the log scale is free; continue pinned newton()'s exact step from
     # the L-BFGS-B result. The completion holds at most the accepted and one
     # candidate trial, as the L-BFGS-B stage does.
@@ -1839,7 +1880,12 @@ def optimize_regular_stream_reml(
     completion = None
     if not family.scale_known and (pin_lambda or n_lambda == 0):
         optimized, completion = _complete_pinned_regular_scale(
-            objective, optimized, params_initial[:n_lambda], bounds, reml_control
+            objective,
+            optimized,
+            params_initial[:n_lambda],
+            bounds,
+            reml_control,
+            inner_tolerance=pirls_control.tol,
         )
     return RegularStreamREMLOptimization(
         trial=optimized.trial,

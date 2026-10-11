@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from scipy.optimize import minimize as scipy_minimize
 
 import jaxgam.execution.reml as reml_execution
 from jaxgam.data.source import DataFrameRowSource
@@ -12,6 +13,7 @@ from jaxgam.execution.reml import StreamREMLControl, optimize_regular_stream_rem
 from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.standard import Gamma, Gaussian
 from jaxgam.formula.design_provider import StreamDesign
+from tests.helpers import _AssertCollector
 from tests.test_execution.test_regular_penalized_matrix import (
     _rank_one_preparation,
     _source_reference,
@@ -506,3 +508,209 @@ def test_pinned_completed_scale_is_pinned_gam_fit3_stationary(family_class, link
     )
     r_gradient = float(oracle["gradient"][-1])
     assert abs(r_gradient) / trial.log_phi_curvature <= STRICT.rtol
+
+
+# ---------------------------------------------------------------------------
+# Completion after an L-BFGS-B ABNORMAL (line-search roundoff) stop
+# ---------------------------------------------------------------------------
+
+
+class _InnerProfile(_Profile):
+    """Profile whose trials also own a converged inner source state."""
+
+    def __init__(self, scripted=None, inner=None):
+        super().__init__(scripted)
+        self.inner = dict(inner or {})
+
+    def __call__(self, *args, **kwargs):
+        trial = super().__call__(*args, **kwargs)
+        state = trial.fit_result.state
+        state.converged = True
+        state.line_search_failed = False
+        state.stationarity = 1e-14
+        for name, value in self.inner.get(len(self.requests), {}).items():
+            setattr(state, name, value)
+        return trial
+
+
+def _lbfgs_stops(message, status):
+    def minimize_call(objective, params, **kwargs):
+        objective(params)
+        assert kwargs["bounds"][0] == (40.01, 40.01)
+        return SimpleNamespace(
+            x=np.asarray(params), success=False, message=message, status=status, nit=3
+        )
+
+    return minimize_call
+
+
+def _optimize_stopped(monkeypatch, profile, message, status, start):
+    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", profile)
+    monkeypatch.setattr(reml_execution, "minimize", _lbfgs_stops(message, status))
+    return optimize_regular_stream_reml(
+        _optimizer_stream(),
+        SimpleNamespace(scale_known=False),
+        np.r_[_PINNED, start],
+        maximum_bytes=1_000_000,
+        pin_lambda=True,
+        control=StreamREMLControl(history_size=8),
+    )
+
+
+@pytest.mark.parametrize("message", ["ABNORMAL: ", "ABNORMAL_TERMINATION_IN_LNSRCH"])
+def test_optimizer_completes_after_abnormal_line_search_stop(monkeypatch, message):
+    profile = _InnerProfile()
+    result = _optimize_stopped(monkeypatch, profile, message, 2, _STATIONARY + 1e-3)
+    assert result.converged
+    assert result.status == 2
+    assert result.scale_completion_steps >= 1
+    assert result.scale_completion_stop in {"resolved", "no gradient reduction"}
+    assert result.message.startswith(f"{message}; pinned log-scale Newton completion: ")
+    for request in profile.requests:
+        np.testing.assert_array_equal(request[:-1], _PINNED)
+    assert abs(float(result.trial.params[-1]) - _STATIONARY) <= 4 * np.spacing(
+        abs(_STATIONARY)
+    )
+    expected = _trial(result.trial.params)
+    assert float(result.trial.score) == float(expected.score)
+    np.testing.assert_array_equal(result.trial.gradient, expected.gradient)
+    assert result.projected_gradient_inf == abs(float(result.trial.gradient[-1]))
+    assert result.n_evaluations == len(profile.requests)
+    assert result.n_accepted == result.scale_completion_steps
+    assert result.accepted_score_history[-1] == float(result.trial.score)
+
+
+@pytest.mark.parametrize(
+    ("message", "status", "inner", "stop"),
+    [
+        ("ERROR: STPMAX < STPMIN", 2, {}, "not run: L-BFGS-B failed"),
+        (
+            "STOP: TOTAL NO. OF F,G EVALUATIONS EXCEEDS LIMIT",
+            1,
+            {},
+            "not run: L-BFGS-B failed",
+        ),
+        ("ABNORMAL: ", 2, {"converged": False}, "not run: accepted trial is invalid"),
+        (
+            "ABNORMAL: ",
+            2,
+            {"line_search_failed": True},
+            "not run: accepted trial is invalid",
+        ),
+        ("ABNORMAL: ", 2, {"stationarity": 1.0}, "not run: accepted trial is invalid"),
+        (
+            "ABNORMAL: ",
+            2,
+            {"stationarity": np.nan},
+            "not run: accepted trial is invalid",
+        ),
+    ],
+    ids=[
+        "error",
+        "evaluation-limit",
+        "abnormal-unconverged-inner",
+        "abnormal-inner-line-search",
+        "abnormal-inner-tolerance",
+        "abnormal-nonfinite-inner",
+    ],
+)
+def test_optimizer_does_not_complete_limit_error_or_invalid_abnormal_stop(
+    monkeypatch, message, status, inner, stop
+):
+    profile = _InnerProfile(inner={1: inner})
+    start = _STATIONARY + 1e-3
+    result = _optimize_stopped(monkeypatch, profile, message, status, start)
+    assert not result.converged
+    assert result.status == status
+    assert result.scale_completion_stop == stop
+    assert result.scale_completion_steps == 0
+    assert len(profile.requests) == 1
+    assert result.message == message
+    assert float(result.trial.params[-1]) == start
+
+
+def _plateau_then_abnormal(record):
+    """Run real L-BFGS-B to a first-order plateau, then stop ABNORMAL.
+
+    Near a pinned optimum the line search compares raw-score roundoff; this
+    reproduces its ABNORMAL stop deterministically at a valid accepted trial
+    whose log-scale gradient still exceeds gtol.
+    """
+
+    def minimize_call(fun, x0, **kwargs):
+        options = {**kwargs["options"], "gtol": 1e-3}
+        plateau = scipy_minimize(fun, x0, **{**kwargs, "options": options})
+        assert plateau.success
+        record["plateau_gradient"] = float(np.asarray(plateau.jac)[-1])
+        return SimpleNamespace(
+            x=np.asarray(plateau.x),
+            success=False,
+            status=2,
+            message="ABNORMAL: ",
+            nit=int(plateau.nit),
+        )
+
+    return minimize_call
+
+
+@pytest.mark.parametrize(
+    ("family_class", "link"),
+    [(Gaussian, "log"), (Gaussian, "inverse"), (Gamma, "inverse"), (Gamma, "log")],
+)
+def test_generated_abnormal_stop_completes_to_unforced_scale(
+    monkeypatch, family_class, link
+):
+    family, _data, _weight, _offset, start, source, prepared, rho = _pinned_rank_one(
+        family_class, link
+    )
+
+    def optimize():
+        return optimize_regular_stream_reml(
+            StreamDesign(prepared, source),
+            family,
+            np.r_[rho, 0.0],
+            maximum_bytes=64_000_000,
+            pin_lambda=True,
+            pirls_control=StreamPIRLSControl(
+                batch_rows=17, solver_policy="qr", tol=1e-11
+            ),
+            initial_coefficients=start,
+        )
+
+    reference = optimize()
+    record = {}
+    monkeypatch.setattr(reml_execution, "minimize", _plateau_then_abnormal(record))
+    forced = optimize()
+
+    gtol = StreamREMLControl().gtol
+    assert abs(record["plateau_gradient"]) > gtol
+    assert reference.converged, reference.message
+    assert forced.status == 2
+    assert forced.message.startswith("ABNORMAL: ; pinned log-scale Newton completion")
+    assert forced.converged, forced.message
+    assert forced.scale_completion_steps >= 1
+    assert forced.projected_gradient_inf <= gtol
+    assert forced.trial.log_phi_curvature > 0.0
+    np.testing.assert_array_equal(np.asarray(forced.trial.params)[:-1], rho)
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("log scale", forced.trial.params, reference.trial.params),
+        ("score", forced.trial.score, reference.trial.score),
+        (
+            "score scale",
+            forced.trial.fit_result.state.score_scale,
+            reference.trial.fit_result.state.score_scale,
+        ),
+        (
+            "coefficients",
+            forced.trial.fit_result.state.coefficients,
+            reference.trial.fit_result.state.coefficients,
+        ),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"forced ABNORMAL {family_class.__name__}/{link} completion")

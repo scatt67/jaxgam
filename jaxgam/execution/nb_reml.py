@@ -27,6 +27,7 @@ from jaxgam.execution.regular_stream import (
 )
 from jaxgam.execution.reml import (
     StreamREMLControl,
+    _abnormal_line_search_stop,
     _AcceptedParameterizedTrialObjective,
     _complete_pinned_coordinate,
     _LocalScoreChange,
@@ -36,6 +37,7 @@ from jaxgam.execution.reml import (
     _projected_gradient_for_bounds,
     _run_parameterized_stream_reml,
     _ScaleNewtonCompletion,
+    _valid_exact_trial,
 )
 from jaxgam.execution.stream import (
     StreamPIRLSControl,
@@ -797,19 +799,6 @@ def _nb_theta_secant_rejection(
     )
 
 
-def _nb_trial_inner_valid(trial: NBStreamREMLTrial, inner_tolerance: float) -> bool:
-    """Require the converged inner state that every exact trial must own."""
-    inner = trial.fit_result.state
-    return bool(
-        inner.converged
-        and not inner.line_search_failed
-        and np.isfinite(inner.stationarity)
-        and inner.stationarity < inner_tolerance
-        and np.isfinite(float(np.asarray(trial.score)))
-        and np.all(np.isfinite(np.asarray(trial.gradient)))
-    )
-
-
 def _complete_pinned_nb_theta(
     objective: _AcceptedNBTrialObjective,
     optimized: _ParameterizedOptimization[NBStreamREMLTrial],
@@ -843,7 +832,7 @@ def _complete_pinned_nb_theta(
     below ``gtol`` and a positive resolved secant curvature.
     """
     lbfgsb_message = optimized.message
-    admissible = optimized.status == 0 or lbfgsb_message.startswith("ABNORMAL")
+    admissible = optimized.status == 0 or _abnormal_line_search_stop(optimized)
     accepted = objective.accepted
     if optimized.converged:
         completion = _ScaleNewtonCompletion(0, "not run: L-BFGS-B stage converged")
@@ -853,7 +842,7 @@ def _complete_pinned_nb_theta(
         )
     elif not np.array_equal(np.asarray(accepted.params, dtype=np.float64)[:-1], pinned):
         raise RuntimeError("Pinned log-theta completion changed supplied rho.")
-    elif not _nb_trial_inner_valid(accepted, inner_tolerance):
+    elif not _valid_exact_trial(accepted, inner_tolerance):
         completion = _ScaleNewtonCompletion(0, "not run: accepted trial is invalid")
     else:
         # Release SciPy's last rejected line-search trial: the completion
