@@ -163,7 +163,13 @@ class StreamREMLOptimization:
 
 @dataclass(frozen=True)
 class RegularStreamREMLOptimization:
-    """Diagnostic outcome of joint regular streamed L-BFGS-B optimization."""
+    """Diagnostic outcome of joint regular streamed L-BFGS-B optimization.
+
+    ``n_iter`` counts L-BFGS-B iterations. When every smoothing parameter is
+    pinned and the scale is unknown, ``scale_completion_steps`` counts the
+    accepted exact-curvature log-scale Newton steps that follow it and
+    ``scale_completion_stop`` records why that completion ended.
+    """
 
     trial: RegularStreamREMLTrial
     converged: bool
@@ -177,6 +183,8 @@ class RegularStreamREMLOptimization:
     projected_gradient_inf: float
     accepted_score_history: tuple[float, ...]
     outer_workspace_bytes: int
+    scale_completion_steps: int = 0
+    scale_completion_stop: str | None = None
 
     @property
     def required_bytes(self) -> int:
@@ -1005,6 +1013,27 @@ class _AcceptedParameterizedTrialObjective(Generic[_TrialT]):
                 f"RowSource changed during {self._source_name} optimization."
             )
 
+    def _evaluate_candidate(self, params: np.ndarray) -> _TrialT:
+        """Replace any candidate with one new exact trial and count its scans."""
+        # Drop an older rejected candidate before constructing its
+        # replacement: the persistent and peak trial count stays two.
+        self.candidate = None
+        trial = self._evaluate(params, self.accepted)
+        self.candidate = trial
+        self.n_evaluations += 1
+        self.cumulative_source_scans += trial.source_scans
+        self.cumulative_batches_scanned += trial.batches_scanned
+        return trial
+
+    def _promote_candidate(self) -> None:
+        """Make the current exact candidate the accepted warm-start state."""
+        if self.candidate is None:
+            raise RuntimeError("No exact candidate trial is available to accept.")
+        self.accepted = self.candidate
+        self.candidate = None
+        self.n_accepted += 1
+        self._history.append(float(np.asarray(self.accepted.score)))
+
     def __call__(self, params: np.ndarray) -> tuple[float, np.ndarray]:
         """Evaluate from the last callback-accepted coefficient state."""
         self._check_source_unchanged()
@@ -1016,12 +1045,7 @@ class _AcceptedParameterizedTrialObjective(Generic[_TrialT]):
         ):
             trial = self.candidate
         else:
-            self.candidate = None
-            trial = self._evaluate(params_host, self.accepted)
-            self.candidate = trial
-            self.n_evaluations += 1
-            self.cumulative_source_scans += trial.source_scans
-            self.cumulative_batches_scanned += trial.batches_scanned
+            trial = self._evaluate_candidate(params_host)
         score = float(np.asarray(trial.score))
         gradient = np.asarray(trial.gradient, dtype=np.float64)
         if not np.isfinite(score) or not np.all(np.isfinite(gradient)):
@@ -1041,10 +1065,7 @@ class _AcceptedParameterizedTrialObjective(Generic[_TrialT]):
                 "L-BFGS-B accepted a point without the matching exact "
                 f"{self._trial_name} trial; refusing an unverified warm start."
             )
-        self.accepted = self.candidate
-        self.candidate = None
-        self.n_accepted += 1
-        self._history.append(float(np.asarray(self.accepted.score)))
+        self._promote_candidate()
 
 
 class _AcceptedRegularTrialObjective(
@@ -1402,6 +1423,229 @@ def _run_parameterized_stream_reml(
     )
 
 
+# Pinned mgcv newton() (gam.fit3.r) caps each log-parameter step at
+# gam.control()$newton$maxNstep = 5 and rejects a step whose quadratic-model
+# error reaches qerror.thresh = 0.8.
+_SCALE_NEWTON_MAX_STEP = 5.0
+_SCALE_NEWTON_QERROR = 0.8
+# Exact Newton steps square the relative scale error. From any point that
+# passed the first-order gtol stage the float64 floor is reached in two or
+# three steps; this bound only guarantees termination.
+_SCALE_NEWTON_MAX_STEPS = 8
+
+
+@dataclass(frozen=True)
+class _ScaleNewtonCompletion:
+    """Outcome of the pinned free-log-scale Newton completion."""
+
+    steps: int
+    stop: str
+
+
+def _regular_score_roundoff(trial: RegularStreamREMLTrial) -> float:
+    """First-order float64 envelope for one regular source score value.
+
+    The score subtracts the O(n) penalized-deviance, saturated-likelihood and
+    log-determinant terms. A raw score difference of this size cannot
+    distinguish two trials; the envelope only rejects a measurable increase.
+    """
+    state = trial.fit_result.state
+    phi = float(np.asarray(state.score_scale))
+    magnitude = (
+        abs(float(np.asarray(trial.score)))
+        + abs(trial.fit_result.source_score.penalized_deviance) / (2.0 * phi)
+        + abs(float(np.asarray(state.saturated_loglik)))
+        + abs(float(np.asarray(state.coefficient_factor.logdet_hessian())))
+    )
+    return 8.0 * float(np.finfo(np.float64).eps) * magnitude
+
+
+def _scale_newton_rejection(
+    accepted: RegularStreamREMLTrial,
+    trial: RegularStreamREMLTrial,
+    step: float,
+    pinned: np.ndarray,
+) -> str | None:
+    """Return why a pinned log-scale Newton trial is not acceptable."""
+    trial_params = np.asarray(trial.params, dtype=np.float64)
+    if not np.array_equal(trial_params[:-1], pinned):
+        raise RuntimeError("Pinned log-scale completion changed supplied rho.")
+    for field in (
+        "source_fingerprint",
+        "basis_fingerprint",
+        "family_name",
+        "link_name",
+    ):
+        if getattr(trial, field) != getattr(accepted, field):
+            raise RuntimeError("Pinned log-scale completion changed lineage.")
+    score_old = float(np.asarray(accepted.score))
+    score_new = float(np.asarray(trial.score))
+    gradient_old = float(np.asarray(accepted.gradient)[-1])
+    gradient_new = float(np.asarray(trial.gradient)[-1])
+    curvature_old = accepted.log_phi_curvature
+    curvature_new = trial.log_phi_curvature
+    if (
+        curvature_old is None
+        or curvature_new is None
+        or not np.all(
+            np.isfinite(
+                (
+                    score_old,
+                    score_new,
+                    gradient_old,
+                    gradient_new,
+                    curvature_old,
+                    curvature_new,
+                )
+            )
+        )
+    ):
+        return "nonfinite trial"
+    if curvature_new <= 0.0:
+        return "nonpositive trial curvature"
+    if abs(gradient_new) >= abs(gradient_old):
+        return "no gradient reduction"
+    # Near the optimum the raw score change of a Newton step is far below
+    # the float64 resolution of the O(n) score. The cubic Hermite integral of
+    # the exact first and second derivatives measures it instead; its
+    # truncation error is O(step^5). newton()'s descent and quadratic-model
+    # tests are applied to that measured change.
+    predicted = gradient_old * step + 0.5 * curvature_old * step * step
+    change = 0.5 * step * (gradient_old + gradient_new) + (
+        step * step * (curvature_old - curvature_new) / 12.0
+    )
+    if not change < 0.0:
+        return "no derivative-integrated descent"
+    qerror = abs(predicted - change) / max(abs(predicted), abs(change))
+    if not qerror < _SCALE_NEWTON_QERROR:
+        return "quadratic model error"
+    envelope = _regular_score_roundoff(accepted) + _regular_score_roundoff(trial)
+    if not score_new - score_old <= envelope:
+        return "measurable score increase"
+    return None
+
+
+def _complete_pinned_log_scale(
+    objective: _AcceptedRegularTrialObjective,
+    pinned: np.ndarray,
+    *,
+    max_steps: int = _SCALE_NEWTON_MAX_STEPS,
+) -> _ScaleNewtonCompletion:
+    """Continue pinned ``newton()`` on the only free coordinate, log scale.
+
+    With every smoothing parameter supplied, pinned mgcv's ``gam.outer``
+    calls ``newton()`` on ``log(scale)`` alone. gam.fit3 supplies the exact
+    curvature ``d2lr.d2lphi = Dp/(2 phi) - ls[3] phi^2 - ls[2] phi``: for fixed
+    rho the coefficients and log determinants do not depend on the scale, so
+    it is the full second derivative. ``newton()`` takes full exact Newton
+    steps, whose relative scale error squares at every step, and tests
+    convergence only after a step; with a tight ``conv.tol`` it therefore
+    returns the stationary scale to roundoff. The first-order L-BFGS-B stage
+    stops at ``|g| <= gtol``, leaving a relative scale error ``|g|/curvature``.
+
+    This completion continues newton()'s exact-curvature step from the
+    accepted L-BFGS-B trial. Each candidate is a fully reconverged exact
+    source trial; it is accepted only when its curvature is positive, the
+    gradient magnitude decreases, and newton()'s descent and quadratic-model
+    tests hold for the derivative-integrated score change. The iteration
+    stops when the next correction is no longer representable in float64 log
+    scale or a trial no longer reduces the exact gradient, i.e. at the
+    gradient's evaluation floor. Rho is never optimized: every candidate
+    differs from the accepted parameters only in the final coordinate.
+    """
+    steps = 0
+    for _ in range(max_steps):
+        objective._check_source_unchanged()
+        accepted = objective.accepted
+        params = np.asarray(accepted.params, dtype=np.float64)
+        if not np.array_equal(params[:-1], pinned):
+            raise RuntimeError("Pinned log-scale completion changed supplied rho.")
+        gradient = float(np.asarray(accepted.gradient)[-1])
+        curvature = accepted.log_phi_curvature
+        if curvature is None or not np.isfinite(curvature) or curvature <= 0.0:
+            return _ScaleNewtonCompletion(steps, "nonpositive curvature")
+        if not np.isfinite(gradient):
+            return _ScaleNewtonCompletion(steps, "nonfinite gradient")
+        step = float(
+            np.clip(
+                -gradient / curvature, -_SCALE_NEWTON_MAX_STEP, _SCALE_NEWTON_MAX_STEP
+            )
+        )
+        trial_params = params.copy()
+        trial_params[-1] = params[-1] + step
+        if trial_params[-1] == params[-1]:
+            return _ScaleNewtonCompletion(steps, "resolved")
+        trial = objective._evaluate_candidate(trial_params)
+        reason = _scale_newton_rejection(accepted, trial, step, pinned)
+        if reason is not None:
+            objective.candidate = None
+            return _ScaleNewtonCompletion(steps, reason)
+        objective._promote_candidate()
+        steps += 1
+    return _ScaleNewtonCompletion(steps, "step limit")
+
+
+def _complete_pinned_regular_scale(
+    objective: _AcceptedRegularTrialObjective,
+    optimized: _ParameterizedOptimization[RegularStreamREMLTrial],
+    pinned: np.ndarray,
+    bounds: list[tuple[float | None, float | None]],
+    control: StreamREMLControl,
+) -> tuple[_ParameterizedOptimization[RegularStreamREMLTrial], _ScaleNewtonCompletion]:
+    """Apply the log-scale completion and restate the final accepted status."""
+    if optimized.status != 0:
+        return optimized, _ScaleNewtonCompletion(0, "not run: L-BFGS-B failed")
+    # Only the log scale is free; continue pinned newton()'s exact step from
+    # the L-BFGS-B result. The completion holds at most the accepted and one
+    # candidate trial, as the L-BFGS-B stage does.
+    completion = _complete_pinned_log_scale(objective, pinned)
+    objective._check_source_unchanged()
+    trial = objective.accepted
+    projected_gradient_inf = float(
+        np.max(
+            np.abs(
+                _projected_gradient_for_bounds(
+                    np.asarray(trial.params, dtype=np.float64),
+                    np.asarray(trial.gradient, dtype=np.float64),
+                    bounds,
+                )
+            )
+        )
+    )
+    curvature = trial.log_phi_curvature
+    curvature_positive = bool(
+        curvature is not None and np.isfinite(curvature) and curvature > 0.0
+    )
+    # newton() never reports convergence at an indefinite point.
+    converged = projected_gradient_inf <= control.gtol and curvature_positive
+    message = (
+        f"{optimized.message}; pinned log-scale Newton completion: "
+        f"{completion.steps} exact-curvature step(s), stopped by "
+        f"{completion.stop}; projected gradient {projected_gradient_inf:.3e}, "
+        f"log-scale curvature "
+        f"{float('nan') if curvature is None else curvature:.10g}"
+    )
+    if not curvature_positive:
+        message = f"{message}; log-scale curvature is not positive."
+    elif not converged:
+        message = f"{message}; projected gradient exceeds gtol {control.gtol:.3e}."
+    return (
+        replace(
+            optimized,
+            trial=trial,
+            converged=converged,
+            message=message,
+            n_evaluations=objective.n_evaluations,
+            n_accepted=objective.n_accepted,
+            cumulative_source_scans=objective.cumulative_source_scans,
+            cumulative_batches_scanned=objective.cumulative_batches_scanned,
+            projected_gradient_inf=projected_gradient_inf,
+            accepted_score_history=objective.accepted_score_history,
+        ),
+        completion,
+    )
+
+
 def optimize_regular_stream_reml(
     stream: StreamDesign,
     family: ExponentialFamily,
@@ -1504,6 +1748,11 @@ def optimize_regular_stream_reml(
         bounds,
         reml_control,
     )
+    completion = None
+    if not family.scale_known and (pin_lambda or n_lambda == 0):
+        optimized, completion = _complete_pinned_regular_scale(
+            objective, optimized, params_initial[:n_lambda], bounds, reml_control
+        )
     return RegularStreamREMLOptimization(
         trial=optimized.trial,
         converged=optimized.converged,
@@ -1517,4 +1766,6 @@ def optimize_regular_stream_reml(
         projected_gradient_inf=optimized.projected_gradient_inf,
         accepted_score_history=optimized.accepted_score_history,
         outer_workspace_bytes=outer_workspace_bytes,
+        scale_completion_steps=0 if completion is None else completion.steps,
+        scale_completion_stop=None if completion is None else completion.stop,
     )
