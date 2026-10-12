@@ -173,10 +173,17 @@ class StreamREMLOptimization:
 class RegularStreamREMLOptimization:
     """Diagnostic outcome of joint regular streamed L-BFGS-B optimization.
 
-    ``n_iter`` counts L-BFGS-B iterations. When every smoothing parameter is
-    pinned and the scale is unknown, ``scale_completion_steps`` counts the
-    accepted exact-curvature log-scale Newton steps that follow it and
-    ``scale_completion_stop`` records why that completion ended.
+    ``status`` is the L-BFGS-B status and ``n_iter`` counts its iterations
+    plus any accepted free-parameter completion steps; ``converged`` is
+    restated on the returned trial. When no smoothing parameter is free
+    (every one pinned, or none exists) and the scale is unknown,
+    ``scale_completion_steps`` counts the accepted exact-curvature log-scale
+    Newton steps that follow it (not included in ``n_iter``) and
+    ``scale_completion_stop`` records why that completion ended. With free
+    smoothing parameters,
+    ``curvature_completion_steps``/``curvature_completion_stop`` describe the
+    free-parameter Newton completion after an L-BFGS-B roundoff stop
+    (``None`` when that completion was not admitted).
     """
 
     trial: RegularStreamREMLTrial
@@ -196,6 +203,8 @@ class RegularStreamREMLOptimization:
     cumulative_inner_iterations: int = 0
     cumulative_final_refit_solves: int = 0
     cumulative_derivative_s: float = 0.0
+    curvature_completion_steps: int = 0
+    curvature_completion_stop: str | None = None
 
     @property
     def required_bytes(self) -> int:
@@ -237,6 +246,8 @@ class _ParameterizedOptimization(Generic[_TrialT]):
     cumulative_inner_iterations: int = 0
     cumulative_final_refit_solves: int = 0
     cumulative_derivative_s: float = 0.0
+    completion_steps: int = 0
+    completion_stop: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1279,6 +1290,327 @@ def _validate_max_step(max_step: float | None) -> None:
         raise ValueError("max_step must be finite and positive when supplied.")
 
 
+# Free-parameter curvature completion after an L-BFGS-B roundoff stop. Exact
+# trials carry exact gradients but no outer Hessian, so each Newton iteration
+# spends 2m central-difference gradient probes on curvature and at most
+# 1 + _CURVATURE_COMPLETION_MAX_HALVINGS trials on its step. From the plateau
+# where L-BFGS-B stops one step normally reaches gtol; the iteration bound
+# only guarantees termination. The free-parameter cap bounds the probes.
+_CURVATURE_COMPLETION_MAX_FREE = 4
+_CURVATURE_COMPLETION_MAX_STEPS = 3
+_CURVATURE_COMPLETION_MAX_HALVINGS = 3
+_CURVATURE_COMPLETION_PROBE_WIDTH = 1e-4
+
+
+@dataclass(frozen=True)
+class _CurvatureCompletion:
+    """Outcome of the free-parameter finite-difference Newton completion.
+
+    ``curvature_positive`` states that a positive definite curvature model
+    belongs to the returned trial: either the central-difference Hessian of
+    exact gradients evaluated at it, or the one at the origin of the accepted
+    step that produced it together with a positive exact-gradient secant
+    along that step. ``eigenvalues`` are those of the last curvature model
+    formed; ``last_step_inf`` is the max-norm of the last proposed step.
+    """
+
+    steps: int
+    stop: str
+    curvature_positive: bool = False
+    eigenvalues: tuple[float, ...] = ()
+    last_step_inf: float | None = None
+    last_step_accepted: bool = False
+
+
+def _lbfgsb_roundoff_stop(result: OptimizeResult) -> bool:
+    """Whether L-BFGS-B stopped on raw-score roundoff rather than a limit.
+
+    A relative-reduction stop means the accepted score did not decrease by
+    ``ftol`` (with ``ftol=0``, not at all). ``ABNORMAL`` means ``maxls``
+    line-search trials failed the Moré-Thuente sufficient-decrease test and
+    SciPy restored the last accepted iterate. Near the optimum both compare
+    raw-score roundoff. Iteration/evaluation limits and errors are excluded.
+    """
+    message = str(result.message)
+    return (bool(result.success) and "RELATIVE REDUCTION OF F" in message) or (
+        int(result.status) != 0 and message.startswith("ABNORMAL")
+    )
+
+
+def _free_projected_norm(
+    params: np.ndarray,
+    gradient: np.ndarray,
+    bounds: list[tuple[float | None, float | None]],
+) -> float:
+    """Max-norm of the bound-projected gradient."""
+    projected = _projected_gradient_for_bounds(params, gradient, bounds)
+    return float(np.max(np.abs(projected)))
+
+
+def _curvature_newton_rejection(
+    accepted: _TrialT,
+    trial: _TrialT,
+    step: np.ndarray,
+    curvature: np.ndarray,
+    free: np.ndarray,
+    bounds: list[tuple[float | None, float | None]],
+    score_roundoff: Callable[[_TrialT], float],
+) -> str | None:
+    """Return why one free-parameter Newton trial is not acceptable.
+
+    Pinned ``gam.fit3.r::newton`` accepts a step when the score decreases and
+    the quadratic-model error ``|pred - change|/max(|pred|, |change|)`` is
+    below ``qerror.thresh = 0.8`` (newton() also adds ``score.scale*conv.tol``
+    to that denominator; omitting it is stricter). Near the optimum the raw
+    score change is far below the roundoff of the O(n) score: a Gamma trial
+    reconverged from a distant warm start read 2.6e-12 above nearby trials
+    whose exact changes were below 6.1e-14, five times the first-order
+    envelope of one score. These tests
+    therefore use the trapezoid integral of the exact endpoint gradients
+    along the step (exact for the local quadratic, error O(|s|^3)), with the
+    single-coordinate completion's acceptance tests in the same order: a
+    positive exact secant ``s'(g1 - g0)``, a smaller exact projected
+    gradient, derivative-integrated descent, the quadratic-model error, and
+    no raw score increase beyond the float64 envelope of both scores.
+    """
+    gradient_old = np.asarray(accepted.gradient, dtype=np.float64)
+    gradient_new = np.asarray(trial.gradient, dtype=np.float64)
+    score_old = float(np.asarray(accepted.score))
+    score_new = float(np.asarray(trial.score))
+    if not (
+        np.isfinite(score_old)
+        and np.isfinite(score_new)
+        and np.all(np.isfinite(gradient_old))
+        and np.all(np.isfinite(gradient_new))
+    ):
+        return "nonfinite trial"
+    old_free = gradient_old[free]
+    new_free = gradient_new[free]
+    if not float(step @ (new_free - old_free)) > 0.0:
+        return "nonpositive secant curvature"
+    old_norm = _free_projected_norm(
+        np.asarray(accepted.params, dtype=np.float64), gradient_old, bounds
+    )
+    new_norm = _free_projected_norm(
+        np.asarray(trial.params, dtype=np.float64), gradient_new, bounds
+    )
+    if not new_norm < old_norm:
+        return "no gradient reduction"
+    predicted = float(old_free @ step + 0.5 * (step @ curvature @ step))
+    change = float(0.5 * ((old_free + new_free) @ step))
+    if not change < 0.0:
+        return "no derivative-integrated descent"
+    qerror = abs(predicted - change) / max(abs(predicted), abs(change))
+    if not qerror < _SCALE_NEWTON_QERROR:
+        return "quadratic model error"
+    envelope = float(score_roundoff(accepted)) + float(score_roundoff(trial))
+    if not (np.isfinite(envelope) and envelope >= 0.0):
+        return "invalid score envelope"
+    if not score_new - score_old <= envelope:
+        return "measurable score increase"
+    return None
+
+
+def _complete_free_curvature_newton(
+    objective: _AcceptedParameterizedTrialObjective[_TrialT],
+    bounds: list[tuple[float | None, float | None]],
+    control: StreamREMLControl,
+    *,
+    iterations: int,
+    max_step: float | None,
+    trial_valid: Callable[[_TrialT], bool],
+    score_roundoff: Callable[[_TrialT], float],
+) -> tuple[_CurvatureCompletion, int]:
+    """Continue pinned ``newton()`` on a few free parameters after L-BFGS-B.
+
+    For free (log sp, log scale) or (log sp, log theta) parameters pinned
+    mgcv's ``gam.outer`` runs ``gam.fit3.r::newton``: from the exact Hessian
+    it takes ``-H^{-1} g``, scaled so its largest component is at most
+    ``maxNstep = 5``, accepts it on score decrease with quadratic-model error
+    below 0.8, step-halves otherwise, and declares convergence when the new
+    gradient is small and the Hessian that produced the step was positive
+    definite (``converged <- !indef``). Near the optimum the remaining REML
+    decrease is below one ULP of the O(n) score, so L-BFGS-B's raw-score line
+    search stops by relative reduction or ``ABNORMAL`` before ``gtol``.
+
+    The exact trial has no outer Hessian. Each iteration therefore forms a
+    central-difference Hessian of exact gradients from ``2m`` fully
+    reconverged probes at ``1e-4 * max(1, |x_j|)`` (capped by ``max_step``),
+    symmetrizes it and requires newton()'s positive definiteness (no
+    eigenvalue below ``max(d) * eps^0.7``). The Newton step, capped at
+    ``min(maxNstep, max_step)``, is accepted or halved at most three times by
+    :func:`_curvature_newton_rejection`. Every accepted state is a fully
+    reconverged exact source trial promoted through the objective; at most
+    the accepted and one candidate trial are held, plus host m-vectors and
+    the m-by-m model. The completion stops when the accepted trial meets
+    ``gtol`` (``converged`` after a step, ``stationary`` before one), at the
+    first unusable curvature model, after an unaccepted halving sequence, or
+    at the step, iteration or evaluation limits. Fixed coordinates
+    (``lower == upper``) are never moved.
+    """
+    free = np.flatnonzero(
+        [
+            not (lower is not None and upper is not None and lower == upper)
+            for lower, upper in bounds
+        ]
+    )
+    m = int(free.size)
+    step_cap = (
+        _SCALE_NEWTON_MAX_STEP
+        if max_step is None
+        else min(_SCALE_NEWTON_MAX_STEP, float(max_step))
+    )
+    per_iteration = 2 * m + 1 + _CURVATURE_COMPLETION_MAX_HALVINGS
+    lineage = ("source_fingerprint", "basis_fingerprint", "family_name", "link_name")
+    steps = 0
+    curvature_positive = False
+    eigenvalues: tuple[float, ...] = ()
+    last_step_inf: float | None = None
+    last_step_accepted = False
+
+    def outcome(stop: str) -> tuple[_CurvatureCompletion, int]:
+        return (
+            _CurvatureCompletion(
+                steps,
+                stop,
+                curvature_positive,
+                eigenvalues,
+                last_step_inf,
+                last_step_accepted,
+            ),
+            iterations,
+        )
+
+    def evaluate(params: np.ndarray) -> _TrialT:
+        reference = objective.accepted
+        trial = objective._evaluate_candidate(params)
+        if not _same_rho(params, trial.params):
+            raise RuntimeError(
+                "Curvature completion received a trial for other parameters."
+            )
+        if any(
+            getattr(trial, name, None) != getattr(reference, name, None)
+            for name in lineage
+        ):
+            raise RuntimeError("Curvature completion changed source/family lineage.")
+        return trial
+
+    # Release SciPy's last rejected line-search trial: the completion holds
+    # the accepted and at most one candidate trial.
+    objective.candidate = None
+    for _ in range(_CURVATURE_COMPLETION_MAX_STEPS):
+        objective._check_source_unchanged()
+        accepted = objective.accepted
+        center = np.asarray(accepted.params, dtype=np.float64)
+        gradient = np.asarray(accepted.gradient, dtype=np.float64)
+        if iterations >= control.max_iter:
+            return outcome("iteration limit")
+        if objective.n_evaluations + per_iteration > control.maxfun:
+            return outcome("evaluation limit")
+        widths = np.array(
+            [
+                _CURVATURE_COMPLETION_PROBE_WIDTH * max(1.0, abs(center[index]))
+                for index in free
+            ]
+        )
+        if max_step is not None:
+            widths = np.minimum(widths, max_step)
+        if any(
+            (bounds[index][0] is not None and center[index] - width < bounds[index][0])
+            or (
+                bounds[index][1] is not None
+                and center[index] + width > bounds[index][1]
+            )
+            for index, width in zip(free, widths, strict=True)
+        ):
+            return outcome("curvature probe outside bounds")
+        curvature = np.empty((m, m), dtype=np.float64)
+        for column, (index, width) in enumerate(zip(free, widths, strict=True)):
+            probes = []
+            for sign in (1.0, -1.0):
+                probe_params = center.copy()
+                probe_params[index] = center[index] + sign * width
+                probe = evaluate(probe_params)
+                valid = trial_valid(probe)
+                probes.append(np.asarray(probe.gradient, dtype=np.float64)[free])
+                objective.candidate = None
+                del probe
+                if not valid:
+                    return outcome("invalid curvature probe")
+            curvature[:, column] = (probes[0] - probes[1]) / (2.0 * width)
+        curvature = 0.5 * (curvature + curvature.T)
+        values = (
+            np.linalg.eigvalsh(curvature)
+            if np.all(np.isfinite(curvature))
+            else np.full(m, np.nan)
+        )
+        eigenvalues = tuple(float(value) for value in values)
+        # newton(): pdef is FALSE when an eigenvalue is negative or below
+        # max(d) * .Machine$double.eps^.7.
+        curvature_positive = bool(
+            np.all(np.isfinite(values))
+            and values[-1] > 0.0
+            and values[0] >= values[-1] * np.finfo(np.float64).eps ** 0.7
+        )
+        if not curvature_positive:
+            return outcome("indefinite curvature")
+        if _free_projected_norm(center, gradient, bounds) <= control.gtol:
+            return outcome("stationary")
+        newton = -np.linalg.solve(curvature, gradient[free])
+        largest = float(np.max(np.abs(newton)))
+        if largest > step_cap:
+            # newton(): Nstep <- mns * Nstep/ms.
+            newton = step_cap * (newton / largest)
+        reason: str | None = None
+        for halving in range(_CURVATURE_COMPLETION_MAX_HALVINGS + 1):
+            trial_params = center.copy()
+            trial_params[free] = center[free] + newton / 2.0**halving
+            if np.array_equal(trial_params, center):
+                return outcome("step not representable")
+            if any(
+                (lower is not None and value < lower)
+                or (upper is not None and value > upper)
+                for value, (lower, upper) in zip(trial_params, bounds, strict=True)
+            ):
+                return outcome("step leaves parameter bounds")
+            # The realized float64 step defines the model and the integral.
+            step = trial_params[free] - center[free]
+            last_step_inf = float(np.max(np.abs(step)))
+            last_step_accepted = False
+            trial = evaluate(trial_params)
+            reason = (
+                "invalid trial"
+                if not trial_valid(trial)
+                else _curvature_newton_rejection(
+                    accepted, trial, step, curvature, free, bounds, score_roundoff
+                )
+            )
+            del trial
+            if reason is None:
+                break
+            objective.candidate = None
+        if reason is not None:
+            return outcome(f"rejected: {reason}")
+        objective._promote_candidate()
+        steps += 1
+        iterations += 1
+        last_step_accepted = True
+        # The model that produced this step was positive definite and the
+        # exact secant along it is positive (newton()'s convergence rule).
+        curvature_positive = True
+        promoted = objective.accepted
+        if (
+            _free_projected_norm(
+                np.asarray(promoted.params, dtype=np.float64),
+                np.asarray(promoted.gradient, dtype=np.float64),
+                bounds,
+            )
+            <= control.gtol
+        ):
+            return outcome("converged")
+    return outcome("step limit")
+
+
 def _run_parameterized_stream_reml(
     objective: _AcceptedParameterizedTrialObjective[_TrialT],
     params_initial: np.ndarray,
@@ -1288,6 +1620,7 @@ def _run_parameterized_stream_reml(
     roundoff_stationary_completion: bool = False,
     curvature_stationary_completion: bool = False,
     completion_inner_tolerance: float | None = None,
+    completion_score_roundoff: Callable[[_TrialT], float] | None = None,
     local_score_change: Callable[
         [_AcceptedParameterizedTrialObjective[_TrialT], _TrialT, _TrialT, float],
         _LocalScoreChange | None,
@@ -1301,9 +1634,13 @@ def _run_parameterized_stream_reml(
     projected gradient is resolved but whose score differs by only one float64
     ULP. The optional completion policy retains its already reconverged trial
     across later line-search probes; callers charge that additional ownership.
-    A two-parameter roundoff stop can instead use a local curvature correction;
-    its trial is accepted only after a fresh exact fit satisfies the original
-    projected-gradient and inner-stationarity tolerances.
+    With free parameters, ``curvature_stationary_completion`` continues
+    pinned newton() after an L-BFGS-B roundoff stop (relative reduction or
+    ``ABNORMAL``) from a valid accepted trial whose projected gradient still
+    exceeds ``gtol`` (:func:`_complete_free_curvature_newton`).
+    ``completion_score_roundoff`` is the float64 envelope of one trial score.
+    Convergence is then restated on the returned trial: projected gradient
+    at or below ``gtol`` with a positive definite curvature model.
     """
     if not _same_rho(np.asarray(params_initial), objective.accepted.params):
         raise ValueError("Initial parameters do not match the exact accepted trial.")
@@ -1338,6 +1675,8 @@ def _run_parameterized_stream_reml(
         completion_inner_tolerance is None or completion_inner_tolerance <= 0.0
     ):
         raise ValueError("Curvature completion requires an inner tolerance.")
+    if curvature_stationary_completion and completion_score_roundoff is None:
+        raise ValueError("Curvature completion requires a score roundoff envelope.")
     _validate_max_step(max_step)
     stationary_trial: _TrialT | None = None
     stationary_norm = np.inf
@@ -1590,90 +1929,73 @@ def _run_parameterized_stream_reml(
                 f"projected gradient {candidate_norm:.3e}, "
                 f"inner valid {candidate_inner_valid}{comparison_detail}."
             )
+    completion: _CurvatureCompletion | None = None
     if (
         curvature_stationary_completion
-        and bool(result.success)
         and not converged
-        and "RELATIVE REDUCTION OF F" in message
-        and len(result_params) == 2
-        and total_iterations < control.max_iter
-        and objective.n_evaluations + 8 <= control.maxfun
+        and _lbfgsb_roundoff_stop(result)
     ):
-        center = np.asarray(objective.accepted.params, dtype=np.float64)
-        accepted_score = float(np.asarray(objective.accepted.score))
-        gradient = np.asarray(objective.accepted.gradient, dtype=np.float64)
-        curvature = np.empty((2, 2), dtype=np.float64)
-        for index in range(2):
-            width = 1e-4 * max(1.0, abs(center[index]))
-            if max_step is not None:
-                width = min(width, max_step)
-            direction = np.zeros(2, dtype=np.float64)
-            direction[index] = width
-            plus = center + direction
-            minus = center - direction
-            lower, upper = bounds[index]
-            if (lower is not None and minus[index] < lower) or (
-                upper is not None and plus[index] > upper
-            ):
-                break
-            _, plus_gradient = objective(plus)
-            _, minus_gradient = objective(minus)
-            curvature[:, index] = (plus_gradient - minus_gradient) / (2.0 * width)
-        else:
-            curvature = 0.5 * (curvature + curvature.T)
-            eigenvalues = (
-                np.linalg.eigvalsh(curvature)
-                if np.all(np.isfinite(curvature))
-                else np.array([np.nan, np.nan])
+        free_count = sum(
+            not (lower is not None and upper is not None and lower == upper)
+            for lower, upper in bounds
+        )
+        accepted = objective.accepted
+        if not 1 <= free_count <= _CURVATURE_COMPLETION_MAX_FREE:
+            completion = _CurvatureCompletion(
+                0, "not run: free parameter count outside the completion range"
             )
-            if eigenvalues[0] > max(1e-12, 1e-8 * eigenvalues[-1]):
-                correction = -np.linalg.solve(curvature, gradient)
-                corrected = center + correction
-                correction_limit = min(1e-3, max_step) if max_step is not None else 1e-3
-                if np.max(np.abs(correction)) <= correction_limit and all(
-                    (lower is None or value >= lower)
-                    and (upper is None or value <= upper)
-                    for value, (lower, upper) in zip(corrected, bounds, strict=True)
-                ):
-                    # A full Newton correction can change a flat exact score
-                    # by a few ULPs even when its gradient vanishes. Short
-                    # step-halving retains a decreasing exact trial that also
-                    # meets the original projected-gradient/inner gates.
-                    for fraction in (1.0, 0.5, 0.25, 0.125):
-                        trial_params = center + fraction * correction
-                        candidate_score, candidate_gradient = objective(trial_params)
-                        candidate = objective.candidate
-                        candidate_norm = float(
-                            np.max(
-                                np.abs(
-                                    _projected_gradient_for_bounds(
-                                        trial_params, candidate_gradient, bounds
-                                    )
-                                )
-                            )
-                        )
-                        if (
-                            candidate is not None
-                            and _same_rho(trial_params, candidate.params)
-                            and candidate_norm <= control.gtol
-                            and inner_valid(candidate)
-                            and candidate_score - accepted_score
-                            <= np.spacing(abs(accepted_score))
-                        ):
-                            objective._check_source_unchanged()
-                            objective.accepted = candidate
-                            objective.candidate = None
-                            objective.n_accepted += 1
-                            objective._history.append(candidate_score)
-                            total_iterations += 1
-                            projected_gradient_inf = candidate_norm
-                            converged = True
-                            message = (
-                                f"{message}; exact curvature correction reached "
-                                "the original stationarity tolerances."
-                            )
-                            break
-    if bool(result.success) and not converged:
+        elif total_iterations >= control.max_iter:
+            completion = _CurvatureCompletion(0, "not run: iteration limit")
+        elif not (
+            inner_valid(accepted)
+            and np.isfinite(float(np.asarray(accepted.score)))
+            and np.all(np.isfinite(np.asarray(accepted.gradient)))
+        ):
+            completion = _CurvatureCompletion(0, "not run: accepted trial is invalid")
+        else:
+            completion, total_iterations = _complete_free_curvature_newton(
+                objective,
+                bounds,
+                control,
+                iterations=total_iterations,
+                max_step=max_step,
+                trial_valid=lambda trial: bool(
+                    inner_valid(trial)
+                    and np.isfinite(float(np.asarray(trial.score)))
+                    and np.all(np.isfinite(np.asarray(trial.gradient)))
+                ),
+                score_roundoff=completion_score_roundoff,
+            )
+        objective._check_source_unchanged()
+        projected_gradient_inf = _free_projected_norm(
+            np.asarray(objective.accepted.params, dtype=np.float64),
+            np.asarray(objective.accepted.gradient, dtype=np.float64),
+            bounds,
+        )
+        converged = bool(
+            projected_gradient_inf <= control.gtol and completion.curvature_positive
+        )
+        if completion.last_step_inf is None:
+            proposed = "none"
+        else:
+            proposed = (
+                f"{completion.last_step_inf:.3e} "
+                f"({'accepted' if completion.last_step_accepted else 'rejected'})"
+            )
+        eigenvalues = ", ".join(f"{value:.6g}" for value in completion.eigenvalues)
+        message = (
+            f"{message}; free-parameter curvature Newton completion: "
+            f"{completion.steps} accepted step(s), stopped by {completion.stop}; "
+            f"last proposed step max-norm {proposed}; finite-difference "
+            f"curvature eigenvalues [{eigenvalues}]"
+        )
+        if not converged and projected_gradient_inf <= control.gtol:
+            message = f"{message}; no positive definite curvature model."
+    if (
+        (bool(result.success) or completion is not None)
+        and not converged
+        and projected_gradient_inf > control.gtol
+    ):
         message = (
             f"{message}; projected gradient {projected_gradient_inf:.3e} exceeds "
             f"gtol {control.gtol:.3e}."
@@ -1693,6 +2015,8 @@ def _run_parameterized_stream_reml(
         cumulative_inner_iterations=objective.cumulative_inner_iterations,
         cumulative_final_refit_solves=objective.cumulative_final_refit_solves,
         cumulative_derivative_s=objective.cumulative_derivative_s,
+        completion_steps=0 if completion is None else completion.steps,
+        completion_stop=None if completion is None else completion.stop,
     )
 
 
@@ -2124,11 +2448,15 @@ def optimize_regular_stream_reml(
             p, n_params, reml_control, pirls_control
         )
     )
-    # The unknown-scale one-penalty case has two free coordinates. Its local
-    # stationarity correction retains two gradient-probe vectors, a curvature
-    # matrix, and short-lived parameter/gradient copies alongside the accepted
-    # and candidate trials.
-    curvature_completion = not pin_lambda and n_lambda == 1 and not family.scale_known
+    # With free smoothing parameters and at most four free coordinates, an
+    # L-BFGS-B roundoff stop continues newton() through the free-parameter
+    # curvature completion. Beside the accepted and candidate trials it holds
+    # the m-by-m curvature model, its eigenvalue/solve copies (2m^2) and about
+    # fourteen m-vectors of parameters, gradients, probes and steps; for
+    # m <= 4, 3m^2 + 14m <= m^2 + 24m.
+    curvature_completion = (
+        not pin_lambda and n_lambda >= 1 and n_params <= _CURVATURE_COMPLETION_MAX_FREE
+    )
     curvature_completion_bytes = (
         8 * (n_params * n_params + 24 * n_params) if curvature_completion else 0
     )
@@ -2170,6 +2498,7 @@ def optimize_regular_stream_reml(
         completion_inner_tolerance=(
             pirls_control.tol if curvature_completion else None
         ),
+        completion_score_roundoff=_regular_score_roundoff,
         **step_options,
     )
     completion = None
@@ -2200,4 +2529,6 @@ def optimize_regular_stream_reml(
         cumulative_inner_iterations=optimized.cumulative_inner_iterations,
         cumulative_final_refit_solves=optimized.cumulative_final_refit_solves,
         cumulative_derivative_s=optimized.cumulative_derivative_s,
+        curvature_completion_steps=optimized.completion_steps,
+        curvature_completion_stop=optimized.completion_stop,
     )

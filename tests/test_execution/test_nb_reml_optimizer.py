@@ -997,21 +997,28 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
     max_iter: int,
     reported_iter: int,
 ) -> None:
-    """A rounded score admits only a well-conditioned, reconverged correction."""
+    """A rounded score continues newton() only from reconverged exact trials.
+
+    The free-parameter completion forms a central-difference Hessian from
+    four exact-gradient probes, caps each Newton step at ``max_step`` from
+    the accepted warm start and halves rejected steps at most three times.
+    """
     start = np.array([start_rho, 0.0])
     target = start + np.array([-1e-6 if start_rho == 40.0 else 1e-6, -1e-6])
     hessian = np.diag([curvature_sign * 2.0, 3.0])
     source = SimpleNamespace(fingerprint=lambda: "source")
 
-    def evaluate(_stream, _family, params, **_kwargs):
+    def evaluate(_stream, _family, params, **kwargs):
         params = np.asarray(params, dtype=np.float64)
-        if max_step is not None:
-            assert np.max(np.abs(params - start)) <= max_step
+        warm_start = kwargs["warm_start"]
+        if max_step is not None and warm_start is not None:
+            assert np.max(np.abs(params - np.asarray(warm_start.params))) <= max_step
         return SimpleNamespace(
             params=params.copy(),
             score=jnp.array(1.0),
             gradient=jnp.asarray(hessian @ (params - target)),
             fit_result=SimpleNamespace(
+                score_penalized_deviance=0.0,
                 state=SimpleNamespace(
                     converged=True,
                     line_search_failed=False,
@@ -1020,7 +1027,9 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
                         if not valid_inner and np.max(np.abs(params - target)) < 1e-10
                         else 0.0
                     ),
-                )
+                    saturated_loglik=0.0,
+                    coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 0.0),
+                ),
             ),
             source_scans=3,
             batches_scanned=5,
@@ -1057,6 +1066,7 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
         control,
         curvature_stationary_completion=True,
         completion_inner_tolerance=1e-11,
+        completion_score_roundoff=nb_reml_execution._nb_score_roundoff,
         max_step=max_step,
     )
     expect_converged = (
@@ -1064,19 +1074,41 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
         and valid_inner
         and maxfun > 5
         and start_rho == 0.0
-        and max_step is None
         and reported_iter < max_iter
     )
     assert result.converged is expect_converged
     if maxfun <= 5 or start_rho == 40.0 or reported_iter >= max_iter:
-        expected_evaluations = 1
-    elif curvature_sign < 0.0 or max_step is not None:
-        expected_evaluations = 5
+        expected_evaluations, expected_accepted = 1, 0
+        expected_stop = (
+            "evaluation limit"
+            if maxfun <= 5
+            else "curvature probe outside bounds"
+            if start_rho == 40.0
+            else "not run: iteration limit"
+        )
+    elif curvature_sign < 0.0:
+        expected_evaluations, expected_accepted = 5, 0
+        expected_stop = "indefinite curvature"
+    elif not valid_inner:
+        # Each of the three Newton iterations forms its curvature from four
+        # probes; the full step lands on the invalid inner fit and its exact
+        # half step is accepted, so 7/8 of the correction remains a valid
+        # nonstationary trial at the step limit.
+        expected_evaluations, expected_accepted = 1 + 3 * (4 + 2), 3
+        expected_stop = "step limit"
+    elif max_step is not None:
+        # newton() scales the first step to the cap; the second iteration's
+        # full step reaches the minimizer.
+        expected_evaluations, expected_accepted = 1 + 2 * (4 + 1), 2
+        expected_stop = "converged"
     else:
-        # An invalid inner fit rejects the full correction. All three shorter
-        # steps are then evaluated but fail the original gradient gate.
-        expected_evaluations = 6 if valid_inner else 9
+        expected_evaluations, expected_accepted = 6, 1
+        expected_stop = "converged"
     assert result.n_evaluations == expected_evaluations
+    assert result.n_accepted == expected_accepted
+    assert result.completion_stop == expected_stop
+    assert result.completion_steps == expected_accepted
+    assert result.n_iter == reported_iter + expected_accepted
     assert result.cumulative_source_scans == 3 * result.n_evaluations
     assert result.cumulative_batches_scanned == 5 * result.n_evaluations
     if expect_converged:
@@ -1089,13 +1121,20 @@ def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
             atol=STRICT.atol,
         )
         assert result.projected_gradient_inf <= control.gtol
-        assert result.n_accepted == 1
-        assert result.n_iter == result.n_accepted
+    elif expected_accepted:
+        np.testing.assert_allclose(
+            np.asarray(result.trial.params),
+            start + 0.875 * (target - start),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert result.trial.fit_result.state.stationarity == 0.0
+        assert result.projected_gradient_inf > control.gtol
+        assert "exceeds gtol" in result.message
     else:
         np.testing.assert_array_equal(result.trial.params, start)
         assert result.projected_gradient_inf > control.gtol
-        assert result.n_accepted == 0
-        assert result.n_iter == reported_iter
+        assert "exceeds gtol" in result.message
 
 
 @pytest.mark.parametrize("max_step", [0.0, np.inf, True])

@@ -1085,6 +1085,7 @@ def optimize_nb_stream_reml(
             not pin_lambda and n_lambda == 1 and family.n_theta == 1
         ),
         completion_inner_tolerance=(pirls_control.tol if family.n_theta == 1 else None),
+        completion_score_roundoff=_nb_score_roundoff,
         local_score_change=(_nb_local_stationary_score_change if theta_only else None),
         max_step=max_step,
     )
