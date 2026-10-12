@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from scipy.optimize import OptimizeResult
 
 import jaxgam.execution.reml as reml_execution
 from jaxgam.execution.reml import StreamREMLControl, optimize_regular_stream_reml
@@ -657,3 +658,46 @@ def test_regular_optimizer_enables_completion_for_small_free_counts(
         assert result.curvature_completion_stop is None
         assert result.curvature_completion_steps == 0
         np.testing.assert_array_equal(np.asarray(result.trial.params), stop)
+
+
+@pytest.mark.parametrize(
+    ("predicted", "change", "rise", "envelope", "reason"),
+    [
+        (-1e-13, -1e-13, 0.0, 1e-12, None),
+        (-1e-13, 0.0, 0.0, 1e-12, "no derivative-integrated descent"),
+        (-1e-13, -1e-12, 0.0, 1e-12, "quadratic model error"),
+        (-1e-13, -1e-13, 0.0, np.nan, "invalid score envelope"),
+        (-1e-13, -1e-13, 2e-12, 1e-12, "measurable score increase"),
+    ],
+)
+def test_completions_share_one_newton_acceptance_test(
+    predicted, change, rise, envelope, reason
+):
+    """Pinned and free completions apply newton()'s tests in one helper."""
+    score = _OPTIMUM_SCORE
+    assert (
+        reml_execution._newton_model_rejection(
+            predicted, change, score, score + rise, envelope
+        )
+        == reason
+    )
+
+
+def test_completions_share_one_abnormal_stop_predicate():
+    """SciPy's result and the restated stage result use one ABNORMAL test."""
+    abnormal = OptimizeResult(success=False, status=2, message=_ABNORMAL)
+    legacy = OptimizeResult(
+        success=False, status=2, message="ABNORMAL_TERMINATION_IN_LNSRCH"
+    )
+    relative = OptimizeResult(success=True, status=0, message=_RELATIVE)
+    limit = OptimizeResult(
+        success=False, status=1, message="STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT"
+    )
+    restated = SimpleNamespace(status=2, message="ABNORMAL: ; completion detail")
+    for result in (abnormal, legacy, restated):
+        assert reml_execution._abnormal_line_search_stop(result)
+    for result in (abnormal, legacy, relative):
+        assert reml_execution._lbfgsb_roundoff_stop(result)
+    for result in (relative, limit):
+        assert not reml_execution._abnormal_line_search_stop(result)
+    assert not reml_execution._lbfgsb_roundoff_stop(limit)

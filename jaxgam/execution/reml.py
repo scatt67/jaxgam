@@ -1331,10 +1331,9 @@ def _lbfgsb_roundoff_stop(result: OptimizeResult) -> bool:
     SciPy restored the last accepted iterate. Near the optimum both compare
     raw-score roundoff. Iteration/evaluation limits and errors are excluded.
     """
-    message = str(result.message)
-    return (bool(result.success) and "RELATIVE REDUCTION OF F" in message) or (
-        int(result.status) != 0 and message.startswith("ABNORMAL")
-    )
+    return (
+        bool(result.success) and "RELATIVE REDUCTION OF F" in str(result.message)
+    ) or _abnormal_line_search_stop(result)
 
 
 def _free_projected_norm(
@@ -1398,17 +1397,13 @@ def _curvature_newton_rejection(
         return "no gradient reduction"
     predicted = float(old_free @ step + 0.5 * (step @ curvature @ step))
     change = float(0.5 * ((old_free + new_free) @ step))
-    if not change < 0.0:
-        return "no derivative-integrated descent"
-    qerror = abs(predicted - change) / max(abs(predicted), abs(change))
-    if not qerror < _SCALE_NEWTON_QERROR:
-        return "quadratic model error"
-    envelope = float(score_roundoff(accepted)) + float(score_roundoff(trial))
-    if not (np.isfinite(envelope) and envelope >= 0.0):
-        return "invalid score envelope"
-    if not score_new - score_old <= envelope:
-        return "measurable score increase"
-    return None
+    return _newton_model_rejection(
+        predicted,
+        change,
+        score_old,
+        score_new,
+        float(score_roundoff(accepted)) + float(score_roundoff(trial)),
+    )
 
 
 def _complete_free_curvature_newton(
@@ -1946,11 +1941,7 @@ def _run_parameterized_stream_reml(
             )
         elif total_iterations >= control.max_iter:
             completion = _CurvatureCompletion(0, "not run: iteration limit")
-        elif not (
-            inner_valid(accepted)
-            and np.isfinite(float(np.asarray(accepted.score)))
-            and np.all(np.isfinite(np.asarray(accepted.gradient)))
-        ):
+        elif not _valid_exact_trial(accepted, completion_inner_tolerance):
             completion = _CurvatureCompletion(0, "not run: accepted trial is invalid")
         else:
             completion, total_iterations = _complete_free_curvature_newton(
@@ -1959,10 +1950,8 @@ def _run_parameterized_stream_reml(
                 control,
                 iterations=total_iterations,
                 max_step=max_step,
-                trial_valid=lambda trial: bool(
-                    inner_valid(trial)
-                    and np.isfinite(float(np.asarray(trial.score)))
-                    and np.all(np.isfinite(np.asarray(trial.gradient)))
+                trial_valid=lambda trial: _valid_exact_trial(
+                    trial, completion_inner_tolerance
                 ),
                 score_roundoff=completion_score_roundoff,
             )
@@ -2064,6 +2053,38 @@ def _regular_score_roundoff(trial: RegularStreamREMLTrial) -> float:
     return 8.0 * float(np.finfo(np.float64).eps) * magnitude
 
 
+def _newton_model_rejection(
+    predicted: float,
+    change: float,
+    score_old: float,
+    score_new: float,
+    envelope: float,
+) -> str | None:
+    """Apply pinned ``newton()``'s step acceptance to a measured change.
+
+    ``gam.fit3.r::newton`` accepts a trial when ``score.change < 0`` and the
+    quadratic-model error ``|pred.change - score.change| /
+    max(|pred.change|, |score.change|)`` is below ``qerror.thresh = 0.8``
+    (newton() also adds ``score.scale*conv.tol`` to that denominator;
+    omitting it is stricter). Near the optimum the raw change is far below
+    the float64 resolution of the O(n) score, so every completion passes the
+    change measured from exact endpoint derivatives; the raw score may not
+    rise beyond ``envelope``, the float64 envelope of both scores. Both the
+    pinned single-coordinate and the free-parameter completion use this one
+    test after their own curvature and gradient gates.
+    """
+    if not change < 0.0:
+        return "no derivative-integrated descent"
+    qerror = abs(predicted - change) / max(abs(predicted), abs(change))
+    if not qerror < _SCALE_NEWTON_QERROR:
+        return "quadratic model error"
+    if not (np.isfinite(envelope) and envelope >= 0.0):
+        return "invalid score envelope"
+    if not score_new - score_old <= envelope:
+        return "measurable score increase"
+    return None
+
+
 def _pinned_newton_rejection(
     accepted: _TrialT,
     trial: _TrialT,
@@ -2124,15 +2145,13 @@ def _pinned_newton_rejection(
     change = integrated_change(
         step, gradient_old, gradient_new, curvature_old, curvature_new
     )
-    if not change < 0.0:
-        return "no derivative-integrated descent"
-    qerror = abs(predicted - change) / max(abs(predicted), abs(change))
-    if not qerror < _SCALE_NEWTON_QERROR:
-        return "quadratic model error"
-    envelope = score_roundoff(accepted) + score_roundoff(trial)
-    if not score_new - score_old <= envelope:
-        return "measurable score increase"
-    return None
+    return _newton_model_rejection(
+        predicted,
+        change,
+        score_old,
+        score_new,
+        score_roundoff(accepted) + score_roundoff(trial),
+    )
 
 
 def _hermite_change(
@@ -2271,17 +2290,18 @@ def _complete_pinned_log_scale(
 
 
 def _abnormal_line_search_stop(
-    optimized: _ParameterizedOptimization[_TrialT],
+    optimized: _ParameterizedOptimization[_TrialT] | OptimizeResult,
 ) -> bool:
     """Whether L-BFGS-B ended ABNORMAL after failed line searches.
 
     SciPy reports ``ABNORMAL: `` (``ABNORMAL_TERMINATION_IN_LNSRCH`` before
     its C translation) when ``maxls`` evaluations fail the Moré-Thuente tests
     with no correction pairs left, and restores the last accepted iterate.
-    Near a pinned single-coordinate optimum these tests compare raw-score
-    roundoff, so this stop does not mean the accepted trial is unusable.
+    Near an optimum these tests compare raw-score roundoff, so this stop does
+    not mean the accepted trial is unusable. It reads SciPy's result and the
+    restated stage result alike; every completion uses this one test.
     """
-    return optimized.status != 0 and optimized.message.startswith("ABNORMAL")
+    return int(optimized.status) != 0 and str(optimized.message).startswith("ABNORMAL")
 
 
 def _valid_exact_trial(trial: _TrialT, inner_tolerance: float) -> bool:
