@@ -59,21 +59,8 @@ from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 # A named generated case, exact model controls, and a live pinned-R fit own
 # each reviewed PR7.6 MODERATE field. The generator is replayed at runtime so
 # changed data or source schemas cannot inherit that field's allowance.
-_PR76_SCORE_PHI_CASES = frozenset(
-    {
-        (Gaussian, "log"),
-        (Gaussian, "inverse"),
-        (Gaussian, "logit"),
-        (Gaussian, "probit"),
-        (Gaussian, "cloglog"),
-        (Gaussian, "inverse_squared"),
-        (Gamma, "identity"),
-        (Gamma, "log"),
-        (Gamma, "logit"),
-        (Gamma, "cloglog"),
-        (Gamma, "inverse_squared"),
-    }
-)
+# Unknown-scale score scales are judged by pinned R's own matched-state
+# stationarity instead (see _matched_r_score_scale_checks).
 _PR76_KNOWN_BOUNDARY_CASES = frozenset({(Poisson, "identity"), (Binomial, "log")})
 
 
@@ -215,9 +202,7 @@ def test_pr76_nb_reviewed_case_rejects_changed_data_or_mode() -> None:
         "inverse_squared",
     ],
 )
-def test_public_fixed_sp_regular_noncanonical_pinned_r(
-    family_class, link: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_public_fixed_sp_regular_noncanonical_pinned_r(family_class, link: str) -> None:
     """Public fixed-sp regular inventory uses R's score and reported scales."""
     family, data, weight, offset, start = _public_fixed_regular_case(family_class, link)
     r_startup_boundary = (
@@ -230,7 +215,8 @@ def test_public_fixed_sp_regular_noncanonical_pinned_r(
                 data, weight, offset, family.family_name.lower(), link
             )
     else:
-        expected = RBridge(mode="rpy2").public_fixed_sp_fit(
+        bridge = RBridge(mode="rpy2")
+        expected = bridge.public_fixed_sp_fit(
             data, weight, offset, family.family_name.lower(), link
         )
     model = GAM(
@@ -245,29 +231,8 @@ def test_public_fixed_sp_regular_noncanonical_pinned_r(
         ),
     )
     source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
-    selected_phi_case = (family_class, link) in _PR76_SCORE_PHI_CASES
-    known_boundary_case = (family_class, link) in _PR76_KNOWN_BOUNDARY_CASES
-    if selected_phi_case or known_boundary_case:
+    if (family_class, link) in _PR76_KNOWN_BOUNDARY_CASES:
         _assert_pr76_regular_case(family_class, link, source, model)
-    captured = {}
-    if (family_class, link) == (Gamma, "probit"):
-        from jaxgam.execution import reml as reml_execution
-
-        original_optimizer = reml_execution.optimize_regular_stream_reml
-
-        def capture_optimizer(*args, **kwargs):
-            optimized = original_optimizer(*args, **kwargs)
-            captured.update(
-                optimized=optimized,
-                pirls_control=kwargs["pirls_control"],
-                reml_control=kwargs.get("control")
-                or reml_execution.StreamREMLControl(),
-            )
-            return optimized
-
-        monkeypatch.setattr(
-            reml_execution, "optimize_regular_stream_reml", capture_optimizer
-        )
     if family_class is Poisson and r_startup_boundary:
         with pytest.raises(ValueError, match="initial predictor"):
             model.fit(source, result="prediction")
@@ -323,9 +288,7 @@ def test_public_fixed_sp_regular_noncanonical_pinned_r(
         data[["x"]], pred_type="link", se_fit=True, offset=offset
     )
     moderate_fields: set[str] = set()
-    if selected_phi_case:
-        moderate_fields.add("score scale")
-    elif (family_class, link) == (Poisson, "identity"):
+    if (family_class, link) == (Poisson, "identity"):
         moderate_fields.update(("coefficients", "fitted values", "link SE"))
     elif (family_class, link) == (Binomial, "log"):
         moderate_fields.update(("coefficients", "score", "fitted values", "link SE"))
@@ -346,49 +309,19 @@ def test_public_fixed_sp_regular_noncanonical_pinned_r(
             "link SE": "link_se",
         }.get(name, name)
         tolerance = MODERATE if name in moderate_fields else STRICT
-        if (family_class, link) == (Gamma, "probit") and field == "score_scale":
-            optimized = captured["optimized"]
-            trial = optimized.trial
-            r_gradient = expected["outer_gradient"]
-            r_hessian = expected["outer_hessian"]
-            assert r_gradient is not None
-            assert r_hessian is not None
-            r_gradient_text = [format(float(x), ".17g") for x in np.ravel(r_gradient)]
-            r_hessian_text = [format(float(x), ".17g") for x in np.ravel(r_hessian)]
-            diagnostic = (
-                f"JAX scale={float(actual):.17g}, R scale={expected[field]:.17g}; "
-                f"JAX score={float(np.asarray(trial.score)):.17g}, "
-                f"R score={expected['score']:.17g}; "
-                f"JAX gradient={float(np.asarray(trial.gradient)[-1]):.17g}, "
-                f"R gradient={r_gradient_text}, R Hessian={r_hessian_text}; "
-                f"JAX status={optimized.message!r}, "
-                f"outer iterations={optimized.n_iter}, "
-                f"projected gradient={optimized.projected_gradient_inf:.17g}, "
-                f"inner stationarity={trial.fit_result.state.stationarity:.17g}, "
-                f"source factor residual={trial.source_factor_residual:.17g}, "
-                f"observed factor residual={trial.observed_factor_residual:.17g}; "
-                f"R status={expected['outer_status']!r}, "
-                f"outer iterations={expected['outer_iterations']}, "
-                f"inner converged={expected['inner_converged']}, "
-                f"inner iterations={expected['inner_iterations']}; "
-                f"JAX PIRLS tol={captured['pirls_control'].tol:.17g}, "
-                f"gtol={captured['reml_control'].gtol:.17g}, "
-                f"ftol={captured['reml_control'].ftol:.17g}; "
-                f"R epsilon={expected['r_epsilon']:.17g}, "
-                f"Newton conv.tol={expected['r_newton_tolerance']:.17g}"
-            )
-            checks.check(
-                name,
-                lambda actual=actual, field=field, diagnostic=diagnostic: (
-                    np.testing.assert_allclose(
-                        actual,
-                        expected[field],
-                        rtol=STRICT.rtol,
-                        atol=STRICT.atol,
-                        err_msg=diagnostic,
-                    )
-                ),
-            )
+        if field == "score_scale" and not family.scale_known:
+            _matched_r_score_scale_checks(
+                family,
+                link,
+                data,
+                weight,
+                offset,
+                source,
+                model,
+                result,
+                expected,
+                bridge,
+            )(checks)
             continue
         checks.check(
             name,
@@ -502,7 +435,12 @@ def _matched_r_score_scale_checks(
     Newton-completed stationary scale.
     """
     derivatives = bridge.public_fixed_sp_scale_derivatives(
-        data, weight, offset, family.family_name.lower(), link, sp=0.5
+        data,
+        weight,
+        offset,
+        family.family_name.lower(),
+        link,
+        sp=float(model.sp[0]) if model.sp else None,
     )
     r_phi = float(expected["score_scale"])
     r_gradient = derivatives["gradient"]
@@ -546,7 +484,8 @@ def _matched_r_score_scale_checks(
     gradient_in_phi_units = family.family_name == "Gamma"
     # Record the pinned oracle's raw-tolerance selection in the test log.
     logging.getLogger(__name__).warning(
-        f"PR7.6 {family.family_name}/{link} raw score-scale tolerance: "
+        f"PR7.6 {model.formula} {family.family_name}/{link} raw score-scale "
+        "tolerance: "
         f"{'STRICT' if r_stationary else 'MODERATE'} "
         f"(R phi*/phi_R - 1 = {np.expm1(-r_gradient / r_hessian):.3e}, "
         f"R outer status = {expected['outer_status']})"

@@ -1357,7 +1357,7 @@ class RBridge:
         family_name: str,
         link: str,
         *,
-        sp: float,
+        sp: float | None,
         scale: float | None = None,
         r_epsilon: float = 1e-11,
         r_newton_tolerance: float = 1e-10,
@@ -1371,8 +1371,10 @@ class RBridge:
         offset and newton's tightened control. One fresh ``gam.fit3``
         (``deriv=2``) at ``sp = c(log(sp), log(scale))`` then returns the
         objective newton differentiates, independent of newton's path or of
-        the trial object it may return after a step failure. ``scale=None``
-        evaluates at the fit's own returned ``reml.scale``.
+        the trial object it may return after a step failure. ``sp=None``
+        selects the parametric ``y ~ x`` model, whose only newton parameter is
+        ``log(scale)``. ``scale=None`` evaluates at the fit's own returned
+        ``reml.scale``.
         """
         self._require_rpy2()
         from tests.r_ast import clone_function, make_r_callback
@@ -1421,7 +1423,10 @@ class RBridge:
             raise RBridgeError("Pinned public fit did not call newton's gam.fit3")
         first = recorded[0]
         recorded_sp = np.asarray(first["sp"], dtype=np.float64).ravel()
-        if recorded_sp.shape != (2,) or abs(recorded_sp[0] - np.log(sp)) > 4 * (
+        if sp is None:
+            if recorded_sp.shape != (1,):
+                raise RBridgeError("newton's parametric gam.fit3 sp is not log(scale)")
+        elif recorded_sp.shape != (2,) or abs(recorded_sp[0] - np.log(sp)) > 4 * (
             np.spacing(abs(np.log(sp)))
         ):
             raise RBridgeError("newton's gam.fit3 sp is not c(log(sp), log(scale))")
@@ -1433,7 +1438,7 @@ class RBridge:
             **{
                 **first,
                 "sp": self._to_r_vector(
-                    np.array([recorded_sp[0], np.log(evaluation_scale)])
+                    np.r_[recorded_sp[:-1], np.log(evaluation_scale)]
                 ),
                 "deriv": 2,
             }

@@ -230,18 +230,22 @@ def test_public_fixed_sp_scale_derivatives_reproduce_newton_state() -> None:
     bridge = RBridge(mode="rpy2")
     checks = _AssertCollector()
     full = 0
-    for family_class, link in (
-        (Gaussian, "log"),
-        (Gaussian, "sqrt"),
-        (Gamma, "inverse"),
-        (Gamma, "sqrt"),
-        (Gamma, "probit"),
+    for family_class, link, sp in (
+        (Gaussian, "log", 0.5),
+        (Gaussian, "sqrt", 0.5),
+        (Gamma, "inverse", 0.5),
+        (Gamma, "sqrt", 0.5),
+        (Gamma, "probit", 0.5),
+        # Parametric y ~ x: newton's only parameter is log(scale).
+        (Gaussian, "log", None),
+        (Gamma, "inverse", None),
+        (Gamma, "sqrt", None),
     ):
         family, data, weight, offset, _ = _case(family_class, link)
         name = family.family_name.lower()
-        public = bridge.public_fixed_sp_fit(data, weight, offset, name, link, sp=0.5)
+        public = bridge.public_fixed_sp_fit(data, weight, offset, name, link, sp=sp)
         derivatives = bridge.public_fixed_sp_scale_derivatives(
-            data, weight, offset, name, link, sp=0.5
+            data, weight, offset, name, link, sp=sp
         )
         assert derivatives["returned_scale"] == public["score_scale"]
         assert derivatives["scale"] == public["score_scale"]
@@ -261,7 +265,7 @@ def test_public_fixed_sp_scale_derivatives_reproduce_newton_state() -> None:
             ("hessian", np.ravel(public["outer_hessian"])[-1]),
         ):
             checks.check(
-                f"{name}/{link} {field}",
+                f"{name}/{link} sp={sp} {field}",
                 lambda field=field, outer=outer, derivatives=derivatives: (
                     np.testing.assert_allclose(
                         derivatives[field],
