@@ -701,3 +701,124 @@ def test_completions_share_one_abnormal_stop_predicate():
     for result in (relative, limit):
         assert not reml_execution._abnormal_line_search_stop(result)
     assert not reml_execution._lbfgsb_roundoff_stop(limit)
+
+
+@pytest.mark.parametrize(
+    ("n_penalties", "scale_known", "pin_lambda", "route"),
+    [
+        (1, False, True, "pinned"),
+        (0, False, False, "pinned"),
+        (0, False, True, "pinned"),
+        (1, False, False, "free"),
+        (1, True, False, "free"),
+        (3, False, False, "free"),
+        (4, False, False, None),
+    ],
+)
+def test_regular_completion_routing_prefers_pinned_scale(
+    monkeypatch, n_penalties, scale_known, pin_lambda, route
+):
+    """At most one newton() completion runs; the pinned log-scale one wins.
+
+    Without a free smoothing parameter the log scale is the only free
+    coordinate. Its count (m = 1) is inside the free completion's range, but
+    the exact-curvature pinned completion owns it. Free smoothing with at
+    most four free coordinates takes the free-parameter completion.
+    """
+    n_params = n_penalties + int(not scale_known)
+    hessian = np.diag(np.linspace(2.0, 3.0, n_params)) + 0.25
+    target = np.linspace(-1.0, 1.0, n_params)
+    start = target + 0.01
+    evaluated = []
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        params = np.asarray(params, dtype=np.float64)
+        evaluated.append(params.copy())
+        difference = params - target
+        trial = _regular_stub(
+            params,
+            score=_OPTIMUM_SCORE + 0.5 * float(difference @ hessian @ difference),
+            gradient=hessian @ difference,
+            log_phi_curvature=None if scale_known else float(hessian[-1, -1]),
+        )
+        trial.fit_result.state.n_iter = 3
+        trial.final_refit_solves = 1
+        trial.derivative_elapsed_s = 0.25
+        return trial
+
+    def relative_stop(fun, x0, **_kwargs):
+        fun(np.asarray(x0))
+        return SimpleNamespace(
+            x=np.asarray(x0).copy(), success=True, status=0, message=_RELATIVE, nit=1
+        )
+
+    routes = []
+    pinned = reml_execution._complete_pinned_regular_scale
+    free = reml_execution._complete_free_curvature_newton
+
+    def record_pinned(*args, **kwargs):
+        routes.append("pinned")
+        return pinned(*args, **kwargs)
+
+    def record_free(*args, **kwargs):
+        routes.append("free")
+        return free(*args, **kwargs)
+
+    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", relative_stop)
+    monkeypatch.setattr(reml_execution, "_complete_pinned_regular_scale", record_pinned)
+    monkeypatch.setattr(reml_execution, "_complete_free_curvature_newton", record_free)
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(
+            fitting=SimpleNamespace(
+                penalty_structure=SimpleNamespace(n_penalties=n_penalties)
+            ),
+            n_coef=4,
+        ),
+    )
+    result = optimize_regular_stream_reml(
+        stream,
+        SimpleNamespace(scale_known=scale_known),
+        start,
+        maximum_bytes=1_000_000,
+        pin_lambda=pin_lambda,
+        control=_CONTROL,
+    )
+    assert routes == ([] if route is None else [route])
+    np.testing.assert_array_equal(
+        np.asarray(result.trial.params)[: n_penalties if pin_lambda else 0],
+        start[: n_penalties if pin_lambda else 0],
+    )
+    # Work counters charge every exact trial, completion trials included.
+    assert result.n_evaluations == len(evaluated)
+    assert result.cumulative_source_scans == 2 * len(evaluated)
+    assert result.cumulative_inner_iterations == 3 * len(evaluated)
+    assert result.cumulative_final_refit_solves == len(evaluated)
+    assert result.cumulative_derivative_s == 0.25 * len(evaluated)
+    if route == "pinned":
+        assert result.scale_completion_stop in {"resolved", "no gradient reduction"}
+        assert result.scale_completion_steps >= 1
+        assert result.curvature_completion_stop is None
+        assert result.curvature_completion_steps == 0
+        assert "pinned log-scale Newton completion" in result.message
+        assert "free-parameter curvature" not in result.message
+        assert result.converged
+    elif route == "free":
+        assert result.curvature_completion_stop == "converged"
+        assert result.curvature_completion_steps == 1
+        assert result.scale_completion_stop is None
+        assert "free-parameter curvature Newton completion" in result.message
+        assert "pinned log-scale" not in result.message
+        assert result.converged
+        np.testing.assert_allclose(
+            np.asarray(result.trial.params),
+            target,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+    else:
+        assert result.scale_completion_stop is None
+        assert result.curvature_completion_stop is None
+        assert not result.converged
+        np.testing.assert_array_equal(np.asarray(result.trial.params), start)

@@ -2414,6 +2414,14 @@ def optimize_regular_stream_reml(
     ``pin_lambda=True`` the supplied rho is held exactly, including outside
     the estimated-parameter bounds, while phi remains free. Every accepted
     point owns a fully reconverged source trial.
+
+    At most one newton() completion follows the L-BFGS-B stage. When no
+    smoothing parameter is free (every rho pinned, or none exists) and the
+    scale is unknown, log scale is the only free coordinate and the pinned
+    single-coordinate completion with exact log-scale curvature runs; it
+    takes precedence. Otherwise, with free smoothing parameters and at most
+    four free coordinates, the free-parameter curvature completion runs after
+    an L-BFGS-B roundoff stop.
     """
     reml_control = StreamREMLControl() if control is None else control
     _validate_max_step(max_step)
@@ -2474,8 +2482,15 @@ def optimize_regular_stream_reml(
     # the m-by-m curvature model, its eigenvalue/solve copies (2m^2) and about
     # fourteen m-vectors of parameters, gradients, probes and steps; for
     # m <= 4, 3m^2 + 14m <= m^2 + 24m.
+    # Completion routing: the pinned single-coordinate log-scale completion
+    # takes precedence; the free-parameter completion needs a free smoothing
+    # parameter, so the two never both follow one L-BFGS-B stage.
+    pinned_scale_completion = not family.scale_known and (pin_lambda or n_lambda == 0)
     curvature_completion = (
-        not pin_lambda and n_lambda >= 1 and n_params <= _CURVATURE_COMPLETION_MAX_FREE
+        not pinned_scale_completion
+        and not pin_lambda
+        and n_lambda >= 1
+        and n_params <= _CURVATURE_COMPLETION_MAX_FREE
     )
     curvature_completion_bytes = (
         8 * (n_params * n_params + 24 * n_params) if curvature_completion else 0
@@ -2522,7 +2537,7 @@ def optimize_regular_stream_reml(
         **step_options,
     )
     completion = None
-    if not family.scale_known and (pin_lambda or n_lambda == 0):
+    if pinned_scale_completion:
         optimized, completion = _complete_pinned_regular_scale(
             objective,
             optimized,

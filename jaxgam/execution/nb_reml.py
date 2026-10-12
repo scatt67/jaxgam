@@ -969,7 +969,10 @@ def optimize_nb_stream_reml(
     log-theta remains free and unbounded. Whenever log theta is the only free
     coordinate (every rho pinned, or no smoothing parameter at all), the
     roundoff stationary comparison and the log-theta secant Newton completion
-    follow the L-BFGS-B stage.
+    follow the L-BFGS-B stage; this pinned route takes precedence. Otherwise,
+    with one free smoothing parameter and free log theta, the free-parameter
+    curvature completion follows an L-BFGS-B roundoff stop. At most one
+    completion runs.
     """
     reml_control = StreamREMLControl() if control is None else control
     _validate_max_step(max_step)
@@ -1041,13 +1044,17 @@ def optimize_nb_stream_reml(
     # The log-theta completion records two host scalars per promotion; its
     # own trials reuse the accepted/candidate slots after L-BFGS-B returns.
     theta_secant_bytes = _THETA_SECANT_BYTES if theta_only else 0
+    # The pinned log-theta route takes precedence; the free-parameter
+    # completion needs the one free smoothing parameter, so the two never
+    # both follow one L-BFGS-B stage.
+    curvature_completion = (
+        not theta_only and not pin_lambda and n_lambda == 1 and family.n_theta == 1
+    )
     # The two-coordinate completion holds a small finite-gradient curvature
     # matrix, probe vectors, projected gradients and short-lived copies while
     # accepted and candidate trials coexist.
     curvature_completion_bytes = (
-        8 * (n_params * n_params + 24 * n_params)
-        if not pin_lambda and n_lambda == 1 and family.n_theta == 1
-        else 0
+        8 * (n_params * n_params + 24 * n_params) if curvature_completion else 0
     )
     outer_workspace_bytes = (
         retained_trial_bytes
@@ -1081,9 +1088,7 @@ def optimize_nb_stream_reml(
         bounds,
         reml_control,
         roundoff_stationary_completion=theta_only,
-        curvature_stationary_completion=(
-            not pin_lambda and n_lambda == 1 and family.n_theta == 1
-        ),
+        curvature_stationary_completion=curvature_completion,
         completion_inner_tolerance=(pirls_control.tol if family.n_theta == 1 else None),
         completion_score_roundoff=_nb_score_roundoff,
         local_score_change=(_nb_local_stationary_score_change if theta_only else None),

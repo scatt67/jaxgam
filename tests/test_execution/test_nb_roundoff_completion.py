@@ -1185,3 +1185,164 @@ def test_no_smooth_estimated_theta_abnormal_completion_matches_pinned_r(
             ),
         )
     checks.raise_if_any(f"no-smooth NB/{link} forced ABNORMAL pinned R parity")
+
+
+# ---------------------------------------------------------------------------
+# Completion routing: pinned log theta before the free-parameter completion
+# ---------------------------------------------------------------------------
+
+
+def _routing_nb_trial(params, hessian, target):
+    """Exact quadratic NB source trial; log theta is the final coordinate."""
+    params = np.array(params, dtype=np.float64, copy=True)
+    difference = params - target
+    state = SimpleNamespace(
+        converged=True,
+        line_search_failed=False,
+        stationarity=0.0,
+        n_iter=1,
+        saturated_loglik=-280.0,
+        coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 19.0),
+    )
+    return _ProfileTrial(
+        params=params,
+        score=np.float64(
+            _PROFILE_SCORE + 0.5 * float(difference @ hessian @ difference)
+        ),
+        gradient=hessian @ difference,
+        source_scans=2,
+        batches_scanned=5,
+        source_fingerprint="source",
+        basis_fingerprint="basis",
+        family_name="nb",
+        link_name="IdentityLink",
+        source_factor_residual=1e-15,
+        observed_factor_residual=1e-15,
+        workspace=SimpleNamespace(required_bytes=256),
+        fit_result=SimpleNamespace(
+            log_theta=params[-1:].copy(),
+            score_penalized_deviance=190.0,
+            state=state,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("n_penalties", "pin_lambda", "route"),
+    [
+        (1, True, "theta"),
+        (0, False, "theta"),
+        (0, True, "theta"),
+        (1, False, "free"),
+        (2, False, None),
+    ],
+)
+def test_nb_completion_routing_prefers_pinned_log_theta(
+    monkeypatch, n_penalties, pin_lambda, route
+):
+    """At most one newton() completion runs; the pinned log-theta one wins.
+
+    With every rho pinned, or none, log theta is the only free coordinate and
+    takes the secant completion. One free rho with free log theta takes the
+    free-parameter completion; NB enables it for exactly that pair.
+    """
+    n_params = n_penalties + 1
+    hessian = np.diag(np.linspace(2.0, 3.0, n_params)) + 0.25
+    target = np.linspace(-1.0, 1.0, n_params)
+    start = target + 0.01
+    evaluated = []
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        evaluated.append(np.asarray(params, dtype=np.float64).copy())
+        trial = _routing_nb_trial(params, hessian, target)
+        trial.final_refit_solves = 1
+        trial.derivative_elapsed_s = 0.25
+        return trial
+
+    def accept_then_stop(fun, x0, *, callback, **_kwargs):
+        # Two accepted log-theta steps resolve the secant, then a roundoff
+        # stop leaves the projected gradient above gtol.
+        x = np.asarray(x0, dtype=np.float64).copy()
+        fun(x)
+        for _ in range(2):
+            x = x.copy()
+            x[-1] -= 0.003
+            fun(x)
+            callback(OptimizeResult(x=x.copy(), fun=0.0))
+        return SimpleNamespace(
+            x=x.copy(),
+            success=True,
+            status=0,
+            message="CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+            nit=2,
+        )
+
+    flags = []
+    original = nb_reml_execution._run_parameterized_stream_reml
+
+    def record(*args, **kwargs):
+        flags.append(
+            (
+                kwargs["roundoff_stationary_completion"],
+                kwargs["curvature_stationary_completion"],
+            )
+        )
+        return original(*args, **kwargs)
+
+    fitting = SimpleNamespace(
+        penalty_structure=SimpleNamespace(n_penalties=n_penalties)
+    )
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(fitting=fitting, n_coef=2),
+    )
+    monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", accept_then_stop)
+    monkeypatch.setattr(nb_reml_execution, "_run_parameterized_stream_reml", record)
+    result = nb_reml_execution.optimize_nb_stream_reml(
+        stream,
+        NegativeBinomial(theta=2.7, fixed=False, link="identity"),
+        start,
+        maximum_bytes=1_000_000,
+        pin_lambda=pin_lambda,
+        pirls_control=StreamPIRLSControl(solver_policy="qr", tol=_INNER_TOLERANCE),
+        control=_PUBLIC_CONTROL,
+    )
+    assert flags == [(route == "theta", route == "free")]
+    np.testing.assert_array_equal(
+        np.asarray(result.trial.params)[: n_penalties if pin_lambda else 0],
+        start[: n_penalties if pin_lambda else 0],
+    )
+    # Work counters charge every exact trial, completion trials included.
+    assert result.n_evaluations == len(evaluated)
+    assert result.cumulative_source_scans == 2 * len(evaluated)
+    assert result.cumulative_inner_iterations == len(evaluated)
+    assert result.cumulative_final_refit_solves == len(evaluated)
+    assert result.cumulative_derivative_s == 0.25 * len(evaluated)
+    if route == "theta":
+        assert result.theta_completion_stop is not None
+        assert not result.theta_completion_stop.startswith("not run")
+        assert result.theta_completion_steps >= 1
+        assert "secant Newton completion" in result.message
+        assert "free-parameter curvature" not in result.message
+        assert result.converged, result.message
+    elif route == "free":
+        assert result.theta_completion_stop is None
+        assert result.theta_completion_steps == 0
+        assert (
+            "free-parameter curvature Newton completion: 1 accepted step(s), "
+            "stopped by converged" in result.message
+        )
+        assert "secant Newton completion" not in result.message
+        assert result.converged, result.message
+        np.testing.assert_allclose(
+            np.asarray(result.trial.params),
+            target,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+    else:
+        assert result.theta_completion_stop is None
+        assert "curvature Newton completion" not in result.message
+        assert "secant Newton completion" not in result.message
+        assert not result.converged
