@@ -28,6 +28,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -788,6 +789,158 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
                 ),
             )
     checks.raise_if_any("Gamma inverse-squared exact partition parity")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_exact_gamma_inverse_squared_roundoff_stops_complete_pinned_r(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forced L-BFGS-B roundoff stops complete to the unforced endpoint and R.
+
+    The scripted first-order stage stops by relative reduction or ABNORMAL at
+    the pinned-Linux B=13 offset from the unforced optimum (projected
+    gradient ~1.4e-6 > gtol). In the ABNORMAL run the accepted raw score is
+    also lowered to 30 ULPs below the completed trial's own raw score, the
+    lucky-low roundoff draw that defeated the former one-ULP raw-score test.
+    """
+    from jaxgam.execution import reml as reml_execution
+
+    data, weight, offset = _public_exact_regular_case(Gamma, "inverse_squared")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+
+    def model() -> GAM:
+        return GAM(
+            'y~s(x,bs="cr",k=6)',
+            family=Gamma("inverse_squared"),
+            control=FitControl(
+                execution="stream",
+                linear_solver="qr",
+                batch_rows=17,
+                uncertainty="fisher",
+            ),
+        )
+
+    unforced = model().fit(source, result="prediction")
+    assert unforced.converged, unforced.convergence_info
+    stop = np.array(
+        [np.log(unforced.smoothing_params[0]), np.log(unforced.score_scale)]
+    ) + np.array([-2.1056e-7, 2.172e-8])
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, "gamma", "inverse_squared"
+    )
+    assert expected["inner_converged"]
+    actual_evaluate = reml_execution.evaluate_regular_stream_reml
+    stop_scores: dict[bytes, float] = {}
+
+    def evaluate(*args, **kwargs):
+        trial = actual_evaluate(*args, **kwargs)
+        params = np.asarray(trial.params, dtype=np.float64).tobytes()
+        if params in stop_scores:
+            trial = replace(trial, score=np.float64(stop_scores[params]))
+        return trial
+
+    def scripted_stop(abnormal: bool):
+        def minimize(fun, _x0, *, callback, **_kwargs):
+            fun(stop)
+            callback(SimpleNamespace(x=stop))
+            return SimpleNamespace(
+                x=stop.copy(),
+                success=not abnormal,
+                status=2 if abnormal else 0,
+                message=(
+                    "ABNORMAL: "
+                    if abnormal
+                    else "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
+                ),
+                nit=1,
+            )
+
+        return minimize
+
+    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+    checks = _AssertCollector()
+    completed_score = None
+    for abnormal in (False, True):
+        if abnormal:
+            stop_scores[stop.tobytes()] = completed_score - 30 * np.spacing(
+                abs(completed_score)
+            )
+        monkeypatch.setattr(reml_execution, "minimize", scripted_stop(abnormal))
+        fitted_model = model()
+        moderate_fields = _pr83_gamma_linux_endpoint_fields(
+            Gamma,
+            "inverse_squared",
+            source,
+            fitted_model,
+            expected,
+            data,
+            weight,
+            offset,
+        )
+        result = fitted_model.fit(source, result="prediction")
+        label = "abnormal" if abnormal else "relative reduction"
+        diagnostics = result.exact_optimizer_diagnostics
+        assert diagnostics is not None
+        assert result.converged, f"{label}: {result.convergence_info}"
+        assert diagnostics.status == (2 if abnormal else 0)
+        assert diagnostics.projected_gradient_inf <= 1e-6
+        assert (
+            "free-parameter curvature Newton completion: 1 accepted step(s), "
+            "stopped by converged" in result.convergence_info
+        )
+        history = diagnostics.accepted_score_history
+        rise = history[-1] - history[-2]
+        assert rise <= STRICT.atol
+        if abnormal:
+            assert history[-1] == completed_score
+            assert rise == 30 * np.spacing(abs(completed_score))
+        else:
+            completed_score = history[-1]
+        fitted = result.predict(data[["x"]], offset=offset)
+        link_se = result.predict(
+            data[["x"]], pred_type="link", se_fit=True, offset=offset
+        )[1]
+        unforced_link_se = unforced.predict(
+            data[["x"]], pred_type="link", se_fit=True, offset=offset
+        )[1]
+        for name, actual, reference in (
+            ("score", result.score, unforced.score),
+            ("smoothing", result.smoothing_params, unforced.smoothing_params),
+            ("coefficients", result.coefficients, unforced.coefficients),
+            ("scale", result.scale, unforced.scale),
+            ("score scale", result.score_scale, unforced.score_scale),
+            ("link SE", link_se, unforced_link_se),
+        ):
+            checks.check(
+                f"{label} unforced {name}",
+                lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                    actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+        for name, actual in (
+            ("coefficients", result.coefficients),
+            ("score", result.score),
+            ("scale", result.scale),
+            ("score_scale", result.score_scale),
+            ("deviance", result.deviance),
+            ("smoothing", result.smoothing_params[0]),
+            ("edf", result.edf_total),
+            ("fitted_values", fitted),
+            ("link_se", link_se),
+        ):
+            tolerance = MODERATE if name in moderate_fields else STRICT
+            checks.check(
+                f"{label} pinned R {name}",
+                lambda actual=actual, name=name, tolerance=tolerance: (
+                    np.testing.assert_allclose(
+                        actual,
+                        expected[name],
+                        rtol=tolerance.rtol,
+                        atol=tolerance.atol,
+                    )
+                ),
+            )
+    checks.raise_if_any("Gamma inverse-squared forced roundoff completion")
 
 
 def test_public_exact_large_row_fit_stays_within_stream_budget() -> None:
