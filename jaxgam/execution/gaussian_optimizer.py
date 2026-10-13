@@ -15,7 +15,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from jaxgam.families.standard import Gaussian
-from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.gaussian import (
     GaussianQRScore,
     jit_gaussian_qr_reml_hessian,
@@ -32,14 +32,14 @@ from jaxgam.formula.rank_coordinates import IdentifiableCoordinateMap
 from jaxgam.links.links import IdentityLink
 
 from .gaussian import (
+    GAUSSIAN_LBFGS_MAXCOR,
+    GAUSSIAN_LBFGS_PENALTY_THRESHOLD,
     FrozenGaussianQRPreparation,
     GaussianQRIneligible,
     prepare_frozen_gaussian_qr,
     prepare_streamed_frozen_gaussian_qr,
 )
 from .reml import StreamREMLControl, _projected_gradient
-
-GAUSSIAN_LBFGS_PENALTY_THRESHOLD = 50
 
 
 @dataclass(frozen=True)
@@ -449,7 +449,7 @@ def use_gaussian_qr_lbfgs(n_penalties: int) -> bool:
 
 
 def optimize_gaussian_qr_lbfgs(
-    fitting: FittingData,
+    fitting: FittingData | PreparedFittingMetadata,
     provider: DenseGaussianQROuterProvider,
     *,
     log_lambda_init: jax.Array | None = None,
@@ -468,6 +468,7 @@ def optimize_gaussian_qr_lbfgs(
         StreamREMLControl(
             gtol=float(np.sqrt(np.finfo(np.float64).eps)),
             ftol=0.0,
+            maxcor=GAUSSIAN_LBFGS_MAXCOR,
         )
         if control is None
         else control

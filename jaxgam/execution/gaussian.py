@@ -29,6 +29,10 @@ class GaussianQRIneligible(ValueError):
     """The model is valid, but outside the reviewed Gaussian QR route."""
 
 
+GAUSSIAN_LBFGS_PENALTY_THRESHOLD = 50
+GAUSSIAN_LBFGS_MAXCOR = 10
+
+
 @dataclass(frozen=True)
 class GaussianQRWorkspaceEstimate:
     """Conservative ledger for known streamed Gaussian QR array storage.
@@ -44,6 +48,7 @@ class GaussianQRWorkspaceEstimate:
     compact_host_device_bytes: int
     score_derivative_bytes: int
     outer_hessian_bytes: int
+    lbfgs_workspace_bytes: int
     optimization_peak_bytes: int
     required_bytes: int
 
@@ -431,7 +436,7 @@ def prepare_streamed_frozen_gaussian_qr(
 
 
 def estimate_streamed_gaussian_qr_workspace(
-    prepared: object, batch_rows: int
+    prepared: object, batch_rows: int, *, pin_lambda: bool = False
 ) -> GaussianQRWorkspaceEstimate:
     """Estimate known peak arrays before QR compression or device transfer."""
     if (
@@ -472,12 +477,26 @@ def estimate_streamed_gaussian_qr_workspace(
     score_derivative_bytes = (
         16 * p * p + 8 * root_entries + 16 * (p + rank + root_rows + m + 1)
     ) * itemsize
-    # The current streamed route uses Newton and therefore returns the full
-    # unknown-scale outer Hessian to Python. Opaque XLA derivative scratch is
-    # still outside this prospective ledger, as documented above.
-    outer_hessian_bytes = (m + 1) * (m + 1) * itemsize
+    n_outer = m + 1
+    if m > GAUSSIAN_LBFGS_PENALTY_THRESHOLD:
+        # SciPy's L-BFGS-B work arrays retain 2*m correction vectors plus its
+        # documented vector/scalar workspace. Fixed rho is removed from the
+        # free vector, leaving only unknown log(phi).
+        n_free = 1 if pin_lambda else n_outer
+        maxcor = GAUSSIAN_LBFGS_MAXCOR
+        lbfgs_workspace_bytes = (
+            2 * maxcor * n_free + 5 * n_free + 11 * maxcor * maxcor + 8 * maxcor
+        ) * itemsize + 3 * n_free * np.dtype(np.int32).itemsize
+        outer_hessian_bytes = 0
+    else:
+        # Newton returns the full unknown-scale outer Hessian to Python.
+        outer_hessian_bytes = n_outer * n_outer * itemsize
+        lbfgs_workspace_bytes = 0
     optimization_peak_bytes = (
-        compact_host_device_bytes + score_derivative_bytes + outer_hessian_bytes
+        compact_host_device_bytes
+        + score_derivative_bytes
+        + outer_hessian_bytes
+        + lbfgs_workspace_bytes
     )
     required_bytes = max(compression_peak_bytes, optimization_peak_bytes)
     return GaussianQRWorkspaceEstimate(
@@ -487,13 +506,18 @@ def estimate_streamed_gaussian_qr_workspace(
         compact_host_device_bytes=compact_host_device_bytes,
         score_derivative_bytes=score_derivative_bytes,
         outer_hessian_bytes=outer_hessian_bytes,
+        lbfgs_workspace_bytes=lbfgs_workspace_bytes,
         optimization_peak_bytes=optimization_peak_bytes,
         required_bytes=required_bytes,
     )
 
 
 def preflight_streamed_gaussian_qr_workspace(
-    prepared: object, batch_rows: int, memory_budget_bytes: int
+    prepared: object,
+    batch_rows: int,
+    memory_budget_bytes: int,
+    *,
+    pin_lambda: bool = False,
 ) -> GaussianQRWorkspaceEstimate:
     """Reject an over-budget Gaussian QR route before compression/device copies."""
     if (
@@ -502,7 +526,9 @@ def preflight_streamed_gaussian_qr_workspace(
         or memory_budget_bytes <= 0
     ):
         raise ValueError("memory_budget_bytes must be a positive integer")
-    estimate = estimate_streamed_gaussian_qr_workspace(prepared, batch_rows)
+    estimate = estimate_streamed_gaussian_qr_workspace(
+        prepared, batch_rows, pin_lambda=pin_lambda
+    )
     if estimate.required_bytes > memory_budget_bytes:
         raise MemoryError(
             "Known streamed Gaussian QR workspace requires "
@@ -511,7 +537,8 @@ def preflight_streamed_gaussian_qr_workspace(
             f"(compression={estimate.compression_peak_bytes}, compact host/device="
             f"{estimate.compact_host_device_bytes}, score/derivative="
             f"{estimate.score_derivative_bytes}, outer Hessian="
-            f"{estimate.outer_hessian_bytes}). SciPy LAPACK and XLA may allocate "
+            f"{estimate.outer_hessian_bytes}, L-BFGS-B="
+            f"{estimate.lbfgs_workspace_bytes}). SciPy LAPACK and XLA may allocate "
             "additional native workspace that this prospective check cannot hard-cap."
         )
     return estimate

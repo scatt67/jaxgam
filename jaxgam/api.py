@@ -426,6 +426,7 @@ class GAM:
                     prepared,
                     self.control.batch_rows,
                     self.control.memory_budget_bytes,
+                    pin_lambda=self.sp is not None,
                 )
         jax_device = _resolve_device(self.device)
         if estimated_efs:
@@ -628,8 +629,9 @@ def _fit_stream_gaussian_qr(
 ) -> GAMPredictionResult:
     """Fit the opt-in frozen Gaussian QR route through the published seam.
 
-    The selected Newton result carries the outer score and convergence
-    provenance; the row-free provider state owns the coefficient factor.
+    The selected Newton or large-penalty L-BFGS-B result carries the outer
+    score and convergence provenance; the row-free provider state owns the
+    coefficient factor.
     """
     fixed = sp is not None
     log_lambda = (
@@ -637,14 +639,29 @@ def _fit_stream_gaussian_qr(
         if fixed
         else metadata.log_lambda_init
     )
-    fit_result = newton_optimize(
-        metadata,
-        method,
-        log_lambda_init=log_lambda,
-        pin_lambda=fixed,
-        score_provider=provider,
+    from jaxgam.execution.gaussian_optimizer import (
+        optimize_gaussian_qr_lbfgs,
+        use_gaussian_qr_lbfgs,
     )
-    lambda_strategy = "fixed" if fixed else f"newton_{method.lower()}"
+
+    if use_gaussian_qr_lbfgs(metadata.n_penalties):
+        fit_result = optimize_gaussian_qr_lbfgs(
+            metadata,
+            provider,
+            log_lambda_init=log_lambda,
+            pin_lambda=fixed,
+        )
+        optimized_strategy = f"lbfgs_{method.lower()}"
+    else:
+        fit_result = newton_optimize(
+            metadata,
+            method,
+            log_lambda_init=log_lambda,
+            pin_lambda=fixed,
+            score_provider=provider,
+        )
+        optimized_strategy = f"newton_{method.lower()}"
+    lambda_strategy = "fixed" if fixed else optimized_strategy
     state = provider.to_stream_state(fit_result)
     selected = _selected_stream_fit(
         state,

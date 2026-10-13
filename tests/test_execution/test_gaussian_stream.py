@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import jaxgam.api as api_module
+import jaxgam.execution.gaussian_optimizer as gaussian_optimizer_module
 import jaxgam.fitting.newton as newton_module
 from jaxgam import GAM, FitControl
 from jaxgam.api import _preflight_stream_workspace
@@ -47,6 +48,19 @@ def _inputs(n: int = 149):
     data = pd.DataFrame({"x": x, "z": z, "y": y})
     formula = "y ~ s(x, bs='cr', k=7) + s(z, bs='cr', k=6)"
     return formula, data, weight, offset
+
+
+def _large_m_inputs():
+    n = 153
+    base = np.linspace(-1.0, 1.0, n)
+    columns = {f"x{index:02d}": np.roll(base, 3 * index) for index in range(51)}
+    y = sum(np.sin(2.0 * values) for values in columns.values()) / np.sqrt(51.0)
+    y += np.tile(np.array([0.1, -0.05, 0.02]), 51)
+    data = pd.DataFrame({**columns, "y": y})
+    formula = "y ~ " + " + ".join(
+        f"s(x{index:02d}, bs='cr', k=3)" for index in range(51)
+    )
+    return formula, data
 
 
 class _CountingSource:
@@ -227,6 +241,80 @@ def test_public_stream_gaussian_qr_matches_dense_strict(fixed_sp) -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+
+
+def test_real_large_m_stream_uses_first_order_route_and_bounded_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    formula, data = _large_m_inputs()
+    source = DataFrameRowSource(data, response="y")
+    captured: dict[str, object] = {}
+    original_builder = gaussian_optimizer_module.build_stream_gaussian_qr_provider
+
+    def audited_builder(stream, fitting, *, batch_rows):
+        estimate = estimate_streamed_gaussian_qr_workspace(stream.prepared, batch_rows)
+        provider = original_builder(stream, fitting, batch_rows=batch_rows)
+        captured.update(estimate=estimate, prepared=stream.prepared, provider=provider)
+        return provider
+
+    def fail_hessian(*_args, **_kwargs):
+        raise AssertionError("large-m streamed Gaussian fit formed an outer Hessian")
+
+    monkeypatch.setattr(
+        gaussian_optimizer_module,
+        "build_stream_gaussian_qr_provider",
+        audited_builder,
+    )
+    monkeypatch.setattr(
+        gaussian_optimizer_module, "jit_gaussian_qr_reml_hessian", fail_hessian
+    )
+    streamed = GAM(
+        formula,
+        control=FitControl(
+            execution="stream",
+            gaussian_compression=True,
+            batch_rows=37,
+        ),
+    ).fit(source, result="prediction")
+
+    estimate = captured["estimate"]
+    provider = captured["provider"]
+    assert provider._fitting.n_penalties == 51
+    assert estimate.outer_hessian_bytes == 0
+    n_free = 52
+    maxcor = 10
+    expected_lbfgs = (
+        2 * maxcor * n_free + 5 * n_free + 11 * maxcor * maxcor + 8 * maxcor
+    ) * np.dtype(np.float64).itemsize + 3 * n_free * np.dtype(np.int32).itemsize
+    assert estimate.lbfgs_workspace_bytes == expected_lbfgs
+    fixed_estimate = estimate_streamed_gaussian_qr_workspace(
+        captured["prepared"], 37, pin_lambda=True
+    )
+    assert fixed_estimate.outer_hessian_bytes == 0
+    assert 0 < fixed_estimate.lbfgs_workspace_bytes < estimate.lbfgs_workspace_bytes
+    assert provider.source_scans == 1
+    assert provider.finalize_calls == 1
+    assert streamed.execution_route == "stream_gaussian_qr"
+    assert streamed.lambda_strategy == "lbfgs_reml"
+    assert streamed.converged
+
+    dense = GAM(
+        formula,
+        control=FitControl(gaussian_compression=True),
+    ).fit(data, result="prediction")
+    for actual, expected in (
+        (streamed.coefficients, dense.coefficients),
+        (streamed.deviance, dense.deviance),
+        (streamed.score, dense.score),
+        (streamed.scale, dense.scale),
+        (streamed.predict(data), dense.predict(data)),
+    ):
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+    # This fixture's true signal lies in the shared unpenalized subspace, so
+    # all 51 smoothing optima are effectively infinite. The raw finite lambda
+    # representatives can drift while fitted quantities remain STRICT.
+    assert np.min(streamed.smoothing_params) > 1e8
+    assert np.min(dense.smoothing_params) > 1e8
 
 
 @pytest.mark.parametrize("bad_weight", [0.0, 1e-12, 1e11])

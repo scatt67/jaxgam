@@ -55,8 +55,9 @@ class FitControl:
     ``memory_budget_bytes``; a budget too small for one row is rejected before
     any full-data scan. Source-owned storage and allocator overhead remain
     outside these bounds. Gaussian QR adds a route-specific ledger for its
-    merge buffers and compact score/derivative arrays. Native LAPACK/XLA
-    workspace is not an allocator hard cap.
+    merge buffers and compact score/derivative arrays, including either the
+    small-penalty Newton Hessian or the bounded large-penalty L-BFGS-B work
+    arrays. Native LAPACK/XLA workspace is not an allocator hard cap.
 
     ``gaussian_compression=True`` opts a Gaussian identity-link fit into one
     weighted QR reduction followed by coefficient-space REML trials.  With
