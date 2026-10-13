@@ -347,7 +347,9 @@ def test_nb_optimizer_selected_trial_stationarity_and_nearby_dense_derivatives(
         _OPTIMIZER_CONTROL,
         _OPTIMIZER_PIRLS_CONTROL,
     )
-    curvature_bytes = 8 * (len(selected) ** 2 + 24 * len(selected)) if estimated else 0
+    # One free rho, with or without free log theta, charges the free-parameter
+    # curvature completion.
+    curvature_bytes = 8 * (len(selected) ** 2 + 24 * len(selected))
     assert result.outer_workspace_bytes == retained + history + lbfgs + curvature_bytes
     assert 0 < _retained_numeric_bytes(result.trial) <= retained
 
