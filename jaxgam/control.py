@@ -49,8 +49,12 @@ class FitControl:
     prediction matrices/SE workspace and explicit covariance materialization.
     The streamed backend additionally rejects known live PIRLS workspaces
     (coefficient reductions plus one design batch) above
-    ``memory_budget_bytes``. CPU basis preparation remains outside that
-    conservative accounting.
+    ``memory_budget_bytes``. Phase-1 streamed preparation scans at most
+    ``batch_rows`` rows at a time and shrinks that size until its prospective
+    setup workspace (JaxGAM-owned arrays plus the exact-knot SQLite scope) fits
+    ``memory_budget_bytes``; a budget too small for one row is rejected before
+    any full-data scan. Source-owned storage and allocator overhead remain
+    outside these bounds.
     """
 
     execution: Literal["dense", "stream"] = "dense"

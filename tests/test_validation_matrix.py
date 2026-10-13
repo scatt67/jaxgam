@@ -24,6 +24,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 
 import numpy as np
@@ -35,14 +37,820 @@ from jaxgam.api import GAM
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda, efs_initial_log_scale
+from jaxgam.execution.reml import evaluate_regular_stream_reml
+from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.negative_binomial import NegativeBinomial
-from jaxgam.families.standard import Gaussian, Poisson
+from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.newton import NewtonOptimizer
 from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import SEED, _AssertCollector, check_that, r_available
+from jaxgam.formula.prepare import prepare_model
+from tests.helpers import (
+    SEED,
+    _AssertCollector,
+    check_that,
+    nb_optimizer_case_data,
+    r_available,
+)
 from tests.r_bridge import RBridge, RBridgeError
 from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
+
+# A named generated case, exact model controls, and a live pinned-R fit own
+# each reviewed PR7.6 MODERATE field. The generator is replayed at runtime so
+# changed data or source schemas cannot inherit that field's allowance.
+# Unknown-scale score scales are judged by pinned R's own matched-state
+# stationarity instead (see _matched_r_score_scale_checks).
+_PR76_KNOWN_BOUNDARY_CASES = frozenset({(Poisson, "identity"), (Binomial, "log")})
+
+
+def _public_fixed_regular_case(family_class, link: str):
+    """Regenerate the original seeded 83-row retained-start input."""
+    from tests.test_execution.test_regular_starts import _case
+
+    return _case(family_class, link)
+
+
+def _assert_pr76_regular_case(
+    family_class,
+    link: str,
+    source: DataFrameRowSource,
+    model: GAM,
+) -> None:
+    """Bind a reviewed exception to the named generated input and controls."""
+    family, data, weight, offset, _ = _public_fixed_regular_case(family_class, link)
+    expected = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    assert type(family) is family_class
+    assert type(model.family) is family_class
+    assert type(model.family.link) is type(family.link)
+    assert source.n_rows == expected.n_rows == 83
+    assert source.fingerprint() == expected.fingerprint()
+    assert model.formula == "y~x"
+    assert model.sp == []
+    assert model.control.execution == "stream"
+    assert model.control.linear_solver == "qr"
+    assert model.control.batch_rows == 17
+    assert model.control.uncertainty == "fisher"
+
+
+def _assert_pr76_nb_case(source: DataFrameRowSource, model: GAM, link: str) -> None:
+    """Bind the reviewed free-theta cell to its generated rows and mode."""
+    data, weight, offset = nb_optimizer_case_data()
+    expected = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    assert source.n_rows == expected.n_rows == 180
+    assert source.fingerprint() == expected.fingerprint()
+    assert type(model.family) is NegativeBinomial
+    assert model.family.n_theta == 1
+    assert type(model.family.link) is type(NegativeBinomial(link=link).link)
+    np.testing.assert_array_equal(model.family.get_theta(transformed=True), [2.7])
+    assert model.formula == 'y~s(x,bs="cr",k=8)'
+    assert model.sp == [0.5]
+    assert model.control.execution == "stream"
+    assert model.control.linear_solver == "qr"
+    assert model.control.batch_rows == 17
+    assert model.control.uncertainty == "fisher"
+
+
+@pytest.mark.parametrize(
+    ("family_class", "link"), [(Gamma, "log"), (Poisson, "identity")]
+)
+def test_pr76_reviewed_case_rejects_changed_data_model_or_control(
+    family_class, link
+) -> None:
+    family, data, weight, offset, _ = _public_fixed_regular_case(family_class, link)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    control = FitControl(
+        execution="stream", linear_solver="qr", batch_rows=17, uncertainty="fisher"
+    )
+    model = GAM("y~x", family=family, sp=[], control=control)
+    _assert_pr76_regular_case(family_class, link, source, model)
+
+    changed_data = data.copy()
+    changed_data.loc[0, "y"] = np.nextafter(changed_data.loc[0, "y"], np.inf)
+    changed_source = DataFrameRowSource(
+        changed_data, response="y", weights=weight, offset=offset
+    )
+    with pytest.raises(AssertionError):
+        _assert_pr76_regular_case(family_class, link, changed_source, model)
+    changed_weight = weight.copy()
+    changed_weight[1] = np.nextafter(changed_weight[1], np.inf)
+    changed_source = DataFrameRowSource(
+        data, response="y", weights=changed_weight, offset=offset
+    )
+    with pytest.raises(AssertionError):
+        _assert_pr76_regular_case(family_class, link, changed_source, model)
+    changed_model = GAM(
+        "y~x", family=family, sp=[], control=replace(control, batch_rows=18)
+    )
+    with pytest.raises(AssertionError):
+        _assert_pr76_regular_case(family_class, link, source, changed_model)
+    changed_model = GAM("y~s(x,bs='cr',k=6)", family=family, sp=[], control=control)
+    with pytest.raises(AssertionError):
+        _assert_pr76_regular_case(family_class, link, source, changed_model)
+
+
+def test_pr76_nb_reviewed_case_rejects_changed_data_or_mode() -> None:
+    data, weight, offset = nb_optimizer_case_data()
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    control = FitControl(
+        execution="stream", linear_solver="qr", batch_rows=17, uncertainty="fisher"
+    )
+    family = NegativeBinomial(theta=2.7, link="identity")
+    model = GAM('y~s(x,bs="cr",k=8)', family=family, sp=[0.5], control=control)
+    _assert_pr76_nb_case(source, model, "identity")
+
+    changed_weight = weight.copy()
+    changed_weight[1] = np.nextafter(changed_weight[1], np.inf)
+    changed_source = DataFrameRowSource(
+        data, response="y", weights=changed_weight, offset=offset
+    )
+    with pytest.raises(AssertionError):
+        _assert_pr76_nb_case(changed_source, model, "identity")
+    changed_model = GAM(
+        model.formula,
+        family=NegativeBinomial(theta=2.7, fixed=True, link="identity"),
+        sp=[0.5],
+        control=control,
+    )
+    with pytest.raises(AssertionError):
+        _assert_pr76_nb_case(source, changed_model, "identity")
+    changed_model = GAM(
+        model.formula,
+        family=family,
+        sp=[0.5],
+        control=replace(control, uncertainty="none"),
+    )
+    with pytest.raises(AssertionError):
+        _assert_pr76_nb_case(source, changed_model, "identity")
+    changed_model = GAM('y~s(x,bs="cr",k=6)', family=family, sp=[0.5], control=control)
+    with pytest.raises(AssertionError):
+        _assert_pr76_nb_case(source, changed_model, "identity")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("family_class", [Gaussian, Gamma, Poisson, Binomial])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "identity",
+        "log",
+        "inverse",
+        "sqrt",
+        "logit",
+        "probit",
+        "cloglog",
+        "inverse_squared",
+    ],
+)
+def test_public_fixed_sp_regular_noncanonical_pinned_r(family_class, link: str) -> None:
+    """Public fixed-sp regular inventory uses R's score and reported scales."""
+    family, data, weight, offset, start = _public_fixed_regular_case(family_class, link)
+    r_startup_boundary = (
+        family_class is Poisson and link in {"logit", "probit", "cloglog"}
+    ) or (family_class is Binomial and link == "inverse_squared")
+    if r_startup_boundary:
+        r_error = pytest.importorskip("rpy2.rinterface_lib.embedded").RRuntimeError
+        with pytest.raises(r_error, match=r"out of range|starting values"):
+            RBridge(mode="rpy2").public_fixed_sp_fit(
+                data, weight, offset, family.family_name.lower(), link
+            )
+    else:
+        bridge = RBridge(mode="rpy2")
+        expected = bridge.public_fixed_sp_fit(
+            data, weight, offset, family.family_name.lower(), link
+        )
+    model = GAM(
+        "y~x",
+        family=family,
+        sp=[],
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    if (family_class, link) in _PR76_KNOWN_BOUNDARY_CASES:
+        _assert_pr76_regular_case(family_class, link, source, model)
+    if family_class is Poisson and r_startup_boundary:
+        with pytest.raises(ValueError, match="initial predictor"):
+            model.fit(source, result="prediction")
+        return
+    result = model.fit(source, result="prediction")
+    assert result.converged
+    if r_startup_boundary:
+        # mgcv's top-level candidate recovery rejects this input even with a
+        # supplied start. Validate the public state against gam.fit3 at the
+        # selected score scale, using the same retained valid start.
+        assert start is not None
+        X = np.column_stack((np.ones(len(data)), data.x.to_numpy()))
+        source_fit = RBridge(mode="rpy2").regular_coefficient_fit(
+            family.family_name,
+            link,
+            X,
+            data.y.to_numpy(),
+            weight,
+            offset,
+            start,
+            tolerance=1e-11,
+            score_scale=result.score_scale,
+        )
+        oracle, covariance = source_fit["reference"], source_fit["covariance"]
+        prediction = result.predict(data[["x"]], offset=offset)
+        _, link_se = result.predict(
+            data[["x"]], pred_type="link", se_fit=True, offset=offset
+        )
+        expected_link_se = np.sqrt(
+            oracle[3] * np.einsum("ij,jk,ik->i", X, covariance, X)
+        )
+        checks = _AssertCollector()
+        for name, actual, expected_value in (
+            ("coefficients", result.coefficients, oracle[:2]),
+            ("score", result.score, oracle[5]),
+            ("reported scale", result.scale, oracle[3]),
+            ("deviance", result.deviance, oracle[2]),
+            ("fitted values", prediction, family.link.inverse(X @ oracle[:2] + offset)),
+            ("link SE", link_se, expected_link_se),
+        ):
+            checks.check(
+                name,
+                lambda actual=actual, expected_value=expected_value: (
+                    np.testing.assert_allclose(
+                        actual, expected_value, rtol=STRICT.rtol, atol=STRICT.atol
+                    )
+                ),
+            )
+        checks.raise_if_any("public Binomial/inverse_squared gam.fit3 parity")
+        return
+    prediction = result.predict(data[["x"]], offset=offset)
+    _, link_se = result.predict(
+        data[["x"]], pred_type="link", se_fit=True, offset=offset
+    )
+    moderate_fields: set[str] = set()
+    if (family_class, link) == (Poisson, "identity"):
+        moderate_fields.update(("coefficients", "fitted values", "link SE"))
+    elif (family_class, link) == (Binomial, "log"):
+        moderate_fields.update(("coefficients", "score", "fitted values", "link SE"))
+    checks = _AssertCollector()
+    for name, actual in (
+        ("coefficients", result.coefficients),
+        ("score", result.score),
+        ("reported scale", result.scale),
+        ("score scale", result.score_scale),
+        ("deviance", result.deviance),
+        ("fitted values", prediction),
+        ("link SE", link_se),
+    ):
+        field = {
+            "reported scale": "scale",
+            "score scale": "score_scale",
+            "fitted values": "fitted_values",
+            "link SE": "link_se",
+        }.get(name, name)
+        tolerance = MODERATE if name in moderate_fields else STRICT
+        if field == "score_scale" and not family.scale_known:
+            _matched_r_score_scale_checks(
+                family,
+                link,
+                data,
+                weight,
+                offset,
+                source,
+                model,
+                result,
+                expected,
+                bridge,
+            )(checks)
+            continue
+        checks.check(
+            name,
+            lambda actual=actual, field=field, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
+                )
+            ),
+        )
+    checks.raise_if_any(f"public {family.family_name}/{link} fixed-sp R parity")
+
+
+def _public_fixed_smooth_model(family) -> GAM:
+    """The public fixed nonzero-sp smooth specification used by PR7.6 rows."""
+    return GAM(
+        'y~s(x,bs="cr",k=8)',
+        family=family,
+        sp=[0.5],
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+
+
+def _assert_public_fixed_smooth_parity(
+    model: GAM,
+    result,
+    expected: dict,
+    data: pd.DataFrame,
+    offset: np.ndarray,
+    label: str,
+    *,
+    score_scale_checks: Callable[[_AssertCollector], None] | None = None,
+) -> None:
+    """Compare one converged public smooth fit to pinned R at STRICT.
+
+    ``score_scale_checks`` replaces only the raw score-scale comparison for an
+    unknown-scale cell; every other field keeps its raw-R STRICT check.
+    """
+    assert result.converged, result.convergence_info
+    assert result.execution_route == "stream_qr"
+    assert result.source_scans > 0
+    assert result.known_workspace_bytes <= model.control.memory_budget_bytes
+    np.testing.assert_array_equal(result.smoothing_params, [0.5])
+    fitted = result.predict(data[["x"]], offset=offset)
+    _, link_se = result.predict(
+        data[["x"]], pred_type="link", se_fit=True, offset=offset
+    )
+    checks = _AssertCollector()
+    for name, actual in (
+        ("coefficients", result.coefficients),
+        ("score", result.score),
+        ("reported scale", result.scale),
+        ("score scale", result.score_scale),
+        ("deviance", result.deviance),
+        ("total EDF", result.edf_total),
+        ("fitted values", fitted),
+        ("link SE", link_se),
+    ):
+        if name == "score scale" and score_scale_checks is not None:
+            score_scale_checks(checks)
+            continue
+        field = {
+            "reported scale": "scale",
+            "score scale": "score_scale",
+            "total EDF": "edf",
+            "fitted values": "fitted_values",
+            "link SE": "link_se",
+        }.get(name, name)
+        checks.check(
+            name,
+            lambda actual=actual, field=field: np.testing.assert_allclose(
+                actual,
+                expected[field],
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=(
+                    f"R inner converged={expected['inner_converged']}, "
+                    f"outer status={expected['outer_status']}, "
+                    f"outer gradient={expected['outer_gradient']}; "
+                    f"JAX status={result.convergence_info}"
+                ),
+            ),
+        )
+    checks.raise_if_any(f"public {label} nonzero-sp R parity")
+
+
+def _matched_r_score_scale_checks(
+    family,
+    link: str,
+    data: pd.DataFrame,
+    weight: np.ndarray,
+    offset: np.ndarray,
+    source: DataFrameRowSource,
+    model: GAM,
+    result,
+    expected: dict,
+    bridge: RBridge,
+) -> Callable[[_AssertCollector], None]:
+    """Judge an unknown-scale score scale by pinned R's own stationarity.
+
+    Whether pinned newton() stops one step short of the stationary scale or
+    reaches it is roundoff- and BLAS-dependent, and after a step failure its
+    outer gradient/Hessian describe the rejected trial, not the returned
+    reml.scale. A matched-state gam.fit3 evaluation at R's returned phi_R
+    supplies R's own derivatives g_R, h_R there instead, independent of
+    newton's history. phi_star = phi_R * exp(-g_R / h_R) is R's own
+    Newton-completed stationary scale.
+    """
+    derivatives = bridge.public_fixed_sp_scale_derivatives(
+        data,
+        weight,
+        offset,
+        family.family_name.lower(),
+        link,
+        sp=float(model.sp[0]) if model.sp else None,
+    )
+    r_phi = float(expected["score_scale"])
+    r_gradient = derivatives["gradient"]
+    r_hessian = derivatives["hessian"]
+    phi_star = r_phi * np.exp(-r_gradient / r_hessian)
+    r_stationary = bool(np.isclose(phi_star, r_phi, rtol=STRICT.rtol, atol=STRICT.atol))
+    rho = np.log(np.asarray(model.sp, dtype=np.float64))
+    params = np.r_[rho, np.log(r_phi)]
+    # Exact JAX source trial at R's returned scale with rho pinned, using the
+    # public route's unknown-scale coefficient control.
+    at_r_scale = evaluate_regular_stream_reml(
+        StreamDesign(
+            prepare_model(parse_formula(model.formula), source, family=family), source
+        ),
+        family,
+        params,
+        maximum_bytes=model.control.memory_budget_bytes,
+        control=StreamPIRLSControl(
+            batch_rows=model.control.batch_rows, solver_policy="qr", tol=1e-11
+        ),
+    )
+    jax_gradient = float(np.asarray(at_r_scale.gradient)[-1])
+    jax_phi_star = r_phi * np.exp(-jax_gradient / at_r_scale.log_phi_curvature)
+    detail = (
+        f"R phi={r_phi:.17g}, matched R gradient={r_gradient:.17g}, "
+        f"matched R Hessian={r_hessian:.17g}, R phi*={phi_star:.17g}, "
+        f"R stationary at STRICT={r_stationary}, "
+        f"R outer status={expected['outer_status']}; "
+        f"JAX gradient at R phi={jax_gradient:.17g}, "
+        f"JAX curvature at R phi={at_r_scale.log_phi_curvature!r}, "
+        f"JAX-implied phi*={jax_phi_star:.17g}; "
+        f"JAX phi={float(result.score_scale):.17g}, "
+        f"JAX status={result.convergence_info}"
+    )
+    # Gamma only: against 40-digit references, R's fix.family.ls Gamma
+    # ls[2]*phi term (digamma cancellation) is off by up to 1.22e-12 at R's
+    # phi while JAX's Stirling-form term is exact. That moves the implied
+    # stationary phi by ~2.5e-14 relative, whereas a misattributed
+    # rejected-trial gradient (~1.8e-7) would move it by ~4.5e-9. The Gamma
+    # gradient provenance is therefore checked in phi units at STRICT.
+    gradient_in_phi_units = family.family_name == "Gamma"
+    # Record the pinned oracle's raw-tolerance selection in the test log.
+    logging.getLogger(__name__).warning(
+        f"PR7.6 {model.formula} {family.family_name}/{link} raw score-scale "
+        "tolerance: "
+        f"{'STRICT' if r_stationary else 'MODERATE'} "
+        f"(R phi*/phi_R - 1 = {np.expm1(-r_gradient / r_hessian):.3e}, "
+        f"R outer status = {expected['outer_status']})"
+    )
+
+    def provenance() -> None:
+        assert derivatives["inner_converged"], detail
+        assert derivatives["returned_scale"] == r_phi, detail
+        np.testing.assert_allclose(
+            derivatives["reml_scale"],
+            r_phi,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=detail,
+        )
+        np.testing.assert_array_equal(np.asarray(at_r_scale.params), params)
+        if gradient_in_phi_units:
+            np.testing.assert_allclose(
+                jax_phi_star,
+                phi_star,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=detail,
+            )
+        else:
+            np.testing.assert_allclose(
+                jax_gradient,
+                r_gradient,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+                err_msg=detail,
+            )
+        np.testing.assert_allclose(
+            at_r_scale.log_phi_curvature,
+            r_hessian,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=detail,
+        )
+
+    def stationary_oracle() -> None:
+        np.testing.assert_allclose(
+            result.score_scale,
+            phi_star,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=detail,
+        )
+
+    def raw_r() -> None:
+        # Where R's own derivative shows it stationary at STRICT resolution
+        # the raw comparison stays STRICT. Otherwise R returned its scale one
+        # Newton correction short of stationarity; four documented correction
+        # attempts (exact completion; newton() emulation from
+        # log(null.scale/10) with raw-score decisions; stopping at newton()'s
+        # own conv.tol test; emulation with roundoff-free decisions) cannot
+        # reproduce R's roundoff-driven stop, so the raw scale is MODERATE.
+        tolerance = STRICT if r_stationary else MODERATE
+        np.testing.assert_allclose(
+            result.score_scale,
+            r_phi,
+            rtol=tolerance.rtol,
+            atol=tolerance.atol,
+            err_msg=detail,
+        )
+
+    def add(checks: _AssertCollector) -> None:
+        checks.check(
+            "score scale provenance at R phi"
+            + (" (gradient in phi units)" if gradient_in_phi_units else ""),
+            provenance,
+        )
+        checks.check("score scale R Newton-completed oracle", stationary_oracle)
+        checks.check(
+            f"score scale raw R ({'STRICT' if r_stationary else 'MODERATE'})",
+            raw_r,
+        )
+
+    return add
+
+
+# Original generated rows on which pinned R's inner gam.fit3 exhausts
+# maxit = 200, mapped to JAX's explicit public convergence outcome.
+# Poisson/identity and Binomial/log: R's penalized deviance is constant to
+# float64 after a few iterations, but gam.fit3's coefficient-gradient check
+# at epsilon = 1e-11 keeps failing at roundoff. Rows with alpha == 0 (y = 0
+# under Poisson/identity, y = 1 under Binomial/log) are replaced by machine
+# epsilon, giving O(1/eps) working responses. JAX's reviewed known-scale
+# noncanonical control converges; R provides no converged reference here.
+# Binomial/identity: the fit approaches the mu = 0 boundary; R step-halves
+# every iteration and JAX's source controller reports nonconvergence.
+_PR76_SMOOTH_R_INNER_MAXIT = {
+    (Poisson, "identity"): True,
+    (Binomial, "identity"): False,
+    (Binomial, "log"): True,
+}
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("family_class", [Gaussian, Gamma, Poisson, Binomial])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "identity",
+        "log",
+        "inverse",
+        "sqrt",
+        "logit",
+        "probit",
+        "cloglog",
+        "inverse_squared",
+    ],
+)
+def test_public_fixed_nonzero_sp_regular_smooth_pinned_r(
+    family_class, link: str
+) -> None:
+    """Exercise every regular fixed-sp link with an actual penalized public smooth."""
+    family, data, weight, offset, _ = _public_fixed_regular_case(family_class, link)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    model = _public_fixed_smooth_model(family)
+    r_startup_boundary = (
+        family_class is Poisson and link in {"logit", "probit", "cloglog"}
+    ) or (family_class is Binomial and link == "inverse_squared")
+    bridge = RBridge(mode="rpy2")
+    if r_startup_boundary:
+        # The pinned public R fit rejects these original generated rows:
+        # bounded Poisson links at initialization, and Binomial inverse
+        # squared during the source inner fit. Retain each explicit cell.
+        r_error = pytest.importorskip("rpy2.rinterface_lib.embedded").RRuntimeError
+        with pytest.raises(r_error, match=r"out of range|starting values"):
+            bridge.public_fixed_sp_fit(
+                data, weight, offset, family.family_name.lower(), link, sp=0.5
+            )
+        if family_class is Poisson:
+            with pytest.raises(ValueError, match="initial predictor"):
+                model.fit(source, result="prediction")
+            return
+        with pytest.raises(ValueError, match="selected working system is inadmissible"):
+            model.fit(source, result="prediction")
+        return
+    if (family_class, link) == (Binomial, "inverse"):
+        # The fit drives mu to the binomial upper bound (eta -> 1). gam.fit3
+        # halves an out-of-bounds step toward the previous coefficients and
+        # stops after maxit halvings cannot restore validmu ("inner loop 2").
+        # JAX's source controller reports that it did not converge.
+        r_error = pytest.importorskip("rpy2.rinterface_lib.embedded").RRuntimeError
+        with pytest.raises(r_error, match=r"inner loop 2; can't correct step size"):
+            bridge.public_fixed_sp_fit(
+                data, weight, offset, family.family_name.lower(), link, sp=0.5
+            )
+        result = model.fit(source, result="prediction")
+        assert not result.converged
+        assert result.convergence_info == "fixed sp streamed PIRLS did not converge"
+        np.testing.assert_array_equal(result.smoothing_params, [0.5])
+        return
+
+    expected = bridge.public_fixed_sp_fit(
+        data, weight, offset, family.family_name.lower(), link, sp=0.5
+    )
+    result = model.fit(source, result="prediction")
+    if (family_class, link) in _PR76_SMOOTH_R_INNER_MAXIT:
+        assert not expected["inner_converged"]
+        assert expected["inner_iterations"] == 200
+        jax_converged = _PR76_SMOOTH_R_INNER_MAXIT[(family_class, link)]
+        assert bool(result.converged) is jax_converged
+        assert result.convergence_info == (
+            "fixed sp streamed PIRLS"
+            if jax_converged
+            else "fixed sp streamed PIRLS did not converge"
+        )
+        np.testing.assert_array_equal(result.smoothing_params, [0.5])
+        return
+    assert expected["inner_converged"], (
+        f"R {family.family_name}/{link} inner did not converge "
+        f"after {expected['inner_iterations']} iterations; "
+        f"JAX converged={result.converged}, status={result.convergence_info}"
+    )
+    score_scale_checks = (
+        None
+        if family.scale_known
+        else _matched_r_score_scale_checks(
+            family,
+            link,
+            data,
+            weight,
+            offset,
+            source,
+            model,
+            result,
+            expected,
+            bridge,
+        )
+    )
+    _assert_public_fixed_smooth_parity(
+        model,
+        result,
+        expected,
+        data,
+        offset,
+        f"{family.family_name}/{link}",
+        score_scale_checks=score_scale_checks,
+    )
+
+
+def _public_interior_smooth_case(family_class, link: str):
+    """Generate well-conditioned interior rows for an R-boundary smooth link.
+
+    The design grid, offset, one zero prior weight and the public model
+    specification match the original rows. Means stay inside each link's
+    domain; Poisson means avoid zero counts and Binomial responses are
+    successes over 20-40 integer trials, so no row has alpha == 0.
+    """
+    x = np.linspace(-0.6, 0.7, 83)
+    offset = 0.01 * np.sin(x)
+    wave = np.sin(2.0 * x)
+    mu = {
+        (Poisson, "identity"): 10.0 + 3.0 * wave,
+        (Binomial, "identity"): 0.45 + 0.15 * wave,
+        (Binomial, "log"): np.exp(-0.8 + 0.3 * wave),
+        (Binomial, "inverse"): 1.0 / (2.5 + 0.5 * wave),
+    }[(family_class, link)]
+    rng = np.random.default_rng(7601)
+    if family_class is Poisson:
+        weight = 0.4 + rng.uniform(size=len(x))
+        y = rng.poisson(mu).astype(float)
+    else:
+        trials = rng.integers(20, 41, size=len(x))
+        y = rng.binomial(trials, mu) / trials
+        weight = trials.astype(float)
+    weight[3] = 0.0
+    return family_class(link), pd.DataFrame({"x": x, "y": y}), weight, offset
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize(
+    ("family_class", "link"),
+    [
+        (Poisson, "identity"),
+        (Binomial, "identity"),
+        (Binomial, "log"),
+        (Binomial, "inverse"),
+    ],
+)
+def test_public_fixed_nonzero_sp_regular_smooth_interior_pinned_r(
+    family_class, link: str
+) -> None:
+    """Converged pinned-R parity for links whose original rows lack a reference."""
+    family, data, weight, offset = _public_interior_smooth_case(family_class, link)
+    if family_class is Poisson:
+        assert np.all(data.y > 0)
+    else:
+        assert np.all((data.y > 0) & (data.y < 1))
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    model = _public_fixed_smooth_model(family)
+    expected = RBridge(mode="rpy2").public_fixed_sp_fit(
+        data, weight, offset, family.family_name.lower(), link, sp=0.5
+    )
+    assert expected["inner_converged"]
+    assert expected["inner_iterations"] < 200
+    result = model.fit(source, result="prediction")
+    _assert_public_fixed_smooth_parity(
+        model,
+        result,
+        expected,
+        data,
+        offset,
+        f"interior {family.family_name}/{link}",
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
+@pytest.mark.parametrize("estimated", [False, True])
+@pytest.mark.parametrize("smooth", [False, True])
+def test_public_fixed_sp_nb_theta_modes_pinned_r(
+    link: str, estimated: bool, smooth: bool
+) -> None:
+    """Fixed lambda leaves NB theta free and zero penalties still estimate it."""
+    data, weight, offset = nb_optimizer_case_data()
+    sp = 0.5 if smooth else None
+    supertight_nb = estimated and smooth
+    # Pinned Newton needs one more resolved log-theta step for this link on
+    # Linux; 5e-14 gives full outer convergence on both tested CPUs. Other
+    # links retain their reviewed control and status profile.
+    newton_tolerance = 1e-10
+    if supertight_nb:
+        newton_tolerance = 5e-14 if link == "log" else 1e-12
+    expected = RBridge(mode="rpy2").public_fixed_sp_fit(
+        data,
+        weight,
+        offset,
+        "nb",
+        link,
+        theta=-2.7 if estimated else 2.7,
+        sp=sp,
+        r_epsilon=1e-12 if supertight_nb else 1e-11,
+        r_newton_tolerance=newton_tolerance,
+    )
+    family = NegativeBinomial(theta=2.7, fixed=not estimated, link=link)
+    model = GAM(
+        'y~s(x,bs="cr",k=8)' if smooth else "y~x",
+        family=family,
+        sp=[sp] if smooth else [],
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    if supertight_nb:
+        _assert_pr76_nb_case(source, model, link)
+    result = model.fit(source, result="prediction")
+    # For estimated theta the optimizer report names the L-BFGS-B task, the
+    # log-theta completion outcome, its final proposed and last accepted
+    # log-theta steps, the projected gradient against gtol and the curvature.
+    assert result.converged, (
+        f"NB/{link} estimated={estimated} smooth={smooth}: optimizer report "
+        f"[{result.convergence_info}]; outer iterations={result.n_iter}, "
+        f"source scans={result.source_scans}, batches={result.batches_scanned}, "
+        f"theta={result.theta!r}, score={result.score!r}"
+    )
+    if supertight_nb and link == "log":
+        assert expected["inner_converged"]
+        assert expected["outer_status"] == "full convergence"
+    prediction = result.predict(data[["x"]], offset=offset)
+    _, link_se = result.predict(
+        data[["x"]], pred_type="link", se_fit=True, offset=offset
+    )
+    if estimated:
+        assert result.theta is not None
+    else:
+        assert result.theta is None
+    moderate_fields = (
+        {"theta"} if supertight_nb and link in {"identity", "sqrt"} else set()
+    )
+    checks = _AssertCollector()
+    for name, actual in (
+        ("theta", result.family.get_theta(transformed=True)[0]),
+        ("coefficients", result.coefficients),
+        ("score", result.score),
+        ("reported scale", result.scale),
+        ("score scale", result.score_scale),
+        ("deviance", result.deviance),
+        ("fitted values", prediction),
+        ("link SE", link_se),
+    ):
+        field = {
+            "reported scale": "scale",
+            "score scale": "score_scale",
+            "fitted values": "fitted_values",
+            "link SE": "link_se",
+        }.get(name, name)
+        tolerance = MODERATE if name in moderate_fields else STRICT
+        checks.check(
+            name,
+            lambda actual=actual, field=field, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
+                )
+            ),
+        )
+    checks.raise_if_any(f"public NB/{link} fixed-sp R parity")
+
 
 # ---------------------------------------------------------------------------
 # JAX cache teardown

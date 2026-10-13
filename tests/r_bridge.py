@@ -918,6 +918,32 @@ class RBridge:
             dtype=np.float64,
         ).copy()
 
+    def source_gamma_saturated_likelihood(
+        self, response: np.ndarray, weights: np.ndarray, scale: float
+    ) -> np.ndarray:
+        """Return mgcv's Gamma ls value and first two scale derivatives."""
+        self._require_rpy2()
+        y = np.asarray(response, dtype=np.float64)
+        w = np.asarray(weights, dtype=np.float64)
+        if (
+            y.ndim != 1
+            or w.shape != y.shape
+            or not np.all(np.isfinite(y))
+            or not np.all(np.isfinite(w))
+            or np.any(y <= 0)
+            or np.any(w < 0)
+            or not np.isfinite(scale)
+            or scale <= 0
+        ):
+            raise ValueError("Gamma likelihood oracle inputs are invalid")
+        family = self._call_internal("fix.family.ls", self._stats.Gamma())
+        return np.asarray(
+            family.rx2("ls")(
+                self._to_r_vector(y), self._to_r_vector(w), len(y), float(scale)
+            ),
+            dtype=np.float64,
+        ).copy()
+
     def source_gaussian_initial_values(
         self, response: np.ndarray, link: str
     ) -> tuple[float, np.ndarray]:
@@ -1266,6 +1292,250 @@ class RBridge:
             theta,
             skip_offset_null_deviance=True,
         )
+
+    def _public_fixed_sp_gam_arguments(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+        *,
+        theta: float | None,
+        sp: float | None,
+        r_epsilon: float,
+        r_newton_tolerance: float,
+    ) -> tuple[Any, dict[str, Any]]:
+        """Build the pinned public fixed-sp ``gam`` formula and arguments."""
+        ro = self._ro
+        source_link = "1/mu^2" if link == "inverse_squared" else link
+        constructors = {
+            "gamma": self._stats.Gamma,
+            "gaussian": self._stats.gaussian,
+            "poisson": self._stats.poisson,
+            "binomial": self._stats.binomial,
+        }
+        if family_name == "nb":
+            if theta is None:
+                raise ValueError("fixed-sp NB source oracle needs theta")
+            family = self._mgcv.nb(theta=theta, link=source_link)
+        else:
+            try:
+                constructor = constructors[family_name]
+            except KeyError:
+                raise ValueError("unsupported fixed-sp source family") from None
+            family = constructor(link=source_link)
+        smooth = sp is not None
+        control = self._mgcv.gam_control(
+            epsilon=r_epsilon,
+            maxit=200,
+            newton=ro.ListVector(
+                {
+                    "conv.tol": r_newton_tolerance,
+                    "maxNstep": 5.0,
+                    "maxSstep": 2.0,
+                    "maxHalf": 30,
+                }
+            ),
+        )
+        formula = ro.Formula('y ~ s(x, bs="cr", k=8)' if smooth else "y ~ x")
+        return formula, {
+            "data": self._to_r_dataframe(data),
+            "weights": self._to_r_vector(weight),
+            "offset": self._to_r_vector(offset),
+            "family": family,
+            "sp": self._to_r_vector([sp]) if smooth else ro.NULL,
+            "method": "REML",
+            "control": control,
+        }
+
+    def public_fixed_sp_scale_derivatives(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+        *,
+        sp: float | None,
+        scale: float | None = None,
+        r_epsilon: float = 1e-11,
+        r_newton_tolerance: float = 1e-10,
+    ) -> dict[str, Any]:
+        """Evaluate pinned gam.fit3's log-scale REML derivatives at one scale.
+
+        The public fit of :meth:`public_fixed_sp_fit` runs through private
+        clones of ``gam`` -> ``estimate.gam`` -> ``gam.outer`` -> ``newton``
+        whose ``gam.fit3`` records newton's first call: the prepared model
+        matrix, penalty roots, null coefficients, fixed family, weights,
+        offset and newton's tightened control. One fresh ``gam.fit3``
+        (``deriv=2``) at ``sp = c(log(sp), log(scale))`` then returns the
+        objective newton differentiates, independent of newton's path or of
+        the trial object it may return after a step failure. ``sp=None``
+        selects the parametric ``y ~ x`` model, whose only newton parameter is
+        ``log(scale)``. ``scale=None`` evaluates at the fit's own returned
+        ``reml.scale``.
+        """
+        self._require_rpy2()
+        from tests.r_ast import clone_function, make_r_callback
+
+        if family_name not in {"gaussian", "gamma"}:
+            raise ValueError("scale derivatives need an unknown-scale regular family")
+        formula, arguments = self._public_fixed_sp_gam_arguments(
+            data,
+            weight,
+            offset,
+            family_name,
+            link,
+            theta=None,
+            sp=sp,
+            r_epsilon=r_epsilon,
+            r_newton_tolerance=r_newton_tolerance,
+        )
+        ro = self._ro
+        fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        recorded: list[dict[str, Any]] = []
+
+        def record_fit3(**fit_arguments: Any) -> Any:
+            if not recorded:
+                recorded.append(dict(fit_arguments))
+            return fit3(**fit_arguments)
+
+        namespace = ro.r["getNamespace"]("mgcv")
+        private = ro.r["new.env"](parent=namespace)
+        callback = make_r_callback(record_fit3)
+        names = ("newton", "gam.outer", "estimate.gam")
+        try:
+            private["gam.fit3"] = callback
+            for name in names:
+                private[name] = clone_function(
+                    self._utils.getFromNamespace(name, "mgcv"), environment=private
+                )
+            r_gam = clone_function(
+                self._utils.getFromNamespace("gam", "mgcv"), environment=private
+            )
+            fit = r_gam(formula, **arguments)
+        finally:
+            for name in ("gam.fit3", *names):
+                private[name] = ro.NULL
+        outer = fit.rx2("outer.info")
+        if not recorded or outer is ro.NULL:
+            raise RBridgeError("Pinned public fit did not call newton's gam.fit3")
+        first = recorded[0]
+        recorded_sp = np.asarray(first["sp"], dtype=np.float64).ravel()
+        if sp is None:
+            if recorded_sp.shape != (1,):
+                raise RBridgeError("newton's parametric gam.fit3 sp is not log(scale)")
+        elif recorded_sp.shape != (2,) or abs(recorded_sp[0] - np.log(sp)) > 4 * (
+            np.spacing(abs(np.log(sp)))
+        ):
+            raise RBridgeError("newton's gam.fit3 sp is not c(log(sp), log(scale))")
+        returned_scale = float(fit.rx2("reml.scale")[0])
+        evaluation_scale = returned_scale if scale is None else float(scale)
+        if not np.isfinite(evaluation_scale) or evaluation_scale <= 0.0:
+            raise ValueError("scale must be finite and positive")
+        evaluated = fit3(
+            **{
+                **first,
+                "sp": self._to_r_vector(
+                    np.r_[recorded_sp[:-1], np.log(evaluation_scale)]
+                ),
+                "deriv": 2,
+            }
+        )
+        gradient = np.asarray(evaluated.rx2("REML1"), dtype=np.float64)
+        hessian = np.asarray(evaluated.rx2("REML2"), dtype=np.float64)
+        return {
+            "scale": evaluation_scale,
+            "reml_scale": float(evaluated.rx2("reml.scale")[0]),
+            "returned_scale": returned_scale,
+            "outer_status": str(outer.rx2("conv")[0]),
+            "outer_gradient": float(np.ravel(outer.rx2("grad"))[-1]),
+            "outer_hessian": float(np.ravel(outer.rx2("hess"))[-1]),
+            "score": float(evaluated.rx2("REML")[0]),
+            "gradient": float(gradient[-1]),
+            "hessian": float(hessian[-1, -1]),
+            "inner_converged": bool(evaluated.rx2("converged")[0]),
+        }
+
+    def public_fixed_sp_fit(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+        *,
+        theta: float | None = None,
+        sp: float | None = None,
+        r_epsilon: float = 1e-11,
+        r_newton_tolerance: float = 1e-10,
+    ) -> dict[str, Any]:
+        """Run a tight pinned mgcv public fit for one fixed-sp release cell."""
+        self._require_rpy2()
+        ro = self._ro
+        formula, arguments = self._public_fixed_sp_gam_arguments(
+            data,
+            weight,
+            offset,
+            family_name,
+            link,
+            theta=theta,
+            sp=sp,
+            r_epsilon=r_epsilon,
+            r_newton_tolerance=r_newton_tolerance,
+        )
+        r_data = arguments["data"]
+        fit = self._mgcv.gam(formula, **arguments)
+        score_scale = fit.rx2("reml.scale")
+        if score_scale is ro.NULL:
+            score_scale = fit.rx2("sig2")
+        link_prediction = self._stats.predict(
+            fit, newdata=r_data, type="link", **{"se.fit": True}
+        )
+        outer = fit.rx2("outer.info")
+        outer_status = (
+            "none"
+            if outer is ro.NULL or outer.rx2("conv") is ro.NULL
+            else str(outer.rx2("conv")[0])
+        )
+        outer_gradient = (
+            None
+            if outer is ro.NULL or outer.rx2("grad") is ro.NULL
+            else np.asarray(outer.rx2("grad"), dtype=np.float64).copy()
+        )
+        outer_hessian = (
+            None
+            if outer is ro.NULL or outer.rx2("hess") is ro.NULL
+            else np.asarray(outer.rx2("hess"), dtype=np.float64).copy()
+        )
+        return {
+            "theta": (
+                float(fit.rx2("family").rx2("getTheta")(True)[0])
+                if family_name == "nb"
+                else np.nan
+            ),
+            "score": float(fit.rx2("gcv.ubre")[0]),
+            "scale": float(fit.rx2("sig2")[0]),
+            "score_scale": float(score_scale[0]),
+            "deviance": float(fit.rx2("deviance")[0]),
+            "edf": float(np.sum(np.asarray(fit.rx2("edf"), dtype=np.float64))),
+            "coefficients": np.asarray(fit.rx2("coefficients")).copy(),
+            "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
+            "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
+            "inner_converged": bool(fit.rx2("converged")[0]),
+            "inner_iterations": int(fit.rx2("iter")[0]),
+            "outer_status": outer_status,
+            "outer_gradient": outer_gradient,
+            "outer_hessian": outer_hessian,
+            "outer_iterations": (
+                None
+                if outer is ro.NULL or outer.rx2("iter") is ro.NULL
+                else int(outer.rx2("iter")[0])
+            ),
+            "r_epsilon": r_epsilon,
+            "r_newton_tolerance": r_newton_tolerance,
+        }
 
     def nb_theta_diagnostics(
         self,
@@ -2376,8 +2646,11 @@ class RBridge:
         tolerance: float = 1e-7,
         max_iter: int = 200,
         require_convergence: bool = True,
+        score_scale: float = 0.7,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Run pinned unpenalized ``gam.fit3`` with the natural QR null start."""
+        if not np.isfinite(score_scale) or score_scale <= 0:
+            raise ValueError("score_scale must be positive and finite")
         family, r_X, r_y, r_weight, r_offset, null, known_scale = (
             self._regular_gam_fit3_inputs(family_name, link, X, y, weight, offset)
         )
@@ -2388,7 +2661,7 @@ class RBridge:
             y=r_y,
             sp=ro.FloatVector([])
             if known_scale
-            else self._base.log(ro.FloatVector([0.7])),
+            else self._base.log(ro.FloatVector([score_scale])),
             Eb=ro.FloatVector([0.0]),
             UrS=ro.baseenv["list"](),
             weights=r_weight,
@@ -2418,6 +2691,42 @@ class RBridge:
         ]
         covariance = np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy()
         return reference, null, covariance, status
+
+    def regular_coefficient_fit(
+        self,
+        family_name: str,
+        link: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        start: np.ndarray | None = None,
+        *,
+        tolerance: float = 1e-7,
+        max_iter: int = 200,
+        require_convergence: bool = True,
+        score_scale: float = 0.7,
+    ) -> dict[str, np.ndarray]:
+        """Expose the shared pinned regular start reference by field name."""
+        reference, null, covariance, status = self.regular_gam_fit3_start(
+            family_name,
+            link,
+            X,
+            y,
+            weight,
+            offset,
+            start,
+            tolerance=tolerance,
+            max_iter=max_iter,
+            require_convergence=require_convergence,
+            score_scale=score_scale,
+        )
+        return {
+            "reference": reference,
+            "null": null,
+            "covariance": covariance,
+            "status": status,
+        }
 
     def regular_gam_fit3_penalized(
         self,

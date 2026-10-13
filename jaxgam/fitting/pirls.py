@@ -832,7 +832,9 @@ def _observed_weights(
     eta = X @ beta + offset
 
     def _dev_sum(e: jax.Array) -> jax.Array:
-        return family.dev_resids(y, family.link.inverse(e), wt)
+        return jnp.sum(
+            family.deviance_derivative_contributions(y, family.link.inverse(e), wt)
+        )
 
     grad_D = jax.grad(_dev_sum)
     _, d2 = jax.jvp(grad_D, (eta,), (jnp.ones_like(eta),))

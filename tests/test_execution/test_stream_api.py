@@ -227,12 +227,26 @@ def test_public_stream_covariance_budget_and_route_guards() -> None:
     data = _data("gaussian")
     source = DataFrameRowSource(data, response="y")
     formula = 'y ~ s(x, bs="cr", k=6)'
-    with pytest.raises(MemoryError, match="Known streamed PIRLS workspace"):
+    # Phase-1 setup is the first budgeted stage: one byte cannot scan a row.
+    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
         GAM(
             formula,
             sp=[0.2],
             control=FitControl(
                 execution="stream", uncertainty="covariance", memory_budget_bytes=1
+            ),
+        ).fit(source, result="prediction")
+    # A budget that admits setup's batches still rejects the PIRLS workspace
+    # its requested 200,000-row fit batches would need.
+    with pytest.raises(MemoryError, match="Known streamed PIRLS workspace"):
+        GAM(
+            formula,
+            sp=[0.2],
+            control=FitControl(
+                execution="stream",
+                uncertainty="covariance",
+                batch_rows=200_000,
+                memory_budget_bytes=20_000_000,
             ),
         ).fit(source, result="prediction")
     covariance = GAM(
@@ -258,12 +272,190 @@ def test_public_stream_covariance_budget_and_route_guards() -> None:
         GAM(formula, sp=[0.2], control=FitControl(execution="stream")).fit(
             source, weights=np.ones(len(data)), result="prediction"
         )
-    with pytest.raises(NotImplementedError, match=r"Gaussian.*Poisson.*Binomial"):
+    with pytest.raises(
+        NotImplementedError,
+        match="NB observed-information fitting requires linear_solver='qr'",
+    ):
         GAM(formula, family="nb", sp=[0.2], control=FitControl(execution="stream")).fit(
             source, result="prediction"
         )
     with pytest.raises(NotImplementedError, match="requires execution='stream'"):
         GAM(formula, sp=[0.2], control=FitControl(linear_solver="qr")).fit(data)
+
+
+class _RecordingSource(DataFrameRowSource):
+    """Record requested scan sizes and the yielded batch lengths."""
+
+    def __init__(self, data: pd.DataFrame, **kwargs) -> None:
+        super().__init__(data, response="y", **kwargs)
+        self.scans: list[list[int]] = []
+
+    def scan(self, batch_rows: int):
+        record = [batch_rows, 0]
+        self.scans.append(record)
+        for batch in super().scan(batch_rows):
+            record[1] = max(record[1], len(batch.row_positions))
+            yield batch
+
+
+def _spy_prepare_model(monkeypatch, *, setup_batch_rows: int | None = None) -> list:
+    """Record public setup controls; optionally force only the setup partition."""
+    import jaxgam.api as api_module
+
+    calls = []
+    original = api_module.prepare_model
+
+    def spy(*args, **kwargs):
+        calls.append(dict(kwargs))
+        if setup_batch_rows is not None:
+            kwargs["batch_rows"] = setup_batch_rows
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, "prepare_model", spy)
+    return calls
+
+
+def test_public_stream_threads_fit_control_into_setup(monkeypatch) -> None:
+    from jaxgam.formula.prepare import SetupWorkspace
+
+    calls = _spy_prepare_model(monkeypatch)
+    data = _data("gaussian")
+    formula = 'y ~ s(x, bs="cr", k=6)'
+    control = FitControl(execution="stream", batch_rows=9)
+    source = _RecordingSource(data)
+    GAM(formula, sp=[0.2], control=control).fit(source, result="prediction")
+    assert calls[-1]["batch_rows"] == 9
+    assert calls[-1]["maximum_bytes"] == control.memory_budget_bytes
+    # Only the two one-row setup peaks differ from the requested size.
+    assert {requested for requested, _ in source.scans} == {1, 9}
+    assert all(largest <= requested for requested, largest in source.scans)
+
+    workspaces = []
+    original = SetupWorkspace.batch_rows
+
+    def record(self, requested, maximum_bytes):
+        workspaces.append(self)
+        return original(self, requested, maximum_bytes)
+
+    monkeypatch.setattr(SetupWorkspace, "batch_rows", record)
+    GAM(formula, sp=[0.2], control=control).fit(
+        _RecordingSource(data), result="prediction"
+    )
+    # Shrink setup to five-row scans while the fit keeps its 65,536 request.
+    budget = workspaces[-1].bytes_for_rows(6) - 1
+    shrunk = _RecordingSource(data)
+    result = GAM(
+        formula,
+        sp=[0.2],
+        control=FitControl(execution="stream", memory_budget_bytes=budget),
+    ).fit(shrunk, result="prediction")
+    assert result.converged
+    setup_scans = shrunk.scans[2 : 2 + 5]  # knot, centering and fitting preparation
+    assert [requested for requested, _ in shrunk.scans[:2]] == [1, 1]
+    assert {requested for requested, _ in setup_scans} == {5}
+    assert {requested for requested, _ in shrunk.scans[7:]} == {65_536}
+
+
+def _stream_fit_fields(result) -> dict[str, np.ndarray]:
+    return {
+        "coefficients": np.asarray(result.coefficients),
+        "smoothing_params": np.asarray(result.smoothing_params),
+        "deviance": np.asarray(result.deviance),
+        "scale": np.asarray(result.scale),
+        "edf_total": np.asarray(result.edf_total),
+    }
+
+
+@pytest.mark.parametrize(
+    ("family", "optimizer", "solver"),
+    [
+        ("gaussian", "newton", "cholesky"),
+        ("poisson", "newton", "qr"),
+        ("poisson", "efs", "qr"),
+    ],
+)
+def test_public_stream_fits_are_invariant_to_setup_partition(
+    monkeypatch, family: str, optimizer: str, solver: str
+) -> None:
+    """Fixed-sp and EFS-estimated public fits agree at STRICT across setup sizes.
+
+    The fit partition is held at FitControl.batch_rows; only the Phase-1 scan
+    size changes, so any difference would come from setup reductions.
+    """
+    data = _data(family)
+    formula = 'y ~ x2 + s(x, bs="cr", k=6)'
+    data["x2"] = np.cos(3.0 * data.x)
+    fits = {}
+    for setup_batch_rows in (len(data), 11, 1):
+        _spy_prepare_model(monkeypatch, setup_batch_rows=setup_batch_rows)
+        model = GAM(
+            formula,
+            family=family,
+            optimizer=optimizer,
+            sp=None if optimizer == "efs" else [0.3],
+            control=FitControl(execution="stream", linear_solver=solver, batch_rows=13),
+        )
+        source = DataFrameRowSource(
+            data,
+            response="y",
+            weights=data.weight.to_numpy(),
+            offset=data.offset.to_numpy(),
+        )
+        fits[setup_batch_rows] = _stream_fit_fields(
+            model.fit(source, result="prediction")
+        )
+        monkeypatch.undo()
+    reference = fits.pop(len(data))
+    collector = _AssertCollector()
+    for setup_batch_rows, fields in fits.items():
+        for name, value in fields.items():
+            collector.check(
+                f"{name} at setup batch_rows={setup_batch_rows}",
+                lambda value=value, name=name: np.testing.assert_allclose(
+                    value, reference[name], rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+    collector.raise_if_any(f"{family}/{optimizer} setup-partition invariance")
+
+
+@pytest.mark.parametrize(
+    ("family", "solver"), [("gaussian", "cholesky"), ("poisson", "qr")]
+)
+def test_public_fixed_sp_stream_fit_is_invariant_to_fit_control_batch_rows(
+    family: str, solver: str
+) -> None:
+    """FitControl.batch_rows sizes setup and fit scans; fixed-sp fits agree."""
+    data = _data(family)
+    data["x2"] = np.cos(3.0 * data.x)
+    fits = {}
+    for batch_rows in (len(data), 13, 5):
+        source = DataFrameRowSource(
+            data,
+            response="y",
+            weights=data.weight.to_numpy(),
+            offset=data.offset.to_numpy(),
+        )
+        fits[batch_rows] = _stream_fit_fields(
+            GAM(
+                'y ~ x2 + s(x, bs="cr", k=6)',
+                family=family,
+                sp=[0.3],
+                control=FitControl(
+                    execution="stream", linear_solver=solver, batch_rows=batch_rows
+                ),
+            ).fit(source, result="prediction")
+        )
+    reference = fits.pop(len(data))
+    collector = _AssertCollector()
+    for batch_rows, fields in fits.items():
+        for name, value in fields.items():
+            collector.check(
+                f"{name} at batch_rows={batch_rows}",
+                lambda value=value, name=name: np.testing.assert_allclose(
+                    value, reference[name], rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+    collector.raise_if_any(f"{family} fixed-sp FitControl.batch_rows invariance")
 
 
 def test_stream_workspace_reserves_final_edf_and_candidate_matrices() -> None:

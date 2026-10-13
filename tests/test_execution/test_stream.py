@@ -1017,21 +1017,17 @@ def test_gaussian_score_scale_uses_positive_weight_count_and_no_penalty_case(
         control=StreamPIRLSControl(batch_rows=7),
     )
     assert prepared.fitting is not None
-    if len(log_lambda) == 0:
-        expected_score_scale = result.scale
-    else:
-        score_denominator = np.count_nonzero(weights > 0.0) - (
-            prepared.n_coef - prepared.fitting.total_penalty_rank
-        )
-        expected_score_scale = result.penalized_deviance / score_denominator
+    score_denominator = np.count_nonzero(weights > 0.0) - (
+        prepared.n_coef - prepared.fitting.total_penalty_rank
+    )
+    expected_score_scale = result.penalized_deviance / score_denominator
     np.testing.assert_allclose(
         np.asarray(result.score_scale),
         np.asarray(expected_score_scale),
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
-    if len(log_lambda):
-        assert not np.isclose(float(result.scale), float(result.score_scale))
+    assert not np.isclose(float(result.scale), float(result.score_scale))
 
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")

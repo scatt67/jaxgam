@@ -52,6 +52,7 @@ import numpy as np
 from jax.scipy.linalg import cho_solve, solve_triangular
 
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
@@ -299,7 +300,13 @@ def _diff_score(
         beta, XtWX, dev = _pirls_out_ext(S_lambda, log_theta, beta_warm)
 
     else:
-        # --- Standard family path: 2 primals (unchanged) ---
+        # --- Fixed-parameter family path: 2 primals ---
+        fixed_nb = isinstance(family, NegativeBinomial)
+        fixed_log_theta = (
+            jnp.asarray(family.get_theta(transformed=False)) if fixed_nb else None
+        )
+        direct_nb_dev = family.deviance_fn(y, wt) if fixed_nb else None
+
         @jax.custom_jvp
         def _pirls_out(S_lambda_inner, beta_warm_inner):
             result = pirls_loop(
@@ -330,7 +337,13 @@ def _diff_score(
             eta = X @ beta + offset
             deta = X @ dbeta
 
-            if family.is_canonical:
+            if fixed_nb:
+
+                def _eta_to_W(e):
+                    grad_dev = jax.grad(lambda ee: direct_nb_dev(ee, fixed_log_theta))
+                    _, curvature = jax.jvp(grad_dev, (e,), (jnp.ones_like(e),))
+                    return 0.5 * curvature
+            elif family.is_canonical:
                 # Canonical link: Fisher == observed; XtWX is the Fisher Hessian.
                 def _eta_to_W(e):
                     return family.working_weights(family.link.inverse(e), wt)
@@ -341,7 +354,11 @@ def _diff_score(
                 # mgcv's Newton-weighted log|H|).
                 def _eta_to_W(e):
                     def _dev_sum(ee):
-                        return family.dev_resids(y, family.link.inverse(ee), wt)
+                        return jnp.sum(
+                            family.deviance_derivative_contributions(
+                                y, family.link.inverse(ee), wt
+                            )
+                        )
 
                     _, d2 = jax.jvp(jax.grad(_dev_sum), (e,), (jnp.ones_like(e),))
                     return 0.5 * d2
@@ -351,7 +368,13 @@ def _diff_score(
 
             # Chain: dη → dμ → ddeviance
             def _eta_to_dev(e):
-                return jnp.sum(family.dev_resids(y, family.link.inverse(e), wt))
+                if fixed_nb:
+                    return direct_nb_dev(e, fixed_log_theta)
+                return jnp.sum(
+                    family.deviance_derivative_contributions(
+                        y, family.link.inverse(e), wt
+                    )
+                )
 
             _, ddev = jax.jvp(_eta_to_dev, (eta,), (deta,))
 

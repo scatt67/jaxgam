@@ -216,6 +216,84 @@ class TestRBridgeEFS:
 
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+def test_public_fixed_sp_scale_derivatives_reproduce_newton_state() -> None:
+    """Matched-state gam.fit3 reproduces newton()'s state where it belongs.
+
+    newton()'s outer gradient/Hessian describe the returned ``reml.scale``
+    only after ``full convergence``; there the matched-state evaluation at
+    the returned scale must reproduce them. Which generated cells converge
+    fully is roundoff- and BLAS-dependent, so at least one must.
+    """
+    from jaxgam.families.standard import Gamma, Gaussian
+    from tests.test_execution.test_regular_starts import _case
+
+    bridge = RBridge(mode="rpy2")
+    checks = _AssertCollector()
+    full = 0
+    for family_class, link, sp in (
+        (Gaussian, "log", 0.5),
+        (Gaussian, "sqrt", 0.5),
+        (Gamma, "inverse", 0.5),
+        (Gamma, "sqrt", 0.5),
+        (Gamma, "probit", 0.5),
+        # Parametric y ~ x: newton's only parameter is log(scale).
+        (Gaussian, "log", None),
+        (Gamma, "inverse", None),
+        (Gamma, "sqrt", None),
+    ):
+        family, data, weight, offset, _ = _case(family_class, link)
+        name = family.family_name.lower()
+        public = bridge.public_fixed_sp_fit(data, weight, offset, name, link, sp=sp)
+        derivatives = bridge.public_fixed_sp_scale_derivatives(
+            data, weight, offset, name, link, sp=sp
+        )
+        assert derivatives["returned_scale"] == public["score_scale"]
+        assert derivatives["scale"] == public["score_scale"]
+        np.testing.assert_allclose(
+            derivatives["reml_scale"],
+            public["score_scale"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert derivatives["outer_status"] == public["outer_status"]
+        assert derivatives["inner_converged"]
+        if derivatives["outer_status"] != "full convergence":
+            continue
+        full += 1
+        for field, outer in (
+            ("gradient", np.ravel(public["outer_gradient"])[-1]),
+            ("hessian", np.ravel(public["outer_hessian"])[-1]),
+        ):
+            checks.check(
+                f"{name}/{link} sp={sp} {field}",
+                lambda field=field, outer=outer, derivatives=derivatives: (
+                    np.testing.assert_allclose(
+                        derivatives[field],
+                        outer,
+                        rtol=STRICT.rtol,
+                        atol=STRICT.atol,
+                    )
+                ),
+            )
+    assert full > 0
+    checks.raise_if_any("Matched-state pinned newton() derivatives")
+    # A supplied scale is honored and the pinned sp coordinate is retained.
+    family, data, weight, offset, _ = _case(Gaussian, "log")
+    shifted = bridge.public_fixed_sp_scale_derivatives(
+        data, weight, offset, "gaussian", "log", sp=0.5, scale=1e-3
+    )
+    assert shifted["scale"] == 1e-3
+    np.testing.assert_allclose(
+        shifted["reml_scale"], 1e-3, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert shifted["gradient"] > 0.0
+    with pytest.raises(ValueError, match="unknown-scale"):
+        bridge.public_fixed_sp_scale_derivatives(
+            data, weight, offset, "poisson", "log", sp=0.5
+        )
+
+
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeFitGam:
     def test_fit_gaussian_returns_expected_keys(
         self, gaussian_data: pd.DataFrame

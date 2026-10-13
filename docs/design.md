@@ -3891,6 +3891,20 @@ def test_nb_autodiff_matches_finite_diff():
 
 ### 10.1 The Sparse/Dense/GPU Triangle Problem (Resolved)
 
+**Implemented post-v1 streamed fixed-sp route.** `FitControl(execution="stream",
+linear_solver="qr")` with replayable `RowSource` input and
+`result="prediction"` supports the built-in regular-family/link inventory and
+NB log/identity/square-root links on their valid source-start domains.
+Preparation and source scans remain CPU NumPy operations; pure batch kernels
+and solves remain JAX-compatible. The controller retains bounded coefficient
+reductions rather than the training design. Signed observed fit factors and
+Fisher uncertainty factors have distinct roles. Fixed smoothing parameters
+remain fixed while unknown regular scale or free NB theta is estimated by the
+exact parameter driver. Selected coefficients, family state, score and scale
+must refer to the same returned fit, with truthful convergence and source-work
+diagnostics. This explicit route does not enable the speculative automatic
+sparse/CHOLMOD/bam routing described below.
+
 v1.0 proposed transparent sparse/dense switching. This was removed because JAX sparse is experimental and cannot JIT, scipy sparse forces CPU round-trips from GPU, and the "transparent" decision logic was neither good for GPU perf nor good for sparse perf.
 
 **Instead, the library provides three explicit, well-optimized execution paths.** The user can choose explicitly, or an auto-selector picks based on n and p.

@@ -724,7 +724,7 @@ def fit_streamed_pirls(
         scale = jnp.array(1.0, dtype=jnp.float64)
     else:  # preflight makes this unreachable; keep an execution fail-closed.
         raise NotImplementedError("Unsupported streamed reported-scale policy.")
-    if policy.score_scale == "reported_scale" or structure.n_penalties == 0:
+    if policy.score_scale == "reported_scale":
         score_scale = scale
     elif policy.score_scale == "gaussian_fixed_sp":
         score_denominator = int(summary["n_positive_weight"]) - (

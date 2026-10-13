@@ -458,13 +458,13 @@ def test_streamed_static_rejections_precede_model_preparation(monkeypatch) -> No
             optimizer="efs",
             control=FitControl(execution="stream", linear_solver="qr"),
         ).fit(source, result="full")
-    with pytest.raises(NotImplementedError, match="canonical Gaussian"):
+    with pytest.raises(NotImplementedError, match="requires linear_solver='qr'"):
         GAM(
             "y ~ s(x, bs='cr', k=5)",
             family="gamma",
             optimizer="efs",
             sp=[0.4],
-            control=FitControl(execution="stream", linear_solver="qr"),
+            control=FitControl(execution="stream"),
         ).fit(source, result="prediction")
 
 
@@ -580,7 +580,10 @@ def test_streamed_efs_public_memory_budget_rejects_before_provider_allocation(
         efs_stream.RegularStreamEFSProvider, "create", unexpected_create
     )
     data = _poisson_data(n=32)
-    with pytest.raises(MemoryError, match="startup retention exceeds"):
+    # The public budget now reaches Phase-1 setup first, and any budget that
+    # admits one setup row exceeds this model's EFS startup retention. That
+    # guard's own contract is owned by test_efs_stream.py's direct preflight.
+    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
         GAM(
             "y ~ s(x, bs='cr', k=5)",
             family="poisson",
