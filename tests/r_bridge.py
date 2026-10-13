@@ -21,6 +21,7 @@ import os
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -253,6 +254,24 @@ class RBridge:
         ok, reason = self.check_versions()
         if not ok:
             raise RBridgeError(f"Pinned R oracle unavailable: {reason}")
+
+    @contextmanager
+    def _preserved_r_seed(self, seed: int):
+        """Keep a pinned random fixture private to the embedded R session."""
+        base = self._ro.baseenv
+        environment = self._ro.globalenv
+        had_seed = bool(
+            base["exists"](".Random.seed", envir=environment, inherits=False)[0]
+        )
+        old_seed = base["get"](".Random.seed", envir=environment) if had_seed else None
+        try:
+            base["set.seed"](seed)
+            yield
+        finally:
+            if had_seed:
+                base["assign"](".Random.seed", old_seed, envir=environment)
+            else:
+                base["rm"](".Random.seed", envir=environment)
 
     def _call_internal(self, name: str, *args: Any, **kwargs: Any) -> Any:
         """Call an installed mgcv namespace function without evaluating source."""
@@ -786,6 +805,180 @@ class RBridge:
             ).copy(),
             "covariance": np.asarray(covariance, dtype=np.float64).copy(),
             "score": float(fit.rx2("REML")[0]),
+        }
+
+    def source_gaussian_fixed_rho_qr_refit(
+        self,
+        factor: np.ndarray,
+        transformed_response: np.ndarray,
+        residual_tail: float,
+        log_smoothing: np.ndarray,
+        scale: float,
+        n_positive_weights: int,
+        sum_log_positive_weights: float,
+    ) -> float:
+        """Refit a compact Gaussian QR system with pinned base-R arithmetic."""
+        self._require_rpy2()
+        R = np.asarray(factor, dtype=np.float64)
+        qtz = np.asarray(transformed_response, dtype=np.float64)
+        rho = np.asarray(log_smoothing, dtype=np.float64)
+        if R.shape != (3, 3) or qtz.shape != (3,) or rho.shape != (2,):
+            raise ValueError("Fixed-rho QR oracle has incompatible dimensions")
+        if scale <= 0 or n_positive_weights <= 0:
+            raise ValueError(
+                "Fixed-rho QR oracle requires positive scale and weight count"
+            )
+        penalty_root = np.array(
+            ((0.0, np.exp(rho[0] / 2), 0.0), (0.0, 0.0, np.exp(rho[1] / 2)))
+        )
+        source_factor = self._to_r_matrix(R)
+        source_root = self._to_r_matrix(penalty_root)
+        response = self._to_r_vector(qtz)
+        base = self._ro.baseenv
+        hessian = base["+"](
+            self._base.crossprod(source_factor), self._base.crossprod(source_root)
+        )
+        coefficients = self._base.solve(
+            hessian, self._base.crossprod(source_factor, response)
+        )
+        residual = base["-"](response, base["%*%"](source_factor, coefficients))
+        penalty = base["%*%"](source_root, coefficients)
+        rss = residual_tail + float(self._base.sum(base["*"](residual, residual))[0])
+        quadratic = float(self._base.sum(base["*"](penalty, penalty))[0])
+        logdet_h = float(
+            self._base.determinant(hessian, logarithm=True).rx2("modulus")[0]
+        )
+        penalty_qr = self._base.qr(self._to_r_matrix(penalty_root[:, 1:]))
+        penalty_factor = base["qr.R"](penalty_qr)
+        logdet_s = 2 * float(
+            self._base.sum(
+                self._base.log(self._base.abs(self._base.diag(penalty_factor)))
+            )[0]
+        )
+        saturated = (
+            -n_positive_weights * np.log(2 * np.pi * scale) / 2
+            + sum_log_positive_weights / 2
+        )
+        return (
+            (rss + quadratic) / (2 * scale)
+            - saturated
+            + (logdet_h - logdet_s) / 2
+            - np.log(2 * np.pi * scale) / 2
+        )
+
+    def source_gaussian_tensor_sl_fit(
+        self, log_smoothing: np.ndarray, log_phi: float
+    ) -> dict[str, Any]:
+        """Return pinned tensor ``Sl.fit`` and its frozen source coordinates."""
+        self._require_rpy2()
+        rho = np.asarray(log_smoothing, dtype=np.float64)
+        if rho.shape != (2,) or not np.all(np.isfinite(rho)):
+            raise ValueError("Tensor Sl.fit requires two finite log penalties")
+        n = 53
+        with self._preserved_r_seed(742):
+            x = np.asarray(self._stats.runif(n), dtype=np.float64)
+            z = np.asarray(self._stats.runif(n), dtype=np.float64)
+            noise = np.asarray(self._stats.rnorm(n, sd=0.17), dtype=np.float64)
+        offset = np.linspace(-0.15, 0.25, n)
+        weights = 0.4 + (np.arange(1, n + 1) % 9) / 7
+        response = 0.3 + np.sin(3 * x) - 0.5 * np.cos(4 * z) + offset + noise
+        frame = self._to_r_dataframe(pd.DataFrame({"x": x, "z": z, "y": response}))
+        formula = self._ro.Formula("y ~ te(x,z,bs=c('cr','cr'),k=c(4,4))")
+        interpreted = self._call_internal("interpret.gam", formula)
+        setup = self._call_internal(
+            "gam.setup", interpreted, self._stats.terms(interpreted.rx2("pf")), frame
+        )
+        base = self._ro.baseenv
+        setup = base["[[<-"](setup, "w", value=self._to_r_vector(weights))
+        setup = base["[[<-"](setup, "offset", value=self._to_r_vector(offset))
+        design = np.asarray(setup.rx2("X"), dtype=np.float64)
+        target = np.asarray(setup.rx2("y"), dtype=np.float64) - offset
+        square_root_weight = np.sqrt(weights)
+        qr = self._call_internal(
+            "qr_update",
+            self._to_r_matrix(square_root_weight[:, None] * design),
+            self._to_r_vector(square_root_weight * target),
+        )
+        transformed_response = np.asarray(qr.rx2("f"), dtype=np.float64)
+        residual_tail = float(qr.rx2("y.norm2")[0]) - float(
+            np.sum(transformed_response * transformed_response)
+        )
+        prepared = self._call_internal(
+            "Sl.Xprep", self._call_internal("Sl.setup", setup), qr.rx2("R")
+        )
+        fit = self._call_internal(
+            "Sl.fit",
+            prepared.rx2("Sl"),
+            prepared.rx2("X"),
+            qr.rx2("f"),
+            self._to_r_vector(rho),
+            self._to_r_vector(np.zeros(2, dtype=bool)),
+            float(log_phi),
+            False,
+            residual_tail,
+            n,
+            prepared.rx2("Mp"),
+        )
+        anchor = self._to_r_vector(np.array((-2.0, 1.0)))
+        width = int(self._base.ncol(prepared.rx2("X"))[0])
+        determinant = self._call_internal(
+            "ldetS",
+            prepared.rx2("Sl"),
+            anchor,
+            self._to_r_vector(np.ones(2, dtype=bool)),
+            width,
+            root=True,
+        )
+        block = prepared.rx2("Sl")[0]
+        grouped = self._call_internal(
+            "gam.reparam", block.rx2("rS"), lsp=anchor, deriv=2
+        )
+        block_columns = np.arange(
+            int(block.rx2("start")[0]), int(block.rx2("stop")[0]) + 1
+        )
+        selected = np.asarray(block.rx2("ind"))
+        active = (
+            block_columns[
+                selected.astype(bool)
+                if selected.size == block_columns.size
+                and np.all(np.isin(selected, (0, 1)))
+                else selected.astype(int) - 1
+            ]
+            - 1
+        )
+        roots = []
+        for value in grouped.rx2("rS"):
+            matrix = np.asarray(value, dtype=np.float64)
+            root = np.zeros((matrix.shape[0], width))
+            root[:, active] = matrix.T
+            roots.append(root)
+        refit_coefficients = self._call_internal(
+            "Sl.repara", fit.rx2("rp"), fit.rx2("beta"), inverse=True
+        )
+        prediction = base["%*%"](prepared.rx2("X"), refit_coefficients)
+        return {
+            "R": np.asarray(
+                self._call_internal(
+                    "Sl.repara", determinant.rx2("rp"), prepared.rx2("X")
+                ),
+                dtype=np.float64,
+            ).copy(),
+            "qtz": transformed_response.copy(),
+            "residual_tail": residual_tail,
+            "root": np.asarray(determinant.rx2("E"), dtype=np.float64).copy(),
+            "score": float(fit.rx2("reml")[0]),
+            "roots": roots,
+            "root_ranks": np.asarray(
+                setup.rx2("smooth")[0].rx2("rank"), dtype=int
+            ).copy(),
+            "gradient": np.asarray(fit.rx2("reml1"), dtype=np.float64).copy(),
+            "hessian": np.asarray(fit.rx2("reml2"), dtype=np.float64).copy(),
+            "penalty_nullity": int(prepared.rx2("Mp")[0]),
+            "n_obs": n,
+            "n_positive_weights": int(np.count_nonzero(weights > 0)),
+            "sum_log_positive_weights": float(np.log(weights).sum()),
+            "scale": float(np.exp(log_phi)),
+            "prediction": np.asarray(prediction, dtype=np.float64).ravel().copy(),
         }
 
     def fix_dependence(
