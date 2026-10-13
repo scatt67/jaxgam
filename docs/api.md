@@ -111,12 +111,30 @@ families and links are those of the fixed-sp route, and `linear_solver="qr"`
 is required. A model with no smoothing, scale or theta parameter to select
 falls back to a plain coefficient fit.
 
+Near the optimum, the remaining REML decrease can fall below the score's
+floating-point resolution. L-BFGS-B may then stop on its relative-reduction
+test, or after an abnormal line search, before the gradient tolerance is met.
+In that case the fit continues mgcv's `newton()` iteration:
+
+- When log scale or log theta is the only free coordinate, it takes exact
+  Newton steps on that coordinate (exact curvature for the scale, a secant
+  for theta).
+- Otherwise it steps on up to four free log parameters, using a central
+  difference Hessian built from exact gradients.
+
+Every step refits the source fully and must pass `newton()`'s step cap and
+quadratic-model test. Descent is judged by the integrated exact gradient
+within a float64 score envelope. At most one such continuation runs per fit.
+Fixed smoothing parameters never move, and `converged` is restated on the
+returned trial.
+
 Successful fits report `execution_route="stream_exact_reml_qr"` and
 `lambda_strategy="exact_reml"`. `converged` requires the projected gradient
 to meet the optimizer tolerance. `exact_optimizer_diagnostics` records the
 optimizer status, trial evaluations, accepted steps, final projected gradient,
 accepted score history, startup scans, cumulative PIRLS passes, final score
-refits and derivative time.
+refits and derivative time. These counts include the `newton()` continuation
+trials.
 
 ### Extended Fellner--Schall fitting
 
