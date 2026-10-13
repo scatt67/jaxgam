@@ -807,6 +807,27 @@ class RBridge:
             "score": float(fit.rx2("REML")[0]),
         }
 
+    def source_gaussian_fixed_sp_fit(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        smoothing: list[float] | np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+    ) -> dict[str, Any]:
+        """Fit pinned weighted/offset Gaussian ``gam`` at fixed smoothing."""
+        self._require_rpy2()
+        model = self._mgcv.gam(
+            self._ro.Formula(formula),
+            data=self._to_r_dataframe(data),
+            family=self._stats.gaussian(),
+            method="REML",
+            sp=self._ro.FloatVector(np.asarray(smoothing, dtype=np.float64)),
+            weights=self._ro.FloatVector(np.asarray(weights, dtype=np.float64)),
+            offset=self._ro.FloatVector(np.asarray(offset, dtype=np.float64)),
+        )
+        return self._extract_fit_results_rpy2(model)
+
     def source_gaussian_sl_fit(
         self,
         data: pd.DataFrame,

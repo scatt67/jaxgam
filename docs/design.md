@@ -3639,8 +3639,8 @@ result may retain Fisher uncertainty but owns no training rows or source. The
 released routes cover the tested regular-family links, regular-family scale
 handling, and the separate fixed/estimated NB theta path for log, identity,
 and square-root links. Fixed smoothing and zero-penalty models retain their
-established dispatch precedence. The existing
-``gaussian_compression=True`` availability guard remains unchanged.
+established dispatch precedence. ``gaussian_compression=True`` applies to
+the Newton or fixed-smoothing Gaussian route, not to estimated EFS smoothing.
 For estimated negative-binomial identity and square-root links, the pinned
 ``gam.fit4`` default is a zero-coefficient recovery anchor. The public adapter
 accepts these links only when applying the supplied offset to that anchor gives

@@ -18,6 +18,27 @@ lean: GAMInferenceResult = model.fit(data, result="inference")
 lean.predict(newdata)
 ```
 
+### Gaussian QR fitting
+
+Dense Gaussian identity-link models can opt into frozen QR compression. The
+training rows are reduced once, and REML smoothing trials then use only
+coefficient-sized statistics:
+
+```python
+from jaxgam import FitControl, GAM
+
+result = GAM(
+    "y ~ s(x1) + s(x2)",
+    family="gaussian",
+    control=FitControl(gaussian_compression=True),
+).fit(data)
+```
+
+The ordinary dense route remains the default. The QR route accepts finite
+positive prior weights between `1e-10` and `1e10` and a full identifiable
+coefficient map. Unsupported cases use dense fitting and report the reason in
+`execution_fallback_reason`. Estimated EFS smoothing also uses dense fitting.
+
 ### Streamed QR coefficient solves
 
 Fixed-sp streamed fits can request the positive-weight QR/TSQR solver
@@ -178,8 +199,8 @@ Estimated negative-binomial identity and square-root fits require an offset
 whose mean at the zero-coefficient recovery anchor is positive. A zero offset
 produces a zero mean for these links, so both execution routes reject that
 input just as pinned mgcv does. Explicit fixed smoothing parameters and models
-without penalties keep their existing fixed/Newton routes. The existing
-`gaussian_compression=True` availability guard remains unchanged.
+without penalties keep their existing fixed/Newton routes. Gaussian compression
+applies to the Newton or fixed-smoothing Gaussian route.
 
 Poisson logit, probit, and complementary-log-log are constructor extensions,
 not advertised Poisson links. Their integer-response NULL initialization

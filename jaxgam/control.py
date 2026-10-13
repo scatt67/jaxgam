@@ -55,6 +55,12 @@ class FitControl:
     ``memory_budget_bytes``; a budget too small for one row is rejected before
     any full-data scan. Source-owned storage and allocator overhead remain
     outside these bounds.
+
+    ``gaussian_compression=True`` opts a dense Gaussian identity-link fit into
+    one weighted QR reduction followed by coefficient-space REML trials.  The
+    initial route requires finite weights in the PIRLS unclipped interval and
+    a full identifiable coefficient map.  Other models use the ordinary dense
+    route and report the reason in ``execution_fallback_reason``.
     """
 
     execution: Literal["dense", "stream"] = "dense"
@@ -81,7 +87,7 @@ class FitControl:
             raise ValueError("gaussian_compression must be a boolean.")
         if not isinstance(self.efs, EFSControl):
             raise ValueError("efs must be an EFSControl instance.")
-        if self.gaussian_compression:
+        if self.gaussian_compression and self.execution != "dense":
             raise NotImplementedError(
-                "gaussian_compression=True is not available for this execution path."
+                "gaussian_compression=True currently requires dense execution."
             )

@@ -2950,6 +2950,194 @@ class TestValidationMatrix:
         collector.raise_if_any(cell_id)
 
 
+@pytest.mark.parametrize(
+    ("formula", "fixed_sp"),
+    [
+        ("y ~ s(x1, bs='cr', k=6) + s(x2, bs='cr', k=5)", None),
+        ("y ~ te(x1, x2, bs='cr', k=5)", [0.8, 1.4]),
+    ],
+    ids=("estimated-additive", "fixed-tensor"),
+)
+def test_gaussian_qr_public_fixed_and_estimated_routes(formula, fixed_sp) -> None:
+    """Final public Gaussian QR fields agree with the dense result contract."""
+    data = _make_two_smooth_data("gaussian", seed=SEED + 91)
+    data["y"] += 0.7 * np.cos(2.0 * np.pi * data["x2"])
+    rng = np.random.default_rng(SEED + 193)
+    weights = rng.uniform(0.35, 1.8, len(data))
+    offset = 0.07 * np.sin(2.0 * np.pi * data["x2"].to_numpy())
+    dense = GAM(formula, family="gaussian", sp=fixed_sp).fit(
+        data, weights=weights, offset=offset
+    )
+    compressed = GAM(
+        formula,
+        family="gaussian",
+        sp=fixed_sp,
+        control=FitControl(gaussian_compression=True),
+    ).fit(data, weights=weights, offset=offset)
+    assert compressed.execution_route == "gaussian_qr"
+    assert compressed.execution_fallback_reason is None
+    collector = _AssertCollector()
+    for name in (
+        "coefficients",
+        "fitted_values",
+        "linear_predictor",
+        "deviance",
+        "score",
+        "scale",
+        "smoothing_params",
+        "edf_total",
+        "Vp",
+    ):
+        collector.check(
+            name,
+            lambda name=name: np.testing.assert_allclose(
+                getattr(compressed, name),
+                getattr(dense, name),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+    collector.raise_if_any(f"Gaussian QR {formula}")
+
+
+def test_gaussian_qr_flat_smoothing_boundary_preserves_fitted_model() -> None:
+    """An effectively infinite lambda retains fitted-model parity.
+
+    STRICT correction passes isolated (1) absent x2 curvature, (2) the dense
+    normal-equation jitter's fixed-state derivative perturbation, (3) stable
+    compressed score subtraction with no trajectory change, and (4) tighter
+    convergence, which made dense step-halving fail while QR continued along
+    the flat direction.  Per the repository's flat-REML policy, the fitted
+    quantities use MODERATE while the raw effectively-infinite lambda drift is
+    recorded separately and is never compared at LOOSE tolerance.
+    """
+    formula = "y ~ s(x1, bs='cr', k=6) + s(x2, bs='cr', k=5)"
+    data = _make_two_smooth_data("gaussian", seed=SEED + 91)
+    rng = np.random.default_rng(SEED + 193)
+    weights = rng.uniform(0.35, 1.8, len(data))
+    offset = 0.07 * np.sin(2.0 * np.pi * data["x2"].to_numpy())
+    dense = GAM(formula, family="gaussian").fit(data, weights=weights, offset=offset)
+    compressed = GAM(
+        formula,
+        family="gaussian",
+        control=FitControl(gaussian_compression=True),
+    ).fit(data, weights=weights, offset=offset)
+    assert compressed.execution_route == "gaussian_qr"
+    assert dense.smoothing_params[1] > 1e8
+    assert compressed.smoothing_params[1] > 1e8
+    assert (
+        abs(np.log(compressed.smoothing_params[1] / dense.smoothing_params[1])) < 0.01
+    )
+    collector = _AssertCollector()
+    for name in (
+        "coefficients",
+        "fitted_values",
+        "linear_predictor",
+        "deviance",
+        "score",
+        "scale",
+        "edf_total",
+        "Vp",
+    ):
+        collector.check(
+            name,
+            lambda name=name: np.testing.assert_allclose(
+                getattr(compressed, name),
+                getattr(dense, name),
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+            ),
+        )
+    collector.raise_if_any("Gaussian QR flat smoothing boundary")
+
+
+def _fixed_gaussian_qr_r_case(label: str):
+    """Return deterministic data and controls for QR-sensitive fixed-R gates."""
+    specifications = {
+        "correlated-tensor": (
+            97,
+            3872,
+            "y ~ te(x, z, bs='cr', k=4)",
+            [0.7, 2.1],
+        ),
+        "near-perfect": (73, 4983, "y ~ s(x, bs='cr', k=5)", [0.6]),
+        "factor-by": (
+            111,
+            5094,
+            "y ~ group + s(x, by=group, bs='cr', k=5)",
+            [0.8, 1.1, 2.0],
+        ),
+    }
+    n, seed, formula, smoothing = specifications[label]
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(-1.0, 1.0, n)
+    z = 0.75 * x + 0.25 * rng.uniform(-1.0, 1.0, n)
+    weights = 0.4 + 1.2 * rng.uniform(size=n)
+    offset = 0.06 * np.cos(2.0 * x)
+    group = pd.Categorical(np.resize(["a", "b", "c"], n))
+    if label == "near-perfect":
+        y = 0.4 + 0.7 * x + offset + rng.normal(0.0, 1e-8, n)
+    else:
+        y = (
+            0.4
+            + np.sin(3.0 * x)
+            + 0.7 * np.cos(4.0 * z)
+            + offset
+            + rng.normal(0.0, 0.17, n)
+        )
+        if label == "factor-by":
+            codes = group.codes
+            y += 0.3 * codes + 0.2 * codes * np.sin(2.0 * x)
+    data = pd.DataFrame({"x": x, "z": z, "y": y, "group": group})
+    return formula, smoothing, data, weights, offset
+
+
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+@pytest.mark.parametrize("label", ["correlated-tensor", "near-perfect", "factor-by"])
+def test_gaussian_qr_fixed_public_results_match_pinned_r_strict(
+    label, r_bridge
+) -> None:
+    """Fixed QR results match R where dense normal-equation jitter can differ."""
+    if r_bridge.mode != "rpy2":
+        pytest.skip("Fixed weighted/offset R controls require the pinned rpy2 image")
+
+    formula, smoothing, data, weights, offset = _fixed_gaussian_qr_r_case(label)
+    compressed = GAM(
+        formula,
+        family="gaussian",
+        sp=smoothing,
+        control=FitControl(gaussian_compression=True),
+    ).fit(data, weights=weights, offset=offset)
+    reference = r_bridge.source_gaussian_fixed_sp_fit(
+        formula, data, smoothing, weights, offset
+    )
+    assert compressed.execution_route == "gaussian_qr"
+    collector = _AssertCollector()
+    fields = {
+        "coefficients": "coefficients",
+        "fitted_values": "fitted_values",
+        "deviance": "deviance",
+        "score": "reml_score",
+        "scale": "scale",
+        "edf_total": "edf_total",
+        "Vp": "Vp",
+        "null_deviance": "null_deviance",
+    }
+    for actual_name, reference_name in fields.items():
+        collector.check(
+            actual_name,
+            lambda actual_name=actual_name, reference_name=reference_name: (
+                np.testing.assert_allclose(
+                    getattr(compressed, actual_name),
+                    reference[reference_name],
+                    rtol=STRICT.rtol,
+                    atol=STRICT.atol,
+                )
+            ),
+        )
+    collector.raise_if_any(f"Gaussian QR fixed {label} pinned R")
+
+
 # ---------------------------------------------------------------------------
 # B. TestHardGateInvariants — structural invariants (no R required)
 # ---------------------------------------------------------------------------

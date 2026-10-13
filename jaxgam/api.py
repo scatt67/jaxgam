@@ -24,7 +24,7 @@ from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.registry import get_family
 from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.initialization import initialize_beta
-from jaxgam.fitting.newton import NewtonResult, newton_optimize
+from jaxgam.fitting.newton import NewtonResult, OuterScoreProvider, newton_optimize
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion
 from jaxgam.formula.design import ModelSetup
@@ -209,10 +209,33 @@ class GAM:
         jax_device = _resolve_device(self.device)
         fd = FittingData.from_setup(setup, family_obj, device=jax_device)
 
-        # Phase 2: fit. Explicit fixed smoothing parameters and parametric
-        # models preserve their established routes before optimizer dispatch.
+        score_provider: OuterScoreProvider | None = None
+        execution_route = "dense"
+        execution_fallback_reason = None
+        if self.control.gaussian_compression:
+            if self.optimizer == "efs" and self.sp is None:
+                execution_fallback_reason = (
+                    "Gaussian QR compression requires Newton smoothing selection."
+                )
+            else:
+                from jaxgam.execution.gaussian_optimizer import (
+                    GaussianQRIneligible,
+                    build_dense_gaussian_qr_provider,
+                )
+
+                try:
+                    score_provider = build_dense_gaussian_qr_provider(fd)
+                except GaussianQRIneligible as error:
+                    execution_fallback_reason = str(error)
+                else:
+                    execution_route = "gaussian_qr"
+
+        # Phase 2: fit. Fixed smoothing and parametric models retain their
+        # established dispatch before estimated smoothing selection.
         if self.sp is not None:
-            fit_result = _fit_fixed_sp(fd, self.sp, self.method)
+            fit_result = _fit_fixed_sp(
+                fd, self.sp, self.method, score_provider=score_provider
+            )
             lambda_strategy = "fixed"
         elif fd.n_penalties == 0:
             fit_result = newton_optimize(fd, self.method)
@@ -275,7 +298,7 @@ class GAM:
                 )
             lambda_strategy = "efs_reml"
         else:
-            fit_result = newton_optimize(fd, self.method)
+            fit_result = newton_optimize(fd, self.method, score_provider=score_provider)
             lambda_strategy = f"newton_{self.method.lower()}"
 
         if (
@@ -300,6 +323,8 @@ class GAM:
             method=self.method,
             result_mode=result,
             control=self.control,
+            execution_route=execution_route,
+            execution_fallback_reason=execution_fallback_reason,
             supplied_smoothing_params=self.sp,
         )
 
@@ -1167,7 +1192,11 @@ def _fixed_log_smoothing_parameters(sp: np.ndarray | list, n_penalties: int):
 
 
 def _fit_fixed_sp(
-    fd: FittingData, sp: np.ndarray | list, method: str = "REML"
+    fd: FittingData,
+    sp: np.ndarray | list,
+    method: str = "REML",
+    *,
+    score_provider: OuterScoreProvider | None = None,
 ) -> NewtonResult:
     """Fit with user-supplied fixed smoothing parameters.
 
@@ -1210,7 +1239,13 @@ def _fit_fixed_sp(
     # through the pinned-Newton path so the reported REML score is evaluated at
     # the jointly-optimal (theta, phi) and the real sp stay fixed.
     if fd.family.n_theta > 0 or not fd.family.scale_known:
-        return newton_optimize(fd, method, log_lambda_init=log_lambda, pin_lambda=True)
+        return newton_optimize(
+            fd,
+            method,
+            log_lambda_init=log_lambda,
+            pin_lambda=True,
+            score_provider=score_provider,
+        )
 
     S_lam = fd.S_lambda(log_lambda)
 

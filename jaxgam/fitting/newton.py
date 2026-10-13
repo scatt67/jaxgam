@@ -45,6 +45,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Protocol
 
 import jax
 import jax.numpy as jnp
@@ -765,6 +766,36 @@ class NewtonResult:
     theta: float | None = None
 
 
+class _OuterScoreState(Protocol):
+    """Minimum trial state shared by row-backed and compressed optimizers."""
+
+    coefficients: jax.Array
+    edf: jax.Array
+    scale: jax.Array
+
+
+class OuterScoreProvider(Protocol):
+    """Host-owned score seam; JIT kernels continue to receive plain arrays."""
+
+    def initial_parameters(self, log_lambda: jax.Array) -> jax.Array: ...
+
+    def evaluate(self, params: jax.Array) -> tuple[_OuterScoreState, jax.Array]: ...
+
+    def differentiate(
+        self, params: jax.Array, state: _OuterScoreState
+    ) -> tuple[jax.Array, jax.Array]: ...
+
+    def finalize(self, params: jax.Array, state: _OuterScoreState) -> PIRLSResult: ...
+
+
+@dataclass(frozen=True)
+class _ProviderCriterion:
+    """Scalar metadata used by the unchanged Newton convergence policy."""
+
+    edf: jax.Array
+    scale: jax.Array
+
+
 # ---------------------------------------------------------------------------
 # Safe Newton step (pure function, no state)
 # ---------------------------------------------------------------------------
@@ -892,6 +923,7 @@ class NewtonOptimizer:
         max_step: float = 5.0,
         lsp_max: float = 40.0,
         pin_lambda: bool = False,
+        score_provider: OuterScoreProvider | None = None,
     ) -> None:
         if method != "REML":
             raise ValueError(
@@ -909,6 +941,7 @@ class NewtonOptimizer:
         # fixed-`sp` path for families with estimated theta (e.g. NB), where
         # mgcv still estimates theta with the smoothing params held fixed.
         self._pin_lambda = pin_lambda
+        self._score_provider = score_provider
         self._is_gaussian = fd.family.family_name == "gaussian"
 
         # Eigenvalue floor power: R's fast.REML.fit (Gaussian) uses
@@ -945,6 +978,11 @@ class NewtonOptimizer:
         # Joint optimization: append log_phi to params when scale is unknown
         # (matches R's mgcv.r line 2033: lsp <- c(lsp, log.scale))
         self._joint_scale = not fd.family.scale_known and fd.n_penalties > 0
+        if score_provider is not None and (not self._is_gaussian or self._joint_theta):
+            raise ValueError(
+                "A compressed outer-score provider requires Gaussian fitting "
+                "without family parameters."
+            )
 
         # Pre-bind all arguments except (params, beta_init) which vary
         # per Newton iteration. Shared by _jit_fit_and_score (forward pass)
@@ -952,38 +990,42 @@ class NewtonOptimizer:
         # Dynamic args are JAX arrays; static args are Python values that
         # key the JIT cache.
         offset = fd.offset if fd.offset is not None else jnp.zeros(fd.n_obs)
-        self._jit_kwargs = {
-            "X": fd.X,
-            "y": fd.y,
-            "wt": fd.wt,
-            "offset": offset,
-            "penalty_structure": fd.penalty_structure,
-            "singleton_eig_constants": fd.singleton_eig_constants,
-            "multi_block_proj_S": fd.multi_block_proj_S,
-            "count_indices": (
-                fd.count_prefix_plan.indices
-                if fd.count_prefix_plan is not None
-                else jnp.zeros(0, dtype=jnp.int64)
-            ),
-            "family": fd.family,
-            "pirls_tol": self._pirls_tol,
-            "joint_theta": self._joint_theta,
-            "joint_scale": self._joint_scale,
-            "n_lambda": fd.n_penalties,
-            "Mp": fd.total_penalty_null_dim,
-            "rank_deficit": fd.rank_deficit,
-            "singleton_sp_indices": fd.singleton_sp_indices,
-            "singleton_ranks": fd.singleton_ranks,
-            "multi_block_sp_indices": fd.multi_block_sp_indices,
-            "multi_block_ranks": fd.multi_block_ranks,
-            "p": fd.n_coef,
-            "max_y": fd.max_y,
-            "integer_counts": (
-                fd.count_prefix_plan.integer_counts
-                if fd.count_prefix_plan is not None
-                else True
-            ),
-        }
+        self._jit_kwargs = (
+            {}
+            if score_provider is not None
+            else {
+                "X": fd.X,
+                "y": fd.y,
+                "wt": fd.wt,
+                "offset": offset,
+                "penalty_structure": fd.penalty_structure,
+                "singleton_eig_constants": fd.singleton_eig_constants,
+                "multi_block_proj_S": fd.multi_block_proj_S,
+                "count_indices": (
+                    fd.count_prefix_plan.indices
+                    if fd.count_prefix_plan is not None
+                    else jnp.zeros(0, dtype=jnp.int64)
+                ),
+                "family": fd.family,
+                "pirls_tol": self._pirls_tol,
+                "joint_theta": self._joint_theta,
+                "joint_scale": self._joint_scale,
+                "n_lambda": fd.n_penalties,
+                "Mp": fd.total_penalty_null_dim,
+                "rank_deficit": fd.rank_deficit,
+                "singleton_sp_indices": fd.singleton_sp_indices,
+                "singleton_ranks": fd.singleton_ranks,
+                "multi_block_sp_indices": fd.multi_block_sp_indices,
+                "multi_block_ranks": fd.multi_block_ranks,
+                "p": fd.n_coef,
+                "max_y": fd.max_y,
+                "integer_counts": (
+                    fd.count_prefix_plan.integer_counts
+                    if fd.count_prefix_plan is not None
+                    else True
+                ),
+            }
+        )
 
         # Build custom_jvp-based differentiable score for all families.
         # For non-Gaussian: captures d(beta*)/d(rho), d(XtWX)/d(rho),
@@ -994,7 +1036,13 @@ class NewtonOptimizer:
         #   because it treats beta* as constant. For single-smooth (m=1)
         #   this has little effect, but for multi-smooth (m>1) the missing
         #   terms cause 2-14x more iterations than R.
-        if fd.n_penalties > 0:
+        if score_provider is not None:
+
+            def _provider_grad_hess(params, state):
+                return score_provider.differentiate(params, state)
+
+            self._diff_grad_hess = _provider_grad_hess
+        elif fd.n_penalties > 0:
             kw = self._jit_kwargs
 
             def _grad_hess_fn(params, beta_warm):
@@ -1048,13 +1096,15 @@ class NewtonOptimizer:
         )
 
     def _make_criterion(
-        self, pirls_result: PIRLSResult
-    ) -> _CriterionBase | _JointCriterionBase:
+        self, pirls_result: PIRLSResult | _OuterScoreState
+    ) -> _CriterionBase | _JointCriterionBase | _ProviderCriterion:
         """Create the REML criterion object from converged PIRLS.
 
         ML is not supported in v1.0 (see ``_check_scope_guards``), so only the
         REML criterion classes are constructed.
         """
+        if self._score_provider is not None:
+            return _ProviderCriterion(pirls_result.edf, pirls_result.scale)
         if self._joint_scale:
             return JointREMLCriterion(self._fd, pirls_result)
         return REMLCriterion(self._fd, pirls_result)
@@ -1063,7 +1113,7 @@ class NewtonOptimizer:
         self,
         params: jax.Array,
         beta_init: jax.Array,
-    ) -> tuple[PIRLSResult, jax.Array]:
+    ) -> tuple[PIRLSResult | _OuterScoreState, jax.Array]:
         """Run PIRLS and compute criterion score in a single JIT dispatch.
 
         Uses ``_jit_fit_and_score`` which fuses S_lambda construction,
@@ -1078,6 +1128,8 @@ class NewtonOptimizer:
         Uses tightened PIRLS tolerance (``conv_tol / 100``) matching
         R's gam.fit3.r line 1308.
         """
+        if self._score_provider is not None:
+            return self._score_provider.evaluate(params)
         score, pirls_result = _jit_fit_and_score(
             params,
             beta_init,
@@ -1090,13 +1142,47 @@ class NewtonOptimizer:
         params: jax.Array,
         params_trial: jax.Array,
         beta_base: jax.Array,
-        trial: PIRLSResult,
+        trial: PIRLSResult | _OuterScoreState,
         score: float,
         score_trial: float,
         score_scale: float,
     ) -> float:
         """Refine only small, finite full-rank identity-Gaussian comparisons."""
         change = score_trial - score
+        if self._score_provider is not None:
+            base_score = beta_base.score_state
+            trial_score = trial.score_state
+            n_lambda = self._fd.n_penalties
+            if self._joint_scale:
+                log_phi_base = params[n_lambda]
+                delta_log_phi = params_trial[n_lambda] - log_phi_base
+                delta_quadratic = (
+                    trial_score.penalized_residual_sum_squares
+                    - base_score.penalized_residual_sum_squares
+                )
+                scaled_quadratic_change = jnp.exp(-log_phi_base) * (
+                    jnp.exp(-delta_log_phi) * delta_quadratic
+                    + base_score.penalized_residual_sum_squares
+                    * jnp.expm1(-delta_log_phi)
+                )
+                scale_change = (
+                    base_score.n_positive_weights - self._fd.total_penalty_null_dim
+                ) * delta_log_phi
+            else:
+                scaled_quadratic_change = (
+                    trial_score.penalized_residual_sum_squares
+                    - base_score.penalized_residual_sum_squares
+                ) / base_score.scale
+                scale_change = jnp.array(0.0)
+            stable_change = 0.5 * (
+                scaled_quadratic_change
+                + trial_score.log_det_hessian
+                - base_score.log_det_hessian
+                - trial_score.log_det_penalty
+                + base_score.log_det_penalty
+                + scale_change
+            )
+            return float(stable_change) if np.isfinite(stable_change) else change
         fd = self._fd
         if (
             not np.isfinite(change)
@@ -1136,7 +1222,7 @@ class NewtonOptimizer:
         score: float,
         beta_warm: jax.Array,
         score_scale: float,
-    ) -> tuple[jax.Array, PIRLSResult, jax.Array, _StepOutcome]:
+    ) -> tuple[jax.Array, PIRLSResult | _OuterScoreState, jax.Array, _StepOutcome]:
         """Step-halving for Gaussian (R's ``fast.REML.fit``, fast-REML.r
         lines 1822-1844).
 
@@ -1214,7 +1300,7 @@ class NewtonOptimizer:
         hess: jax.Array,
         outer_iter: int,
         is_pdef: bool,
-    ) -> tuple[jax.Array, PIRLSResult, jax.Array, _StepOutcome]:
+    ) -> tuple[jax.Array, PIRLSResult | _OuterScoreState, jax.Array, _StepOutcome]:
         """Trial step with quadratic-error check and steepest-descent fallback.
 
         Follows R's ``newton()`` (gam.fit3.r lines 1491-1571) for
@@ -1395,7 +1481,7 @@ class NewtonOptimizer:
         score: float,
         score_old: float,
         is_pdef: bool,
-        pirls_result: PIRLSResult,
+        pirls_result: PIRLSResult | _OuterScoreState,
     ) -> tuple[jax.Array, jax.Array, float, bool]:
         """Compute gradient/Hessian and check convergence at accepted point.
 
@@ -1429,8 +1515,12 @@ class NewtonOptimizer:
             # the Hessian cross-penalty terms, critical for multi-smooth.
             # For non-Gaussian, also captures d(XtWX)/d(rho).
             # Matches R's analytical Hessian from gdi.c / fast.REML.fit.
-            beta_warm = pirls_result.coefficients
-            grad, hess = self._diff_grad_hess(params, beta_warm)
+            derivative_state = (
+                pirls_result
+                if self._score_provider is not None
+                else pirls_result.coefficients
+            )
+            grad, hess = self._diff_grad_hess(params, derivative_state)
             hess = (hess + hess.T) / 2
         else:
             # Purely parametric (no smoothing parameters): use criterion AD.
@@ -1496,8 +1586,8 @@ class NewtonOptimizer:
         params: jax.Array,
         score: jax.Array,
         gradient: jax.Array,
-        criterion: _CriterionBase | _JointCriterionBase,
-        pirls_result: PIRLSResult,
+        criterion: _CriterionBase | _JointCriterionBase | _ProviderCriterion,
+        pirls_result: PIRLSResult | _OuterScoreState,
         converged: bool,
         step_failed: bool,
         n_iter: int,
@@ -1533,6 +1623,11 @@ class NewtonOptimizer:
             theta = float(jnp.exp(log_theta[0]))
             self._fd.family.put_theta(np.asarray(log_theta))
 
+        finalized = (
+            self._score_provider.finalize(params, pirls_result)
+            if self._score_provider is not None
+            else pirls_result
+        )
         return NewtonResult(
             log_lambda=log_lambda,
             smoothing_params=jnp.exp(log_lambda),
@@ -1542,7 +1637,7 @@ class NewtonOptimizer:
             gradient=grad_lambda,
             edf=criterion.edf,
             scale=criterion.scale,
-            pirls_result=pirls_result,
+            pirls_result=finalized,
             convergence_info=info,
             theta=theta,
         )
@@ -1596,12 +1691,14 @@ class NewtonOptimizer:
         log_lambda = fd.log_lambda_init.copy()
         parts = [log_lambda]
 
-        if self._joint_theta:
+        if self._score_provider is not None:
+            params = self._score_provider.initial_parameters(log_lambda)
+        elif self._joint_theta:
             # Append initial log_theta from family state
             log_theta_init = jnp.asarray(fd.family.get_theta(transformed=False))
             parts.append(log_theta_init)
 
-        if self._joint_scale:
+        if self._score_provider is None and self._joint_scale:
             # Run initial PIRLS to get Fletcher scale for log_phi init
             S_init = fd.S_lambda(log_lambda)
             log_theta_init_for_pirls = None
@@ -1626,7 +1723,8 @@ class NewtonOptimizer:
             log_phi_init = jnp.log(phi_init)
             parts.append(log_phi_init[None])
 
-        params = jnp.concatenate(parts) if len(parts) > 1 else log_lambda
+        if self._score_provider is None:
+            params = jnp.concatenate(parts) if len(parts) > 1 else log_lambda
 
         # -- Initial fit and score --
         pirls_result, score = self._fit_and_score(params, self._initial_beta())
@@ -1689,11 +1787,16 @@ class NewtonOptimizer:
             if self._is_gaussian:
                 # fast.REML.fit: simpler step acceptance, step.failed
                 # breaks immediately (R fast-REML.r lines 1822-1844)
+                gaussian_warm_state = (
+                    pirls_result
+                    if self._score_provider is not None
+                    else pirls_result.coefficients
+                )
                 params_new, pirls_new, score_new, outcome = self._step_halve_gaussian(
                     params,
                     step,
                     float(score),
-                    pirls_result.coefficients,
+                    gaussian_warm_state,
                     score_scale,
                 )
             else:
@@ -1776,6 +1879,7 @@ def newton_optimize(
     max_step: float = 5.0,
     lsp_max: float = 40.0,
     pin_lambda: bool = False,
+    score_provider: OuterScoreProvider | None = None,
 ) -> NewtonResult:
     """Minimize REML criterion over log smoothing parameters.
 
@@ -1830,5 +1934,6 @@ def newton_optimize(
         max_step=max_step,
         lsp_max=lsp_max,
         pin_lambda=pin_lambda,
+        score_provider=score_provider,
     )
     return optimizer.run()
