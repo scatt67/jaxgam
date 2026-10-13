@@ -782,8 +782,12 @@ class OuterScoreProvider(Protocol):
     def evaluate(self, params: jax.Array) -> tuple[_OuterScoreState, jax.Array]: ...
 
     def differentiate(
-        self, params: jax.Array, state: _OuterScoreState
-    ) -> tuple[jax.Array, jax.Array]: ...
+        self,
+        params: jax.Array,
+        state: _OuterScoreState,
+        *,
+        second_order: bool = True,
+    ) -> tuple[jax.Array, jax.Array | None]: ...
 
     def finalize(self, params: jax.Array, state: _OuterScoreState) -> PIRLSResult: ...
 
@@ -1039,7 +1043,12 @@ class NewtonOptimizer:
         if score_provider is not None:
 
             def _provider_grad_hess(params, state):
-                return score_provider.differentiate(params, state)
+                gradient, hessian = score_provider.differentiate(params, state)
+                if hessian is None:
+                    raise RuntimeError(
+                        "Newton requires a second-order outer-score provider."
+                    )
+                return gradient, hessian
 
             self._diff_grad_hess = _provider_grad_hess
         elif fd.n_penalties > 0:

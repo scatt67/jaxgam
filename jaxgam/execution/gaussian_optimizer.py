@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import numpy as np
+from scipy.optimize import minimize
 
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting.data import FittingData
@@ -21,6 +22,7 @@ from jaxgam.fitting.gaussian import (
     jit_gaussian_qr_reml_score,
     jit_gaussian_qr_reml_value_and_grad,
 )
+from jaxgam.fitting.newton import NewtonResult
 from jaxgam.fitting.pirls import PIRLSResult
 from jaxgam.fitting.state import CholeskyCoefficientFactor, StreamFitState
 from jaxgam.fitting.stream_kernels import coefficient_stationarity
@@ -35,6 +37,9 @@ from .gaussian import (
     prepare_frozen_gaussian_qr,
     prepare_streamed_frozen_gaussian_qr,
 )
+from .reml import StreamREMLControl, _projected_gradient
+
+GAUSSIAN_LBFGS_PENALTY_THRESHOLD = 50
 
 
 @dataclass(frozen=True)
@@ -182,8 +187,12 @@ class DenseGaussianQROuterProvider:
         return state, score_state.score
 
     def differentiate(
-        self, params: jax.Array, state: GaussianQROuterState
-    ) -> tuple[jax.Array, jax.Array]:
+        self,
+        params: jax.Array,
+        state: GaussianQROuterState,
+        *,
+        second_order: bool = True,
+    ) -> tuple[jax.Array, jax.Array | None]:
         """Return exact score derivatives from the same frozen statistics."""
         del state
         _, gradient = jit_gaussian_qr_reml_value_and_grad(
@@ -196,6 +205,8 @@ class DenseGaussianQROuterProvider:
             self._fixed_scale,
             **self._kwargs,
         )
+        if not second_order:
+            return gradient, None
         hessian = jit_gaussian_qr_reml_hessian(
             params,
             self._compression,
@@ -375,6 +386,191 @@ class StreamGaussianQROuterProvider(DenseGaussianQROuterProvider):
             source_scans=self.source_scans,
             batches_scanned=self.batches_scanned,
         )
+
+
+@dataclass(frozen=True)
+class _GaussianLBFGSTrial:
+    """One exact frozen-statistics value/gradient evaluation."""
+
+    params: jax.Array
+    state: GaussianQROuterState
+    score: jax.Array
+    gradient: jax.Array
+
+
+class _GaussianLBFGSObjective:
+    """SciPy boundary retaining only the most recent coefficient-space trial."""
+
+    def __init__(
+        self,
+        provider: DenseGaussianQROuterProvider,
+        fixed_log_lambda: jax.Array | None,
+    ) -> None:
+        self._provider = provider
+        self._fixed_log_lambda = fixed_log_lambda
+        self.trial: _GaussianLBFGSTrial | None = None
+
+    def _full_params(self, free_params: np.ndarray) -> jax.Array:
+        free = jnp.asarray(free_params, dtype=jnp.float64)
+        if self._fixed_log_lambda is None:
+            return free
+        return jnp.concatenate((self._fixed_log_lambda, free))
+
+    def __call__(self, free_params: np.ndarray) -> tuple[float, np.ndarray]:
+        params = self._full_params(free_params)
+        if self.trial is None or not np.array_equal(
+            np.asarray(params), np.asarray(self.trial.params)
+        ):
+            state, score = self._provider.evaluate(params)
+            gradient, hessian = self._provider.differentiate(
+                params, state, second_order=False
+            )
+            if hessian is not None:
+                raise RuntimeError(
+                    "Gaussian L-BFGS received an unexpected outer Hessian."
+                )
+            if not all(
+                np.all(np.isfinite(np.asarray(value)))
+                for value in (score, gradient, state.coefficients, state.scale)
+            ):
+                raise FloatingPointError(
+                    "Gaussian L-BFGS received a non-finite frozen-statistics trial."
+                )
+            self.trial = _GaussianLBFGSTrial(params, state, score, gradient)
+        gradient = np.asarray(self.trial.gradient, dtype=np.float64)
+        if self._fixed_log_lambda is not None:
+            gradient = gradient[len(self._fixed_log_lambda) :]
+        return float(np.asarray(self.trial.score)), gradient
+
+
+def use_gaussian_qr_lbfgs(n_penalties: int) -> bool:
+    """Choose limited-memory optimization above the reviewed m threshold."""
+    return n_penalties > GAUSSIAN_LBFGS_PENALTY_THRESHOLD
+
+
+def optimize_gaussian_qr_lbfgs(
+    fitting: FittingData,
+    provider: DenseGaussianQROuterProvider,
+    *,
+    log_lambda_init: jax.Array | None = None,
+    pin_lambda: bool = False,
+    control: StreamREMLControl | None = None,
+) -> NewtonResult:
+    """Optimize frozen Gaussian statistics without a full outer Hessian.
+
+    L-BFGS-B retains at most ``maxcor`` correction vectors. Only smoothing
+    parameters are bounded; the Gaussian log scale remains unbounded. Fixed
+    smoothing parameters are removed from SciPy's free vector entirely.
+    """
+    if fitting.n_penalties == 0:
+        raise ValueError("Gaussian QR L-BFGS requires at least one penalty.")
+    reml_control = (
+        StreamREMLControl(
+            gtol=float(np.sqrt(np.finfo(np.float64).eps)),
+            ftol=0.0,
+        )
+        if control is None
+        else control
+    )
+    log_lambda = (
+        fitting.log_lambda_init
+        if log_lambda_init is None
+        else jnp.asarray(log_lambda_init, dtype=jnp.float64)
+    )
+    if log_lambda.shape != (fitting.n_penalties,):
+        raise ValueError("log_lambda_init must match the number of Gaussian penalties.")
+    if not np.all(np.isfinite(np.asarray(log_lambda))):
+        raise ValueError("log_lambda_init must contain only finite values.")
+    if not pin_lambda:
+        log_lambda = jnp.clip(log_lambda, -40.0, 40.0)
+    params_initial = provider.initial_parameters(log_lambda)
+    if params_initial.shape[0] < fitting.n_penalties:
+        raise ValueError("Gaussian provider returned an incomplete parameter vector.")
+
+    fixed_log_lambda = log_lambda if pin_lambda else None
+    free_initial = np.asarray(
+        params_initial[fitting.n_penalties :] if pin_lambda else params_initial,
+        dtype=np.float64,
+    )
+    objective = _GaussianLBFGSObjective(provider, fixed_log_lambda)
+    if pin_lambda:
+        bounds = [(None, None)] * len(free_initial)
+    else:
+        bounds = [(-40.0, 40.0)] * fitting.n_penalties + [(None, None)] * (
+            len(free_initial) - fitting.n_penalties
+        )
+
+    if len(free_initial):
+        result = minimize(
+            objective,
+            free_initial,
+            method="L-BFGS-B",
+            jac=True,
+            bounds=bounds,
+            options={
+                "maxiter": reml_control.max_iter,
+                "maxfun": reml_control.maxfun,
+                "maxcor": reml_control.maxcor,
+                "maxls": reml_control.maxls,
+                "gtol": reml_control.gtol,
+                "ftol": reml_control.ftol,
+            },
+        )
+        score, free_gradient = objective(np.asarray(result.x, dtype=np.float64))
+        del score
+        projected = np.asarray(free_gradient, dtype=np.float64).copy()
+        if not pin_lambda:
+            projected[: fitting.n_penalties] = _projected_gradient(
+                np.asarray(result.x[: fitting.n_penalties]),
+                projected[: fitting.n_penalties],
+                lower=-40.0,
+                upper=40.0,
+            )
+        projected_gradient_inf = float(np.max(np.abs(projected)))
+        terminal_trial = objective.trial
+        if terminal_trial is None:  # pragma: no cover - objective just ran.
+            raise RuntimeError("Gaussian L-BFGS produced no terminal trial.")
+        score_scale = 1.0 + abs(float(np.asarray(terminal_trial.score)))
+        gradient_converged = projected_gradient_inf <= reml_control.gtol * score_scale
+        # SciPy can report an abnormal line-search termination after reaching
+        # a flat Gaussian optimum. Match NewtonOptimizer's established rule:
+        # a failed step at a gradient-converged point is full convergence.
+        converged = gradient_converged and (
+            bool(result.success) or int(result.status) == 2
+        )
+        n_iter = int(result.nit)
+        if converged:
+            convergence_info = "full convergence"
+        elif int(result.status) == 1:
+            convergence_info = "iteration limit"
+        else:
+            convergence_info = "step failed"
+    else:
+        objective(free_initial)
+        converged = True
+        n_iter = 0
+        convergence_info = "fixed sp"
+
+    trial = objective.trial
+    if trial is None:  # pragma: no cover - every branch evaluates one trial.
+        raise RuntimeError("Gaussian L-BFGS produced no exact trial.")
+    gradient = trial.gradient[: fitting.n_penalties]
+    if pin_lambda:
+        gradient = jnp.zeros_like(gradient)
+    pirls_result = provider.finalize(trial.params, trial.state)
+    return NewtonResult(
+        log_lambda=trial.params[: fitting.n_penalties],
+        smoothing_params=jnp.exp(trial.params[: fitting.n_penalties]),
+        converged=converged,
+        n_iter=n_iter,
+        score=trial.score,
+        gradient=gradient,
+        edf=trial.state.edf,
+        scale=trial.state.scale,
+        pirls_result=pirls_result,
+        convergence_info=convergence_info,
+        theta=None,
+    )
 
 
 def build_dense_gaussian_qr_provider(

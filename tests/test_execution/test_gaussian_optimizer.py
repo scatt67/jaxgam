@@ -6,8 +6,11 @@ from dataclasses import replace
 
 import jax
 import numpy as np
+import pandas as pd
 import pytest
+from scipy.optimize import OptimizeResult
 
+import jaxgam.execution.gaussian_optimizer as gaussian_optimizer_module
 from jaxgam.api import GAM, _fit_fixed_sp
 from jaxgam.control import FitControl
 from jaxgam.execution.gaussian import prepare_frozen_gaussian_qr
@@ -15,11 +18,14 @@ from jaxgam.execution.gaussian_optimizer import (
     DenseGaussianQROuterProvider,
     GaussianQRIneligible,
     build_dense_gaussian_qr_provider,
+    optimize_gaussian_qr_lbfgs,
+    use_gaussian_qr_lbfgs,
 )
+from jaxgam.execution.reml import StreamREMLControl
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
-from jaxgam.fitting.newton import NewtonOptimizer
+from jaxgam.fitting.newton import NewtonOptimizer, newton_optimize
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.rank_coordinates import IdentifiableCoordinateMap
@@ -56,7 +62,31 @@ def _problem() -> FittingData:
     return FittingData.from_setup(setup, Gaussian())
 
 
-def _assert_no_observation_dimension(closed_jaxpr, n_obs: int) -> None:
+def _large_m_inputs():
+    rng = np.random.default_rng(731)
+    n_levels = 51
+    repeats = 4
+    x = np.tile(np.linspace(-1.0, 1.0, repeats), n_levels)
+    group = pd.Categorical(
+        np.repeat([f"g{index:02d}" for index in range(n_levels)], repeats)
+    )
+    y = np.sin(2.0 * x) + np.repeat(rng.normal(scale=0.2, size=n_levels), repeats)
+    y += rng.normal(scale=0.05, size=len(x))
+    data = pd.DataFrame({"x": x, "group": group, "y": y})
+    formula = "y ~ group + s(x, by=group, bs='cr', k=3)"
+    return formula, data
+
+
+def _large_m_problem() -> FittingData:
+    formula, data = _large_m_inputs()
+    setup = ModelSetup.build(parse_formula(formula), data)
+    fitting = FittingData.from_setup(setup, Gaussian())
+    assert fitting.n_penalties == 51
+    assert fitting.rank_deficit == 0
+    return fitting
+
+
+def _jaxpr_shapes(closed_jaxpr) -> list[tuple[int, ...]]:
     shapes: list[tuple[int, ...]] = [
         np.shape(value) for value in jax.tree.leaves(closed_jaxpr.consts)
     ]
@@ -81,6 +111,11 @@ def _assert_no_observation_dimension(closed_jaxpr, n_obs: int) -> None:
                     visit(value)
 
     visit(closed_jaxpr.jaxpr)
+    return shapes
+
+
+def _assert_no_observation_dimension(closed_jaxpr, n_obs: int) -> None:
+    shapes = _jaxpr_shapes(closed_jaxpr)
     assert shapes
     assert all(n_obs not in shape for shape in shapes)
 
@@ -170,6 +205,230 @@ def test_provider_score_and_derivative_jaxprs_have_no_observation_arrays() -> No
     _assert_no_observation_dimension(score_jaxpr, fitting.n_obs)
     _assert_no_observation_dimension(derivative_jaxpr, fitting.n_obs)
     assert provider.finalize_calls == 0
+
+
+def test_lbfgs_matches_newton_meaningful_fit_and_shared_gradient_strict() -> None:
+    fitting = _problem()
+    newton_provider = build_dense_gaussian_qr_provider(fitting)
+    lbfgs_provider = build_dense_gaussian_qr_provider(fitting)
+    params = lbfgs_provider.initial_parameters(fitting.log_lambda_init)
+    state, _ = lbfgs_provider.evaluate(params)
+    first_order, no_hessian = lbfgs_provider.differentiate(
+        params, state, second_order=False
+    )
+    second_order, _ = lbfgs_provider.differentiate(params, state)
+    assert no_hessian is None
+    np.testing.assert_allclose(
+        first_order, second_order, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+    newton = NewtonOptimizer(fitting, score_provider=newton_provider).run()
+    lbfgs = optimize_gaussian_qr_lbfgs(fitting, lbfgs_provider)
+    assert newton.converged
+    assert lbfgs.converged
+    for actual, expected in (
+        (lbfgs.score, newton.score),
+        (lbfgs.edf, newton.edf),
+        (lbfgs.scale, newton.scale),
+        (lbfgs.pirls_result.coefficients, newton.pirls_result.coefficients),
+        (lbfgs.pirls_result.eta, newton.pirls_result.eta),
+        (lbfgs.pirls_result.deviance, newton.pirls_result.deviance),
+    ):
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+    assert newton_provider.finalize_calls == lbfgs_provider.finalize_calls == 1
+
+
+def test_real_large_m_provider_uses_no_outer_hessian_or_square_m_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fitting = _large_m_problem()
+    provider = build_dense_gaussian_qr_provider(fitting)
+    params = provider.initial_parameters(fitting.log_lambda_init)
+    state, _ = provider.evaluate(params)
+    n_outer = len(params)
+    assert use_gaussian_qr_lbfgs(fitting.n_penalties)
+
+    def fail_hessian(*_args, **_kwargs):
+        raise AssertionError("large-m Gaussian optimization formed an outer Hessian")
+
+    monkeypatch.setattr(
+        gaussian_optimizer_module, "jit_gaussian_qr_reml_hessian", fail_hessian
+    )
+    gradient_jaxpr = jax.make_jaxpr(
+        lambda value: provider.differentiate(value, state, second_order=False)[0]
+    )(params)
+    shapes = _jaxpr_shapes(gradient_jaxpr)
+    # The 51x51 penalty-range determinant is part of the scalar REML score.
+    # The forbidden outer Hessian is 52x52 here: 51 rho plus log(phi).
+    assert (n_outer, n_outer) not in shapes
+
+    result = optimize_gaussian_qr_lbfgs(
+        fitting,
+        provider,
+        control=StreamREMLControl(
+            max_iter=1,
+            maxfun=10,
+            maxcor=3,
+            maxls=5,
+            gtol=1e-8,
+            ftol=0.0,
+        ),
+    )
+    retained = (
+        provider._compression.R,
+        provider._compression.qtz,
+        *provider._penalty_roots,
+        result.log_lambda,
+        result.gradient,
+        result.pirls_result.coefficients,
+        result.pirls_result.L,
+    )
+    assert all(np.shape(value) != (n_outer, n_outer) for value in retained)
+    assert provider.finalize_calls == 1
+
+    formula, data = _large_m_inputs()
+    public = GAM(formula, control=FitControl(gaussian_compression=True)).fit(
+        data, result="prediction"
+    )
+    assert public.execution_route == "gaussian_qr"
+    assert public.lambda_strategy == "lbfgs_reml"
+    assert public.converged
+
+
+def test_lbfgs_selection_threshold_is_strictly_above_fifty() -> None:
+    assert not use_gaussian_qr_lbfgs(50)
+    assert use_gaussian_qr_lbfgs(51)
+
+
+def test_fixed_log_lambda_outside_estimated_bounds_is_preserved_strict() -> None:
+    fitting = _problem()
+    fixed_log_lambda = jax.numpy.array([41.0, 0.4], dtype=jax.numpy.float64)
+    reference_provider = build_dense_gaussian_qr_provider(fitting)
+    actual_provider = build_dense_gaussian_qr_provider(fitting)
+    reference = newton_optimize(
+        fitting,
+        "REML",
+        log_lambda_init=fixed_log_lambda,
+        pin_lambda=True,
+        score_provider=reference_provider,
+    )
+    actual = optimize_gaussian_qr_lbfgs(
+        fitting,
+        actual_provider,
+        log_lambda_init=fixed_log_lambda,
+        pin_lambda=True,
+    )
+
+    np.testing.assert_array_equal(actual.log_lambda, fixed_log_lambda)
+    for observed, expected in (
+        (actual.smoothing_params, reference.smoothing_params),
+        (actual.score, reference.score),
+        (actual.edf, reference.edf),
+        (actual.scale, reference.scale),
+        (actual.pirls_result.coefficients, reference.pirls_result.coefficients),
+    ):
+        np.testing.assert_allclose(
+            observed, expected, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+
+def test_public_large_m_selection_and_fixed_sp_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    formula, data, weight, offset = _problem_inputs()
+    control = FitControl(gaussian_compression=True)
+    newton = GAM(formula, control=control).fit(
+        data, weights=weight, offset=offset, result="prediction"
+    )
+    fixed = GAM(formula, sp=[0.7, 1.2], control=control).fit(
+        data, weights=weight, offset=offset, result="prediction"
+    )
+    monkeypatch.setattr(
+        gaussian_optimizer_module, "GAUSSIAN_LBFGS_PENALTY_THRESHOLD", 1
+    )
+    lbfgs = GAM(formula, control=control).fit(
+        data, weights=weight, offset=offset, result="prediction"
+    )
+
+    def fail_hessian(*_args, **_kwargs):
+        raise AssertionError("fixed large-m Gaussian fit formed an outer Hessian")
+
+    monkeypatch.setattr(
+        gaussian_optimizer_module, "jit_gaussian_qr_reml_hessian", fail_hessian
+    )
+    fixed_lbfgs = GAM(formula, sp=[0.7, 1.2], control=control).fit(
+        data, weights=weight, offset=offset, result="prediction"
+    )
+    assert newton.lambda_strategy == "newton_reml"
+    assert lbfgs.lambda_strategy == "lbfgs_reml"
+    assert fixed.lambda_strategy == fixed_lbfgs.lambda_strategy == "fixed"
+    for actual, expected in (
+        (lbfgs.coefficients, newton.coefficients),
+        (lbfgs.deviance, newton.deviance),
+        (lbfgs.score, newton.score),
+        (lbfgs.scale, newton.scale),
+        (fixed_lbfgs.coefficients, fixed.coefficients),
+        (fixed_lbfgs.smoothing_params, fixed.smoothing_params),
+        (fixed_lbfgs.score, fixed.score),
+        (fixed_lbfgs.scale, fixed.scale),
+    ):
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+
+
+def test_lbfgs_rejects_nonfinite_real_provider_trial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fitting = _problem()
+    provider = build_dense_gaussian_qr_provider(fitting)
+    original = provider.differentiate
+
+    def nonfinite_gradient(params, state, *, second_order=True):
+        gradient, hessian = original(params, state, second_order=second_order)
+        return jax.numpy.full_like(gradient, jax.numpy.nan), hessian
+
+    monkeypatch.setattr(provider, "differentiate", nonfinite_gradient)
+    with pytest.raises(FloatingPointError, match="non-finite frozen-statistics trial"):
+        optimize_gaussian_qr_lbfgs(fitting, provider)
+    assert provider.finalize_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "gtol", "expected_info"),
+    [(2, 1e-20, "step failed"), (1, 1e10, "iteration limit")],
+    ids=["line-search-above-gradient-tolerance", "iteration-limit"],
+)
+def test_lbfgs_terminal_failure_policy_uses_exact_final_gradient(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    gtol: float,
+    expected_info: str,
+) -> None:
+    fitting = _problem()
+    provider = build_dense_gaussian_qr_provider(fitting)
+
+    def terminal_failure(objective, initial, **_kwargs):
+        objective(initial)
+        return OptimizeResult(
+            x=np.asarray(initial),
+            success=False,
+            status=status,
+            nit=4,
+            message=expected_info,
+        )
+
+    monkeypatch.setattr(gaussian_optimizer_module, "minimize", terminal_failure)
+    result = optimize_gaussian_qr_lbfgs(
+        fitting,
+        provider,
+        control=StreamREMLControl(gtol=gtol, ftol=0.0),
+    )
+    assert not result.converged
+    assert result.convergence_info == expected_info
+    if status == 2:
+        assert float(np.max(np.abs(result.gradient))) > gtol
+    else:
+        assert float(np.max(np.abs(result.gradient))) < gtol
+    assert provider.finalize_calls == 1
 
 
 def test_provider_direct_constructor_rejects_nonidentity_coordinate_map() -> None:

@@ -298,8 +298,22 @@ class GAM:
                 )
             lambda_strategy = "efs_reml"
         else:
-            fit_result = newton_optimize(fd, self.method, score_provider=score_provider)
-            lambda_strategy = f"newton_{self.method.lower()}"
+            use_lbfgs = False
+            if score_provider is not None:
+                from jaxgam.execution.gaussian_optimizer import (
+                    optimize_gaussian_qr_lbfgs,
+                    use_gaussian_qr_lbfgs,
+                )
+
+                use_lbfgs = use_gaussian_qr_lbfgs(fd.n_penalties)
+            if use_lbfgs:
+                fit_result = optimize_gaussian_qr_lbfgs(fd, score_provider)
+                lambda_strategy = f"lbfgs_{self.method.lower()}"
+            else:
+                fit_result = newton_optimize(
+                    fd, self.method, score_provider=score_provider
+                )
+                lambda_strategy = f"newton_{self.method.lower()}"
 
         if (
             self.optimizer == "efs"
@@ -1403,6 +1417,20 @@ def _fit_fixed_sp(
     import jax.numpy as jnp
 
     log_lambda = _fixed_log_smoothing_parameters(sp, fd.n_penalties)
+
+    if score_provider is not None:
+        from jaxgam.execution.gaussian_optimizer import (
+            optimize_gaussian_qr_lbfgs,
+            use_gaussian_qr_lbfgs,
+        )
+
+        if use_gaussian_qr_lbfgs(fd.n_penalties):
+            return optimize_gaussian_qr_lbfgs(
+                fd,
+                score_provider,
+                log_lambda_init=log_lambda,
+                pin_lambda=True,
+            )
 
     # Families with an estimated dispersion parameter still co-optimize it with
     # the smoothing parameters held fixed, matching mgcv (gam.outer keeps theta

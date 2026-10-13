@@ -22,7 +22,9 @@ lean.predict(newdata)
 
 Dense Gaussian identity-link models can opt into frozen QR compression. The
 training rows are reduced once, and REML smoothing trials then use only
-coefficient-sized statistics:
+coefficient-sized statistics. Models with at most 50 penalties retain Newton;
+larger penalty vectors use bounded L-BFGS-B with exact gradients and no full
+outer Hessian:
 
 ```python
 from jaxgam import FitControl, GAM
