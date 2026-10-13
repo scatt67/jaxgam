@@ -807,6 +807,69 @@ class RBridge:
             "score": float(fit.rx2("REML")[0]),
         }
 
+    def source_gaussian_sl_fit(
+        self,
+        data: pd.DataFrame,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        rho: np.ndarray,
+        log_phi: float,
+    ) -> dict[str, Any]:
+        """Evaluate pinned ``qr_update``/``Sl.fit`` on a weighted tensor fit."""
+        self._require_rpy2()
+        weight_array = np.asarray(weights, dtype=np.float64)
+        offset_array = np.asarray(offset, dtype=np.float64)
+        parameters = np.asarray(rho, dtype=np.float64)
+        if (
+            weight_array.shape != (len(data),)
+            or offset_array.shape != (len(data),)
+            or parameters.shape != (2,)
+            or np.any(weight_array <= 0)
+        ):
+            raise ValueError("Gaussian Sl.fit oracle inputs are invalid")
+        formula = self._ro.Formula("y ~ te(x,z,k=4)")
+        frame = self._to_r_dataframe(data)
+        interpreted = self._call_internal("interpret.gam", formula)
+        setup = self._call_internal(
+            "gam.setup", interpreted, self._stats.terms(interpreted.rx2("pf")), frame
+        )
+        design = np.asarray(setup.rx2("X"), dtype=np.float64)
+        response = np.asarray(setup.rx2("y"), dtype=np.float64)
+        square_root_weight = np.sqrt(weight_array)
+        qr = self._call_internal(
+            "qr_update",
+            self._to_r_matrix(square_root_weight[:, None] * design),
+            self._to_r_vector(square_root_weight * (response - offset_array)),
+        )
+        fitted = np.asarray(qr.rx2("f"), dtype=np.float64)
+        tail = float(qr.rx2("y.norm2")[0]) - float(np.sum(fitted * fitted))
+        prepared = self._call_internal(
+            "Sl.Xprep", self._call_internal("Sl.setup", setup), qr.rx2("R")
+        )
+        result = self._call_internal(
+            "Sl.fit",
+            prepared.rx2("Sl"),
+            prepared.rx2("X"),
+            qr.rx2("f"),
+            self._to_r_vector(parameters),
+            self._to_r_vector(np.zeros(2, dtype=bool)),
+            float(log_phi),
+            False,
+            tail,
+            len(data),
+            prepared.rx2("Mp"),
+        )
+        return {
+            "X": design.copy(),
+            "S": [
+                np.asarray(penalty, dtype=np.float64).copy()
+                for penalty in setup.rx2("S")
+            ],
+            "score": float(result.rx2("reml")[0]),
+            "gradient": np.asarray(result.rx2("reml1"), dtype=np.float64).copy(),
+            "hessian": np.asarray(result.rx2("reml2"), dtype=np.float64).copy(),
+        }
+
     def source_gaussian_fixed_rho_qr_refit(
         self,
         factor: np.ndarray,
