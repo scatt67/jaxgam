@@ -210,7 +210,12 @@ CoefficientFactor: TypeAlias = (
 
 @dataclass(frozen=True)
 class StreamFitState:
-    """Final coefficient-space state for a fixed-smoothing streamed fit."""
+    """Final coefficient-space state for a streamed fit.
+
+    ``line_search_failed`` and ``backtracks`` describe inner coefficient-step
+    halving. Outer smoothing-optimizer status is reported separately by the
+    public result's convergence fields.
+    """
 
     coefficients: jax.Array
     log_lambda: jax.Array

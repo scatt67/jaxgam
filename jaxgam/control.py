@@ -54,13 +54,17 @@ class FitControl:
     setup workspace (JaxGAM-owned arrays plus the exact-knot SQLite scope) fits
     ``memory_budget_bytes``; a budget too small for one row is rejected before
     any full-data scan. Source-owned storage and allocator overhead remain
-    outside these bounds.
+    outside these bounds. Gaussian QR adds a route-specific ledger for its
+    merge buffers and compact score/derivative arrays. Native LAPACK/XLA
+    workspace is not an allocator hard cap.
 
-    ``gaussian_compression=True`` opts a dense Gaussian identity-link fit into
-    one weighted QR reduction followed by coefficient-space REML trials.  The
-    initial route requires finite weights in the PIRLS unclipped interval and
-    a full identifiable coefficient map.  Other models use the ordinary dense
-    route and report the reason in ``execution_fallback_reason``.
+    ``gaussian_compression=True`` opts a Gaussian identity-link fit into one
+    weighted QR reduction followed by coefficient-space REML trials.  With
+    ``execution='stream'`` the reduction consumes one bounded replay after
+    prepared setup and retains no training rows.  The initial route requires
+    finite weights in the PIRLS unclipped interval and a full identifiable
+    coefficient map.  Ineligible dense models use the ordinary dense route and
+    report the reason in ``execution_fallback_reason``.
     """
 
     execution: Literal["dense", "stream"] = "dense"
@@ -87,7 +91,3 @@ class FitControl:
             raise ValueError("gaussian_compression must be a boolean.")
         if not isinstance(self.efs, EFSControl):
             raise ValueError("efs must be an EFSControl instance.")
-        if self.gaussian_compression and self.execution != "dense":
-            raise NotImplementedError(
-                "gaussian_compression=True currently requires dense execution."
-            )

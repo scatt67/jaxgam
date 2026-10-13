@@ -72,7 +72,17 @@ def test_interleaved_supports_remain_coupled_and_zero_penalty_is_safe() -> None:
 
 
 def test_response_reduction_weighted_mean() -> None:
-    reduction = ResponseReduction(3, 4.0, 1.0, 6.0, 10.0, -1.0, 2.0)
+    reduction = ResponseReduction(
+        n_obs=3,
+        total_weight=4.0,
+        weight_min=0.5,
+        weight_max=2.0,
+        response_min=1.0,
+        response_max=6.0,
+        weighted_sum=10.0,
+        offset_min=-1.0,
+        offset_max=2.0,
+    )
     assert reduction.weighted_mean == 2.5
 
 

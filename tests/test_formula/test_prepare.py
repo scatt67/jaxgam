@@ -227,6 +227,8 @@ def test_fitting_preparation_matches_dense_cpu_coordinate_setup() -> None:
     reduction = prepared.fitting.response
     assert reduction.n_obs == len(data)
     assert reduction.total_weight == pytest.approx(float(weights.sum()))
+    assert reduction.weight_min == pytest.approx(float(weights.min()))
+    assert reduction.weight_max == pytest.approx(float(weights.max()))
     assert reduction.weighted_mean == pytest.approx(
         np.average(data["y"], weights=weights)
     )

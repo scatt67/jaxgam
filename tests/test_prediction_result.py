@@ -61,8 +61,9 @@ def test_fisher_standard_errors_and_batched_positions_match_full() -> None:
 
 def test_control_rejects_unimplemented_routes_and_budgets_covariance() -> None:
     assert FitControl(gaussian_compression=True).gaussian_compression
-    with pytest.raises(NotImplementedError, match="dense execution"):
-        FitControl(execution="stream", gaussian_compression=True)
+    assert FitControl(
+        execution="stream", gaussian_compression=True
+    ).gaussian_compression
     assert FitControl(execution="stream").execution == "stream"
     data = _data()
     result = GAM(

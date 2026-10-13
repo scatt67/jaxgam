@@ -56,7 +56,7 @@ from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting import penalty_ops
-from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import PIRLSResult, pirls_loop
 from jaxgam.fitting.reml import (
@@ -916,7 +916,7 @@ class NewtonOptimizer:
 
     def __init__(
         self,
-        fd: FittingData,
+        fd: FittingData | PreparedFittingMetadata,
         method: str = "REML",
         max_iter: int = 200,
         tol: float | None = None,
@@ -989,11 +989,12 @@ class NewtonOptimizer:
         # and _jit_diff_grad_hess (gradient/Hessian for non-Gaussian).
         # Dynamic args are JAX arrays; static args are Python values that
         # key the JIT cache.
-        offset = fd.offset if fd.offset is not None else jnp.zeros(fd.n_obs)
-        self._jit_kwargs = (
-            {}
-            if score_provider is not None
-            else {
+        if score_provider is not None:
+            self._jit_kwargs = {}
+        else:
+            assert isinstance(fd, FittingData)
+            offset = fd.offset if fd.offset is not None else jnp.zeros(fd.n_obs)
+            self._jit_kwargs = {
                 "X": fd.X,
                 "y": fd.y,
                 "wt": fd.wt,
@@ -1025,7 +1026,6 @@ class NewtonOptimizer:
                     else True
                 ),
             }
-        )
 
         # Build custom_jvp-based differentiable score for all families.
         # For non-Gaussian: captures d(beta*)/d(rho), d(XtWX)/d(rho),
@@ -1727,7 +1727,12 @@ class NewtonOptimizer:
             params = jnp.concatenate(parts) if len(parts) > 1 else log_lambda
 
         # -- Initial fit and score --
-        pirls_result, score = self._fit_and_score(params, self._initial_beta())
+        beta_start = (
+            jnp.zeros(fd.n_coef, dtype=jnp.float64)
+            if self._score_provider is not None
+            else self._initial_beta()
+        )
+        pirls_result, score = self._fit_and_score(params, beta_start)
         criterion = self._make_criterion(pirls_result)
         grad, hess, score_scale, _ = self._check_convergence(
             criterion,
@@ -1871,7 +1876,7 @@ class NewtonOptimizer:
 
 
 def newton_optimize(
-    fd: FittingData,
+    fd: FittingData | PreparedFittingMetadata,
     method: str = "REML",
     log_lambda_init: jax.Array | None = None,
     max_iter: int = 200,

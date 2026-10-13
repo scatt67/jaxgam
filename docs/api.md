@@ -38,6 +38,15 @@ The ordinary dense route remains the default. The QR route accepts finite
 positive prior weights between `1e-10` and `1e10` and a full identifiable
 coefficient map. Unsupported cases use dense fitting and report the reason in
 `execution_fallback_reason`. Estimated EFS smoothing also uses dense fitting.
+For a replayable `RowSource`, set `execution="stream"` and request
+`result="prediction"`; eligible Gaussian identity models use the same frozen
+QR statistics with a prospective memory check, with fixed or estimated
+smoothing and either `linear_solver`. An opted-in RowSource fit that is not
+eligible (another family or link, estimated EFS selection, weights outside the
+QR boundary, or an incomplete coefficient map) takes the streamed route it
+would take without the request and reports the reason in
+`execution_fallback_reason`; estimated smoothing then uses exact streamed REML,
+which requires `linear_solver="qr"`.
 
 ### Streamed QR coefficient solves
 
@@ -130,7 +139,9 @@ optimization path differs from the dense Newton optimizer, so fits agree at
 the optimum to numerical tolerance rather than step by step. The supported
 families and links are those of the fixed-sp route, and `linear_solver="qr"`
 is required. A model with no smoothing, scale or theta parameter to select
-falls back to a plain coefficient fit.
+falls back to a plain coefficient fit. An eligible Gaussian identity fit that
+sets `gaussian_compression=True` takes the frozen Gaussian QR route instead
+and reports `execution_route="stream_gaussian_qr"`.
 
 Near the optimum, the remaining REML decrease can fall below the score's
 floating-point resolution. L-BFGS-B may then stop on its relative-reduction

@@ -46,6 +46,7 @@ class PreparedModel:
     predict_spec: predict_matrix.PredictSpec
     penalties: PenaltyStructure | None
     source_fingerprint: str
+    row_positions_fingerprint: str
     basis_fingerprint: str
     n_obs: int
     response: str
@@ -632,7 +633,16 @@ def prepare_model(
     )
     smooth_sums = [np.zeros(smooth.n_coefs) for smooth in smooths]
     smooth_norms = [0.0 for _ in smooths]
+    row_positions_digest = hashlib.sha256(b"jaxgam-row-positions-v1\0")
     for batch in _scan_valid(source, setup_rows):
+        positions = np.asarray(batch.row_positions)
+        if positions.ndim != 1 or not np.issubdtype(positions.dtype, np.integer):
+            raise ValueError(
+                "RowSource positions must be a one-dimensional integer array."
+            )
+        row_positions_digest.update(
+            np.ascontiguousarray(positions, dtype=np.int64).view(np.uint8)
+        )
         columns = dict(batch.columns)
         parametric, _ = _batch_parametric(
             formula_spec, columns, len(batch.row_positions)
@@ -793,6 +803,7 @@ def prepare_model(
         predict_spec,
         penalties,
         source.fingerprint(),
+        row_positions_digest.hexdigest(),
         basis_fingerprint,
         source.n_rows,
         formula_spec.response,
@@ -876,6 +887,8 @@ def _prepare_fitting(
     ldxx = np.zeros(prepared.n_coef)
     n_obs = 0
     total_weight = 0.0
+    weight_min = np.inf
+    weight_max = -np.inf
     weighted_sum = 0.0
     response_min = np.inf
     response_max = -np.inf
@@ -918,6 +931,8 @@ def _prepare_fitting(
         del stacked
         n_obs += len(y)
         total_weight += float(np.sum(wt))
+        weight_min = min(weight_min, float(np.min(wt)))
+        weight_max = max(weight_max, float(np.max(wt)))
         weighted_sum += float(np.sum(wt * y))
         response_min = min(response_min, float(np.min(y)))
         response_max = max(response_max, float(np.max(y)))
@@ -1006,6 +1021,8 @@ def _prepare_fitting(
         response=ResponseReduction(
             n_obs=n_obs,
             total_weight=total_weight,
+            weight_min=weight_min,
+            weight_max=weight_max,
             response_min=response_min,
             response_max=response_max,
             weighted_sum=weighted_sum,

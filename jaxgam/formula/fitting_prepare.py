@@ -45,6 +45,8 @@ class ResponseReduction:
 
     n_obs: int
     total_weight: float
+    weight_min: float
+    weight_max: float
     response_min: float
     response_max: float
     weighted_sum: float

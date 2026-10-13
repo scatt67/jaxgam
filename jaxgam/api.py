@@ -337,7 +337,14 @@ class GAM:
         result: Literal["full", "inference", "prediction"],
         family: ExponentialFamily,
     ) -> GAMPredictionResult:
-        """Run the replayable-source prediction-result execution route."""
+        """Run the replayable-source route, including opt-in Gaussian QR.
+
+        Route precedence: an explicit ``gaussian_compression=True`` request
+        for an exact Gaussian identity Newton/fixed-sp fit takes the frozen
+        Gaussian QR route. Every other fit, and an opted-in fit found
+        ineligible, takes the published route it would take without the
+        request; an unmet request is reported in ``execution_fallback_reason``.
+        """
         from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
 
         if not isinstance(data, RowSource):
@@ -356,6 +363,12 @@ class GAM:
             )
         estimated_efs = self.optimizer == "efs" and self.sp is None
         estimated_exact = self.optimizer == "newton" and self.sp is None
+        execution_fallback_reason = _gaussian_qr_request_fallback(
+            self.control, family, estimated_efs=estimated_efs
+        )
+        gaussian_qr_candidate = (
+            self.control.gaussian_compression and execution_fallback_reason is None
+        )
         if estimated_efs:
             if self.control.linear_solver != "qr":
                 raise NotImplementedError(
@@ -363,7 +376,9 @@ class GAM:
                 )
             _check_stream_efs_family(family)
         elif estimated_exact:
-            if self.control.linear_solver != "qr":
+            # The frozen Gaussian QR route owns its own solves; only the
+            # exact streamed REML route requires the QR coefficient solver.
+            if self.control.linear_solver != "qr" and not gaussian_qr_candidate:
                 raise NotImplementedError(
                     "Exact streamed REML requires linear_solver='qr'."
                 )
@@ -379,16 +394,38 @@ class GAM:
             maximum_bytes=self.control.memory_budget_bytes,
         )
         stream = StreamDesign(prepared, data)
+        gaussian_qr_workspace = None
+        if gaussian_qr_candidate:
+            from jaxgam.execution.gaussian import (
+                preflight_streamed_gaussian_qr_workspace,
+            )
+
+            assert prepared.fitting is not None
+            response = prepared.fitting.response
+            if response.weight_min < 1e-10 or response.weight_max > 1e10:
+                execution_fallback_reason = (
+                    "Gaussian QR currently requires unclipped finite positive weights"
+                )
+            else:
+                # Reject an over-budget QR route before device placement.
+                gaussian_qr_workspace = preflight_streamed_gaussian_qr_workspace(
+                    prepared,
+                    self.control.batch_rows,
+                    self.control.memory_budget_bytes,
+                )
         jax_device = _resolve_device(self.device)
         if estimated_efs:
             if prepared.penalties is None or prepared.penalties.n_penalties == 0:
-                return _fit_stream_parametric_bypass(
-                    stream,
-                    family,
-                    formula=self.formula,
-                    method=self.method,
-                    control=self.control,
-                    device=jax_device,
+                return _with_execution_fallback_reason(
+                    _fit_stream_parametric_bypass(
+                        stream,
+                        family,
+                        formula=self.formula,
+                        method=self.method,
+                        control=self.control,
+                        device=jax_device,
+                    ),
+                    execution_fallback_reason,
                 )
             from jaxgam.execution.efs_stream import fit_streamed_efs
 
@@ -400,17 +437,56 @@ class GAM:
                 control=self.control.efs,
                 device=jax_device,
             )
-            return GAMPredictionResult._from_stream_fit(
-                stream_state=execution.fit.pirls_result,
-                prepared=prepared,
-                metadata=execution.metadata,
-                family=execution.family,
-                formula=self.formula,
-                method=self.method,
-                control=self.control,
-                execution_route="stream_efs_qr",
-                selected_fit=execution.fit,
-                lambda_strategy="efs_reml",
+            return _with_execution_fallback_reason(
+                GAMPredictionResult._from_stream_fit(
+                    stream_state=execution.fit.pirls_result,
+                    prepared=prepared,
+                    metadata=execution.metadata,
+                    family=execution.family,
+                    formula=self.formula,
+                    method=self.method,
+                    control=self.control,
+                    execution_route="stream_efs_qr",
+                    selected_fit=execution.fit,
+                    lambda_strategy="efs_reml",
+                ),
+                execution_fallback_reason,
+            )
+        metadata = None
+        if gaussian_qr_workspace is not None:
+            from jaxgam.execution.gaussian import GaussianQRIneligible
+            from jaxgam.execution.gaussian_optimizer import (
+                build_stream_gaussian_qr_provider,
+            )
+
+            metadata = PreparedFittingMetadata.from_prepared(
+                prepared, family, jax_device
+            )
+            try:
+                provider = build_stream_gaussian_qr_provider(
+                    stream, metadata, batch_rows=self.control.batch_rows
+                )
+            except GaussianQRIneligible as error:
+                execution_fallback_reason = str(error)
+            else:
+                return _fit_stream_gaussian_qr(
+                    stream,
+                    provider,
+                    metadata,
+                    family,
+                    self.sp,
+                    formula=self.formula,
+                    method=self.method,
+                    control=self.control,
+                    known_workspace_bytes=gaussian_qr_workspace.required_bytes,
+                )
+        if estimated_exact and self.control.linear_solver != "qr":
+            # Only an opted-in Gaussian QR candidate reaches this point with
+            # another solver; its exact-REML fallback needs the QR solver.
+            raise NotImplementedError(
+                "Estimated-sp RowSource fitting requires an eligible Gaussian QR "
+                f"route ({execution_fallback_reason}) or linear_solver='qr' for "
+                "exact streamed REML."
             )
         known_workspace_bytes = _preflight_stream_workspace(
             prepared.n_coef,
@@ -418,45 +494,57 @@ class GAM:
             self.control.memory_budget_bytes,
             linear_solver=self.control.linear_solver,
         )
-        metadata = PreparedFittingMetadata.from_prepared(prepared, family, jax_device)
+        if metadata is None:
+            metadata = PreparedFittingMetadata.from_prepared(
+                prepared, family, jax_device
+            )
         if estimated_exact:
-            return _fit_stream_exact_reml(
-                stream,
-                family,
-                metadata,
-                formula=self.formula,
-                method=self.method,
-                control=self.control,
-                device=jax_device,
+            return _with_execution_fallback_reason(
+                _fit_stream_exact_reml(
+                    stream,
+                    family,
+                    metadata,
+                    formula=self.formula,
+                    method=self.method,
+                    control=self.control,
+                    device=jax_device,
+                ),
+                execution_fallback_reason,
             )
         log_lambda = _fixed_log_smoothing_parameters(self.sp, metadata.n_penalties)
         from jaxgam.families.negative_binomial import NegativeBinomial
 
         if isinstance(family, NegativeBinomial):
-            return _fit_stream_fixed_nb(
-                stream,
-                family,
-                log_lambda,
-                metadata,
-                formula=self.formula,
-                method=self.method,
-                control=self.control,
-                device=jax_device,
-                supplied_sp=self.sp,
+            return _with_execution_fallback_reason(
+                _fit_stream_fixed_nb(
+                    stream,
+                    family,
+                    log_lambda,
+                    metadata,
+                    formula=self.formula,
+                    method=self.method,
+                    control=self.control,
+                    device=jax_device,
+                    supplied_sp=self.sp,
+                ),
+                execution_fallback_reason,
             )
         if not _stream_legacy_fisher_eligible(family) or (
             self.control.linear_solver == "qr" and family.scale_known
         ):
-            return _fit_stream_fixed_regular(
-                stream,
-                family,
-                log_lambda,
-                metadata,
-                formula=self.formula,
-                method=self.method,
-                control=self.control,
-                device=jax_device,
-                supplied_sp=self.sp,
+            return _with_execution_fallback_reason(
+                _fit_stream_fixed_regular(
+                    stream,
+                    family,
+                    log_lambda,
+                    metadata,
+                    formula=self.formula,
+                    method=self.method,
+                    control=self.control,
+                    device=jax_device,
+                    supplied_sp=self.sp,
+                ),
+                execution_fallback_reason,
             )
         stream_state = fit_streamed_pirls(
             stream,
@@ -468,20 +556,104 @@ class GAM:
             ),
             device=jax_device,
         )
-        return GAMPredictionResult._from_stream_fit(
-            stream_state=stream_state,
-            prepared=prepared,
-            metadata=metadata,
-            family=family,
-            formula=self.formula,
-            method=self.method,
-            control=self.control,
-            execution_route=(
-                "stream_qr" if self.control.linear_solver == "qr" else "stream"
+        return _with_execution_fallback_reason(
+            GAMPredictionResult._from_stream_fit(
+                stream_state=stream_state,
+                prepared=prepared,
+                metadata=metadata,
+                family=family,
+                formula=self.formula,
+                method=self.method,
+                control=self.control,
+                execution_route=(
+                    "stream_qr" if self.control.linear_solver == "qr" else "stream"
+                ),
+                known_workspace_bytes=known_workspace_bytes,
+                supplied_smoothing_params=self.sp,
             ),
-            known_workspace_bytes=known_workspace_bytes,
-            supplied_smoothing_params=self.sp,
+            execution_fallback_reason,
         )
+
+
+def _gaussian_qr_request_fallback(
+    control: FitControl, family: ExponentialFamily, *, estimated_efs: bool
+) -> str | None:
+    """Return why an explicit Gaussian QR request cannot apply to this route."""
+    from jaxgam.families.standard import Gaussian
+    from jaxgam.links.links import IdentityLink
+
+    if not control.gaussian_compression:
+        return None
+    if estimated_efs:
+        return "Gaussian QR compression requires Newton smoothing selection."
+    if type(family) is not Gaussian or not isinstance(family.link, IdentityLink):
+        return "Gaussian QR requires the exact Gaussian family with identity link"
+    return None
+
+
+def _with_execution_fallback_reason(
+    result: GAMPredictionResult, reason: str | None
+) -> GAMPredictionResult:
+    """Record an unmet Gaussian QR request on a published-route result."""
+    if reason is None:
+        return result
+    return replace(result, execution_fallback_reason=reason)
+
+
+def _fit_stream_gaussian_qr(
+    stream: StreamDesign,
+    provider: object,
+    metadata: PreparedFittingMetadata,
+    family: ExponentialFamily,
+    sp: np.ndarray | list | None,
+    *,
+    formula: str,
+    method: str,
+    control: FitControl,
+    known_workspace_bytes: int,
+) -> GAMPredictionResult:
+    """Fit the opt-in frozen Gaussian QR route through the published seam.
+
+    The selected Newton result carries the outer score and convergence
+    provenance; the row-free provider state owns the coefficient factor.
+    """
+    fixed = sp is not None
+    log_lambda = (
+        _fixed_log_smoothing_parameters(sp, metadata.n_penalties)
+        if fixed
+        else metadata.log_lambda_init
+    )
+    fit_result = newton_optimize(
+        metadata,
+        method,
+        log_lambda_init=log_lambda,
+        pin_lambda=fixed,
+        score_provider=provider,
+    )
+    lambda_strategy = "fixed" if fixed else f"newton_{method.lower()}"
+    state = provider.to_stream_state(fit_result)
+    selected = _selected_stream_fit(
+        state,
+        float(np.asarray(fit_result.score)),
+        converged=bool(fit_result.converged),
+        n_iter=int(fit_result.n_iter),
+        convergence_info=fit_result.convergence_info,
+    )
+    return GAMPredictionResult._from_stream_fit(
+        stream_state=state,
+        prepared=stream.prepared,
+        metadata=metadata,
+        family=family,
+        formula=formula,
+        method=method,
+        control=control,
+        execution_route="stream_gaussian_qr",
+        selected_fit=selected,
+        lambda_strategy=lambda_strategy,
+        source_scans=provider.source_scans,
+        batches_scanned=provider.batches_scanned,
+        known_workspace_bytes=known_workspace_bytes,
+    )
 
 
 def _stream_legacy_fisher_eligible(family: ExponentialFamily) -> bool:
