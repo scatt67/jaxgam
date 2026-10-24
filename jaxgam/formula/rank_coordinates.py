@@ -13,13 +13,13 @@ from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
-from scipy import linalg
 
 from jaxgam.formula.fitting_prepare import (
     GlobalPenaltyCoordinates,
     global_penalty_coordinates,
 )
 from jaxgam.penalties.structure import PenaltyStructure
+from jaxgam.smooths.source_lapack import source_frobenius_norm, source_pivoted_qr
 
 
 def _readonly(value: npt.ArrayLike, *, dtype: type[np.generic]) -> np.ndarray:
@@ -130,16 +130,20 @@ def rank_revealing_coordinate_map(
         raise ValueError("rank-coordinate retained rank is invalid")
     if not np.all(np.isfinite(design)) or not np.all(np.isfinite(root)):
         raise ValueError("rank-coordinate inputs must be finite")
-    _, data_r_pivoted, data_pivots = linalg.qr(design, mode="economic", pivoting=True)
+    # gdiPK: mgcv_qr (DGEQP3) of the weighted design, unpivot R, scale R and
+    # the balanced root by their sequential Frobenius norms, then DGEQP3 of
+    # the stacked layout. Exactly aliased columns tie in that second QR, so
+    # both factorizations use the declared single-thread provider.
+    data_r_pivoted, data_pivots = source_pivoted_qr(np.asarray(design, order="F"))
     inverse = np.empty_like(data_pivots)
     inverse[data_pivots] = np.arange(p)
     data_r = data_r_pivoted[:, inverse]
-    data_norm = np.linalg.norm(data_r, ord="fro")
-    root_norm = np.linalg.norm(root, ord="fro")
+    data_norm = source_frobenius_norm(data_r)
+    root_norm = source_frobenius_norm(root)
     if data_norm == 0 or root_norm == 0:
         raise ValueError("rank-coordinate layout needs data and penalty support")
     layout = np.vstack((data_r / data_norm, root / root_norm))
-    pivots = linalg.qr(layout, mode="economic", pivoting=True)[2]
+    pivots = source_pivoted_qr(np.asarray(layout, order="F"))[1]
     keep = np.sort(np.asarray(pivots[:retained_rank], dtype=np.int64))
     drop = np.sort(np.asarray(pivots[retained_rank:], dtype=np.int64))
     basis = np.eye(p)[:, keep]

@@ -385,3 +385,47 @@ def test_unreviewed_raw_cubic_inputs_remain_strict(monkeypatch) -> None:
     assert _reviewed_raw_cubic_tolerance(1, knots, changed, 0.1) is STRICT
     assert _reviewed_raw_cubic_tolerance(1, knots, raw, 0.11) is STRICT
     assert _reviewed_raw_cubic_tolerance(2, knots, raw, 0.1) is STRICT
+
+
+def test_source_pivoted_qr_follows_mgcv_qr_contract_and_preserves_input() -> None:
+    """DGEQP3 on the provider: free pivots, zero-based order, R in pivot order."""
+    from scipy import linalg
+
+    rng = np.random.default_rng(3107)
+    generic = rng.standard_normal((17, 6))
+    original = generic.copy()
+    upper, pivots = source_lapack.source_pivoted_qr(generic)
+    np.testing.assert_array_equal(generic, original)
+    assert upper.shape == (6, 6)
+    np.testing.assert_array_equal(np.tril(upper, -1), 0.0)
+    np.testing.assert_array_equal(pivots, linalg.qr(generic, pivoting=True)[2])
+    pivoted = generic[:, pivots]
+    np.testing.assert_allclose(
+        upper.T @ upper, pivoted.T @ pivoted, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    aliased = generic.copy()
+    aliased[:, 5] = aliased[:, 2]
+    aliased_upper, aliased_pivots = source_lapack.source_pivoted_qr(aliased)
+    assert len({2, 5} & set(aliased_pivots[:5].tolist())) == 1
+    assert abs(aliased_upper[-1, -1]) <= 1e-12 * abs(aliased_upper[0, 0])
+    wide_upper, wide_pivots = source_lapack.source_pivoted_qr(generic.T.copy())
+    assert wide_upper.shape == (6, 17)
+    assert sorted(wide_pivots.tolist()) == list(range(17))
+
+
+@pytest.mark.parametrize(
+    "matrix",
+    [np.ones((3, 2), dtype=np.float32), np.empty((0, 2)), np.array([[np.nan]])],
+)
+def test_source_pivoted_qr_rejects_invalid_matrices(matrix) -> None:
+    with pytest.raises(ValueError, match="Source pivoted QR"):
+        source_lapack.source_pivoted_qr(matrix)
+
+
+def test_source_frobenius_norm_is_one_sequential_column_major_sum() -> None:
+    assert source_lapack.source_frobenius_norm(np.array([[3.0], [4.0]])) == 5.0
+    assert source_lapack.source_frobenius_norm(np.empty((0, 3))) == 0.0
+    values = np.array([[1e16, 1.0], [-1e16, 1.0]])
+    # Column-major order: ((1e32 + 1e32) + 1) + 1, sequentially in binary64.
+    expected = np.sqrt(((1e32 + 1e32) + 1.0) + 1.0)
+    assert source_lapack.source_frobenius_norm(values) == expected

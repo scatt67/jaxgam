@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import functools
+import math
 import sys
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
@@ -80,6 +81,7 @@ class _SourceLapack:
     dsyevr_work: object
     dgemm: object
     dptsv: object
+    dgeqp3_work: object
 
 
 @dataclass(frozen=True)
@@ -219,6 +221,7 @@ def _source_lapack() -> _SourceLapack:
         dsyevr_work = library.scipy_LAPACKE_dsyevr_work
         dgemm = library.scipy_cblas_dgemm
         dptsv = library.scipy_LAPACKE_dptsv
+        dgeqp3_work = library.scipy_LAPACKE_dgeqp3_work
     except AttributeError as exc:
         raise RuntimeError(
             "Pinned OpenBLAS provider does not export the required LP64 "
@@ -275,7 +278,19 @@ def _source_lapack() -> _SourceLapack:
         lapack_int,
     ]
     dptsv.restype = lapack_int
-    return _SourceLapack(provider, library, dsyevr_work, dgemm, dptsv)
+    dgeqp3_work.argtypes = [
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        int_pointer,
+        double_pointer,
+        double_pointer,
+        lapack_int,
+    ]
+    dgeqp3_work.restype = lapack_int
+    return _SourceLapack(provider, library, dsyevr_work, dgemm, dptsv, dgeqp3_work)
 
 
 @functools.lru_cache(maxsize=1)
@@ -645,6 +660,76 @@ def _check_input_shape(S: npt.NDArray[np.float64]) -> int:
 def _check_input_finite(S: npt.NDArray[np.float64]) -> None:
     if not np.all(np.isfinite(S)):
         raise ValueError("Cubic shrinkage penalty must contain only finite values.")
+
+
+def source_pivoted_qr(
+    matrix: npt.NDArray[np.float64],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]]:
+    """Run mgcv's ``mgcv_qr`` (LAPACK DGEQP3, all columns free) on the provider.
+
+    Returns the ``min(m, n)`` by ``n`` upper-triangular factor in pivoted
+    column order and the zero-based pivots, as ``mgcv_qr`` leaves them.  The
+    caller's matrix is not modified.  Pinned mgcv's ``gdiPK`` breaks exactly
+    tied (aliased) columns by DGEQP3's own norm downdating, so the call goes
+    through the declared single-thread provider rather than SciPy's LAPACK.
+    """
+    if (
+        not isinstance(matrix, np.ndarray)
+        or matrix.dtype != np.float64
+        or matrix.ndim != 2
+        or 0 in matrix.shape
+    ):
+        raise ValueError("Source pivoted QR requires a nonempty float64 matrix.")
+    rows, columns = matrix.shape
+    if rows > _LAPACK_INT_MAX or columns > _LAPACK_INT_MAX:
+        raise ValueError("Source pivoted QR dimension exceeds the LP64 integer range.")
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("Source pivoted QR matrix must contain only finite values.")
+    provider = _source_lapack()
+    double_pointer = ctypes.POINTER(ctypes.c_double)
+    int_pointer = ctypes.POINTER(ctypes.c_int)
+    factor = np.array(matrix, dtype=np.float64, order="F", copy=True)
+    pivots = np.zeros(columns, dtype=np.int32)
+    tau = np.zeros(min(rows, columns), dtype=np.float64)
+    query = np.empty(1, dtype=np.float64)
+
+    def call(work: np.ndarray, lwork: int) -> int:
+        return provider.dgeqp3_work(
+            _LAPACK_COL_MAJOR,
+            rows,
+            columns,
+            factor.ctypes.data_as(double_pointer),
+            rows,
+            pivots.ctypes.data_as(int_pointer),
+            tau.ctypes.data_as(double_pointer),
+            work.ctypes.data_as(double_pointer),
+            lwork,
+        )
+
+    status = call(query, -1)
+    if status != 0:
+        raise np.linalg.LinAlgError(
+            f"DGEQP3 workspace query failed with info={status}."
+        )
+    lwork = _query_length(
+        query[0], name="lwork", cap=3 * columns + 1 + 64 * (columns + 1)
+    )
+    work = np.empty(lwork, dtype=np.float64)
+    status = call(work, lwork)
+    if status != 0:
+        raise np.linalg.LinAlgError(f"DGEQP3 failed with info={status}.")
+    size = min(rows, columns)
+    upper = np.triu(factor[:size, :])
+    return upper, pivots.astype(np.int64) - 1
+
+
+def source_frobenius_norm(matrix: npt.NDArray[np.float64]) -> float:
+    """Match ``gdi.c::frobenius_norm``: one column-major running double sum."""
+    values = np.asarray(matrix, dtype=np.float64).ravel(order="F")
+    if values.size == 0:
+        return 0.0
+    squares = values * values
+    return math.sqrt(float(np.cumsum(squares)[-1]))
 
 
 def natural_cubic_system_solve(
