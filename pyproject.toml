@@ -7,6 +7,21 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
+    # Two pinned OpenBLAS wheels, both loaded RTLD_LOCAL by
+    # jaxgam/smooths/source_lapack.py; neither replaces NumPy/SciPy's BLAS.
+    # - scipy-openblas32 (OpenBLAS 0.3.26, LP64): cubic-shrinkage DSYEVR and
+    #   DGEMM, getFS DPTSV, and the source penalty-coordinate DSYEVR. It
+    #   matches the OpenBLAS 0.3.26 linked by pinned Linux R 4.5.2/mgcv 1.9-3.
+    # - scipy-openblas64 (OpenBLAS 0.3.30, ILP64): only the source Rlanczos
+    #   DSYEVD/DGEMV/DGEMM/DDOT/DNRM2 used by Gaussian-process bases.
+    # A single wheel was measured on 2026-10-24 and rejected:
+    # - openblas64 for everything: on pinned Linux the cubic-shrinkage raw
+    #   penalties miss pinned R (worst case max abs 0.393, rel 0.156, a
+    #   null-space orientation change), and the coupled-alias rank gauge
+    #   misses (max abs 0.141 / 0.512 / 0.458).
+    # - openblas32 for everything: on macOS the weighted GP rank map flips
+    #   gauge against pinned R (coefficients max abs 8.30, covariance 1.26e4),
+    #   where the two-wheel configuration passes.
     "scipy-openblas32==0.3.26.0.4",
     "scipy-openblas64==0.3.30.0.2",
     "numba>=0.58",
