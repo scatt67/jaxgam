@@ -429,3 +429,181 @@ def test_source_frobenius_norm_is_one_sequential_column_major_sum() -> None:
     # Column-major order: ((1e32 + 1e32) + 1) + 1, sequentially in binary64.
     expected = np.sqrt(((1e32 + 1e32) + 1.0) + 1.0)
     assert source_lapack.source_frobenius_norm(values) == expected
+
+
+def test_each_provider_library_runs_single_threaded_after_load() -> None:
+    """Both wheel libraries are pinned to one OpenBLAS thread when loaded."""
+    for loader in (source_lapack._source_lapack, source_lapack._source_lanczos):
+        loader.cache_clear()
+        provider = loader()
+        assert provider.module.num_threads() == 1, provider.module.package
+        loader.cache_clear()
+
+
+_VENDORED_THREADS_SCRIPT = r"""
+import ctypes
+import json
+import sys
+from pathlib import Path
+
+import numpy
+import scipy
+import scipy.linalg  # loads SciPy's vendored BLAS/LAPACK
+
+def vendored():
+    found = {}
+    for module in (numpy, scipy):
+        root = Path(module.__file__).resolve().parent
+        candidates = list(root.parent.glob(f"{module.__name__}.libs/*openblas*"))
+        candidates += list(root.glob(".dylibs/*openblas*"))
+        for path in candidates:
+            library = ctypes.CDLL(str(path), ctypes.RTLD_LOCAL)
+            for suffix in ("", "64_"):
+                name = f"scipy_openblas_get_num_threads{suffix}"
+                if hasattr(library, name):
+                    getter = getattr(library, name)
+                    getter.restype = ctypes.c_int
+                    found[f"{module.__name__}:{path.name}"] = getter
+    return found
+
+getters = vendored()
+before = {name: getter() for name, getter in getters.items()}
+import jaxgam.smooths.source_lapack as source_lapack
+providers = [source_lapack._source_lapack(), source_lapack._source_lanczos()]
+after = {name: getter() for name, getter in getters.items()}
+print(json.dumps({
+    "jaxgam": source_lapack.__file__,
+    "before": before,
+    "after": after,
+    "providers": [provider.module.num_threads() for provider in providers],
+    "lapack": scipy.__config__.CONFIG["Build Dependencies"]["lapack"]["name"],
+}))
+"""
+
+
+def test_provider_pin_leaves_numpy_and_scipy_blas_threads_unchanged() -> None:
+    """NumPy's and SciPy's vendored BLAS keep the caller's thread count."""
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    env = dict(os.environ, OPENBLAS_NUM_THREADS="3", PYTHONPATH=str(root))
+    completed = subprocess.run(
+        [sys.executable, "-c", _VENDORED_THREADS_SCRIPT],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert report["jaxgam"].startswith(str(root)), report["jaxgam"]
+    assert report["providers"] == [1, 1]
+    assert report["after"] == report["before"]
+    if report["lapack"] == "Accelerate":
+        # Accelerate-backed NumPy/SciPy vendor no OpenBLAS thread control.
+        assert not report["before"]
+    else:
+        assert report["before"], "no vendored NumPy/SciPy OpenBLAS was found"
+        assert set(report["before"].values()) == {3}
+
+
+_PROVIDER_OUTPUT_SCRIPT = r"""
+import hashlib
+import json
+
+import numpy as np
+
+import jaxgam.smooths.source_lapack as source_lapack
+from jaxgam.formula.rank_coordinates import rank_revealing_coordinate_map
+from jaxgam.smooths.source_penalty_coordinates import source_symmetric_eigh
+
+
+def digest(*values):
+    sha = hashlib.sha256()
+    for value in values:
+        sha.update(np.ascontiguousarray(value).tobytes())
+    return sha.hexdigest()
+
+
+# Elementwise inputs only: no NumPy/SciPy BLAS call precedes the provider.
+k = 96
+i, j = np.indices((k, k), dtype=np.float64)
+penalty = np.exp(-np.abs(i - j) / 7.0) + 0.01 * np.cos(i * j / 11.0)
+penalty = 0.5 * (penalty + penalty.T)
+n = 150
+a, b = np.indices((n, n), dtype=np.float64)
+kernel = np.exp(-(((a - b) / 23.0) ** 2))
+rows = np.arange(240, dtype=np.float64)[:, None]
+columns = np.arange(9, dtype=np.float64)[None, :]
+design = np.sin(0.37 * rows * (columns + 1.0)) + 0.1 * columns
+design[:, 8] = design[:, 7]  # an exactly aliased pair, as in x + s(x, bs='gp')
+root = np.zeros((5, 9))
+root[np.arange(5), np.arange(5)] = 1.0 + np.arange(5)
+values, vectors = source_lapack.source_lanczos(kernel, 20)
+eig_values, eig_vectors = source_symmetric_eigh(penalty)
+coordinate_map = rank_revealing_coordinate_map(design, root, retained_rank=8)
+report = {
+    "threads": [
+        source_lapack._source_lapack().module.num_threads(),
+        source_lapack._source_lanczos().module.num_threads(),
+    ],
+    "cubic_shrinkage": digest(source_lapack.cubic_shrinkage_penalty(penalty)),
+    "natural_cubic": digest(
+        source_lapack.natural_cubic_system_solve(
+            4.0 + np.arange(40.0), np.ones(39), np.cos(np.indices((40, 3))[0] * 1.0)
+        )
+    ),
+    "lanczos": digest(values, vectors),
+    "symmetric_eigen": digest(eig_values, eig_vectors),
+    "rank_gauge": digest(coordinate_map.keep, coordinate_map.drop),
+    "drop": coordinate_map.drop.tolist(),
+}
+print(json.dumps(report))
+"""
+
+
+def _provider_outputs_with_threads(threads: str) -> dict:
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    env = dict(
+        os.environ,
+        OPENBLAS_NUM_THREADS=threads,
+        OMP_NUM_THREADS=threads,
+        PYTHONPATH=str(root),
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", _PROVIDER_OUTPUT_SCRIPT],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def test_provider_outputs_do_not_depend_on_caller_openblas_threads() -> None:
+    """Cubic shrinkage, Lanczos and the rank gauge ignore OPENBLAS_NUM_THREADS."""
+    single = _provider_outputs_with_threads("1")
+    many = _provider_outputs_with_threads("8")
+    assert single["threads"] == many["threads"] == [1, 1]
+    assert many == single
+
+
+def test_thread_pin_rejects_missing_controls_and_an_unaccepted_setting() -> None:
+    with pytest.raises(RuntimeError, match="thread-count controls"):
+        source_lapack._pin_single_thread(SimpleNamespace(), "scipy-openblas32", "")
+    library = SimpleNamespace(
+        scipy_openblas_set_num_threads64_=Mock(),
+        scipy_openblas_get_num_threads64_=Mock(return_value=4),
+    )
+    with pytest.raises(RuntimeError, match="single-thread setting"):
+        source_lapack._pin_single_thread(library, "scipy-openblas64", "64_")
+    library.scipy_openblas_set_num_threads64_.assert_called_once_with(1)

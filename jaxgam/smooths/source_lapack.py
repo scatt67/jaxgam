@@ -6,6 +6,19 @@ LAPACKE/CBLAS entry points from two declared packages: the accepted
 ``scipy-openblas32==0.3.26.0.4`` cubic provider and the source-coordinate
 ``scipy-openblas64==0.3.30.0.2`` Lanczos provider.  It never searches for R or
 a system BLAS/LAPACK and does not replace NumPy/SciPy's backend.
+
+Threading: both wheels are threaded OpenBLAS builds whose default thread count
+follows ``OPENBLAS_NUM_THREADS`` or the machine's core count, and threaded
+reductions change last-bit results.  When each wheel library is loaded, this
+module sets that library's own thread count to one
+(``scipy_openblas_set_num_threads`` / ``scipy_openblas_set_num_threads64_``)
+and verifies it, so every provider result is the single-thread arithmetic
+validated against pinned R, regardless of the caller's environment.  The
+setting is library-local: the wheels are loaded ``RTLD_LOCAL`` and are
+separate from the BLAS that NumPy and SciPy vendor, whose thread counts are
+unchanged.  It is made once at load, never toggled around calls, so
+concurrent Python threads see one fixed value; these threaded builds lock
+internally, so concurrent provider calls are safe.
 """
 
 from __future__ import annotations
@@ -14,6 +27,7 @@ import ctypes
 import functools
 import math
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from importlib import util as importlib_util
@@ -57,6 +71,7 @@ class _DeclaredProvider:
     config: str
     library_path: Path
     library_name: str
+    num_threads: Callable[[], int]
 
     @property
     def __version__(self) -> str:
@@ -168,6 +183,7 @@ def _declared_provider(
     library_name: str,
     config_symbol: str,
     ilp64: bool,
+    thread_symbol_suffix: str = "",
 ) -> tuple[_DeclaredProvider, ctypes.CDLL]:
     try:
         actual_version = importlib_metadata.version(package)
@@ -197,8 +213,32 @@ def _declared_provider(
     if config_is_ilp64 != ilp64:
         expected = "ILP64" if ilp64 else "LP64"
         raise RuntimeError(f"{package} does not provide the required {expected} ABI.")
-    provider = _DeclaredProvider(package, actual_version, config, path, library_name)
+    num_threads = _pin_single_thread(library, package, thread_symbol_suffix)
+    provider = _DeclaredProvider(
+        package, actual_version, config, path, library_name, num_threads
+    )
     return provider, library
+
+
+def _pin_single_thread(
+    library: ctypes.CDLL, package: str, suffix: str
+) -> Callable[[], int]:
+    """Fix this wheel library's own OpenBLAS thread count at one, once."""
+    try:
+        set_threads = getattr(library, f"scipy_openblas_set_num_threads{suffix}")
+        get_threads = getattr(library, f"scipy_openblas_get_num_threads{suffix}")
+    except AttributeError as exc:
+        raise RuntimeError(
+            f"{package} does not export its OpenBLAS thread-count controls."
+        ) from exc
+    set_threads.argtypes = [ctypes.c_int]
+    set_threads.restype = None
+    get_threads.argtypes = []
+    get_threads.restype = ctypes.c_int
+    set_threads(1)
+    if get_threads() != 1:
+        raise RuntimeError(f"{package} did not accept a single-thread setting.")
+    return get_threads
 
 
 @functools.lru_cache(maxsize=1)
@@ -305,6 +345,7 @@ def _source_lanczos() -> _SourceLanczos:
         library_name="scipy_openblas64_",
         config_symbol="scipy_openblas_get_config64_",
         ilp64=True,
+        thread_symbol_suffix="64_",
     )
     enum_int = ctypes.c_int
     lapack_int = ctypes.c_int64
