@@ -294,6 +294,80 @@ def test_public_fixed_sp_scale_derivatives_reproduce_newton_state() -> None:
 
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+def test_public_exact_reml_derivatives_reproduce_estimated_endpoint_state() -> None:
+    """Matched-state gam.fit3 reproduces R's estimated-smoothing endpoint.
+
+    At R's returned (log sp, log scale) the fresh deriv=2 evaluation must
+    return the public fit's own sp, scale and score, a converged inner fit and
+    a symmetric positive definite outer Hessian. newton()'s outer gradient and
+    Hessian describe the returned point only after ``full convergence``;
+    there the evaluation must reproduce them. Which cells converge fully is
+    platform-dependent, so at least one must.
+    """
+    from jaxgam.families.standard import Gamma, Gaussian
+    from tests.test_validation_matrix import _public_exact_regular_case
+
+    bridge = RBridge(mode="rpy2")
+    with pytest.raises(ValueError, match="unknown-scale"):
+        bridge.public_exact_reml_derivatives(
+            *_public_exact_regular_case(Gamma, "log"), "poisson", "log"
+        )
+    checks = _AssertCollector()
+    full = 0
+    for family_class, link in (
+        (Gamma, "logit"),
+        (Gamma, "inverse_squared"),
+        (Gaussian, "identity"),
+    ):
+        name = family_class.__name__.lower()
+        data, weight, offset = _public_exact_regular_case(family_class, link)
+        public = bridge.public_exact_reml_fit(data, weight, offset, name, link)
+        derivatives = bridge.public_exact_reml_derivatives(
+            data, weight, offset, name, link
+        )
+        assert derivatives["outer_status"] == public["outer_status"]
+        assert derivatives["inner_converged"]
+        assert derivatives["smoothing"] == public["smoothing"]
+        assert derivatives["returned_scale"] == public["score_scale"]
+        assert derivatives["returned_score"] == public["score"]
+        np.testing.assert_array_equal(
+            derivatives["log_parameters"],
+            np.log([public["smoothing"], public["score_scale"]]),
+        )
+        hessian = derivatives["hessian"]
+        np.testing.assert_array_equal(hessian, hessian.T)
+        assert np.all(np.linalg.eigvalsh(hessian) > 0.0)
+        for field, actual, reference in (
+            ("REML", derivatives["score"], public["score"]),
+            ("reml.scale", derivatives["reml_scale"], public["score_scale"]),
+        ):
+            checks.check(
+                f"{name}/{link} {field}",
+                lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                    actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+        if derivatives["outer_status"] != "full convergence":
+            continue
+        full += 1
+        for field, actual, reference in (
+            ("gradient", derivatives["gradient"], derivatives["outer_gradient"]),
+            ("hessian", hessian, derivatives["outer_hessian"]),
+        ):
+            checks.check(
+                f"{name}/{link} newton {field}",
+                lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                    np.ravel(actual),
+                    np.ravel(reference),
+                    rtol=STRICT.rtol,
+                    atol=STRICT.atol,
+                ),
+            )
+    assert full > 0
+    checks.raise_if_any("Matched-state pinned estimated-endpoint derivatives")
+
+
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeFitGam:
     def test_fit_gaussian_returns_expected_keys(
         self, gaussian_data: pd.DataFrame

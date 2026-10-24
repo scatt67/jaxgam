@@ -4234,7 +4234,7 @@ class RBridge:
         if not ok:
             raise RBridgeError(f"Pinned EFS oracle unavailable: {reason}")
 
-    def public_exact_reml_fit(
+    def _public_exact_reml_gam_arguments(
         self,
         data: pd.DataFrame,
         weight: np.ndarray,
@@ -4242,18 +4242,11 @@ class RBridge:
         family_name: str,
         link: str,
         *,
-        smooth: bool = True,
-        estimated_theta: bool = False,
-        initial_smoothing: float | None = None,
-    ) -> dict[str, Any]:
-        """Fit the public cubic or linear REML model in live pinned mgcv.
-
-        Both regular and NB release cells use the same source-matched Newton
-        controls and uncertainty. ``initial_smoothing`` maps to the documented
-        ``gam(in.out=list(sp=..., scale=1))`` initial state in ``estimate.gam``;
-        it leaves the rows, model, criterion and convergence controls intact.
-        """
-        self._require_rpy2()
+        smooth: bool,
+        estimated_theta: bool,
+        initial_smoothing: float | None,
+    ) -> tuple[Any, dict[str, Any]]:
+        """Build the pinned public exact-REML ``gam`` formula and arguments."""
         if family_name not in {"gaussian", "gamma", "poisson", "binomial", "nb"}:
             raise ValueError(f"Unsupported public exact R family: {family_name}")
         if len(data) != len(weight) or len(data) != len(offset):
@@ -4283,7 +4276,6 @@ class RBridge:
             if family_name == "nb"
             else 'y ~ s(x, bs="cr", k=6)'
         )
-        r_data = self._to_r_dataframe(data)
         control = self._mgcv.gam_control(
             epsilon=1e-11,
             maxit=200,
@@ -4303,17 +4295,50 @@ class RBridge:
                 )
             }
         )
-        fit = self._mgcv.gam(
-            ro.Formula(formula),
-            data=r_data,
-            weights=self._to_r_vector(weight),
-            offset=self._to_r_vector(offset),
-            family=family,
-            method="REML",
-            optimizer=ro.StrVector(["outer", "newton"]),
-            control=control,
+        return ro.Formula(formula), {
+            "data": self._to_r_dataframe(data),
+            "weights": self._to_r_vector(weight),
+            "offset": self._to_r_vector(offset),
+            "family": family,
+            "method": "REML",
+            "optimizer": ro.StrVector(["outer", "newton"]),
+            "control": control,
             **startup,
+        }
+
+    def public_exact_reml_fit(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+        *,
+        smooth: bool = True,
+        estimated_theta: bool = False,
+        initial_smoothing: float | None = None,
+    ) -> dict[str, Any]:
+        """Fit the public cubic or linear REML model in live pinned mgcv.
+
+        Both regular and NB release cells use the same source-matched Newton
+        controls and uncertainty. ``initial_smoothing`` maps to the documented
+        ``gam(in.out=list(sp=..., scale=1))`` initial state in ``estimate.gam``;
+        it leaves the rows, model, criterion and convergence controls intact.
+        """
+        self._require_rpy2()
+        formula, arguments = self._public_exact_reml_gam_arguments(
+            data,
+            weight,
+            offset,
+            family_name,
+            link,
+            smooth=smooth,
+            estimated_theta=estimated_theta,
+            initial_smoothing=initial_smoothing,
         )
+        ro = self._ro
+        r_data = arguments["data"]
+        fit = self._mgcv.gam(formula, **arguments)
         score_scale = fit.rx2("reml.scale")
         if score_scale is ro.NULL:
             score_scale = fit.rx2("sig2")
@@ -4349,6 +4374,110 @@ class RBridge:
             "coefficients": np.asarray(fit.rx2("coefficients")).copy(),
             "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
             "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
+        }
+
+    def public_exact_reml_derivatives(
+        self,
+        data: pd.DataFrame,
+        weight: np.ndarray,
+        offset: np.ndarray,
+        family_name: str,
+        link: str,
+    ) -> dict[str, Any]:
+        """Evaluate pinned REML derivatives at R's returned estimated endpoint.
+
+        The public smooth fit of :meth:`public_exact_reml_fit` runs through
+        private clones of ``gam`` -> ``estimate.gam`` -> ``gam.outer`` ->
+        ``newton`` whose ``gam.fit3`` records newton's first call: the prepared
+        model matrix, penalty roots, null coefficients, family, weights, offset
+        and newton's tightened control. For one smoothing parameter and an
+        unknown scale ``estimate.gam`` appends ``log(scale)`` to newton's
+        ``lsp`` and leaves ``L`` NULL, so ``gam.fit3`` receives
+        ``sp = c(log(sp), log(scale))``. One fresh ``gam.fit3`` (``deriv=2``)
+        at R's returned ``c(log(sp), log(reml.scale))`` then returns the outer
+        gradient ``REML1`` and Hessian ``REML2`` over both free log parameters,
+        independent of newton's path or of the trial object it may describe
+        after a step failure.
+        """
+        self._require_rpy2()
+        from tests.r_ast import clone_function, make_r_callback
+
+        if family_name not in {"gaussian", "gamma"}:
+            raise ValueError(
+                "endpoint derivatives need an unknown-scale regular family"
+            )
+        formula, arguments = self._public_exact_reml_gam_arguments(
+            data,
+            weight,
+            offset,
+            family_name,
+            link,
+            smooth=True,
+            estimated_theta=False,
+            initial_smoothing=None,
+        )
+        ro = self._ro
+        fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        recorded: list[dict[str, Any]] = []
+
+        def record_fit3(**fit_arguments: Any) -> Any:
+            if not recorded:
+                recorded.append(dict(fit_arguments))
+            return fit3(**fit_arguments)
+
+        namespace = ro.r["getNamespace"]("mgcv")
+        private = ro.r["new.env"](parent=namespace)
+        callback = make_r_callback(record_fit3)
+        names = ("newton", "gam.outer", "estimate.gam")
+        try:
+            private["gam.fit3"] = callback
+            for name in names:
+                private[name] = clone_function(
+                    self._utils.getFromNamespace(name, "mgcv"), environment=private
+                )
+            r_gam = clone_function(
+                self._utils.getFromNamespace("gam", "mgcv"), environment=private
+            )
+            fit = r_gam(formula, **arguments)
+        finally:
+            for name in ("gam.fit3", *names):
+                private[name] = ro.NULL
+        outer = fit.rx2("outer.info")
+        if not recorded or outer is ro.NULL:
+            raise RBridgeError("Pinned public fit did not call newton's gam.fit3")
+        first = recorded[0]
+        recorded_sp = np.asarray(first["sp"], dtype=np.float64).ravel()
+        if recorded_sp.shape != (2,):
+            raise RBridgeError("newton's gam.fit3 sp is not c(log(sp), log(scale))")
+        smoothing = np.asarray(fit.rx2("sp"), dtype=np.float64).ravel()
+        if smoothing.shape != (1,):
+            raise RBridgeError(
+                "public exact fit did not return one smoothing parameter"
+            )
+        returned_scale = float(fit.rx2("reml.scale")[0])
+        log_parameters = np.array([np.log(smoothing[0]), np.log(returned_scale)])
+        if not np.all(np.isfinite(log_parameters)):
+            raise RBridgeError("public exact fit returned a non-finite endpoint")
+        evaluated = fit3(
+            **{**first, "sp": self._to_r_vector(log_parameters), "deriv": 2}
+        )
+        gradient = np.asarray(evaluated.rx2("REML1"), dtype=np.float64).ravel()
+        hessian = np.asarray(evaluated.rx2("REML2"), dtype=np.float64)
+        if gradient.shape != (2,) or hessian.shape != (2, 2):
+            raise RBridgeError("gam.fit3 did not return two-parameter REML derivatives")
+        return {
+            "log_parameters": log_parameters,
+            "smoothing": float(smoothing[0]),
+            "returned_scale": returned_scale,
+            "reml_scale": float(evaluated.rx2("reml.scale")[0]),
+            "returned_score": float(fit.rx2("gcv.ubre")[0]),
+            "score": float(evaluated.rx2("REML")[0]),
+            "gradient": gradient.copy(),
+            "hessian": hessian.copy(),
+            "outer_status": str(outer.rx2("conv")[0]),
+            "outer_gradient": np.asarray(outer.rx2("grad"), dtype=np.float64).copy(),
+            "outer_hessian": np.asarray(outer.rx2("hess"), dtype=np.float64).copy(),
+            "inner_converged": bool(evaluated.rx2("converged")[0]),
         }
 
     def efs_statistics_algebra(
