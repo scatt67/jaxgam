@@ -210,6 +210,7 @@ def _pinned_selected_reference(
     estimated,
     epsilon=1e-11,
     max_iter=200,
+    deriv=1,
 ):
     source = getattr(stream.source, "source", stream.source)
     batch = next(source.scan(stream.prepared.n_obs))
@@ -229,6 +230,7 @@ def _pinned_selected_reference(
         estimated=estimated,
         epsilon=epsilon,
         max_iter=max_iter,
+        deriv=deriv,
     )
 
 

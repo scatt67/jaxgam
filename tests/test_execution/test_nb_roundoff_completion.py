@@ -8,6 +8,7 @@ from weakref import ref
 
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.optimize import OptimizeResult
 from scipy.optimize import minimize as scipy_minimize
@@ -19,12 +20,22 @@ from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.reml import StreamREMLControl
 from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.negative_binomial import NegativeBinomial
-from tests.helpers import _AssertCollector, nb_optimizer_case_data, r_available
+from jaxgam.fitting.data import FittingData
+from jaxgam.fitting.newton import _jit_diff_hess
+from jaxgam.formula.design import ModelSetup
+from jaxgam.formula.parser import parse_formula
+from tests.helpers import (
+    _AssertCollector,
+    check_that,
+    nb_optimizer_case_data,
+    r_available,
+)
 from tests.r_bridge import RBridge
-from tests.test_execution.test_nb_reml import _LINKS
+from tests.test_execution.test_nb_reml import _LINKS, _dense_score_arguments
 from tests.test_execution.test_nb_reml_optimizer import (
     _OPTIMIZER_MAXIMUM_BYTES,
     _OPTIMIZER_PIRLS_CONTROL,
+    _THETA,
     _optimizer_case,
     _pinned_selected_reference,
 )
@@ -972,27 +983,87 @@ def test_generated_abnormal_stop_completes_to_unforced_stationary_theta(
     checks.raise_if_any(f"forced ABNORMAL NB/{link} completion")
 
 
+def _matched_log_theta_curvature(stream, link, trial) -> float:
+    """Return JAX's exact dense log-theta curvature on the stream design.
+
+    The dense differentiable score is evaluated with the stream's own fitting
+    design (the matrix the pinned gam.fit4 oracle receives), so it describes
+    the same matched state as the R curvature.
+    """
+    source = getattr(stream.source, "source", stream.source)
+    batch = next(source.scan(stream.prepared.n_obs))
+    setup = ModelSetup.build(
+        parse_formula('y ~ s(x, bs="cr", k=8)'),
+        pd.DataFrame({"x": batch.columns["x"], "y": batch.y}),
+        weights=batch.weight,
+        offset=batch.offset,
+    )
+    family = NegativeBinomial(theta=_THETA, fixed=False, link=link)
+    arguments = _dense_score_arguments(FittingData.from_setup(setup, family))
+    arguments["X"] = jnp.asarray(stream.prepared.evaluate_fitting_batch(batch))
+    hessian = _jit_diff_hess(
+        jnp.asarray(trial.params),
+        jnp.asarray(trial.fit_result.state.coefficients),
+        **arguments,
+    )
+    return float(np.asarray(hessian)[-1, -1])
+
+
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
 @pytest.mark.parametrize("link", _LINKS)
 def test_generated_abnormal_completion_is_pinned_gam_fit4_stationary(monkeypatch, link):
-    """Pinned R's exact source state at the completed theta is stationary."""
+    """Pinned R's exact source state at the completed theta is stationary.
+
+    The log-theta gradient at the completed theta is roundoff: R's own
+    evaluation of this near-zero sum over 180 rows carries about 1e-12 of
+    noise, the size of STRICT's atol. Comparing it directly compares R's
+    roundoff, not stationarity. As the score-scale gate does with R's
+    stationarity oracle, the completed log theta is instead compared with R's
+    own Newton-implied stationary log theta, log(theta_J) - g_R / h_R, from
+    gam.fit4's exact gradient and curvature at the same matched state. JAX's
+    exact log-theta curvature there must equal h_R (provenance). Score,
+    coefficients, deviance and the smoothing-parameter gradient stay
+    compared directly.
+    """
     stream, _, forced = _optimize_generated(link, monkeypatch, {})
     assert forced.converged, forced.message
+    params = np.asarray(forced.trial.params)
     expected = _pinned_selected_reference(
         stream,
         link,
-        np.asarray(forced.trial.params),
+        params,
         estimated=True,
         epsilon=1e-12,
         max_iter=400,
+        deriv=2,
     )
     state = forced.trial.fit_result.state
+    r_gradient = float(expected["gradient"][-1])
+    r_curvature = float(expected["hessian"][-1, -1])
     checks = _AssertCollector()
+    checks.check(
+        "positive R log-theta curvature",
+        lambda: check_that(r_curvature > 0.0, f"h_R={r_curvature!r}"),
+    )
     for name, actual, reference in (
         ("score", forced.trial.score, expected["score"]),
-        ("gradient", forced.trial.gradient, expected["gradient"]),
+        (
+            "smoothing gradient",
+            np.asarray(forced.trial.gradient)[:-1],
+            expected["gradient"][:-1],
+        ),
         ("coefficients", state.coefficients, expected["beta"]),
         ("deviance", state.deviance, expected["deviance"]),
+        (
+            "R Newton-implied log theta",
+            params[-1],
+            params[-1] - r_gradient / r_curvature,
+        ),
+        (
+            "log-theta curvature",
+            _matched_log_theta_curvature(stream, link, forced.trial),
+            r_curvature,
+        ),
     ):
         checks.check(
             name,
@@ -1002,7 +1073,7 @@ def test_generated_abnormal_completion_is_pinned_gam_fit4_stationary(monkeypatch
         )
     checks.raise_if_any(f"forced ABNORMAL NB/{link} pinned gam.fit4 state")
     # R's own exact log-theta derivative certifies the completed theta.
-    assert abs(float(expected["gradient"][-1])) <= _PUBLIC_CONTROL.gtol
+    assert abs(r_gradient) <= _PUBLIC_CONTROL.gtol
 
 
 # Stationary exact trials read this many ULPs high. It exceeds the few-ULP

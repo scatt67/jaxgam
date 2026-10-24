@@ -3301,9 +3301,16 @@ class RBridge:
         estimated: bool,
         epsilon: float = 1e-11,
         max_iter: int = 200,
+        deriv: int = 1,
     ) -> dict[str, Any]:
-        """Evaluate pinned gam.fit4 in supplied NB fitting coordinates (theta 2.7)."""
+        """Evaluate pinned gam.fit4 in supplied NB fitting coordinates (theta 2.7).
+
+        ``deriv=2`` also returns gam.fit4's exact REML Hessian ``REML2`` in the
+        same (log sp, log theta) order as the gradient.
+        """
         self._require_rpy2()
+        if deriv not in (1, 2):
+            raise ValueError("deriv must be 1 or 2")
         ro = self._ro
         X, E, y, weight, offset, params = (
             np.asarray(value, dtype=np.float64)
@@ -3345,23 +3352,30 @@ class RBridge:
             Mp=X.shape[1] - rank,
             family=family,
             control=self._mgcv.gam_control(epsilon=epsilon, maxit=max_iter),
-            deriv=1,
+            deriv=deriv,
             scale=1,
             scoreType="REML",
             **{"null.coef": self._to_r_vector(null)},
         )
         if not bool(fit.rx2("converged")[0]):
             raise RBridgeError("Pinned gam.fit4 coefficient oracle did not converge.")
-        gradient = _r_array(fit.rx2("REML1"))
-        if estimated:
-            gradient = gradient[[1, 0]]
-        return {
+        raw_gradient = _r_array(fit.rx2("REML1"), dtype=np.float64)
+        # gam.fit4 orders (log theta, log sp); JaxGAM orders (log sp, log theta).
+        order = [1, 0] if estimated else list(range(raw_gradient.size))
+        gradient = raw_gradient[order].copy()
+        result = {
             "score": float(fit.rx2("REML")[0]),
             "iter": int(fit.rx2("iter")[0]),
             "deviance": float(fit.rx2("deviance")[0]),
             "beta": _r_array(fit.rx2("coefficients")),
             "gradient": gradient,
         }
+        if deriv == 2:
+            hessian = _r_array(fit.rx2("REML2"), dtype=np.float64).reshape(
+                len(order), len(order)
+            )
+            result["hessian"] = hessian[np.ix_(order, order)].copy()
+        return result
 
     def nb_cubic_outer_fit(
         self,
