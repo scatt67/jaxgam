@@ -27,7 +27,7 @@ import json
 import logging
 import sys
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -3435,6 +3435,35 @@ def _public_regular_efs_start_descriptor(
     }
 
 
+# FitControl fields bound by name into reviewed digests. Every other
+# FitControl field must equal its default, so a reviewed digest neither changes
+# when a later defaulted control is added nor admits that control's non-default
+# value.
+_REVIEWED_DIGEST_FIT_CONTROL_FIELDS = (
+    "batch_rows",
+    "efs",
+    "execution",
+    "gaussian_compression",
+    "linear_solver",
+    "memory_budget_bytes",
+    "output_budget_bytes",
+    "uncertainty",
+)
+
+
+def _reviewed_fit_control_payload(control: FitControl) -> dict[str, object]:
+    """Return the reviewed control fields; require all others at defaults."""
+    defaults = type(control)()
+    for control_field in fields(control):
+        name = control_field.name
+        if name not in _REVIEWED_DIGEST_FIT_CONTROL_FIELDS:
+            assert getattr(control, name) == getattr(defaults, name), (
+                f"unreviewed FitControl field {name!r} is not at its default"
+            )
+    payload = asdict(control)
+    return {name: payload[name] for name in _REVIEWED_DIGEST_FIT_CONTROL_FIELDS}
+
+
 def _public_regular_efs_profile_digest(
     prepared, batch, offset, family_name, link, formula, control, startup
 ) -> str:
@@ -3489,7 +3518,7 @@ def _public_regular_efs_profile_digest(
         "basis_fingerprint": prepared.basis_fingerprint,
         "blocks": blocks,
         "coordinate_terms": coordinate_terms,
-        "control": asdict(control),
+        "control": _reviewed_fit_control_payload(control),
         "family": family_name,
         "formula": formula,
         "initial_scale_hex": start_descriptor["scale_hex"],
@@ -3570,6 +3599,19 @@ def test_public_regular_efs_profile_digest_binds_basis_controls_and_starts() -> 
     assert digest(prepared, formula, control, portable_start) == expected
     changed_control = replace(control, efs=EFSControl(score_tolerance=0.01))
     assert digest(prepared, formula, changed_control, startup) != expected
+
+    # A later defaulted FitControl field leaves the reviewed digest unchanged,
+    # while its non-default value cannot inherit the reviewed allowance.
+    @dataclass(frozen=True)
+    class _ExtendedFitControl(FitControl):
+        later_option: int = 0
+
+    extended = _ExtendedFitControl(
+        **{name: getattr(control, name) for name in _REVIEWED_DIGEST_FIT_CONTROL_FIELDS}
+    )
+    assert digest(prepared, formula, extended, startup) == expected
+    with pytest.raises(AssertionError, match="later_option"):
+        digest(prepared, formula, replace(extended, later_option=1), startup)
     with pytest.raises(AssertionError):
         digest(
             prepared,
