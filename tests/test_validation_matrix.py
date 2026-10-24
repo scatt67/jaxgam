@@ -160,12 +160,20 @@ _PR83_NB_MODERATE_FIELDS = {
     ),
 }
 
-# Reviewed Linux bytes from the four-pass Gamma endpoint audit. Host libm
-# produces different low-bit trigonometric offsets and stays STRICT for these
-# two additional fields. The digest covers x, y, weights, and offset in order.
-_PR83_GAMMA_LINUX_ENDPOINT_DIGEST = (
-    "7e9f4c8eed03d50a5cf29c7def6dc76839e8c62066dad5c4047d114fb9e427b9"
-)
+# Estimated Gamma endpoints whose raw pinned-R field is judged by R's own
+# stationarity. Pinned newton() decides its last step on raw-score roundoff,
+# so for these generated rows it ends in "full convergence" or "step failed"
+# depending on the platform (host, aarch64 and amd64 Linux disagree even with
+# one BLAS thread), returning sp or scale up to one Newton correction from
+# its stationary point. The four-pass endpoint audit's correction attempts
+# cannot reproduce that stop; the named field's raw R comparison is STRICT
+# where R's matched-state derivatives show it stationary at STRICT
+# resolution and MODERATE otherwise (see _pr83_r_endpoint_checks).
+_PR83_R_STATIONARITY_FIELDS = {
+    ("gamma", "logit"): "score_scale",
+    ("gamma", "inverse_squared"): "smoothing",
+}
+_PR83_R_ENDPOINT_COORDINATES = {"smoothing": 0, "score_scale": 1}
 _PR83_ZERO_PENALTY_MODERATE_FIELDS = frozenset({"score_scale"})
 
 
@@ -346,139 +354,182 @@ def _assert_pr83_regular_case(
     )
 
 
-def _pr83_gamma_linux_endpoint_fields(
+def _pr83_newton_completed(
+    rho: np.ndarray, gradient: np.ndarray, hessian: np.ndarray
+) -> np.ndarray:
+    """Return one Newton completion of a (log sp, log scale) endpoint."""
+    return np.asarray(rho, dtype=np.float64) - np.linalg.solve(
+        np.asarray(hessian, dtype=np.float64), np.asarray(gradient, dtype=np.float64)
+    )
+
+
+def _pr83_field_stationary(field: str, value: float, completed: np.ndarray) -> bool:
+    """Whether a raw sp or scale equals its Newton-completed value at STRICT."""
+    target = np.exp(completed[_PR83_R_ENDPOINT_COORDINATES[field]])
+    return bool(np.isclose(value, target, rtol=STRICT.rtol, atol=STRICT.atol))
+
+
+def test_pr83_r_stationarity_rule_selects_raw_tolerance_per_coordinate():
+    """Only an endpoint one correction from stationary relaxes its own field."""
+    hessian = np.array([[1.8663, -1.8756], [-1.8756, 46.477]])
+    stationary = np.log([0.0136, 0.0256])
+    np.testing.assert_array_equal(
+        _pr83_newton_completed(stationary, np.zeros(2), hessian), stationary
+    )
+    # One Newton correction of 1e-8 in log sp: the gradient there is H d.
+    offset = np.array([1e-8, 0.0])
+    completed = _pr83_newton_completed(stationary + offset, hessian @ offset, hessian)
+    np.testing.assert_allclose(completed, stationary, rtol=STRICT.rtol, atol=0.0)
+    assert _pr83_field_stationary("smoothing", 0.0136, completed)
+    assert not _pr83_field_stationary(
+        "smoothing", float(np.exp(stationary[0] + 1e-8)), completed
+    )
+    # The scale coordinate is judged on its own.
+    assert _pr83_field_stationary("score_scale", 0.0256, completed)
+    assert set(_PR83_R_STATIONARITY_FIELDS) == {
+        ("gamma", "logit"),
+        ("gamma", "inverse_squared"),
+    }
+
+
+def _pr83_r_endpoint_checks(
     family_class,
     link: str,
     source: DataFrameRowSource,
     model: GAM,
+    result,
     expected: dict,
-    data: pd.DataFrame,
-    weight: np.ndarray,
-    offset: np.ndarray,
+    derivatives: dict,
     *,
-    partition: bool = False,
-) -> frozenset[str]:
-    """Grant only reviewed Linux field endpoints on exact bytes and controls."""
-    if family_class is not Gamma or link not in {"logit", "inverse_squared"}:
-        return frozenset()
-    digest = hashlib.sha256(
-        b"".join(
-            np.asarray(value, dtype="<f8").tobytes()
-            for value in (data["x"], data["y"], weight, offset)
-        )
-    ).hexdigest()
-    if digest != _PR83_GAMMA_LINUX_ENDPOINT_DIGEST:
-        return frozenset()
-    batch_rows = model.control.batch_rows
-    if partition:
-        assert link == "inverse_squared"
-        assert batch_rows in (13, 17, 32, 96)
-    else:
-        assert batch_rows == 17
-    _assert_pr83_regular_case(family_class, link, source, model, batch_rows=batch_rows)
-    assert bool(expected["inner_converged"])
-    if link == "logit":
-        assert bool(expected["outer_converged"])
-        assert expected["outer_status"] == "full convergence"
-        return frozenset({"score_scale"})
-    assert not bool(expected["outer_converged"])
-    assert expected["outer_status"] == "step failed"
-    return frozenset({"smoothing"})
+    label: str,
+) -> tuple[str, Callable[[_AssertCollector], None]]:
+    """Judge an estimated Gamma endpoint by pinned R's own stationarity.
 
+    ``derivatives`` are pinned gam.fit3's matched-state REML gradient g_R and
+    Hessian H_R over (log sp, log scale) at R's returned endpoint rho_R
+    (RBridge.public_exact_reml_derivatives). rho_R - H_R^{-1} g_R is R's own
+    Newton-completed stationary point, whether newton() reported full
+    convergence or a step failure. The checks are:
 
-def test_pr83_gamma_endpoint_guard_requires_reviewed_bytes_controls_and_r_status(
-    monkeypatch,
-) -> None:
-    """A changed row/control or R endpoint cannot inherit the narrow fields."""
-    data, weight, offset = _public_exact_regular_case(Gamma, "logit")
-    digest = hashlib.sha256(
-        b"".join(
-            np.asarray(value, dtype="<f8").tobytes()
-            for value in (data["x"], data["y"], weight, offset)
-        )
-    ).hexdigest()
-    monkeypatch.setitem(globals(), "_PR83_GAMMA_LINUX_ENDPOINT_DIGEST", digest)
-    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
-    control = FitControl(
-        execution="stream", linear_solver="qr", batch_rows=17, uncertainty="fisher"
+    * provenance at STRICT: the matched evaluation reproduces R's returned
+      sp, scale and score with a converged inner fit and a positive definite
+      Hessian, and JAX's exact source trial at rho_R carries R's derivatives
+      (log-scale curvature against H_R; the gradient in parameter units,
+      H_R^{-1} g, because R's Gamma fix.family.ls ls[2]*phi term carries up
+      to 1.2e-12 of digamma cancellation, see _matched_r_score_scale_checks);
+    * the JAX endpoint, Newton-completed with its own exact gradient, equals
+      R's Newton-completed endpoint at STRICT, and so does the raw JAX
+      endpoint wherever JAX is itself stationary at STRICT resolution;
+    * the cell's named raw field against raw R at STRICT where both raw
+      endpoints are stationary in that coordinate at STRICT resolution, and
+      otherwise at MODERATE bound to the generated rows and controls.
+
+    Returns the named field, whose plain raw-R comparison the caller drops,
+    and the function adding these checks.
+    """
+    family = family_class(link)
+    field = _PR83_R_STATIONARITY_FIELDS[(family.family_name.lower(), link)]
+    coordinate = _PR83_R_ENDPOINT_COORDINATES[field]
+    rho_r = np.asarray(derivatives["log_parameters"], dtype=np.float64)
+    hessian = np.asarray(derivatives["hessian"], dtype=np.float64)
+    rho_star = _pr83_newton_completed(rho_r, derivatives["gradient"], hessian)
+    stream = StreamDesign(
+        prepare_model(parse_formula(model.formula), source, family=family), source
     )
-    model = GAM('y~s(x,bs="cr",k=6)', family=Gamma("logit"), control=control)
-    r_status = {
-        "inner_converged": True,
-        "outer_converged": True,
-        "outer_status": "full convergence",
-    }
-    assert _pr83_gamma_linux_endpoint_fields(
-        Gamma, "logit", source, model, r_status, data, weight, offset
-    ) == frozenset({"score_scale"})
-    changed_offset = offset.copy()
-    changed_offset[0] = np.nextafter(changed_offset[0], np.inf)
-    assert not _pr83_gamma_linux_endpoint_fields(
-        Gamma, "logit", source, model, r_status, data, weight, changed_offset
+    pirls_control = StreamPIRLSControl(
+        batch_rows=model.control.batch_rows, solver_policy="qr", tol=1e-11
     )
-    with pytest.raises(AssertionError):
-        _pr83_gamma_linux_endpoint_fields(
-            Gamma,
-            "logit",
-            source,
-            GAM(
-                'y~s(x,bs="cr",k=6)',
-                family=Gamma("logit"),
-                control=replace(control, batch_rows=18),
-            ),
-            r_status,
-            data,
-            weight,
-            offset,
+
+    def exact_trial(params: np.ndarray):
+        return evaluate_regular_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=model.control.memory_budget_bytes,
+            control=pirls_control,
         )
-    inverse_status = {
-        "inner_converged": True,
-        "outer_converged": False,
-        "outer_status": "step failed",
-    }
-    inverse_model = GAM(
-        'y~s(x,bs="cr",k=6)',
-        family=Gamma("inverse_squared"),
-        control=replace(control, batch_rows=13),
+
+    at_r = exact_trial(rho_r)
+    jax_value = float(
+        result.smoothing_params[0] if field == "smoothing" else result.score_scale
     )
-    assert _pr83_gamma_linux_endpoint_fields(
-        Gamma,
-        "inverse_squared",
-        source,
-        inverse_model,
-        inverse_status,
-        data,
-        weight,
-        offset,
-        partition=True,
-    ) == frozenset({"smoothing"})
-    with pytest.raises(AssertionError):
-        _pr83_gamma_linux_endpoint_fields(
-            Gamma,
-            "inverse_squared",
-            source,
-            GAM(
-                'y~s(x,bs="cr",k=6)',
-                family=Gamma("inverse_squared"),
-                control=replace(control, batch_rows=31),
-            ),
-            inverse_status,
-            data,
-            weight,
-            offset,
-            partition=True,
+    rho_jax = np.log([result.smoothing_params[0], result.score_scale])
+    at_jax = exact_trial(rho_jax)
+    rho_jax_star = _pr83_newton_completed(rho_jax, at_jax.gradient, hessian)
+    implied_from_r = _pr83_newton_completed(rho_r, at_r.gradient, hessian)
+    jax_stationary = bool(
+        np.allclose(rho_jax_star, rho_jax, rtol=STRICT.rtol, atol=STRICT.atol)
+    )
+    r_field_stationary = _pr83_field_stationary(field, expected[field], rho_star)
+    jax_field_stationary = _pr83_field_stationary(field, jax_value, rho_jax_star)
+    raw_strict = r_field_stationary and jax_field_stationary
+    raw_tolerance = STRICT if raw_strict else MODERATE
+    raw_name = "STRICT" if raw_strict else "MODERATE"
+    if not raw_strict:
+        _assert_pr83_regular_case(
+            family_class, link, source, model, batch_rows=model.control.batch_rows
         )
-    with pytest.raises(AssertionError):
-        _pr83_gamma_linux_endpoint_fields(
-            Gamma,
-            "logit",
-            source,
-            model,
-            {**r_status, "outer_converged": False},
-            data,
-            weight,
-            offset,
+    detail = (
+        f"R outer status={derivatives['outer_status']}, rho_R={rho_r.tolist()}, "
+        f"g_R={np.asarray(derivatives['gradient']).tolist()}, "
+        f"H_R={hessian.tolist()}, R rho*={rho_star.tolist()}; "
+        f"JAX gradient at rho_R={np.asarray(at_r.gradient).tolist()}, "
+        f"JAX rho={rho_jax.tolist()}, "
+        f"JAX gradient at rho={np.asarray(at_jax.gradient).tolist()}, "
+        f"JAX Newton-completed rho={rho_jax_star.tolist()}; "
+        f"{field} stationary at STRICT: R={r_field_stationary}, "
+        f"JAX={jax_field_stationary}; JAX endpoint stationary={jax_stationary}"
+    )
+    # Record the pinned oracle's raw-tolerance selection in the test log.
+    logging.getLogger(__name__).warning(
+        f"PR8.3 Gamma/{link} {label} raw {field} tolerance: {raw_name} "
+        f"(R {field}*/{field}_R - 1 = "
+        f"{np.expm1(rho_star - rho_r)[coordinate]:.3e}, JAX {field}*/{field} - 1 "
+        f"= {np.expm1(rho_jax_star - rho_jax)[coordinate]:.3e}, R outer status = "
+        f"{derivatives['outer_status']})"
+    )
+
+    def provenance() -> None:
+        assert derivatives["inner_converged"], detail
+        assert derivatives["smoothing"] == expected["smoothing"], detail
+        assert derivatives["returned_scale"] == expected["score_scale"], detail
+        assert np.all(np.linalg.eigvalsh(0.5 * (hessian + hessian.T)) > 0.0), detail
+        np.testing.assert_array_equal(np.asarray(at_r.params), rho_r)
+        for actual, reference in (
+            (derivatives["reml_scale"], derivatives["returned_scale"]),
+            (derivatives["score"], derivatives["returned_score"]),
+            (derivatives["returned_score"], expected["score"]),
+            (at_r.log_phi_curvature, hessian[1, 1]),
+            (implied_from_r, rho_star),
+        ):
+            np.testing.assert_allclose(
+                actual, reference, rtol=STRICT.rtol, atol=STRICT.atol, err_msg=detail
+            )
+
+    def completed_endpoint() -> None:
+        np.testing.assert_allclose(
+            rho_jax_star, rho_star, rtol=STRICT.rtol, atol=STRICT.atol, err_msg=detail
         )
+        if jax_stationary:
+            np.testing.assert_allclose(
+                rho_jax, rho_star, rtol=STRICT.rtol, atol=STRICT.atol, err_msg=detail
+            )
+
+    def raw_r() -> None:
+        np.testing.assert_allclose(
+            jax_value,
+            expected[field],
+            rtol=raw_tolerance.rtol,
+            atol=raw_tolerance.atol,
+            err_msg=detail,
+        )
+
+    def add(checks: _AssertCollector) -> None:
+        checks.check(f"{label} R endpoint provenance", provenance)
+        checks.check(f"{label} R Newton-completed endpoint", completed_endpoint)
+        checks.check(f"{label} {field} raw R ({raw_name})", raw_r)
+
+    return field, add
 
 
 def _assert_pr83_nb_case(source, model, link, *, estimated, smooth) -> None:
@@ -674,9 +725,20 @@ def test_public_estimated_regular_all_links_pinned_r(
     expected = _public_exact_regular_pinned_r(
         tmp_path, data, weight, offset, family.family_name.lower(), link
     )
-    moderate_fields = moderate_fields | _pr83_gamma_linux_endpoint_fields(
-        family_class, link, source, model, expected, data, weight, offset
-    )
+    oracle_field = None
+    if (family.family_name.lower(), link) in _PR83_R_STATIONARITY_FIELDS:
+        oracle_field, add_oracle = _pr83_r_endpoint_checks(
+            family_class,
+            link,
+            source,
+            model,
+            result,
+            expected,
+            RBridge(mode="rpy2").public_exact_reml_derivatives(
+                data, weight, offset, family.family_name.lower(), link
+            ),
+            label="estimated",
+        )
     fitted = result.predict(data[["x"]], offset=offset)
     _, link_se = result.predict(
         data[["x"]], pred_type="link", se_fit=True, offset=offset
@@ -711,6 +773,8 @@ def test_public_estimated_regular_all_links_pinned_r(
             "fitted values": "fitted_values",
             "link SE": "link_se",
         }.get(name, name)
+        if field == oracle_field:
+            continue
         tolerance = MODERATE if field in moderate_fields else STRICT
         checks.check(
             name,
@@ -720,6 +784,8 @@ def test_public_estimated_regular_all_links_pinned_r(
                 )
             ),
         )
+    if oracle_field is not None:
+        add_oracle(checks)
     checks.raise_if_any(f"public estimated {family.family_name}/{link} R parity")
 
 
@@ -732,6 +798,9 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
     source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
     expected = _public_exact_regular_pinned_r(
         tmp_path, data, weight, offset, "gamma", "inverse_squared"
+    )
+    derivatives = RBridge(mode="rpy2").public_exact_reml_derivatives(
+        data, weight, offset, "gamma", "inverse_squared"
     )
     assert expected["inner_converged"]
     checks = _AssertCollector()
@@ -746,19 +815,18 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
                 uncertainty="fisher",
             ),
         )
-        moderate_fields = _pr83_gamma_linux_endpoint_fields(
+        result = model.fit(source, result="prediction")
+        assert result.converged, f"batch_rows={batch_rows}: {result.convergence_info}"
+        oracle_field, add_oracle = _pr83_r_endpoint_checks(
             Gamma,
             "inverse_squared",
             source,
             model,
+            result,
             expected,
-            data,
-            weight,
-            offset,
-            partition=True,
+            derivatives,
+            label=f"batch {batch_rows}",
         )
-        result = model.fit(source, result="prediction")
-        assert result.converged, f"batch_rows={batch_rows}: {result.convergence_info}"
         diagnostics = result.exact_optimizer_diagnostics
         assert diagnostics is not None
         assert diagnostics.projected_gradient_inf <= 1e-6
@@ -776,18 +844,15 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
                 expected["link_se"],
             ),
         ):
-            tolerance = MODERATE if name in moderate_fields else STRICT
+            if name == oracle_field:
+                continue
             checks.check(
                 f"batch {batch_rows} {name}",
-                lambda actual=actual, reference=reference, tolerance=tolerance: (
-                    np.testing.assert_allclose(
-                        actual,
-                        reference,
-                        rtol=tolerance.rtol,
-                        atol=tolerance.atol,
-                    )
+                lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                    actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
                 ),
             )
+        add_oracle(checks)
     checks.raise_if_any("Gamma inverse-squared exact partition parity")
 
 
@@ -828,6 +893,9 @@ def test_public_exact_gamma_inverse_squared_roundoff_stops_complete_pinned_r(
     expected = _public_exact_regular_pinned_r(
         tmp_path, data, weight, offset, "gamma", "inverse_squared"
     )
+    derivatives = RBridge(mode="rpy2").public_exact_reml_derivatives(
+        data, weight, offset, "gamma", "inverse_squared"
+    )
     assert expected["inner_converged"]
     actual_evaluate = reml_execution.evaluate_regular_stream_reml
     stop_scores: dict[bytes, float] = {}
@@ -867,18 +935,18 @@ def test_public_exact_gamma_inverse_squared_roundoff_stops_complete_pinned_r(
             )
         monkeypatch.setattr(reml_execution, "minimize", scripted_stop(abnormal))
         fitted_model = model()
-        moderate_fields = _pr83_gamma_linux_endpoint_fields(
+        result = fitted_model.fit(source, result="prediction")
+        label = "abnormal" if abnormal else "relative reduction"
+        oracle_field, add_oracle = _pr83_r_endpoint_checks(
             Gamma,
             "inverse_squared",
             source,
             fitted_model,
+            result,
             expected,
-            data,
-            weight,
-            offset,
+            derivatives,
+            label=label,
         )
-        result = fitted_model.fit(source, result="prediction")
-        label = "abnormal" if abnormal else "relative reduction"
         diagnostics = result.exact_optimizer_diagnostics
         assert diagnostics is not None
         assert result.converged, f"{label}: {result.convergence_info}"
@@ -928,18 +996,15 @@ def test_public_exact_gamma_inverse_squared_roundoff_stops_complete_pinned_r(
             ("fitted_values", fitted),
             ("link_se", link_se),
         ):
-            tolerance = MODERATE if name in moderate_fields else STRICT
+            if name == oracle_field:
+                continue
             checks.check(
                 f"{label} pinned R {name}",
-                lambda actual=actual, name=name, tolerance=tolerance: (
-                    np.testing.assert_allclose(
-                        actual,
-                        expected[name],
-                        rtol=tolerance.rtol,
-                        atol=tolerance.atol,
-                    )
+                lambda actual=actual, name=name: np.testing.assert_allclose(
+                    actual, expected[name], rtol=STRICT.rtol, atol=STRICT.atol
                 ),
             )
+        add_oracle(checks)
     checks.raise_if_any("Gamma inverse-squared forced roundoff completion")
 
 
