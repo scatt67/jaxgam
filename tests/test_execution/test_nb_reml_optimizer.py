@@ -361,11 +361,17 @@ def test_nb_optimizer_selected_trial_stationarity_and_nearby_dense_derivatives(
 @pytest.mark.parametrize("link", _LINKS)
 def test_nb_optimizer_selected_state_matches_pinned_gam_fit4(link, estimated):
     stream, _family, _params, result = _optimize(link, estimated=estimated)
+    # The oracle is pinned gam.fit4's converged inner state. At its default
+    # epsilon=1e-11 R's PIRLS can stop one iteration short (8.1e-12 in beta
+    # for the composed NB/identity selection), so it runs to 1e-12, as the
+    # sibling roundoff-completion gate does.
     expected = _pinned_selected_reference(
         stream,
         link,
         np.asarray(result.trial.params),
         estimated=estimated,
+        epsilon=1e-12,
+        max_iter=400,
     )
     collector = _AssertCollector()
     for name, actual in (
