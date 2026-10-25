@@ -44,6 +44,20 @@ _KERNEL_TO_MGCV_TYPE = {
 }
 
 
+def _r_array(value: Any, dtype: Any = None) -> np.ndarray:
+    """Copy an R vector, matrix or array into NumPy-owned memory.
+
+    rpy2 exposes R double, integer and logical vectors through buffers that
+    ``np.asarray`` wraps without copying, so such a view reads R-managed memory
+    that R's garbage collector may reuse after any later R allocation once the
+    R object is unreferenced. Every R-to-NumPy conversion in this bridge goes
+    through this copy. Values, shape and dtype (unless ``dtype`` is given) are
+    those ``np.asarray`` would produce; ``order="K"`` keeps R's column-major
+    layout for matrices and arrays.
+    """
+    return np.array(value, dtype=dtype, copy=True, order="K")
+
+
 @lru_cache(maxsize=1)
 def _r_packages() -> tuple[Any, Any, Any, Any, Any]:
     """Reuse package wrappers around the single embedded R interpreter."""
@@ -359,7 +373,7 @@ class RBridge:
                 and str(outer.rx2("conv")[0]) == "full convergence"
             )
             finite = all(
-                np.all(np.isfinite(np.asarray(model.rx2(name), dtype=np.float64)))
+                np.all(np.isfinite(_r_array(model.rx2(name), dtype=np.float64)))
                 for name in (
                     "coefficients",
                     "fitted.values",
@@ -379,10 +393,10 @@ class RBridge:
             "warm_seconds": durations[1:],
             "validity": validity,
             "result": {
-                "coefficients": np.asarray(model.rx2("coefficients")).tolist(),
-                "fitted_values": np.asarray(model.rx2("fitted.values")).tolist(),
-                "smoothing_params": np.asarray(model.rx2("sp")).tolist(),
-                "edf": np.asarray(summary.rx2("edf")).tolist(),
+                "coefficients": _r_array(model.rx2("coefficients")).tolist(),
+                "fitted_values": _r_array(model.rx2("fitted.values")).tolist(),
+                "smoothing_params": _r_array(model.rx2("sp")).tolist(),
+                "edf": _r_array(summary.rx2("edf")).tolist(),
                 "deviance": float(model.rx2("deviance")[0]),
                 "score": float(model.rx2("gcv.ubre")[0]),
                 "scale": float(model.rx2("scale")[0]),
@@ -562,11 +576,9 @@ class RBridge:
             else self._ro.r["/"](null.rx2("null.scale"), 10)
         )
         return {
-            "log_smoothing": np.asarray(self._base.log(sp), dtype=np.float64).copy(),
-            "null_coefficients": np.asarray(
-                null.rx2("null.coef"), dtype=np.float64
-            ).copy(),
-            "scale": float(np.asarray(r_phi, dtype=np.float64)[0]),
+            "log_smoothing": _r_array(self._base.log(sp), dtype=np.float64),
+            "null_coefficients": _r_array(null.rx2("null.coef"), dtype=np.float64),
+            "scale": float(_r_array(r_phi, dtype=np.float64)[0]),
         }
 
     def fit_gam(
@@ -737,10 +749,10 @@ class RBridge:
             drop=drop,
         )
         return {
-            "xbd": np.asarray(xbd, dtype=np.float64).copy(),
-            "xwyd": np.asarray(xwyd, dtype=np.float64).copy(),
-            "xwxd": np.asarray(xwxd, dtype=np.float64).copy(),
-            "diag_xvxd": np.asarray(diagonal, dtype=np.float64).copy(),
+            "xbd": _r_array(xbd, dtype=np.float64),
+            "xwyd": _r_array(xwyd, dtype=np.float64),
+            "xwxd": _r_array(xwxd, dtype=np.float64),
+            "diag_xvxd": _r_array(diagonal, dtype=np.float64),
         }
 
     def _fix_dependence_rpy2(
@@ -810,10 +822,10 @@ class RBridge:
         rhs = crossprod(factor, penalized.rx2("f"))
         coefficients = self._base.solve(normal, rhs)
         return {
-            "R": np.asarray(second.rx2("R"), dtype=np.float64).copy(),
-            "f": np.asarray(second.rx2("f"), dtype=np.float64).copy(),
+            "R": _r_array(second.rx2("R"), dtype=np.float64),
+            "f": _r_array(second.rx2("f"), dtype=np.float64),
             "y_norm2": float(second.rx2("y.norm2")[0]),
-            "penalized_coefficients": np.asarray(coefficients, dtype=np.float64)
+            "penalized_coefficients": _r_array(coefficients, dtype=np.float64)
             .ravel()
             .copy(),
         }
@@ -882,7 +894,7 @@ class RBridge:
         return (
             int(result.rx2("n")[0]),
             bool(result.rx2("use.wy")[0]),
-            np.asarray(result.rx2("y"), dtype=np.float64)[: X.shape[1]].copy(),
+            _r_array(result.rx2("y"), dtype=np.float64)[: X.shape[1]].copy(),
         )
 
     def source_gaussian_aic(
@@ -913,12 +925,12 @@ class RBridge:
         if y.ndim != 1 or w.shape != y.shape or not np.isfinite(scale) or scale <= 0:
             raise ValueError("Gaussian likelihood oracle inputs are invalid")
         family = self._call_internal("fix.family.ls", self._stats.gaussian())
-        return np.asarray(
+        return _r_array(
             family.rx2("ls")(
                 self._to_r_vector(y), self._to_r_vector(w), len(y), float(scale)
             ),
             dtype=np.float64,
-        ).copy()
+        )
 
     def source_gamma_saturated_likelihood(
         self, response: np.ndarray, weights: np.ndarray, scale: float
@@ -939,12 +951,12 @@ class RBridge:
         ):
             raise ValueError("Gamma likelihood oracle inputs are invalid")
         family = self._call_internal("fix.family.ls", self._stats.Gamma())
-        return np.asarray(
+        return _r_array(
             family.rx2("ls")(
                 self._to_r_vector(y), self._to_r_vector(w), len(y), float(scale)
             ),
             dtype=np.float64,
-        ).copy()
+        )
 
     def source_gaussian_initial_values(
         self, response: np.ndarray, link: str
@@ -962,7 +974,7 @@ class RBridge:
         self._base.eval(family.rx2("initialize"), envir=environment)
         return (
             float(self._stats.sd(self._to_r_vector(y))[0]),
-            np.asarray(environment["mustart"], dtype=np.float64).copy(),
+            _r_array(environment["mustart"], dtype=np.float64),
         )
 
     def source_gaussian_public_fit(
@@ -999,15 +1011,13 @@ class RBridge:
         if not bool(fit.rx2("converged")[0]):
             raise RBridgeError("Pinned Gaussian GAM did not converge")
         return {
-            "coefficients": np.asarray(
-                fit.rx2("coefficients"), dtype=np.float64
-            ).copy(),
+            "coefficients": _r_array(fit.rx2("coefficients"), dtype=np.float64),
             "deviance": float(fit.rx2("deviance")[0]),
             "scale": float(fit.rx2("sig2")[0]),
             "edf": float(self._base.sum(fit.rx2("edf"))[0]),
             "score": float(fit.rx2("gcv.ubre")[0]),
-            "fitted": np.asarray(fit.rx2("fitted.values"), dtype=np.float64).copy(),
-            "covariance": np.asarray(fit.rx2("Vp"), dtype=np.float64).copy(),
+            "fitted": _r_array(fit.rx2("fitted.values"), dtype=np.float64),
+            "covariance": _r_array(fit.rx2("Vp"), dtype=np.float64),
             "reml_scale": float(fit.rx2("reml.scale")[0]),
         }
 
@@ -1044,13 +1054,13 @@ class RBridge:
         )
         null = self._call_internal("get.null.coef", setup)
         divide = self._ro.baseenv["/"]
-        return np.asarray(
+        return _r_array(
             self._base.c(
                 self._base.log(initial),
                 self._base.log(divide(null.rx2("null.scale"), 10.0)),
             ),
             dtype=np.float64,
-        ).copy()
+        )
 
     def source_weighted_stream_reml_fit(
         self,
@@ -1093,7 +1103,7 @@ class RBridge:
         return (
             float(fit.rx2("gcv.ubre")[0]),
             float(fit.rx2("deviance")[0]),
-            np.asarray(fit.rx2("fitted.values"), dtype=np.float64).copy(),
+            _r_array(fit.rx2("fitted.values"), dtype=np.float64),
         )
 
     def source_regular_gdi_ratio(
@@ -1152,12 +1162,12 @@ class RBridge:
         )
         mu_r = family.rx2("linkinv")(eta)
         me_r = family.rx2("mu.eta")(eta)
-        good = (w > 0) & (np.asarray(me_r, dtype=np.float64) != 0)
+        good = (w > 0) & (_r_array(me_r, dtype=np.float64) != 0)
         X_r = self._to_r_matrix(X[good])
         y_r = self._to_r_vector(y[good])
         weight_r = self._to_r_vector(w[good])
-        mu_r = self._to_r_vector(np.asarray(mu_r, dtype=np.float64)[good])
-        me_r = self._to_r_vector(np.asarray(me_r, dtype=np.float64)[good])
+        mu_r = self._to_r_vector(_r_array(mu_r, dtype=np.float64)[good])
+        me_r = self._to_r_vector(_r_array(me_r, dtype=np.float64)[good])
 
         def derivative(name: str):
             return family.rx2(name)(mu_r)
@@ -1177,7 +1187,7 @@ class RBridge:
             )
         else:
             alpha = add(1.0, multiply(subtract(y_r, mu_r), add(variance_first, g2)))
-            alpha_values = np.asarray(alpha, dtype=np.float64).copy()
+            alpha_values = _r_array(alpha, dtype=np.float64)
             alpha_values[alpha_values == 0] = np.finfo(float).eps
             alpha = self._to_r_vector(alpha_values)
             weight = multiply(fisher_weight, alpha)
@@ -1217,9 +1227,9 @@ class RBridge:
         )
         saturated = family.rx2("ls")(y_r, weight_r, len(y_r), 0.8)
         log_scale_cotangent = multiply(multiply(-0.6, saturated[1]), 0.8)
-        return np.asarray(
+        return _r_array(
             self._base.c(beta_cotangent, log_scale_cotangent), dtype=np.float64
-        ).copy()
+        )
 
     def fit_efs(
         self,
@@ -1424,7 +1434,7 @@ class RBridge:
         if not recorded or outer is ro.NULL:
             raise RBridgeError("Pinned public fit did not call newton's gam.fit3")
         first = recorded[0]
-        recorded_sp = np.asarray(first["sp"], dtype=np.float64).ravel()
+        recorded_sp = _r_array(first["sp"], dtype=np.float64).ravel()
         if sp is None:
             if recorded_sp.shape != (1,):
                 raise RBridgeError("newton's parametric gam.fit3 sp is not log(scale)")
@@ -1445,15 +1455,15 @@ class RBridge:
                 "deriv": 2,
             }
         )
-        gradient = np.asarray(evaluated.rx2("REML1"), dtype=np.float64)
-        hessian = np.asarray(evaluated.rx2("REML2"), dtype=np.float64)
+        gradient = _r_array(evaluated.rx2("REML1"), dtype=np.float64)
+        hessian = _r_array(evaluated.rx2("REML2"), dtype=np.float64)
         return {
             "scale": evaluation_scale,
             "reml_scale": float(evaluated.rx2("reml.scale")[0]),
             "returned_scale": returned_scale,
             "outer_status": str(outer.rx2("conv")[0]),
-            "outer_gradient": float(np.ravel(outer.rx2("grad"))[-1]),
-            "outer_hessian": float(np.ravel(outer.rx2("hess"))[-1]),
+            "outer_gradient": float(_r_array(outer.rx2("grad")).ravel()[-1]),
+            "outer_hessian": float(_r_array(outer.rx2("hess")).ravel()[-1]),
             "score": float(evaluated.rx2("REML")[0]),
             "gradient": float(gradient[-1]),
             "hessian": float(hessian[-1, -1]),
@@ -1504,12 +1514,12 @@ class RBridge:
         outer_gradient = (
             None
             if outer is ro.NULL or outer.rx2("grad") is ro.NULL
-            else np.asarray(outer.rx2("grad"), dtype=np.float64).copy()
+            else _r_array(outer.rx2("grad"), dtype=np.float64)
         )
         outer_hessian = (
             None
             if outer is ro.NULL or outer.rx2("hess") is ro.NULL
-            else np.asarray(outer.rx2("hess"), dtype=np.float64).copy()
+            else _r_array(outer.rx2("hess"), dtype=np.float64)
         )
         return {
             "theta": (
@@ -1521,10 +1531,10 @@ class RBridge:
             "scale": float(fit.rx2("sig2")[0]),
             "score_scale": float(score_scale[0]),
             "deviance": float(fit.rx2("deviance")[0]),
-            "edf": float(np.sum(np.asarray(fit.rx2("edf"), dtype=np.float64))),
-            "coefficients": np.asarray(fit.rx2("coefficients")).copy(),
-            "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
-            "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
+            "edf": float(np.sum(_r_array(fit.rx2("edf"), dtype=np.float64))),
+            "coefficients": _r_array(fit.rx2("coefficients")),
+            "fitted_values": _r_array(fit.rx2("fitted.values")),
+            "link_se": _r_array(link_prediction.rx2("se.fit")),
             "inner_converged": bool(fit.rx2("converged")[0]),
             "inner_iterations": int(fit.rx2("iter")[0]),
             "outer_status": outer_status,
@@ -1631,7 +1641,7 @@ class RBridge:
         end = traced(start_r, family, y_r, mu_r, scale=1, wt=weight_r)
         return {
             "initial": fields(start_r),
-            "final": np.r_[np.asarray(end, dtype=np.float64), fields(end)],
+            "final": np.r_[_r_array(end, dtype=np.float64), fields(end)],
             "path": np.asarray(theta_path, dtype=np.float64),
             "halvings": np.asarray(halvings, dtype=np.float64),
         }
@@ -1681,7 +1691,7 @@ class RBridge:
         )
         if rank:
             root = base["%*%"](
-                self._base.t(self._to_r_matrix(np.asarray(U1)[:, :rank])),
+                self._base.t(self._to_r_matrix(_r_array(U1)[:, :rank])),
                 self._base.t(r_E),
             )
             roots = base["list"](root)
@@ -1690,10 +1700,9 @@ class RBridge:
         target = self._base.rep(
             family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
         )
-        null = np.asarray(
-            self._base.qr_coef(self._base.qr(r_X_public), target),
-            dtype=np.float64,
-        ).copy()
+        null = _r_array(
+            self._base.qr_coef(self._base.qr(r_X_public), target), dtype=np.float64
+        )
         null[np.isnan(null)] = 0.0
         null_r = self._base.solve(r_transform, self._to_r_vector(null))
 
@@ -1833,21 +1842,21 @@ class RBridge:
             family.rx2("dev.resids")(r_y, mean, r_weight, theta)
         )
         return {
-            "beta": np.asarray(fit.rx2("coefficients")).copy(),
-            "theta": np.asarray(theta).copy(),
-            "source_deviance": np.asarray(fit.rx2("deviance")).copy(),
-            "final_deviance": np.asarray(final_deviance).copy(),
+            "beta": _r_array(fit.rx2("coefficients")),
+            "theta": _r_array(theta),
+            "source_deviance": _r_array(fit.rx2("deviance")),
+            "final_deviance": _r_array(final_deviance),
             "source_theta": np.asarray(pre_theta, dtype=np.float64),
             "gdi_penalty": np.asarray([final_locals["penalty"]]),
-            "score": np.asarray(fit.rx2("REML")).copy(),
+            "score": _r_array(fit.rx2("REML")),
             "stopping_pdev": np.asarray([final_locals["pdev"]]),
-            "G": np.asarray(observed).copy(),
-            "F": np.asarray(fisher).copy(),
-            "V": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
+            "G": _r_array(observed),
+            "F": _r_array(fisher),
+            "V": _r_array(self._base.tcrossprod(fit.rx2("rV"))),
             "theta_history": np.asarray(theta_history, dtype=np.float64),
-            "iter": np.asarray(fit.rx2("iter")).copy(),
+            "iter": _r_array(fit.rx2("iter")),
             "theta_iter": np.asarray([theta_updates[0]]),
-            "null_coefficients": np.asarray(null_r).copy(),
+            "null_coefficients": _r_array(null_r),
             "recoveries": np.asarray([recoveries[0]]),
         }
 
@@ -1884,7 +1893,7 @@ class RBridge:
         roots = (
             base["list"](
                 base["%*%"](
-                    self._base.t(self._to_r_matrix(np.asarray(U1)[:, :rank])),
+                    self._base.t(self._to_r_matrix(_r_array(U1)[:, :rank])),
                     self._base.t(r_E),
                 )
             )
@@ -1894,7 +1903,7 @@ class RBridge:
         target = self._base.rep(
             family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
         )
-        null = np.asarray(self._base.qr_coef(self._base.qr(r_X), target)).copy()
+        null = _r_array(self._base.qr_coef(self._base.qr(r_X), target))
         null[np.isnan(null)] = 0.0
         recovery_count = [0]
         penalty = [np.nan]
@@ -1967,16 +1976,16 @@ class RBridge:
         covariance = self._base.tcrossprod(fit.rx2("rV"))
         edf = self._base.sum(base["diag"](base["%*%"](covariance, fisher)))
         return {
-            "beta": np.asarray(fit.rx2("coefficients")).copy(),
-            "dev": np.asarray(fit.rx2("deviance")).copy(),
-            "G": np.asarray(observed).copy(),
-            "F": np.asarray(fisher).copy(),
-            "V": np.asarray(covariance).copy(),
-            "edf": np.asarray(edf).copy(),
-            "score": np.asarray(fit.rx2("REML")).copy(),
+            "beta": _r_array(fit.rx2("coefficients")),
+            "dev": _r_array(fit.rx2("deviance")),
+            "G": _r_array(observed),
+            "F": _r_array(fisher),
+            "V": _r_array(covariance),
+            "edf": _r_array(edf),
+            "score": _r_array(fit.rx2("REML")),
             "gdi": np.asarray(penalty, dtype=np.float64),
-            "iter": np.asarray(fit.rx2("iter")).copy(),
-            "converged": np.asarray(fit.rx2("converged")).copy(),
+            "iter": _r_array(fit.rx2("iter")),
+            "converged": _r_array(fit.rx2("converged")),
             "recovery": np.asarray(recovery_count),
         }
 
@@ -2061,14 +2070,14 @@ class RBridge:
             base["is.finite"](retried_response),
         )
         output: dict[str, Any] = {
-            "w": np.asarray(weight_observed).copy(),
-            "fisher": np.asarray(fisher).copy(),
-            "wz": np.asarray(weighted_response).copy(),
-            "z": np.asarray(response).copy(),
+            "w": _r_array(weight_observed),
+            "fisher": _r_array(fisher),
+            "wz": _r_array(weighted_response),
+            "z": _r_array(response),
             "dev": float(deviance[0]),
             "use.wy": bool(self._base.any(invalid)[0]),
-            "retry_w": np.asarray(retried_weight).copy(),
-            "retry_wz": np.asarray(retried_response).copy(),
+            "retry_w": _r_array(retried_weight),
+            "retry_wz": _r_array(retried_response),
             "good.count": int(self._base.sum(good)[0]),
         }
         if direct_design is not None:
@@ -2079,7 +2088,7 @@ class RBridge:
             gram = self._base.crossprod(design_r, base["*"](retried_weight, design_r))
             rhs = self._base.crossprod(design_r, retried_response)
             beta = self._base.solve(base["+"](gram, penalty_r), rhs)
-            output["beta"] = np.asarray(beta).ravel().copy()
+            output["beta"] = _r_array(beta).ravel().copy()
         return output
 
     def nb_batch_derivative_contractions(
@@ -2141,15 +2150,15 @@ class RBridge:
             base["is.finite"](weighted_response),
         )
         return {
-            "beta": np.asarray(base["drop"](self._base.crossprod(X_r, beta_term))),
-            "log.theta": np.asarray(theta_term).copy(),
-            "stationarity": np.asarray(
+            "beta": _r_array(base["drop"](self._base.crossprod(X_r, beta_term))),
+            "log.theta": _r_array(theta_term),
+            "stationarity": _r_array(
                 base["drop"](
                     self._base.crossprod(
                         X_r, base["*"](half, derivatives.rx2("Detath"))
                     )
                 )
-            ).copy(),
+            ),
             "good": int(self._base.sum(good)[0]),
         }
 
@@ -2185,7 +2194,7 @@ class RBridge:
             ),
         )
         deviance = self._stats.binomial().rx2("dev.resids")(y_r, mu_r, weight_r)
-        return np.column_stack((np.asarray(deviance), np.asarray(curvature)))
+        return np.column_stack((_r_array(deviance), _r_array(curvature)))
 
     def binomial_aic_rows(
         self, y: np.ndarray, weight: np.ndarray, mu: np.ndarray
@@ -2269,7 +2278,7 @@ class RBridge:
             base["/"](residual, base["*"](mu_eta, alpha)),
         )
         return {
-            name: np.asarray(value).copy()
+            name: _r_array(value)
             for name, value in (
                 ("eta", r_eta),
                 ("mu", mu),
@@ -2305,10 +2314,10 @@ class RBridge:
             )
         )
         return self.binomial_log_initial_terms(
-            np.asarray(y),
+            _r_array(y),
             np.asarray([0.8, 1.7, 0.25, 2.3, 0.4]),
             np.asarray([-0.1, 0.2, 0.0, -0.4, 0.7]),
-            eta=np.asarray(eta),
+            eta=_r_array(eta),
         )
 
     def regular_first_iteration_source(
@@ -2342,10 +2351,10 @@ class RBridge:
 
         def collect(eta: Any, mu: Any, weight: Any, response: Any) -> None:
             captured.update(
-                eta=np.asarray(eta).copy(),
-                mu=np.asarray(mu).copy(),
-                weight=np.asarray(weight).copy(),
-                z=np.asarray(response).copy(),
+                eta=_r_array(eta),
+                mu=_r_array(mu),
+                weight=_r_array(weight),
+                z=_r_array(response),
             )
 
         fit_function = instrument_function(
@@ -2424,14 +2433,14 @@ class RBridge:
             raise RBridgeError("Pinned Binomial/log admission fit did not converge")
         return {
             "reference": np.r_[
-                np.asarray(fit.rx2("coefficients")),
+                _r_array(fit.rx2("coefficients")),
                 fit.rx2("deviance")[0],
                 1.0,
                 fit.rx2("trA")[0],
                 fit.rx2("REML")[0],
             ],
-            "covariance": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
-            "fitted": np.asarray(fit.rx2("fitted.values")).copy(),
+            "covariance": _r_array(self._base.tcrossprod(fit.rx2("rV"))),
+            "fitted": _r_array(fit.rx2("fitted.values")),
         }
 
     def gamma_fisher_recovery_reference(
@@ -2517,14 +2526,14 @@ class RBridge:
             raise RBridgeError("Pinned Gamma limited control unexpectedly converged")
         return {
             "reference": np.r_[
-                np.asarray(fit.rx2("coefficients")),
+                _r_array(fit.rx2("coefficients")),
                 fit.rx2("deviance")[0],
                 fit.rx2("scale.est")[0],
                 fit.rx2("trA")[0],
                 fit.rx2("REML")[0],
             ],
-            "covariance": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
-            "fitted": np.asarray(fit.rx2("fitted.values")).copy(),
+            "covariance": _r_array(self._base.tcrossprod(fit.rx2("rV"))),
+            "fitted": _r_array(fit.rx2("fitted.values")),
             "recoveries": successful_recoveries,
         }
 
@@ -2563,16 +2572,16 @@ class RBridge:
         self._require_rpy2()
         r_X = self._to_r_matrix(X)
         factor = self._base.qr(r_X)
-        coefficients = np.asarray(
+        coefficients = _r_array(
             self._base.qr_coef(
                 factor, self._base.rep(target, times=np.asarray(X).shape[0])
             ),
             dtype=np.float64,
-        ).copy()
+        )
         coefficients[np.isnan(coefficients)] = 0.0
         return (
             int(factor.rx2("rank")[0]),
-            np.asarray(factor.rx2("pivot"), dtype=np.int32) - 1,
+            _r_array(factor.rx2("pivot"), dtype=np.int32) - 1,
             coefficients,
         )
 
@@ -2627,10 +2636,9 @@ class RBridge:
         normalized_target = self._base.rep(
             family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
         )
-        null = np.asarray(
-            self._base.qr_coef(self._base.qr(r_X), normalized_target),
-            dtype=np.float64,
-        ).copy()
+        null = _r_array(
+            self._base.qr_coef(self._base.qr(r_X), normalized_target), dtype=np.float64
+        )
         null[np.isnan(null)] = 0.0
         known_scale = family_name.lower() in {"binomial", "poisson"}
         return family, r_X, r_y, r_weight, r_offset, null, known_scale
@@ -2685,13 +2693,13 @@ class RBridge:
         if require_convergence and not bool(status[0]):
             raise RBridgeError("Pinned gam.fit3 start oracle did not converge")
         reference = np.r_[  # same source field order as the old binary oracle
-            np.asarray(fit.rx2("coefficients")),
+            _r_array(fit.rx2("coefficients")),
             float(fit.rx2("deviance")[0]),
             1.0 if known_scale else float(fit.rx2("scale.est")[0]),
             float(fit.rx2("trA")[0]),
             float(fit.rx2("REML")[0]),
         ]
-        covariance = np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy()
+        covariance = _r_array(self._base.tcrossprod(fit.rx2("rV")))
         return reference, null, covariance, status
 
     def regular_coefficient_fit(
@@ -2811,7 +2819,7 @@ class RBridge:
         if not bool(fit.rx2("converged")[0]):
             raise RBridgeError("Pinned penalized gam.fit3 oracle did not converge")
         reference = np.r_[
-            np.asarray(fit.rx2("coefficients")),
+            _r_array(fit.rx2("coefficients")),
             float(fit.rx2("deviance")[0]),
             1.0 if known_scale else float(fit.rx2("scale.est")[0]),
             float(fit.rx2("trA")[0]),
@@ -2820,14 +2828,14 @@ class RBridge:
         return {
             "reference": reference,
             "null": null,
-            "covariance": np.asarray(self._base.tcrossprod(fit.rx2("rV"))).copy(),
+            "covariance": _r_array(self._base.tcrossprod(fit.rx2("rV"))),
             "status": np.asarray(
                 [bool(fit.rx2("converged")[0]), int(fit.rx2("iter")[0])],
                 dtype=np.float64,
             ),
             "candidate_valid": np.asarray(candidates[-1:], dtype=np.float64),
             "gradient": (
-                np.asarray(fit.rx2("REML1"), dtype=np.float64)
+                _r_array(fit.rx2("REML1"), dtype=np.float64)
                 if derivatives
                 else np.empty(0)
             ),
@@ -2880,8 +2888,8 @@ class RBridge:
                 if name == "Gamma":
                     results["gamma_failed"] = False
                 else:
-                    results["beta"] = np.asarray(fit.rx2("coefficients"))
-                    results["deviance"] = np.asarray(fit.rx2("deviance"))
+                    results["beta"] = _r_array(fit.rx2("coefficients"))
+                    results["deviance"] = _r_array(fit.rx2("deviance"))
         return results
 
     def regular_source_gamma_fixed_trial(
@@ -2920,11 +2928,11 @@ class RBridge:
             **{"null.coef": null},
         )
         return np.r_[
-            np.asarray(fit.rx2("coefficients")),
-            np.asarray(fit.rx2("deviance")),
-            np.asarray(fit.rx2("scale.est")),
-            np.asarray(fit.rx2("trA")),
-            np.asarray(fit.rx2("REML")),
+            _r_array(fit.rx2("coefficients")),
+            _r_array(fit.rx2("deviance")),
+            _r_array(fit.rx2("scale.est")),
+            _r_array(fit.rx2("trA")),
+            _r_array(fit.rx2("REML")),
         ]
 
     def regular_source_penalized_gamma_score(
@@ -3086,16 +3094,16 @@ class RBridge:
             raise RBridgeError("Pinned signed-score gdi return was not reached")
         return {
             "reference": np.r_[
-                np.asarray(fit.rx2("coefficients")),
-                np.asarray(fit.rx2("deviance")),
-                np.asarray(fit.rx2("scale.est")),
-                np.asarray(fit.rx2("trA")),
-                np.asarray(fit.rx2("REML")),
+                _r_array(fit.rx2("coefficients")),
+                _r_array(fit.rx2("deviance")),
+                _r_array(fit.rx2("scale.est")),
+                _r_array(fit.rx2("trA")),
+                _r_array(fit.rx2("REML")),
             ],
-            "fisher_inverse": np.asarray(
+            "fisher_inverse": _r_array(
                 self._base.tcrossprod(fit.rx2("rV")), dtype=np.float64
             ),
-            "source_payload": np.r_[captured[-1], np.asarray(fit.rx2("scale.est"))],
+            "source_payload": np.r_[captured[-1], _r_array(fit.rx2("scale.est"))],
         }
 
     def nb_selected_fit(
@@ -3132,12 +3140,12 @@ class RBridge:
         )
         rank = E.shape[0]
         U1 = self._base.eigen(self._base.crossprod(r_E), symmetric=True).rx2("vectors")
-        U1_penalized = self._to_r_matrix(np.asarray(U1)[:, :rank])
+        U1_penalized = self._to_r_matrix(_r_array(U1)[:, :rank])
         root = ro.baseenv["%*%"](self._base.t(U1_penalized), self._base.t(r_E))
         target = self._base.rep(
             family.rx2("linkfun")(self._base.mean(r_y)), times=len(y)
         )
-        null = np.asarray(
+        null = _r_array(
             self._base.qr_coef(self._base.qr(r_X), target), dtype=np.float64
         )
         null[np.isnan(null)] = 0.0
@@ -3162,14 +3170,14 @@ class RBridge:
         )
         if not bool(fit.rx2("converged")[0]):
             raise RBridgeError("Pinned gam.fit4 coefficient oracle did not converge.")
-        gradient = np.asarray(fit.rx2("REML1")).copy()
+        gradient = _r_array(fit.rx2("REML1"))
         if estimated:
             gradient = gradient[[1, 0]]
         return {
             "score": float(fit.rx2("REML")[0]),
             "iter": int(fit.rx2("iter")[0]),
             "deviance": float(fit.rx2("deviance")[0]),
-            "beta": np.asarray(fit.rx2("coefficients")).copy(),
+            "beta": _r_array(fit.rx2("coefficients")),
             "gradient": gradient,
         }
 
@@ -3225,7 +3233,7 @@ class RBridge:
             ),
             "log_theta": float(fit.rx2("family").rx2("getTheta")()[0]),
             "score": float(fit.rx2("gcv.ubre")[0]),
-            "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
+            "fitted_values": _r_array(fit.rx2("fitted.values")),
             "deviance": float(fit.rx2("deviance")[0]),
             "edf": float(self._base.sum(fit.rx2("edf"))[0]),
             "scale": float(fit.rx2("sig2")[0]),
@@ -3252,10 +3260,10 @@ class RBridge:
             method="REML",
             fit=False,
         )
-        metadata = np.r_[np.asarray(setup.rx2("off")), np.asarray(setup.rx2("rank"))]
+        metadata = np.r_[_r_array(setup.rx2("off")), _r_array(setup.rx2("rank"))]
         return (
-            np.asarray(setup.rx2("X")).copy(),
-            np.asarray(setup.rx2("S")[0]).copy(),
+            _r_array(setup.rx2("X")),
+            _r_array(setup.rx2("S")[0]),
             metadata,
         )
 
@@ -3299,8 +3307,8 @@ class RBridge:
             multiply(half, derivatives.rx2("Deta")),
         )
         return {
-            "weight": np.asarray(r_weight, dtype=np.float64).copy(),
-            "weighted_response": np.asarray(r_response, dtype=np.float64).copy(),
+            "weight": _r_array(r_weight, dtype=np.float64),
+            "weighted_response": _r_array(r_response, dtype=np.float64),
         }
 
     def efs_nb_deviance_derivatives(
@@ -3331,12 +3339,12 @@ class RBridge:
             "dDeta", r_y, r_mu, r_weights, r_theta, r_family, deriv=0
         )
         return {
-            "deviance": np.asarray(
+            "deviance": _r_array(
                 r_family.rx2("dev.resids")(r_y, r_mu, r_weights, r_theta),
                 dtype=np.float64,
-            ).copy(),
-            "deta": np.asarray(derivatives.rx2("Deta"), dtype=np.float64).copy(),
-            "deta2": np.asarray(derivatives.rx2("Deta2"), dtype=np.float64).copy(),
+            ),
+            "deta": _r_array(derivatives.rx2("Deta"), dtype=np.float64),
+            "deta2": _r_array(derivatives.rx2("Deta2"), dtype=np.float64),
         }
 
     def efs_diagnostics(
@@ -3412,7 +3420,7 @@ class RBridge:
         trace: list[np.ndarray] = []
 
         def record_theta(theta: Any) -> None:
-            trace.append(np.array(theta, dtype=np.float64, copy=True))
+            trace.append(_r_array(theta, dtype=np.float64))
 
         accepted_path = (12, 2, 3, 14)
         if accepted_path not in find_call_paths(
@@ -3432,9 +3440,9 @@ class RBridge:
             value = nlogl(theta, family, r_y, r_mu, scale=1, wt=r_weights, deriv=2)
             return np.asarray(
                 [
-                    float(np.asarray(value.rx2("nll"))[0]),
-                    float(np.asarray(value.rx2("g"))[0]),
-                    float(np.asarray(value.rx2("H")).ravel()[0]),
+                    float(_r_array(value.rx2("nll"))[0]),
+                    float(_r_array(value.rx2("g"))[0]),
+                    float(_r_array(value.rx2("H")).ravel()[0]),
                 ],
                 dtype=np.float64,
             )
@@ -3442,13 +3450,13 @@ class RBridge:
         initial = state(r_start)
         final_theta = traced(r_start, family, r_y, r_mu, scale=1, wt=r_weights)
         final = np.concatenate(
-            (np.asarray(final_theta, dtype=np.float64), state(final_theta))
+            (_r_array(final_theta, dtype=np.float64), state(final_theta))
         )
         trace_values = np.asarray(trace, dtype=np.float64).reshape(-1)
         trace_nll = np.asarray(
             [
                 float(
-                    np.asarray(
+                    _r_array(
                         nlogl(
                             self._to_r_vector(np.asarray([theta])),
                             family,
@@ -3488,22 +3496,20 @@ class RBridge:
         square = self._ro.r["^"]
         value = self._base.sum(family.rx2("dev.resids")(r_y, r_mu, r_weights, r_theta))
         return {
-            "value": float(np.asarray(value)[0]),
-            "d_eta": np.asarray(
-                multiply(derivatives.rx2("Dmu"), r_mu), dtype=np.float64
-            ).copy(),
-            "h_eta": np.asarray(
+            "value": float(_r_array(value)[0]),
+            "d_eta": _r_array(multiply(derivatives.rx2("Dmu"), r_mu), dtype=np.float64),
+            "h_eta": _r_array(
                 add(
                     multiply(derivatives.rx2("Dmu2"), square(r_mu, 2)),
                     multiply(derivatives.rx2("Dmu"), r_mu),
                 ),
                 dtype=np.float64,
-            ).copy(),
-            "mixed": np.asarray(
+            ),
+            "mixed": _r_array(
                 multiply(derivatives.rx2("Dmuth"), r_mu), dtype=np.float64
-            ).copy(),
-            "d_theta": float(np.asarray(self._base.sum(derivatives.rx2("Dth")))[0]),
-            "h_theta": float(np.asarray(self._base.sum(derivatives.rx2("Dth2")))[0]),
+            ),
+            "d_theta": float(_r_array(self._base.sum(derivatives.rx2("Dth")))[0]),
+            "h_theta": float(_r_array(self._base.sum(derivatives.rx2("Dth2")))[0]),
         }
 
     def efs_nb_deviance_is_finite(
@@ -3594,12 +3600,10 @@ class RBridge:
             r_family.rx2("dev.resids")(r_y, r_mu, r_weights, theta_out)
         )
         return {
-            "coefficients": np.asarray(
-                fit.rx2("coefficients"), dtype=np.float64
-            ).copy(),
-            "log_theta": float(np.asarray(theta_out)[0]),
-            "deviance": float(np.asarray(deviance)[0]),
-            "fit_deviance": float(np.asarray(fit.rx2("deviance"))[0]),
+            "coefficients": _r_array(fit.rx2("coefficients"), dtype=np.float64),
+            "log_theta": float(_r_array(theta_out)[0]),
+            "deviance": float(_r_array(deviance)[0]),
+            "fit_deviance": float(_r_array(fit.rx2("deviance"))[0]),
         }
 
     def efs_nb_inner_trace_reference(
@@ -3660,10 +3664,10 @@ class RBridge:
         }
 
         def copy(value: Any) -> np.ndarray:
-            return np.array(value, dtype=np.float64, copy=True).ravel(order="F")
+            return _r_array(value, dtype=np.float64).ravel(order="F")
 
         def scalar(value: Any) -> float:
-            return float(np.asarray(value, dtype=np.float64).ravel()[0])
+            return float(_r_array(value, dtype=np.float64).ravel()[0])
 
         def record_raw(beta: Any, eta: Any, dev: Any) -> None:
             trace["raw_beta"].append(copy(beta))
@@ -3949,7 +3953,7 @@ class RBridge:
             r_name = self._ro.r["as.name"]
             if (
                 not default_null[0].rsame(r_name("rep"))
-                or float(np.asarray(default_null[1])[0]) != 0.0
+                or float(_r_array(default_null[1])[0]) != 0.0
                 or not default_null[2][0].rsame(r_name("ncol"))
                 or not default_null[2][1].rsame(r_name("x"))
             ):
@@ -3958,7 +3962,7 @@ class RBridge:
             def record_fit3(**arguments: Any) -> Any:
                 null_omitted.append("null.coef" not in arguments)
                 null_trace.append(
-                    np.array(
+                    _r_array(
                         arguments.get(
                             "null.coef",
                             self._base.rep(
@@ -3966,7 +3970,6 @@ class RBridge:
                             ),
                         ),
                         dtype=np.float64,
-                        copy=True,
                     )
                 )
                 return fit3(**arguments)
@@ -3997,7 +4000,7 @@ class RBridge:
         reference = self._extract_fit_results_rpy2(model)
         outer = model.rx2("outer.info")
         reference.update(
-            outer_iterations=int(np.asarray(outer.rx2("iter"))[0]),
+            outer_iterations=int(_r_array(outer.rx2("iter"))[0]),
             convergence=str(outer.rx2("conv")[0]),
             null_coef_trace=tuple(null_trace),
             null_coef_omitted=tuple(null_omitted),
@@ -4105,7 +4108,7 @@ class RBridge:
         cutoff = self._ro.r["*"](
             self._base.max(values), self._ro.r["^"](machine_epsilon, 0.75)
         )
-        keep = np.asarray(self._ro.r[">"](values, cutoff), dtype=bool)
+        keep = _r_array(self._ro.r[">"](values, cutoff), dtype=bool)
         if not np.any(keep):
             raise ValueError("regular gdi1 oracle requires a nonzero penalty")
         r_keep = self._ro.BoolVector(keep)
@@ -4132,7 +4135,7 @@ class RBridge:
         captured: dict[str, np.ndarray | float] = {}
 
         def copy(value: Any) -> np.ndarray:
-            return np.array(value, dtype=np.float64, copy=True).ravel(order="F")
+            return _r_array(value, dtype=np.float64).ravel(order="F")
 
         def pre_gdi(
             transform: Any,
@@ -4147,15 +4150,15 @@ class RBridge:
             )
             captured["pre_eta"] = copy(eta)
             captured["pre_mu"] = copy(mu)
-            captured["pre_deviance"] = float(np.asarray(dev).ravel()[0])
-            captured["pre_pdev"] = float(np.asarray(pdev).ravel()[0])
+            captured["pre_deviance"] = float(_r_array(dev).ravel()[0])
+            captured["pre_pdev"] = float(_r_array(pdev).ravel()[0])
 
         def gdi_candidate(transform: Any, current: Any) -> None:
             current = self._ro.conversion.get_conversion().rpy2py(current)
             captured["gdi_beta"] = copy(
                 self._base.drop(r_multiply(transform, current.rx2("beta")))
             )
-            captured["gdi_penalty"] = float(np.asarray(current.rx2("conv.tol"))[0])
+            captured["gdi_penalty"] = float(_r_array(current.rx2("conv.tol"))[0])
 
         fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
         for head, symbols, capture, callback, when in (
@@ -4209,21 +4212,19 @@ class RBridge:
         fisher = fit.rx2("weights")
         weighted = self._ro.r["*"]
         captured.update(
-            reported_scale=float(np.asarray(fit.rx2("scale.est"))[0]),
-            score=float(np.asarray(fit.rx2("REML"))[0]),
+            reported_scale=float(_r_array(fit.rx2("scale.est"))[0]),
+            score=float(_r_array(fit.rx2("REML"))[0]),
             selected_beta=copy(fit.rx2("coefficients")),
             selected_eta=copy(fit.rx2("linear.predictors")),
             selected_mu=copy(fit.rx2("fitted.values")),
             observed_weight=copy(observed),
             fisher_weight=copy(fisher),
-            XtWX=np.asarray(
-                self._base.crossprod(r_x, weighted(observed, r_x)),
-                dtype=np.float64,
-            ).copy(),
-            XtWX_fisher=np.asarray(
-                self._base.crossprod(r_x, weighted(fisher, r_x)),
-                dtype=np.float64,
-            ).copy(),
+            XtWX=_r_array(
+                self._base.crossprod(r_x, weighted(observed, r_x)), dtype=np.float64
+            ),
+            XtWX_fisher=_r_array(
+                self._base.crossprod(r_x, weighted(fisher, r_x)), dtype=np.float64
+            ),
             source_commit=_PINNED_MGCV_SOURCE_COMMIT,
         )
         return captured
@@ -4371,9 +4372,9 @@ class RBridge:
             "inner_converged": bool(fit.rx2("converged")[0]),
             "outer_converged": outer_converged,
             "outer_status": outer_status,
-            "coefficients": np.asarray(fit.rx2("coefficients")).copy(),
-            "fitted_values": np.asarray(fit.rx2("fitted.values")).copy(),
-            "link_se": np.asarray(link_prediction.rx2("se.fit")).copy(),
+            "coefficients": _r_array(fit.rx2("coefficients")),
+            "fitted_values": _r_array(fit.rx2("fitted.values")),
+            "link_se": _r_array(link_prediction.rx2("se.fit")),
         }
 
     def public_exact_reml_derivatives(
@@ -4446,10 +4447,10 @@ class RBridge:
         if not recorded or outer is ro.NULL:
             raise RBridgeError("Pinned public fit did not call newton's gam.fit3")
         first = recorded[0]
-        recorded_sp = np.asarray(first["sp"], dtype=np.float64).ravel()
+        recorded_sp = _r_array(first["sp"], dtype=np.float64).ravel()
         if recorded_sp.shape != (2,):
             raise RBridgeError("newton's gam.fit3 sp is not c(log(sp), log(scale))")
-        smoothing = np.asarray(fit.rx2("sp"), dtype=np.float64).ravel()
+        smoothing = _r_array(fit.rx2("sp"), dtype=np.float64).ravel()
         if smoothing.shape != (1,):
             raise RBridgeError(
                 "public exact fit did not return one smoothing parameter"
@@ -4461,8 +4462,8 @@ class RBridge:
         evaluated = fit3(
             **{**first, "sp": self._to_r_vector(log_parameters), "deriv": 2}
         )
-        gradient = np.asarray(evaluated.rx2("REML1"), dtype=np.float64).ravel()
-        hessian = np.asarray(evaluated.rx2("REML2"), dtype=np.float64)
+        gradient = _r_array(evaluated.rx2("REML1"), dtype=np.float64).ravel()
+        hessian = _r_array(evaluated.rx2("REML2"), dtype=np.float64)
         if gradient.shape != (2,) or hessian.shape != (2, 2):
             raise RBridgeError("gam.fit3 did not return two-parameter REML derivatives")
         return {
@@ -4475,8 +4476,8 @@ class RBridge:
             "gradient": gradient.copy(),
             "hessian": hessian.copy(),
             "outer_status": str(outer.rx2("conv")[0]),
-            "outer_gradient": np.asarray(outer.rx2("grad"), dtype=np.float64).copy(),
-            "outer_hessian": np.asarray(outer.rx2("hess"), dtype=np.float64).copy(),
+            "outer_gradient": _r_array(outer.rx2("grad"), dtype=np.float64),
+            "outer_hessian": _r_array(outer.rx2("hess"), dtype=np.float64),
             "inner_converged": bool(evaluated.rx2("converged")[0]),
         }
 
@@ -4532,10 +4533,10 @@ class RBridge:
         square = self._ro.r["^"]
 
         def r_square_sum(value: Any) -> float:
-            return float(np.asarray(self._base.sum(square(value, 2)))[0])
+            return float(_r_array(self._base.sum(square(value, 2)))[0])
 
         return {
-            "d": np.asarray(reparam.rx2("det1"), dtype=np.float64),
+            "d": _r_array(reparam.rx2("det1"), dtype=np.float64),
             "t": np.asarray(
                 [
                     r_square_sum(self._base.forwardsolve(r_factor, root))
@@ -4587,7 +4588,7 @@ class RBridge:
 
         def scripted_fit(**arguments: Any) -> Any:
             packed = arguments["sp"]
-            proposals.append(np.array(packed, dtype=np.float64, copy=True))
+            proposals.append(_r_array(packed, dtype=np.float64))
             index = min(len(proposals) - 1, len(fit_scores) - 1)
             return self._ro.ListVector(
                 {
@@ -4631,12 +4632,10 @@ class RBridge:
         outer = output.rx2("outer.info")
         return {
             "proposals": np.vstack(proposals),
-            "accepted_sp": np.asarray(output.rx2("sp"), dtype=np.float64).copy(),
-            "final_score": float(np.asarray(output.rx2("REML"))[0]),
-            "score_history": np.asarray(
-                outer.rx2("score.hist"), dtype=np.float64
-            ).copy(),
-            "iter": int(np.asarray(output.rx2("iter"))[0]),
+            "accepted_sp": _r_array(output.rx2("sp"), dtype=np.float64),
+            "final_score": float(_r_array(output.rx2("REML"))[0]),
+            "score_history": _r_array(outer.rx2("score.hist"), dtype=np.float64),
+            "iter": int(_r_array(output.rx2("iter"))[0]),
             "convergence": str(outer.rx2("conv")[0]),
         }
 
@@ -4787,8 +4786,8 @@ class RBridge:
         result = self._extract_fit_results_rpy2(model)
         outer = model.rx2("outer.info")
         result.update(
-            outer_iterations=int(np.asarray(outer.rx2("iter"))[0]),
-            score_history=np.asarray(outer.rx2("score.hist"), dtype=np.float64).ravel(
+            outer_iterations=int(_r_array(outer.rx2("iter"))[0]),
+            score_history=_r_array(outer.rx2("score.hist"), dtype=np.float64).ravel(
                 order="F"
             ),
             convergence=str(outer.rx2("conv")[0]),
@@ -4873,7 +4872,7 @@ class RBridge:
         n_theta = (
             0
             if bool(self._base.is_null(theta_count)[0])
-            else int(np.asarray(theta_count)[0])
+            else int(_r_array(theta_count)[0])
         )
         if initial_log_theta is not None and n_theta > 0:
             r_family.rx2("putTheta")(
@@ -4928,7 +4927,7 @@ class RBridge:
             if initial_scale is None:
                 null_fit = self._call_internal("get.null.coef", setup)
                 initial_scale = float(
-                    np.asarray(self._ro.r["/"](null_fit.rx2("null.scale"), 10))[0]
+                    _r_array(self._ro.r["/"](null_fit.rx2("null.scale"), 10))[0]
                 )
             lsp = self._base.c(lsp, self._base.log(float(initial_scale)))
         if old_beta is self._ro.NULL and null_coef:
@@ -4947,10 +4946,10 @@ class RBridge:
         private = self._ro.r["new.env"](parent=self._ro.r["getNamespace"]("mgcv"))
 
         def single(value: Any) -> float:
-            return float(np.asarray(value, dtype=np.float64).ravel()[0])
+            return float(_r_array(value, dtype=np.float64).ravel()[0])
 
         def copied(value: Any) -> np.ndarray:
-            return np.array(value, dtype=np.float64, copy=True).ravel(order="F")
+            return _r_array(value, dtype=np.float64).ravel(order="F")
 
         def record_retained(value: Any) -> None:
             retained_log.append(not bool(self._base.is_null(value)[0]))
@@ -4984,7 +4983,7 @@ class RBridge:
             )
 
         def record_prefix(iteration: Any, pdev: Any, old_pdev: Any) -> None:
-            if int(np.asarray(iteration)[0]) != 1:
+            if int(_r_array(iteration)[0]) != 1:
                 return
             current = single(pdev)
             previous = single(old_pdev)
@@ -5057,7 +5056,7 @@ class RBridge:
                 nsp = len(args["UrS"])
                 fit_family = self._ro.conversion.get_conversion().rpy2py(args["family"])
                 nth = (
-                    int(np.asarray(fit_family.rx2("n.theta"))[0])
+                    int(_r_array(fit_family.rx2("n.theta"))[0])
                     if bool(self._base.inherits(args["family"], "extended.family")[0])
                     else 0
                 )
@@ -5066,7 +5065,7 @@ class RBridge:
                     rinterface.MissingArg,
                     self._base.seq_len(
                         int(self._base.ncol(args["U1"])[0])
-                        - int(np.asarray(args["Mp"])[0])
+                        - int(_r_array(args["Mp"])[0])
                     ),
                     drop=False,
                 )
@@ -5317,27 +5316,27 @@ class RBridge:
 
     def _extract_fit_results_rpy2(self, r_model: Any) -> dict[str, Any]:
         """Extract fit results from an R model object."""
-        coefficients = np.array(r_model.rx2("coefficients"), dtype=np.float64)
-        fitted_values = np.array(r_model.rx2("fitted.values"), dtype=np.float64)
-        smoothing_params = np.array(r_model.rx2("sp"), dtype=np.float64)
-        deviance = float(np.array(r_model.rx2("deviance"))[0])
-        scale = float(np.array(r_model.rx2("scale"))[0])
+        coefficients = _r_array(r_model.rx2("coefficients"), dtype=np.float64)
+        fitted_values = _r_array(r_model.rx2("fitted.values"), dtype=np.float64)
+        smoothing_params = _r_array(r_model.rx2("sp"), dtype=np.float64)
+        deviance = float(_r_array(r_model.rx2("deviance"))[0])
+        scale = float(_r_array(r_model.rx2("scale"))[0])
         vp_r = r_model.rx2("Vp")
         n_coef = len(coefficients)
-        vp = np.array(vp_r, dtype=np.float64).reshape((n_coef, n_coef))
-        reml_score = float(np.array(r_model.rx2("gcv.ubre"))[0])
+        vp = _r_array(vp_r, dtype=np.float64).reshape((n_coef, n_coef))
+        reml_score = float(_r_array(r_model.rx2("gcv.ubre"))[0])
 
         # reml.scale is the scale used in the REML criterion (jointly
         # optimized), which differs from model$scale (Fletcher estimate).
         reml_scale_r = r_model.rx2("reml.scale")
         reml_scale = (
-            float(np.array(reml_scale_r)[0]) if reml_scale_r is not None else scale
+            float(_r_array(reml_scale_r)[0]) if reml_scale_r is not None else scale
         )
 
         r_summary = self._base.summary(r_model)
-        edf = np.array(r_summary.rx2("edf"), dtype=np.float64)
-        edf_total = float(np.sum(np.array(r_model.rx2("edf"), dtype=np.float64)))
-        null_deviance = float(np.array(r_model.rx2("null.deviance"))[0])
+        edf = _r_array(r_summary.rx2("edf"), dtype=np.float64)
+        edf_total = float(np.sum(_r_array(r_model.rx2("edf"), dtype=np.float64)))
+        null_deviance = float(_r_array(r_model.rx2("null.deviance"))[0])
         outer = r_model.rx2("outer.info")
         outer_status = (
             str(outer.rx2("conv")[0])
@@ -5351,7 +5350,7 @@ class RBridge:
             family_obj = r_model.rx2("family")
             get_theta = family_obj.rx2("getTheta")
             if get_theta is not None:
-                theta = float(np.array(get_theta(True))[0])
+                theta = float(_r_array(get_theta(True))[0])
         except Exception:
             pass
 
@@ -5503,20 +5502,20 @@ if (!is.null(fam$getTheta)) {{
         smooth_list = r_model.rx2("smooth")
         n_smooths = len(smooth_list)
 
-        X_full = np.array(ro.r["model.matrix"](r_model), dtype=np.float64)
+        X_full = _r_array(ro.r["model.matrix"](r_model), dtype=np.float64)
 
         basis_matrices = []
         penalty_matrices = []
         for i in range(n_smooths):
             sm = smooth_list[i]
-            first_col = int(np.array(sm.rx2("first.para"))[0]) - 1
-            last_col = int(np.array(sm.rx2("last.para"))[0])
+            first_col = int(_r_array(sm.rx2("first.para"))[0]) - 1
+            last_col = int(_r_array(sm.rx2("last.para"))[0])
             basis_matrices.append(X_full[:, first_col:last_col])
 
             S_list = sm.rx2("S")
             penalties_for_smooth = []
             for j in range(len(S_list)):
-                S_flat = np.array(S_list[j], dtype=np.float64)
+                S_flat = _r_array(S_list[j], dtype=np.float64)
                 # R matrices come as column-major flat arrays via rpy2
                 n_cols = last_col - first_col
                 if S_flat.ndim == 2:
@@ -5732,13 +5731,13 @@ for (i in seq_len(n_smooths)) {{
 
         def optional_array(name: str, shape: tuple[int, ...]) -> np.ndarray:
             value = smooth.rx2(name)
-            return np.zeros(shape) if value is self._ro.NULL else np.asarray(value)
+            return np.zeros(shape) if value is self._ro.NULL else _r_array(value)
 
-        ranks = np.asarray(smooth.rx2("rank"), dtype=np.float64).ravel()
+        ranks = _r_array(smooth.rx2("rank"), dtype=np.float64).ravel()
         knt = optional_array("knt", (0, 0))
         gp_defn = optional_array("gp.defn", (0,))
         E = (
-            np.asarray(
+            _r_array(
                 self._call_internal(
                     "gpE", smooth.rx2("knt"), smooth.rx2("knt"), smooth.rx2("gp.defn")
                 ),
@@ -5748,8 +5747,8 @@ for (i in seq_len(n_smooths)) {{
             else np.zeros((0, 0))
         )
         return {
-            "X": np.asarray(smooth.rx2("X"), dtype=np.float64),
-            "S": [np.asarray(penalty, dtype=np.float64) for penalty in smooth.rx2("S")],
+            "X": _r_array(smooth.rx2("X"), dtype=np.float64),
+            "S": [_r_array(penalty, dtype=np.float64) for penalty in smooth.rx2("S")],
             "rank": int(ranks[0]),
             "rank_vector": ranks.astype(int),
             "null_space_dim": int(smooth.rx2("null.space.dim")[0]),
@@ -5926,9 +5925,9 @@ if (!is.null(sm$shift)) {{
             label = smooth.rx2("label")
             results.append(
                 {
-                    "X": np.asarray(smooth.rx2("X"), dtype=np.float64),
+                    "X": _r_array(smooth.rx2("X"), dtype=np.float64),
                     "S": [
-                        np.asarray(penalty, dtype=np.float64)
+                        _r_array(penalty, dtype=np.float64)
                         for penalty in smooth.rx2("S")
                     ],
                     "rank": int(smooth.rx2("rank")[0]),
@@ -6109,10 +6108,10 @@ for (i in seq_len(n_sm)) {{
 
         result: dict[str, Any] = {}
         if se_fit:
-            result["predictions"] = np.array(pred.rx2("fit"), dtype=np.float64)
-            result["se"] = np.array(pred.rx2("se.fit"), dtype=np.float64)
+            result["predictions"] = _r_array(pred.rx2("fit"), dtype=np.float64)
+            result["se"] = _r_array(pred.rx2("se.fit"), dtype=np.float64)
         else:
-            result["predictions"] = np.array(pred, dtype=np.float64)
+            result["predictions"] = _r_array(pred, dtype=np.float64)
 
         return result
 
@@ -6231,7 +6230,7 @@ if ({se_str}) {{
         # Parametric coefficients table
         p_table_r = r_summary.rx2("p.table")
         if p_table_r is not None and len(p_table_r) > 0:
-            p_arr = np.array(p_table_r, dtype=np.float64)
+            p_arr = _r_array(p_table_r, dtype=np.float64)
             n_rows = len(r_summary.rx2("p.coeff"))
             if p_arr.ndim == 1:
                 result["p_table"] = p_arr.reshape(n_rows, -1)
@@ -6243,8 +6242,8 @@ if ({se_str}) {{
         # Smooth terms table
         s_table_r = r_summary.rx2("s.table")
         if s_table_r is not None and len(s_table_r) > 0:
-            s_arr = np.array(s_table_r, dtype=np.float64)
-            n_smooths = int(np.array(r_summary.rx2("m"))[0])
+            s_arr = _r_array(s_table_r, dtype=np.float64)
+            n_smooths = int(_r_array(r_summary.rx2("m"))[0])
             if n_smooths > 0:
                 result["s_table"] = s_arr.reshape(n_smooths, -1)
             else:
@@ -6254,22 +6253,22 @@ if ({se_str}) {{
 
         # R-squared
         r_sq = r_summary.rx2("r.sq")
-        result["r_sq"] = float(np.array(r_sq)[0]) if r_sq is not None else None
+        result["r_sq"] = float(_r_array(r_sq)[0]) if r_sq is not None else None
 
-        result["dev_explained"] = float(np.array(r_summary.rx2("dev.expl"))[0])
-        result["scale"] = float(np.array(r_summary.rx2("scale"))[0])
-        result["residual_df"] = float(np.array(r_summary.rx2("residual.df"))[0])
-        result["n"] = int(np.array(r_summary.rx2("n"))[0])
+        result["dev_explained"] = float(_r_array(r_summary.rx2("dev.expl"))[0])
+        result["scale"] = float(_r_array(r_summary.rx2("scale"))[0])
+        result["residual_df"] = float(_r_array(r_summary.rx2("residual.df"))[0])
+        result["n"] = int(_r_array(r_summary.rx2("n"))[0])
 
         edf_r = r_summary.rx2("edf")
         if edf_r is not None:
-            result["edf"] = np.array(edf_r, dtype=np.float64)
+            result["edf"] = _r_array(edf_r, dtype=np.float64)
         else:
             result["edf"] = np.array([])
 
         sp_crit = r_summary.rx2("sp.criterion")
         if sp_crit is not None:
-            result["sp_criterion"] = float(np.array(sp_crit)[0])
+            result["sp_criterion"] = float(_r_array(sp_crit)[0])
         else:
             result["sp_criterion"] = None
 

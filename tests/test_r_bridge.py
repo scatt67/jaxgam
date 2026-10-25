@@ -9,8 +9,8 @@ import pandas as pd
 import pytest
 
 from tests.efs_oracle import make_efs_fixture
-from tests.helpers import _AssertCollector, make_smooth_spec
-from tests.r_bridge import RBridge, RBridgeError, gp_config_to_mgcv_m
+from tests.helpers import _AssertCollector, check_that, make_smooth_spec
+from tests.r_bridge import RBridge, RBridgeError, _r_array, gp_config_to_mgcv_m
 from tests.tolerances import MODERATE, STRICT
 
 
@@ -59,7 +59,7 @@ class TestRBridgeAvailability:
         source = np.array(
             [[0.0, -0.0], [np.nextafter(1.0, 2.0), np.nextafter(0.0, 1.0)]]
         ).T
-        result = np.asarray(bridge._to_r_matrix(source), dtype=np.float64)
+        result = _r_array(bridge._to_r_matrix(source), dtype=np.float64)
         np.testing.assert_array_equal(result.view(np.uint64), source.view(np.uint64))
         integers = np.array([0, 1, np.iinfo(np.int32).max], dtype=np.int64)
         np.testing.assert_array_equal(bridge._to_r_vector(integers), integers)
@@ -67,6 +67,129 @@ class TestRBridgeAvailability:
             bridge._to_r_vector(np.array([np.iinfo(np.int32).min]))
         with pytest.raises(ValueError, match="two-dimensional"):
             bridge._to_r_matrix(integers)
+
+
+def _owns_memory(array: np.ndarray) -> bool:
+    """Whether ``array`` (or the array it views) owns NumPy-allocated memory."""
+    root = array
+    while isinstance(root.base, np.ndarray):
+        root = root.base
+    return root.flags.owndata
+
+
+def _churn_r_memory(bridge: RBridge) -> None:
+    """Force R garbage collection between fresh R allocations (no RNG use)."""
+    for size in (10_000, 100_000, 1_000_000, 100_000):
+        bridge._base.gc()
+        bridge._base.numeric(size)
+        bridge._base.as_double(bridge._base.seq_len(size))
+    bridge._base.gc()
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+class TestRArrayOwnership:
+    """R-to-NumPy conversions own their memory instead of viewing R's."""
+
+    def test_r_array_copies_with_numpy_dtype_shape_and_layout(self) -> None:
+        bridge = RBridge()
+        values = np.arange(24.0) - 7.5
+        cases = {
+            "double": bridge._to_r_vector(values),
+            "integer": bridge._ro.IntVector(np.arange(5, dtype=np.int32)),
+            "logical": bridge._ro.BoolVector([True, False, True]),
+            "matrix": bridge._to_r_matrix(values.reshape(4, 6)),
+            "array": bridge._base.array(
+                bridge._to_r_vector(values), dim=bridge._ro.IntVector([2, 3, 4])
+            ),
+        }
+        collector = _AssertCollector()
+        for name, r_value in cases.items():
+            view = np.asarray(r_value)  # the zero-copy pattern being replaced
+            owned = _r_array(r_value)
+
+            def check(view=view, owned=owned) -> None:
+                assert not view.flags.owndata
+                assert owned.flags.owndata
+                assert not np.shares_memory(owned, view)
+                assert owned.dtype == view.dtype
+                assert owned.shape == view.shape
+                assert owned.flags.f_contiguous == view.flags.f_contiguous
+                np.testing.assert_array_equal(owned, view)
+
+            collector.check(name, check)
+        converted = _r_array(cases["integer"], dtype=np.float64)
+        collector.check(
+            "requested dtype",
+            lambda: np.testing.assert_array_equal(converted, np.arange(5.0)),
+        )
+        collector.raise_if_any("_r_array ownership")
+
+    def test_converted_values_survive_forced_r_garbage_collection(self) -> None:
+        """A copy keeps R's values after the R object is released and collected."""
+        bridge = RBridge()
+        source = np.linspace(-2.0, 3.0, 4096)
+        expected = source * 2.0 + 1.0
+        r_result = bridge._ro.r["+"](
+            bridge._ro.r["*"](bridge._to_r_vector(source), 2), 1
+        )
+        owned = _r_array(r_result)
+        del r_result
+        _churn_r_memory(bridge)
+        np.testing.assert_array_equal(owned, expected)
+
+    def test_bridge_oracles_return_owned_arrays_that_survive_gc(self) -> None:
+        bridge = RBridge()
+        rng = np.random.default_rng(20261025)
+        x = np.sort(rng.uniform(0.0, 1.0, 80))
+        z = rng.uniform(0.0, 1.0, 80)
+        data = pd.DataFrame({"x": x, "z": z, "y": np.sin(6 * x) + 0.3 * z})
+        results = {
+            "smoothCon": bridge.smooth_construct(
+                "s(x,bs='tp',k=8)", data, absorb_cons=False
+            ),
+            "smoothCon list": bridge.smooth_construct_list(
+                "ti(x,z,bs='tp',k=c(4,4))", data, absorb_cons=True
+            )[0],
+            "fit": bridge.fit_gam("y ~ s(x, k=8) + s(z, k=6)", data),
+            "prediction": bridge.predict_gam(
+                "y ~ s(x, k=8)", data, data.iloc[:7], se_fit=True
+            ),
+            "summary": bridge.summary_gam("y ~ s(x, k=8)", data),
+            "components": bridge.get_smooth_components("y ~ s(x, k=8)", data),
+        }
+
+        def arrays(value, prefix=""):
+            if isinstance(value, np.ndarray):
+                yield prefix, value
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    yield from arrays(item, f"{prefix}/{key}")
+            elif isinstance(value, (list, tuple)):
+                for index, item in enumerate(value):
+                    yield from arrays(item, f"{prefix}[{index}]")
+
+        found = list(arrays(results))
+        assert len(found) > 20
+        snapshot = {name: array.copy() for name, array in found}
+        _churn_r_memory(bridge)
+        for _ in range(3):
+            bridge.smooth_construct("ti(x,z,bs='tp',k=c(6,6))", data, absorb_cons=True)
+        _churn_r_memory(bridge)
+        collector = _AssertCollector()
+        for name, array in found:
+            collector.check(
+                f"{name} owned",
+                lambda array=array, name=name: check_that(
+                    _owns_memory(array), f"{name} views memory it does not own"
+                ),
+            )
+            collector.check(
+                f"{name} unchanged",
+                lambda array=array, name=name: np.testing.assert_array_equal(
+                    array, snapshot[name]
+                ),
+            )
+        collector.raise_if_any("bridge results after R garbage collection")
 
 
 @pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
