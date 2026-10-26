@@ -1094,3 +1094,72 @@ def test_bam_discrete_gaussian_rejects_legacy_mode_before_r_object_conversion():
         RBridge(mode="subprocess").fit_bam_discrete_gaussian(
             "y ~ s(x)", frame, m=(3, 3)
         )
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_bam_discretization_replays_bams_own_grids_and_term_margins() -> None:
+    frame = _working_frame()
+    bridge = RBridge(mode="rpy2")
+    rounded = bridge.bam_discretization("y ~ z + te(x,z,bs='cr',k=3)", frame, m=30)
+    assert set(rounded.variables) == {"x", "y", "z"}
+    assert rounded.term_margins == {
+        "(Intercept)": (("(Intercept)",),),
+        "z": (("z",),),
+        "te(x,z)": (("x",), ("z",)),
+    }
+    assert rounded.table_rows == (
+        1,
+        rounded.variables["z"].n_unique,
+        rounded.variables["x"].n_unique,
+        rounded.variables["z"].n_unique,
+    )
+    for name, variable in rounded.variables.items():
+        assert variable.n_unique <= 30
+        assert len(variable.representatives) == variable.n_unique
+        assert variable.data_range == (frame[name].min(), frame[name].max())
+        assert not set(variable.representatives) <= set(frame[name])
+    exact = bridge.bam_discretization("y ~ z + te(x,z,bs='cr',k=3)", frame)
+    for name, variable in exact.variables.items():
+        assert variable.n_unique == frame[name].nunique()
+        assert set(variable.representatives) == set(frame[name])
+    with pytest.raises(ValueError, match="factor_names"):
+        bridge.bam_discretization("y ~ s(x)", frame, factor_names=("g",))
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_bam_discrete_prediction_flag_selects_predict_bamd() -> None:
+    frame = _working_frame()
+    bridge = RBridge(mode="rpy2")
+    request = pd.DataFrame(
+        {
+            "x": np.linspace(-0.1, 1.1, 1200),
+            "z": np.linspace(-1.2, 1.2, 1200)[::-1],
+        }
+    )
+    exact = bridge.fit_bam_discrete_gaussian(
+        "y ~ z + s(x,bs='cr',k=6)", frame, m=30, newdata=request
+    )
+    compressed = bridge.fit_bam_discrete_gaussian(
+        "y ~ z + s(x,bs='cr',k=6)",
+        frame,
+        m=30,
+        newdata=request,
+        discrete_prediction=True,
+    )
+    np.testing.assert_array_equal(compressed.coefficients, exact.coefficients)
+    assert not np.allclose(
+        compressed.prediction, exact.prediction, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert compressed.prediction_se is not None
+
+
+def test_bam_discrete_prediction_flag_rejects_before_r_conversion(monkeypatch):
+    def reject(*_args, **_kwargs):
+        raise AssertionError("discrete_prediction must be checked before R input")
+
+    monkeypatch.setattr(RBridge, "_bam_discrete_gaussian_arguments", reject)
+    bridge = object.__new__(RBridge)
+    with pytest.raises(ValueError, match="discrete_prediction"):
+        bridge.fit_bam_discrete_gaussian(
+            "y ~ s(x,bs='cr',k=6)", _working_frame(), m=30, discrete_prediction=1
+        )

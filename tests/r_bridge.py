@@ -210,6 +210,37 @@ class BamDiscreteSetup:
 
 
 @dataclass(frozen=True)
+class BamDiscretizedVariable:
+    """One variable of pinned ``bam``'s own ``discrete.mf`` call.
+
+    ``span`` is the zero-based half-open ``ks`` index-column span (jointly
+    discretized variables share it), ``representatives`` the first ``nr``
+    rows of the padded compact frame, and ``data_range`` R's ``range`` of the
+    model-frame column (``None`` for factors).
+    """
+
+    name: str
+    n_unique: int
+    span: tuple[int, int]
+    representatives: np.ndarray
+    data_range: tuple[float, float] | None
+
+
+@dataclass(frozen=True)
+class BamDiscretization:
+    """Pinned ``bam(discrete=)`` per-variable grids and term-to-margin map.
+
+    ``term_margins`` maps every ``ts`` label to the variables of its ``Xd``
+    margins in order (``(Intercept)`` is its own margin), and ``table_rows``
+    holds ``nrow(Xd[[j]])``.
+    """
+
+    variables: dict[str, BamDiscretizedVariable]
+    term_margins: dict[str, tuple[tuple[str, ...], ...]]
+    table_rows: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class BamDiscreteFit:
     """Pinned fixed-sp ``bam(discrete=, method='fREML')`` result."""
 
@@ -7384,6 +7415,114 @@ if (!is.null(s$sp.criterion)) {{
             tuple(map(str, self._base.names(ts_r))),
         )
 
+    def bam_discretization(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        *,
+        factor_names: tuple[str, ...] = (),
+        m: int | tuple[int, ...] | None = None,
+    ) -> BamDiscretization:
+        """Return pinned ``bam(discrete=)``'s grids and term-to-margin map.
+
+        ``bam(fit=FALSE)`` retains the (``tero``-ordered) ``gp``, the model
+        frame and ``dinfo$pmf.names`` it passed to ``discrete.mf``.  That
+        call seeds its own private stream (``temp.seed(8547)``), so replaying
+        it on the retained inputs reproduces bam's discretization exactly;
+        the replay is checked against bam's own ``kd`` index before use.
+        """
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        if len(factor_names) != len(set(factor_names)) or not set(factor_names) <= set(
+            data.columns
+        ):
+            raise ValueError("factor_names must be distinct data-frame columns")
+        grid = self._r_discrete_grid(m, default=True)
+        frame = self._to_r_discrete_dataframe(data, factor_names, preserve_order=True)
+        with self._preserved_r_seed(1907):
+            expected_after = self._stats.runif(8)
+            self._ro.baseenv["set.seed"](1907)
+            setup = self._mgcv.bam(
+                self._ro.Formula(formula), data=frame, discrete=grid, fit=False
+            )
+            # bam passes NULL for discrete=TRUE and the numeric grid otherwise.
+            discrete = self._call_internal(
+                "discrete.mf",
+                setup.rx2("gp"),
+                setup.rx2("mf"),
+                setup.rx2("dinfo").rx2("pmf.names"),
+                m=self._ro.NULL if m is None else grid,
+                full=True,
+            )
+            observed_after = self._stats.runif(8)
+            if not bool(
+                self._ro.baseenv["identical"](expected_after, observed_after)[0]
+            ):
+                raise RBridgeError("bam discretization RNG state not restored")
+        bam_index = _r_array(setup.rx2("kd"), dtype=np.int64)
+        replay_index = _r_array(discrete.rx2("k"), dtype=np.int64)
+        if bam_index.ndim == 1:
+            bam_index = bam_index[:, None]
+        if not np.array_equal(replay_index[:, : bam_index.shape[1]], bam_index):
+            raise RBridgeError("replayed discrete.mf differs from bam's own index")
+        unique = discrete.rx2("nr")
+        counts = dict(zip(map(str, unique.names), map(int, unique), strict=True))
+        span_names = tuple(map(str, self._base.rownames(discrete.rx2("ks"))))
+        span_values = _r_array(discrete.rx2("ks"), dtype=np.int64)
+        spans = {
+            name: (int(bounds[0]) - 1, int(bounds[1]) - 1)
+            for name, bounds in zip(span_names, span_values, strict=True)
+        }
+        padded = discrete.rx2("mf")
+        model_frame = setup.rx2("mf")
+        variables = {}
+        for name in map(str, padded.names):
+            values = padded.rx2(name)
+            factor = bool(self._ro.baseenv["is.factor"](values)[0])
+            representatives = _r_array(
+                self._base.as_character(values) if factor else values
+            )[: counts[name]]
+            data_range = None
+            if not factor:
+                bounds = _r_array(
+                    self._base.range(model_frame.rx2(name)), dtype=np.float64
+                )
+                data_range = (float(bounds[0]), float(bounds[1]))
+            variables[name] = BamDiscretizedVariable(
+                name,
+                counts[name],
+                spans[name],
+                np.array(representatives, copy=True),
+                data_range,
+            )
+        span_variables: dict[int, tuple[str, ...]] = {}
+        for name in span_names:
+            start = spans[name][0]
+            span_variables[start] = (*span_variables.get(start, ()), name)
+        margin_spans = _r_array(setup.rx2("ks"), dtype=np.int64)
+        ts_r = setup.rx2("ts")
+        dt = _r_array(setup.rx2("dt"), dtype=np.int64)
+        term_margins = {}
+        for label, first, count in zip(
+            map(str, self._base.names(ts_r)),
+            _r_array(ts_r, dtype=np.int64) - 1,
+            dt,
+            strict=True,
+        ):
+            term_margins[label] = tuple(
+                span_variables[int(margin_spans[row, 0]) - 1]
+                for row in range(int(first), int(first + count))
+            )
+        tables = setup.rx2("Xd")
+        if tables.typeof == rinterface.RTYPES.NILSXP:
+            raise RBridgeError("bam did not return discrete tables")
+        return BamDiscretization(
+            variables,
+            term_margins,
+            tuple(int(self._base.nrow(table)[0]) for table in tables),
+        )
+
     def fit_bam_discrete_fixed_sp(
         self,
         formula: str,
@@ -7394,6 +7533,8 @@ if (!is.null(s$sp.criterion)) {{
         m: int | tuple[int, ...] | None = None,
         weights: np.ndarray | None = None,
         offset: np.ndarray | None = None,
+        newdata: pd.DataFrame | None = None,
+        discrete_prediction: bool = False,
     ) -> BamDiscreteFit:
         """Fit pinned additive Gaussian ``bam`` at caller-owned smoothing."""
         if sp is None:
@@ -7406,6 +7547,8 @@ if (!is.null(s$sp.criterion)) {{
             m=m,
             weights=weights,
             offset=offset,
+            newdata=newdata,
+            discrete_prediction=discrete_prediction,
         )
 
     def fit_bam_discrete_gaussian(
@@ -7425,14 +7568,20 @@ if (!is.null(s$sp.criterion)) {{
         epsilon: float = 1e-7,
         capture_trials: bool = False,
         newdata: pd.DataFrame | None = None,
+        discrete_prediction: bool = False,
     ) -> BamDiscreteFit:
         """Fit pinned Gaussian bam with fixed or performance-iteration smoothing.
 
         ``sp`` fixes smoothing. ``initial_sp`` and ``initial_scale`` instead
         supply mgcv's ``in.out`` start for a selected working-model replay.
         ``scale`` is R's Gaussian scale control: negative estimates scale,
-        while a positive value fixes it.
+        while a positive value fixes it. ``newdata`` is predicted on the link
+        scale with standard errors by ``predict.bam``: exactly
+        (``discrete=FALSE``, ``predict.gam``) by default, or through
+        ``predict.bamd``'s request compression when ``discrete_prediction``.
         """
+        if not isinstance(discrete_prediction, bool):
+            raise ValueError("discrete_prediction must be a boolean")
         smoothing, arguments = self._bam_discrete_gaussian_arguments(
             data,
             sp=sp,
@@ -7454,6 +7603,7 @@ if (!is.null(s$sp.criterion)) {{
             smoothing,
             newdata=newdata,
             trial_records=np.vstack(trials) if capture_trials else None,
+            discrete_prediction=discrete_prediction,
         )
 
     def _bam_discrete_gaussian_arguments(
@@ -7608,6 +7758,7 @@ if (!is.null(s$sp.criterion)) {{
         *,
         newdata: pd.DataFrame | None,
         trial_records: np.ndarray | None,
+        discrete_prediction: bool = False,
     ) -> BamDiscreteFit:
         """Translate one pinned Gaussian ``bam`` fit into typed fields."""
         coefficients = _r_array(self._stats.coef(fit), dtype=np.float64)
@@ -7618,7 +7769,7 @@ if (!is.null(s$sp.criterion)) {{
                 fit,
                 newdata=self._to_r_dataframe(newdata),
                 type="link",
-                discrete=False,
+                discrete=discrete_prediction,
                 **{"se.fit": True},
             )
             prediction = _r_array(predicted.rx2("fit"), dtype=np.float64)

@@ -12,8 +12,9 @@ import numpy.typing as npt
 import scipy.linalg as sla
 
 import jaxgam
+from jaxgam.data.continuous_request import FrozenRequestGrid, RequestCompressionSpec
 from jaxgam.data.source import RowSource
-from jaxgam.formula.predict_matrix import PredictSpec
+from jaxgam.formula.predict_matrix import PredictSpec, _to_dict
 from jaxgam.inference._core import finish_prediction, predict_core, prepare_prediction
 
 if TYPE_CHECKING:
@@ -149,6 +150,8 @@ class GAMPredictor:
     _fisher_scale: float = 1.0
     _output_budget_bytes: int | None = None
     _memory_budget_bytes: int | None = None
+    _prediction_policy: str | None = None
+    _request_compression: RequestCompressionSpec | None = None
     _jaxgam_version: str = field(default_factory=lambda: jaxgam.__version__)
 
     def __post_init__(self) -> None:
@@ -179,10 +182,22 @@ class GAMPredictor:
             owned.setflags(write=False)
             transforms.append((start, stop, kind, owned))
         object.__setattr__(self, "_fisher_transforms", tuple(transforms))
+        compressed = self._request_compression is not None
+        if compressed and not isinstance(
+            self._request_compression, RequestCompressionSpec
+        ):
+            raise ValueError("request compression must be a RequestCompressionSpec")
+        if compressed != (self._prediction_policy == "mgcv_predict_bamd"):
+            raise ValueError(
+                "request compression requires prediction_policy 'mgcv_predict_bamd'"
+                " and that policy requires request compression"
+            )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Restore frozen arrays and report unsupported cross-version loads."""
         state.setdefault("_fisher_qr_factor", None)
+        state.setdefault("_prediction_policy", None)
+        state.setdefault("_request_compression", None)
         self.__dict__.update(state)
         self.coefficients.setflags(write=False)
         if self.Vp is not None:
@@ -222,6 +237,37 @@ class GAMPredictor:
             warning_stacklevel=4,
         )
 
+    @property
+    def prediction_policy(self) -> str | None:
+        """The effective discrete prediction policy (``None`` off that route).
+
+        ``"mgcv_predict_bamd"`` compresses each whole request first;
+        ``"continuous_frozen_basis"`` evaluates every value exactly.
+        """
+        return self._prediction_policy
+
+    def freeze_request(self, newdata: Data) -> FrozenRequestGrid | None:
+        """Freeze ``predict.bamd`` compression over one whole request.
+
+        Returns ``None`` when this predictor evaluates new values exactly.
+        """
+        if self._request_compression is None:
+            return None
+        return self._request_compression.freeze(_to_dict(newdata))
+
+    def _compressed(
+        self, newdata: Data, request_grid: FrozenRequestGrid | None
+    ) -> Data:
+        """Apply request-level compression when the policy requires it."""
+        if self._request_compression is None:
+            return newdata
+        # Use the prediction encoder's own column conversion, so compressed
+        # and exact requests reach the frozen basis with identical types.
+        columns = _to_dict(newdata)
+        if request_grid is None:
+            request_grid = self._request_compression.freeze(columns)
+        return request_grid.apply(columns)
+
     def _predict(
         self,
         newdata: Data,
@@ -230,8 +276,16 @@ class GAMPredictor:
         se_fit: bool,
         offset: npt.ArrayLike | None,
         warning_stacklevel: int,
+        request_grid: FrozenRequestGrid | None = None,
     ) -> npt.NDArray[Any] | tuple[npt.NDArray[Any], npt.NDArray[np.floating]]:
-        """Predict with an explicit warning depth for delegating wrappers."""
+        """Predict with an explicit warning depth for delegating wrappers.
+
+        Under ``mgcv_predict_bamd`` the request (``newdata`` itself unless a
+        frozen ``request_grid`` of a larger request is supplied) is compressed
+        before the frozen basis is evaluated.
+        """
+        # Reject an invalid request before any whole-request pre-pass.
+        _check_pred_type(pred_type)
         _check_prediction_budgets(
             newdata,
             self._predict_spec.total_coefs,
@@ -253,6 +307,7 @@ class GAMPredictor:
                 "prediction-only result. "
                 "Fit with FitControl(uncertainty='fisher' or 'covariance')."
             )
+        newdata = self._compressed(newdata, request_grid)
         if self.Vp is not None and self._fisher_qr_factor is None:
             return predict_core(
                 self._predict_spec,
@@ -291,7 +346,11 @@ class GAMPredictor:
         )
 
     def predict_matrix(self, newdata: Data) -> npt.NDArray[np.floating]:
-        """Build the constrained linear-predictor matrix for new data."""
+        """Build the constrained linear-predictor matrix for new data.
+
+        Under ``mgcv_predict_bamd`` this is the matrix of the compressed
+        request, like ``predict.bamd(type="lpmatrix")``.
+        """
         _check_prediction_budgets(
             newdata,
             self._predict_spec.total_coefs,
@@ -302,7 +361,7 @@ class GAMPredictor:
             matrix_output=True,
             has_qr_fisher=False,
         )
-        return self._predict_spec.build_predict_matrix(newdata)
+        return self._predict_spec.build_predict_matrix(self._compressed(newdata, None))
 
     def predict_iter(
         self,
@@ -322,6 +381,12 @@ class GAMPredictor:
         Source offsets are applied positionally for every batch.  This adapter
         deliberately delegates matrix construction and response/SE finishing
         to the normal prediction core, preserving factor and link semantics.
+
+        Under ``mgcv_predict_bamd`` the whole source is the prediction
+        request: a bounded pre-pass scans it here, before the iterator is
+        returned, and freezes ``predict.bamd``'s compression grid.  Every
+        yielded batch is compressed with that frozen grid, so results do not
+        depend on ``batch_rows``.  The source must not change afterwards.
         """
         if not isinstance(source, RowSource):
             raise TypeError("predict_iter requires a replayable RowSource.")
@@ -331,10 +396,7 @@ class GAMPredictor:
             or batch_rows <= 0
         ):
             raise ValueError("batch_rows must be a positive integer.")
-        if pred_type not in ("response", "link"):
-            raise ValueError(
-                f"pred_type must be 'response' or 'link', got {pred_type!r}"
-            )
+        _check_pred_type(pred_type)
         if (
             se_fit
             and self.Vp is None
@@ -346,8 +408,17 @@ class GAMPredictor:
                 "prediction-only result. "
                 "Fit with FitControl(uncertainty='fisher' or 'covariance')."
             )
+        request_grid = (
+            None
+            if self._request_compression is None
+            else self._request_compression.freeze_source(source, batch_rows)
+        )
         return self._predict_iter(
-            source, batch_rows, pred_type=pred_type, se_fit=se_fit
+            source,
+            batch_rows,
+            pred_type=pred_type,
+            se_fit=se_fit,
+            request_grid=request_grid,
         )
 
     def _predict_iter(
@@ -357,6 +428,7 @@ class GAMPredictor:
         *,
         pred_type: str,
         se_fit: bool,
+        request_grid: FrozenRequestGrid | None = None,
     ) -> Iterator[
         tuple[
             npt.NDArray[np.intp],
@@ -366,6 +438,7 @@ class GAMPredictor:
         """Generator implementation after eager public validation."""
         source_has_offset = bool(getattr(source, "has_explicit_offset", True))
         warned_missing_offset = False
+        _check_request_source(source, request_grid)
         for batch in source.scan(batch_rows):
             if not np.all(batch.valid):
                 raise NotImplementedError(
@@ -383,8 +456,28 @@ class GAMPredictor:
                     se_fit=se_fit,
                     offset=offset,
                     warning_stacklevel=4,
+                    request_grid=request_grid,
                 ),
             )
+        _check_request_source(source, request_grid)
+
+
+def _check_pred_type(pred_type: str) -> None:
+    if pred_type not in ("response", "link"):
+        raise ValueError(f"pred_type must be 'response' or 'link', got {pred_type!r}")
+
+
+def _check_request_source(
+    source: RowSource, request_grid: FrozenRequestGrid | None
+) -> None:
+    """A frozen request grid is valid only for the unchanged source."""
+    if request_grid is None or request_grid.source_fingerprint is None:
+        return
+    if source.fingerprint() != request_grid.source_fingerprint:
+        raise RuntimeError(
+            "RowSource changed after its prediction request compression was "
+            "frozen; restart predict_iter() to freeze the changed request."
+        )
 
 
 def _check_prediction_budgets(

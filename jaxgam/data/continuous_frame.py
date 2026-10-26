@@ -280,9 +280,32 @@ def _smooth_requests(spec: SmoothSpec, m: int | None) -> list[_GroupRequest]:
     return result
 
 
+def _reject_linked_smoothing(formula: FormulaSpec) -> None:
+    """Refuse ``id=`` before any source scan.
+
+    Pinned ``bam(discrete=TRUE)`` still links the smoothing parameters of
+    terms sharing an ``id`` (its ``gam.setup`` call only stops linking their
+    bases), through the ``L`` matrix.  JaxGAM implements no linked smoothing
+    parameters, so silently fitting independent ones would be another model.
+    """
+    linked = [
+        spec.smooth_type + "(" + ",".join(spec.variables) + ")"
+        for spec in formula.smooth_terms
+        if "id" in spec.extra_args
+    ]
+    if linked:
+        raise NotImplementedError(
+            "Linked smoothing parameters (id=) are not supported by continuous "
+            f"discretization (terms {linked}): mgcv bam links their smoothing "
+            "parameters, which JaxGAM does not implement. Remove id= to fit "
+            "independent smoothing parameters explicitly."
+        )
+
+
 def _discover_requests(
     formula: FormulaSpec, m: int | tuple[int, ...] | None
 ) -> tuple[tuple[_GroupRequest, ...], tuple[tuple[str, int], ...]]:
+    _reject_linked_smoothing(formula)
     smooth_m, parametric_m = _smooth_m_values(m, len(formula.smooth_terms))
     requests: list[_GroupRequest] = []
     name_groups: dict[str, int] = {}

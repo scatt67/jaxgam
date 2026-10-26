@@ -10,6 +10,8 @@ from typing import Literal
 
 from jaxgam.data.discretize import DiscretizationBudget
 
+PREDICTION_POLICIES = ("continuous_frozen_basis", "mgcv_predict_bamd")
+
 
 @dataclass(frozen=True)
 class EFSControl:
@@ -43,9 +45,38 @@ class EFSControl:
 class ContinuousDiscretizationControl:
     """Explicit Phase-1 grid and indexed-action policy.
 
-    The fitted prediction policy deliberately evaluates new values against the
-    frozen basis metadata.  ``predict.bamd`` request-wise recompression is a
-    separate PR11 component.
+    ``prediction_policy`` selects, and the fitted result records, how new
+    data are evaluated.  Both policies reuse the fitted knots, constraints
+    and transforms; neither refits a basis.
+
+    ``"continuous_frozen_basis"`` (default)
+        Every new value is evaluated exactly by the frozen basis, like
+        ``predict.gam``.  Rows are independent, so results never depend on
+        the prediction request or its batching.
+    ``"mgcv_predict_bamd"``
+        Pinned ``predict.bamd`` semantics: the *whole* prediction request is
+        first compressed with ``discrete.mf``'s default policy
+        (``compress.df`` with ``m=NULL``: 1000/100/25 range-grid points per
+        metric for one/two/three-plus jointly discretized variables, rounding
+        only when a group has more unique rows than that grid), and the frozen
+        basis is then evaluated on the compressed values.  The request grid is
+        frozen by a bounded pre-pass before any batch is evaluated or
+        yielded, so results are invariant to prediction batch boundaries but
+        do depend on the composition of the request, exactly as in mgcv.
+        As in ``predict.bam``, a model without smooth terms has no discrete
+        prediction information and is evaluated exactly; its result then
+        records ``prediction_policy="continuous_frozen_basis"`` and keeps the
+        request in ``discretization.requested_prediction_policy``.  Only metric
+        discretization changes; factor semantics are the default path's: a
+        missing or unseen random-effect level contributes zero (100% weight
+        on the prior, an intended divergence from mgcv's ``NA``), a missing
+        or unseen ``by`` level gives ``NaN`` with a warning, and a parametric
+        factor gives ``NaN`` for a missing value and rejects unseen levels.
+
+    ``max_retained_representatives`` bounds the per-group representative
+    values copied into the fitted result's discretization metadata.  Groups
+    with more compact rows retain only their bounded descriptor (range, grid
+    resolution, rounding decision and row count).
     """
 
     m: int | tuple[int, ...] | None = None
@@ -55,7 +86,10 @@ class ContinuousDiscretizationControl:
     pair_policy: Literal["histogram_or_direct", "direct_only"] = "histogram_or_direct"
     max_pair_histogram_bytes: int = 32 * 1024 * 1024
     seed: int = 8547
-    prediction_policy: Literal["continuous_frozen_basis"] = "continuous_frozen_basis"
+    prediction_policy: Literal["continuous_frozen_basis", "mgcv_predict_bamd"] = (
+        "continuous_frozen_basis"
+    )
+    max_retained_representatives: int = 10_000
 
     def __post_init__(self) -> None:
         if isinstance(self.m, tuple):
@@ -88,8 +122,19 @@ class ContinuousDiscretizationControl:
             raise ValueError("max_pair_histogram_bytes must be a positive integer.")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
             raise ValueError("seed must be an integer.")
-        if self.prediction_policy != "continuous_frozen_basis":
-            raise ValueError("prediction_policy must be 'continuous_frozen_basis'.")
+        if self.prediction_policy not in PREDICTION_POLICIES:
+            raise ValueError(
+                "prediction_policy must be 'continuous_frozen_basis' or "
+                "'mgcv_predict_bamd'."
+            )
+        if (
+            isinstance(self.max_retained_representatives, bool)
+            or not isinstance(self.max_retained_representatives, int)
+            or self.max_retained_representatives < 0
+        ):
+            raise ValueError(
+                "max_retained_representatives must be a non-negative integer."
+            )
 
 
 @dataclass(frozen=True)

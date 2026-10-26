@@ -241,6 +241,24 @@ def test_partial_nesting_rejects_before_source_scan() -> None:
         )
 
 
+def test_linked_smoothing_rejects_before_source_scan() -> None:
+    class NoScanSource:
+        n_rows = 12
+
+        def fingerprint(self):
+            return "stable"
+
+        def scan(self, _batch_rows):
+            raise AssertionError("id= must fail before source scan")
+
+    with pytest.raises(NotImplementedError, match=r"\['s\(x\)', 'te\(z,w\)'\]"):
+        build_compact_setup_frame(
+            parse_formula("y ~ s(x, id=1) + te(z, w, id=1) + s(g, bs='re')"),
+            NoScanSource(),
+            m=4,
+        )
+
+
 @pytest.mark.skipif(not r_available(), reason="R with pinned mgcv not available")
 def test_selected_reordered_repeated_rows_match_r_across_batches(r_bridge) -> None:
     frame = _oracle_frame()

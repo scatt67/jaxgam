@@ -247,6 +247,37 @@ def test_public_route_rejects_unimplemented_domains() -> None:
         GAM("y ~ s(x)", sp=[1.0], control=_control(8)).fit(source, result="full")
 
 
+class _NoScanSource(DataFrameRowSource):
+    def scan(self, _batch_rows):
+        raise AssertionError("unsupported terms must reject before scanning")
+
+
+def test_public_route_rejects_linked_smoothing_before_source_scan() -> None:
+    source = _NoScanSource(_frame(), response="y")
+    with pytest.raises(
+        NotImplementedError, match=r"Linked smoothing parameters \(id=\)"
+    ):
+        GAM(
+            "y ~ s(x, id=1, bs='cr', k=6) + s(z, id=1, bs='cr', k=6)",
+            sp=[1.0, 1.0],
+            control=_control(8),
+        ).fit(source, result="prediction")
+
+
+def test_public_route_rejects_multi_variable_random_effects() -> None:
+    frame = _frame()
+    frame["g"] = pd.Categorical(np.resize(np.array(("a", "b", "c")), len(frame)))
+    control = FitControl(
+        execution="discrete",
+        batch_rows=8,
+        discretization=ContinuousDiscretizationControl(m=12, factor_names=("g",)),
+    )
+    with pytest.raises(NotImplementedError, match="multi-variable random effect"):
+        GAM("y ~ s(x, g, bs='re')", sp=[1.0], control=control).fit(
+            _NoScanSource(frame, response="y"), result="prediction"
+        )
+
+
 def test_fixed_sp_fit_matches_pinned_bam_on_valid_layout(r_bridge) -> None:
     position = np.arange(72, dtype=float)
     x = (position + 0.2 * np.sin(position * 0.7)) / 72

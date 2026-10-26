@@ -10,6 +10,7 @@ import numpy.typing as npt
 import scipy.linalg as sla
 
 from jaxgam.control import ContinuousDiscretizationControl, FitControl
+from jaxgam.data.continuous_request import RequestCompressionSpec
 from jaxgam.data.source import RowSource
 from jaxgam.execution.working_model import (
     WorkingModelIteration,
@@ -22,6 +23,11 @@ from jaxgam.fitting.discrete_ops import (
     to_device_discrete_design,
 )
 from jaxgam.formula.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.continuous_metadata import (
+    ContinuousDiscretizationMetadata,
+    build_discretization_metadata,
+    build_request_compression,
+)
 from jaxgam.formula.continuous_setup import (
     ContinuousSetupUnavailable,
     build_continuous_discrete_setup,
@@ -76,6 +82,25 @@ class DiscreteGaussianFit:
     working_model_trace: tuple[WorkingModelIteration, ...] = ()
     fisher_qr_factor: PivotedQRFisherFactor | None = None
     fisher_transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
+    discretization: ContinuousDiscretizationMetadata | None = None
+    request_compression: RequestCompressionSpec | None = None
+
+
+def _reject_unsupported_formula(spec: FormulaSpec) -> None:
+    """Refuse terms whose pinned discrete representation JaxGAM lacks.
+
+    Pinned ``bam(discrete=TRUE)`` converts a multi-variable ``re`` smooth
+    (``tensor.possible``) into a tensor product discretized one variable per
+    margin, whereas the compact setup groups its variables jointly.
+    """
+    for term in spec.smooth_terms:
+        if term.bs == "re" and len(term.variables) > 1:
+            raise NotImplementedError(
+                f"s({','.join(term.variables)}, bs='re') is not supported by "
+                "execution='discrete': pinned mgcv bam discretizes each "
+                "variable of a multi-variable random effect as a separate "
+                "tensor margin, which the compact setup does not reproduce."
+            )
 
 
 def _fixed_sp(sp: npt.ArrayLike, n_penalties: int) -> tuple[np.ndarray, np.ndarray]:
@@ -354,6 +379,7 @@ def fit_discrete_gaussian(
         policy, ContinuousDiscretizationControl
     ):
         raise ValueError("fixed-sp discrete fitting requires its explicit policy")
+    _reject_unsupported_formula(spec)
     fingerprint = source.fingerprint()
     setup = build_continuous_discrete_setup(
         spec,
@@ -371,6 +397,19 @@ def fit_discrete_gaussian(
             f"budget is {setup.budget_bytes}."
         )
     try:
+        # Bounded fitted record and prediction grouping, copied before the
+        # compact selectors are released; neither retains any row data.
+        discretization = build_discretization_metadata(
+            setup,
+            prediction_policy=policy.prediction_policy,
+            max_retained_representatives=policy.max_retained_representatives,
+            shuffle_seed=policy.seed,
+        )
+        request_compression = (
+            build_request_compression(setup, policy.budget)
+            if discretization.prediction_policy == "mgcv_predict_bamd"
+            else None
+        )
         descriptor = build_continuous_discrete_design(
             setup,
             source,
@@ -652,6 +691,8 @@ def fit_discrete_gaussian(
             selected.trace if selected is not None else (),
             qr_factor,
             transforms,
+            discretization,
+            request_compression,
         )
     finally:
         # The result owns only frozen prediction metadata. Compact selectors,

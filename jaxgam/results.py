@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
+    from jaxgam.formula.continuous_metadata import ContinuousDiscretizationMetadata
     from jaxgam.formula.design import ModelSetup, SmoothInfo
     from jaxgam.formula.predict_matrix import Data
     from jaxgam.formula.prepare import PreparedModel
@@ -325,7 +326,9 @@ class GAMPredictionResult:
 
     This deliberately has no training rows, setup, EDF vectors, or mandatory
     covariance.  It retains only scalar convergence diagnostics and a frozen
-    :class:`GAMPredictor`.
+    :class:`GAMPredictor`.  Discrete fits also record ``prediction_policy``
+    and ``discretization``: a bounded per-group/per-term record of the
+    fitted ``compress.df`` grids whose size does not depend on ``n``.
     """
 
     _predictor: GAMPredictor
@@ -356,6 +359,9 @@ class GAMPredictionResult:
     smoothing_strategy: str | None = field(default=None, kw_only=True)
     discretization_strategy: str | None = field(default=None, kw_only=True)
     prediction_policy: str | None = field(default=None, kw_only=True)
+    discretization: ContinuousDiscretizationMetadata | None = field(
+        default=None, kw_only=True
+    )
     fitting_source_scans: int | None = field(default=None, kw_only=True)
     fitting_batches_scanned: int | None = field(default=None, kw_only=True)
     working_model_proposal_evaluations: int | None = field(default=None, kw_only=True)
@@ -369,6 +375,7 @@ class GAMPredictionResult:
         self.smoothing_params.setflags(write=False)
 
     def __setstate__(self, state: dict) -> None:
+        state.setdefault("discretization", None)
         self.__dict__.update(state)
         self.smoothing_params.setflags(write=False)
 
@@ -479,6 +486,13 @@ class GAMPredictionResult:
         """Build a row-free result for fixed or working-model Gaussian fitting."""
         policy = control.discretization
         assert policy is not None
+        # Record the policy prediction actually follows; the metadata also
+        # keeps the requested one when they differ.
+        prediction_policy = (
+            policy.prediction_policy
+            if fit_state.discretization is None
+            else fit_state.discretization.prediction_policy
+        )
         predictor = GAMPredictor(
             coefficients=fit_state.coefficients,
             Vp=fit_state.covariance,
@@ -492,6 +506,8 @@ class GAMPredictionResult:
             _fisher_scale=fit_state.scale,
             _output_budget_bytes=control.output_budget_bytes,
             _memory_budget_bytes=control.memory_budget_bytes,
+            _prediction_policy=prediction_policy,
+            _request_compression=fit_state.request_compression,
         )
         return cls(
             _predictor=predictor,
@@ -525,7 +541,8 @@ class GAMPredictionResult:
             execution_fallback_reason=None,
             smoothing_strategy=fit_state.smoothing_strategy,
             discretization_strategy="mgcv_range_grid",
-            prediction_policy=policy.prediction_policy,
+            prediction_policy=prediction_policy,
+            discretization=fit_state.discretization,
             fitting_source_scans=fit_state.fitting_source_scans,
             fitting_batches_scanned=fit_state.fitting_batches_scanned,
             working_model_proposal_evaluations=fit_state.proposal_evaluations,

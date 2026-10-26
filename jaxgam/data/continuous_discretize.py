@@ -48,10 +48,16 @@ class RangeGridIndex:
     shuffle_seed: int
     rng_policy: Literal["r_4_5_mt_rejection"] = "r_4_5_mt_rejection"
     construction_peak_bytes: int = 0
+    # Observed distinct values per factor column: ``compress.df``'s ``mf``.
+    # Declared categorical levels can include unobserved categories, so the
+    # grid threshold cannot be recovered from ``factor_levels``.
+    factor_counts: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if set(self.factor_names).intersection(self.metric_names):
             raise ValueError("factor and metric grid names must be disjoint")
+        if self.factor_counts and len(self.factor_counts) != len(self.factor_names):
+            raise ValueError("factor counts do not match factor columns")
         all_names = (*self.factor_names, *self.metric_names)
         if not all_names:
             raise ValueError("range-grid index requires at least one column")
@@ -87,6 +93,14 @@ class RangeGridIndex:
     @property
     def n_unique(self) -> int:
         return self.index.n_unique
+
+    @property
+    def unique_threshold(self) -> int:
+        """``compress.df``'s ``mm*mf``: rounding happens above this count."""
+        counts = self.factor_counts or tuple(
+            len(levels) for levels in self.factor_levels
+        )
+        return math.prod(counts) * self.points_per_metric ** len(self.metric_names)
 
 
 @dataclass(frozen=True)
@@ -286,6 +300,29 @@ def _analyze_columns(
     )
 
 
+def range_grid(low: float, high: float, points: int) -> npt.NDArray[np.float64]:
+    """Pinned ``seq(low, high, length=points)`` used by ``compress.df``."""
+    return np.linspace(low, high, points, dtype=np.float64)
+
+
+def snap_to_range_grid(
+    values: npt.ArrayLike, grid: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Round metric values to ``compress.df``'s evenly spaced grid.
+
+    Ports ``kx <- round((x - xl[1]) / dx) + 1; x <- xu[kx]`` with
+    ``dx <- xu[2] - xu[1]``; R's ``round`` and ``np.rint`` both round half
+    to even.  A degenerate one-value grid maps every value to that value.
+    """
+    numeric = np.asarray(values, dtype=np.float64)
+    if grid[0] == grid[-1]:
+        return np.full(numeric.shape, grid[0], dtype=np.float64)
+    spacing = grid[1] - grid[0]
+    positions = np.rint((numeric - grid[0]) / spacing).astype(np.intp)
+    np.clip(positions, 0, len(grid) - 1, out=positions)
+    return grid[positions]
+
+
 class _RangeGridSource:
     """Replay a source with metric columns replaced by frozen range-grid values."""
 
@@ -315,14 +352,7 @@ class _RangeGridSource:
         for batch in self.source.scan(batch_rows):
             columns = dict(batch.columns)
             for name, grid in zip(self.metric_names, self.grids, strict=True):
-                values = np.asarray(columns[name], dtype=np.float64)
-                if grid[0] == grid[-1]:
-                    columns[name] = np.full(values.shape, grid[0], dtype=np.float64)
-                    continue
-                spacing = grid[1] - grid[0]
-                positions = np.rint((values - grid[0]) / spacing).astype(np.intp)
-                np.clip(positions, 0, len(grid) - 1, out=positions)
-                columns[name] = grid[positions]
+                columns[name] = snap_to_range_grid(columns[name], grid)
             yield RowBatch(
                 MappingProxyType(columns),
                 batch.y,
@@ -927,8 +957,7 @@ def range_grid_index_columns(
                 "rounding is required"
             )
         grids = tuple(
-            np.linspace(low, high, points, dtype=np.float64)
-            for low, high in analysis.metric_ranges
+            range_grid(low, high, points) for low, high in analysis.metric_ranges
         )
         grid_bytes = sum(int(grid.nbytes) for grid in grids)
         # Each transformed metric remains in the emitted column mapping.  The
@@ -1026,4 +1055,5 @@ def range_grid_index_columns(
         rounded,
         shuffle_seed,
         construction_peak_bytes=construction_peak,
+        factor_counts=analysis.factor_counts,
     )
