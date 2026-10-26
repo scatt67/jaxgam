@@ -13,7 +13,7 @@ import scipy
 
 from jaxgam.smooths import source_lapack
 from jaxgam.smooths.cubic import CubicRegressionSmooth
-from tests.helpers import _AssertCollector
+from tests.helpers import _AssertCollector, r_links_pinned_openblas
 from tests.tolerances import MODERATE, STRICT
 
 _ACCELERATE_CUBIC_MODERATE_DIGESTS = {
@@ -147,6 +147,12 @@ def test_declared_provider_version_config_and_lp64_symbols() -> None:
     assert provider.dgemm.restype is None
     assert "scipy_openblas32" not in sys.modules
     assert provider.dptsv.restype is source_lapack.ctypes.c_int
+    for name in ("dstedc_work", "dgesdd_work"):
+        assert getattr(provider, name).restype is source_lapack.ctypes.c_int
+    for name in ("ddot", "dnrm2"):
+        assert getattr(provider, name).restype is source_lapack.ctypes.c_double
+    for name in ("dsymv", "daxpy", "dgemv", "dscal"):
+        assert getattr(provider, name).restype is None
 
 
 def test_natural_cubic_system_solve_matches_dense_and_preserves_inputs() -> None:
@@ -607,3 +613,133 @@ def test_thread_pin_rejects_missing_controls_and_an_unaccepted_setting() -> None
     with pytest.raises(RuntimeError, match="single-thread setting"):
         source_lapack._pin_single_thread(library, "scipy-openblas64", "64_")
     library.scipy_openblas_set_num_threads64_.assert_called_once_with(1)
+
+
+def _rlanczos_kernel(case: str) -> tuple[np.ndarray, int]:
+    """Symmetric input matrix and Ritz count of one Rlanczos parity case.
+
+    The Gaussian-process cases are smooth.construct.gp's knot kernels at its
+    retained rank; the thin-plate kernel on clustered knots is indefinite
+    with a dominant negative eigenvalue, so Rlanczos retains pairs from both
+    ends of the spectrum. All are built from runtime-generated data.
+    """
+    from jaxgam.smooths.gaussian_process import GaussianProcessSmooth
+    from jaxgam.smooths.tprs import tps_semi_kernel
+    from tests.helpers import make_smooth_spec
+
+    rng = np.random.default_rng(102626)
+    clustered = np.sort(np.r_[rng.normal(-1, 0.05, 30), rng.normal(1.2, 0.08, 31)])
+    if case == "tprs/clustered":
+        return tps_semi_kernel(np.abs(clustered[:, None] - clustered), 2, 1), 4
+    data, k, extra = {
+        "gp/uniform": ({"x": rng.uniform(0, 1, 300)}, -1, {}),
+        "gp/clustered": ({"x": clustered}, 8, {"kernel": "matern_5_2"}),
+        "gp/planar": (
+            {"x": rng.uniform(0, 1, 120), "z": rng.uniform(0, 1, 120)},
+            30,
+            {},
+        ),
+    }[case]
+    smooth = GaussianProcessSmooth(make_smooth_spec(list(data), bs="gp", k=k, **extra))
+    smooth.setup(data)
+    E, _ = smooth._gp_E(smooth._knt, smooth._knt, resolved_rho=smooth._resolved_rho)
+    return E, smooth.rank
+
+
+_RLANCZOS_CASES = ("gp/uniform", "gp/clustered", "gp/planar", "tprs/clustered")
+
+
+def test_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
+    """The exact route ports mat.c::Rlanczos and its BLAS/LAPACK calls.
+
+    Against an R that links the pinned OpenBLAS 0.3.26, every Ritz pair is
+    bitwise identical. R linked to another BLAS (macOS Accelerate) reorders
+    ``dsymv``/``ddot``; there the Ritz values match at STRICT, while its Ritz
+    vectors are BLAS-dependent beyond STRICT for ill-conditioned kernels
+    (measured on Accelerate R: 9.6e-9 for the clustered Matern kernel, 5.0e-12
+    for the planar one) and are not compared. The Gaussian-process raw-basis
+    gates compare the resulting bases against that R at STRICT.
+    """
+    if r_bridge.mode != "rpy2":
+        pytest.skip("Identical-input slanczos oracle requires rpy2.")
+    pinned = r_links_pinned_openblas(r_bridge)
+    tol = np.finfo(float).eps ** 0.5
+    collector = _AssertCollector()
+    for case in _RLANCZOS_CASES:
+        E, k = _rlanczos_kernel(case)
+        values, vectors = source_lapack.source_lanczos(
+            E, k, tol=tol, tprs_tridiagonal=True
+        )
+        expected = r_bridge.source_slanczos(E, k, tol)
+        collector.check(
+            f"{case}/values",
+            lambda values=values, expected=expected: np.testing.assert_allclose(
+                values, expected["values"], rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+        if pinned:
+            collector.check(
+                f"{case}/bitwise",
+                lambda values=values, vectors=vectors, expected=expected: (
+                    np.testing.assert_array_equal(values, expected["values"]),
+                    np.testing.assert_array_equal(vectors, expected["vectors"]),
+                ),
+            )
+        collector.check(
+            f"{case}/orthonormal Ritz vectors",
+            lambda vectors=vectors, k=k: np.testing.assert_allclose(
+                vectors.T @ vectors, np.eye(k), rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.raise_if_any("source Rlanczos")
+
+
+def test_rlanczos_keeps_leading_pairs_without_convergence(monkeypatch) -> None:
+    """A run that never certifies convergence keeps Rlanczos's m=k, lm=0."""
+    E, _ = _rlanczos_kernel("tprs/clustered")
+    original = source_lapack.source_trisymeig
+
+    def uncertified(diagonal, off_diagonal):
+        values, vectors = original(diagonal, off_diagonal)
+        vectors = vectors.copy()
+        vectors[-1, :] = 1.0  # every Ritz error bound is then |beta_j| > 0
+        return values, vectors
+
+    monkeypatch.setattr(source_lapack, "source_trisymeig", uncertified)
+    values, vectors = source_lapack.source_lanczos(
+        E, 4, tol=np.finfo(float).tiny, tprs_tridiagonal=True
+    )
+    complete = np.sort(np.linalg.eigvalsh(E))[::-1]
+    # The leading algebraic pairs, not the largest magnitudes (E has a large
+    # negative eigenvalue that the converged selection would retain).
+    assert np.abs(complete[-1]) > np.abs(complete[3])
+    np.testing.assert_allclose(values, complete[:4], rtol=STRICT.rtol, atol=STRICT.atol)
+    assert vectors.shape == (len(E), 4)
+
+
+def test_source_trisymeig_returns_descending_tridiagonal_pairs() -> None:
+    diagonal = np.array([2.0, -1.0, 3.0, 0.5])
+    off_diagonal = np.array([0.3, -0.7, 0.2])
+    values, vectors = source_lapack.source_trisymeig(diagonal, off_diagonal)
+    T = np.diag(diagonal) + np.diag(off_diagonal, 1) + np.diag(off_diagonal, -1)
+    assert np.all(np.diff(values) <= 0)
+    np.testing.assert_allclose(
+        values, np.sort(np.linalg.eigvalsh(T))[::-1], rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_allclose(
+        T @ vectors, vectors * values, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+def test_source_project_rows_is_one_dgemv_per_row() -> None:
+    rng = np.random.default_rng(37)
+    rows = rng.standard_normal((7, 5))
+    UZ = rng.standard_normal((5, 4))
+    np.testing.assert_allclose(
+        source_lapack.source_project_rows(rows, UZ),
+        rows @ UZ,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    with pytest.raises(ValueError, match="UZ row dimension"):
+        source_lapack.source_project_rows(rows.T, UZ)

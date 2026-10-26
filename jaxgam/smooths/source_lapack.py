@@ -1,11 +1,14 @@
-"""Pinned LAPACK provider for source-exact cubic shrinkage penalties.
+"""Pinned LAPACK provider for source-exact cubic and thin-plate constructors.
 
 The cubic shrinkage and thin-plate constructors are sensitive to their numeric
 provider's null-space coordinates.  This module binds only the required
-LAPACKE/CBLAS entry points from two declared packages: the accepted
-``scipy-openblas32==0.3.26.0.4`` cubic provider and the source-coordinate
-``scipy-openblas64==0.3.30.0.2`` Lanczos provider.  It never searches for R or
-a system BLAS/LAPACK and does not replace NumPy/SciPy's backend.
+LAPACKE/CBLAS entry points from two declared packages.
+``scipy-openblas32==0.3.26.0.4`` is the OpenBLAS release the pinned Linux R
+links: it serves the cubic shrinkage eigentransform and the thin-plate ports
+of mgcv's ``Rlanczos`` and ``predict_tprs``, so those calls reproduce R's.  The
+``scipy-openblas64==0.3.30.0.2`` provider serves the retained GP Lanczos
+route.  It never searches for R or a system BLAS/LAPACK and does not replace
+NumPy/SciPy's backend.
 
 Threading: both wheels are threaded OpenBLAS builds whose default thread count
 follows ``OPENBLAS_NUM_THREADS`` or the machine's core count, and threaded
@@ -37,6 +40,14 @@ import numpy as np
 import numpy.typing as npt
 from scipy import __config__ as scipy_config
 from scipy import linalg
+
+from jaxgam.smooths.source_arithmetic import (
+    SOURCE_FMA_CONTRACTION,
+    lanczos_start,
+    lanczos_three_term,
+    ritz_accumulate,
+    sequential_dot,
+)
 
 _PROVIDER_VERSION = "0.3.26.0.4"
 _OPENBLAS_PREFIX = "OpenBLAS 0.3.26 "
@@ -89,7 +100,12 @@ class _DeclaredProvider:
 
 @dataclass(frozen=True)
 class _SourceLapack:
-    """Validated LP64 function handles owned by the declared provider."""
+    """Validated LP64 function handles owned by the declared provider.
+
+    OpenBLAS 0.3.26 is the BLAS/LAPACK linked by the pinned Linux R, so the
+    thin-plate Rlanczos and prediction ports call the same routines R calls
+    (``dsymv``/``ddot``/``daxpy``/``dstedc``/``dgemv``).
+    """
 
     module: _DeclaredProvider
     library: ctypes.CDLL
@@ -97,6 +113,14 @@ class _SourceLapack:
     dgemm: object
     dptsv: object
     dgeqp3_work: object
+    dsymv: object
+    ddot: object
+    daxpy: object
+    dgemv: object
+    dnrm2: object
+    dscal: object
+    dstedc_work: object
+    dgesdd_work: object
 
 
 @dataclass(frozen=True)
@@ -262,6 +286,14 @@ def _source_lapack() -> _SourceLapack:
         dgemm = library.scipy_cblas_dgemm
         dptsv = library.scipy_LAPACKE_dptsv
         dgeqp3_work = library.scipy_LAPACKE_dgeqp3_work
+        dsymv = library.scipy_cblas_dsymv
+        ddot = library.scipy_cblas_ddot
+        daxpy = library.scipy_cblas_daxpy
+        dgemv = library.scipy_cblas_dgemv
+        dnrm2 = library.scipy_cblas_dnrm2
+        dscal = library.scipy_cblas_dscal
+        dstedc_work = library.scipy_LAPACKE_dstedc_work
+        dgesdd_work = library.scipy_LAPACKE_dgesdd_work
     except AttributeError as exc:
         raise RuntimeError(
             "Pinned OpenBLAS provider does not export the required LP64 "
@@ -330,7 +362,97 @@ def _source_lapack() -> _SourceLapack:
         lapack_int,
     ]
     dgeqp3_work.restype = lapack_int
-    return _SourceLapack(provider, library, dsyevr_work, dgemm, dptsv, dgeqp3_work)
+    dsymv.argtypes = [
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+    ]
+    dsymv.restype = None
+    ddot.argtypes = [lapack_int, double_pointer, lapack_int, double_pointer, lapack_int]
+    ddot.restype = double
+    daxpy.argtypes = [
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+    ]
+    daxpy.restype = None
+    dgemv.argtypes = [
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double,
+        double_pointer,
+        lapack_int,
+    ]
+    dgemv.restype = None
+    dnrm2.argtypes = [lapack_int, double_pointer, lapack_int]
+    dnrm2.restype = double
+    dscal.argtypes = [lapack_int, double, double_pointer, lapack_int]
+    dscal.restype = None
+    dstedc_work.argtypes = [
+        lapack_int,
+        ctypes.c_char,
+        lapack_int,
+        double_pointer,
+        double_pointer,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        int_pointer,
+        lapack_int,
+    ]
+    dstedc_work.restype = lapack_int
+    dgesdd_work.argtypes = [
+        lapack_int,
+        ctypes.c_char,
+        lapack_int,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        int_pointer,
+    ]
+    dgesdd_work.restype = lapack_int
+    return _SourceLapack(
+        provider,
+        library,
+        dsyevr_work,
+        dgemm,
+        dptsv,
+        dgeqp3_work,
+        dsymv,
+        ddot,
+        daxpy,
+        dgemv,
+        dnrm2,
+        dscal,
+        dstedc_work,
+        dgesdd_work,
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -428,15 +550,16 @@ def source_lanczos(
     *,
     tol: float | None = None,
     available_workspace_bytes: int | None = None,
+    tprs_tridiagonal: bool = False,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """Run the retained Rlanczos port on the declared numeric provider.
 
-    JaxGAM deliberately uses a tighter convergence check than mgcv's raw
-    truncated iteration because canonical tensor coordinates can amplify a
-    merely converged Ritz residual.  The established algorithm is unchanged:
-    deterministic start, two block reorthogonalization passes and dense
-    symmetric decomposition of the tridiagonal iterate.  Pinning every BLAS
-    and eigen operation removes the Accelerate/OpenBLAS coordinate split.
+    The general GP route retains its pinned block reorthogonalization and
+    dense tridiagonal eigensolve. ``tprs_tridiagonal=True`` is the exact
+    mat.c::Rlanczos port that tprs_setup calls (pinned OpenBLAS 0.3.26 BLAS
+    and DSTEDC, source loop order and contraction): its Ritz vectors define
+    the thin-plate basis. Both routes use the same conservative knot-local
+    workspace bound.
     """
     if not isinstance(matrix, np.ndarray) or matrix.dtype != np.dtype(np.float64):
         raise TypeError("Source Lanczos matrix must be a float64 NumPy array.")
@@ -462,6 +585,9 @@ def source_lanczos(
         raise ValueError("Source Lanczos tolerance must lie in (0, 0.01].")
     if not np.all(np.isfinite(matrix)):
         raise ValueError("Source Lanczos matrix must contain only finite values.")
+
+    if tprs_tridiagonal:
+        return _source_tprs_lanczos(matrix, k, tol)
 
     source = _source_lanczos()
     double_pointer = ctypes.POINTER(ctypes.c_double)
@@ -686,6 +812,205 @@ def source_lanczos(
         k,
     )
     return values, output
+
+
+def _double_pointer(array: npt.NDArray[np.float64]):
+    return array.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+
+
+def source_trisymeig(
+    diagonal: npt.NDArray[np.float64], off_diagonal: npt.NDArray[np.float64]
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Port mat.c::mgcv_trisymeig(d, g, v, n, getvec=1, descending=1).
+
+    Calls the pinned DSTEDC with ``compz='I'`` and mgcv's workspace rounding,
+    then reverses the ascending eigenpairs into descending order.
+    """
+    provider = _source_lapack()
+    size = len(diagonal)
+    values = np.array(diagonal, dtype=np.float64, copy=True)
+    side = np.zeros(max(size - 1, 1), dtype=np.float64)
+    side[: size - 1] = off_diagonal
+    vectors = np.zeros((size, size), dtype=np.float64, order="F")
+    work_query = np.empty(1, dtype=np.float64)
+    iwork_query = np.empty(1, dtype=np.int32)
+    int_pointer = ctypes.POINTER(ctypes.c_int)
+
+    def call(work, lwork, iwork, liwork) -> int:
+        return int(
+            provider.dstedc_work(
+                _LAPACK_COL_MAJOR,
+                b"I",
+                size,
+                _double_pointer(values),
+                _double_pointer(side),
+                _double_pointer(vectors),
+                size,
+                _double_pointer(work),
+                lwork,
+                iwork.ctypes.data_as(int_pointer),
+                liwork,
+            )
+        )
+
+    if call(work_query, -1, iwork_query, -1) != 0:
+        raise np.linalg.LinAlgError("DSTEDC workspace query failed.")
+    # mgcv: lwork = floor(work1), rounded up when the fraction exceeds 0.5.
+    lwork = int(np.floor(work_query[0]))
+    if work_query[0] - lwork > 0.5:
+        lwork += 1
+    lwork = _query_length(
+        float(lwork), name="lwork", cap=2 * size * size + 6 * size + 1
+    )
+    liwork = _query_length(iwork_query[0], name="liwork", cap=5 * size + 3)
+    status = call(
+        np.empty(lwork, dtype=np.float64),
+        lwork,
+        np.empty(liwork, dtype=np.int32),
+        liwork,
+    )
+    if status != 0:
+        raise np.linalg.LinAlgError(f"DSTEDC failed with info={status}.")
+    return values[::-1].copy(), np.asfortranarray(vectors[:, ::-1])
+
+
+def _source_tprs_lanczos(
+    matrix: npt.NDArray[np.float64], k: int, tol: float
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Port mat.c::Rlanczos(A, U, D, n, m=k, lm=-1, tol, nt=1) exactly.
+
+    Tprs_setup asks for the ``k`` largest-magnitude eigenpairs.  The BLAS and
+    LAPACK calls (``dsymv``/``ddot``/``daxpy``/``dstedc``) go to the pinned
+    OpenBLAS 0.3.26 that pinned R links, and the C loops keep mgcv's order and
+    its compiled multiply-add rounding (see :mod:`source_arithmetic`).
+    """
+    provider = _source_lapack()
+    contract = SOURCE_FMA_CONTRACTION
+    n = matrix.shape[0]
+    if n > _LAPACK_INT_MAX:
+        raise ValueError("Source Lanczos dimension exceeds the LP64 integer range.")
+    A = np.array(matrix, dtype=np.float64, order="F", copy=True)
+    basis = np.zeros((n, n), dtype=np.float64, order="F")
+    basis[:, 0] = lanczos_start(n, contract)
+    diagonal = np.zeros(n, dtype=np.float64)
+    off_diagonal = np.zeros(n, dtype=np.float64)
+    z = np.empty(n, dtype=np.float64)
+    f_check = max(k // 2, 10)
+    f_check = min(f_check, max(n // 10, 1))
+    converged = False
+    values = vectors = None
+    upper = 0
+    lower = 0
+    size = n
+    for j in range(n):
+        current = basis[:, j]
+        provider.dsymv(
+            _LAPACK_COL_MAJOR,
+            _CBLAS_UPPER,
+            n,
+            1.0,
+            _double_pointer(A),
+            n,
+            _double_pointer(current),
+            1,
+            0.0,
+            _double_pointer(z),
+            1,
+        )
+        alpha = sequential_dot(current, z, 0.0, contract)
+        diagonal[j] = alpha
+        previous = basis[:, j - 1] if j else current
+        beta = off_diagonal[j - 1] if j else 0.0
+        lanczos_three_term(z, alpha, current, beta, previous, j == 0, contract)
+        if j:
+            # Full reorthogonalization, applied twice, as in Rlanczos.
+            for _ in range(2):
+                for i in range(j + 1):
+                    prior = basis[:, i]
+                    coefficient = -provider.ddot(
+                        n, _double_pointer(z), 1, _double_pointer(prior), 1
+                    )
+                    provider.daxpy(
+                        n, coefficient, _double_pointer(prior), 1, _double_pointer(z), 1
+                    )
+        off_diagonal[j] = np.sqrt(sequential_dot(z, z, 0.0, contract))
+        if j < n - 1:
+            basis[:, j + 1] = z / off_diagonal[j]
+        if not ((j >= k and j % f_check == 0) or j == n - 1):
+            continue
+        values, vectors = source_trisymeig(diagonal[: j + 1], off_diagonal[:j])
+        norm = max(abs(values[0]), abs(values[j]))
+        errors = np.abs(off_diagonal[j] * vectors[j, :])
+        if j >= k:
+            max_error = norm * tol
+            upper = lower = 0
+            converged = True
+            while upper + lower < k:
+                if abs(values[upper]) >= abs(values[j - lower]):
+                    if errors[upper] > max_error:
+                        converged = False
+                        break
+                    upper += 1
+                else:
+                    # mat.c tests err[ni], not err[j-ni]; kept verbatim.
+                    if errors[lower] > max_error:
+                        converged = False
+                        break
+                    lower += 1
+            if converged:
+                size = j + 1
+                break
+    if not converged:
+        # Without convergence Rlanczos keeps m=k, lm=0: the k leading pairs.
+        upper, lower, size = k, 0, n
+    selected = list(range(upper)) + [
+        size - (upper + lower - c) for c in range(upper, k)
+    ]
+    output = np.zeros((n, k), dtype=np.float64)
+    ritz_accumulate(
+        output,
+        np.asfortranarray(basis[:, :size]),
+        np.ascontiguousarray(vectors[:size, selected]),
+        contract,
+    )
+    return values[selected].copy(), output
+
+
+def source_project_rows(
+    rows: npt.NDArray[np.float64], UZ: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Return ``rows @ UZ`` as predict_tprs/tps_g form it: one dgemv per row.
+
+    mgcv evaluates ``a = t(UZ) b`` with ``dgemv('T', ...)`` for each datum;
+    OpenBLAS' matrix-vector kernel rounds differently from a matrix product.
+    """
+    provider = _source_lapack()
+    UZ = np.asfortranarray(UZ, dtype=np.float64)
+    m, k = UZ.shape
+    rows = np.ascontiguousarray(rows, dtype=np.float64)
+    if rows.ndim != 2 or rows.shape[1] != m:
+        raise ValueError("Projected rows must match the UZ row dimension.")
+    output = np.empty((rows.shape[0], k), dtype=np.float64)
+    target = np.empty(k, dtype=np.float64)
+    uz = _double_pointer(UZ)
+    out = _double_pointer(target)
+    for i in range(rows.shape[0]):
+        provider.dgemv(
+            _LAPACK_COL_MAJOR,
+            _CBLAS_TRANS,
+            m,
+            k,
+            1.0,
+            uz,
+            m,
+            _double_pointer(rows[i]),
+            1,
+            0.0,
+            out,
+            1,
+        )
+        output[i] = target
+    return output
 
 
 def _check_input_shape(S: npt.NDArray[np.float64]) -> int:
