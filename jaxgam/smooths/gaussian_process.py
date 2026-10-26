@@ -18,15 +18,40 @@ from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
 from jaxgam.smooths.gp_kernels import GPKernel, gp_kernel_registry
-from jaxgam.smooths.source_lapack import source_lanczos
+from jaxgam.smooths.source_lapack import source_lanczos, source_r_matprod
 from jaxgam.smooths.utils import (
     DISTANCE_BATCH_ROWS,
-    _compute_distance_matrix,
     _get_unique_rows,
     _subsample_knots,
+    source_column_means,
 )
 
 _DEF_K = (10, 30, 100)
+_WIDE_LONG_DOUBLE = np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
+
+
+def _compute_distance_matrix(
+    X1: npt.NDArray[np.floating],
+    X2: npt.NDArray[np.floating],
+) -> npt.NDArray[np.float64]:
+    """Return gpE's distances ``sqrt(rowSums((x - xk)^2))`` as R forms them.
+
+    R squares each coordinate difference in double, sums the squares over
+    covariates in order in ``rowSums``' C ``long double`` accumulator, rounds
+    to double and takes the square root.  One covariate needs no wide
+    accumulator: ``0 + d^2`` is exact.
+    """
+    X1 = np.asarray(X1, dtype=np.float64)
+    X2 = np.asarray(X2, dtype=np.float64)
+    d = X1.shape[1]
+    wide = d > 1 and _WIDE_LONG_DOUBLE
+    total = np.zeros(
+        (X1.shape[0], X2.shape[0]), dtype=np.longdouble if wide else np.float64
+    )
+    for column in range(d):
+        delta = X1[:, column, np.newaxis] - X2[np.newaxis, :, column]
+        total += delta * delta
+    return np.sqrt(np.asarray(total, dtype=np.float64))
 
 
 class GaussianProcessSmooth(Smooth):
@@ -164,17 +189,29 @@ class GaussianProcessSmooth(Smooth):
     def _build_design(
         self, x_centered: npt.NDArray[np.floating]
     ) -> npt.NDArray[np.floating]:
+        """Port Predict.matrix.gp.smooth, including its row chunks.
+
+        R evaluates ``gpE(x[ind,], knt) %*% UZ`` in chunks of ``nk`` rows when
+        ``n > nk`` (then a final partial chunk), else in one block.  The chunk
+        shape selects R's BLAS call (``dgemm``, or ``dgemv`` for one row), so
+        the same products go to the pinned provider.  Kernel distances within
+        a chunk are formed in row batches of at most ``DISTANCE_BATCH_ROWS``.
+        """
         n_rows = x_centered.shape[0]
+        n_knots = self._knt.shape[0]
         X = np.empty((n_rows, self.n_coefs), dtype=float)
-        for start in range(0, n_rows, DISTANCE_BATCH_ROWS):
-            stop = min(start + DISTANCE_BATCH_ROWS, n_rows)
-            rows = x_centered[start:stop]
-            distances = _compute_distance_matrix(rows, self._knt)
-            E_rows = self._kernel.evaluate(
-                distances / self._resolved_rho, power=self._power
-            )
-            X[start:stop, : self.rank] = E_rows @ self._UZ
-            X[start:stop, self.rank :] = self._gp_T(rows)
+        chunk = n_knots if n_rows > n_knots else max(n_rows, 1)
+        for start in range(0, n_rows, chunk):
+            stop = min(start + chunk, n_rows)
+            E_chunk = np.empty((stop - start, n_knots), dtype=float)
+            for low in range(start, stop, DISTANCE_BATCH_ROWS):
+                high = min(low + DISTANCE_BATCH_ROWS, stop)
+                distances = _compute_distance_matrix(x_centered[low:high], self._knt)
+                E_chunk[low - start : high - start] = self._kernel.evaluate(
+                    distances / self._resolved_rho, power=self._power
+                )
+            X[start:stop, : self.rank] = source_r_matprod(E_chunk, self._UZ)
+            X[start:stop, self.rank :] = self._gp_T(x_centered[start:stop])
         return X
 
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
@@ -205,7 +242,7 @@ class GaussianProcessSmooth(Smooth):
                 f"(nk={nk}, bs_dim={bs_dim})."
             )
 
-        self._shift = x.mean(axis=0)
+        self._shift = source_column_means(x)
         x_c = x - self._shift
         knt_c = knt - self._shift
         self._knt = knt_c
@@ -239,7 +276,7 @@ class GaussianProcessSmooth(Smooth):
         X = self._build_design(x_c)
         self._X = X
 
-        [self._S], self._s_scale = self._smoothcon_normalize(X, [D])
+        [self._S], self._s_scale = self._source_smoothcon_normalize(X, [D])
 
         self._is_setup = True
 

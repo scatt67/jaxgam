@@ -739,3 +739,44 @@ def test_source_project_rows_is_one_dgemv_per_row() -> None:
     )
     with pytest.raises(ValueError, match="UZ row dimension"):
         source_lapack.source_project_rows(rows.T, UZ)
+
+
+def test_source_r_matprod_follows_r_blas_dispatch() -> None:
+    """R's ``%*%``: dgemm, dgemv('N') for one column, dgemv('T') for one row."""
+    rng = np.random.default_rng(41)
+    collector = _AssertCollector()
+    for left_shape, right_shape in (
+        ((7, 5), (5, 3)),
+        ((7, 5), (5, 1)),
+        ((1, 5), (5, 3)),
+        ((1, 5), (5, 1)),
+    ):
+        left = rng.standard_normal(left_shape)
+        right = rng.standard_normal(right_shape)
+        actual = source_lapack.source_r_matprod(left, right)
+        collector.check(
+            f"{left_shape}x{right_shape}",
+            lambda actual=actual, left=left, right=right: np.testing.assert_allclose(
+                actual, left @ right, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.raise_if_any("source R matrix product")
+    left = rng.standard_normal((7, 5))
+    right = rng.standard_normal((5, 3))
+    np.testing.assert_array_equal(
+        source_lapack.source_r_matprod(left, right),
+        source_lapack.source_matprod(left, right),
+    )
+    np.testing.assert_array_equal(
+        source_lapack.source_r_matprod(np.ones((0, 5)), right), np.zeros((0, 3))
+    )
+    np.testing.assert_array_equal(
+        source_lapack.source_r_matprod(np.ones((4, 0)), np.ones((0, 2))),
+        np.zeros((4, 2)),
+    )
+    with pytest.raises(ValueError, match="conform"):
+        source_lapack.source_r_matprod(left, left)
+    with pytest.raises(ValueError, match="conform"):
+        source_lapack.source_matprod(left, left)
+    with pytest.raises(ValueError, match="finite"):
+        source_lapack.source_r_matprod(np.full((2, 5), np.nan), right)

@@ -128,6 +128,40 @@ class Smooth(ABC):
             return [S / s_scale for S in S_list], s_scale
         return list(S_list), 1.0
 
+    @staticmethod
+    def _source_smoothcon_normalize(
+        X: npt.NDArray[np.floating],
+        S_list: list[npt.NDArray[np.floating]],
+    ) -> tuple[list[npt.NDArray[np.floating]], float]:
+        """smoothCon's penalty scaling with R's ``norm`` arithmetic.
+
+        ``maXX <- norm(X, "I")^2`` and ``maS <- norm(S[[i]])/maXX`` call
+        LAPACK ``dlange``, whose reference loops sum absolute values in a
+        fixed order: across columns for each row (``"I"``) and down rows for
+        each column (``"O"``).  Each penalty is divided by its own ``maS``;
+        the returned scale is the first penalty's, as in
+        :meth:`_smoothcon_normalize`.
+        """
+        X = np.asarray(X, dtype=np.float64)
+        row_sums = np.zeros(X.shape[0], dtype=np.float64)
+        for column in range(X.shape[1]):
+            row_sums += np.abs(X[:, column])
+        norm_x = float(row_sums.max(initial=0.0))
+        max_x_sq = norm_x * norm_x
+        if not max_x_sq > 0.0:
+            return list(S_list), 1.0
+        normalized = []
+        scales = []
+        for S in S_list:
+            S = np.asarray(S, dtype=np.float64)
+            column_sums = np.zeros(S.shape[1], dtype=np.float64)
+            for row in range(S.shape[0]):
+                column_sums += np.abs(S[row])
+            scale = float(column_sums.max(initial=0.0)) / max_x_sq
+            normalized.append(S / scale)
+            scales.append(scale)
+        return normalized, scales[0]
+
     def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         """Hook for shrinkage penalty modification. No-op in base."""
         return S

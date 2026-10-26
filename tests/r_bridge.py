@@ -6189,6 +6189,30 @@ for (i in seq_len(n_smooths)) {{
             "iterations": int(result.rx2("iter")[0]),
         }
 
+    def source_smooth_basis(
+        self,
+        smooth_expr: str,
+        data: pd.DataFrame,
+        new_data: pd.DataFrame | None = None,
+    ) -> dict[str, Any]:
+        """Pinned unconstrained ``smoothCon`` basis and ``PredictMat`` rows.
+
+        Returns ``smoothCon(..., absorb.cons=FALSE)``'s scaled ``X`` and
+        ``S`` and, when ``new_data`` is given, ``PredictMat`` on it, each
+        copied into NumPy-owned memory before any further R allocation.
+        """
+        smooth = self._smooth_objects_rpy2(smooth_expr, data, False)[0]
+        result: dict[str, Any] = {
+            "X": np.array(smooth.rx2("X"), dtype=np.float64),
+            "S": [np.array(penalty, dtype=np.float64) for penalty in smooth.rx2("S")],
+        }
+        if new_data is not None:
+            result["prediction"] = np.array(
+                self._mgcv.PredictMat(smooth, self._to_r_dataframe(new_data)),
+                dtype=np.float64,
+            )
+        return result
+
     def linked_lapack(self) -> str:
         """Resolved path of the LAPACK library R links (``La_library()``)."""
         self._require_rpy2()

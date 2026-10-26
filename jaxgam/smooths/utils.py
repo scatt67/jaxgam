@@ -342,6 +342,27 @@ def _compute_distance_matrix(
     return cdist(X1, X2, metric="euclidean")
 
 
+def source_column_means(
+    X: npt.NDArray[np.floating], *, chunk_rows: int = 65536
+) -> npt.NDArray[np.float64]:
+    """Return R's ``colMeans(X)``: long-double column sums in source row order.
+
+    ``do_colsum`` accumulates each column in C ``long double`` (``LDOUBLE``)
+    from the first row to the last, divides by the row count there and rounds
+    once.  NumPy's ``longdouble`` is the same C type, so the accumulator's
+    precision follows the platform as R's does; ``cumsum`` fixes the
+    left-to-right order.  Rows are consumed in bounded chunks.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    if X.ndim != 2 or X.shape[0] == 0:
+        raise ValueError("Column means need a nonempty two-dimensional array.")
+    total = np.zeros(X.shape[1], dtype=np.longdouble)
+    for start in range(0, X.shape[0], chunk_rows):
+        rows = np.asarray(X[start : start + chunk_rows], dtype=np.longdouble)
+        total = np.cumsum(np.vstack((total[np.newaxis], rows)), axis=0)[-1].copy()
+    return np.asarray(total / np.longdouble(X.shape[0]), dtype=np.float64)
+
+
 def _get_unique_rows(
     X: npt.NDArray[np.floating],
 ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.intp]]:

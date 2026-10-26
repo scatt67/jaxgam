@@ -14,11 +14,13 @@ import pytest
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.smooths import gaussian_process as gp_module
+from jaxgam.smooths.base import Smooth
 from jaxgam.smooths.gaussian_process import GaussianProcessSmooth
 from jaxgam.smooths.gp_kernels import GPKernel
 from jaxgam.smooths.registry import get_smooth_class
 from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
-from tests.helpers import _AssertCollector, r_available
+from jaxgam.smooths.utils import source_column_means
+from tests.helpers import _AssertCollector, r_available, r_links_pinned_openblas
 from tests.r_bridge import RBridge, gp_config_to_mgcv_m
 from tests.tolerances import STRICT, ToleranceClass
 
@@ -702,3 +704,183 @@ class TestGPTensorMarginVsR:
         )
         collector.check("null_space_dim matches", null_space_dim_matches)
         collector.raise_if_any(f"tensor GP construct [{wrapper}]")
+
+
+def _source_basis_cases() -> dict[str, tuple[pd.DataFrame, list[str], int, dict]]:
+    """Runtime-generated GP cases spanning smooth.construct.gp's source stages.
+
+    They cover one to three covariates (gpE's long-double ``rowSums``),
+    duplicated rows (``n > nk``, so Predict.matrix.gp.smooth works in ``nk``-row
+    chunks, the last of one row), a rank-one basis (``%*%`` by ``dgemv``),
+    stationarity, a supplied range, and every kernel family.
+    """
+    rng = np.random.default_rng(20261026)
+    levels = np.sort(rng.uniform(-1.0, 2.0, 40))
+
+    def uniform(n: int, *names: str) -> pd.DataFrame:
+        return pd.DataFrame({name: rng.uniform(0, 1, n) for name in names})
+
+    return {
+        "uniform300": (uniform(300, "x"), ["x"], -1, {}),
+        "dup121": (
+            pd.DataFrame({"x": np.r_[np.tile(levels, 3), levels[7]]}),
+            ["x"],
+            -1,
+            {},
+        ),
+        "planar": (uniform(200, "x", "z"), ["x", "z"], 30, {}),
+        "spatial3": (uniform(150, "x", "z", "w"), ["x", "z", "w"], 20, {}),
+        "stationary_m52": (
+            uniform(150, "x"),
+            ["x"],
+            -1,
+            {"kernel": "matern_5_2", "rho": 0.3, "stationary": True},
+        ),
+        "rank1": (uniform(50, "x"), ["x"], 3, {}),
+        "spherical": (uniform(100, "x"), ["x"], 9, {"kernel": "spherical", "rho": 0.4}),
+        "power_exp": (
+            uniform(100, "x"),
+            ["x"],
+            9,
+            {"kernel": "power_exponential", "power": 1.5},
+        ),
+        "matern72": (uniform(100, "x"), ["x"], 9, {"kernel": "matern_7_2", "rho": 0.5}),
+    }
+
+
+@pytest.mark.skipif(not r_available(), reason="R+mgcv not available")
+def test_raw_basis_penalty_and_prediction_match_pinned_smoothcon(r_bridge) -> None:
+    """Unconstrained X, scaled S and PredictMat rows against pinned mgcv.
+
+    Every stage follows smooth.construct.gp.smooth.spec's arithmetic: long
+    double ``colMeans`` shift, gpE distances, the exact Rlanczos, R's ``%*%``
+    on the pinned provider in Predict.matrix.gp.smooth's chunks, and
+    smoothCon's ``dlange`` scaling. Against R linked to the pinned OpenBLAS
+    0.3.26 the results are bitwise; against other-BLAS R they are STRICT.
+    Prediction rows (``2 nk + 1`` new points) end in a one-row chunk.
+    """
+    if r_bridge.mode != "rpy2":
+        pytest.skip("Raw GP basis oracle requires rpy2.")
+    pinned = r_links_pinned_openblas(r_bridge)
+    rng = np.random.default_rng(31)
+    collector = _AssertCollector()
+
+    def compare(label: str, actual: np.ndarray, expected: np.ndarray) -> None:
+        if pinned:
+            collector.check(
+                f"{label} bitwise",
+                lambda: np.testing.assert_array_equal(actual, expected),
+            )
+        else:
+            collector.check(
+                f"{label} STRICT", lambda: _assert_close(actual, expected, STRICT)
+            )
+
+    for label, (data, variables, k, extra) in _source_basis_cases().items():
+        spec = _make_spec(variables, k=k, **extra)
+        smooth = GaussianProcessSmooth(spec)
+        smooth.setup(_data_dict(data))
+        m_args = gp_config_to_mgcv_m(spec)
+        term = (
+            f"s({','.join(variables)}, bs='gp'"
+            + (f", k={k}" if k > 0 else "")
+            + (f", m=c({','.join(map(str, m_args))})" if extra else "")
+            + ")"
+        )
+        new = pd.DataFrame(
+            {
+                name: rng.uniform(-0.1, 1.1, 2 * len(smooth._knt) + 1)
+                for name in variables
+            }
+        )
+        expected = r_bridge.source_smooth_basis(term, data, new)
+        compare(f"{label}/X", smooth.training_design_matrix(), expected["X"])
+        compare(f"{label}/S", smooth.build_penalty_matrices()[0].S, expected["S"][0])
+        compare(
+            f"{label}/PredictMat",
+            smooth.predict_matrix(_data_dict(new)),
+            expected["prediction"],
+        )
+    collector.raise_if_any("GP raw basis vs pinned smoothCon")
+
+
+class TestSourceArithmetic:
+    """Source-order helpers behind the GP basis, checked without R."""
+
+    def test_distances_square_and_sum_in_covariate_order(self) -> None:
+        rng = np.random.default_rng(4)
+        x = rng.uniform(-3.0, 3.0, (17, 3))
+        knots = rng.uniform(-3.0, 3.0, (11, 3))
+        np.testing.assert_array_equal(
+            gp_module._compute_distance_matrix(x[:, :1], knots[:, :1]),
+            np.abs(x[:, :1] - knots[:, 0]),
+        )
+        for d in (2, 3):
+            expected = np.zeros((17, 11), dtype=np.longdouble)
+            for column in range(d):
+                delta = x[:, column, None] - knots[None, :, column]
+                expected += delta * delta
+            np.testing.assert_array_equal(
+                gp_module._compute_distance_matrix(x[:, :d], knots[:, :d]),
+                np.sqrt(np.asarray(expected, dtype=np.float64)),
+            )
+
+    def test_column_means_accumulate_rows_in_order_in_long_double(self) -> None:
+        values = np.array([[1e16, 3.0], [1.0, -1.0], [-1e16, 0.5], [1.0, 0.25]])
+        expected = []
+        for column in values.T:
+            total = np.longdouble(0.0)
+            for value in column:
+                total += np.longdouble(value)
+            expected.append(float(total / np.longdouble(len(column))))
+        for chunk_rows in (1, 3, 65536):
+            np.testing.assert_array_equal(
+                source_column_means(values, chunk_rows=chunk_rows), expected
+            )
+        with pytest.raises(ValueError, match="nonempty"):
+            source_column_means(np.empty((0, 2)))
+
+    def test_smoothcon_scaling_follows_dlange_sums(self) -> None:
+        rng = np.random.default_rng(8)
+        X = rng.standard_normal((40, 12)) * 10.0 ** rng.integers(-3, 3, 12)
+        S1 = np.diag(rng.uniform(0.1, 9.0, 12))
+        S2 = rng.standard_normal((12, 12))
+        S2 = S2 @ S2.T
+        normalized, scale = Smooth._source_smoothcon_normalize(X, [S1, S2])
+        row_sums = np.zeros(40)
+        for column in range(12):
+            row_sums += np.abs(X[:, column])
+        max_x_sq = row_sums.max() * row_sums.max()
+        for S, actual in zip((S1, S2), normalized, strict=True):
+            column_sums = np.zeros(12)
+            for row in range(12):
+                column_sums += np.abs(S[row])
+            np.testing.assert_array_equal(actual, S / (column_sums.max() / max_x_sq))
+        assert scale == np.abs(S1).sum(axis=0).max() / max_x_sq
+        reference, reference_scale = Smooth._smoothcon_normalize(X, [S1])
+        _assert_close(normalized[0], reference[0], STRICT)
+        _assert_close(np.array([scale]), np.array([reference_scale]), STRICT)
+        unchanged, unit = Smooth._source_smoothcon_normalize(np.zeros((3, 2)), [S1])
+        assert unit == 1.0
+        assert unchanged[0] is S1
+
+    def test_design_products_use_predict_matrix_chunks(self, monkeypatch) -> None:
+        x = np.linspace(0.01, 0.99, 29)
+        smooth = _make_gp_smooth({"x": x}, stationary=False, k=8)
+        shapes: list[tuple[int, int]] = []
+        original = gp_module.source_r_matprod
+
+        def recorded(left, right):
+            shapes.append(left.shape)
+            return original(left, right)
+
+        monkeypatch.setattr(gp_module, "source_r_matprod", recorded)
+        smooth.predict_matrix({"x": np.linspace(0.0, 1.0, 2 * 29 + 1)})
+        assert shapes == [(29, 29), (29, 29), (1, 29)]
+        shapes.clear()
+        smooth.predict_matrix({"x": x[:5]})
+        assert shapes == [(5, 29)]
+        shapes.clear()
+        empty = smooth.predict_matrix({"x": np.empty(0)})
+        assert empty.shape == (0, smooth.n_coefs)
+        assert shapes == []

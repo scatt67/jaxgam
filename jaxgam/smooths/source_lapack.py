@@ -787,6 +787,87 @@ def source_project_rows(
     return output
 
 
+def source_matprod(
+    left: npt.NDArray[np.float64], right: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Port R's matrix-matrix ``%*%``: one column-major ``dgemm('N','N')``."""
+    provider = _source_lapack()
+    a = np.asfortranarray(left, dtype=np.float64)
+    b = np.asfortranarray(right, dtype=np.float64)
+    m, k = a.shape
+    if b.shape[0] != k:
+        raise ValueError("Matrix product dimensions do not conform.")
+    n = b.shape[1]
+    out = np.zeros((m, n), dtype=np.float64, order="F")
+    provider.dgemm(
+        _LAPACK_COL_MAJOR,
+        _CBLAS_NO_TRANS,
+        _CBLAS_NO_TRANS,
+        m,
+        n,
+        k,
+        1.0,
+        _double_pointer(a),
+        max(m, 1),
+        _double_pointer(b),
+        max(k, 1),
+        0.0,
+        _double_pointer(out),
+        max(m, 1),
+    )
+    return np.ascontiguousarray(out)
+
+
+def source_r_matprod(
+    left: npt.NDArray[np.float64], right: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Port R's ``%*%`` (array.c ``matprod``) for finite double matrices.
+
+    R's default matrix product calls ``dgemv('N')`` when the right operand has
+    one column, ``dgemv('T')`` on the transposed right operand when the left
+    operand has one row, and ``dgemm('N','N')`` otherwise; zero-extent products
+    are zero.  Its NaN/Inf branch (a long-double triple loop) is not ported, so
+    non-finite operands are rejected.
+    """
+    a = np.asarray(left, dtype=np.float64)
+    b = np.asarray(right, dtype=np.float64)
+    if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[0]:
+        raise ValueError("Matrix product dimensions do not conform.")
+    m, k = a.shape
+    n = b.shape[1]
+    if 0 in (m, k, n):
+        return np.zeros((m, n), dtype=np.float64)
+    if not (np.all(np.isfinite(a)) and np.all(np.isfinite(b))):
+        raise ValueError("Source matrix product operands must be finite.")
+    if n != 1 and m != 1:
+        return source_matprod(a, b)
+    provider = _source_lapack()
+    if n == 1:
+        matrix = np.asfortranarray(a)
+        vector = np.ascontiguousarray(b[:, 0])
+        rows, columns, transpose, size = m, k, _CBLAS_NO_TRANS, m
+    else:
+        matrix = np.asfortranarray(b)
+        vector = np.ascontiguousarray(a[0])
+        rows, columns, transpose, size = k, n, _CBLAS_TRANS, n
+    out = np.zeros(size, dtype=np.float64)
+    provider.dgemv(
+        _LAPACK_COL_MAJOR,
+        transpose,
+        rows,
+        columns,
+        1.0,
+        _double_pointer(matrix),
+        rows,
+        _double_pointer(vector),
+        1,
+        0.0,
+        _double_pointer(out),
+        1,
+    )
+    return out.reshape(m, n)
+
+
 def _check_input_shape(S: npt.NDArray[np.float64]) -> int:
     if not isinstance(S, np.ndarray) or S.dtype != np.dtype(np.float64):
         raise TypeError("Cubic shrinkage penalty must be a float64 NumPy array.")
