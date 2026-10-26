@@ -81,7 +81,7 @@ def test_lanczos_workspace_rejects_before_mask_or_provider(monkeypatch) -> None:
     finite = Mock(side_effect=AssertionError("finite mask must not be allocated"))
     provider = Mock(side_effect=AssertionError("provider must not be loaded"))
     monkeypatch.setattr(source_lapack.np, "isfinite", finite)
-    monkeypatch.setattr(source_lapack, "_source_lanczos", provider)
+    monkeypatch.setattr(source_lapack, "_source_lapack", provider)
     with pytest.raises(MemoryError, match=rf"requires {required} workspace bytes"):
         source_lapack.source_lanczos(
             np.eye(7), 4, available_workspace_bytes=required - 1
@@ -650,7 +650,7 @@ _RLANCZOS_CASES = ("gp/uniform", "gp/clustered", "gp/planar", "tprs/clustered")
 
 
 def test_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
-    """The exact route ports mat.c::Rlanczos and its BLAS/LAPACK calls.
+    """source_lanczos ports mat.c::Rlanczos and its BLAS/LAPACK calls.
 
     Against an R that links the pinned OpenBLAS 0.3.26, every Ritz pair is
     bitwise identical. R linked to another BLAS (macOS Accelerate) reorders
@@ -667,9 +667,7 @@ def test_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
     collector = _AssertCollector()
     for case in _RLANCZOS_CASES:
         E, k = _rlanczos_kernel(case)
-        values, vectors = source_lapack.source_lanczos(
-            E, k, tol=tol, tprs_tridiagonal=True
-        )
+        values, vectors = source_lapack.source_lanczos(E, k, tol=tol)
         expected = r_bridge.source_slanczos(E, k, tol)
         collector.check(
             f"{case}/values",
@@ -706,9 +704,7 @@ def test_rlanczos_keeps_leading_pairs_without_convergence(monkeypatch) -> None:
         return values, vectors
 
     monkeypatch.setattr(source_lapack, "source_trisymeig", uncertified)
-    values, vectors = source_lapack.source_lanczos(
-        E, 4, tol=np.finfo(float).tiny, tprs_tridiagonal=True
-    )
+    values, vectors = source_lapack.source_lanczos(E, 4, tol=np.finfo(float).tiny)
     complete = np.sort(np.linalg.eigvalsh(E))[::-1]
     # The leading algebraic pairs, not the largest magnitudes (E has a large
     # negative eigenvalue that the converged selection would retain).
