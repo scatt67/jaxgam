@@ -780,3 +780,64 @@ def test_source_r_matprod_follows_r_blas_dispatch() -> None:
         source_lapack.source_matprod(left, left)
     with pytest.raises(ValueError, match="finite"):
         source_lapack.source_r_matprod(np.full((2, 5), np.nan), right)
+
+
+@pytest.mark.parametrize(
+    ("matrix", "kwargs", "error", "message"),
+    [
+        (np.eye(4, dtype=np.float32), {}, TypeError, "float64"),
+        (np.ones((4, 3)), {}, ValueError, "square"),
+        (np.eye(4), {"available_workspace_bytes": -1}, ValueError, "nonnegative"),
+        (np.eye(4), {"tol": 0.0}, ValueError, "tolerance"),
+        (np.eye(4), {"tol": 0.5}, ValueError, "tolerance"),
+        (np.diag([1.0, np.nan, 2.0, 3.0]), {}, ValueError, "finite"),
+    ],
+)
+def test_source_lanczos_rejects_invalid_inputs(matrix, kwargs, error, message) -> None:
+    with pytest.raises(error, match=message):
+        source_lapack.source_lanczos(matrix, 2, **kwargs)
+
+
+def test_source_lanczos_with_every_pair_keeps_the_leading_pairs() -> None:
+    """With k = n the convergence test never runs; Rlanczos keeps m=k, lm=0."""
+    rng = np.random.default_rng(12)
+    raw = rng.standard_normal((6, 6))
+    matrix = raw + raw.T
+    values, vectors = source_lapack.source_lanczos(matrix, 6)
+    np.testing.assert_allclose(
+        values,
+        np.sort(np.linalg.eigvalsh(matrix))[::-1],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        matrix @ vectors, vectors * values, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+def test_source_trisymeig_rounds_workspace_and_reports_failures(monkeypatch) -> None:
+    """mgcv rounds a fractional DSTEDC work query up past one half; errors raise."""
+    calls: list[tuple[int, int]] = []
+
+    def provider(query_status: int, solve_status: int, work_query: float):
+        def dstedc(_layout, _compz, _n, _d, _e, _z, _ldz, work, lwork, iwork, liwork):
+            calls.append((lwork, liwork))
+            if lwork == -1:
+                work[0] = work_query
+                iwork[0] = 3
+                return query_status
+            return solve_status
+
+        return SimpleNamespace(dstedc_work=dstedc)
+
+    diagonal = np.array([1.0, 2.0])
+    off_diagonal = np.array([0.5])
+    monkeypatch.setattr(source_lapack, "_source_lapack", lambda: provider(0, 0, 10.6))
+    source_lapack.source_trisymeig(diagonal, off_diagonal)
+    assert calls == [(-1, -1), (11, 3)]
+    monkeypatch.setattr(source_lapack, "_source_lapack", lambda: provider(1, 0, 10.0))
+    with pytest.raises(np.linalg.LinAlgError, match="workspace query failed"):
+        source_lapack.source_trisymeig(diagonal, off_diagonal)
+    monkeypatch.setattr(source_lapack, "_source_lapack", lambda: provider(0, 2, 10.0))
+    with pytest.raises(np.linalg.LinAlgError, match="info=2"):
+        source_lapack.source_trisymeig(diagonal, off_diagonal)
