@@ -11,13 +11,14 @@ import scipy.linalg as sla
 
 if TYPE_CHECKING:
     from jaxgam.formula.predict_matrix import Data, PredictSpec
+    from jaxgam.inference.operator_geometry import OperatorPredictionGeometry
     from jaxgam.inference.predictor import PivotedQRFisherFactor
     from jaxgam.links.links import Link
 
 
 def finish_prediction(
     eta: npt.NDArray[np.floating],
-    X_p: npt.NDArray[np.floating],
+    X_p: npt.NDArray[np.floating] | None,
     link: Link,
     Vp: npt.NDArray[np.floating] | None,
     *,
@@ -32,6 +33,8 @@ def finish_prediction(
     pred = link.linkinv(eta) if pred_type == "response" else eta
     if not se_fit:
         return pred
+    if X_p is None:
+        raise RuntimeError("Prediction uncertainty has no requested-row provider.")
 
     if Vp is not None and fisher_qr_factor is None:
         # Preserve the exact operation order used by GAMResults.predict.
@@ -93,16 +96,21 @@ def prepare_prediction(
     offset: npt.ArrayLike | None,
     offset_was_nonzero: bool,
     warning_stacklevel: int,
-) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    geometry: OperatorPredictionGeometry | None = None,
+) -> tuple[npt.NDArray[np.floating] | None, npt.NDArray[np.floating]]:
     """Use the one prediction encoder and validate external offsets."""
     if pred_type not in ("response", "link"):
         raise ValueError(f"pred_type must be 'response' or 'link', got {pred_type!r}")
 
-    X_p = spec.build_predict_matrix(newdata)
-    eta = X_p @ coefficients
+    if geometry is None:
+        X_p = spec.build_predict_matrix(newdata)
+        eta = X_p @ coefficients
+    else:
+        X_p = None
+        eta = geometry.forward(newdata, coefficients)
     if offset is not None:
         offset_array = np.asarray(offset, dtype=np.float64)
-        if offset_array.ndim != 1 or offset_array.shape[0] != X_p.shape[0]:
+        if offset_array.ndim != 1 or offset_array.shape[0] != len(eta):
             raise ValueError(
                 "offset must be a one-dimensional array with one value per "
                 "prediction row."

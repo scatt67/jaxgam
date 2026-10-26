@@ -80,15 +80,17 @@ def test_fit_control_pairs_discrete_execution_with_its_policy() -> None:
     )
     with pytest.raises(ValueError, match="explicit discretization policy"):
         FitControl(execution="discrete")
-    for execution in ("dense", "stream"):
+    for execution in ("dense", "stream", "operator"):
         with pytest.raises(ValueError, match="requires execution='discrete'"):
             FitControl(execution=execution, discretization=policy)
     with pytest.raises(TypeError, match="ContinuousDiscretizationControl"):
         FitControl(execution="discrete", discretization=object())
-    with pytest.raises(ValueError, match="'dense', 'stream', or 'discrete'"):
-        FitControl(execution="operator")
+    with pytest.raises(
+        ValueError, match="'dense', 'stream', 'operator', or 'discrete'"
+    ):
+        FitControl(execution="unsupported")
     assert FitControl().smoothing_strategy == "exact_reml"
-    for execution in ("dense", "stream"):
+    for execution in ("dense", "stream", "operator"):
         with pytest.raises(ValueError, match="working_model_reml requires"):
             FitControl(execution=execution, smoothing_strategy="working_model_reml")
 

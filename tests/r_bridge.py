@@ -1429,6 +1429,93 @@ class RBridge:
 
         return self._fix_dependence_rpy2(X1, X2, tol, rank_def)
 
+    def qr_constant_coefficients(
+        self, design: np.ndarray, constant: float
+    ) -> np.ndarray:
+        """Pinned R ``qr.coef(qr(X), rep(constant,n))`` with NA pivot zeros.
+
+        Use the source QR ordering for rank-deficient no-intercept anchors.
+        """
+        self._require_rpy2()
+        design = np.asarray(design, dtype=np.float64)
+        if design.ndim != 2 or not np.all(np.isfinite(design)):
+            raise ValueError("QR design must be a finite matrix.")
+        if not np.isfinite(constant):
+            raise ValueError("QR constant must be finite.")
+        qr = self._base.qr(self._to_r_matrix(design))
+        response = self._base.rep(float(constant), design.shape[0])
+        coefficients = self._ro.r["qr.coef"](qr, response)
+        coefficients = self._base.replace(
+            coefficients, self._base.is_na(coefficients), 0.0
+        )
+        result = _r_array(coefficients, dtype=np.float64)
+        if result.shape != (design.shape[1],):
+            raise RBridgeError("Pinned QR oracle returned the wrong coefficient size")
+        return result
+
+    def sample_int_permutation(self, size: int, seed: int) -> np.ndarray:
+        """Pinned R RNG reference for ``sample.int(size,size)`` (one-based)."""
+        self._require_rpy2()
+        if size < 1 or seed < 0:
+            raise ValueError("R sample size must be positive and seed nonnegative")
+        with self._preserved_r_seed(seed):
+            return _r_array(self._base.sample_int(size, size), dtype=np.int64)
+
+    def fit_fixed_sp(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        sp: np.ndarray,
+        *,
+        weights: str | None = None,
+        offset: str | None = None,
+        theta: float | None = None,
+        with_uncertainty: bool = False,
+    ) -> dict[str, Any]:
+        """Pinned fixed-sp fit, optionally including covariance and link SE.
+
+        The same declared categorical levels and source weights/offsets are
+        retained. This layer owns coefficient fitting, not smoothing selection
+        or final result summaries.
+        """
+        self._require_rpy2()
+        sp = np.asarray(sp, dtype=np.float64)
+        if sp.ndim != 1 or np.any(~np.isfinite(sp) | (sp <= 0)):
+            raise ValueError("Fixed-sp oracle requires a positive finite vector.")
+        for name in (weights, offset):
+            if name is not None and name not in data:
+                raise ValueError(f"Oracle column {name!r} is missing.")
+        r_family = self._get_efs_family_rpy2(family, theta)
+        r_data = self._to_r_dataframe(data)
+        arguments: dict[str, Any] = {
+            "data": r_data,
+            "family": r_family,
+            "sp": self._to_r_vector(sp),
+            "method": "REML",
+            "drop.unused.levels": False,
+            "control": self._mgcv.gam_control(epsilon=1e-10, maxit=200),
+        }
+        if weights is not None:
+            arguments["weights"] = r_data.rx2(weights)
+        if offset is not None:
+            arguments["offset"] = r_data.rx2(offset)
+        fit = self._mgcv.gam(self._ro.Formula(formula), **arguments)
+        result = {
+            "coefficients": _r_array(fit.rx2("coefficients"), dtype=np.float64),
+            "fitted_values": _r_array(fit.rx2("fitted.values"), dtype=np.float64),
+            "deviance": float(fit.rx2("deviance")[0]),
+            "converged": bool(fit.rx2("converged")[0]),
+        }
+        if with_uncertainty:
+            prediction = self._stats.predict(fit, type="link", **{"se.fit": True})
+            result.update(
+                scale=float(fit.rx2("scale")[0]),
+                Vp=_r_array(fit.rx2("Vp"), dtype=np.float64),
+                link_se=_r_array(prediction.rx2("se.fit"), dtype=np.float64),
+            )
+        return result
+
     def discrete_operators(
         self,
         layout: DiscreteOperatorLayout,
@@ -4094,8 +4181,10 @@ class RBridge:
     ) -> dict[str, np.ndarray]:
         """Evaluate pinned ``dDeta`` observed W and Wz for NB links."""
         self._require_pinned_efs_versions()
-        if link not in {"identity", "sqrt"}:
-            raise ValueError("NB working-factor oracle link must be identity or sqrt")
+        if link not in {"identity", "sqrt", "log"}:
+            raise ValueError(
+                "NB working-factor oracle link must be identity, sqrt or log"
+            )
         arrays = [
             np.asarray(value, dtype=np.float64) for value in (y, mu, weights, offset)
         ]
@@ -6585,6 +6674,16 @@ for (i in seq_len(n_smooths)) {{
             terms[0], data=self._to_r_dataframe(data), **arguments
         )
 
+    def smooth_predict_matrix(
+        self, smooth_expr: str, data: pd.DataFrame, new_data: pd.DataFrame
+    ) -> np.ndarray:
+        """Evaluate installed ``PredictMat`` for one unabsorbed smooth."""
+        smooth = self._smooth_objects_rpy2(smooth_expr, data, False)[0]
+        prediction = self._call_internal(
+            "PredictMat", smooth, self._to_r_dataframe(new_data)
+        )
+        return _r_array(prediction, dtype=np.float64)
+
     def _smooth_construct_rpy2(
         self,
         smooth_expr: str,
@@ -6797,6 +6896,7 @@ if (!is.null(sm$shift)) {{
                         for penalty in smooth.rx2("S")
                     ],
                     "rank": int(smooth.rx2("rank")[0]),
+                    "rank_vector": _r_array(smooth.rx2("rank"), dtype=int).ravel(),
                     "null_space_dim": int(smooth.rx2("null.space.dim")[0]),
                     "by_level": None if by_level is self._ro.NULL else str(by_level[0]),
                     "label": "" if label is self._ro.NULL else str(label[0]),

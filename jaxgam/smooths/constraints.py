@@ -754,6 +754,8 @@ class CoefficientMap:
         X_parametric: npt.NDArray[np.floating] | None = None,
         tol: float = np.finfo(float).eps ** 0.5,
         with_pen: bool = True,
+        *,
+        intercept_reference: npt.NDArray[np.floating] | None = None,
     ) -> list[tuple[int, ...] | None]:
         """Detect and remove inter-term identifiability confounds.
 
@@ -777,6 +779,10 @@ class CoefficientMap:
             Tolerance for dependence detection.
         with_pen : bool
             Whether to augment with sqrt-penalty for detection.
+        intercept_reference : np.ndarray or None
+            The constant column after an orthogonal row reduction. Providing
+            it declares that an intercept exists; its coordinates replace
+            ones in dependence references. The caller owns its storage.
 
         Returns
         -------
@@ -787,6 +793,13 @@ class CoefficientMap:
         m = len(smooths)
         if m == 0:
             return []
+        if intercept_reference is not None and (
+            not isinstance(intercept_reference, np.ndarray)
+            or intercept_reference.shape != (X_blocks[0].shape[0],)
+            or not np.issubdtype(intercept_reference.dtype, np.floating)
+            or not np.all(np.isfinite(intercept_reference))
+        ):
+            raise ValueError("intercept_reference must match finite reduced rows.")
 
         # Collect variable names per smooth and max dimension
         v_names_all: list[str] = []
@@ -805,8 +818,8 @@ class CoefficientMap:
         # Only the intercept/constant direction ever enters the dependence
         # reference (R's gam.side, mgcv.r:594-604); non-intercept parametric
         # columns are never used to side-constrain a smooth.
-        intercept = False
-        if X_parametric is not None and X_parametric.shape[1] > 0:
+        intercept = intercept_reference is not None
+        if not intercept and X_parametric is not None and X_parametric.shape[1] > 0:
             col_sds = np.std(X_parametric, axis=0)
             if np.any(col_sds < np.finfo(float).eps ** 0.75):
                 intercept = True
@@ -849,6 +862,9 @@ class CoefficientMap:
 
         # Setup for augmented matrices if with_pen
         n_obs = X_blocks[0].shape[0] if X_blocks else 0
+        constant = (
+            np.ones(n_obs) if intercept_reference is None else intercept_reference
+        )
         total_np = 0
 
         if with_pen:
@@ -878,7 +894,7 @@ class CoefficientMap:
                     if intercept:
                         X1 = np.concatenate(
                             [
-                                np.ones((n_obs, 1)),
+                                constant[:, None],
                                 np.zeros((total_np, 1)),
                             ],
                             axis=0,
@@ -886,7 +902,7 @@ class CoefficientMap:
                     else:
                         X1 = np.zeros((n_obs + total_np, 0))
                 else:
-                    X1 = np.ones((n_obs, 1)) if intercept else np.zeros((n_obs, 0))
+                    X1 = constant[:, None] if intercept else np.zeros((n_obs, 0))
 
                 x1_components: set[int] = set()
 
@@ -918,7 +934,9 @@ class CoefficientMap:
                             X1 = np.column_stack([X1, Xb]) if X1.shape[1] > 0 else Xb
 
                 # Check for dependence
-                if X1.shape[1] == 0:
+                # R only side-constrains against an existing smooth reference;
+                # an intercept alone does not trigger fixDependence.
+                if X1.shape[1] == int(intercept):
                     continue
 
                 if with_pen:

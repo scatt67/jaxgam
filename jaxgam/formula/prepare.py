@@ -35,7 +35,11 @@ from jaxgam.formula.fitting_prepare import (
 from jaxgam.formula.terms import FormulaSpec
 from jaxgam.penalties.structure import PenaltyStructure, make_penalty_structure
 from jaxgam.smooths.constraints import CoefficientMap, TermBlock
-from jaxgam.smooths.cubic import CubicRegressionSmooth, CubicShrinkageSmooth
+from jaxgam.smooths.cubic import (
+    CubicRegressionSmooth,
+    CubicShrinkageSmooth,
+    CyclicCubicSmooth,
+)
 from jaxgam.smooths.utils import is_factor
 
 
@@ -432,33 +436,63 @@ def _exact_cubic_knots(
     )
 
 
-def _cubic_class(spec) -> type[CubicRegressionSmooth]:
-    """Validate a prepared cubic term before any data scan."""
-    if spec.bs not in {"cr", "cs"} or len(spec.variables) != 1:
+_CUBIC_CLASSES: dict[str, type[CubicRegressionSmooth]] = {
+    "cr": CubicRegressionSmooth,
+    "cs": CubicShrinkageSmooth,
+    "cc": CyclicCubicSmooth,
+}
+
+
+def _cubic_class(spec, *, allow_cyclic: bool = False) -> type[CubicRegressionSmooth]:
+    """Validate a prepared cubic term before any data scan.
+
+    Streamed preparation accepts cr/cs; the bounded operator route also opts
+    in to cyclic cc terms.
+    """
+    allowed = ("cr", "cs", "cc") if allow_cyclic else ("cr", "cs")
+    if spec.bs not in allowed or len(spec.variables) != 1:
         raise NotImplementedError(
-            "Prepared setup currently supports only univariate cr/cs smooths."
+            "Prepared setup currently supports only univariate "
+            f"{'/'.join(allowed)} smooths."
         )
-    return CubicShrinkageSmooth if spec.bs == "cs" else CubicRegressionSmooth
+    return _CUBIC_CLASSES[spec.bs]
 
 
-def _cubic_dimension(spec) -> int:
+def _cubic_dimension(spec, *, allow_cyclic: bool = False) -> int:
     """Basis dimension shared by knot discovery and construction."""
-    return 10 if spec.k == -1 else max(spec.k, _cubic_class(spec)._min_k)
+    smooth_class = _cubic_class(spec, allow_cyclic=allow_cyclic)
+    return 10 if spec.k == -1 else max(spec.k, smooth_class._min_k)
 
 
 def _cubic_null_dimension(spec) -> int:
     """Raw penalty null-space dimension of a prepared cubic term."""
-    return 0 if spec.bs == "cs" else 2
+    return {"cs": 0, "cc": 1}.get(spec.bs, 2)
 
 
-def _cubic_from_knots(spec, knots: npt.NDArray[np.floating]) -> CubicRegressionSmooth:
-    smooth = _cubic_class(spec)(spec)
-    k = _cubic_dimension(spec)
+def _cubic_from_knots(
+    spec,
+    knots: npt.NDArray[np.floating],
+    *,
+    shrinkage_workspace_bytes: int | None = None,
+) -> CubicRegressionSmooth:
+    """Construct a univariate cr/cs/cc basis from its exact knots.
+
+    Callers validate their accepted bases before any data scan; the bounded
+    operator route also passes its remaining shrinkage workspace.
+    """
+    smooth = _cubic_class(spec, allow_cyclic=True)(spec)
+    k = _cubic_dimension(spec, allow_cyclic=True)
     smooth._k = k
     smooth._knots = knots
     smooth._F, smooth._S = smooth._compute_f_and_penalty(smooth._knots)
-    smooth._S = smooth._apply_shrinkage(smooth._S)
-    smooth.n_coefs = k
+    if isinstance(smooth, CubicShrinkageSmooth):
+        smooth._S = smooth._apply_shrinkage(
+            smooth._S,
+            available_workspace_bytes=shrinkage_workspace_bytes,
+        )
+    else:
+        smooth._S = smooth._apply_shrinkage(smooth._S)
+    smooth.n_coefs = k - 1 if spec.bs == "cc" else k
     smooth.rank = k if spec.bs == "cs" else k - 2
     smooth.null_space_dim = _cubic_null_dimension(spec)
     smooth._is_setup = True
@@ -538,12 +572,15 @@ def prepare_model(
     family: Any | None = None,
     batch_rows: int = _DEFAULT_SETUP_BATCH_ROWS,
     maximum_bytes: int | None = None,
+    allow_cyclic: bool = False,
 ) -> PreparedModel:
     """Prepare exact cubic/numeric metadata using dependency-ordered scans.
 
     Unsupported by-variables, tensors, and factors fail before a training
     design is materialized. Exactly aliased numeric parametric columns are
     reduced through the same fixed ``CoefficientMap`` contract as dense setup.
+    Streamed fitting prepares cr/cs terms; ``allow_cyclic=True`` (the bounded
+    operator route) also prepares cyclic cc terms.
 
     Every full-data scan requests at most ``batch_rows`` rows. With
     ``maximum_bytes``, that request shrinks to the largest size whose
@@ -565,7 +602,8 @@ def prepare_model(
             "Prepared setup does not yet support by-variable or tensor smooths."
         )
     basis_dimensions = tuple(
-        _cubic_dimension(term) for term in formula_spec.smooth_terms
+        _cubic_dimension(term, allow_cyclic=allow_cyclic)
+        for term in formula_spec.smooth_terms
     )
     try:
         first = next(_scan_valid(source, 1))

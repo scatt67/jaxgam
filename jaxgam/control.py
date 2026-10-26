@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from numbers import Real
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Literal
 
@@ -138,6 +138,40 @@ class ContinuousDiscretizationControl:
 
 
 @dataclass(frozen=True)
+class OperatorControl:
+    """Explicit limits for the fixed-sp observed-system operator route."""
+
+    max_modest_coefficients: int = 64
+    max_iterations: int = 200
+    tolerance: float = 1e-7
+    cg_max_iterations: int = 1000
+    cg_rtol: float = 1e-10
+    cg_atol: float = 1e-12
+    use_coarse: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("max_modest_coefficients", "max_iterations", "cg_max_iterations"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+                raise ValueError(f"Operator {name} must be a positive integer.")
+        for name in ("tolerance", "cg_rtol", "cg_atol"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, Real)
+                or not math.isfinite(float(value))
+                or value < 0
+            ):
+                raise ValueError(f"Operator {name} must be finite and nonnegative.")
+        if self.tolerance <= 0:
+            raise ValueError("Operator tolerance must be strictly positive.")
+        if self.cg_rtol == 0 and self.cg_atol == 0:
+            raise ValueError("Operator CG requires a positive residual tolerance.")
+        if type(self.use_coarse) is not bool:
+            raise ValueError("Operator use_coarse must be boolean.")
+
+
+@dataclass(frozen=True)
 class FitControl:
     """Explicit resource policy for prediction retention and batching.
 
@@ -193,30 +227,33 @@ class FitControl:
     iteration with every smoothing parameter fixed.
     """
 
-    execution: Literal["dense", "stream", "discrete"] = "dense"
+    execution: Literal["dense", "stream", "operator", "discrete"] = "dense"
     batch_rows: int = 65_536
     memory_budget_bytes: int = 512 * 1024 * 1024
     output_budget_bytes: int = 512 * 1024 * 1024
     uncertainty: Literal["none", "fisher", "covariance"] = "none"
-    linear_solver: Literal["cholesky", "qr"] = "cholesky"
+    linear_solver: Literal["cholesky", "qr", "pcg"] = "cholesky"
     gaussian_compression: bool = False
     efs: EFSControl = field(default_factory=EFSControl)
+    operator: OperatorControl = field(default_factory=OperatorControl)
     discretization: ContinuousDiscretizationControl | None = None
     smoothing_strategy: Literal["exact_reml", "working_model_reml"] = "exact_reml"
     working_model_max_iterations: int = 200
     working_model_epsilon: float = 1e-7
 
     def __post_init__(self) -> None:
-        if self.execution not in ("dense", "stream", "discrete"):
-            raise ValueError("execution must be 'dense', 'stream', or 'discrete'.")
+        if self.execution not in ("dense", "stream", "operator", "discrete"):
+            raise ValueError(
+                "execution must be 'dense', 'stream', 'operator', or 'discrete'."
+            )
         for name in ("batch_rows", "memory_budget_bytes", "output_budget_bytes"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer.")
         if self.uncertainty not in ("none", "fisher", "covariance"):
             raise ValueError("uncertainty must be 'none', 'fisher', or 'covariance'.")
-        if self.linear_solver not in ("cholesky", "qr"):
-            raise ValueError("linear_solver must be 'cholesky' or 'qr'.")
+        if self.linear_solver not in ("cholesky", "qr", "pcg"):
+            raise ValueError("linear_solver must be 'cholesky', 'qr', or 'pcg'.")
         if self.smoothing_strategy not in ("exact_reml", "working_model_reml"):
             raise ValueError("Unsupported smoothing_strategy.")
         if (
@@ -239,6 +276,8 @@ class FitControl:
             raise ValueError("working_model_epsilon must be positive and finite.")
         if not isinstance(self.gaussian_compression, bool):
             raise ValueError("gaussian_compression must be a boolean.")
+        if not isinstance(self.operator, OperatorControl):
+            raise ValueError("operator must be an OperatorControl instance.")
         if not isinstance(self.efs, EFSControl):
             raise ValueError("efs must be an EFSControl instance.")
         if self.discretization is not None and not isinstance(

@@ -153,8 +153,10 @@ class GAM:
         ----------
         data : pandas.DataFrame or dict
             Data frame containing the variables in the formula. A replayable
-            ``RowSource`` is accepted with ``execution='stream'`` or the
-            explicitly configured ``execution='discrete'`` route.
+            ``RowSource`` is accepted with ``execution='stream'``,
+            ``execution='operator'`` or the explicitly configured
+            ``execution='discrete'`` route. The operator route requires explicit
+            fixed ``sp``, ``linear_solver='pcg'`` and prediction-only retention.
         weights : np.ndarray, optional
             Prior weights, shape ``(n,)``.
         offset : np.ndarray, optional
@@ -192,6 +194,10 @@ class GAM:
 
             family_obj = copy.deepcopy(family_obj)
 
+        if self.control.execution == "operator":
+            return self._fit_operator(
+                data, weights, offset, result=result, family=family_obj
+            )
         if self.control.execution == "stream":
             return self._fit_stream(
                 data, weights, offset, result=result, family=family_obj
@@ -202,12 +208,14 @@ class GAM:
             )
         if isinstance(data, RowSource):
             raise TypeError(
-                "A RowSource requires FitControl execution 'stream' or 'discrete'; "
-                "the dense route accepts only a DataFrame or dict."
+                "A RowSource requires FitControl execution 'operator', 'stream' or "
+                "'discrete'; the dense route accepts only a DataFrame or dict."
             )
         if self.control.linear_solver != "cholesky":
+            route = "operator" if self.control.linear_solver == "pcg" else "stream"
             raise NotImplementedError(
-                "linear_solver='qr' currently requires execution='stream'."
+                f"linear_solver={self.control.linear_solver!r} currently requires "
+                f"execution={route!r}."
             )
 
         # Phase 1: parse + build model setup
@@ -351,6 +359,97 @@ class GAM:
             supplied_smoothing_params=self.sp,
         )
 
+    def _fit_operator(
+        self,
+        data: pd.DataFrame | dict | RowSource,
+        weights: np.ndarray | None,
+        offset: np.ndarray | None,
+        *,
+        result: Literal["full", "inference", "prediction"],
+        family: ExponentialFamily,
+    ) -> GAMPredictionResult:
+        """Run explicit fixed-sp, CPU operator fitting with compact prediction."""
+        import numbers
+
+        from jaxgam.execution.operator_fit import fit_operator_fixed_sp
+        from jaxgam.formula.operator_prepare import (
+            OperatorPreparationControl,
+            prepare_operator_model,
+        )
+
+        if self.control.linear_solver != "pcg":
+            raise ValueError("execution='operator' requires linear_solver='pcg'.")
+        if result != "prediction":
+            raise NotImplementedError(
+                "Operator full/inference results need planned score/EDF/variance "
+                "providers; this route currently requires result='prediction'."
+            )
+        if self.control.uncertainty != "none":
+            raise NotImplementedError(
+                "Operator uncertainty needs a planned selected-variance provider."
+            )
+        if self.sp is None:
+            raise NotImplementedError("Operator fitting requires explicit fixed sp.")
+        snapshot = family.execution_parameter_snapshot()
+        if snapshot.theta_mode == "estimated":
+            raise NotImplementedError(
+                "Operator fitting currently requires fixed theta."
+            )
+        if len(snapshot.log_theta) > 1:
+            raise NotImplementedError("Operator result theta currently has one scalar.")
+        if self.device not in (None, "cpu"):
+            raise NotImplementedError("Frozen-system operator PCG currently uses CPU.")
+        if not isinstance(data, RowSource):
+            raise TypeError("Operator fitting requires a replayable RowSource.")
+        if weights is not None or offset is not None:
+            raise ValueError("Operator weights/offset must be owned by the RowSource.")
+        spec = parse_formula(self.formula)
+        expected = (
+            len(spec.smooth_terms)
+            if all(t.by is None and t.smooth_type == "s" for t in spec.smooth_terms)
+            else None
+        )
+        values = [self.sp] if isinstance(self.sp, numbers.Real) else self.sp
+        if expected is not None and len(values) != expected:
+            raise ValueError(f"sp must have {expected} elements for this model.")
+        if any(
+            isinstance(value, bool) or not isinstance(value, numbers.Real)
+            for value in values
+        ):
+            raise ValueError("Operator sp must be a one-dimensional real vector.")
+        if 16 * len(values) > self.control.memory_budget_bytes:
+            raise MemoryError("Operator sp ownership exceeds its memory budget.")
+        sp = np.asarray(values, dtype=np.float64)
+        if np.any(~np.isfinite(sp) | (sp <= 0)):
+            raise ValueError("Operator sp must contain positive finite values.")
+        model = prepare_operator_model(
+            spec,
+            data,
+            control=OperatorPreparationControl(
+                self.control.batch_rows,
+                self.control.memory_budget_bytes,
+                self.control.operator.max_modest_coefficients,
+            ),
+        )
+        expected = model.penalties.n_penalties
+        if len(sp) != expected:
+            raise ValueError(f"sp must have {expected} elements for this model.")
+        fitted = fit_operator_fixed_sp(
+            model,
+            data,
+            family,
+            sp,
+            control=self.control.operator,
+            memory_budget_bytes=self.control.memory_budget_bytes,
+        )
+        return GAMPredictionResult._from_operator_fit(
+            fitted=fitted,
+            sp=sp,
+            formula=self.formula,
+            method=self.method,
+            control=self.control,
+        )
+
     def _fit_stream(
         self,
         data: pd.DataFrame | dict | RowSource,
@@ -370,6 +469,8 @@ class GAM:
         """
         from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
 
+        if self.control.linear_solver == "pcg":
+            raise ValueError("linear_solver='pcg' requires execution='operator'.")
         if not isinstance(data, RowSource):
             raise TypeError(
                 "FitControl(execution='stream') requires a replayable RowSource."
@@ -650,8 +751,10 @@ class GAM:
                 "full and inference results retain unsupported row diagnostics."
             )
         if self.control.linear_solver != "cholesky":
+            route = "operator" if self.control.linear_solver == "pcg" else "stream"
             raise NotImplementedError(
-                "linear_solver='qr' currently requires execution='stream'."
+                f"linear_solver={self.control.linear_solver!r} currently requires "
+                f"execution={route!r}."
             )
         if self.sp is None and self.control.smoothing_strategy != "working_model_reml":
             raise NotImplementedError(

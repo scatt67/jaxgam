@@ -5,6 +5,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from jaxgam import EFSControl, FitControl
+from jaxgam.control import OperatorControl
 
 
 @pytest.mark.parametrize(
@@ -63,3 +64,38 @@ def test_fit_control_composes_one_frozen_efs_control_route() -> None:
         FitControl(efs=None)  # type: ignore[arg-type]
     with pytest.raises(FrozenInstanceError):
         efs.outer_limit = 8
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("max_modest_coefficients", True),
+        ("max_modest_coefficients", 1.5),
+        ("max_iterations", 0),
+        ("cg_max_iterations", -1),
+        ("tolerance", 0),
+        ("tolerance", float("inf")),
+        ("cg_rtol", True),
+        ("cg_rtol", -1),
+        ("cg_atol", float("nan")),
+        ("use_coarse", 1),
+    ],
+)
+def test_operator_controls_fail_closed_on_invalid_values(name, value):
+    with pytest.raises(ValueError, match=name):
+        OperatorControl(**{name: value})
+
+
+def test_operator_control_composition_and_positive_cg_tolerance():
+    operator = OperatorControl(max_modest_coefficients=7, cg_max_iterations=31)
+    assert operator.use_coarse is False
+    control = FitControl(execution="operator", linear_solver="pcg", operator=operator)
+    assert control.operator is operator
+    assert control.execution == "operator"
+    assert control.linear_solver == "pcg"
+    with pytest.raises(ValueError, match="positive residual tolerance"):
+        OperatorControl(cg_rtol=0, cg_atol=0)
+    with pytest.raises(ValueError, match="OperatorControl"):
+        FitControl(operator={})
+    with pytest.raises(FrozenInstanceError):
+        operator.use_coarse = False

@@ -46,6 +46,23 @@ class PredictSpec:
     dropped_param_names: tuple[str, ...]
     total_coefs: int
 
+    @property
+    def required_covariates(self) -> tuple[str, ...]:
+        """Frozen model variables, including each smooth's by variable."""
+        return tuple(
+            dict.fromkeys(
+                [
+                    *(term.name for term in self.parametric_terms),
+                    *(name for term in self.smooth_info for name in term.variables),
+                    *(
+                        term.by_variable
+                        for term in self.smooth_info
+                        if term.by_variable is not None
+                    ),
+                ]
+            )
+        )
+
     def build_predict_matrix(self, newdata: Data) -> npt.NDArray[np.floating]:
         """Build the full constrained prediction matrix for ``newdata``."""
         return build_predict_matrix(self, newdata)

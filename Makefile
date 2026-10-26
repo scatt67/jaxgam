@@ -120,6 +120,30 @@ test-nb-stream-memory: docker-build ## record bounded fixed-B/p NB coefficient m
 		tests/test_execution/test_nb_stream.py \
 		-k warm_coefficient_memory --log-cli-level=INFO -x --tb=short -q
 
+.PHONY: test-operator-local
+test-operator-local: ## run indexed operator preparation/action tests locally
+	$(UV) run $(UV_RUN_FLAGS) pytest tests/test_formula/test_operator_prepare.py \
+		tests/test_formula/test_operator_modest.py tests/test_fitting/test_operators.py --tb=short -v
+
+.PHONY: test-operator
+test-operator: docker-build ## run pinned indexed operator preparation/action tests
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_formula/test_operator_prepare.py tests/test_formula/test_operator_modest.py tests/test_fitting/test_operators.py \
+		--tb=short -v
+
+.PHONY: test-iterative-local
+test-iterative-local: ## run frozen PCG/preconditioner kernel tests locally
+	$(UV) run $(UV_RUN_FLAGS) pytest tests/test_fitting/test_iterative.py \
+		tests/test_fitting/test_preconditioners.py tests/test_execution/test_operator.py \
+		--tb=short -v
+
+.PHONY: test-iterative
+test-iterative: docker-build ## run pinned frozen operator PCG/preconditioner tests
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_fitting/test_iterative.py tests/test_fitting/test_preconditioners.py \
+		tests/test_execution/test_operator.py tests/test_formula/test_operator_prepare.py \
+		tests/test_fitting/test_operators.py --tb=short -v
+
 .PHONY: test-cov
 test-cov: docker-build ## run tests with coverage in Docker
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
@@ -212,6 +236,14 @@ pre-commit-install: ## install pre-commit hooks
 benchmark-nb-lgamma: ## benchmark NB lgamma derivative prefix kernel
 	$(UV) run python scripts/benchmark_nb_lgamma_derivatives.py
 
+.PHONY: benchmark-operator
+benchmark-operator: ## benchmark fixed-sp high-cardinality operator fit (LEVELS=10000 OUTPUT=/tmp/jaxgam-operator-benchmark)
+	$(UV) run python scripts/benchmark_operator.py --levels $${LEVELS:-10000} --output-dir $${OUTPUT:-/tmp/jaxgam-operator-benchmark}
+
+.PHONY: benchmark-operator-preconditioner
+benchmark-operator-preconditioner: ## compare paired coarse/no-coarse PCG on correlated smooth and factor
+	$(UV) run python scripts/benchmark_operator_preconditioner.py --output-dir $${OUTPUT:-/tmp/jaxgam-operator-benchmark}
+
 .PHONY: benchmark-efs
 benchmark-efs: ## benchmark dense Newton/EFS against pinned R EFS (OUTPUT=/tmp/jaxgam-efs-benchmark)
 	$(UV) run python scripts/benchmark_efs.py --output-dir $${OUTPUT:-/tmp/jaxgam-efs-benchmark}
@@ -241,3 +273,18 @@ test-scaling-memory: ## test scaling harness isolation, scan/memory metadata, an
 efs-fixture: ## generate a reproducible pinned EFS oracle fixture (OUTPUT=path.csv)
 	@test -n "$(OUTPUT)" || (echo "Usage: make efs-fixture OUTPUT=/tmp/efs.csv" && exit 1)
 	$(UV) run python -m tests.efs_oracle --output $(OUTPUT)
+
+.PHONY: test-operator-fit test-operator-fit-local
+test-operator-fit-local:
+	uv run pytest tests/test_fitting/test_operator_family.py tests/test_fitting/test_operators.py tests/test_execution/test_operator.py tests/test_execution/test_operator_fit.py tests/test_inference/test_operator_geometry.py -v
+
+test-operator-fit:
+	docker build --target test -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest tests/test_fitting/test_operator_family.py tests/test_fitting/test_operators.py tests/test_execution/test_operator.py tests/test_execution/test_operator_fit.py tests/test_inference/test_operator_geometry.py -v
+
+.PHONY: test-operator-adapters test-operator-adapters-local
+test-operator-adapters-local: ## run capped smooth adapter and shared constraint gates
+	$(UV) run pytest tests/test_formula/test_operator_modest.py tests/test_constraints.py -v
+
+test-operator-adapters: docker-build ## run pinned capped smooth adapter gates
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest tests/test_formula/test_operator_modest.py tests/test_constraints.py -v

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from jaxgam.data.source import RowSource
     from jaxgam.execution.discrete import DiscreteFit
+    from jaxgam.execution.operator_fit import OperatorFitDiagnostics, OperatorFitResult
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
@@ -341,12 +342,17 @@ class GAMPredictionResult:
     ``fit_memory_budget_bytes`` (``FitControl.memory_budget_bytes``); the
     streamed routes have no counterpart because their prepared setup is
     budgeted separately during preparation.
+
+    Fixed-sp operator fits have ``score=None`` when no score provider exists
+    and ``scale=None`` for unknown-scale families; known-scale families
+    report their actual scale of one. Other routes retain their existing
+    numeric score and scale.
     """
 
     _predictor: GAMPredictor
     deviance: float
-    score: float
-    scale: float
+    score: float | None
+    scale: float | None
     theta: float | None
     smoothing_params: np.ndarray
     edf_total: float
@@ -377,6 +383,9 @@ class GAMPredictionResult:
     working_model_proposal_evaluations: int | None = field(default=None, kw_only=True)
     fit_peak_bytes: int | None = field(default=None, kw_only=True)
     fit_memory_budget_bytes: int | None = field(default=None, kw_only=True)
+    operator_diagnostics: OperatorFitDiagnostics | None = field(
+        default=None, kw_only=True
+    )
     n: int
     _batch_rows: int = 65_536
 
@@ -565,6 +574,66 @@ class GAMPredictionResult:
             fit_peak_bytes=fit_state.memory_plan.fit_peak_bytes,
             fit_memory_budget_bytes=fit_state.memory_plan.budget_bytes,
             n=fit_state.n_obs,
+            _batch_rows=control.batch_rows,
+        )
+
+    @classmethod
+    def _from_operator_fit(
+        cls,
+        *,
+        fitted: OperatorFitResult,
+        sp: np.ndarray,
+        formula: str,
+        method: str,
+        control: FitControl,
+    ) -> GAMPredictionResult:
+        """Retain compact prediction geometry and truthful available scalars."""
+        from jaxgam.inference.operator_geometry import OperatorPredictionGeometry
+
+        model = fitted.model
+        required = (
+            2 * model.metadata_bound_bytes + 32 * model.n_coef + 8192 + 16 * len(sp)
+        )
+        if required > control.memory_budget_bytes:
+            raise MemoryError("Operator result ownership exceeds its memory budget.")
+        geometry = OperatorPredictionGeometry(
+            model.modest.predict_spec,
+            model.modest_columns,
+            model.random_effects,
+            model.n_coef,
+            model.batch_rows,
+            model.modest_raw_width,
+            model.metadata_bound_bytes,
+        )
+        predictor = GAMPredictor(
+            coefficients=fitted.coefficients,
+            Vp=None,
+            family=fitted.family,
+            formula=formula,
+            offset_was_nonzero=fitted.offset_was_nonzero,
+            _predict_spec=geometry.modest,
+            _operator_geometry=geometry,
+            _output_budget_bytes=control.output_budget_bytes,
+            _memory_budget_bytes=control.memory_budget_bytes,
+        )
+        snapshot = fitted.family.execution_parameter_snapshot()
+        theta = float(np.exp(snapshot.log_theta[0])) if snapshot.log_theta else None
+        return cls(
+            _predictor=predictor,
+            deviance=fitted.deviance,
+            score=None,
+            scale=1.0 if fitted.family.scale_known else None,
+            theta=theta,
+            smoothing_params=sp,
+            converged=fitted.converged,
+            n_iter=fitted.n_iter,
+            convergence_info=fitted.convergence_info,
+            method=method,
+            lambda_strategy="fixed",
+            execution_path="jax",
+            execution_route="operator",
+            operator_diagnostics=fitted.diagnostics,
+            n=model.n_obs,
             _batch_rows=control.batch_rows,
         )
 

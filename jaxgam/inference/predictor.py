@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numbers
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from jaxgam.inference._core import finish_prediction, predict_core, prepare_pred
 if TYPE_CHECKING:
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.formula.predict_matrix import Data
+    from jaxgam.inference.operator_geometry import OperatorPredictionGeometry
 
 
 @dataclass(frozen=True)
@@ -152,6 +154,7 @@ class GAMPredictor:
     _memory_budget_bytes: int | None = None
     _prediction_policy: str | None = None
     _request_compression: RequestCompressionSpec | None = None
+    _operator_geometry: OperatorPredictionGeometry | None = None
     _jaxgam_version: str = field(default_factory=lambda: jaxgam.__version__)
 
     def __post_init__(self) -> None:
@@ -198,6 +201,7 @@ class GAMPredictor:
         state.setdefault("_fisher_qr_factor", None)
         state.setdefault("_prediction_policy", None)
         state.setdefault("_request_compression", None)
+        state.setdefault("_operator_geometry", None)
         self.__dict__.update(state)
         self.coefficients.setflags(write=False)
         if self.Vp is not None:
@@ -288,13 +292,14 @@ class GAMPredictor:
         _check_pred_type(pred_type)
         _check_prediction_budgets(
             newdata,
-            self._predict_spec.total_coefs,
+            len(self.coefficients),
             se_fit,
             self.Vp is not None,
             self._output_budget_bytes,
             self._memory_budget_bytes,
             matrix_output=False,
             has_qr_fisher=self._fisher_qr_factor is not None,
+            geometry=self._operator_geometry,
         )
         if (
             se_fit
@@ -331,6 +336,7 @@ class GAMPredictor:
             offset=offset,
             offset_was_nonzero=self.offset_was_nonzero,
             warning_stacklevel=warning_stacklevel,
+            geometry=self._operator_geometry,
         )
         return finish_prediction(
             eta,
@@ -353,14 +359,17 @@ class GAMPredictor:
         """
         _check_prediction_budgets(
             newdata,
-            self._predict_spec.total_coefs,
+            len(self.coefficients),
             False,
             self.Vp is not None,
             self._output_budget_bytes,
             self._memory_budget_bytes,
             matrix_output=True,
             has_qr_fisher=False,
+            geometry=self._operator_geometry,
         )
+        if self._operator_geometry is not None:
+            return self._operator_geometry.build_predict_matrix(newdata)
         return self._predict_spec.build_predict_matrix(self._compressed(newdata, None))
 
     def predict_iter(
@@ -439,19 +448,48 @@ class GAMPredictor:
         source_has_offset = bool(getattr(source, "has_explicit_offset", True))
         warned_missing_offset = False
         _check_request_source(source, request_grid)
+        expected = source.n_rows
+        if (
+            isinstance(expected, bool)
+            or not isinstance(expected, numbers.Integral)
+            or expected < 0
+        ):
+            raise ValueError(
+                "Prediction source row count must be a nonnegative integer."
+            )
+        fingerprint = source.fingerprint()
+        seen = 0
         for batch in source.scan(batch_rows):
+            positions = np.asarray(batch.row_positions)
+            n = len(positions)
+            if (
+                positions.ndim != 1
+                or positions.dtype.kind not in "iu"
+                or np.any(positions < 0)
+                or np.any(positions > np.iinfo(np.int64).max)
+            ):
+                raise ValueError("Prediction positions must be nonnegative integers.")
+            if n > batch_rows or seen + n > expected:
+                raise RuntimeError("Prediction source exceeded its declared row bound.")
             if not np.all(batch.valid):
                 raise NotImplementedError(
                     "predict_iter does not support padded batches."
                 )
+            if n == 0:
+                continue
+            seen += n
             offset = batch.offset
             if not source_has_offset and not warned_missing_offset:
                 offset = None
                 warned_missing_offset = True
             yield (
-                batch.row_positions,
+                positions.copy(),
                 self._predict(
-                    dict(batch.columns),
+                    (
+                        dict(batch.columns)
+                        if self._operator_geometry is None
+                        else self._operator_geometry.slice_columns(batch.columns, 0, n)
+                    ),
                     pred_type=pred_type,
                     se_fit=se_fit,
                     offset=offset,
@@ -460,6 +498,16 @@ class GAMPredictor:
                 ),
             )
         _check_request_source(source, request_grid)
+        if seen != expected:
+            raise RuntimeError("Prediction source yielded fewer rows than declared.")
+        actual = source.n_rows
+        if (
+            isinstance(actual, bool)
+            or not isinstance(actual, numbers.Integral)
+            or actual != expected
+            or source.fingerprint() != fingerprint
+        ):
+            raise RuntimeError("Prediction source changed during replay.")
 
 
 def _check_pred_type(pred_type: str) -> None:
@@ -490,6 +538,7 @@ def _check_prediction_budgets(
     *,
     matrix_output: bool,
     has_qr_fisher: bool,
+    geometry: OperatorPredictionGeometry | None = None,
 ) -> None:
     """Check returned output and known NumPy matrix workspace separately.
 
@@ -500,8 +549,7 @@ def _check_prediction_budgets(
     if hasattr(newdata, "columns"):
         n_rows = len(newdata)
     else:
-        values = list(newdata.values())
-        n_rows = 0 if not values else len(values[0])
+        n_rows = len(next(iter(newdata.values()), ()))
     itemsize = np.dtype(float).itemsize
     output_bytes = n_rows * (p if matrix_output else 2 if se_fit else 1) * itemsize
     if output_budget is not None and output_bytes > output_budget:
@@ -516,6 +564,8 @@ def _check_prediction_budgets(
     # even where its retained rank is smaller (7 B*p arrays).
     multiplier = 1 if not se_fit else 7 if has_qr_fisher else 3 if has_covariance else 4
     workspace = multiplier * n_rows * p * itemsize
+    if geometry is not None:
+        workspace = geometry.workspace_bound(n_rows, matrix_output=matrix_output)
     if memory_budget is not None and workspace > memory_budget:
         raise MemoryError(
             f"Prediction workspace requires {workspace} bytes, exceeding memory budget "

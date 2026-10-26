@@ -198,6 +198,59 @@ class TestRArrayOwnership:
 
 
 @pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_operator_qr_and_shrinkage_oracles_use_pinned_r_objects() -> None:
+    bridge = RBridge(mode="rpy2")
+    design = np.array([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]])
+    np.testing.assert_allclose(
+        bridge.qr_constant_coefficients(design, 2.0),
+        [2, 0],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    raw = np.diag([0.0, 0.0, 2.0, 3.0])
+    np.testing.assert_allclose(
+        bridge.source_cubic_shrinkage_penalty(raw),
+        np.diag([0.02, 0.2, 2.0, 3.0]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_operator_source_oracles_reject_legacy_subprocess_mode() -> None:
+    bridge = RBridge(mode="subprocess")
+    with pytest.raises(RBridgeError, match="requires RBridge"):
+        bridge.qr_constant_coefficients(np.ones((2, 1)), 1.0)
+    with pytest.raises(RBridgeError, match="requires RBridge"):
+        bridge.sample_int_permutation(3, 7)
+    with pytest.raises(RBridgeError, match="requires RBridge"):
+        bridge.source_cubic_shrinkage_penalty(np.eye(3))
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_factor_tensor_oracle_keeps_levels_and_margin_ranks():
+    n = 31
+    frame = pd.DataFrame(
+        {
+            "x": np.linspace(-1, 1, n),
+            "z": np.linspace(0, 2, n) ** 2,
+            "fac": pd.Categorical(
+                np.resize(["first", "second", "third"], n),
+                categories=["third", "first", "second"],
+                ordered=True,
+            ),
+        }
+    )
+    result = RBridge(mode="rpy2").smooth_construct_list(
+        "ti(x,z,bs='cr',k=4,by=fac)", frame, absorb_cons=True
+    )
+    assert [smooth["by_level"] for smooth in result] == ["first", "second"]
+    for smooth in result:
+        assert smooth["X"].shape == (n, 9)
+        np.testing.assert_array_equal(smooth["rank_vector"], [6, 6])
+        assert len(smooth["S"]) == 2
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
 class TestRBridgeEFS:
     """Pinned EFS oracle calls use real mgcv fits and private instrumentation."""
 

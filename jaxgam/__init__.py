@@ -53,6 +53,7 @@ from jaxgam.control import (  # noqa: E402
     ContinuousDiscretizationControl,
     EFSControl,
     FitControl,
+    OperatorControl,
 )
 from jaxgam.fitting.state import EFSOptimizerDiagnostics  # noqa: E402
 from jaxgam.inference import GAMPredictor  # noqa: E402
@@ -72,4 +73,5 @@ __all__ = [
     "GAMPredictionResult",
     "GAMPredictor",
     "GAMResults",
+    "OperatorControl",
 ]

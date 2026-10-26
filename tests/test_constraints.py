@@ -13,6 +13,8 @@ R source reference: R/mgcv.r gam.side(), fixDependence()
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -41,6 +43,79 @@ from tests.tolerances import (
     normalize_column_signs,
     normalize_symmetric_signs,
 )
+
+
+def test_row_reduced_side_constraints_keep_the_transformed_intercept(r_bridge):
+    x = np.linspace(-0.9, 1.2, 31)
+    z = np.cos(2.3 * x)
+    small = np.column_stack((x, x**2))
+    large = np.column_stack((np.ones_like(x), x, x**2, z))
+    smooths = [
+        SimpleNamespace(spec=_make_spec(["x"]), side_constrain=True),
+        SimpleNamespace(spec=_make_spec(["x", "z"]), side_constrain=True),
+    ]
+    penalties = [[np.diag([0.0, 1.0])], [np.diag([0.0, 0.0, 1.0, 1.0])]]
+    full_blocks = [small.copy(), large.copy()]
+    full_penalties = [[p.copy() for p in block] for block in penalties]
+    full = CoefficientMap.gam_side(
+        smooths, full_blocks, full_penalties, np.ones((len(x), 1))
+    )
+    joint = np.column_stack((np.ones_like(x), small, large))
+    reduced = np.linalg.qr(joint, mode="r")
+    blocks = [reduced[:, 1:3].copy(), reduced[:, 3:].copy()]
+    reduced_penalties = [[p.copy() for p in block] for block in penalties]
+    actual = CoefficientMap.gam_side(
+        smooths,
+        blocks,
+        reduced_penalties,
+        intercept_reference=reduced[:, 0],
+    )
+    assert actual == full
+    reference = np.column_stack(
+        (
+            np.concatenate((np.ones_like(x), np.zeros(6))),
+            CoefficientMap._augment_smooth_x(small, penalties[0], np.arange(2), 6, 31),
+        )
+    )
+    candidate = CoefficientMap._augment_smooth_x(
+        large, penalties[1], np.arange(2, 6), 6, 31
+    )
+    pinned = r_bridge.fix_dependence(reference, candidate)
+    assert sorted(actual[1]) == sorted(pinned)
+    np.testing.assert_allclose(
+        blocks[1].T @ blocks[1],
+        full_blocks[1].T @ full_blocks[1],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_side_constraints_skip_an_intercept_only_reference(monkeypatch):
+    smooths = [
+        SimpleNamespace(spec=_make_spec(["x"]), side_constrain=False),
+        SimpleNamespace(spec=_make_spec(["x"]), side_constrain=True),
+    ]
+    blocks = [np.ones((9, 1)), np.ones((9, 1))]
+    penalties = [[np.eye(1)], [np.eye(1)]]
+    calls = []
+    monkeypatch.setattr(
+        CoefficientMap, "fix_dependence", lambda *args, **_kwargs: calls.append(args)
+    )
+    with pytest.warns(UserWarning, match="repeated"):
+        actual = CoefficientMap.gam_side(smooths, blocks, penalties, np.ones((9, 1)))
+    assert actual == [None, None]
+    assert not calls
+
+
+@pytest.mark.parametrize(
+    "reference", [np.ones(2), np.ones(3, dtype=int), np.array([1.0, np.nan, 1.0])]
+)
+def test_invalid_reduced_intercept_reference_rejects(reference):
+    smooth = SimpleNamespace(spec=_make_spec(["x"]))
+    with pytest.raises(ValueError, match="intercept_reference"):
+        CoefficientMap.gam_side(
+            [smooth], [np.ones((3, 1))], [[np.eye(1)]], intercept_reference=reference
+        )
 
 
 @pytest.fixture
