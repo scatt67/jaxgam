@@ -6168,6 +6168,32 @@ for (i in seq_len(n_smooths)) {{
             )
         return self._smooth_construct_subprocess(smooth_expr, data, absorb_cons)
 
+    def source_slanczos(
+        self, matrix: np.ndarray, k: int, tol: float
+    ) -> dict[str, np.ndarray | int]:
+        """Pinned ``slanczos(A, k, kl=-1, tol, nt=1)``: tprs_setup's Rlanczos call."""
+        self._require_rpy2()
+        A = np.asarray(matrix, dtype=np.float64)
+        if A.ndim != 2 or A.shape[0] != A.shape[1] or not 1 <= k <= A.shape[0]:
+            raise ValueError("slanczos requires a square matrix and 1 <= k <= n.")
+        result = self._mgcv.slanczos(
+            self._to_r_matrix(A),
+            k=self._ro.IntVector([k]),
+            kl=self._ro.IntVector([-1]),
+            tol=self._ro.FloatVector([tol]),
+            nt=self._ro.IntVector([1]),
+        )
+        return {
+            "values": _r_array(result.rx2("values"), dtype=np.float64),
+            "vectors": _r_array(result.rx2("vectors"), dtype=np.float64),
+            "iterations": int(result.rx2("iter")[0]),
+        }
+
+    def linked_lapack(self) -> str:
+        """Resolved path of the LAPACK library R links (``La_library()``)."""
+        self._require_rpy2()
+        return os.path.realpath(str(self._base.La_library()[0]))
+
     def _smooth_objects_rpy2(
         self,
         smooth_expr: str,

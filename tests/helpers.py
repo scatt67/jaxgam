@@ -13,6 +13,7 @@ Private API (used by conftest fixtures and complex test-local fixtures):
 
 from __future__ import annotations
 
+import ctypes
 from collections.abc import Callable
 from typing import Any
 
@@ -80,6 +81,26 @@ def r_available() -> bool:
         return ok
     except Exception:
         return False
+
+
+def r_links_pinned_openblas(r_bridge) -> bool:
+    """Whether R's LAPACK is the OpenBLAS 0.3.26 the provider pins.
+
+    The source-LAPACK provider declares scipy-openblas32 0.3.26, the OpenBLAS
+    release the pinned Linux R links; results that depend on R's linked BLAS
+    are bitwise there. The library is located with the typed
+    ``RBridge.linked_lapack`` query (never the platform name) and identified
+    by its own ``openblas_get_config`` string, since Debian installs OpenBLAS's
+    LAPACK under the unversioned name ``liblapack.so.3``.
+    """
+    try:
+        library = ctypes.CDLL(r_bridge.linked_lapack(), mode=ctypes.RTLD_LOCAL)
+        config = library.openblas_get_config
+    except (OSError, AttributeError):
+        return False
+    config.argtypes = []
+    config.restype = ctypes.c_char_p
+    return (config() or b"").decode().startswith("OpenBLAS 0.3.26 ")
 
 
 def r_tolerance(family_name: str):

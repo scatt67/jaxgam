@@ -9,7 +9,12 @@ import pandas as pd
 import pytest
 
 from tests.efs_oracle import make_efs_fixture
-from tests.helpers import _AssertCollector, check_that, make_smooth_spec
+from tests.helpers import (
+    _AssertCollector,
+    check_that,
+    make_smooth_spec,
+    r_links_pinned_openblas,
+)
 from tests.r_bridge import RBridge, RBridgeError, _r_array, gp_config_to_mgcv_m
 from tests.tolerances import MODERATE, STRICT
 
@@ -714,6 +719,42 @@ class TestGPConfigToMgcvM:
         )
         collector.check("rho override beats spec.rho", rho_override_beats_spec_rho)
         collector.raise_if_any("gp_config_to_mgcv_m mapping")
+
+
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+def test_source_slanczos_and_linked_lapack_are_typed_oracles() -> None:
+    bridge = RBridge(mode="rpy2")
+    rng = np.random.default_rng(5)
+    A = rng.standard_normal((12, 12))
+    A = A + A.T
+    result = bridge.source_slanczos(A, 3, np.finfo(float).eps ** 0.7)
+    assert result["vectors"].shape == (12, 3)
+    assert result["iterations"] >= 3
+    values = np.linalg.eigvalsh(A)
+    expected = values[np.argsort(-np.abs(values))[:3]]
+    np.testing.assert_allclose(
+        np.sort(result["values"]), np.sort(expected), rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert bridge.linked_lapack()
+    with pytest.raises(ValueError, match="square"):
+        bridge.source_slanczos(A[:, :5], 3, 1e-8)
+
+
+def test_pinned_openblas_detection_needs_the_library_config(tmp_path) -> None:
+    """Detection asks the linked library itself; no library, or no config, is False."""
+
+    class _Bridge:
+        def __init__(self, path: str) -> None:
+            self._path = path
+
+        def linked_lapack(self) -> str:
+            return self._path
+
+    assert not r_links_pinned_openblas(_Bridge(str(tmp_path / "missing.so")))
+    if _r_available():
+        bridge = RBridge(mode="rpy2")
+        detected = r_links_pinned_openblas(bridge)
+        assert detected == r_links_pinned_openblas(_Bridge(bridge.linked_lapack()))
 
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
