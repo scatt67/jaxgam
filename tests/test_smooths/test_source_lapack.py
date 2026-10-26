@@ -323,13 +323,6 @@ def test_declared_provider_rejects_wrong_integer_abi(monkeypatch) -> None:
 
 
 def test_source_lanczos_selected_pairs_satisfy_the_input_operator() -> None:
-    assert "scipy_openblas64" not in sys.modules
-    source_lapack._source_lanczos.cache_clear()
-    provider = source_lapack._source_lanczos()
-    assert provider.module.__version__ == "0.3.30.0.2"
-    assert provider.module.get_openblas_config().startswith("OpenBLAS 0.3.30 ")
-    assert provider.dsyevd_work.restype is source_lapack.ctypes.c_int64
-    assert "scipy_openblas64" not in sys.modules
     rng = np.random.default_rng(1022026)
     raw = rng.normal(size=(19, 19))
     matrix = (raw + raw.T) * 0.5
@@ -437,13 +430,12 @@ def test_source_frobenius_norm_is_one_sequential_column_major_sum() -> None:
     assert source_lapack.source_frobenius_norm(values) == expected
 
 
-def test_each_provider_library_runs_single_threaded_after_load() -> None:
-    """Both wheel libraries are pinned to one OpenBLAS thread when loaded."""
-    for loader in (source_lapack._source_lapack, source_lapack._source_lanczos):
-        loader.cache_clear()
-        provider = loader()
-        assert provider.module.num_threads() == 1, provider.module.package
-        loader.cache_clear()
+def test_provider_library_runs_single_threaded_after_load() -> None:
+    """The wheel library is pinned to one OpenBLAS thread when loaded."""
+    source_lapack._source_lapack.cache_clear()
+    provider = source_lapack._source_lapack()
+    assert provider.module.num_threads() == 1, provider.module.package
+    source_lapack._source_lapack.cache_clear()
 
 
 _VENDORED_THREADS_SCRIPT = r"""
@@ -475,7 +467,7 @@ def vendored():
 getters = vendored()
 before = {name: getter() for name, getter in getters.items()}
 import jaxgam.smooths.source_lapack as source_lapack
-providers = [source_lapack._source_lapack(), source_lapack._source_lanczos()]
+providers = [source_lapack._source_lapack()]
 after = {name: getter() for name, getter in getters.items()}
 print(json.dumps({
     "jaxgam": source_lapack.__file__,
@@ -506,7 +498,7 @@ def test_provider_pin_leaves_numpy_and_scipy_blas_threads_unchanged() -> None:
     assert completed.returncode == 0, completed.stderr
     report = json.loads(completed.stdout.strip().splitlines()[-1])
     assert report["jaxgam"].startswith(str(root)), report["jaxgam"]
-    assert report["providers"] == [1, 1]
+    assert report["providers"] == [1]
     assert report["after"] == report["before"]
     if report["lapack"] == "Accelerate":
         # Accelerate-backed NumPy/SciPy vendor no OpenBLAS thread control.
@@ -552,10 +544,7 @@ values, vectors = source_lapack.source_lanczos(kernel, 20)
 eig_values, eig_vectors = source_symmetric_eigh(penalty)
 coordinate_map = rank_revealing_coordinate_map(design, root, retained_rank=8)
 report = {
-    "threads": [
-        source_lapack._source_lapack().module.num_threads(),
-        source_lapack._source_lanczos().module.num_threads(),
-    ],
+    "threads": [source_lapack._source_lapack().module.num_threads()],
     "cubic_shrinkage": digest(source_lapack.cubic_shrinkage_penalty(penalty)),
     "natural_cubic": digest(
         source_lapack.natural_cubic_system_solve(
@@ -599,7 +588,7 @@ def test_provider_outputs_do_not_depend_on_caller_openblas_threads() -> None:
     """Cubic shrinkage, Lanczos and the rank gauge ignore OPENBLAS_NUM_THREADS."""
     single = _provider_outputs_with_threads("1")
     many = _provider_outputs_with_threads("8")
-    assert single["threads"] == many["threads"] == [1, 1]
+    assert single["threads"] == many["threads"] == [1]
     assert many == single
 
 

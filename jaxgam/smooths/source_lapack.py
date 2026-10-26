@@ -2,27 +2,26 @@
 
 The cubic shrinkage and thin-plate constructors are sensitive to their numeric
 provider's null-space coordinates.  This module binds only the required
-LAPACKE/CBLAS entry points from two declared packages.
-``scipy-openblas32==0.3.26.0.4`` is the OpenBLAS release the pinned Linux R
-links: it serves the cubic shrinkage eigentransform and the ports of mgcv's
+LAPACKE/CBLAS entry points from one declared package,
+``scipy-openblas32==0.3.26.0.4``, the OpenBLAS release the pinned Linux R
+links: it serves the cubic shrinkage eigentransform, getFS's DPTSV, gdiPK's
+DGEQP3, the source penalty-coordinate DSYEVR and the ports of mgcv's
 ``Rlanczos`` (every source Lanczos call, Gaussian-process and thin-plate
-bases alike) and ``predict_tprs``, so those calls reproduce R's.  The
-``scipy-openblas64==0.3.30.0.2`` loader no longer serves any route.  It never
-searches for R or a system BLAS/LAPACK and does not replace NumPy/SciPy's
-backend.
+bases alike), ``predict_tprs`` and R's ``%*%``, so those calls reproduce R's.
+It never searches for R or a system BLAS/LAPACK and does not replace
+NumPy/SciPy's backend.
 
-Threading: both wheels are threaded OpenBLAS builds whose default thread count
+Threading: the wheel is a threaded OpenBLAS build whose default thread count
 follows ``OPENBLAS_NUM_THREADS`` or the machine's core count, and threaded
-reductions change last-bit results.  When each wheel library is loaded, this
+reductions change last-bit results.  When the wheel library is loaded, this
 module sets that library's own thread count to one
-(``scipy_openblas_set_num_threads`` / ``scipy_openblas_set_num_threads64_``)
-and verifies it, so every provider result is the single-thread arithmetic
-validated against pinned R, regardless of the caller's environment.  The
-setting is library-local: the wheels are loaded ``RTLD_LOCAL`` and are
-separate from the BLAS that NumPy and SciPy vendor, whose thread counts are
-unchanged.  It is made once at load, never toggled around calls, so
-concurrent Python threads see one fixed value; these threaded builds lock
-internally, so concurrent provider calls are safe.
+(``scipy_openblas_set_num_threads``) and verifies it, so every provider
+result is the single-thread arithmetic validated against pinned R,
+regardless of the caller's environment.  The setting is library-local: the
+wheel is loaded ``RTLD_LOCAL`` and is separate from the BLAS that NumPy and
+SciPy vendor, whose thread counts are unchanged.  It is made once at load,
+never toggled around calls, so concurrent Python threads see one fixed value;
+the threaded build locks internally, so concurrent provider calls are safe.
 """
 
 from __future__ import annotations
@@ -52,11 +51,7 @@ from jaxgam.smooths.source_arithmetic import (
 
 _PROVIDER_VERSION = "0.3.26.0.4"
 _OPENBLAS_PREFIX = "OpenBLAS 0.3.26 "
-_LANCZOS_PROVIDER_VERSION = "0.3.30.0.2"
-_LANCZOS_OPENBLAS_PREFIX = "OpenBLAS 0.3.30 "
-_LAPACK_ROW_MAJOR = 101
 _LAPACK_COL_MAJOR = 102
-_CBLAS_ROW_MAJOR = 101
 _CBLAS_NO_TRANS = 111
 _CBLAS_TRANS = 112
 _CBLAS_UPPER = 121
@@ -121,19 +116,6 @@ class _SourceLapack:
     dscal: object
     dstedc_work: object
     dgesdd_work: object
-
-
-@dataclass(frozen=True)
-class _SourceLanczos:
-    """Pinned provider handles for the retained Lanczos implementation."""
-
-    module: _DeclaredProvider
-    library: ctypes.CDLL
-    dsyevd_work: object
-    dgemv: object
-    dgemm: object
-    ddot: object
-    dnrm2: object
 
 
 def source_lanczos_workspace_bound(n: int, k: int) -> int:
@@ -453,95 +435,6 @@ def _source_lapack() -> _SourceLapack:
         dstedc_work,
         dgesdd_work,
     )
-
-
-@functools.lru_cache(maxsize=1)
-def _source_lanczos() -> _SourceLanczos:
-    """Load only the source Rlanczos entry points from the pinned provider."""
-    provider, library = _declared_provider(
-        "scipy-openblas64",
-        version=_LANCZOS_PROVIDER_VERSION,
-        prefix=_LANCZOS_OPENBLAS_PREFIX,
-        darwin_name="libscipy_openblas64_.dylib",
-        linux_name="libscipy_openblas64_.so",
-        library_name="scipy_openblas64_",
-        config_symbol="scipy_openblas_get_config64_",
-        ilp64=True,
-        thread_symbol_suffix="64_",
-    )
-    enum_int = ctypes.c_int
-    lapack_int = ctypes.c_int64
-    double = ctypes.c_double
-    int_pointer = ctypes.POINTER(lapack_int)
-    double_pointer = ctypes.POINTER(double)
-    try:
-        dsyevd_work = library.scipy_LAPACKE_dsyevd_work64_
-        dgemv = library.scipy_cblas_dgemv64_
-        dgemm = library.scipy_cblas_dgemm64_
-        ddot = library.scipy_cblas_ddot64_
-        dnrm2 = library.scipy_cblas_dnrm264_
-    except AttributeError as exc:
-        raise RuntimeError(
-            "Pinned OpenBLAS provider does not export the source Lanczos "
-            "ILP64 LAPACKE/CBLAS symbols."
-        ) from exc
-    dsyevd_work.argtypes = [
-        enum_int,
-        ctypes.c_char,
-        ctypes.c_char,
-        lapack_int,
-        double_pointer,
-        lapack_int,
-        double_pointer,
-        double_pointer,
-        lapack_int,
-        int_pointer,
-        lapack_int,
-    ]
-    dsyevd_work.restype = lapack_int
-    dgemv.argtypes = [
-        enum_int,
-        enum_int,
-        lapack_int,
-        lapack_int,
-        double,
-        double_pointer,
-        lapack_int,
-        double_pointer,
-        lapack_int,
-        double,
-        double_pointer,
-        lapack_int,
-    ]
-    dgemv.restype = None
-    dgemm.argtypes = [
-        enum_int,
-        enum_int,
-        enum_int,
-        lapack_int,
-        lapack_int,
-        lapack_int,
-        double,
-        double_pointer,
-        lapack_int,
-        double_pointer,
-        lapack_int,
-        double,
-        double_pointer,
-        lapack_int,
-    ]
-    dgemm.restype = None
-    ddot.argtypes = [
-        lapack_int,
-        double_pointer,
-        lapack_int,
-        double_pointer,
-        lapack_int,
-    ]
-    ddot.restype = double
-    dnrm2.argtypes = [lapack_int, double_pointer, lapack_int]
-    dnrm2.restype = double
-    return _SourceLanczos(provider, library, dsyevd_work, dgemv, dgemm, ddot, dnrm2)
 
 
 def source_lanczos(
