@@ -56,7 +56,10 @@ test-continuous-discrete: docker-build ## run continuous range-grid and exact-in
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
 		tests/test_data/test_discretize.py \
 		tests/test_data/test_continuous_discretize.py \
-		tests/test_data/test_continuous_frame.py -x --tb=short -v
+		tests/test_data/test_continuous_frame.py \
+		tests/test_formula/test_continuous_setup.py \
+		tests/test_formula/test_continuous_design.py \
+		tests/test_formula/test_continuous_bam_oracle.py -x --tb=short -v
 
 .PHONY: test-efs-factor
 test-efs-factor: docker-build ## run exact factor-action EFS contractions and dense kernel compatibility

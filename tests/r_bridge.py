@@ -198,6 +198,16 @@ class DiscreteModelFrame:
     index_spans: dict[str, tuple[int, int]]
 
 
+@dataclass(frozen=True)
+class BamDiscreteSetup:
+    """Pinned ``bam(fit=FALSE, discrete=...)`` metadata and expanded design."""
+
+    layout: DiscreteOperatorLayout
+    expanded_design: np.ndarray
+    penalties: tuple[np.ndarray, ...]
+    term_names: tuple[str, ...]
+
+
 class RBridge:
     """Interface to R's mgcv for reference comparison.
 
@@ -7118,4 +7128,93 @@ if (!is.null(s$sp.criterion)) {{
                 str(name): (int(bounds[0]) - 1, int(bounds[1]) - 1)
                 for name, bounds in zip(span_names, span_values, strict=True)
             },
+        )
+
+    def bam_discrete_setup(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        *,
+        factor_names: tuple[str, ...] = (),
+        m: int | tuple[int, ...] | None = None,
+    ) -> BamDiscreteSetup:
+        """Return pinned ``bam(fit=FALSE)`` compact metadata and design."""
+        self._require_rpy2()
+        from rpy2 import rinterface
+
+        if len(factor_names) != len(set(factor_names)) or not set(factor_names) <= set(
+            data.columns
+        ):
+            raise ValueError("factor_names must be distinct data-frame columns")
+        grid = self._r_discrete_grid(m, default=True)
+        frame = self._to_r_discrete_dataframe(data, factor_names, preserve_order=True)
+        with self._preserved_r_seed(1907):
+            expected_after = self._stats.runif(8)
+            self._ro.baseenv["set.seed"](1907)
+            setup = self._mgcv.bam(
+                self._ro.Formula(formula), data=frame, discrete=grid, fit=False
+            )
+            observed_after = self._stats.runif(8)
+            if not bool(
+                self._ro.baseenv["identical"](expected_after, observed_after)[0]
+            ):
+                raise RBridgeError("bam setup RNG state not restored")
+        tables_r = setup.rx2("Xd")
+        kd_r, ks_r = setup.rx2("kd"), setup.rx2("ks")
+        ts_r, dt_r, qc_r = (setup.rx2(name) for name in ("ts", "dt", "qc"))
+        if any(len(values) == 0 for values in (tables_r, kd_r, ks_r, ts_r, dt_r, qc_r)):
+            raise RBridgeError(
+                "bam did not return the required compact discrete operator metadata"
+            )
+        tables = tuple(_r_array(table, dtype=np.float64) for table in tables_r)
+        vectors = tuple(
+            _r_array(vector, dtype=np.float64).ravel(order="F")
+            if vector.typeof != rinterface.RTYPES.NILSXP and len(vector)
+            else np.empty(0, dtype=np.float64)
+            for vector in setup.rx2("v")
+        )
+        ts = _r_array(ts_r, dtype=np.int64)
+        dt = _r_array(dt_r, dtype=np.int64)
+        qc = _r_array(qc_r, dtype=np.int32)
+        for term in np.flatnonzero(qc > 0):
+            margins = slice(int(ts[term]) - 1, int(ts[term]) + int(dt[term]) - 1)
+            raw_width = int(np.prod([table.shape[1] for table in tables[margins]]))
+            if len(vectors[term]) != raw_width:
+                raise RBridgeError(
+                    f"rank-one constraint {term + 1} has {len(vectors[term])} "
+                    f"Householder entries for raw width {raw_width}"
+                )
+        expanded = self._call_internal(
+            "Xbd",
+            tables_r,
+            self._base.diag(self._base.ncol(setup.rx2("X"))),
+            kd_r,
+            ks_r,
+            ts_r,
+            dt_r,
+            setup.rx2("v"),
+            qc_r,
+            drop=setup.rx2("drop"),
+        )
+        drop_r = setup.rx2("drop")
+        drop = (
+            None
+            if drop_r.typeof == rinterface.RTYPES.NILSXP
+            else _r_array(drop_r, dtype=np.int32) - 1
+        )
+        layout = DiscreteOperatorLayout(
+            tables,
+            _r_array(kd_r, dtype=np.int32) - 1,
+            _r_array(ks_r, dtype=np.int32) - 1,
+            tuple(ts - 1),
+            tuple(dt),
+            vectors,
+            qc,
+            drop,
+        )
+        return BamDiscreteSetup(
+            layout,
+            _r_array(expanded, dtype=np.float64),
+            tuple(_r_array(penalty, dtype=np.float64) for penalty in setup.rx2("S")),
+            tuple(map(str, self._base.names(ts_r))),
         )

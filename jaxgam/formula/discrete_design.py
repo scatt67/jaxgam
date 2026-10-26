@@ -68,7 +68,7 @@ class DiscreteDesignLineage:
 
     source_fingerprint: str
     basis_fingerprint: str
-    origin: Literal["prepared", "dense_setup", "predict_spec"]
+    origin: Literal["prepared", "dense_setup", "predict_spec", "continuous"]
 
 
 @dataclass(frozen=True)
@@ -119,7 +119,11 @@ class LookupBlock:
 
 @dataclass(frozen=True)
 class TensorLookupBlock:
-    """Separate marginal tables for an exact tensor-product term."""
+    """One or more marginal tables for an exact product term.
+
+    A single margin represents an ordinary smooth whose numeric/factor by
+    variable remains a separate indexed multiplier.
+    """
 
     col_start: int
     margin_tables: tuple[npt.NDArray[np.float64], ...]
@@ -133,10 +137,10 @@ class TensorLookupBlock:
     n_levels: int = 1
 
     def __post_init__(self) -> None:
-        if len(self.margin_tables) < 2 or len(self.margin_tables) != len(
+        if not self.margin_tables or len(self.margin_tables) != len(
             self.margin_indices
         ):
-            raise ValueError("tensor lookup needs matching separate marginal tables")
+            raise ValueError("product lookup needs matching marginal tables")
         tables = tuple(
             np.asarray(table, dtype=np.float64) for table in self.margin_tables
         )
