@@ -5,7 +5,8 @@ provider's null-space coordinates.  This module binds only the required
 LAPACKE/CBLAS entry points from one declared package,
 ``scipy-openblas32==0.3.26.0.4``, the OpenBLAS release the pinned Linux R
 links: it serves the cubic shrinkage eigentransform, getFS's DPTSV, gdiPK's
-DGEQP3, the source penalty-coordinate DSYEVR and the ports of mgcv's
+DGEQP3, the source penalty-coordinate DSYEVR, the working model's pivoted
+Cholesky (R ``chol(pivot=TRUE)``'s DPSTRF) and the ports of mgcv's
 ``Rlanczos`` (every source Lanczos call, Gaussian-process and thin-plate
 bases alike), ``predict_tprs`` and R's ``%*%``, so those calls reproduce R's.
 It never searches for R or a system BLAS/LAPACK and does not replace
@@ -116,6 +117,22 @@ class _SourceLapack:
     dscal: object
     dstedc_work: object
     dgesdd_work: object
+    dpstrf_work: object
+
+
+@dataclass(frozen=True)
+class SourcePivotedCholesky:
+    """R ``chol(pivot=TRUE)`` storage from the pinned provider's DPSTRF.
+
+    ``upper`` is the upper triangle of DPSTRF's output with the lower
+    triangle zeroed, as R's ``La_chol`` returns it; after a rank stop the
+    trailing upper block keeps LAPACK's uncompleted residual. ``pivots`` are
+    zero-based and ``rank`` is DPSTRF's completed rank.
+    """
+
+    upper: npt.NDArray[np.float64]
+    pivots: npt.NDArray[np.int32]
+    rank: int
 
 
 def source_lanczos_workspace_bound(n: int, k: int) -> int:
@@ -135,6 +152,20 @@ def source_lanczos_workspace_bound(n: int, k: int) -> int:
     if n > _LAPACK_INT_MAX:
         raise ValueError("Source Lanczos dimension exceeds the LP64 integer range.")
     return 8 * (7 * n * n + 2 * n * k + 19 * n + 35)
+
+
+def source_pivoted_cholesky_workspace_bound(n: int) -> int:
+    """Bound DPSTRF workspace beyond the caller's retained input matrix.
+
+    The peak owns the column-major input copy that DPSTRF overwrites (and
+    that is returned as the upper factor), its one-based integer pivots,
+    LAPACK's ``2n`` real work array and the returned zero-based pivots.
+    """
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError("Pivoted Cholesky dimension must be a nonnegative integer.")
+    if n > _LAPACK_INT_MAX:
+        raise ValueError("Pivoted Cholesky dimension exceeds the LP64 integer range.")
+    return 8 * n * n + 4 * n + 16 * n + 4 * n
 
 
 def cubic_shrinkage_workspace_bound(k: int) -> int:
@@ -276,6 +307,7 @@ def _source_lapack() -> _SourceLapack:
         dscal = library.scipy_cblas_dscal
         dstedc_work = library.scipy_LAPACKE_dstedc_work
         dgesdd_work = library.scipy_LAPACKE_dgesdd_work
+        dpstrf_work = library.scipy_LAPACKE_dpstrf_work
     except AttributeError as exc:
         raise RuntimeError(
             "Pinned OpenBLAS provider does not export the required LP64 "
@@ -419,6 +451,18 @@ def _source_lapack() -> _SourceLapack:
         int_pointer,
     ]
     dgesdd_work.restype = lapack_int
+    dpstrf_work.argtypes = [
+        lapack_int,
+        ctypes.c_char,
+        lapack_int,
+        double_pointer,
+        lapack_int,
+        int_pointer,
+        int_pointer,
+        double,
+        double_pointer,
+    ]
+    dpstrf_work.restype = lapack_int
     return _SourceLapack(
         provider,
         library,
@@ -434,6 +478,7 @@ def _source_lapack() -> _SourceLapack:
         dscal,
         dstedc_work,
         dgesdd_work,
+        dpstrf_work,
     )
 
 
@@ -844,6 +889,79 @@ def source_frobenius_norm(matrix: npt.NDArray[np.float64]) -> float:
         return 0.0
     squares = values * values
     return math.sqrt(float(np.cumsum(squares)[-1]))
+
+
+def source_pivoted_cholesky(
+    matrix: npt.NDArray[np.float64],
+    *,
+    tolerance: float = -1.0,
+    available_workspace_bytes: int | None = None,
+) -> SourcePivotedCholesky:
+    """Pinned DPSTRF factor of a symmetric matrix's upper triangle.
+
+    This is R's ``chol(x, pivot=TRUE)`` (``La_chol``) on the provider that
+    pinned R's OpenBLAS 0.3.26 LAPACK uses: negative ``tolerance`` selects
+    LAPACK's ``n * eps * max(diag)`` stop. The lower triangle is not read.
+    The factor is a host operation with no derivatives; callers own any
+    analytic trace or implicit-function derivatives.
+    """
+    if not isinstance(matrix, np.ndarray) or matrix.dtype != np.dtype(np.float64):
+        raise TypeError("Pivoted Cholesky input must be a float64 NumPy array.")
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("Pivoted Cholesky input must be square.")
+    n = matrix.shape[0]
+    required = source_pivoted_cholesky_workspace_bound(n)
+    if available_workspace_bytes is not None:
+        if (
+            isinstance(available_workspace_bytes, bool)
+            or not isinstance(available_workspace_bytes, int)
+            or available_workspace_bytes < 0
+        ):
+            raise ValueError("available_workspace_bytes must be a nonnegative integer.")
+        if required > available_workspace_bytes:
+            raise MemoryError(
+                f"Pivoted Cholesky requires {required} workspace bytes; "
+                f"{available_workspace_bytes} available."
+            )
+    if (
+        isinstance(tolerance, bool)
+        or not isinstance(tolerance, (int, float, np.floating))
+        or not np.isfinite(tolerance)
+    ):
+        raise ValueError("Pivoted Cholesky tolerance must be a finite real scalar.")
+    if not np.all(np.isfinite(matrix[np.triu_indices(n)])):
+        raise ValueError("Pivoted Cholesky upper triangle must be finite.")
+    if n == 0:
+        return SourcePivotedCholesky(np.empty((0, 0)), np.empty(0, dtype=np.int32), 0)
+    provider = _source_lapack()
+    lapack_int = ctypes.c_int
+    double_pointer = ctypes.POINTER(ctypes.c_double)
+    int_pointer = ctypes.POINTER(lapack_int)
+    a = np.array(matrix, dtype=np.float64, order="F", copy=True)
+    pivots = np.empty(n, dtype=np.int32)
+    rank = lapack_int(0)
+    work = np.empty(2 * n, dtype=np.float64)
+    info = provider.dpstrf_work(
+        _LAPACK_COL_MAJOR,
+        b"U",
+        n,
+        a.ctypes.data_as(double_pointer),
+        n,
+        pivots.ctypes.data_as(int_pointer),
+        ctypes.byref(rank),
+        float(tolerance),
+        work.ctypes.data_as(double_pointer),
+    )
+    del work
+    if info < 0:
+        raise RuntimeError(f"Pinned DPSTRF rejected argument {-info}.")
+    # info > 0 is DPSTRF's rank stop, which R's chol(pivot=TRUE) only warns on.
+    upper = np.triu(a)
+    del a
+    if not np.all(np.isfinite(upper)):
+        raise FloatingPointError("Pinned DPSTRF produced a non-finite factor.")
+    pivots -= 1
+    return SourcePivotedCholesky(upper, pivots, int(rank.value))
 
 
 def natural_cubic_system_solve(

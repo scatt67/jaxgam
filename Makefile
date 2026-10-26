@@ -61,7 +61,13 @@ test-continuous-discrete: docker-build ## run continuous range-grid and exact-in
 		tests/test_formula/test_continuous_design.py \
 		tests/test_formula/test_continuous_bam_oracle.py \
 		tests/test_execution/test_discrete.py \
-		tests/test_execution/test_discrete_score.py -x --tb=short -v
+		tests/test_execution/test_discrete_score.py \
+		tests/test_fitting/test_working_model.py -x --tb=short -v
+
+.PHONY: test-pivoted-cholesky
+test-pivoted-cholesky: docker-build ## run pinned-provider DPSTRF pivot/rank/factor gates in pinned Docker
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest tests/test_smooths/test_source_lapack.py -k pivoted_cholesky -x --tb=short -v
 
 .PHONY: test-efs-factor
 test-efs-factor: docker-build ## run exact factor-action EFS contractions and dense kernel compatibility

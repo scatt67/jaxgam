@@ -16,6 +16,7 @@ Usage::
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import os
 import subprocess
@@ -226,6 +227,150 @@ class BamDiscreteFit:
     covariance: np.ndarray | None = None
     prediction: np.ndarray | None = None
     prediction_se: np.ndarray | None = None
+
+
+@dataclass(frozen=True)
+class SourceLinearAlgebra:
+    """Pinned R's own LAPACK/BLAS libraries, from typed R queries.
+
+    ``openblas_config`` is OpenBLAS's ``openblas_get_config()`` string read
+    from the library R reports in ``La_library()``, or ``None`` when that
+    library is not OpenBLAS (for example R's own libRlapack).
+    """
+
+    lapack_library: str
+    lapack_version: str
+    blas_library: str
+    openblas_config: str | None
+
+    def lapack_is_openblas(self, prefix: str) -> bool:
+        """Whether R's LAPACK is the OpenBLAS build whose config has ``prefix``."""
+        return self.openblas_config is not None and self.openblas_config.startswith(
+            prefix
+        )
+
+
+@dataclass(frozen=True)
+class SourceWorkingPenaltyBlock:
+    """One pinned ``Sl.setup`` block with zero-based half-open coefficients.
+
+    ``penalties`` are ``Sl[[b]]$S`` exactly as ``Sl.addS`` adds them at the
+    ``penalized`` coordinates; ``roots`` and ``root_products`` are ``rS`` and
+    ``pcrossprod(rS, trans=TRUE)`` as ``ldetSblock`` uses them.
+    """
+
+    start: int
+    stop: int
+    transform: np.ndarray
+    penalties: tuple[np.ndarray, ...]
+    roots: tuple[np.ndarray, ...]
+    root_products: tuple[np.ndarray, ...]
+    rank: int
+    penalized: np.ndarray
+    reparameterized: bool
+
+
+@dataclass(frozen=True)
+class SourceWorkingModelState:
+    """Pinned ``Sl.fitChol`` inputs after ``Sl.initial.repara``."""
+
+    blocks: tuple[SourceWorkingPenaltyBlock, ...]
+    gram: np.ndarray
+    rhs: np.ndarray
+    response_square_sum: float
+    n_obs: int
+    null_dimension: int
+
+
+@dataclass(frozen=True)
+class SourceWorkingProposal:
+    """One pinned ``Sl.fitChol`` evaluation and the exact state it used.
+
+    ``smoothing`` is R's own ``exp(log_smoothing)``; ``coefficients`` are in
+    the initial-reparameterization coordinates of ``SourceWorkingModelState``.
+    """
+
+    log_smoothing: np.ndarray
+    smoothing: np.ndarray
+    log_scale: float
+    tolerance: float
+    coefficients: np.ndarray
+    gradient: np.ndarray
+    hessian: np.ndarray
+    step: np.ndarray
+    logdet_penalty: float
+    logdet_hessian: float
+
+
+@dataclass(frozen=True)
+class SourceSlFitCholEvaluation:
+    """Matched pinned state, proposal and ``ldetS`` derivatives at one rho."""
+
+    state: SourceWorkingModelState
+    proposal: SourceWorkingProposal
+    penalty_first: np.ndarray
+    penalty_second: np.ndarray
+
+
+@dataclass(frozen=True)
+class SourceWorkingTrial:
+    """``bgam.fitd`` locals immediately after one ``Sl.fitChol`` trial.
+
+    ``accepted``/``step``/``deviance``/``previous_deviance``/``criterion``
+    are ``lsp0``, ``Nstep``, ``dev``, ``devold`` and ``crit`` *before* this
+    trial's acceptance decision, so each trial is a replayable source state.
+    ``penalty_first``/``penalty_second`` are the trial's ``ldetS`` derivatives
+    from the same frozen ``Sl``, as ``Sl.fitChol`` evaluates them.
+    """
+
+    iteration: int
+    accepted: np.ndarray
+    step: np.ndarray
+    deviance: float
+    previous_deviance: float
+    criterion: float
+    proposal: SourceWorkingProposal
+    penalty_first: np.ndarray
+    penalty_second: np.ndarray
+
+
+@dataclass(frozen=True)
+class SourceWorkingModelTrace:
+    """Pinned additive-Gaussian ``bgam.fitd`` trial sequence and final fit."""
+
+    state: SourceWorkingModelState
+    trials: tuple[SourceWorkingTrial, ...]
+    fit: BamDiscreteFit
+
+
+def _same_source_working_state(
+    first: SourceWorkingModelState, second: SourceWorkingModelState
+) -> bool:
+    """Bitwise equality of two captured frozen ``bgam.fitd`` states."""
+    if (
+        first.response_square_sum != second.response_square_sum
+        or first.n_obs != second.n_obs
+        or first.null_dimension != second.null_dimension
+        or len(first.blocks) != len(second.blocks)
+        or not np.array_equal(first.gram, second.gram)
+        or not np.array_equal(first.rhs, second.rhs)
+    ):
+        return False
+    for left, right in zip(first.blocks, second.blocks, strict=True):
+        if (
+            (left.start, left.stop, left.rank, left.reparameterized)
+            != (right.start, right.stop, right.rank, right.reparameterized)
+            or not np.array_equal(left.transform, right.transform)
+            or not np.array_equal(left.penalized, right.penalized)
+        ):
+            return False
+        for name in ("penalties", "roots", "root_products"):
+            values, others = getattr(left, name), getattr(right, name)
+            if len(values) != len(others) or not all(
+                np.array_equal(a, b) for a, b in zip(values, others, strict=True)
+            ):
+                return False
+    return True
 
 
 class RBridge:
@@ -7566,3 +7711,544 @@ if (!is.null(s$sp.criterion)) {{
             *traced._jaxgam_callback_handles,
         )
         return fitter
+
+    def trace_bam_working_model(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        *,
+        initial_sp: np.ndarray,
+        initial_scale: float,
+        scale: float,
+        m: int = 30,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+        max_iterations: int = 200,
+        epsilon: float = 1e-7,
+    ) -> SourceWorkingModelTrace:
+        """Replayable pinned ``bgam.fitd`` state at every ``Sl.fitChol`` trial.
+
+        Additive Gaussian ``bgam.fitd`` freezes ``qrx`` and ``Sl`` after its
+        first iteration; every trial must report the identical frozen state.
+        """
+        smoothing, arguments = self._bam_discrete_gaussian_arguments(
+            data,
+            sp=None,
+            initial_sp=initial_sp,
+            initial_scale=initial_scale,
+            scale=scale,
+            factor_names=(),
+            m=m,
+            weights=weights,
+            offset=offset,
+            max_iterations=max_iterations,
+            epsilon=epsilon,
+        )
+        states: list[SourceWorkingModelState] = []
+        trials: list[SourceWorkingTrial] = []
+
+        def capture(
+            iteration: Any,
+            accepted: Any,
+            step: Any,
+            lsp: Any,
+            n_sp: Any,
+            log_phi: Any,
+            crit: Any,
+            dev: Any,
+            devold: Any,
+            proposal: Any,
+            qrx: Any,
+            blocks: Any,
+            null_dimension: Any,
+            n_obs: Any,
+        ) -> None:
+            qrx = self._ro.ListVector(qrx)
+            state = SourceWorkingModelState(
+                self._source_working_blocks(blocks),
+                _r_array(qrx.rx2("XX"), dtype=np.float64),
+                _r_array(qrx.rx2("Xy"), dtype=np.float64).ravel(),
+                float(qrx.rx2("y.norm2")[0]),
+                int(n_obs[0]),
+                int(null_dimension[0]),
+            )
+            if states and not _same_source_working_state(states[0], state):
+                raise RBridgeError("additive bgam.fitd changed its frozen state")
+            if not states:
+                states.append(state)
+            parameters = _r_array(lsp, dtype=np.float64)
+            count = int(n_sp[0])
+            previous = _r_array(step, dtype=np.float64)
+            if previous.shape != parameters.shape:
+                if previous.shape != (1,) or previous[0] != 0.0:
+                    raise RBridgeError("unexpected bgam.fitd Nstep shape")
+                previous = np.zeros_like(parameters)
+            determinant = self._call_internal(
+                "ldetS",
+                blocks,
+                self._to_r_vector(parameters[:count]),
+                self._base.rep(False, count),
+                np=self._base.ncol(qrx.rx2("XX")),
+                root=False,
+                repara=False,
+            )
+            trials.append(
+                SourceWorkingTrial(
+                    int(iteration[0]),
+                    _r_array(accepted, dtype=np.float64),
+                    previous,
+                    float(dev[0]),
+                    float(devold[0]),
+                    float(crit[0]),
+                    self._source_working_proposal(
+                        proposal,
+                        parameters[:count],
+                        float(log_phi[0]),
+                        self._source_fitchol_tolerance(crit),
+                        len(parameters),
+                    ),
+                    _r_array(determinant.rx2("ldet1"), dtype=np.float64),
+                    _r_array(determinant.rx2("ldet2"), dtype=np.float64),
+                )
+            )
+
+        fitter = self._instrumented_bam_fit_chol(
+            (
+                "iter",
+                "lsp0",
+                "Nstep",
+                "lsp",
+                "n.sp",
+                "log.phi",
+                "crit",
+                "dev",
+                "devold",
+                "prop",
+                "qrx",
+                "Sl",
+                "Mp",
+                "nobs",
+            ),
+            capture,
+        )
+        fit = fitter(self._ro.Formula(formula), **arguments)
+        if not states:
+            raise RBridgeError("bgam.fitd made no Sl.fitChol trial")
+        return SourceWorkingModelTrace(
+            states[0],
+            tuple(trials),
+            self._bam_discrete_gaussian_result(
+                fit, smoothing, newdata=None, trial_records=None
+            ),
+        )
+
+    def _source_working_blocks(
+        self, blocks: Any
+    ) -> tuple[SourceWorkingPenaltyBlock, ...]:
+        """Translate an ``Sl.setup`` list without changing any stored value."""
+        from rpy2 import rinterface
+
+        result = []
+        for block in self._ro.ListVector(blocks):
+            start = int(block.rx2("start")[0]) - 1
+            stop = int(block.rx2("stop")[0])
+            transform = _r_array(block.rx2("D"), dtype=np.float64)
+            if transform.ndim == 1:
+                transform = np.diag(transform)
+            roots_r = block.rx2("rS")
+            roots = (
+                ()
+                if roots_r.typeof == rinterface.RTYPES.NILSXP
+                else tuple(_r_array(root, dtype=np.float64) for root in roots_r)
+            )
+            result.append(
+                SourceWorkingPenaltyBlock(
+                    start,
+                    stop,
+                    transform,
+                    tuple(
+                        _r_array(penalty, dtype=np.float64)
+                        for penalty in block.rx2("S")
+                    ),
+                    roots,
+                    tuple(
+                        _r_array(
+                            self._call_internal("pcrossprod", root, trans=True),
+                            dtype=np.float64,
+                        )
+                        for root in (() if not roots else roots_r)
+                    ),
+                    int(block.rx2("rank")[0]),
+                    _r_array(block.rx2("ind"), dtype=bool),
+                    bool(block.rx2("repara")[0]),
+                )
+            )
+        return tuple(result)
+
+    def _source_working_proposal(
+        self,
+        proposal: Any,
+        log_smoothing: np.ndarray,
+        log_scale: float,
+        tolerance: np.ndarray,
+        n_parameters: int,
+    ) -> SourceWorkingProposal:
+        """Translate one ``Sl.fitChol`` list and R's own ``exp(rho)``."""
+        proposal = self._ro.ListVector(proposal)
+        step = _r_array(proposal.rx2("step"), dtype=np.float64).ravel()
+        if step.shape != (n_parameters,):
+            if step.shape != (1,) or step[0] != 0.0:
+                raise RBridgeError("unexpected Sl.fitChol step shape")
+            step = np.zeros(n_parameters)
+        return SourceWorkingProposal(
+            np.array(log_smoothing, dtype=np.float64),
+            _r_array(
+                self._base.exp(self._to_r_vector(log_smoothing)), dtype=np.float64
+            ),
+            float(log_scale),
+            float(tolerance[0]),
+            _r_array(proposal.rx2("beta"), dtype=np.float64).ravel(),
+            _r_array(proposal.rx2("grad"), dtype=np.float64).ravel(),
+            _r_array(proposal.rx2("hess"), dtype=np.float64).reshape(
+                n_parameters, n_parameters, order="F"
+            ),
+            step,
+            float(proposal.rx2("ldetS")[0]),
+            float(proposal.rx2("ldetXXS")[0]),
+        )
+
+    def _source_bam_working_statistics(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        weights: np.ndarray,
+        offset: np.ndarray,
+    ) -> tuple[Any, Any, Any, Any, Any, Any]:
+        """Pinned discrete design, ``Sl.setup`` and reparameterized moments."""
+        self._require_rpy2()
+        base = self._ro.baseenv
+        frame = self._to_r_dataframe(data)
+        setup = self._mgcv.bam(
+            self._ro.Formula(formula), data=frame, discrete=30, fit=False
+        )
+        width = int(self._base.ncol(setup.rx2("X"))[0])
+        design = self._call_internal(
+            "Xbd",
+            setup.rx2("Xd"),
+            self._base.diag(width),
+            setup.rx2("kd"),
+            setup.rx2("ks"),
+            setup.rx2("ts"),
+            setup.rx2("dt"),
+            setup.rx2("v"),
+            setup.rx2("qc"),
+            drop=setup.rx2("drop"),
+        )
+        blocks = self._call_internal("Sl.setup", setup)
+        weight = self._to_r_vector(np.asarray(weights, dtype=np.float64))
+        response = frame.rx2("y")
+        residual = base["-"](
+            response, self._to_r_vector(np.asarray(offset, dtype=np.float64))
+        )
+        weighted_design = base["*"](weight, design)
+        gram = self._base.crossprod(design, weighted_design)
+        rhs = self._base.as_numeric(
+            self._base.crossprod(design, base["*"](weight, residual))
+        )
+        yy = self._base.sum(base["*"](weight, base["^"](residual, 2)))
+        ranks = self._base.c(*(block.rx2("rank") for block in blocks))
+        unpenalized = base["-"](self._base.ncol(design), self._base.sum(ranks))
+        repara = {"inverse": False, "both.sides": True, "cov": False}
+        gram = self._call_internal("Sl.initial.repara", blocks, gram, **repara)
+        rhs = self._call_internal("Sl.initial.repara", blocks, rhs, **repara)
+        return design, blocks, gram, rhs, yy, unpenalized
+
+    def source_bam_sl_fitchol_proposal(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        sp: np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        *,
+        fixed_scale: bool,
+    ) -> dict[str, np.ndarray]:
+        """Evaluate the pinned discrete design and ``Sl.fitChol`` proposal."""
+        base = self._ro.baseenv
+        design, blocks, gram, rhs, yy, unpenalized = (
+            self._source_bam_working_statistics(formula, data, weights, offset)
+        )
+        proposal = self._call_internal(
+            "Sl.fitChol",
+            blocks,
+            gram,
+            rhs,
+            self._base.log(self._to_r_vector(np.array(sp, dtype=np.float64))),
+            yy=yy,
+            **{"log.phi": -3.0, "phi.fixed": fixed_scale},
+            nobs=len(data),
+            Mp=unpenalized,
+            tol=0,
+        )
+        coefficients = self._call_internal(
+            "Sl.initial.repara",
+            blocks,
+            proposal.rx2("beta"),
+            inverse=True,
+            **{"both.sides": False},
+            cov=False,
+        )
+        phi = self._base.exp(self._to_r_vector([-3.0]))
+        residual_sum = base["-"](
+            yy, self._base.sum(base["*"](proposal.rx2("beta"), rhs))
+        )
+        criterion = base["+"](
+            base["+"](
+                base["/"](residual_sum, base["*"](2, phi)),
+                base["/"](
+                    base["-"](proposal.rx2("ldetXXS"), proposal.rx2("ldetS")),
+                    2,
+                ),
+            ),
+            base["/"](
+                base["*"](
+                    base["-"](len(data), unpenalized),
+                    self._base.log(base["*"](base["*"](2, self._base.pi), phi)),
+                ),
+                2,
+            ),
+        )
+        return {
+            "X": _r_array(design),
+            "beta": _r_array(coefficients),
+            "criterion": _r_array(criterion),
+            "grad": _r_array(proposal.rx2("grad")),
+            "hess": _r_array(proposal.rx2("hess")),
+            "step": _r_array(proposal.rx2("step")),
+        }
+
+    def source_bam_sl_fitchol_state(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        log_smoothing: np.ndarray,
+        weights: np.ndarray,
+        offset: np.ndarray,
+        *,
+        fixed_scale: bool,
+        log_scale: float = -3.0,
+    ) -> SourceSlFitCholEvaluation:
+        """Pinned ``Sl.fitChol`` with every input it consumed, at exact rho.
+
+        Unlike :meth:`source_bam_sl_fitchol_proposal`, R receives the log
+        smoothing parameters themselves, so a caller can feed the returned
+        roots, products, moments and R's ``exp(rho)`` into another kernel.
+        """
+        rho = np.asarray(log_smoothing, dtype=np.float64)
+        if rho.ndim != 1 or not len(rho) or not np.all(np.isfinite(rho)):
+            raise ValueError("log_smoothing must be a finite non-empty vector")
+        if not np.isfinite(log_scale):
+            raise ValueError("log_scale must be finite")
+        _, blocks, gram, rhs, yy, unpenalized = self._source_bam_working_statistics(
+            formula, data, weights, offset
+        )
+        values = self._to_r_vector(rho)
+        proposal = self._call_internal(
+            "Sl.fitChol",
+            blocks,
+            gram,
+            rhs,
+            values,
+            yy=yy,
+            **{"log.phi": float(log_scale), "phi.fixed": fixed_scale},
+            nobs=len(data),
+            Mp=unpenalized,
+            tol=0,
+        )
+        determinant = self._call_internal(
+            "ldetS",
+            blocks,
+            values,
+            self._base.rep(False, len(rho)),
+            np=self._base.ncol(gram),
+            root=False,
+            repara=False,
+        )
+        return SourceSlFitCholEvaluation(
+            SourceWorkingModelState(
+                self._source_working_blocks(blocks),
+                _r_array(gram, dtype=np.float64),
+                _r_array(rhs, dtype=np.float64).ravel(),
+                float(yy[0]),
+                len(data),
+                int(unpenalized[0]),
+            ),
+            self._source_working_proposal(
+                proposal,
+                rho,
+                log_scale,
+                np.zeros(1),
+                len(rho) + (not fixed_scale),
+            ),
+            _r_array(determinant.rx2("ldet1"), dtype=np.float64),
+            _r_array(determinant.rx2("ldet2"), dtype=np.float64),
+        )
+
+    def source_bam_penalty_determinant(
+        self, formula: str, data: pd.DataFrame, rho: np.ndarray
+    ) -> dict[str, np.ndarray]:
+        """Return pinned ``ldetS`` value and derivatives for a bam setup."""
+        self._require_rpy2()
+        setup = self._mgcv.bam(
+            self._ro.Formula(formula),
+            data=self._to_r_dataframe(data),
+            discrete=30,
+            fit=False,
+        )
+        values = self._to_r_vector(np.array(rho, dtype=np.float64))
+        result = self._call_internal(
+            "ldetS",
+            self._call_internal("Sl.setup", setup),
+            values,
+            self._base.rep(False, len(rho)),
+            np=self._base.ncol(setup.rx2("X")),
+            root=False,
+            repara=False,
+        )
+        return {
+            "value": _r_array(result.rx2("ldetS")),
+            "first": _r_array(result.rx2("ldet1")),
+            "second": _r_array(result.rx2("ldet2")),
+        }
+
+    def source_bam_penalty_root_products(
+        self, formula: str, data: pd.DataFrame
+    ) -> tuple[tuple[np.ndarray, np.ndarray], ...]:
+        """Return pinned ``Sl.setup`` roots and ``pcrossprod`` products."""
+        self._require_rpy2()
+        setup = self._mgcv.bam(
+            self._ro.Formula(formula),
+            data=self._to_r_dataframe(data),
+            discrete=30,
+            fit=False,
+        )
+        first = self._call_internal("Sl.setup", setup)[0]
+        return tuple(
+            (
+                _r_array(root),
+                _r_array(self._call_internal("pcrossprod", root, trans=True)),
+            )
+            for root in first.rx2("rS")
+        )
+
+    def source_linear_algebra(self) -> SourceLinearAlgebra:
+        """Report the LAPACK and BLAS libraries pinned R is running."""
+        self._require_rpy2()
+        base = self._ro.baseenv
+        lapack = str(base["La_library"]()[0])
+        version = str(base["La_version"]()[0])
+        blas = str(base["extSoftVersion"]().rx2("BLAS")[0])
+        config = None
+        if lapack:
+            try:
+                function = ctypes.CDLL(lapack).openblas_get_config
+            except (OSError, AttributeError):
+                function = None
+            if function is not None:
+                function.argtypes = []
+                function.restype = ctypes.c_char_p
+                raw = function()
+                config = None if raw is None else raw.decode()
+        return SourceLinearAlgebra(lapack, version, blas, config)
+
+    def source_pivoted_matrix_factor(self, matrix: np.ndarray) -> dict[str, np.ndarray]:
+        """Return pinned pivoted ``chol`` fields for an identical R matrix."""
+        self._require_rpy2()
+        factor = self._ro.baseenv["chol"](self._to_r_matrix(matrix), pivot=True)
+        # Copy: views into R vectors dangle once R releases the objects.
+        return {
+            "C": _r_array(factor, dtype=np.float64),
+            "pivot": _r_array(self._base.attr(factor, "pivot")),
+            "rank": _r_array(self._base.attr(factor, "rank")),
+        }
+
+    def source_pivoted_coupled_factors(
+        self, data: pd.DataFrame, rho: np.ndarray
+    ) -> dict[str, np.ndarray]:
+        """Build pinned tensor projected penalty and pivoted factor."""
+        self._require_rpy2()
+        base = self._ro.baseenv
+        setup = self._mgcv.bam(
+            self._ro.Formula('y ~ te(x,z,bs="cr",k=3)'),
+            data=self._to_r_dataframe(data),
+            discrete=30,
+            fit=False,
+        )
+        blocks = self._call_internal("Sl.setup", setup)
+        block = next(block for block in blocks if len(block.rx2("S")) > 1)
+        roots = block.rx2("rS")
+        log_smoothing = self._to_r_vector(np.asarray(rho, dtype=np.float64))
+        penalty = base["+"](
+            base["*"](
+                self._base.tcrossprod(roots[0]),
+                self._base.exp(base["["](log_smoothing, 1)),
+            ),
+            base["*"](
+                self._base.tcrossprod(roots[1]),
+                self._base.exp(base["["](log_smoothing, 2)),
+            ),
+        )
+        diagonal = self._base.sqrt(self._base.diag(penalty))
+        scaled = base["/"](self._base.t(base["/"](penalty, diagonal)), diagonal)
+        factor = base["chol"](scaled, pivot=True)
+        return {
+            "A": _r_array(scaled, dtype=np.float64),
+            "C": _r_array(factor, dtype=np.float64),
+            "pivot": _r_array(self._base.attr(factor, "pivot")),
+            "rank": _r_array(self._base.attr(factor, "rank")),
+        }
+
+    def source_working_penalty_setup(
+        self, penalties: tuple[np.ndarray, ...], ranks: tuple[int, ...]
+    ) -> tuple[np.ndarray, int, tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
+        """Return pinned ``Sl.setup`` transform, projected penalties and roots."""
+        self._require_rpy2()
+        size = len(penalties[0])
+        base = self._ro.baseenv
+        source_penalties = base["list"](
+            *(self._to_r_matrix(penalty) for penalty in penalties)
+        )
+        smooth = self._ro.ListVector(
+            {
+                "S": source_penalties,
+                "rank": self._to_r_vector(np.asarray(ranks, dtype=np.int32)),
+                "first.para": 1,
+                "last.para": size,
+                "repara": True,
+            }
+        )
+        setup = self._ro.ListVector(
+            {
+                "X": self._base.matrix(0.0, 1, size),
+                "n.paraPen": 0,
+                "smooth": base["list"](smooth),
+            }
+        )
+        blocks = self._call_internal("Sl.setup", setup)
+        if len(blocks) != 1:
+            raise RBridgeError("Pinned Sl.setup did not retain one penalty block")
+        block = blocks[0]
+        transform = _r_array(block.rx2("D"), dtype=np.float64)
+        if transform.size == size:
+            transform = np.diag(transform)
+        rank = int(block.rx2("rank")[0])
+        if len(penalties) == 1:
+            projected = (_r_array(self._base.diag(block.rx2("ind"))),)
+            roots: tuple[np.ndarray, ...] = ()
+        else:
+            projected = tuple(
+                np.pad(_r_array(penalty), ((0, size - rank), (0, size - rank)))
+                for penalty in block.rx2("S")
+            )
+            roots = tuple(_r_array(root) for root in block.rx2("rS"))
+        return transform, rank, projected, roots

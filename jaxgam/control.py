@@ -142,6 +142,9 @@ class FitControl:
     gaussian_compression: bool = False
     efs: EFSControl = field(default_factory=EFSControl)
     discretization: ContinuousDiscretizationControl | None = None
+    smoothing_strategy: Literal["exact_reml", "working_model_reml"] = "exact_reml"
+    working_model_max_iterations: int = 200
+    working_model_epsilon: float = 1e-7
 
     def __post_init__(self) -> None:
         if self.execution not in ("dense", "stream", "discrete"):
@@ -154,6 +157,26 @@ class FitControl:
             raise ValueError("uncertainty must be 'none', 'fisher', or 'covariance'.")
         if self.linear_solver not in ("cholesky", "qr"):
             raise ValueError("linear_solver must be 'cholesky' or 'qr'.")
+        if self.smoothing_strategy not in ("exact_reml", "working_model_reml"):
+            raise ValueError("Unsupported smoothing_strategy.")
+        if (
+            self.smoothing_strategy == "working_model_reml"
+            and self.execution != "discrete"
+        ):
+            raise ValueError("working_model_reml requires execution='discrete'.")
+        if (
+            isinstance(self.working_model_max_iterations, bool)
+            or not isinstance(self.working_model_max_iterations, int)
+            or self.working_model_max_iterations < 1
+        ):
+            raise ValueError("working_model_max_iterations must be a positive integer.")
+        if (
+            isinstance(self.working_model_epsilon, bool)
+            or not isinstance(self.working_model_epsilon, Real)
+            or not math.isfinite(self.working_model_epsilon)
+            or self.working_model_epsilon <= 0.0
+        ):
+            raise ValueError("working_model_epsilon must be positive and finite.")
         if not isinstance(self.gaussian_compression, bool):
             raise ValueError("gaussian_compression must be a boolean.")
         if not isinstance(self.efs, EFSControl):

@@ -5,6 +5,9 @@ discretization policy. Every other fit dispatches exactly as before and never
 enters the discrete route. A discrete fit owns its solves: it rejects
 ``linear_solver='qr'`` and reports an unmet ``gaussian_compression`` request
 in ``execution_fallback_reason`` while its numbers stay bitwise identical.
+Its smoothing parameters are fixed or selected by
+``smoothing_strategy='working_model_reml'``, which only the discrete route
+accepts; the dense ``optimizer='efs'`` selection is rejected there.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from jaxgam.data.source import DataFrameRowSource
 from tests.helpers import _AssertCollector
 
 _FORMULA = "y ~ z + s(x, bs='cr', k=6)"
-_DISCRETE_ENTRY_POINTS = ("fit_fixed_sp_discrete_gaussian",)
+_DISCRETE_ENTRY_POINTS = ("fit_fixed_sp_discrete_gaussian", "fit_discrete_gaussian")
 _COMPARED_FIELDS = (
     "coefficients",
     "deviance",
@@ -39,6 +42,7 @@ _COMPARED_FIELDS = (
     "prediction_policy",
     "fitting_source_scans",
     "fitting_batches_scanned",
+    "working_model_proposal_evaluations",
     "fit_peak_bytes",
     "fit_memory_budget_bytes",
     "n",
@@ -77,6 +81,10 @@ def test_fit_control_pairs_discrete_execution_with_its_policy() -> None:
         FitControl(execution="discrete", discretization=object())
     with pytest.raises(ValueError, match="'dense', 'stream', or 'discrete'"):
         FitControl(execution="operator")
+    assert FitControl().smoothing_strategy == "exact_reml"
+    for execution in ("dense", "stream"):
+        with pytest.raises(ValueError, match="working_model_reml requires"):
+            FitControl(execution=execution, smoothing_strategy="working_model_reml")
 
 
 @pytest.fixture
@@ -200,3 +208,15 @@ def test_discrete_gaussian_qr_request_keeps_the_discrete_fit_bitwise() -> None:
         ),
     )
     collector.raise_if_any("discrete fit with an unmet Gaussian QR request")
+
+
+def test_discrete_route_rejects_the_dense_efs_selection() -> None:
+    source = DataFrameRowSource(_frame(), response="y")
+    with pytest.raises(NotImplementedError, match="optimizer='efs'"):
+        GAM(
+            _FORMULA,
+            optimizer="efs",
+            control=_discrete_control(smoothing_strategy="working_model_reml"),
+        ).fit(source, result="prediction")
+    with pytest.raises(NotImplementedError, match="working_model_reml"):
+        GAM(_FORMULA, control=_discrete_control()).fit(source, result="prediction")

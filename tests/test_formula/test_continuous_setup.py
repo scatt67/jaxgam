@@ -61,9 +61,9 @@ def test_setup_runs_dense_basis_only_on_padded_compact_frame(monkeypatch) -> Non
     seen = []
     original = ModelSetup.build
 
-    def spy(spec, data, weights=None, offset=None):
+    def spy(spec, data, weights=None, offset=None, **kwargs):
         seen.append(data)
-        return original(spec, data, weights=weights, offset=offset)
+        return original(spec, data, weights=weights, offset=offset, **kwargs)
 
     monkeypatch.setattr(continuous_setup.ModelSetup, "build", staticmethod(spy))
     result = build_continuous_discrete_setup(formula, _source(frame), m=6, batch_rows=7)
@@ -225,8 +225,8 @@ def test_source_change_after_basis_setup_is_rejected(monkeypatch) -> None:
     source = _source(frame)
     original = ModelSetup.build
 
-    def mutate(spec, data, weights=None, offset=None):
-        result = original(spec, data, weights=weights, offset=offset)
+    def mutate(spec, data, weights=None, offset=None, **kwargs):
+        result = original(spec, data, weights=weights, offset=offset, **kwargs)
         source._columns["x"][0] = 99.0
         return result
 

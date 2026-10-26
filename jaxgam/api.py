@@ -605,14 +605,17 @@ class GAM:
         result: Literal["full", "inference", "prediction"],
         family: ExponentialFamily,
     ) -> GAMPredictionResult:
-        """Run the bounded fixed-sp continuous-discrete route.
+        """Run fixed or opt-in Gaussian working-model continuous-discrete fitting.
 
         The route is taken only on an explicit ``execution='discrete'``
         request and owns its solves: ``linear_solver='qr'`` is rejected, and a
         ``gaussian_compression`` request is reported unmet in
         ``execution_fallback_reason`` while the discrete fit runs unchanged.
+        Smoothing parameters are fixed or selected by
+        ``smoothing_strategy='working_model_reml'``; the dense
+        ``optimizer='efs'`` selection is not a discrete strategy.
         """
-        from jaxgam.execution.discrete import fit_fixed_sp_discrete_gaussian
+        from jaxgam.execution.discrete import fit_discrete_gaussian
         from jaxgam.families.standard import Gaussian
 
         if not isinstance(data, RowSource):
@@ -633,17 +636,23 @@ class GAM:
             raise NotImplementedError(
                 "linear_solver='qr' currently requires execution='stream'."
             )
-        if self.sp is None:
+        if self.sp is None and self.control.smoothing_strategy != "working_model_reml":
             raise NotImplementedError(
-                "Discrete fitting currently requires explicit fixed sp; "
-                "bgam.fitd performance iteration is not implemented."
+                "Discrete fitting requires explicit fixed sp or opt-in "
+                "smoothing_strategy='working_model_reml'."
+            )
+        if self.sp is None and self.optimizer != "newton":
+            raise NotImplementedError(
+                f"optimizer={self.optimizer!r} does not apply to discrete fitting; "
+                "smoothing_strategy='working_model_reml' selects its smoothing "
+                "parameters."
             )
         if not isinstance(family, Gaussian) or not family.is_canonical:
             raise NotImplementedError(
                 "Discrete fitting currently supports Gaussian identity only."
             )
         spec = parse_formula(self.formula)
-        state = fit_fixed_sp_discrete_gaussian(
+        state = fit_discrete_gaussian(
             spec,
             data,
             self.sp,
@@ -651,7 +660,7 @@ class GAM:
             device=_resolve_device(self.device),
         )
         return _with_execution_fallback_reason(
-            GAMPredictionResult._from_fixed_sp_discrete_gaussian(
+            GAMPredictionResult._from_discrete_gaussian(
                 fit_state=state,
                 family=family,
                 formula=self.formula,

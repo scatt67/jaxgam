@@ -875,6 +875,219 @@ class TestRBridgeSubprocessFallback:
         np.testing.assert_allclose(r1["edf_total"], r2["edf_total"], rtol=STRICT.rtol)
 
 
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+@pytest.mark.parametrize("scale", [-1.0, float(np.exp(-3.0))])
+def test_bam_discrete_gaussian_uses_requested_working_start_and_scale(
+    scale: float,
+) -> None:
+    """Live Sl.fitChol trace distinguishes starts from fixed smoothing."""
+    position = np.arange(97, dtype=float)
+    x = (position + 0.2 * np.sin(position * 0.7)) / len(position)
+    z = np.cos(position * 0.23) + 0.07 * np.sin(position * 0.91)
+    y = 0.4 - 0.3 * z + np.sin(4.5 * x) + 0.05 * np.cos(position)
+    frame = pd.DataFrame({"x": x, "z": z, "y": y})
+    bridge = RBridge(mode="rpy2")
+    start = np.array([1e-4, 1e4])
+    fit = bridge.fit_bam_discrete_gaussian(
+        "y ~ te(x,z,bs='cr',k=3)",
+        frame,
+        m=30,
+        initial_sp=start,
+        initial_scale=float(np.exp(-3.0)),
+        scale=scale,
+        capture_trials=True,
+    )
+    assert fit.mgcv_converged
+    assert fit.n_iter > 2
+    assert fit.trial_records is not None
+    assert len(fit.trial_records) >= fit.n_iter - 1
+    np.testing.assert_allclose(
+        fit.trial_records[0, : len(start)],
+        np.log(start),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert fit.trial_records.shape[1] == (19 if scale < 0 else 12)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        bridge.fit_bam_discrete_gaussian(
+            "y ~ te(x,z,bs='cr',k=3)",
+            frame,
+            sp=start,
+            initial_sp=start,
+            initial_scale=float(np.exp(-3.0)),
+        )
+
+
+def _working_frame() -> pd.DataFrame:
+    position = np.arange(97, dtype=float)
+    x = (position + 0.2 * np.sin(position * 0.7)) / len(position)
+    z = np.cos(position * 0.23) + 0.07 * np.sin(position * 0.91)
+    y = 0.4 - 0.3 * z + np.sin(4.5 * x) + 0.05 * np.cos(position)
+    return pd.DataFrame({"x": x, "z": z, "y": y})
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+@pytest.mark.parametrize("scale", [-1.0, float(np.exp(-3.0))])
+def test_trace_bam_working_model_reports_replayable_frozen_state(scale: float) -> None:
+    """Tracing is numerically transparent and every trial is a source state."""
+    frame = _working_frame()
+    bridge = RBridge(mode="rpy2")
+    weights = np.linspace(0.6, 1.4, len(frame))
+    offset = np.linspace(-0.1, 0.2, len(frame))
+    arguments = {
+        "initial_sp": np.array([1e-4, 1e4]),
+        "initial_scale": float(np.exp(-3.0)),
+        "scale": scale,
+        "weights": weights,
+        "offset": offset,
+    }
+    trace = bridge.trace_bam_working_model(
+        "y ~ te(x,z,bs='cr',k=3)", frame, **arguments
+    )
+    plain = bridge.fit_bam_discrete_gaussian(
+        "y ~ te(x,z,bs='cr',k=3)", frame, m=30, **arguments
+    )
+    collector = _AssertCollector()
+    for name in ("coefficients", "smoothing_params", "fitted_values"):
+        collector.check(
+            f"untraced {name}",
+            lambda name=name: np.testing.assert_array_equal(
+                getattr(trace.fit, name), getattr(plain, name)
+            ),
+        )
+    (block,) = trace.state.blocks
+    n_parameters = 2 + (scale < 0)
+    collector.check(
+        "frozen state",
+        lambda: (
+            np.testing.assert_allclose(
+                trace.state.gram, trace.state.gram.T, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+            np.testing.assert_array_equal(
+                [block.start, block.stop, block.rank, trace.state.null_dimension],
+                [1, 9, 5, 4],
+            ),
+            np.testing.assert_array_equal(
+                [len(block.roots), len(block.root_products), trace.state.n_obs],
+                [2, 2, len(frame)],
+            ),
+        ),
+    )
+    first = trace.trials[0]
+    collector.check(
+        "iteration-one start",
+        lambda: (
+            np.testing.assert_allclose(
+                first.accepted[:2],
+                np.log(arguments["initial_sp"]),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+            np.testing.assert_array_equal(first.step, np.zeros(n_parameters)),
+            np.testing.assert_array_equal(
+                [first.iteration, first.deviance, first.criterion], [1, 0.0, 0.0]
+            ),
+        ),
+    )
+    for index, trial in enumerate(trace.trials):
+        proposal = trial.proposal
+        collector.check(
+            f"trial {index} lsp = lsp0 + Nstep",
+            lambda trial=trial, proposal=proposal: np.testing.assert_array_equal(
+                trial.accepted + trial.step,
+                np.r_[proposal.log_smoothing, proposal.log_scale][:n_parameters],
+            ),
+        )
+        collector.check(
+            f"trial {index} shapes",
+            lambda proposal=proposal, trial=trial: np.testing.assert_array_equal(
+                [
+                    *proposal.hessian.shape,
+                    len(proposal.gradient),
+                    len(proposal.step),
+                    *trial.penalty_first.shape,
+                    *trial.penalty_second.shape,
+                ],
+                [n_parameters] * 4 + [2, 2, 2],
+            ),
+        )
+    collector.check(
+        "iterations",
+        lambda: np.testing.assert_array_equal(
+            sorted({trial.iteration for trial in trace.trials}),
+            np.arange(1, trace.fit.n_iter),
+        ),
+    )
+    collector.raise_if_any(f"bgam.fitd trace scale={scale}")
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_source_bam_sl_fitchol_state_validates_and_solves_its_system() -> None:
+    frame = _working_frame()
+    bridge = RBridge(mode="rpy2")
+    weights = np.linspace(0.6, 1.4, len(frame))
+    offset = np.linspace(-0.1, 0.2, len(frame))
+    for bad in (np.array([]), np.array([np.nan, 0.0]), np.zeros((1, 2))):
+        with pytest.raises(ValueError, match="log_smoothing"):
+            bridge.source_bam_sl_fitchol_state(
+                "y ~ te(x,z,bs='cr',k=3)",
+                frame,
+                bad,
+                weights,
+                offset,
+                fixed_scale=True,
+            )
+    with pytest.raises(ValueError, match="log_scale"):
+        bridge.source_bam_sl_fitchol_state(
+            "y ~ te(x,z,bs='cr',k=3)",
+            frame,
+            np.zeros(2),
+            weights,
+            offset,
+            fixed_scale=True,
+            log_scale=np.inf,
+        )
+    evaluation = bridge.source_bam_sl_fitchol_state(
+        "y ~ te(x,z,bs='cr',k=3)",
+        frame,
+        np.log([0.35, 0.7]),
+        weights,
+        offset,
+        fixed_scale=False,
+    )
+    state, proposal = evaluation.state, evaluation.proposal
+    (block,) = state.blocks
+    hessian = state.gram.copy()
+    penalized = block.start + np.flatnonzero(block.penalized)
+    for lam, penalty in zip(proposal.smoothing, block.penalties, strict=True):
+        hessian[np.ix_(penalized, penalized)] += lam * penalty
+    np.testing.assert_allclose(
+        hessian @ proposal.coefficients,
+        state.rhs,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert proposal.gradient.shape == proposal.step.shape == (3,)
+    assert evaluation.penalty_second.shape == (2, 2)
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_source_linear_algebra_reports_r_lapack_provider() -> None:
+    from tests.r_bridge import SourceLinearAlgebra
+
+    report = RBridge(mode="rpy2").source_linear_algebra()
+    assert report.lapack_library
+    assert report.lapack_version.count(".") == 2
+    assert report.blas_library
+    if report.openblas_config is None:
+        assert not report.lapack_is_openblas("OpenBLAS")
+    else:
+        assert report.lapack_is_openblas("OpenBLAS ")
+        assert not report.lapack_is_openblas("OpenBLAS 9.9.9 ")
+    synthetic = SourceLinearAlgebra("lapack", "3.12.0", "blas", "OpenBLAS 0.3.26 X")
+    assert synthetic.lapack_is_openblas("OpenBLAS 0.3.26 ")
+
+
 def test_bam_discrete_gaussian_rejects_legacy_mode_before_r_object_conversion():
     frame = pd.DataFrame({"x": [0.0, 1.0], "y": [1.0, 2.0]})
     with pytest.raises(RBridgeError, match="requires RBridge"):

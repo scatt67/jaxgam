@@ -53,6 +53,7 @@ class ContinuousDiscreteSetup:
     compact: CompactSetupFrame
     predict_spec: PredictSpec
     penalties: PenaltyStructure | None
+    source_determinant_penalties: PenaltyStructure | None
     source_fingerprint: str
     basis_fingerprint: str
     n_obs: int
@@ -201,7 +202,7 @@ def _prospective_basis_bytes(formula: FormulaSpec, frame: pd.DataFrame) -> int:
             margin_work += q * knots + knots * knots
     float_items = (
         8 * q * max(total, 1)  # block, constrained, assembled and ownership copies
-        + 8 * local_squares  # raw/constrained/frozen local penalty copies
+        + 9 * local_squares  # includes source determinant coordinates
         + 6 * max(total, 1) ** 2  # QR, dependence and centering work
         + 4 * margin_work  # marginal/kernel construction and transforms
     )
@@ -295,10 +296,15 @@ def build_continuous_discrete_setup(
         # constraints here; PredictSpec retains the underlying base smooth so
         # the descriptor stage can store its by-free table and multiplier as
         # separate indexed margins.  The compact training X is discarded.
-        setup = ModelSetup.build(formula, compact.frame)
+        setup = ModelSetup.build(
+            formula, compact.frame, source_penalty_coordinates=True
+        )
         predict_spec = build_predict_spec(setup)
         penalties = setup.penalties
-        retained_basis = _resident_size((predict_spec, penalties))
+        source_determinant_penalties = setup.source_determinant_penalties
+        retained_basis = _resident_size(
+            (predict_spec, penalties, source_determinant_penalties)
+        )
         retained_table = compact.retained_table_bytes + retained_basis
         construction_peak = max(
             compact.construction_peak_bytes,
@@ -320,6 +326,7 @@ def build_continuous_discrete_setup(
             compact=compact,
             predict_spec=predict_spec,
             penalties=penalties,
+            source_determinant_penalties=source_determinant_penalties,
             source_fingerprint=source_fingerprint,
             basis_fingerprint=_basis_token(predict_spec),
             n_obs=source.n_rows,

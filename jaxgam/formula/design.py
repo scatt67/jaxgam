@@ -12,7 +12,7 @@ R source reference: R/gam.r gam.setup()
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,7 +22,11 @@ from scipy import linalg
 
 from jaxgam.formula import predict_matrix
 from jaxgam.formula.terms import FormulaSpec, ParametricTerm, SmoothSpec
-from jaxgam.penalties.structure import PenaltyStructure, make_penalty_structure
+from jaxgam.penalties.structure import (
+    DenseLocalPenalty,
+    PenaltyStructure,
+    make_penalty_structure,
+)
 from jaxgam.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
@@ -141,6 +145,7 @@ class ModelSetup:
     parametric_terms: tuple[ParametricTerm, ...]
     parametric_keep_cols: tuple[int, ...] = ()
     dropped_param_names: tuple[str, ...] = ()
+    source_determinant_penalties: PenaltyStructure | None = None
     _predict_spec_cache: predict_matrix.PredictSpec | None = field(
         init=False, default=None, compare=False, repr=False
     )
@@ -156,6 +161,7 @@ class ModelSetup:
         data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame,
         weights: npt.NDArray[np.floating] | None = None,
         offset: npt.NDArray[np.floating] | None = None,
+        source_penalty_coordinates: bool = False,
     ) -> ModelSetup:
         """Assemble the full model from a parsed formula and data.
 
@@ -307,6 +313,48 @@ class ModelSetup:
             total_p, smooth_blocks, S_constrained
         )
 
+        source_determinant_penalties = None
+        if source_penalty_coordinates and composite_penalty is not None:
+            from jaxgam.smooths.source_penalty_coordinates import (
+                source_centered_penalties,
+            )
+
+            source_blocks = list(composite_penalty.blocks)
+            for smooth, term, raw_X, raw_S in zip(
+                smooths, smooth_blocks, X_blocks, S_blocks, strict=True
+            ):
+                if len(raw_S) < 2 or isinstance(smooth, FactorBySmooth):
+                    continue
+                if term.Z_centering is None:
+                    source_S = tuple(raw_S)
+                else:
+                    source_S = source_centered_penalties(raw_X, tuple(raw_S))
+                if term.del_index:
+                    keep = [
+                        i
+                        for i in range(source_S[0].shape[0])
+                        if i not in term.del_index
+                    ]
+                    source_S = tuple(S[np.ix_(keep, keep)] for S in source_S)
+                for index, block in enumerate(source_blocks):
+                    if (
+                        block.start == term.col_start
+                        and block.stop == term.col_start + term.n_coefs
+                        and block.sp_indices == term.penalty_indices
+                    ):
+                        source_blocks[index] = replace(
+                            block,
+                            local_penalties=tuple(
+                                DenseLocalPenalty(S) for S in source_S
+                            ),
+                        )
+                        break
+                else:
+                    raise RuntimeError("Source determinant block was not found.")
+            source_determinant_penalties = PenaltyStructure(
+                total_p, tuple(source_blocks)
+            )
+
         # 2g. Build SmoothInfo and term_names
         smooth_infos = cls._build_smooth_info(smooths, coef_map)
         term_names = cls._build_term_names(param_names, smooths, coef_map)
@@ -338,6 +386,7 @@ class ModelSetup:
             parametric_terms=tuple(formula_spec.parametric_terms),
             parametric_keep_cols=tuple(parametric_keep_cols),
             dropped_param_names=tuple(dropped_param_names),
+            source_determinant_penalties=source_determinant_penalties,
         )
 
     # ------------------------------------------------------------------

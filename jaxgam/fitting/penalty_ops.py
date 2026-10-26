@@ -112,14 +112,28 @@ def _dense_local(penalty: JaxLocalPenalty) -> jax.Array:
     return jnp.eye(penalty.size, dtype=penalty.values.dtype) * penalty.values
 
 
-def apply(structure: JaxPenaltyStructure, beta: jax.Array, rho: jax.Array) -> jax.Array:
-    """Return ``S_lambda beta`` without forming any individual global S_j."""
+def _smoothing(rho: jax.Array, smoothing: jax.Array | None, sp: int) -> jax.Array:
+    """``exp(rho[sp])``, or a caller-owned exponential of the same state."""
+    return jnp.exp(rho[sp]) if smoothing is None else smoothing[sp]
+
+
+def apply(
+    structure: JaxPenaltyStructure,
+    beta: jax.Array,
+    rho: jax.Array,
+    *,
+    smoothing: jax.Array | None = None,
+) -> jax.Array:
+    """Return ``S_lambda beta`` without forming any individual global S_j.
+
+    ``smoothing`` optionally supplies ``exp(rho)`` evaluated elsewhere.
+    """
     result = jnp.zeros_like(beta)
     for block in structure.blocks:
         local_beta = beta[block.start : block.stop]
         local_result = jnp.zeros_like(local_beta)
         for sp, penalty in zip(block.sp_indices, block.penalties, strict=True):
-            local_result = local_result + jnp.exp(rho[sp]) * _apply_local(
+            local_result = local_result + _smoothing(rho, smoothing, sp) * _apply_local(
                 penalty, local_beta
             )
         result = result.at[block.start : block.stop].set(local_result)

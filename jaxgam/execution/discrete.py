@@ -1,14 +1,9 @@
-"""Bounded fixed-sp Gaussian fitting on a continuous-discrete design.
-
-This is the first PR11 fitting route.  It deliberately implements only the
-fixed smoothing-parameter additive-Gaussian case from ``mgcv::bgam.fitd``.
-Performance-iteration smoothing and request-wise ``predict.bamd`` compression
-remain separate policies.
-"""
+"""Bounded fixed and working-model Gaussian continuous-discrete fitting."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import warnings
+from dataclasses import dataclass, replace
 
 import numpy as np
 import numpy.typing as npt
@@ -16,6 +11,10 @@ import scipy.linalg as sla
 
 from jaxgam.control import ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import RowSource
+from jaxgam.execution.working_model import (
+    WorkingModelIteration,
+    fit_gaussian_working_model_statistics,
+)
 from jaxgam.fitting.discrete_ops import (
     discrete_xbd,
     discrete_xwxd,
@@ -35,6 +34,7 @@ from jaxgam.formula.discrete_design import (
 from jaxgam.formula.fitting_prepare import total_penalty_spaces
 from jaxgam.formula.predict_matrix import PredictSpec
 from jaxgam.formula.terms import FormulaSpec
+from jaxgam.inference.predictor import PivotedQRFisherFactor
 from jaxgam.penalties.structure import DenseLocalPenalty, PenaltyStructure
 from jaxgam.smooths.by_variable import FactorBySmooth
 
@@ -52,8 +52,8 @@ class DiscreteFitMemoryPlan:
 
 
 @dataclass(frozen=True)
-class FixedSpDiscreteGaussianFit:
-    """Row-free state returned by the bounded fixed-sp fit."""
+class DiscreteGaussianFit:
+    """Row-free Gaussian state with its actual smoothing strategy."""
 
     coefficients: npt.NDArray[np.float64]
     deviance: float
@@ -70,6 +70,12 @@ class FixedSpDiscreteGaussianFit:
     fitting_batches_scanned: int
     scale_iterations: int
     memory_plan: DiscreteFitMemoryPlan
+    smoothing_strategy: str = "fixed"
+    converged: bool = True
+    proposal_evaluations: int = 0
+    working_model_trace: tuple[WorkingModelIteration, ...] = ()
+    fisher_qr_factor: PivotedQRFisherFactor | None = None
+    fisher_transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
 
 
 def _fixed_sp(sp: npt.ArrayLike, n_penalties: int) -> tuple[np.ndarray, np.ndarray]:
@@ -321,7 +327,19 @@ def fit_fixed_sp_discrete_gaussian(
     *,
     control: FitControl,
     device: object | None = None,
-) -> FixedSpDiscreteGaussianFit:
+) -> DiscreteGaussianFit:
+    """Fit an explicit fixed-sp Gaussian model on the compact design."""
+    return fit_discrete_gaussian(spec, source, sp, control=control, device=device)
+
+
+def fit_discrete_gaussian(
+    spec: FormulaSpec,
+    source: RowSource,
+    sp: npt.ArrayLike | None,
+    *,
+    control: FitControl,
+    device: object | None = None,
+) -> DiscreteGaussianFit:
     """Fit one Gaussian identity model using bounded indexed actions.
 
     Two fitting scans are intentional. The first forms sufficient statistics;
@@ -329,6 +347,9 @@ def fit_fixed_sp_discrete_gaussian(
     cancellation for nearly exact fits.
     """
     policy = control.discretization
+    working_model = sp is None
+    if working_model and control.smoothing_strategy != "working_model_reml":
+        raise NotImplementedError("Discrete estimated sp requires working_model_reml.")
     if control.execution != "discrete" or not isinstance(
         policy, ContinuousDiscretizationControl
     ):
@@ -381,8 +402,9 @@ def fit_fixed_sp_discrete_gaussian(
                 f"{memory.fit_peak_bytes} bytes, exceeding "
                 f"FitControl.memory_budget_bytes={memory.budget_bytes}."
             )
-        smoothing, log_smoothing = _fixed_sp(sp, penalties.n_penalties)
-        penalty = penalties.materialize(log_smoothing)
+        if not working_model:
+            smoothing, log_smoothing = _fixed_sp(sp, penalties.n_penalties)
+            penalty = penalties.materialize(log_smoothing)
         device_descriptor = to_device_discrete_design(descriptor, device)
         gram = np.zeros((descriptor.n_coef, descriptor.n_coef))
         rhs = np.zeros(descriptor.n_coef)
@@ -392,6 +414,7 @@ def fit_fixed_sp_discrete_gaussian(
         y_mean = 0.0
         y_centered_square_sum = 0.0
         y_origin = None
+        response_square_sum = 0.0
         offset_nonzero = False
         for batch in source.scan(control.batch_rows):
             size = len(batch.row_positions)
@@ -422,6 +445,8 @@ def fit_fixed_sp_discrete_gaussian(
             rhs += np.asarray(
                 discrete_xwyd(device_descriptor, selectors, weights, y - offset)
             )
+            if working_model:
+                response_square_sum += float(np.sum(weights * (y - offset) ** 2))
             # R initializes log(phi) from unweighted var(y).  Merge centered
             # batch moments around one fixed origin, so a large response
             # location cannot cancel its small variance in raw y'y moments.
@@ -448,15 +473,71 @@ def fit_fixed_sp_discrete_gaussian(
             raise RuntimeError("RowSource yielded fewer fitting rows than declared.")
         if source.fingerprint() != fingerprint:
             raise RuntimeError("RowSource changed during discrete fitting.")
-        hessian = 0.5 * (gram + gram.T) + penalty
-        try:
-            factor = np.linalg.cholesky(hessian)
-        except np.linalg.LinAlgError as error:
-            raise np.linalg.LinAlgError(
-                "Discrete fixed-sp Hessian is not positive definite; "
-                "rank-deficient QR fitting is not implemented for this route."
-            ) from error
-        beta = sla.cho_solve((factor, True), rhs)
+        selected = None
+        if working_model:
+            if source.n_rows < 2:
+                raise FloatingPointError(
+                    "Gaussian scale initialization needs two rows."
+                )
+            selected = fit_gaussian_working_model_statistics(
+                gram,
+                rhs,
+                response_square_sum,
+                y_centered_square_sum / (source.n_rows - 1),
+                penalties,
+                source.n_rows,
+                determinant_penalties=setup.source_determinant_penalties,
+                control=control,
+                available_workspace_bytes=memory.budget_bytes - memory.fit_peak_bytes,
+                device=device,
+            )
+            extra = selected.memory_plan.additional_peak_bytes
+            memory = replace(
+                memory,
+                solver_workspace_bytes=memory.solver_workspace_bytes + extra,
+                fit_peak_bytes=memory.fit_peak_bytes + extra,
+            )
+            log_smoothing = selected.log_smoothing
+            smoothing = np.exp(log_smoothing)
+            penalty = penalties.materialize(log_smoothing)
+            if not selected.converged:
+                warnings.warn(
+                    "Gaussian working-model REML did not converge "
+                    "within its iteration limit.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        qr_factor = None
+        transforms = ()
+        if selected is not None:
+            selected_pivots = selected.factor_pivots[: selected.factor_rank]
+            qr_factor = PivotedQRFisherFactor(
+                R=selected.factor_upper[: selected.factor_rank, : selected.factor_rank]
+                * selected.factor_diagonal[selected_pivots][None, :],
+                pivots=np.arange(selected.factor_rank, dtype=np.intp),
+                keep=selected_pivots,
+                original_n_coef=descriptor.n_coef,
+            )
+            inverse = qr_factor.hessian_inverse(np.eye(descriptor.n_coef))
+            transforms = selected.coefficient_transforms
+            for start, stop, _, values in transforms:
+                inverse[start:stop, :] = values @ inverse[start:stop, :]
+                inverse[:, start:stop] = inverse[:, start:stop] @ values.T
+            factor = None
+        else:
+            hessian = 0.5 * (gram + gram.T) + penalty
+            try:
+                factor = np.linalg.cholesky(hessian)
+            except np.linalg.LinAlgError as error:
+                raise np.linalg.LinAlgError(
+                    "Discrete fixed-sp Hessian is not positive definite; "
+                    "rank-deficient QR fitting is not implemented for this route."
+                ) from error
+        beta = (
+            selected.coefficients
+            if selected is not None
+            else sla.cho_solve((factor, True), rhs)
+        )
 
         # Direct residual scan is stable for exact and nearly exact fits.
         deviance = 0.0
@@ -485,39 +566,71 @@ def fit_fixed_sp_discrete_gaussian(
         if source.fingerprint() != fingerprint:
             raise RuntimeError("RowSource changed during discrete residual evaluation.")
 
-        inverse_gram = sla.cho_solve((factor, True), gram)
+        inverse_gram = (
+            inverse @ gram
+            if selected is not None
+            else sla.cho_solve((factor, True), gram)
+        )
         edf = float(np.trace(inverse_gram))
         rank = _penalty_rank(penalties)
         null_dimension = descriptor.n_coef - rank
-        penalized = deviance + float(beta @ penalty @ beta)
-        score_scale, scale_iterations = _pinned_fixed_scale(
-            penalized,
-            source.n_rows,
-            null_dimension,
-            y_centered_square_sum,
+        if selected is None:
+            penalized = deviance + float(beta @ penalty @ beta)
+            score_scale, scale_iterations = _pinned_fixed_scale(
+                penalized,
+                source.n_rows,
+                null_dimension,
+                y_centered_square_sum,
+            )
+        else:
+            # bgam.fitd's criterion penalty lives in Sl.setup coordinates;
+            # an original-coordinate b'Sb cancels when one sp is very large.
+            penalized = deviance + selected.penalty_quadratic
+            score_scale, scale_iterations = selected.scale, selected.n_iter
+        score = (
+            _reml_score(
+                deviance=deviance,
+                beta=beta,
+                penalty=penalty,
+                penalty_structure=penalties,
+                log_smoothing=log_smoothing,
+                factor=factor,
+                score_scale=score_scale,
+                n_obs=source.n_rows,
+                null_dimension=_pinned_criterion_null_dimension(
+                    setup.predict_spec, null_dimension
+                ),
+            )
+            if selected is None
+            else float(
+                penalized / (2.0 * score_scale)
+                + (selected.logdet_hessian - selected.logdet_penalty) / 2.0
+                + (
+                    source.n_rows
+                    - _pinned_criterion_null_dimension(
+                        setup.predict_spec, null_dimension
+                    )
+                )
+                * np.log(2.0 * np.pi * score_scale)
+                / 2.0
+            )
         )
-        score = _reml_score(
-            deviance=deviance,
-            beta=beta,
-            penalty=penalty,
-            penalty_structure=penalties,
-            log_smoothing=log_smoothing,
-            factor=factor,
-            score_scale=score_scale,
-            n_obs=source.n_rows,
-            null_dimension=_pinned_criterion_null_dimension(
-                setup.predict_spec, null_dimension
-            ),
-        )
+        if not np.isfinite(score) or not np.isfinite(edf):
+            raise FloatingPointError("Unusable Gaussian working-model score or EDF.")
         covariance = None
         fisher = None
         if control.uncertainty == "fisher":
             fisher = factor
         elif control.uncertainty == "covariance":
-            covariance = score_scale * sla.cho_solve(
-                (factor, True), np.eye(descriptor.n_coef)
+            covariance = score_scale * (
+                inverse
+                if selected is not None
+                else sla.cho_solve((factor, True), np.eye(descriptor.n_coef))
             )
-        return FixedSpDiscreteGaussianFit(
+        if control.uncertainty != "fisher":
+            qr_factor = None
+            transforms = ()
+        return DiscreteGaussianFit(
             np.asarray(beta),
             deviance,
             score,
@@ -533,6 +646,12 @@ def fit_fixed_sp_discrete_gaussian(
             batches + residual_batches,
             scale_iterations,
             memory,
+            "working_model_reml" if working_model else "fixed",
+            selected.converged if selected is not None else True,
+            selected.proposal_evaluations if selected is not None else 0,
+            selected.trace if selected is not None else (),
+            qr_factor,
+            transforms,
         )
     finally:
         # The result owns only frozen prediction metadata. Compact selectors,

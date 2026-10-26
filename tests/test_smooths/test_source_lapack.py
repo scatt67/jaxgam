@@ -157,6 +157,7 @@ def test_declared_provider_version_config_and_lp64_symbols() -> None:
         assert getattr(provider, name).restype is source_lapack.ctypes.c_double
     for name in ("dsymv", "daxpy", "dgemv", "dscal"):
         assert getattr(provider, name).restype is None
+    assert provider.dpstrf_work.restype is source_lapack.ctypes.c_int
 
 
 def test_natural_cubic_system_solve_matches_dense_and_preserves_inputs() -> None:
@@ -897,3 +898,174 @@ def test_source_trisymeig_rounds_workspace_and_reports_failures(monkeypatch) -> 
     monkeypatch.setattr(source_lapack, "_source_lapack", lambda: provider(0, 2, 10.0))
     with pytest.raises(np.linalg.LinAlgError, match="info=2"):
         source_lapack.source_trisymeig(diagonal, off_diagonal)
+
+
+def _pivoted_cholesky_matrix(n):
+    rng = np.random.default_rng(39017 + n)
+    root = rng.normal(size=(n + 3, n))
+    matrix = root.T @ root + np.diag(np.linspace(0.2, 1.3, n))
+    # The lower triangle is deliberately unrelated, and must be ignored.
+    return np.triu(matrix) + np.tril(np.full((n, n), np.nan), -1)
+
+
+@pytest.mark.parametrize("n", [1, 3, 8, 64, 65, 96, 129])
+def test_source_pivoted_cholesky_factors_pivots_and_reconstructs(n) -> None:
+    matrix = _pivoted_cholesky_matrix(n)
+    actual = source_lapack.source_pivoted_cholesky(matrix)
+    expected, pivots, rank, _ = scipy.linalg.lapack.dpstrf(matrix, lower=0)
+    assert actual.rank == rank == n
+    assert actual.pivots.dtype == np.int32
+    np.testing.assert_array_equal(actual.pivots, pivots - 1)
+    np.testing.assert_allclose(
+        actual.upper, np.triu(expected), rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    symmetric = np.triu(matrix) + np.triu(matrix, 1).T
+    selected = symmetric[np.ix_(actual.pivots, actual.pivots)]
+    np.testing.assert_allclose(
+        actual.upper.T @ actual.upper, selected, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert not np.any(np.tril(actual.upper, -1))
+
+
+@pytest.mark.parametrize(
+    ("matrix", "tolerance"),
+    [
+        (np.diag([1.0, 1e-20]), -1.0),
+        (np.diag([1.0, 1e-20]), 0.0),
+        (np.diag([1.0, 3 * scipy.linalg.lapack.dlamch("E")]), -1.0),
+        (np.diag([1.0, 0.2]), 10.0),
+        (np.array([[1.0, 2.0], [2.0, 4.0]]), -1.0),
+        (np.array([[1.0, 2.0], [2.0, 1.0]]), -1.0),
+        (np.zeros((3, 3)), -1.0),
+        (np.diag([-1.0, -2.0]), -1.0),
+        (np.eye(4), -1.0),
+    ],
+)
+def test_source_pivoted_cholesky_rank_stop_storage(matrix, tolerance) -> None:
+    """LAPACK's rank stop keeps the uncompleted trailing residual, as R does."""
+    expected, pivots, rank, _ = scipy.linalg.lapack.dpstrf(
+        matrix, lower=0, tol=tolerance
+    )
+    actual = source_lapack.source_pivoted_cholesky(matrix, tolerance=tolerance)
+    assert actual.rank == rank
+    np.testing.assert_array_equal(actual.pivots, pivots - 1)
+    np.testing.assert_allclose(
+        actual.upper, np.triu(expected), rtol=STRICT.rtol, atol=STRICT.atol
+    )
+
+
+def test_source_pivoted_cholesky_validates_and_fails_closed() -> None:
+    empty = source_lapack.source_pivoted_cholesky(np.empty((0, 0)))
+    assert empty.rank == 0
+    assert empty.upper.shape == (0, 0)
+    with pytest.raises(ValueError, match="square"):
+        source_lapack.source_pivoted_cholesky(np.ones((2, 3)))
+    for matrix in (
+        np.ones((2, 2), dtype=np.float32),
+        np.ones((2, 2), dtype=np.int64),
+        [[1.0, 0.0], [0.0, 1.0]],
+    ):
+        with pytest.raises(TypeError, match="float64"):
+            source_lapack.source_pivoted_cholesky(matrix)
+    for tolerance in (True, np.nan, np.inf, np.zeros(1), 1j):
+        with pytest.raises(ValueError, match="finite real scalar"):
+            source_lapack.source_pivoted_cholesky(np.eye(2), tolerance=tolerance)
+    for matrix in (np.diag([1.0, np.nan]), np.array([[1.0, np.inf], [0.0, 2.0]])):
+        with pytest.raises(ValueError, match="upper triangle must be finite"):
+            source_lapack.source_pivoted_cholesky(matrix)
+    overflow = np.zeros((66, 66))
+    np.fill_diagonal(overflow, 1e308)
+    overflow[:64, 64:] = 1.25e307
+    overflow[64, 65] = -1e308
+    with pytest.raises(FloatingPointError, match="non-finite factor"):
+        source_lapack.source_pivoted_cholesky(overflow)
+
+
+def test_source_pivoted_cholesky_workspace_rejects_before_provider(
+    monkeypatch,
+) -> None:
+    for n in (True, -1, 1.5):
+        with pytest.raises(ValueError, match="nonnegative integer"):
+            source_lapack.source_pivoted_cholesky_workspace_bound(n)
+    with pytest.raises(ValueError, match="LP64"):
+        source_lapack.source_pivoted_cholesky_workspace_bound(2**31)
+    required = source_lapack.source_pivoted_cholesky_workspace_bound(4)
+    assert required >= 8 * 16 + 8 * 2 * 4
+    within = source_lapack.source_pivoted_cholesky(
+        np.eye(4), available_workspace_bytes=required
+    )
+    np.testing.assert_array_equal(within.upper, np.eye(4))
+    provider = Mock(side_effect=AssertionError("provider must not be loaded"))
+    monkeypatch.setattr(source_lapack, "_source_lapack", provider)
+    with pytest.raises(MemoryError, match=rf"requires {required} workspace bytes"):
+        source_lapack.source_pivoted_cholesky(
+            np.eye(4), available_workspace_bytes=required - 1
+        )
+    for workspace in (True, -1, 1.5):
+        with pytest.raises(ValueError, match="available_workspace_bytes"):
+            source_lapack.source_pivoted_cholesky(
+                np.eye(4), available_workspace_bytes=workspace
+            )
+    provider.assert_not_called()
+    failing = SimpleNamespace(dpstrf_work=Mock(return_value=-2))
+    monkeypatch.setattr(source_lapack, "_source_lapack", lambda: failing)
+    with pytest.raises(RuntimeError, match="rejected argument 2"):
+        source_lapack.source_pivoted_cholesky(np.eye(4))
+
+
+def _pinned_factor_tolerance(r_bridge):
+    """Bit-identical when R's LAPACK is the pinned OpenBLAS build itself."""
+    linear_algebra = r_bridge.source_linear_algebra()
+    return linear_algebra.lapack_is_openblas(source_lapack._OPENBLAS_PREFIX)
+
+
+def test_source_pivoted_cholesky_matches_pinned_r_factors(r_bridge) -> None:
+    """R's chol(pivot=TRUE) on coupled preconditioned and blocked matrices."""
+    from tests.test_fitting.test_working_model import _frame
+
+    identical = _pinned_factor_tolerance(r_bridge)
+    rng = np.random.default_rng(48119)
+    root = rng.normal(size=(70, 96))
+    references = [
+        r_bridge.source_pivoted_coupled_factors(_frame(), np.log(smoothing))
+        for smoothing in (
+            [0.35, 0.7],
+            [1e-6, 1.0],
+            [1e-10, 100.0],
+            [1e-4, 1e4],
+            [1e4, 1e-4],
+        )
+    ]
+    matrices = [reference["A"] for reference in references]
+    # Unblocked coupled-penalty factors are the ldetSblock gate's inputs.
+    bitwise = [identical] * len(matrices)
+    for matrix in (
+        _pivoted_cholesky_matrix(65),
+        _pivoted_cholesky_matrix(129),
+        root.T @ root,
+    ):
+        matrices.append(matrix)
+        references.append(r_bridge.source_pivoted_matrix_factor(matrix))
+        bitwise.append(False)
+    collector = _AssertCollector()
+    for matrix, reference, identical in zip(matrices, references, bitwise, strict=True):
+        factor = source_lapack.source_pivoted_cholesky(matrix)
+        label = f"p={len(matrix)},rank={factor.rank}"
+        collector.check(
+            f"{label} rank and pivots",
+            lambda factor=factor, reference=reference: np.testing.assert_array_equal(
+                [factor.rank, *factor.pivots],
+                [np.asarray(reference["rank"]).item(), *(reference["pivot"] - 1)],
+            ),
+        )
+        collector.check(
+            f"{label} upper factor",
+            lambda factor=factor, reference=reference, identical=identical: (
+                np.testing.assert_array_equal(factor.upper, reference["C"])
+                if identical
+                else np.testing.assert_allclose(
+                    factor.upper, reference["C"], rtol=STRICT.rtol, atol=STRICT.atol
+                )
+            ),
+        )
+    collector.raise_if_any("pinned provider DPSTRF against R chol(pivot=TRUE)")

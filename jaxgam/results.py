@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from jaxgam.data.source import RowSource
-    from jaxgam.execution.discrete import FixedSpDiscreteGaussianFit
+    from jaxgam.execution.discrete import DiscreteGaussianFit
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
@@ -358,6 +358,7 @@ class GAMPredictionResult:
     prediction_policy: str | None = field(default=None, kw_only=True)
     fitting_source_scans: int | None = field(default=None, kw_only=True)
     fitting_batches_scanned: int | None = field(default=None, kw_only=True)
+    working_model_proposal_evaluations: int | None = field(default=None, kw_only=True)
     fit_peak_bytes: int | None = field(default=None, kw_only=True)
     fit_memory_budget_bytes: int | None = field(default=None, kw_only=True)
     n: int
@@ -466,16 +467,16 @@ class GAMPredictionResult:
         return covariance
 
     @classmethod
-    def _from_fixed_sp_discrete_gaussian(
+    def _from_discrete_gaussian(
         cls,
         *,
-        fit_state: FixedSpDiscreteGaussianFit,
+        fit_state: DiscreteGaussianFit,
         family: ExponentialFamily,
         formula: str,
         method: str,
         control: FitControl,
     ) -> GAMPredictionResult:
-        """Build a row-free result for the explicit fixed-sp discrete route."""
+        """Build a row-free result for fixed or working-model Gaussian fitting."""
         policy = control.discretization
         assert policy is not None
         predictor = GAMPredictor(
@@ -486,6 +487,8 @@ class GAMPredictionResult:
             offset_was_nonzero=fit_state.offset_was_nonzero,
             _predict_spec=fit_state.predict_spec,
             _fisher_factor=fit_state.fisher_factor,
+            _fisher_qr_factor=fit_state.fisher_qr_factor,
+            _fisher_transforms=fit_state.fisher_transforms,
             _fisher_scale=fit_state.scale,
             _output_budget_bytes=control.output_budget_bytes,
             _memory_budget_bytes=control.memory_budget_bytes,
@@ -498,22 +501,34 @@ class GAMPredictionResult:
             theta=None,
             smoothing_params=fit_state.smoothing_params,
             edf_total=fit_state.edf_total,
-            converged=True,
+            converged=fit_state.converged,
             n_iter=fit_state.scale_iterations,
             convergence_info=(
                 "fixed sp discrete Gaussian direct solve with pinned "
                 f"scale iteration ({fit_state.scale_iterations} iterations)"
+            )
+            if fit_state.smoothing_strategy == "fixed"
+            else (
+                "Gaussian working-model REML "
+                + ("converged" if fit_state.converged else "did not converge")
+                + f" after {fit_state.scale_iterations} iterations and "
+                + f"{fit_state.proposal_evaluations} proposals"
             ),
             method=method,
-            lambda_strategy="fixed",
-            execution_path="jax_actions_numpy_solve",
+            lambda_strategy=fit_state.smoothing_strategy,
+            execution_path=(
+                "jax_actions_numpy_solve"
+                if fit_state.smoothing_strategy == "fixed"
+                else "jax_actions_working_model_numpy_postestimation"
+            ),
             execution_route="discrete",
             execution_fallback_reason=None,
-            smoothing_strategy="fixed",
+            smoothing_strategy=fit_state.smoothing_strategy,
             discretization_strategy="mgcv_range_grid",
             prediction_policy=policy.prediction_policy,
             fitting_source_scans=fit_state.fitting_source_scans,
             fitting_batches_scanned=fit_state.fitting_batches_scanned,
+            working_model_proposal_evaluations=fit_state.proposal_evaluations,
             fit_peak_bytes=fit_state.memory_plan.fit_peak_bytes,
             fit_memory_budget_bytes=fit_state.memory_plan.budget_bytes,
             n=fit_state.n_obs,
