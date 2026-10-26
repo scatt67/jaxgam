@@ -43,6 +43,21 @@ _CUBIC_SMOOTH_CLASSES = {
 }
 
 
+def test_source_fma_fallback_keeps_single_rounding_on_python_311(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The supported Python 3.11 fallback must preserve C's fused product."""
+    from jaxgam.smooths import cubic
+
+    monkeypatch.delattr(cubic.math, "fma", raising=False)
+    cubic._source_fma.cache_clear()
+    try:
+        unit = 1.0 + 2.0**-52
+        assert cubic._source_fma()(unit, unit, -(1.0 + 2.0**-51)) == 2.0**-104
+    finally:
+        cubic._source_fma.cache_clear()
+
+
 def _setup_cubic_smooth(bs: str, data, k: int = 10):
     spec = make_smooth_spec(["x"], bs=bs, k=k)
     smooth = _CUBIC_SMOOTH_CLASSES[bs](spec)
