@@ -29,6 +29,7 @@ R source reference: efam.r lines 161-310 (nb() extended family)
 from __future__ import annotations
 
 import functools
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -43,7 +44,7 @@ from jaxgam.families.base import (
 )
 from jaxgam.families.extended import ExtendedFamily
 from jaxgam.jax_utils import array_module
-from jaxgam.links.links import Link, LogLink
+from jaxgam.links.links import IdentityLink, Link, LogLink, SqrtLink
 
 _MU_EPS = 1e-10
 
@@ -64,6 +65,15 @@ _PREFIX_COMPILED_FIXED_BYTES = 512
 _VECTOR_DIFF_MAX_THETA_TO_COUNT = 1e6
 _FRACTIONAL_ASYMPTOTIC_THETA = 1e6
 _FRACTIONAL_ASYMPTOTIC_THETA_TO_RESPONSE = 1e4
+
+
+class NBDevianceDerivatives(NamedTuple):
+    """``nb()$Dd`` rows: d/dmu, d2/dmu2, d/dtheta and d2/dtheta2 of the deviance."""
+
+    mu: np.ndarray
+    mu2: np.ndarray
+    theta: np.ndarray
+    theta2: np.ndarray
 
 
 class NegativeBinomial(ExtendedFamily):
@@ -142,7 +152,11 @@ class NegativeBinomial(ExtendedFamily):
         return self._log_theta.copy()
 
     def execution_capabilities(self) -> FamilyExecutionCapabilities:
-        """Describe NB's explicit-theta, observed-information primitives."""
+        """Describe NB's explicit-theta, observed-information primitives.
+
+        Pinned ``nb()`` accepts the log, identity and sqrt links; each runs the
+        discrete extended-family performance iteration.
+        """
         return FamilyExecutionCapabilities(
             row_separable=True,
             fisher_working_system=True,
@@ -154,6 +168,9 @@ class NegativeBinomial(ExtendedFamily):
             dynamic_phi=False,
             coefficient_system="observed",
             fisher_equals_observed_for_score=False,
+            extended_performance_iteration=isinstance(
+                self.link, (LogLink, IdentityLink, SqrtLink)
+            ),
         )
 
     def execution_parameter_snapshot(self) -> FamilyParameterSnapshot:
@@ -439,6 +456,124 @@ class NegativeBinomial(ExtendedFamily):
                 - (y + theta) * xp.log1p((y - mu_safe) / (mu_safe + theta))
             )
         )
+
+    # ------------------------------------------------------------------
+    # Pinned efam.r::nb() arithmetic at explicit theta (bgam.fitd route).
+    # ``theta`` is exp(log_theta) as the caller formed it (host libm exp).
+    # No stability rewrites: these reproduce R's own operation order.
+    # ------------------------------------------------------------------
+
+    def source_dev_resids_at(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray, theta
+    ) -> np.ndarray:
+        """``nb()$dev.resids``: ``mu[mu<=0] <- NA``, then the raw log ratios."""
+        xp = array_module(mu)
+        mu = xp.where(mu <= 0.0, xp.nan, mu)
+        return (
+            2.0
+            * wt
+            * (
+                y * xp.log(xp.maximum(1.0, y) / mu)
+                - (y + theta) * xp.log((y + theta) / (mu + theta))
+            )
+        )
+
+    def source_dd(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray, theta
+    ) -> NBDevianceDerivatives:
+        """``nb()$Dd`` at level 2, restricted to the terms bgam.fitd uses."""
+        xp = array_module(mu)
+        yth = y + theta
+        muth = mu + theta
+        ratio = yth / muth
+        return NBDevianceDerivatives(
+            mu=2.0 * wt * (yth / muth - y / mu),
+            mu2=-2.0 * wt * (yth / muth**2 - y / mu**2),
+            theta=-2.0 * wt * theta * (xp.log(ratio) + (1.0 - ratio)),
+            theta2=-2.0
+            * wt
+            * theta
+            * (
+                xp.log(ratio)
+                + theta * yth / muth**2
+                - yth / muth
+                - 2.0 * theta / muth
+                + 1.0
+                + theta / yth
+            ),
+        )
+
+    def source_ls_rows(
+        self, y: np.ndarray, wt: np.ndarray, log_theta, theta
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Row terms of ``nb()$ls``: ``ls = -sum(a)``, ``lsth1 = sum(b)``,
+        ``lsth2 = -sum(c)`` for the returned ``(a, b, c)``."""
+        xp = array_module(y)
+        if xp is np:
+            from scipy.special import gammaln as lgamma
+            from scipy.special import polygamma, psi
+        else:
+            lgamma = jsp.gammaln
+            psi = jsp.digamma
+            polygamma = jsp.polygamma
+        positive = xp.where(y > 0.0, y, 1.0)
+        ylogy = xp.where(y > 0.0, positive * xp.log(positive), y)
+        yth = y + theta
+        lyth = xp.log(yth)
+        term = (
+            yth * lyth
+            - ylogy
+            + lgamma(y + 1.0)
+            - theta * xp.log(theta)
+            + lgamma(theta)
+            - lgamma(theta + y)
+        )
+        psi0_yth = psi(yth)
+        psi0_th = psi(theta)
+        first = theta * (lyth - psi0_yth + psi0_th - log_theta)
+        psi1_yth = polygamma(1, yth)
+        psi1_th = polygamma(1, theta)
+        second = theta * (
+            lyth
+            - theta * psi1_yth
+            - psi0_yth
+            + theta / yth
+            + theta * psi1_th
+            + psi0_th
+            - log_theta
+            - 1.0
+        )
+        return term * wt, -first * wt, second * wt
+
+    def source_newton_working(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        eta: np.ndarray,
+        offset: np.ndarray,
+        wt: np.ndarray,
+        theta,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """``bgam.fitd``'s extended-family ``w``/``z`` from ``dDeta`` (``rho == 0``).
+
+        ``w = Deta2/2`` and ``z = (eta - offset) - Deta/Deta2`` (observed,
+        possibly negative weights); rows with a non-finite ``w`` or ``z`` get
+        zero of both.
+        """
+        xp = array_module(mu)
+        derivatives = self.source_dd(y, mu, wt, theta)
+        if isinstance(self.link, IdentityLink):
+            second = derivatives.mu2
+            ratio = derivatives.mu / derivatives.mu2
+        else:
+            ig1 = self.link.mu_eta(self.link.link(mu))
+            g2g = self.link.source_g2g(mu)
+            second = derivatives.mu2 * ig1**2 - derivatives.mu * g2g * ig1
+            ratio = derivatives.mu / (derivatives.mu2 * ig1 - derivatives.mu * g2g)
+        weight = second * 0.5
+        response = (eta - offset) - ratio
+        good = xp.isfinite(response) & xp.isfinite(weight)
+        return xp.where(good, weight, 0.0), xp.where(good, response, 0.0)
 
     def execution_summary_from_batch(
         self, y: np.ndarray, wt: np.ndarray, valid: np.ndarray

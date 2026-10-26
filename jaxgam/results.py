@@ -493,10 +493,14 @@ class GAMPredictionResult:
             if fit_state.discretization is None
             else fit_state.discretization.prediction_policy
         )
+        fitted_family = copy.deepcopy(family)
+        if fit_state.log_theta is not None:
+            # The extended family's final (fixed or estimated) theta.
+            fitted_family.put_theta(np.array([fit_state.log_theta]))
         predictor = GAMPredictor(
             coefficients=fit_state.coefficients,
             Vp=fit_state.covariance,
-            family=copy.deepcopy(family),
+            family=fitted_family,
             formula=formula,
             offset_was_nonzero=fit_state.offset_was_nonzero,
             _predict_spec=fit_state.predict_spec,
@@ -514,7 +518,9 @@ class GAMPredictionResult:
             deviance=fit_state.deviance,
             score=fit_state.score,
             scale=fit_state.scale,
-            theta=None,
+            theta=None
+            if fit_state.log_theta is None
+            else float(np.exp(fit_state.log_theta)),
             smoothing_params=fit_state.smoothing_params,
             edf_total=fit_state.edf_total,
             converged=fit_state.converged,
@@ -1480,8 +1486,14 @@ def _discrete_convergence_info(
             if fit_state.smoothing_strategy == "fixed"
             else "working-model REML"
         )
+        if fit_state.log_theta is None:
+            weights = "Fisher"
+        else:
+            estimated = getattr(family, "n_theta", 0) > 0
+            weights = "dDeta Newton"
+            smoothing += ", estimated theta" if estimated else ", fixed theta"
         return (
-            f"{family.family_name} discrete Fisher performance iteration "
+            f"{family.family_name} discrete {weights} performance iteration "
             f"({smoothing}) {outcome} after {fit_state.scale_iterations} "
             f"iterations, {fit_state.proposal_evaluations} proposals and "
             f"{fit_state.coefficient_halvings} coefficient step halvings"

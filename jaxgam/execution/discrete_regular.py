@@ -27,6 +27,7 @@ scans; nothing here retains an ``n``-row array.
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -51,6 +52,7 @@ from jaxgam.execution.discrete import (
 from jaxgam.execution.regular_working_model import (
     RegularWorkingModelFit,
     WorkingEvaluation,
+    WorkingNuisance,
     WorkingRows,
     WorkingStatistics,
     fit_regular_working_model,
@@ -61,11 +63,19 @@ from jaxgam.execution.working_model import (
     compile_working_model_proposal,
     source_penalty_quadratic,
 )
+from jaxgam.execution.working_theta import (
+    ThetaObjective,
+    ThetaUpdate,
+    source_estimate_theta,
+)
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.fitting.discrete_ops import to_device_discrete_design
 from jaxgam.fitting.discrete_working import (
     DiscreteWorkingBatch,
+    discrete_extended_initial_working_batch,
+    discrete_extended_working_batch,
     discrete_initial_working_batch,
+    discrete_theta_batch,
     discrete_working_batch,
 )
 from jaxgam.fitting.working_model import GaussianWorkingModelProposal
@@ -82,8 +92,13 @@ def _regular_solver_plan(
     n_coef: int,
     penalties: PenaltyStructure,
     control: FitControl,
+    *,
+    extended: bool = False,
 ) -> DiscreteFitMemoryPlan:
     """Bound the performance-iteration row and statistic workspace.
+
+    An extended family adds its ``Dd`` terms and the six ``estimate.theta``
+    row vectors (host copies and long-double accumulators included).
 
     The coefficient-space proposal workspace is measured separately when it
     is compiled. Here: per batch, host response/weight/offset/positions plus
@@ -102,6 +117,10 @@ def _regular_solver_plan(
         + 2 * np.dtype(np.longdouble).itemsize
         + 2 * np.dtype(np.bool_).itemsize
     )
+    if extended:
+        row_workspace += control.batch_rows * (
+            24 * float_size + 12 * np.dtype(np.longdouble).itemsize
+        )
     local_materializations = sum(
         block.size * block.size
         for block in penalties.blocks
@@ -236,14 +255,8 @@ class _DiscreteWorkingRows:
                 response = family.execution_initial_response_cpu(y, weight)
                 self.moments.add(response)
                 self.offset_nonzero |= bool(np.any(offset != 0.0))
-                yield discrete_initial_working_batch(
-                    self.device_descriptor,
-                    selectors,
-                    np.asarray(state.eta),
-                    response,
-                    weight,
-                    offset,
-                    family=family,
+                yield self._initial_kernel(
+                    selectors, np.asarray(state.eta), response, weight, offset
                 )
                 del batch, selectors, y, weight, offset, state, response
 
@@ -258,8 +271,7 @@ class _DiscreteWorkingRows:
         def batches() -> Iterator[DiscreteWorkingBatch]:
             for batch, selectors in self._scan():
                 weight = np.asarray(batch.weight, dtype=np.float64)
-                yield discrete_working_batch(
-                    self.device_descriptor,
+                yield self._kernel(
                     selectors,
                     beta,
                     family.execution_initial_response_cpu(
@@ -267,8 +279,7 @@ class _DiscreteWorkingRows:
                     ),
                     weight,
                     np.asarray(batch.offset, dtype=np.float64),
-                    family=family,
-                    statistics=statistics,
+                    statistics,
                 )
                 del batch, selectors, weight
 
@@ -276,6 +287,129 @@ class _DiscreteWorkingRows:
 
     def response_variance(self) -> float:
         return self.moments.variance()
+
+    def _initial_kernel(self, selectors, eta, response, weight, offset):
+        return discrete_initial_working_batch(
+            self.device_descriptor,
+            selectors,
+            eta,
+            response,
+            weight,
+            offset,
+            family=self.family,
+        )
+
+    def _kernel(self, selectors, beta, response, weight, offset, statistics):
+        return discrete_working_batch(
+            self.device_descriptor,
+            selectors,
+            beta,
+            response,
+            weight,
+            offset,
+            family=self.family,
+            statistics=statistics,
+        )
+
+
+class _DiscreteExtendedRows(_DiscreteWorkingRows):
+    """Extended-family (NB) rows at the current explicit theta.
+
+    ``log_theta`` is ``bgam.fitd``'s ``theta``; ``exp`` is the C library's,
+    once per value, as R forms ``exp(theta)`` in ``dev.resids``/``Dd``/``ls``.
+    :meth:`objective` is ``estimate.theta``'s ``nlogl`` at fixed coefficients.
+    """
+
+    def __init__(self, *args, log_theta: float, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.set_log_theta(log_theta)
+
+    def set_log_theta(self, log_theta: float) -> None:
+        self.log_theta = float(log_theta)
+        self.theta = math.exp(self.log_theta)
+
+    def _initial_kernel(self, selectors, eta, response, weight, offset):
+        return discrete_extended_initial_working_batch(
+            self.device_descriptor,
+            selectors,
+            eta,
+            response,
+            weight,
+            offset,
+            np.asarray(self.theta),
+            family=self.family,
+        )
+
+    def _kernel(self, selectors, beta, response, weight, offset, statistics):
+        return discrete_extended_working_batch(
+            self.device_descriptor,
+            selectors,
+            beta,
+            response,
+            weight,
+            offset,
+            np.asarray(self.theta),
+            family=self.family,
+            statistics=statistics,
+        )
+
+    def objective(
+        self, coefficients: np.ndarray, log_theta: float, derivatives: bool
+    ) -> ThetaObjective:
+        """``nlogl(theta, family, y, mu, scale=1, wt, deriv)`` by one scan.
+
+        Each sum is R's (row order, C long double): ``dev = sum(dev.resids)``,
+        ``g = colSums(Dth)/2 - sum(-term1*w)``, ``H = colSums(Dth2)/2 -
+        (-sum(term2*w))`` and ``nll = dev/2 - (-sum(term*w))``.
+        """
+        family = self.family
+        beta = np.asarray(coefficients, dtype=np.float64)
+        log_theta = float(log_theta)
+        theta = np.asarray(math.exp(log_theta))
+        totals = [np.longdouble(0.0) for _ in range(6)]
+        for batch, selectors in self._scan():
+            weight = np.asarray(batch.weight, dtype=np.float64)
+            result = discrete_theta_batch(
+                self.device_descriptor,
+                selectors,
+                beta,
+                family.execution_initial_response_cpu(
+                    np.asarray(batch.y, dtype=np.float64), weight
+                ),
+                weight,
+                np.asarray(batch.offset, dtype=np.float64),
+                np.asarray(log_theta),
+                theta,
+                family=family,
+                derivatives=derivatives,
+            )
+            for index, rows in enumerate(result):
+                totals[index] = source_sum(np.asarray(rows), totals[index])
+            del batch, selectors, weight, result
+        deviance, first, second, ls, lsth1, lsth2 = (float(value) for value in totals)
+        ls = -ls
+        nll = deviance / 2.0 - ls
+        if not derivatives:
+            return ThetaObjective(nll, np.nan, np.nan)
+        return ThetaObjective(nll, first / 2.0 - lsth1, second / 2.0 - (-lsth2))
+
+
+class _ThetaNuisance:
+    """``estimate.theta`` at the step-controlled coefficients (``bam.r:613-621``)."""
+
+    def __init__(self, rows: _DiscreteExtendedRows) -> None:
+        self.rows = rows
+
+    def update(self, coefficients: np.ndarray) -> ThetaUpdate:
+        beta = np.array(coefficients, dtype=np.float64)
+        update = source_estimate_theta(
+            self.rows.log_theta,
+            lambda log_theta, derivatives: self.rows.objective(
+                beta, log_theta, derivatives
+            ),
+        )
+        self.rows.set_log_theta(update.log_theta)
+        return update
 
 
 @dataclass(frozen=True)
@@ -301,21 +435,26 @@ class RegularWorkingComponents:
     family: ExponentialFamily
     control: FitControl
     n_obs: int
+    nuisance: WorkingNuisance | None = None
 
     def run(
         self,
         rows: WorkingRows | None = None,
         *,
+        nuisance: WorkingNuisance | None = None,
         _oracle_replay_halvings: Mapping[int, int] | None = None,
     ) -> RegularWorkingModelFit:
         """Run ``bgam.fitd``'s outer loop on ``rows`` (the source by default).
 
         Another :class:`WorkingRows` provider (an explicit design, say) runs
-        the identical controller and proposals; ``_oracle_replay_halvings``
-        is the test/oracle hook of :func:`fit_regular_working_model`.
+        the identical controller and proposals with its own ``nuisance``
+        (the source rows use theirs); ``_oracle_replay_halvings`` is the
+        test/oracle hook of :func:`fit_regular_working_model`.
         """
+        if rows is None:
+            rows, nuisance = self.rows, self.nuisance
         return fit_regular_working_model(
-            self.rows if rows is None else rows,
+            rows,
             self.propose,
             self.penalty,
             self.problem.descriptor.n_coef,
@@ -323,16 +462,23 @@ class RegularWorkingComponents:
             epsilon=self.control.working_model_epsilon,
             max_iterations=self.control.working_model_max_iterations,
             start=self.start,
+            nuisance=nuisance,
             _oracle_replay_halvings=_oracle_replay_halvings,
         )
 
-    def result(self, fit: RegularWorkingModelFit) -> DiscreteFit:
+    def result(
+        self, fit: RegularWorkingModelFit, *, log_theta: float | None = None
+    ) -> DiscreteFit:
         """Assemble pinned ``bgam.fitd``'s final fields from ``fit``.
 
         ``Vp = PP*scale`` and ``edf = diag(PP %*% qrx$R)`` pair the last
         accepted proposal's ``PP`` with the last iteration top's ``X'WX``;
         the score is the final ``crit`` with the reset null dimension ``Mp``.
+        An extended family reports its final theta: the source rows' unless
+        ``log_theta`` gives another run's.
         """
+        if log_theta is None:
+            log_theta = getattr(self.rows, "log_theta", None)
         problem, control = self.problem, self.control
         setup = problem.setup
         n_coef = problem.descriptor.n_coef
@@ -405,6 +551,7 @@ class RegularWorkingComponents:
             problem.request_compression,
             performance_iteration=True,
             coefficient_halvings=fit.coefficient_halvings,
+            log_theta=log_theta,
         )
 
 
@@ -418,17 +565,22 @@ def regular_working_components(
     control: FitControl,
     device: object | None = None,
 ) -> Iterator[RegularWorkingComponents]:
-    """Prepare, budget and compile one regular-family discrete fit.
+    """Prepare, budget and compile one regular- or extended-family discrete fit.
 
     ``sp`` fixes every smoothing parameter (``Sl.fitChol`` then updates only
     an estimated scale); ``sp=None`` selects them from each working model.
+    An extended family (NB) evaluates at its explicit theta and, when theta
+    is estimated, carries the ``estimate.theta`` nuisance update.
     """
     working_model = sp is None
     if working_model and control.smoothing_strategy != "working_model_reml":
         raise NotImplementedError("Discrete estimated sp requires working_model_reml.")
-    if not family.execution_capabilities().regular_performance_iteration:
+    capabilities = family.execution_capabilities()
+    extended = capabilities.extended_performance_iteration
+    if not (capabilities.regular_performance_iteration or extended):
         raise NotImplementedError(
-            f"{family!r} lacks the regular_performance_iteration capability."
+            f"{family!r} lacks the regular or extended performance-iteration "
+            "capability."
         )
     with _prepared_discrete(spec, source, control) as problem:
         setup = problem.setup
@@ -444,6 +596,7 @@ def regular_working_components(
             descriptor.n_coef,
             penalties,
             control,
+            extended=extended,
         )
         _check_fit_budget(memory)
         compiled = compile_working_model_proposal(
@@ -462,7 +615,7 @@ def regular_working_components(
             solver_workspace_bytes=memory.solver_workspace_bytes + extra,
             fit_peak_bytes=memory.fit_peak_bytes + extra,
         )
-        rows = _DiscreteWorkingRows(
+        row_arguments = (
             source,
             descriptor,
             to_device_discrete_design(descriptor, device),
@@ -470,6 +623,15 @@ def regular_working_components(
             control.batch_rows,
             problem.fingerprint,
         )
+        nuisance = None
+        if extended:
+            rows = _DiscreteExtendedRows(
+                *row_arguments, log_theta=float(family.get_theta()[0])
+            )
+            if family.n_theta > 0:
+                nuisance = _ThetaNuisance(rows)
+        else:
+            rows = _DiscreteWorkingRows(*row_arguments)
         transferred: list[object] = [None, None]
 
         def propose(
@@ -517,6 +679,7 @@ def regular_working_components(
                 family,
                 control,
                 source.n_rows,
+                nuisance,
             )
         finally:
             transferred.clear()  # Release the last device statistics.

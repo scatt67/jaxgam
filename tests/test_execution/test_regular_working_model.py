@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import pickle
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import numpy as np
 import pandas as pd
@@ -455,16 +455,24 @@ class _NoScanSource(DataFrameRowSource):
         raise AssertionError("an unsupported family must reject before scanning")
 
 
+class _UnportedExtendedFamily(NegativeBinomial):
+    """An extended family without the discrete performance-iteration port."""
+
+    def execution_capabilities(self):
+        return replace(
+            super().execution_capabilities(), extended_performance_iteration=False
+        )
+
+
 @pytest.mark.parametrize(
     ("family", "message"),
     [
-        (NegativeBinomial(), "estimate.theta"),
-        (NegativeBinomial(theta=2.0, fixed=True), "estimate.theta"),
+        (_UnportedExtendedFamily(), "negative binomial"),
         (Poisson(link="logit"), "Poisson"),
         (Gaussian(link="log"), "Gaussian identity"),
         (Binomial(link="sqrt"), "Binomial"),
     ],
-    ids=["nb", "nb-fixed-theta", "poisson-logit", "gaussian-log", "binomial-sqrt"],
+    ids=["unported-extended", "poisson-logit", "gaussian-log", "binomial-sqrt"],
 )
 def test_unsupported_families_reject_before_scanning(family, message):
     with pytest.raises(NotImplementedError, match=message):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -9,10 +11,15 @@ import pandas as pd
 import pytest
 
 from jaxgam.data.source import DataFrameRowSource
+from jaxgam.execution.regular_working_model import source_sum
+from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.discrete_ops import to_device_discrete_design
 from jaxgam.fitting.discrete_working import (
+    discrete_extended_initial_working_batch,
+    discrete_extended_working_batch,
     discrete_initial_working_batch,
+    discrete_theta_batch,
     discrete_working_batch,
 )
 from jaxgam.formula.design import ModelSetup
@@ -370,3 +377,197 @@ def test_working_batch_runs_under_an_outer_jit() -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+
+
+_NB_LINKS = ["log", "identity", "sqrt"]
+
+
+def _nb_inputs(n):
+    position = np.arange(n, dtype=float)
+    mean = 2.0 + 1.5 * np.cos(position)
+    y = np.floor(mean + 1.3 * np.sin(3 * position) + 0.5).clip(min=0.0)
+    weight = np.linspace(0.3, 1.7, n)
+    weight[::11] = 0.0
+    offset = np.linspace(-0.05, 0.08, n)
+    return mean, y, weight, offset
+
+
+@pytest.mark.parametrize("link", _NB_LINKS)
+def test_extended_batches_compile_and_match_explicit_design(link) -> None:
+    """NB batches equal the explicit design with pinned nb() arithmetic.
+
+    Initial (``linkfun(mustart)``) and coefficient batches give ``dev.resids``
+    rows and ``dDeta`` Newton ``X'WX``/``X'Wz``/``sum(w z^2)``; theta batches
+    give ``estimate.theta``'s row terms. Every kernel compiles.
+    """
+    X, descriptor = _design()
+    device = to_device_discrete_design(descriptor)
+    n, p = X.shape
+    family = NegativeBinomial(theta=2.0, link=link)
+    mean, y, weight, offset = _nb_inputs(n)
+    log_theta = 0.4
+    theta = math.exp(log_theta)
+    eta_start = np.asarray(family.link.link(mean))
+    beta = np.linalg.lstsq(X, eta_start - offset, rcond=None)[0]
+    totals = {
+        name: [np.longdouble(0.0), np.zeros((p, p)), np.zeros(p), 0.0]
+        for name in ("initial", "coefficients")
+    }
+    theta_totals = [np.longdouble(0.0) for _ in range(6)]
+    for start in range(0, n, 7):
+        rows = np.arange(start, min(n, start + 7))
+        selectors = _selectors(descriptor, rows)
+        arguments = (y[rows], weight[rows], offset[rows])
+        initial = discrete_extended_initial_working_batch(
+            device,
+            selectors,
+            eta_start[rows],
+            *arguments,
+            np.asarray(theta),
+            family=family,
+        )
+        coefficient = discrete_extended_working_batch(
+            device,
+            selectors,
+            jnp.asarray(beta),
+            *arguments,
+            np.asarray(theta),
+            family=family,
+        )
+        objective = discrete_theta_batch(
+            device,
+            selectors,
+            jnp.asarray(beta),
+            *arguments,
+            np.asarray(log_theta),
+            np.asarray(theta),
+            family=family,
+        )
+        for name, result in (("initial", initial), ("coefficients", coefficient)):
+            total = totals[name]
+            total[0] = source_sum(np.asarray(result.deviance_rows), total[0])
+            total[1] += np.asarray(result.gram)
+            total[2] += np.asarray(result.rhs)
+            total[3] += float(result.response_square_sum)
+        for index, values in enumerate(objective):
+            theta_totals[index] = source_sum(np.asarray(values), theta_totals[index])
+    collector = _AssertCollector()
+    collector.check(
+        "jit compiled",
+        lambda: check_that(
+            discrete_extended_working_batch._cache_size() > 0
+            and discrete_extended_initial_working_batch._cache_size() > 0
+            and discrete_theta_batch._cache_size() > 0,
+            "extended kernels did not compile",
+        ),
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for name, eta in (("initial", eta_start), ("coefficients", X @ beta + offset)):
+            mu = np.asarray(family.link.inverse(eta))
+            W, z = family.source_newton_working(y, mu, eta, offset, weight, theta)
+            expected = (
+                float(source_sum(family.source_dev_resids_at(y, mu, weight, theta))),
+                X.T @ (W[:, None] * X),
+                X.T @ (W * z),
+                np.sum(W * z**2),
+            )
+            for label, observed, target in zip(
+                ("deviance", "gram", "rhs", "y.norm2"),
+                totals[name],
+                expected,
+                strict=True,
+            ):
+                collector.check(
+                    f"{name} {label}",
+                    lambda observed=observed, target=target: np.testing.assert_allclose(
+                        float(observed) if np.ndim(observed) == 0 else observed,
+                        target,
+                        rtol=STRICT.rtol,
+                        atol=STRICT.atol,
+                    ),
+                )
+        mu = np.asarray(family.link.inverse(X @ beta + offset))
+        terms = family.source_dd(y, mu, weight, theta)
+        ls_rows, first, second = family.source_ls_rows(y, weight, log_theta, theta)
+        for label, observed, rows in zip(
+            ("deviance", "Dth", "Dth2", "ls", "lsth1", "lsth2"),
+            theta_totals,
+            (
+                family.source_dev_resids_at(y, mu, weight, theta),
+                terms.theta,
+                terms.theta2,
+                ls_rows,
+                first,
+                second,
+            ),
+            strict=True,
+        ):
+            collector.check(
+                f"theta {label}",
+                lambda observed=observed, rows=rows: np.testing.assert_allclose(
+                    float(observed),
+                    float(source_sum(rows)),
+                    rtol=STRICT.rtol,
+                    atol=STRICT.atol,
+                ),
+            )
+    collector.raise_if_any(f"nb/{link}")
+
+
+@pytest.mark.parametrize("link", _NB_LINKS)
+def test_nb_rows_match_pinned_nb_family(r_bridge, link) -> None:
+    """Pinned nb() dev.resids, Dd, ls and dDeta working rows at STRICT.
+
+    The JAX arithmetic the kernels run (compiled), at means including a
+    zero-weight row, against ``fix.family.link(nb())`` and ``dDeta``.
+    """
+    family = NegativeBinomial(theta=2.0, link=link)
+    rng = np.random.default_rng(3)
+    n = 40
+    mu = rng.uniform(0.5, 9.0, n)
+    y = rng.negative_binomial(2.0, 2.0 / (2.0 + mu)).astype(float)
+    weight = np.linspace(0.5, 1.5, n)
+    weight[7] = 0.0
+    offset = np.linspace(-0.1, 0.1, n)
+    eta = np.asarray(family.link.link(mu))
+    log_theta = 0.7
+    theta = math.exp(log_theta)
+    expected = r_bridge.nb_working_terms(
+        y, mu, eta, offset, weight, log_theta, link=link
+    )
+
+    @jax.jit
+    def rows(y, mu, eta, offset, weight, log_theta, theta):
+        terms = family.source_dd(y, mu, weight, theta)
+        w, z = family.source_newton_working(y, mu, eta, offset, weight, theta)
+        return (
+            family.source_dev_resids_at(y, mu, weight, theta),
+            terms.theta,
+            terms.theta2,
+            *family.source_ls_rows(y, weight, log_theta, theta),
+            w,
+            z,
+        )
+
+    deviance, dth, dth2, ls_rows, first, second, w, z = (
+        np.asarray(value)
+        for value in rows(y, mu, eta, offset, weight, log_theta, theta)
+    )
+    collector = _AssertCollector()
+    for name, observed, target in (
+        ("dev.resids", deviance, expected["deviance"]),
+        ("Dth", dth, expected["dth"]),
+        ("Dth2", dth2, expected["dth2"]),
+        ("ls", -float(source_sum(ls_rows)), expected["ls"]),
+        ("lsth1", float(source_sum(first)), expected["lsth1"]),
+        ("lsth2", -float(source_sum(second)), expected["lsth2"]),
+        ("w", w, expected["w"]),
+        ("z", z, expected["z"]),
+    ):
+        collector.check(
+            name,
+            lambda observed=observed, target=target: np.testing.assert_allclose(
+                observed, target, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.raise_if_any(f"nb/{link} rows")

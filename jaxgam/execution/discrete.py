@@ -77,7 +77,8 @@ class DiscreteFit:
     ``performance_iteration`` marks a regular family fitted by ``bgam.fitd``'s
     Fisher performance iteration (fixed or working-model smoothing), whose
     ``scale_iterations`` are its outer iterations and whose
-    ``coefficient_halvings`` count the coefficient step halvings.
+    ``coefficient_halvings`` count the coefficient step halvings;
+    ``log_theta`` is an extended family's final (fixed or estimated) theta.
     """
 
     coefficients: npt.NDArray[np.float64]
@@ -107,6 +108,7 @@ class DiscreteFit:
     request_compression: RequestCompressionSpec | None = None
     performance_iteration: bool = False
     coefficient_halvings: int = 0
+    log_theta: float | None = None
 
 
 def _reject_unsupported_formula(spec: FormulaSpec) -> None:

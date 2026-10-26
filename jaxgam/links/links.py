@@ -150,6 +150,16 @@ class Link(ABC):
         mu = self.inverse(eta)
         return 1.0 / self.derivative(mu)
 
+    def source_g2g(self, mu: Array) -> Array:
+        """``g''(mu)/g'(mu)^2`` exactly as pinned ``fix.family.link`` forms it.
+
+        mgcv's extended families use this ratio form (``dDeta``); links that
+        an extended-family route supports override it with R's closed form.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} has no pinned extended-family g2g."
+        )
+
     def initial_link_cpu(self, mu: np.ndarray) -> np.ndarray:
         """Return the strict CPU link used by the opt-in R-style start path.
 
@@ -219,6 +229,11 @@ class IdentityLink(Link):
         xp = array_module(eta)
         return xp.ones_like(eta, dtype=float)
 
+    def source_g2g(self, mu: Array) -> Array:
+        """``rep.int(0, length(mu))``."""
+        xp = array_module(mu)
+        return xp.zeros_like(mu, dtype=float)
+
 
 class LogLink(Link):
     """Log link: g(μ) = log(μ)."""
@@ -250,6 +265,11 @@ class LogLink(Link):
     def mu_eta(self, eta: Array) -> Array:
         xp = array_module(eta)
         return xp.exp(eta)
+
+    def source_g2g(self, mu: Array) -> Array:
+        """``rep(-1, length(mu))``."""
+        xp = array_module(mu)
+        return xp.full_like(mu, -1.0, dtype=float)
 
 
 class LogitLink(Link):
@@ -437,6 +457,10 @@ class SqrtLink(Link):
 
     def mu_eta(self, eta: Array) -> Array:
         return 2.0 * eta
+
+    def source_g2g(self, mu: Array) -> Array:
+        """``- mu^-.5``."""
+        return -(mu**-0.5)
 
 
 class InverseSquaredLink(Link):

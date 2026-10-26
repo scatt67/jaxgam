@@ -147,3 +147,132 @@ def discrete_initial_working_batch(
     supplied ``eta`` already includes any offset.
     """
     return _working_batch(design, selectors, eta, y, prior_weight, offset, family, True)
+
+
+# --------------------------------------------------------------------------
+# Extended family (NB): bgam.fitd's dDeta working model at explicit theta.
+# --------------------------------------------------------------------------
+
+
+class DiscreteThetaBatch(NamedTuple):
+    """One batch's rows for ``estimate.theta``'s ``nlogl`` at fixed ``mu``.
+
+    ``deviance_rows`` are ``dev.resids``; ``theta_rows``/``theta2_rows`` are
+    ``Dd$Dth``/``Dd$Dth2``; ``ls_rows``, ``lsth1_rows`` and ``lsth2_rows`` are
+    the summands of ``ls``'s ``-sum``, ``sum`` and ``-sum``. Derivative rows
+    are zero-sized when only the objective is requested.
+    """
+
+    deviance_rows: jax.Array
+    theta_rows: jax.Array
+    theta2_rows: jax.Array
+    ls_rows: jax.Array
+    lsth1_rows: jax.Array
+    lsth2_rows: jax.Array
+
+
+def _extended_working_batch(
+    design: DeviceDiscreteDesign,
+    selectors: tuple[tuple[jax.Array, ...], ...],
+    eta: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    theta: jax.Array,
+    family: ExponentialFamily,
+    statistics: bool,
+) -> DiscreteWorkingBatch:
+    if not (eta.shape == y.shape == prior_weight.shape == offset.shape):
+        raise ValueError("eta, y, prior weights and offset must share one shape.")
+    mu = family.link.inverse(eta)
+    deviance = family.source_dev_resids_at(y, mu, prior_weight, theta)
+    if not statistics:
+        empty = jnp.zeros((0,), dtype=eta.dtype)
+        return DiscreteWorkingBatch(
+            deviance, empty.reshape(0, 0), empty, jnp.zeros((), eta.dtype)
+        )
+    weight, response = family.source_newton_working(
+        y, mu, eta, offset, prior_weight, theta
+    )
+    return DiscreteWorkingBatch(
+        deviance,
+        discrete_xwxd(design, selectors, weight),
+        discrete_xwyd(design, selectors, weight, response),
+        jnp.sum(weight * response**2),
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "statistics"))
+def discrete_extended_working_batch(
+    design: DeviceDiscreteDesign,
+    selectors: tuple[tuple[jax.Array, ...], ...],
+    coefficients: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    theta: jax.Array,
+    *,
+    family: ExponentialFamily,
+    statistics: bool = True,
+) -> DiscreteWorkingBatch:
+    """Extended-family batch at ``eta = Xbd(coefficients) + offset``.
+
+    ``theta`` is the natural-scale family parameter (``exp(log theta)``
+    formed on the host). Working weights are ``bgam.fitd``'s ``dDeta``
+    Newton weights ``Deta2/2`` (``rho == 0``), not Fisher weights.
+    """
+    eta = discrete_xbd(design, selectors, coefficients) + offset
+    return _extended_working_batch(
+        design, selectors, eta, y, prior_weight, offset, theta, family, statistics
+    )
+
+
+@partial(jax.jit, static_argnames=("family",))
+def discrete_extended_initial_working_batch(
+    design: DeviceDiscreteDesign,
+    selectors: tuple[tuple[jax.Array, ...], ...],
+    eta: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    theta: jax.Array,
+    *,
+    family: ExponentialFamily,
+) -> DiscreteWorkingBatch:
+    """Extended-family batch at ``eta = linkfun(mustart)`` (iteration one)."""
+    return _extended_working_batch(
+        design, selectors, eta, y, prior_weight, offset, theta, family, True
+    )
+
+
+@partial(jax.jit, static_argnames=("family", "derivatives"))
+def discrete_theta_batch(
+    design: DeviceDiscreteDesign,
+    selectors: tuple[tuple[jax.Array, ...], ...],
+    coefficients: jax.Array,
+    y: jax.Array,
+    prior_weight: jax.Array,
+    offset: jax.Array,
+    log_theta: jax.Array,
+    theta: jax.Array,
+    *,
+    family: ExponentialFamily,
+    derivatives: bool = True,
+) -> DiscreteThetaBatch:
+    """``estimate.theta``'s per-row ``nlogl`` terms at fixed coefficients.
+
+    ``derivatives=False`` is ``nlogl(deriv=0)``: deviance and ``ls`` only.
+    """
+    eta = discrete_xbd(design, selectors, coefficients) + offset
+    mu = family.link.inverse(eta)
+    deviance = family.source_dev_resids_at(y, mu, prior_weight, theta)
+    ls_rows, lsth1_rows, lsth2_rows = family.source_ls_rows(
+        y, prior_weight, log_theta, theta
+    )
+    if not derivatives:
+        empty = jnp.zeros((0,), dtype=eta.dtype)
+        return DiscreteThetaBatch(deviance, empty, empty, ls_rows, empty, empty)
+    terms = family.source_dd(y, mu, prior_weight, theta)
+    return DiscreteThetaBatch(
+        deviance, terms.theta, terms.theta2, ls_rows, lsth1_rows, lsth2_rows
+    )

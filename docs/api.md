@@ -294,12 +294,14 @@ is a different fitting method from the dense route's nested exact REML.
 | Poisson | log, identity, sqrt | Fisher IRLS weights re-formed each iteration | 1 |
 | Binomial | logit, probit, cloglog, log | Fisher IRLS weights re-formed each iteration | 1 |
 | Gamma | inverse, identity, log | Fisher IRLS weights re-formed each iteration | estimated (`log.phi`) |
+| Negative binomial | log, identity, sqrt | `dDeta` Newton weights re-formed each iteration; theta fixed or re-estimated by `estimate.theta` | 1 |
 
-Non-Gaussian families use Fisher weights for every link (there is no
-observed-curvature split), halve a coefficient step while the raw penalized
-`sum(dev.resids)` rises, and converge on the penalized deviance change.
-Negative binomial is not yet available on this route (its `estimate.theta`
-nuisance update is unported) and raises `NotImplementedError`.
+Poisson, Binomial and Gamma use Fisher weights for every link (there is no
+observed-curvature split); all non-Gaussian families halve a coefficient step
+while the raw penalized `sum(dev.resids)` rises and converge on the penalized
+deviance change. An estimated negative-binomial theta is updated once per
+iteration conditionally on the current mean (it is not jointly optimized with
+the smoothing parameters); the result reports the final `theta`.
 
 ```python
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl

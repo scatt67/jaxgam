@@ -1269,3 +1269,58 @@ def test_family_dev_resids_returns_raw_rows_and_validates() -> None:
     )
     with pytest.raises(ValueError, match="matching 1-D"):
         bridge.family_dev_resids("gamma", np.ones(2), np.ones(3), np.ones(2))
+
+
+def test_nb_family_arguments_reject_before_r_conversion() -> None:
+    bridge = object.__new__(RBridge)
+    with pytest.raises(ValueError, match="nb family only"):
+        bridge._bam_family("poisson", None, theta=2.0)
+    with pytest.raises(ValueError, match="needs its value"):
+        bridge._bam_family("nb", "log", theta_fixed=True)
+    with pytest.raises(ValueError, match="positive and finite"):
+        bridge._bam_family("nb", "log", theta=-1.0)
+    with pytest.raises(ValueError, match="theta_fixed must be a boolean"):
+        bridge._bam_family("nb", "log", theta=1.0, theta_fixed=1)
+    with pytest.raises(ValueError, match="pinned nb link"):
+        bridge._bam_family("nb", "logit")
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+@pytest.mark.parametrize("fixed", [False, True], ids=["estimated", "fixed"])
+def test_trace_bam_nb_reports_theta_at_every_trial_and_exit(fixed: bool) -> None:
+    frame, weights, offset = _poisson_frame()
+    bridge = RBridge(mode="rpy2")
+    arguments = {
+        "family": "nb",
+        "sp": np.array([0.7]),
+        "weights": weights,
+        "offset": offset,
+        "theta": 2.0,
+        "theta_fixed": fixed,
+    }
+    trace = bridge.trace_bam_regular_working_model(
+        "y ~ z + s(x,bs='cr',k=6)", frame, **arguments
+    )
+    plain = bridge.fit_bam_discrete(
+        "y ~ z + s(x,bs='cr',k=6)", frame, m=30, **arguments
+    )
+    np.testing.assert_array_equal(trace.fit.coefficients, plain.coefficients)
+    thetas = [trial.log_theta for trial in trace.trials]
+    assert all(value is not None for value in thetas)
+    assert thetas[0] == np.log(2.0)
+    assert trace.final_log_theta == plain.log_theta
+    if fixed:
+        assert set(thetas) == {np.log(2.0)}
+    else:
+        assert len(set(thetas)) > 1
+    terms = bridge.nb_working_terms(
+        frame.y.to_numpy(),
+        plain.fitted_values,
+        np.log(plain.fitted_values),
+        offset,
+        weights,
+        plain.log_theta,
+    )
+    assert {"deviance", "dth", "dth2", "ls", "lsth1", "lsth2", "w", "z"} <= set(terms)
+    with pytest.raises(ValueError, match="matching 1-D"):
+        bridge.nb_estimate_theta(np.ones(2), np.ones(3), np.ones(2), 0.0)

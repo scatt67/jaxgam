@@ -185,10 +185,12 @@ class FitControl:
     within ``working_model_max_iterations``. Gaussian identity models use one
     frozen working model; Poisson, Binomial and Gamma re-form a Fisher
     working model (IRLS weights, no observed-curvature split) at every
-    iteration, with the scale fixed at one or, for Gamma, estimated. This is
-    not the nested exact REML optimization of the dense route. An explicit
-    ``sp`` instead runs the same iteration with every smoothing parameter
-    fixed.
+    iteration, with the scale fixed at one or, for Gamma, estimated. The
+    negative binomial uses ``bgam.fitd``'s ``dDeta`` Newton working model and,
+    when theta is estimated, re-estimates it each iteration by
+    ``estimate.theta`` at the current mean. This is not the nested exact REML
+    optimization of the dense route. An explicit ``sp`` instead runs the same
+    iteration with every smoothing parameter fixed.
     """
 
     execution: Literal["dense", "stream", "discrete"] = "dense"

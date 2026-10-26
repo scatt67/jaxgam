@@ -832,6 +832,7 @@ def _advance_following(parts, state, source_halvings, collector, label, replayed
         "scale_estimated": parts.scale_estimated,
         "epsilon": 1e-7,
         "start": parts.start,
+        "nuisance": parts.nuisance,
     }
     advance = regular.advance_regular_working_model(
         state, parts.rows, parts.propose, parts.penalty, **arguments
@@ -903,12 +904,6 @@ def test_matched_state_statistics_proposals_and_controller(r_bridge, case):
         weights=weights,
         offset=offset,
     )
-    blocks = trace.trials[0].state.blocks
-    metadata = source_working_metadata(trace.trials[0].state)
-    ldet = ldet_tolerance(r_bridge)
-    groups: dict[int, list] = {}
-    for trial in trace.trials:
-        groups.setdefault(trial.iteration, []).append(trial)
     collector = _AssertCollector()
     with regular_working_components(
         parse_formula(formula),
@@ -917,191 +912,9 @@ def test_matched_state_statistics_proposals_and_controller(r_bridge, case):
         sp,
         control=_control(selected),
     ) as parts:
-        for k, trials in groups.items():
-            first = trials[0]
-            evaluation = (
-                parts.rows.initial()
-                if k == 1
-                else parts.rows.evaluate(first.coefficients)
-            )
-            statistics = evaluation.statistics
-            for name, observed, expected in (
-                ("X'WX", statistics.gram, first.gram),
-                ("X'Wz", statistics.rhs, first.rhs),
-                (
-                    "y.norm2",
-                    statistics.response_square_sum,
-                    first.state.response_square_sum,
-                ),
-            ):
-                collector.check(
-                    f"iteration {k} {name}", _close(observed, expected, STRICT)
-                )
-            for index, trial in enumerate(trials):
-                proposal = trial.proposal
-                parameters = (
-                    proposal.log_smoothing
-                    if fam.scale_known
-                    else np.r_[proposal.log_smoothing, proposal.log_scale]
-                )
-                result = evaluate_gaussian_working_model_proposal(
-                    parameters,
-                    trial.state.gram,
-                    trial.state.rhs,
-                    trial.state.response_square_sum,
-                    metadata,
-                    scale_is_fixed=fam.scale_known,
-                    fixed_smoothing=not selected,
-                    log_scale=proposal.log_scale,
-                    tolerance=proposal.tolerance,
-                    smoothing=proposal.smoothing,
-                )
-                label = f"iteration {k} trial {index}"
-                for name, observed, expected, tolerance in (
-                    (
-                        "coefficients",
-                        result.coefficients,
-                        proposal.coefficients,
-                        STRICT,
-                    ),
-                    ("gradient", result.gradient, proposal.gradient, STRICT),
-                    ("hessian", result.hessian, proposal.hessian, STRICT),
-                    ("ldetS", result.logdet_penalty, proposal.logdet_penalty, ldet),
-                    ("ldetXXS", result.logdet_hessian, proposal.logdet_hessian, STRICT),
-                ):
-                    collector.check(
-                        f"{label} {name}", _close(observed, expected, tolerance)
-                    )
-                if len(proposal.gradient):
-                    check_newton_step(
-                        collector,
-                        label,
-                        (result.gradient, result.hessian, result.step),
-                        (proposal.gradient, proposal.hessian, proposal.step),
-                        proposal.tolerance,
-                    )
-                else:
-                    collector.check(
-                        f"{label} empty step",
-                        lambda result=result: check_that(
-                            result.step.shape == (0,), "fixed sp and scale: no step"
-                        ),
-                    )
-        iterations = sorted(groups)
-        criterion = np.nan
-        replayed: list[tuple[int, int, float]] = []
-        for position, k in enumerate(iterations[1:], start=1):
-            first = groups[k][0]
-            accepted = None if k == 2 else groups[k - 1][0].coefficients
-            state = regular.RegularWorkingModelState(
-                k - 1,
-                first.accepted,
-                first.step,
-                _public(groups[k - 1][-1].proposal.coefficients, blocks),
-                accepted,
-                np.nan
-                if accepted is None
-                else parts.rows.evaluate(accepted, statistics=False).deviance,
-                first.previous_deviance,
-                first.criterion,
-            )
-            label = f"replay iteration {k}"
-            advance = _advance_following(
-                parts, state, first.coefficient_trials - 1, collector, label, replayed
-            )
-            last = groups[k][-1]
-            checks = [
-                ("top coefficients", advance.coefficients, first.coefficients),
-                ("penalized deviance", advance.penalized_deviance, first.deviance),
-            ]
-            collector.check(
-                f"{label} decisions",
-                lambda advance=advance, k=k: check_that(
-                    not advance.converged
-                    and advance.proposal.evaluations == len(groups[k]),
-                    f"converged={advance.converged}, trials "
-                    f"{advance.proposal and advance.proposal.evaluations} vs "
-                    f"pinned {len(groups[k])}",
-                ),
-            )
-            if advance.converged:
-                continue
-            criterion = advance.state.criterion
-            checks += [
-                (
-                    "accepted parameters",
-                    advance.state.parameters,
-                    last.accepted + last.step,
-                ),
-                (
-                    "next coefficients",
-                    advance.state.coefficients,
-                    _public(last.proposal.coefficients, blocks),
-                ),
-            ]
-            if position + 1 < len(iterations):
-                following = groups[iterations[position + 1]][0]
-                checks.append(
-                    ("criterion", advance.state.criterion, following.criterion)
-                )
-            for name, observed, expected in checks:
-                collector.check(f"{label} {name}", _close(observed, expected, STRICT))
-            if len(last.proposal.step):
-                # The accepted trial's own system, re-evaluated on this
-                # iteration's statistics, against R's for the next Nstep.
-                ours = parts.propose(
-                    advance.state.parameters,
-                    last.proposal.tolerance,
-                    advance.statistics,
-                )
-                collector.check(
-                    f"{label} next step is the accepted proposal's",
-                    _close(np.asarray(ours.step), advance.state.step, STRICT),
-                )
-                check_newton_step(
-                    collector,
-                    f"{label} next step",
-                    (ours.gradient, ours.hessian, ours.step),
-                    (last.proposal.gradient, last.proposal.hessian, last.proposal.step),
-                    last.proposal.tolerance,
-                )
-        # The converging iteration: R's state after its last proposal.
-        k = iterations[-1]
-        last, first = groups[k][-1], groups[k][0]
-        state = regular.RegularWorkingModelState(
-            k,
-            last.accepted + last.step,
-            last.proposal.step,
-            _public(last.proposal.coefficients, blocks),
-            first.coefficients,
-            parts.rows.evaluate(first.coefficients, statistics=False).deviance,
-            first.deviance,
-            criterion,
+        replayed = check_matched_state(
+            r_bridge, collector, trace, parts, fam=fam, selected=selected
         )
-        label = f"replay converging iteration {k + 1}"
-        advance = _advance_following(
-            parts,
-            state,
-            trace.final_coefficient_trials - 1,
-            collector,
-            label,
-            replayed,
-        )
-        collector.check(
-            f"{label} converges",
-            lambda: check_that(
-                trace.converged
-                and trace.final_iteration == k + 1
-                and advance.converged,
-                f"pinned conv={trace.converged} iter={trace.final_iteration}; "
-                f"replay converged={advance.converged}",
-            ),
-        )
-        for name, observed, expected in (
-            ("final coefficients", advance.coefficients, trace.fit.coefficients),
-            ("final deviance", advance.deviance, trace.fit.deviance),
-        ):
-            collector.check(f"{label} {name}", _close(observed, expected, STRICT))
     bound = _REVIEWED_MATCHED_REPLAYS.get(case, 0)
     collector.check(
         "replay bound",
@@ -1111,6 +924,230 @@ def test_matched_state_statistics_proposals_and_controller(r_bridge, case):
         ),
     )
     collector.raise_if_any(f"{case} matched bgam.fitd state")
+
+
+def check_matched_state(r_bridge, collector, trace, parts, *, fam, selected):
+    """Gate every pinned iteration and trial from R's exact state.
+
+    Returns the replayed decisions. For an extended family each trial's
+    ``log_theta`` is R's theta after that iteration's ``estimate.theta``: the
+    statistics use it, the theta update is replayed from R's previous theta
+    at R's step-controlled coefficients, and every controller replay starts
+    from R's theta entering the iteration.
+    """
+    blocks = trace.trials[0].state.blocks
+    metadata = source_working_metadata(trace.trials[0].state)
+    ldet = ldet_tolerance(r_bridge)
+    groups: dict[int, list] = {}
+    for trial in trace.trials:
+        groups.setdefault(trial.iteration, []).append(trial)
+    extended = trace.trials[0].log_theta is not None
+    theta_after = {k: trials[0].log_theta for k, trials in groups.items()}
+
+    def enter(k):
+        """Set the rows to R's theta entering iteration ``k``."""
+        if extended:
+            parts.rows.set_log_theta(theta_after[max(k - 1, 1)])
+
+    for k, trials in groups.items():
+        first = trials[0]
+        if extended and k > 1 and parts.nuisance is not None:
+            enter(k)
+            update = parts.nuisance.update(first.coefficients)
+            collector.check(
+                f"iteration {k} estimate.theta",
+                _close(update.log_theta, theta_after[k], STRICT),
+            )
+        if extended:
+            parts.rows.set_log_theta(theta_after[k])
+        evaluation = (
+            parts.rows.initial() if k == 1 else parts.rows.evaluate(first.coefficients)
+        )
+        statistics = evaluation.statistics
+        for name, observed, expected in (
+            ("X'WX", statistics.gram, first.gram),
+            ("X'Wz", statistics.rhs, first.rhs),
+            (
+                "y.norm2",
+                statistics.response_square_sum,
+                first.state.response_square_sum,
+            ),
+        ):
+            collector.check(f"iteration {k} {name}", _close(observed, expected, STRICT))
+        for index, trial in enumerate(trials):
+            proposal = trial.proposal
+            parameters = (
+                proposal.log_smoothing
+                if fam.scale_known
+                else np.r_[proposal.log_smoothing, proposal.log_scale]
+            )
+            result = evaluate_gaussian_working_model_proposal(
+                parameters,
+                trial.state.gram,
+                trial.state.rhs,
+                trial.state.response_square_sum,
+                metadata,
+                scale_is_fixed=fam.scale_known,
+                fixed_smoothing=not selected,
+                log_scale=proposal.log_scale,
+                tolerance=proposal.tolerance,
+                smoothing=proposal.smoothing,
+            )
+            label = f"iteration {k} trial {index}"
+            for name, observed, expected, tolerance in (
+                (
+                    "coefficients",
+                    result.coefficients,
+                    proposal.coefficients,
+                    STRICT,
+                ),
+                ("gradient", result.gradient, proposal.gradient, STRICT),
+                ("hessian", result.hessian, proposal.hessian, STRICT),
+                ("ldetS", result.logdet_penalty, proposal.logdet_penalty, ldet),
+                ("ldetXXS", result.logdet_hessian, proposal.logdet_hessian, STRICT),
+            ):
+                collector.check(
+                    f"{label} {name}", _close(observed, expected, tolerance)
+                )
+            if len(proposal.gradient):
+                check_newton_step(
+                    collector,
+                    label,
+                    (result.gradient, result.hessian, result.step),
+                    (proposal.gradient, proposal.hessian, proposal.step),
+                    proposal.tolerance,
+                )
+            else:
+                collector.check(
+                    f"{label} empty step",
+                    lambda result=result: check_that(
+                        result.step.shape == (0,), "fixed sp and scale: no step"
+                    ),
+                )
+    iterations = sorted(groups)
+    criterion = np.nan
+    replayed: list[tuple[int, int, float]] = []
+    for position, k in enumerate(iterations[1:], start=1):
+        first = groups[k][0]
+        enter(k)
+        accepted = None if k == 2 else groups[k - 1][0].coefficients
+        state = regular.RegularWorkingModelState(
+            k - 1,
+            first.accepted,
+            first.step,
+            _public(groups[k - 1][-1].proposal.coefficients, blocks),
+            accepted,
+            np.nan
+            if accepted is None
+            else parts.rows.evaluate(accepted, statistics=False).deviance,
+            first.previous_deviance,
+            first.criterion,
+        )
+        label = f"replay iteration {k}"
+        advance = _advance_following(
+            parts, state, first.coefficient_trials - 1, collector, label, replayed
+        )
+        last = groups[k][-1]
+        checks = [
+            ("top coefficients", advance.coefficients, first.coefficients),
+            ("penalized deviance", advance.penalized_deviance, first.deviance),
+        ]
+        collector.check(
+            f"{label} decisions",
+            lambda advance=advance, k=k: check_that(
+                not advance.converged
+                and advance.proposal.evaluations == len(groups[k]),
+                f"converged={advance.converged}, trials "
+                f"{advance.proposal and advance.proposal.evaluations} vs "
+                f"pinned {len(groups[k])}",
+            ),
+        )
+        if advance.converged:
+            continue
+        criterion = advance.state.criterion
+        checks += [
+            (
+                "accepted parameters",
+                advance.state.parameters,
+                last.accepted + last.step,
+            ),
+            (
+                "next coefficients",
+                advance.state.coefficients,
+                _public(last.proposal.coefficients, blocks),
+            ),
+        ]
+        if position + 1 < len(iterations):
+            following = groups[iterations[position + 1]][0]
+            checks.append(("criterion", advance.state.criterion, following.criterion))
+        for name, observed, expected in checks:
+            collector.check(f"{label} {name}", _close(observed, expected, STRICT))
+        if len(last.proposal.step):
+            # The accepted trial's own system, re-evaluated on this
+            # iteration's statistics, against R's for the next Nstep.
+            ours = parts.propose(
+                advance.state.parameters,
+                last.proposal.tolerance,
+                advance.statistics,
+            )
+            collector.check(
+                f"{label} next step is the accepted proposal's",
+                _close(np.asarray(ours.step), advance.state.step, STRICT),
+            )
+            check_newton_step(
+                collector,
+                f"{label} next step",
+                (ours.gradient, ours.hessian, ours.step),
+                (last.proposal.gradient, last.proposal.hessian, last.proposal.step),
+                last.proposal.tolerance,
+            )
+    # The converging iteration: R's state after its last proposal.
+    k = iterations[-1]
+    last, first = groups[k][-1], groups[k][0]
+    enter(k + 1)
+    state = regular.RegularWorkingModelState(
+        k,
+        last.accepted + last.step,
+        last.proposal.step,
+        _public(last.proposal.coefficients, blocks),
+        first.coefficients,
+        parts.rows.evaluate(first.coefficients, statistics=False).deviance,
+        first.deviance,
+        criterion,
+    )
+    label = f"replay converging iteration {k + 1}"
+    advance = _advance_following(
+        parts,
+        state,
+        trace.final_coefficient_trials - 1,
+        collector,
+        label,
+        replayed,
+    )
+    collector.check(
+        f"{label} converges",
+        lambda: check_that(
+            trace.converged and trace.final_iteration == k + 1 and advance.converged,
+            f"pinned conv={trace.converged} iter={trace.final_iteration}; "
+            f"replay converged={advance.converged}",
+        ),
+    )
+    final_deviance = advance.deviance
+    if extended and parts.nuisance is not None:
+        collector.check(
+            f"{label} final theta",
+            _close(parts.rows.log_theta, trace.final_log_theta, STRICT),
+        )
+        # bam's residuals use the theta of the converging iteration.
+        final_deviance = parts.rows.evaluate(
+            advance.coefficients, statistics=False
+        ).deviance
+    for name, observed, expected in (
+        ("final coefficients", advance.coefficients, trace.fit.coefficients),
+        ("final deviance", final_deviance, trace.fit.deviance),
+    ):
+        collector.check(f"{label} {name}", _close(observed, expected, STRICT))
+    return replayed
 
 
 # --------------------------------------------------------------------------

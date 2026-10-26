@@ -258,6 +258,7 @@ class BamDiscreteFit:
     covariance: np.ndarray | None = None
     prediction: np.ndarray | None = None
     prediction_se: np.ndarray | None = None
+    log_theta: float | None = None
 
 
 @dataclass(frozen=True)
@@ -400,6 +401,7 @@ class SourceRegularWorkingTrial:
     previous_deviance: float
     criterion: float
     proposal: SourceWorkingProposal
+    log_theta: float | None = None
 
 
 @dataclass(frozen=True)
@@ -411,7 +413,9 @@ class SourceRegularWorkingModelTrace:
     ``kk`` belongs to the converging iteration, which makes no proposal.
     When pinned R stops with an error instead (and the caller allowed it),
     ``failure`` holds R's message, ``trials`` the trials made before it, and
-    ``fit`` and the loop-exit fields are ``None``.
+    ``fit`` and the loop-exit fields are ``None``. For ``nb`` every trial's
+    ``log_theta`` is ``theta`` after that iteration's ``estimate.theta``, and
+    ``final_log_theta`` is ``theta`` at the loop exit.
     """
 
     trials: tuple[SourceRegularWorkingTrial, ...]
@@ -420,6 +424,7 @@ class SourceRegularWorkingModelTrace:
     final_coefficient_trials: int | None
     converged: bool | None
     failure: str | None = None
+    final_log_theta: float | None = None
 
 
 def _same_source_working_state(
@@ -7629,11 +7634,15 @@ if (!is.null(s$sp.criterion)) {{
         capture_trials: bool = False,
         newdata: pd.DataFrame | None = None,
         discrete_prediction: bool = False,
+        theta: float | None = None,
+        theta_fixed: bool = False,
     ) -> BamDiscreteFit:
         """Fit pinned discrete bam with fixed or performance-iteration smoothing.
 
         ``family``/``link`` name a pinned ``stats`` family constructor
-        (``gaussian``, ``poisson``, ``binomial`` or ``gamma``) and its link.
+        (``gaussian``, ``poisson``, ``binomial`` or ``gamma``) or mgcv's
+        ``nb``, and its link. For ``nb``, ``theta`` is the fixed theta when
+        ``theta_fixed`` and otherwise the start of its estimation (default 1).
         ``sp`` fixes smoothing. ``initial_sp`` and ``initial_scale`` instead
         supply mgcv's ``in.out`` start for a selected working-model replay.
         ``scale`` is R's scale control: negative estimates scale, while a
@@ -7658,6 +7667,8 @@ if (!is.null(s$sp.criterion)) {{
             offset=offset,
             max_iterations=max_iterations,
             epsilon=epsilon,
+            theta=theta,
+            theta_fixed=theta_fixed,
         )
         trials: list[np.ndarray] = []
         fitter = self._traced_bam_fit_chol(trials) if capture_trials else self._mgcv.bam
@@ -7675,10 +7686,22 @@ if (!is.null(s$sp.criterion)) {{
         "poisson": ("log", "identity", "sqrt"),
         "binomial": ("logit", "probit", "cloglog", "log"),
         "gamma": ("inverse", "identity", "log"),
+        "nb": ("log", "identity", "sqrt"),
     }
 
-    def _bam_family(self, family: str, link: str | None) -> Any:
-        """Construct one pinned ``stats`` family object by typed name."""
+    def _bam_family(
+        self,
+        family: str,
+        link: str | None,
+        *,
+        theta: float | None = None,
+        theta_fixed: bool = False,
+    ) -> Any:
+        """Construct one pinned family object by typed name.
+
+        ``nb`` is ``mgcv::nb``: ``theta`` fixes theta when ``theta_fixed``,
+        otherwise it starts the estimation (``nb(theta=-theta)``; default 1).
+        """
         links = self._BAM_FAMILY_LINKS.get(family)
         if links is None:
             raise ValueError(
@@ -7687,13 +7710,26 @@ if (!is.null(s$sp.criterion)) {{
             )
         if link is not None and link not in links:
             raise ValueError(f"link {link!r} is not a pinned {family} link")
-        constructor = {
-            "gaussian": self._stats.gaussian,
-            "poisson": self._stats.poisson,
-            "binomial": self._stats.binomial,
-            "gamma": self._stats.Gamma,
-        }[family]
-        return constructor() if link is None else constructor(link=link)
+        if not isinstance(theta_fixed, bool):
+            raise ValueError("theta_fixed must be a boolean")
+        if family != "nb":
+            if theta is not None or theta_fixed:
+                raise ValueError("theta applies to the nb family only")
+            constructor = {
+                "gaussian": self._stats.gaussian,
+                "poisson": self._stats.poisson,
+                "binomial": self._stats.binomial,
+                "gamma": self._stats.Gamma,
+            }[family]
+            return constructor() if link is None else constructor(link=link)
+        if theta is not None and (not np.isfinite(theta) or theta <= 0.0):
+            raise ValueError("nb theta must be positive and finite")
+        if theta_fixed and theta is None:
+            raise ValueError("a fixed nb theta needs its value")
+        arguments: dict[str, Any] = {} if link is None else {"link": link}
+        if theta is not None:
+            arguments["theta"] = float(theta) if theta_fixed else -float(theta)
+        return self._mgcv.nb(**arguments)
 
     def family_dev_resids(
         self,
@@ -7722,6 +7758,99 @@ if (!is.null(s$sp.criterion)) {{
             constructor.rx2("dev.resids")(y_r, mu_r, weight_r), dtype=np.float64
         )
 
+    def nb_working_terms(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        eta: np.ndarray,
+        offset: np.ndarray,
+        weight: np.ndarray,
+        log_theta: float,
+        *,
+        link: str = "log",
+    ) -> dict[str, np.ndarray]:
+        """Pinned ``nb()`` row terms at explicit theta, as ``bgam.fitd`` uses them.
+
+        ``fix.family.link(nb(theta, link))``'s ``dev.resids``, ``Dd`` (level
+        2: ``Dth``, ``Dth2``), the ``ls`` saturated likelihood totals and the
+        extended-family working model ``w = dDeta$Deta2*.5``,
+        ``z = (eta-offset) - dDeta$Deta.Deta2`` with non-finite rows zeroed.
+        """
+        self._require_rpy2()
+        arrays = [
+            np.asarray(values, dtype=np.float64)
+            for values in (y, mu, eta, offset, weight)
+        ]
+        if any(
+            values.ndim != 1 or values.shape != arrays[0].shape for values in arrays
+        ):
+            raise ValueError(
+                "y, mu, eta, offset and weight must be matching 1-D arrays"
+            )
+        if not np.isfinite(log_theta):
+            raise ValueError("log_theta must be finite")
+        family = self._call_internal(
+            "fix.family.link", self._bam_family("nb", link, theta=1.0, theta_fixed=True)
+        )
+        y_r, mu_r, eta_r, offset_r, weight_r = (self._to_r_vector(v) for v in arrays)
+        theta_r = self._to_r_vector(np.array([log_theta]))
+        base = self._ro.baseenv
+        deviance = family.rx2("dev.resids")(y_r, mu_r, weight_r, theta_r)
+        derivatives = self._ro.ListVector(
+            family.rx2("Dd")(y_r, mu_r, theta_r, weight_r, level=2)
+        )
+        saturated = self._ro.ListVector(family.rx2("ls")(y_r, weight_r, theta_r, 1.0))
+        working = self._ro.ListVector(
+            self._call_internal("dDeta", y_r, mu_r, weight_r, theta_r, family, 0)
+        )
+        w = base["*"](working.rx2("Deta2"), self._to_r_vector(np.array([0.5])))
+        z = base["-"](base["-"](eta_r, offset_r), working.rx2("Deta.Deta2"))
+        good = base["&"](base["is.finite"](z), base["is.finite"](w))
+        zero = self._to_r_vector(np.array([0.0]))
+        return {
+            "deviance": _r_array(deviance, dtype=np.float64),
+            "dth": _r_array(derivatives.rx2("Dth"), dtype=np.float64).ravel(),
+            "dth2": _r_array(derivatives.rx2("Dth2"), dtype=np.float64).ravel(),
+            "ls": np.array([saturated.rx2("ls")[0]], dtype=np.float64),
+            "lsth1": np.array([saturated.rx2("lsth1")[0]], dtype=np.float64),
+            "lsth2": np.array([saturated.rx2("lsth2")[0]], dtype=np.float64),
+            "w": _r_array(base["ifelse"](good, w, zero), dtype=np.float64),
+            "z": _r_array(base["ifelse"](good, z, zero), dtype=np.float64),
+        }
+
+    def nb_estimate_theta(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weight: np.ndarray,
+        log_theta: float,
+        *,
+        link: str = "log",
+        tolerance: float = 1e-7,
+    ) -> float:
+        """Pinned ``estimate.theta(theta, nb, y, mu, scale=1, wt, tol)``: log theta."""
+        self._require_rpy2()
+        arrays = [np.asarray(values, dtype=np.float64) for values in (y, mu, weight)]
+        if any(
+            values.ndim != 1 or values.shape != arrays[0].shape for values in arrays
+        ):
+            raise ValueError("y, mu and weight must be matching 1-D arrays")
+        family = self._call_internal(
+            "fix.family.link", self._bam_family("nb", link, theta=1.5)
+        )
+        y_r, mu_r, weight_r = (self._to_r_vector(v) for v in arrays)
+        result = self._call_internal(
+            "estimate.theta",
+            self._to_r_vector(np.array([float(log_theta)])),
+            family,
+            y_r,
+            mu_r,
+            scale=1.0,
+            wt=weight_r,
+            tol=float(tolerance),
+        )
+        return float(_r_array(result, dtype=np.float64)[0])
+
     def _bam_discrete_arguments(
         self,
         data: pd.DataFrame,
@@ -7738,6 +7867,8 @@ if (!is.null(s$sp.criterion)) {{
         offset: np.ndarray | None,
         max_iterations: int,
         epsilon: float,
+        theta: float | None = None,
+        theta_fixed: bool = False,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         """Validate pinned discrete ``bam`` controls and build its arguments."""
         if family not in self._BAM_FAMILY_LINKS or (
@@ -7852,7 +7983,9 @@ if (!is.null(s$sp.criterion)) {{
             )
         arguments: dict[str, Any] = {
             "data": frame,
-            "family": self._bam_family(family, link),
+            "family": self._bam_family(
+                family, link, theta=theta, theta_fixed=theta_fixed
+            ),
             "method": "fREML",
             "discrete": m_value,
             "control": self._call_internal(
@@ -7899,6 +8032,12 @@ if (!is.null(s$sp.criterion)) {{
         fitted_sp = _r_array(fit.rx2("sp"), dtype=np.float64)
         if not len(fitted_sp):
             fitted_sp = smoothing
+        fitted_family = fit.rx2("family")
+        log_theta = (
+            float(fitted_family.rx2("getTheta")()[0])
+            if bool(self._base.inherits(fitted_family, "extended.family")[0])
+            else None
+        )
         return BamDiscreteFit(
             coefficients=coefficients,
             fitted_values=_r_array(self._stats.fitted(fit), dtype=np.float64),
@@ -7914,6 +8053,7 @@ if (!is.null(s$sp.criterion)) {{
             covariance=covariance,
             prediction=prediction,
             prediction_se=prediction_se,
+            log_theta=log_theta,
         )
 
     def _traced_bam_fit_chol(self, trials: list[np.ndarray]) -> Any:
@@ -8155,6 +8295,8 @@ if (!is.null(s$sp.criterion)) {{
         max_iterations: int = 200,
         epsilon: float = 1e-7,
         allow_failure: bool = False,
+        theta: float | None = None,
+        theta_fixed: bool = False,
     ) -> SourceRegularWorkingModelTrace:
         """Replayable pinned non-additive ``bgam.fitd`` state at every trial.
 
@@ -8184,9 +8326,12 @@ if (!is.null(s$sp.criterion)) {{
             offset=offset,
             max_iterations=max_iterations,
             epsilon=epsilon,
+            theta=theta,
+            theta_fixed=theta_fixed,
         )
         from rpy2 import rinterface
 
+        extended = family == "nb"
         fixed_rho = (
             None
             if sp is None
@@ -8217,6 +8362,7 @@ if (!is.null(s$sp.criterion)) {{
             n_obs: Any,
             coefficient_trials: Any,
             coefficients: Any,
+            *theta_now: Any,
         ) -> None:
             qrx = self._ro.ListVector(qrx)
             if not blocks_cache:
@@ -8261,14 +8407,22 @@ if (!is.null(s$sp.criterion)) {{
                         self._source_fitchol_tolerance(crit),
                         len(parameters),
                     ),
+                    float(theta_now[0][0]) if theta_now else None,
                 )
             )
 
-        ending: list[tuple[int, int, bool]] = []
+        ending: list[tuple[int, int, bool, float | None]] = []
 
-        def finish(iteration: Any, coefficient_trials: Any, converged: Any) -> None:
+        def finish(
+            iteration: Any, coefficient_trials: Any, converged: Any, *theta_now: Any
+        ) -> None:
             ending.append(
-                (int(iteration[0]), int(coefficient_trials[0]), bool(converged[0]))
+                (
+                    int(iteration[0]),
+                    int(coefficient_trials[0]),
+                    bool(converged[0]),
+                    float(theta_now[0][0]) if theta_now else None,
+                )
             )
 
         fitter = self._instrumented_bam_fit_chol(
@@ -8289,9 +8443,10 @@ if (!is.null(s$sp.criterion)) {{
                 "nobs",
                 "kk",
                 "coef",
+                *(("theta",) if extended else ()),
             ),
             capture,
-            final_symbols=("iter", "kk", "conv"),
+            final_symbols=("iter", "kk", "conv", *(("theta",) if extended else ())),
             final_callback=finish,
         )
         from rpy2.rinterface_lib.embedded import RRuntimeError
@@ -8306,10 +8461,14 @@ if (!is.null(s$sp.criterion)) {{
             )
         if not trials or len(ending) != 1:
             raise RBridgeError("bgam.fitd made no Sl.fitChol trial or loop exit")
+        final_iteration, final_trials, converged, final_log_theta = ending[0]
         return SourceRegularWorkingModelTrace(
             tuple(trials),
             self._bam_discrete_result(fit, smoothing, newdata=None, trial_records=None),
-            *ending[0],
+            final_iteration,
+            final_trials,
+            converged,
+            final_log_theta=final_log_theta,
         )
 
     def _source_working_blocks(

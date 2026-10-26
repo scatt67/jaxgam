@@ -91,6 +91,19 @@ class WorkingRows(Protocol):
         ...
 
 
+class WorkingNuisance(Protocol):
+    """An extended family's per-iteration nuisance update (``estimate.theta``).
+
+    ``update(coefficients)`` re-estimates the nuisance at the step-controlled
+    coefficients, changes what the rows evaluate from then on, and returns a
+    record kept in the iteration trace.
+    """
+
+    def update(self, coefficients: np.ndarray) -> object:
+        """Re-estimate at ``coefficients``; the rows now use the new value."""
+        ...
+
+
 @dataclass(frozen=True)
 class RegularWorkingModelState:
     """``bgam.fitd``'s carried state at the top of an outer iteration.
@@ -141,6 +154,7 @@ class RegularWorkingModelIteration:
     trial_evaluations: int
     step_control_margins: tuple[float, ...] = ()
     converged: bool = False
+    nuisance: object | None = None
 
 
 @dataclass(frozen=True)
@@ -208,6 +222,7 @@ def advance_regular_working_model(
     scale_estimated: bool,
     epsilon: float,
     start: Callable[[WorkingStatistics, float], np.ndarray],
+    nuisance: WorkingNuisance | None = None,
     _oracle_replay_halvings: int | None = None,
 ) -> RegularWorkingModelAdvance:
     """Port one non-additive ``bgam.fitd`` outer iteration from ``state``.
@@ -219,6 +234,12 @@ def advance_regular_working_model(
     one's free ``lsp0`` (``initial.sp``/``in.out`` and, when estimated,
     ``log(var(G$y)*.05)`` from ``variance``, which is ``nan`` for a known
     scale).
+
+    ``nuisance`` (an extended family with estimated theta) follows
+    ``bgam.fitd``'s order: ``dev0`` is re-evaluated with the current theta,
+    the step control and the penalized deviance use that theta, and from
+    iteration two the theta is re-estimated at the step-controlled
+    coefficients before the working model is formed with it.
 
     ``_oracle_replay_halvings`` is a test/oracle hook, never set by the
     public API: it replays a known source step-control outcome (``kk - 1``)
@@ -248,12 +269,18 @@ def advance_regular_working_model(
         previous = None
         if iteration > 2:
             assert state.accepted_coefficients is not None
-            previous = state.accepted_deviance + penalty(
-                state.accepted_coefficients, bound
+            # dev0 <- sum(dev.resids(G$y, mu0, G$w, theta)): the current theta.
+            accepted_deviance = (
+                state.accepted_deviance
+                if nuisance is None
+                else rows.evaluate(
+                    state.accepted_coefficients, statistics=False
+                ).deviance
             )
+            previous = accepted_deviance + penalty(state.accepted_coefficients, bound)
         halvings = 0
         while True:
-            evaluation = rows.evaluate(coefficients)
+            evaluation = rows.evaluate(coefficients, statistics=nuisance is None)
             deviance = evaluation.deviance
             if previous is not None:
                 margins.append(
@@ -276,10 +303,18 @@ def advance_regular_working_model(
                 continue
             break
         penalized = deviance + bsb
+    update = None
+    if nuisance is not None and iteration > 1:
+        # estimate.theta at mu, then dDeta with the new theta. bgam.fitd runs
+        # both before its stop("Non-finite deviance"), so a non-finite mu
+        # fails inside the theta update first.
+        update = nuisance.update(coefficients)
     if not np.isfinite(penalized):
         raise FloatingPointError(
             f"Non-finite working-model deviance at iteration {iteration}."
         )
+    if update is not None:
+        evaluation = rows.evaluate(coefficients)
     statistics = _finite_statistics(evaluation)
     # log.phi is the last accepted trial's log scale (log(1) when known).
     if (
@@ -310,6 +345,7 @@ def advance_regular_working_model(
                 0,
                 tuple(margins),
                 True,
+                update,
             ),
         )
     if iteration == 1:
@@ -345,6 +381,8 @@ def advance_regular_working_model(
         next_criterion,
         accepted.evaluations,
         tuple(margins),
+        False,
+        update,
     )
     return RegularWorkingModelAdvance(
         RegularWorkingModelState(
@@ -380,9 +418,14 @@ def fit_regular_working_model(
     epsilon: float,
     max_iterations: int,
     start: Callable[[WorkingStatistics, float], np.ndarray],
+    nuisance: WorkingNuisance | None = None,
     _oracle_replay_halvings: Mapping[int, int] | None = None,
 ) -> RegularWorkingModelFit:
     """Run ``bgam.fitd``'s outer loop to convergence or ``maxit``.
+
+    With an estimated ``nuisance`` the converging iteration has already
+    re-estimated it, so the final deviance is re-evaluated with that value,
+    as ``bam``'s residuals are.
 
     ``_oracle_replay_halvings`` (test/oracle hook) maps outer iterations to
     replayed step-control outcomes (see :func:`advance_regular_working_model`).
@@ -408,6 +451,7 @@ def fit_regular_working_model(
             scale_estimated=scale_estimated,
             epsilon=epsilon,
             start=start,
+            nuisance=nuisance,
             _oracle_replay_halvings=None
             if _oracle_replay_halvings is None
             else _oracle_replay_halvings.get(state.completed + 1),
@@ -426,7 +470,13 @@ def fit_regular_working_model(
     assert accepted is not None
     if converged:
         coefficients = last.coefficients
-        deviance = last.deviance
+        deviance = (
+            last.deviance
+            if nuisance is None
+            else rows.evaluate(coefficients, statistics=False).deviance
+        )
+        if not np.isfinite(deviance):
+            raise FloatingPointError("Non-finite final working-model deviance.")
         n_iter = state.completed + 1
     else:
         coefficients = state.coefficients

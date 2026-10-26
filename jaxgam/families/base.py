@@ -112,6 +112,11 @@ class FamilyExecutionCapabilities:
     #: ``dev.resids`` arithmetic (:meth:`ExponentialFamily.source_dev_resids`)
     #: and a link the pinned R family constructor accepts.
     regular_performance_iteration: bool = False
+    #: Pinned ``bgam.fitd``'s extended-family performance iteration is
+    #: validated for this family/link: ``dDeta`` Newton working weights, pinned
+    #: ``dev.resids``/``Dd``/``ls`` arithmetic at explicit theta, and the
+    #: ``estimate.theta`` nuisance update when theta is estimated.
+    extended_performance_iteration: bool = False
 
 
 @dataclass(frozen=True)

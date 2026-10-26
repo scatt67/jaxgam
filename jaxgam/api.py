@@ -613,7 +613,9 @@ class GAM:
         the frozen-statistic working model. Families exposing the
         ``regular_performance_iteration`` capability (Poisson, Binomial and
         Gamma with the links pinned ``bam`` accepts for them) use pinned
-        ``bgam.fitd``'s Fisher performance iteration.
+        ``bgam.fitd``'s Fisher performance iteration; the negative binomial
+        (``extended_performance_iteration``) uses its ``dDeta`` Newton
+        working model with fixed or ``estimate.theta``-updated theta.
 
         The route is taken only on an explicit ``execution='discrete'``
         request and owns its solves: ``linear_solver='qr'`` is rejected, and a
@@ -657,21 +659,26 @@ class GAM:
                 "parameters."
             )
         capabilities = family.execution_capabilities()
-        if isinstance(family, ExtendedFamily) or capabilities.dynamic_theta:
+        if (
+            isinstance(family, ExtendedFamily)
+            and not capabilities.extended_performance_iteration
+        ):
             raise NotImplementedError(
-                f"Discrete fitting of the {family.family_name} family is not "
-                "implemented: bgam.fitd's extended-family working model "
-                "(dDeta Newton weights) and its nuisance update "
-                "(mgcv efam.r::estimate.theta, conditioning on the current mu) "
-                "remain to be ported."
+                f"Discrete fitting of the {family!r} family is not implemented: "
+                "bgam.fitd's extended-family route is ported for the negative "
+                "binomial family with its log, identity and sqrt links."
             )
         additive = isinstance(family, Gaussian) and family.is_canonical
-        if not additive and not capabilities.regular_performance_iteration:
+        if not (
+            additive
+            or capabilities.regular_performance_iteration
+            or capabilities.extended_performance_iteration
+        ):
             raise NotImplementedError(
-                "Discrete fitting supports Gaussian identity and the Poisson "
+                "Discrete fitting supports Gaussian identity, the Poisson "
                 "(log, identity, sqrt), Binomial (logit, probit, cloglog, log) "
-                "and Gamma (inverse, identity, log) families; got "
-                f"{family!r}."
+                "and Gamma (inverse, identity, log) families, and the negative "
+                f"binomial (log, identity, sqrt); got {family!r}."
             )
         spec = parse_formula(self.formula)
         device = _resolve_device(self.device)

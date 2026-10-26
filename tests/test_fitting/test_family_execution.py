@@ -34,7 +34,14 @@ from jaxgam.fitting.family_execution import (
 )
 from jaxgam.fitting.pirls import canonical_working_quantities
 from jaxgam.fitting.reml import fletcher_scale, pearson_rss
-from jaxgam.links.links import IdentityLink, InverseLink, Link, LogLink
+from jaxgam.links.links import (
+    IdentityLink,
+    InverseLink,
+    Link,
+    LogitLink,
+    LogLink,
+    SqrtLink,
+)
 from jaxgam.links.registry import link_registry
 from tests.helpers import r_available
 from tests.r_bridge import RBridge
@@ -769,6 +776,46 @@ def test_regular_performance_iteration_capability_names_pinned_links(
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
+
+
+@pytest.mark.parametrize(
+    ("family", "expected"),
+    [
+        (NegativeBinomial(), True),
+        (NegativeBinomial(link="identity"), True),
+        (NegativeBinomial(theta=2.0, fixed=True, link="sqrt"), True),
+        (Poisson(), False),
+        (Gaussian(), False),
+    ],
+    ids=repr,
+)
+def test_extended_performance_iteration_capability_names_nb_links(
+    family, expected
+) -> None:
+    """Pinned nb() accepts log, identity and sqrt; regular families are not
+    extended."""
+    capabilities = family.execution_capabilities()
+    assert capabilities.extended_performance_iteration is expected
+    if expected:
+        assert not capabilities.regular_performance_iteration
+
+
+def test_source_g2g_is_pinned_fix_family_link_closed_form() -> None:
+    """``fix.family.link`` (gam.fit3.r) g2g for the links nb() accepts.
+
+    dDeta (gam.fit4.r) short-cuts the identity link before calling g2g, so
+    the identity form is never reached by the NB route; it is still R's.
+    """
+    mu = np.array([0.25, 1.0, 4.0, 9.0])
+    np.testing.assert_array_equal(IdentityLink().source_g2g(mu), np.zeros(4))
+    np.testing.assert_array_equal(LogLink().source_g2g(mu), np.full(4, -1.0))
+    np.testing.assert_array_equal(SqrtLink().source_g2g(mu), -(mu**-0.5))
+    assert (
+        np.asarray(jax.jit(SqrtLink().source_g2g)(jnp.asarray(mu))).tolist()
+        == (-(mu**-0.5)).tolist()
+    )
+    with pytest.raises(NotImplementedError, match="no pinned extended-family g2g"):
+        LogitLink().source_g2g(mu)
 
 
 def test_source_dev_resids_is_explicit_per_family() -> None:

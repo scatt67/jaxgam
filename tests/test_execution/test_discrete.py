@@ -240,15 +240,11 @@ def test_public_route_rejects_unimplemented_domains() -> None:
     source = DataFrameRowSource(_frame(), response="y")
     with pytest.raises(NotImplementedError, match="requires explicit fixed sp"):
         GAM("y ~ s(x)", control=_control(8)).fit(source, result="prediction")
-    # Poisson/Binomial/Gamma now run bgam.fitd's performance iteration
-    # (tests/test_execution/test_discrete_regular.py); a noncanonical Gaussian
-    # and the estimated-theta NB family remain unimplemented.
+    # Poisson/Binomial/Gamma and NB now run bgam.fitd's performance iteration
+    # (tests/test_execution/test_discrete_regular.py, test_discrete_nb.py); a
+    # noncanonical Gaussian remains unimplemented.
     with pytest.raises(NotImplementedError, match="supports Gaussian identity"):
         GAM("y ~ s(x)", family=Gaussian(link="log"), sp=[1.0], control=_control(8)).fit(
-            source, result="prediction"
-        )
-    with pytest.raises(NotImplementedError, match=r"estimate\.theta"):
-        GAM("y ~ s(x)", family="nb", sp=[1.0], control=_control(8)).fit(
             source, result="prediction"
         )
     with pytest.raises(NotImplementedError, match="result='prediction' only"):
