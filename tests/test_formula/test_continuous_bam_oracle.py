@@ -211,3 +211,15 @@ def test_pinned_bam_sparse_tensor_constraint_is_rejected_before_xbd(r_bridge) ->
             factor_names=("g",),
             m=6,
         )
+
+
+def test_pinned_bam_setup_default_uses_discrete_grid(r_bridge) -> None:
+    """An omitted helper grid requests ``bam(discrete=TRUE)``, never NULL."""
+    x = np.linspace(0.0, 1.0, 50)
+    frame = pd.DataFrame({"y": np.sin(3.0 * x), "x": x})
+    setup = r_bridge.bam_discrete_setup("y ~ s(x, bs='cr', k=6)", frame)
+    assert setup.layout.marginal_tables
+    assert setup.layout.row_indices.shape[0] == len(frame)
+    assert setup.expanded_design.shape[0] == len(frame)
+    assert setup.expanded_design.shape[1] > 1
+    assert np.all(np.isfinite(setup.expanded_design))

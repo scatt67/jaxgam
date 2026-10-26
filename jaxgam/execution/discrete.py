@@ -1,0 +1,540 @@
+"""Bounded fixed-sp Gaussian fitting on a continuous-discrete design.
+
+This is the first PR11 fitting route.  It deliberately implements only the
+fixed smoothing-parameter additive-Gaussian case from ``mgcv::bgam.fitd``.
+Performance-iteration smoothing and request-wise ``predict.bamd`` compression
+remain separate policies.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import numpy.typing as npt
+import scipy.linalg as sla
+
+from jaxgam.control import ContinuousDiscretizationControl, FitControl
+from jaxgam.data.source import RowSource
+from jaxgam.fitting.discrete_ops import (
+    discrete_xbd,
+    discrete_xwxd,
+    discrete_xwyd,
+    to_device_discrete_design,
+)
+from jaxgam.formula.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.continuous_setup import (
+    ContinuousSetupUnavailable,
+    build_continuous_discrete_setup,
+)
+from jaxgam.formula.discrete_design import (
+    DiscreteDesignControl,
+    DiscreteDesignUnavailable,
+    DiscreteMemoryPlan,
+)
+from jaxgam.formula.fitting_prepare import total_penalty_spaces
+from jaxgam.formula.predict_matrix import PredictSpec
+from jaxgam.formula.terms import FormulaSpec
+from jaxgam.penalties.structure import DenseLocalPenalty, PenaltyStructure
+from jaxgam.smooths.by_variable import FactorBySmooth
+
+
+@dataclass(frozen=True)
+class DiscreteFitMemoryPlan:
+    """Conservative combined retained/action/solver byte bound."""
+
+    setup_retained_bytes: int
+    descriptor_host_retained_bytes: int
+    descriptor_device_peak_bytes: int
+    solver_workspace_bytes: int
+    fit_peak_bytes: int
+    budget_bytes: int
+
+
+@dataclass(frozen=True)
+class FixedSpDiscreteGaussianFit:
+    """Row-free state returned by the bounded fixed-sp fit."""
+
+    coefficients: npt.NDArray[np.float64]
+    deviance: float
+    score: float
+    scale: float
+    edf_total: float
+    smoothing_params: npt.NDArray[np.float64]
+    fisher_factor: npt.NDArray[np.float64] | None
+    covariance: npt.NDArray[np.float64] | None
+    predict_spec: PredictSpec
+    n_obs: int
+    offset_was_nonzero: bool
+    fitting_source_scans: int
+    fitting_batches_scanned: int
+    scale_iterations: int
+    memory_plan: DiscreteFitMemoryPlan
+
+
+def _fixed_sp(sp: npt.ArrayLike, n_penalties: int) -> tuple[np.ndarray, np.ndarray]:
+    values = np.atleast_1d(np.asarray(sp, dtype=np.float64))
+    if values.ndim != 1 or len(values) != n_penalties:
+        raise ValueError(
+            f"sp has {values.size} elements but model has {n_penalties} penalty terms."
+        )
+    if np.any(values <= 0.0) or not np.all(np.isfinite(values)):
+        bad = values[(values <= 0.0) | ~np.isfinite(values)]
+        raise ValueError(
+            "sp must contain strictly positive, finite values; "
+            f"got invalid value(s) {bad.tolist()}."
+        )
+    return values, np.log(values)
+
+
+def _solver_plan(
+    setup_retained_bytes: int,
+    descriptor: DiscreteMemoryPlan,
+    n_coef: int,
+    penalties: PenaltyStructure,
+    control: FitControl,
+) -> DiscreteFitMemoryPlan:
+    # Bound the known arrays by their largest coefficient-space shape:
+    # five retained solver matrices (G/S/H/L/H^-1G), one set of structural
+    # range bases, two unscaled block/eigenvector arrays, six simultaneous
+    # projection/root arrays (projection intermediate, projected component,
+    # symmetric LAPACK input, LAPACK factor, triangular copy, unpivoted root),
+    # the combined range penalty and one product/ownership copy. Roots are
+    # combined sequentially, so this count does not multiply by penalties.
+    matrix_count = 5 + 1 + 2 + 6 + 1 + 1
+    # Covariance inversion, scaling and predictor ownership can coexist.
+    matrix_count += 3 if control.uncertainty == "covariance" else 0
+    # DenseLocalPenalty.dense() is a view; compact diagonal/identity penalties
+    # need explicit local matrices while the block metadata is evaluated.
+    local_materializations = sum(
+        block.size * block.size
+        for block in penalties.blocks
+        for component in block.local_penalties
+        if not isinstance(component, DenseLocalPenalty)
+    )
+    # At residual reduction peak: three input float64 vectors, source scan
+    # positions plus RowBatch positions, scan ordinals, fitted/residual and
+    # two weighted-product temporaries. The validity vector is boolean.
+    # Descriptor selector staging is charged in its action peak separately.
+    row_workspace = control.batch_rows * (
+        10 * np.dtype(np.float64).itemsize + np.dtype(np.bool_).itemsize
+    )
+    solver = (
+        np.dtype(np.float64).itemsize
+        * (matrix_count * n_coef * n_coef + local_materializations + 8 * n_coef)
+        + row_workspace
+    )
+    host = descriptor.host_retained_bytes + descriptor.selector_resident_bytes
+    peak = setup_retained_bytes + host + descriptor.device_peak_bytes + solver
+    return DiscreteFitMemoryPlan(
+        setup_retained_bytes,
+        host,
+        descriptor.device_peak_bytes,
+        solver,
+        peak,
+        control.memory_budget_bytes,
+    )
+
+
+def _penalty_rank(structure: PenaltyStructure) -> int:
+    return sum(basis.shape[1] for _, basis in total_penalty_spaces(structure)[1])
+
+
+def _pinned_criterion_null_dimension(
+    spec: PredictSpec, total_null_dimension: int
+) -> int:
+    """Match pinned mgcv 1.9-3 ``bgam.fitd``'s final ``Mp`` reset."""
+    parametric = next(
+        (
+            term.n_coefs
+            for term in spec.coef_map.terms
+            if term.term_type == "parametric"
+        ),
+        0,
+    )
+    smooths = [
+        term.smooth
+        for term in spec.coef_map.terms
+        if term.term_type == "smooth" and term.smooth is not None
+    ]
+    expanded_smooth_count = sum(
+        smooth.n_levels if isinstance(smooth, FactorBySmooth) else 1
+        for smooth in smooths
+    )
+    return total_null_dimension if expanded_smooth_count > 1 else parametric
+
+
+def _log_pdet(structure: PenaltyStructure, log_smoothing: np.ndarray) -> float:
+    """Evaluate ``log|S|+`` on setup-owned structural range spaces.
+
+    The range of each penalty block is fixed by its unweighted component
+    penalties.  Re-estimating rank from the *scaled* combined penalty can drop
+    a valid direction when smoothing parameters differ greatly, changing the
+    REML normalization.  This is the NumPy counterpart of ``Sl.setup`` plus
+    ``ldetS`` in pinned mgcv.
+    """
+    log_determinant = 0.0
+    structural_ranges = {
+        id(block): basis for block, basis in total_penalty_spaces(structure)[1]
+    }
+    for block in structure.blocks:
+        penalties = block.dense_penalties()
+        range_basis = structural_ranges[id(block)]
+        rank = range_basis.shape[1]
+        if rank == 0:
+            continue
+        if len(penalties) == 1:
+            eigenvalues = np.linalg.eigvalsh(penalties[0])[-rank:]
+            if np.any(eigenvalues <= 0.0):
+                raise FloatingPointError("Penalty range determinant is not positive.")
+            log_determinant += float(
+                rank * log_smoothing[block.sp_indices[0]] + np.sum(np.log(eigenvalues))
+            )
+            continue
+
+        # ``Sl.setup`` projects an overlapping multi-penalty block through
+        # the range of the *unscaled* component sum, then calls ``mroot``
+        # with the combined block rank before ``ldetSblock`` combines roots.
+        # Preserve that source policy, including its floating-point roots.
+        # Accumulate in source order without stacking all component matrices.
+        total = penalties[0].copy()
+        for component in penalties[1:]:
+            total += component
+        _, vectors = sla.eigh(0.5 * (total + total.T), driver="evr", check_finite=False)
+        # R's eigen() returns descending eigenvalues/vectors.
+        source_range = vectors[:, -rank:][:, ::-1]
+        block_log_smoothing = np.asarray(
+            [log_smoothing[index] for index in block.sp_indices]
+        )
+        maximum = float(np.max(block_log_smoothing))
+        combined = np.zeros((rank, rank))
+        for value, component in zip(block_log_smoothing, penalties, strict=True):
+            root = _pivoted_cholesky_root(
+                source_range.T @ component @ source_range, rank
+            )
+            combined += np.exp(value - maximum) * (root @ root.T)
+        log_determinant += rank * maximum + _positive_logdet(combined, rank)
+    return log_determinant
+
+
+def _pivoted_cholesky_root(matrix: np.ndarray, requested_rank: int) -> np.ndarray:
+    """Port the pivoted-Cholesky ``mroot`` layout used by pinned mgcv."""
+    factor, pivots, rank, info = sla.lapack.dpstrf(
+        0.5 * (matrix + matrix.T), lower=0, tol=0.0
+    )
+    if info < 0:
+        raise FloatingPointError("Penalty root factorization failed.")
+    factor = np.triu(factor)
+    if rank < len(factor):
+        factor[rank:, rank:] = 0.0
+    inverse_pivots = np.argsort(pivots - 1)
+    return factor[:requested_rank, :][:, inverse_pivots].T
+
+
+def _positive_logdet(matrix: np.ndarray, structural_rank: int) -> float:
+    """Match ``ldetSblock`` diagonal scaling and pivoted Cholesky."""
+    diagonal = np.diag(matrix).copy()
+    diagonal[diagonal <= 0.0] = 1.0
+    scaling = np.sqrt(diagonal)
+    scaled = (matrix / scaling[:, None]) / scaling[None, :]
+    factor, pivots, rank, info = sla.lapack.dpstrf(0.5 * (scaled + scaled.T), lower=0)
+    if info < 0 or rank != structural_rank:
+        raise FloatingPointError(
+            "Penalty determinant factorization disagrees with structural rank."
+        )
+    selected = pivots[:rank] - 1
+    return float(
+        2.0 * np.sum(np.log(np.diag(factor)[:rank]) + np.log(scaling[selected]))
+    )
+
+
+def _reml_score(
+    *,
+    deviance: float,
+    beta: np.ndarray,
+    penalty: np.ndarray,
+    penalty_structure: PenaltyStructure,
+    log_smoothing: np.ndarray,
+    factor: np.ndarray,
+    score_scale: float,
+    n_obs: int,
+    null_dimension: int,
+) -> float:
+    log_det_hessian = 2.0 * float(np.sum(np.log(np.diag(factor))))
+    penalized = deviance + float(beta @ penalty @ beta)
+    return float(
+        penalized / (2.0 * score_scale)
+        + log_det_hessian / 2.0
+        - _log_pdet(penalty_structure, log_smoothing) / 2.0
+        + (n_obs - null_dimension) * np.log(2.0 * np.pi * score_scale) / 2.0
+    )
+
+
+def _pinned_fixed_scale(
+    penalized_deviance: float,
+    n_obs: int,
+    null_dimension: int,
+    y_centered_square_sum: float,
+) -> tuple[float, int]:
+    """Port pinned ``bgam.fitd``'s damped log-scale Newton sequence."""
+    denominator = n_obs - null_dimension
+    if denominator <= 0 or penalized_deviance <= 0.0:
+        raise FloatingPointError("Invalid fixed-sp REML score scale.")
+    if n_obs < 2:
+        raise FloatingPointError("Gaussian scale initialization needs two rows.")
+    variance = y_centered_square_sum / (n_obs - 1)
+    if not np.isfinite(variance) or variance <= 0.0:
+        raise FloatingPointError("Gaussian scale initialization is not positive.")
+    log_scale = float(np.log(variance * 0.05))
+    step = 0.0
+    deviance = penalized_deviance
+    deviance_old = np.inf
+    for iteration in range(1, 201):
+        if (
+            iteration > 2
+            and abs(deviance - deviance_old) / (0.1 + abs(deviance)) < 1e-7
+            and abs(step) < 1e-7 * (abs(log_scale) + 1.0)
+        ):
+            return float(np.exp(log_scale)), iteration - 1
+        deviance_old = deviance
+        previous_step = step
+        while True:
+            trial = log_scale + previous_step
+            scale = float(np.exp(trial))
+            gradient = (-penalized_deviance / scale + denominator) / 2.0
+            proposed = 1.0 - denominator * scale / penalized_deviance
+            if abs(proposed) > 4.0:
+                proposed = float(np.copysign(4.0, proposed))
+            if previous_step != 0.0 and gradient * previous_step > deviance * 1e-7:
+                previous_step /= 2.0
+                continue
+            log_scale = trial
+            step = proposed
+            break
+    raise RuntimeError("Pinned fixed-sp Gaussian scale iteration did not converge.")
+
+
+def fit_fixed_sp_discrete_gaussian(
+    spec: FormulaSpec,
+    source: RowSource,
+    sp: npt.ArrayLike,
+    *,
+    control: FitControl,
+    device: object | None = None,
+) -> FixedSpDiscreteGaussianFit:
+    """Fit one Gaussian identity model using bounded indexed actions.
+
+    Two fitting scans are intentional. The first forms sufficient statistics;
+    the second accumulates selected-row residuals directly, avoiding unstable
+    cancellation for nearly exact fits.
+    """
+    policy = control.discretization
+    if control.execution != "discrete" or not isinstance(
+        policy, ContinuousDiscretizationControl
+    ):
+        raise ValueError("fixed-sp discrete fitting requires its explicit policy")
+    fingerprint = source.fingerprint()
+    setup = build_continuous_discrete_setup(
+        spec,
+        source,
+        factor_names=policy.factor_names,
+        m=policy.m,
+        budget=policy.budget,
+        selector_memmap_dir=policy.selector_memmap_directory,
+        batch_rows=control.batch_rows,
+        seed=policy.seed,
+    )
+    if isinstance(setup, ContinuousSetupUnavailable):
+        raise MemoryError(
+            f"{setup.reason}: requires {setup.required_bytes} bytes, "
+            f"budget is {setup.budget_bytes}."
+        )
+    try:
+        descriptor = build_continuous_discrete_design(
+            setup,
+            source,
+            control=DiscreteDesignControl(
+                budget=policy.budget,
+                batch_rows=control.batch_rows,
+                selector_memmap_directory=policy.selector_memmap_directory,
+                pair_policy=policy.pair_policy,
+                max_pair_histogram_bytes=policy.max_pair_histogram_bytes,
+            ),
+        )
+        if isinstance(descriptor, DiscreteDesignUnavailable):
+            raise MemoryError(
+                f"{descriptor.reason}: requires {descriptor.required_bytes} bytes, "
+                f"budget is {descriptor.budget_bytes}."
+            )
+        assert descriptor.memory_plan is not None
+        penalties = setup.penalties or PenaltyStructure(descriptor.n_coef, ())
+        memory = _solver_plan(
+            setup.retained_table_bytes,
+            descriptor.memory_plan,
+            descriptor.n_coef,
+            penalties,
+            control,
+        )
+        if memory.fit_peak_bytes > memory.budget_bytes:
+            raise MemoryError(
+                "Discrete fit workspace requires "
+                f"{memory.fit_peak_bytes} bytes, exceeding "
+                f"FitControl.memory_budget_bytes={memory.budget_bytes}."
+            )
+        smoothing, log_smoothing = _fixed_sp(sp, penalties.n_penalties)
+        penalty = penalties.materialize(log_smoothing)
+        device_descriptor = to_device_discrete_design(descriptor, device)
+        gram = np.zeros((descriptor.n_coef, descriptor.n_coef))
+        rhs = np.zeros(descriptor.n_coef)
+        cursor = 0
+        batches = 0
+        y_count = 0
+        y_mean = 0.0
+        y_centered_square_sum = 0.0
+        y_origin = None
+        offset_nonzero = False
+        for batch in source.scan(control.batch_rows):
+            size = len(batch.row_positions)
+            if size == 0 or cursor + size > source.n_rows:
+                raise RuntimeError("RowSource yielded an invalid fitting row count.")
+            if batch.y is None:
+                raise ValueError("Discrete fitting requires a RowSource response.")
+            valid = np.asarray(batch.valid)
+            y = np.asarray(batch.y, dtype=np.float64)
+            weights = np.asarray(batch.weight, dtype=np.float64)
+            offset = np.asarray(batch.offset, dtype=np.float64)
+            if not np.all(valid):
+                raise NotImplementedError(
+                    "Discrete fitting does not yet support padded invalid rows."
+                )
+            if (
+                not np.all(np.isfinite(y))
+                or not np.all(np.isfinite(weights))
+                or not np.all(np.isfinite(offset))
+                or np.any(weights < 0.0)
+            ):
+                raise ValueError(
+                    "Discrete fitting inputs must be finite with nonnegative weights."
+                )
+            rows = np.arange(cursor, cursor + size, dtype=np.intp)
+            selectors = descriptor.batch_indices(rows)
+            gram += np.asarray(discrete_xwxd(device_descriptor, selectors, weights))
+            rhs += np.asarray(
+                discrete_xwyd(device_descriptor, selectors, weights, y - offset)
+            )
+            # R initializes log(phi) from unweighted var(y).  Merge centered
+            # batch moments around one fixed origin, so a large response
+            # location cannot cancel its small variance in raw y'y moments.
+            if y_origin is None:
+                y_origin = float(y[0])
+            centered_y = y - y_origin
+            batch_mean = float(np.mean(centered_y))
+            batch_centered_square_sum = float(np.sum((centered_y - batch_mean) ** 2))
+            combined_count = y_count + size
+            mean_delta = batch_mean - y_mean
+            y_centered_square_sum += (
+                batch_centered_square_sum
+                + mean_delta * mean_delta * y_count * size / combined_count
+            )
+            y_mean += mean_delta * size / combined_count
+            y_count = combined_count
+            offset_nonzero |= bool(np.any(offset != 0.0))
+            cursor += size
+            batches += 1
+            # A finished fitting batch must not retain its response or source
+            # columns while the next batch (or residual scan) is constructed.
+            del batch, valid, y, weights, offset, rows, selectors, centered_y
+        if cursor != source.n_rows:
+            raise RuntimeError("RowSource yielded fewer fitting rows than declared.")
+        if source.fingerprint() != fingerprint:
+            raise RuntimeError("RowSource changed during discrete fitting.")
+        hessian = 0.5 * (gram + gram.T) + penalty
+        try:
+            factor = np.linalg.cholesky(hessian)
+        except np.linalg.LinAlgError as error:
+            raise np.linalg.LinAlgError(
+                "Discrete fixed-sp Hessian is not positive definite; "
+                "rank-deficient QR fitting is not implemented for this route."
+            ) from error
+        beta = sla.cho_solve((factor, True), rhs)
+
+        # Direct residual scan is stable for exact and nearly exact fits.
+        deviance = 0.0
+        residual_cursor = 0
+        residual_batches = 0
+        for batch in source.scan(control.batch_rows):
+            size = len(batch.row_positions)
+            if size == 0 or residual_cursor + size > source.n_rows:
+                raise RuntimeError("RowSource yielded an invalid residual row count.")
+            if batch.y is None or not np.all(np.asarray(batch.valid)):
+                raise RuntimeError(
+                    "RowSource response/validity changed during fitting."
+                )
+            rows = np.arange(residual_cursor, residual_cursor + size, dtype=np.intp)
+            selectors = descriptor.batch_indices(rows)
+            fitted = np.asarray(discrete_xbd(device_descriptor, selectors, beta))
+            residual = np.asarray(batch.y, dtype=np.float64) - (
+                fitted + np.asarray(batch.offset, dtype=np.float64)
+            )
+            deviance += float(np.sum(np.asarray(batch.weight) * residual * residual))
+            residual_cursor += size
+            residual_batches += 1
+            del batch, rows, selectors, fitted, residual
+        if residual_cursor != source.n_rows:
+            raise RuntimeError("RowSource yielded fewer residual rows than declared.")
+        if source.fingerprint() != fingerprint:
+            raise RuntimeError("RowSource changed during discrete residual evaluation.")
+
+        inverse_gram = sla.cho_solve((factor, True), gram)
+        edf = float(np.trace(inverse_gram))
+        rank = _penalty_rank(penalties)
+        null_dimension = descriptor.n_coef - rank
+        penalized = deviance + float(beta @ penalty @ beta)
+        score_scale, scale_iterations = _pinned_fixed_scale(
+            penalized,
+            source.n_rows,
+            null_dimension,
+            y_centered_square_sum,
+        )
+        score = _reml_score(
+            deviance=deviance,
+            beta=beta,
+            penalty=penalty,
+            penalty_structure=penalties,
+            log_smoothing=log_smoothing,
+            factor=factor,
+            score_scale=score_scale,
+            n_obs=source.n_rows,
+            null_dimension=_pinned_criterion_null_dimension(
+                setup.predict_spec, null_dimension
+            ),
+        )
+        covariance = None
+        fisher = None
+        if control.uncertainty == "fisher":
+            fisher = factor
+        elif control.uncertainty == "covariance":
+            covariance = score_scale * sla.cho_solve(
+                (factor, True), np.eye(descriptor.n_coef)
+            )
+        return FixedSpDiscreteGaussianFit(
+            np.asarray(beta),
+            deviance,
+            score,
+            score_scale,
+            edf,
+            smoothing,
+            fisher,
+            covariance,
+            setup.predict_spec,
+            source.n_rows,
+            offset_nonzero,
+            2,
+            batches + residual_batches,
+            scale_iterations,
+            memory,
+        )
+    finally:
+        # The result owns only frozen prediction metadata. Compact selectors,
+        # including any memmap files, are fitting-time resources.
+        setup.cleanup()

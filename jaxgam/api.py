@@ -152,7 +152,8 @@ class GAM:
         ----------
         data : pandas.DataFrame or dict
             Data frame containing the variables in the formula. A replayable
-            ``RowSource`` is accepted only with ``execution='stream'``.
+            ``RowSource`` is accepted with ``execution='stream'`` or the
+            explicitly configured ``execution='discrete'`` route.
         weights : np.ndarray, optional
             Prior weights, shape ``(n,)``.
         offset : np.ndarray, optional
@@ -169,6 +170,8 @@ class GAM:
             Frozen full-diagnostic or lean-inference result. Streamed fitting
             returns ``result='prediction'`` and supports fixed smoothing
             parameters across the family execution contracts or EFS with QR.
+            Discrete fitting currently requires explicit fixed ``sp`` and
+            ``result='prediction'``.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
         """
@@ -191,10 +194,14 @@ class GAM:
             return self._fit_stream(
                 data, weights, offset, result=result, family=family_obj
             )
+        if self.control.execution == "discrete":
+            return self._fit_discrete(
+                data, weights, offset, result=result, family=family_obj
+            )
         if isinstance(data, RowSource):
             raise TypeError(
-                "A RowSource requires FitControl(execution='stream'); the dense "
-                "route accepts only a DataFrame or dict."
+                "A RowSource requires FitControl execution 'stream' or 'discrete'; "
+                "the dense route accepts only a DataFrame or dict."
             )
         if self.control.linear_solver != "cholesky":
             raise NotImplementedError(
@@ -589,6 +596,71 @@ class GAM:
             execution_fallback_reason,
         )
 
+    def _fit_discrete(
+        self,
+        data: pd.DataFrame | dict | RowSource,
+        weights: np.ndarray | None,
+        offset: np.ndarray | None,
+        *,
+        result: Literal["full", "inference", "prediction"],
+        family: ExponentialFamily,
+    ) -> GAMPredictionResult:
+        """Run the bounded fixed-sp continuous-discrete route.
+
+        The route is taken only on an explicit ``execution='discrete'``
+        request and owns its solves: ``linear_solver='qr'`` is rejected, and a
+        ``gaussian_compression`` request is reported unmet in
+        ``execution_fallback_reason`` while the discrete fit runs unchanged.
+        """
+        from jaxgam.execution.discrete import fit_fixed_sp_discrete_gaussian
+        from jaxgam.families.standard import Gaussian
+
+        if not isinstance(data, RowSource):
+            raise TypeError(
+                "FitControl(execution='discrete') requires a replayable RowSource."
+            )
+        if weights is not None or offset is not None:
+            raise ValueError(
+                "weights and offset must be owned by the RowSource for "
+                "execution='discrete'; do not pass separate arrays."
+            )
+        if result != "prediction":
+            raise NotImplementedError(
+                "Discrete fitting currently supports result='prediction' only; "
+                "full and inference results retain unsupported row diagnostics."
+            )
+        if self.control.linear_solver != "cholesky":
+            raise NotImplementedError(
+                "linear_solver='qr' currently requires execution='stream'."
+            )
+        if self.sp is None:
+            raise NotImplementedError(
+                "Discrete fitting currently requires explicit fixed sp; "
+                "bgam.fitd performance iteration is not implemented."
+            )
+        if not isinstance(family, Gaussian) or not family.is_canonical:
+            raise NotImplementedError(
+                "Discrete fitting currently supports Gaussian identity only."
+            )
+        spec = parse_formula(self.formula)
+        state = fit_fixed_sp_discrete_gaussian(
+            spec,
+            data,
+            self.sp,
+            control=self.control,
+            device=_resolve_device(self.device),
+        )
+        return _with_execution_fallback_reason(
+            GAMPredictionResult._from_fixed_sp_discrete_gaussian(
+                fit_state=state,
+                family=family,
+                formula=self.formula,
+                method=self.method,
+                control=self.control,
+            ),
+            _discrete_gaussian_qr_request_fallback(self.control),
+        )
+
 
 def _gaussian_qr_request_fallback(
     control: FitControl, family: ExponentialFamily, *, estimated_efs: bool
@@ -604,6 +676,13 @@ def _gaussian_qr_request_fallback(
     if type(family) is not Gaussian or not isinstance(family.link, IdentityLink):
         return "Gaussian QR requires the exact Gaussian family with identity link"
     return None
+
+
+def _discrete_gaussian_qr_request_fallback(control: FitControl) -> str | None:
+    """Return why a Gaussian QR request cannot apply to the discrete route."""
+    if not control.gaussian_compression:
+        return None
+    return "Gaussian QR compression requires execution 'dense' or 'stream'."
 
 
 def _with_execution_fallback_reason(

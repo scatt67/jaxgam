@@ -873,3 +873,11 @@ class TestRBridgeSubprocessFallback:
         )
         np.testing.assert_allclose(r1["deviance"], r2["deviance"], rtol=STRICT.rtol)
         np.testing.assert_allclose(r1["edf_total"], r2["edf_total"], rtol=STRICT.rtol)
+
+
+def test_bam_discrete_gaussian_rejects_legacy_mode_before_r_object_conversion():
+    frame = pd.DataFrame({"x": [0.0, 1.0], "y": [1.0, 2.0]})
+    with pytest.raises(RBridgeError, match="requires RBridge"):
+        RBridge(mode="subprocess").fit_bam_discrete_gaussian(
+            "y ~ s(x)", frame, m=(3, 3)
+        )

@@ -159,26 +159,37 @@ def pair_reduction_plan(
     )
 
 
-def to_device_discrete_design(design: FrozenDiscreteDesign) -> DeviceDiscreteDesign:
+def to_device_discrete_design(
+    design: FrozenDiscreteDesign, device: jax.Device | None = None
+) -> DeviceDiscreteDesign:
     """Transfer compact tables and frozen transforms, never n-row selectors."""
     blocks: list[DeviceBlock] = []
     for block in design.blocks:
         if isinstance(block, LookupBlock):
-            blocks.append(DeviceLookupBlock(jnp.asarray(block.table), block.col_start))
+            blocks.append(
+                DeviceLookupBlock(
+                    jax.device_put(jnp.asarray(block.table), device), block.col_start
+                )
+            )
         else:
             assert isinstance(block, TensorLookupBlock)
             blocks.append(
                 DeviceTensorLookupBlock(
-                    tuple(jnp.asarray(table) for table in block.margin_tables),
-                    None if block.centering is None else jnp.asarray(block.centering),
-                    jnp.asarray(block.keep),
+                    tuple(
+                        jax.device_put(jnp.asarray(table), device)
+                        for table in block.margin_tables
+                    ),
+                    None
+                    if block.centering is None
+                    else jax.device_put(jnp.asarray(block.centering), device),
+                    jax.device_put(jnp.asarray(block.keep), device),
                     block.col_start,
                     None
                     if block.multiplier_table is None
-                    else jnp.asarray(block.multiplier_table),
+                    else jax.device_put(jnp.asarray(block.multiplier_table), device),
                     None
                     if block.level_codes is None
-                    else jnp.asarray(block.level_codes),
+                    else jax.device_put(jnp.asarray(block.level_codes), device),
                     block.n_levels,
                 )
             )

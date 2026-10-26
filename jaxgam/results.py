@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from jaxgam.data.source import RowSource
+    from jaxgam.execution.discrete import FixedSpDiscreteGaussianFit
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
@@ -352,6 +353,13 @@ class GAMPredictionResult:
     exact_optimizer_diagnostics: StreamExactOptimizerDiagnostics | None = field(
         default=None, kw_only=True
     )
+    smoothing_strategy: str | None = field(default=None, kw_only=True)
+    discretization_strategy: str | None = field(default=None, kw_only=True)
+    prediction_policy: str | None = field(default=None, kw_only=True)
+    fitting_source_scans: int | None = field(default=None, kw_only=True)
+    fitting_batches_scanned: int | None = field(default=None, kw_only=True)
+    fit_peak_bytes: int | None = field(default=None, kw_only=True)
+    fit_memory_budget_bytes: int | None = field(default=None, kw_only=True)
     n: int
     _batch_rows: int = 65_536
 
@@ -456,6 +464,61 @@ class GAMPredictionResult:
                 covariance[:, start:stop] *= values[None, :]
         covariance.setflags(write=False)
         return covariance
+
+    @classmethod
+    def _from_fixed_sp_discrete_gaussian(
+        cls,
+        *,
+        fit_state: FixedSpDiscreteGaussianFit,
+        family: ExponentialFamily,
+        formula: str,
+        method: str,
+        control: FitControl,
+    ) -> GAMPredictionResult:
+        """Build a row-free result for the explicit fixed-sp discrete route."""
+        policy = control.discretization
+        assert policy is not None
+        predictor = GAMPredictor(
+            coefficients=fit_state.coefficients,
+            Vp=fit_state.covariance,
+            family=copy.deepcopy(family),
+            formula=formula,
+            offset_was_nonzero=fit_state.offset_was_nonzero,
+            _predict_spec=fit_state.predict_spec,
+            _fisher_factor=fit_state.fisher_factor,
+            _fisher_scale=fit_state.scale,
+            _output_budget_bytes=control.output_budget_bytes,
+            _memory_budget_bytes=control.memory_budget_bytes,
+        )
+        return cls(
+            _predictor=predictor,
+            deviance=fit_state.deviance,
+            score=fit_state.score,
+            scale=fit_state.scale,
+            theta=None,
+            smoothing_params=fit_state.smoothing_params,
+            edf_total=fit_state.edf_total,
+            converged=True,
+            n_iter=fit_state.scale_iterations,
+            convergence_info=(
+                "fixed sp discrete Gaussian direct solve with pinned "
+                f"scale iteration ({fit_state.scale_iterations} iterations)"
+            ),
+            method=method,
+            lambda_strategy="fixed",
+            execution_path="jax_actions_numpy_solve",
+            execution_route="discrete",
+            execution_fallback_reason=None,
+            smoothing_strategy="fixed",
+            discretization_strategy="mgcv_range_grid",
+            prediction_policy=policy.prediction_policy,
+            fitting_source_scans=fit_state.fitting_source_scans,
+            fitting_batches_scanned=fit_state.fitting_batches_scanned,
+            fit_peak_bytes=fit_state.memory_plan.fit_peak_bytes,
+            fit_memory_budget_bytes=fit_state.memory_plan.budget_bytes,
+            n=fit_state.n_obs,
+            _batch_rows=control.batch_rows,
+        )
 
     @classmethod
     def _from_stream_fit(

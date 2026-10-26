@@ -49,7 +49,11 @@ if not os.environ.get("JAXGAM_NO_COMPILATION_CACHE"):
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 
 from jaxgam.api import GAM  # noqa: E402
-from jaxgam.control import EFSControl, FitControl  # noqa: E402
+from jaxgam.control import (  # noqa: E402
+    ContinuousDiscretizationControl,
+    EFSControl,
+    FitControl,
+)
 from jaxgam.fitting.state import EFSOptimizerDiagnostics  # noqa: E402
 from jaxgam.inference import GAMPredictor  # noqa: E402
 from jaxgam.results import (  # noqa: E402
@@ -60,6 +64,7 @@ from jaxgam.results import (  # noqa: E402
 
 __all__ = [
     "GAM",
+    "ContinuousDiscretizationControl",
     "EFSControl",
     "EFSOptimizerDiagnostics",
     "FitControl",

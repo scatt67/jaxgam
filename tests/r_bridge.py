@@ -208,6 +208,26 @@ class BamDiscreteSetup:
     term_names: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class BamDiscreteFit:
+    """Pinned fixed-sp ``bam(discrete=, method='fREML')`` result."""
+
+    coefficients: np.ndarray
+    fitted_values: np.ndarray
+    deviance: float
+    scale: float
+    edf_total: float
+    score: float
+    converged: bool
+    mgcv_converged: bool
+    smoothing_params: np.ndarray
+    n_iter: int
+    trial_records: np.ndarray | None = None
+    covariance: np.ndarray | None = None
+    prediction: np.ndarray | None = None
+    prediction_se: np.ndarray | None = None
+
+
 class RBridge:
     """Interface to R's mgcv for reference comparison.
 
@@ -7218,3 +7238,331 @@ if (!is.null(s$sp.criterion)) {{
             tuple(_r_array(penalty, dtype=np.float64) for penalty in setup.rx2("S")),
             tuple(map(str, self._base.names(ts_r))),
         )
+
+    def fit_bam_discrete_fixed_sp(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        sp: np.ndarray,
+        *,
+        factor_names: tuple[str, ...] = (),
+        m: int | tuple[int, ...] | None = None,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+    ) -> BamDiscreteFit:
+        """Fit pinned additive Gaussian ``bam`` at caller-owned smoothing."""
+        if sp is None:
+            raise ValueError("sp must contain positive finite values")
+        return self.fit_bam_discrete_gaussian(
+            formula,
+            data,
+            sp=sp,
+            factor_names=factor_names,
+            m=m,
+            weights=weights,
+            offset=offset,
+        )
+
+    def fit_bam_discrete_gaussian(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        *,
+        sp: np.ndarray | None = None,
+        initial_sp: np.ndarray | None = None,
+        initial_scale: float | None = None,
+        scale: float | None = None,
+        factor_names: tuple[str, ...] = (),
+        m: int | tuple[int, ...] | None = None,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+        max_iterations: int = 200,
+        epsilon: float = 1e-7,
+        capture_trials: bool = False,
+        newdata: pd.DataFrame | None = None,
+    ) -> BamDiscreteFit:
+        """Fit pinned Gaussian bam with fixed or performance-iteration smoothing.
+
+        ``sp`` fixes smoothing. ``initial_sp`` and ``initial_scale`` instead
+        supply mgcv's ``in.out`` start for a selected working-model replay.
+        ``scale`` is R's Gaussian scale control: negative estimates scale,
+        while a positive value fixes it.
+        """
+        smoothing, arguments = self._bam_discrete_gaussian_arguments(
+            data,
+            sp=sp,
+            initial_sp=initial_sp,
+            initial_scale=initial_scale,
+            scale=scale,
+            factor_names=factor_names,
+            m=m,
+            weights=weights,
+            offset=offset,
+            max_iterations=max_iterations,
+            epsilon=epsilon,
+        )
+        trials: list[np.ndarray] = []
+        fitter = self._traced_bam_fit_chol(trials) if capture_trials else self._mgcv.bam
+        fit = fitter(self._ro.Formula(formula), **arguments)
+        return self._bam_discrete_gaussian_result(
+            fit,
+            smoothing,
+            newdata=newdata,
+            trial_records=np.vstack(trials) if capture_trials else None,
+        )
+
+    def _bam_discrete_gaussian_arguments(
+        self,
+        data: pd.DataFrame,
+        *,
+        sp: np.ndarray | None,
+        initial_sp: np.ndarray | None,
+        initial_scale: float | None,
+        scale: float | None,
+        factor_names: tuple[str, ...],
+        m: int | tuple[int, ...] | None,
+        weights: np.ndarray | None,
+        offset: np.ndarray | None,
+        max_iterations: int,
+        epsilon: float,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        """Validate pinned Gaussian ``bam`` controls and build its arguments."""
+        self._require_rpy2()
+        ok, reason = self.check_versions()
+        if not ok:
+            raise RBridgeError(f"Pinned bam discrete fit unavailable: {reason}")
+        if len(factor_names) != len(set(factor_names)) or not set(factor_names) <= set(
+            data.columns
+        ):
+            raise ValueError("factor_names must be distinct data-frame columns")
+        smoothing = (
+            np.empty(0)
+            if sp is None
+            else np.atleast_1d(np.asarray(sp, dtype=np.float64))
+        )
+        if sp is not None:
+            if smoothing.ndim != 1 or not len(smoothing):
+                raise ValueError("sp must contain at least one smoothing parameter")
+            if np.any(smoothing <= 0) or not np.all(np.isfinite(smoothing)):
+                raise ValueError("sp must contain positive finite values")
+        if sp is not None and initial_sp is not None:
+            raise ValueError("fixed sp and initial_sp are mutually exclusive")
+        if initial_sp is None:
+            if initial_scale is not None:
+                raise ValueError("initial_scale requires initial_sp")
+            start = None
+        else:
+            start = np.atleast_1d(np.asarray(initial_sp, dtype=np.float64))
+            if (
+                start.ndim != 1
+                or not len(start)
+                or np.any(start <= 0)
+                or not np.all(np.isfinite(start))
+                or initial_scale is None
+                or not np.isfinite(initial_scale)
+                or initial_scale <= 0
+            ):
+                raise ValueError("initial_sp and initial_scale must be positive finite")
+            initial_scale = float(initial_scale)
+        if scale is not None and (not np.isfinite(scale) or scale == 0):
+            raise ValueError("scale must be finite and nonzero")
+        if scale is not None:
+            scale = float(scale)
+        if (
+            isinstance(max_iterations, bool)
+            or not isinstance(max_iterations, int)
+            or max_iterations < 1
+        ):
+            raise ValueError("max_iterations must be a positive integer")
+        if (
+            isinstance(epsilon, bool)
+            or not isinstance(epsilon, (int, float))
+            or not np.isfinite(epsilon)
+            or epsilon <= 0.0
+        ):
+            raise ValueError("epsilon must be positive and finite")
+        if isinstance(m, tuple):
+            if not m or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 2
+                for value in m
+            ):
+                raise ValueError("m tuple entries must be integers of at least 2")
+            m_value = self._to_r_vector(np.asarray(m, dtype=np.int32))
+        elif m is None:
+            m_value = True
+        elif isinstance(m, bool) or not isinstance(m, int) or m < 2:
+            raise ValueError("m must be an integer of at least 2")
+        else:
+            m_value = int(m)
+        prior_weights = (
+            np.ones(len(data), dtype=np.float64)
+            if weights is None
+            else np.asarray(weights, dtype=np.float64)
+        )
+        model_offset = (
+            np.zeros(len(data), dtype=np.float64)
+            if offset is None
+            else np.asarray(offset, dtype=np.float64)
+        )
+        if prior_weights.shape != (len(data),) or model_offset.shape != (len(data),):
+            raise ValueError("weights and offset must have one value per data row")
+        if (
+            np.any(prior_weights < 0.0)
+            or not np.all(np.isfinite(prior_weights))
+            or not np.all(np.isfinite(model_offset))
+        ):
+            raise ValueError("weights must be finite and nonnegative; offset finite")
+        frame = self._to_r_dataframe(data)
+        for name in factor_names:
+            series = data[name]
+            levels = (
+                list(series.dtype.categories)
+                if isinstance(series.dtype, pd.CategoricalDtype)
+                else list(pd.unique(series))
+            )
+            constructor = (
+                self._base.ordered
+                if isinstance(series.dtype, pd.CategoricalDtype)
+                and series.dtype.ordered
+                else self._base.factor
+            )
+            frame = self._ro.baseenv["[[<-"](
+                frame,
+                name,
+                value=constructor(
+                    frame.rx2(name), levels=self._ro.StrVector([str(x) for x in levels])
+                ),
+            )
+        arguments: dict[str, Any] = {
+            "data": frame,
+            "family": self._stats.gaussian(),
+            "method": "fREML",
+            "discrete": m_value,
+            "control": self._call_internal(
+                "gam.control", maxit=max_iterations, epsilon=epsilon
+            ),
+        }
+        if weights is not None:
+            arguments["weights"] = self._to_r_vector(prior_weights)
+        if offset is not None:
+            arguments["offset"] = self._to_r_vector(model_offset)
+        if sp is not None:
+            arguments["sp"] = self._to_r_vector(smoothing)
+        if start is not None:
+            arguments["in.out"] = self._ro.ListVector(
+                {"sp": self._to_r_vector(start), "scale": initial_scale}
+            )
+        if scale is not None:
+            arguments["scale"] = scale
+        return smoothing, arguments
+
+    def _bam_discrete_gaussian_result(
+        self,
+        fit: Any,
+        smoothing: np.ndarray,
+        *,
+        newdata: pd.DataFrame | None,
+        trial_records: np.ndarray | None,
+    ) -> BamDiscreteFit:
+        """Translate one pinned Gaussian ``bam`` fit into typed fields."""
+        coefficients = _r_array(self._stats.coef(fit), dtype=np.float64)
+        covariance = _r_array(fit.rx2("Vp"), dtype=np.float64)
+        prediction = prediction_se = None
+        if newdata is not None:
+            predicted = self._stats.predict(
+                fit,
+                newdata=self._to_r_dataframe(newdata),
+                type="link",
+                discrete=False,
+                **{"se.fit": True},
+            )
+            prediction = _r_array(predicted.rx2("fit"), dtype=np.float64)
+            prediction_se = _r_array(predicted.rx2("se.fit"), dtype=np.float64)
+        fitted_sp = _r_array(fit.rx2("sp"), dtype=np.float64)
+        if not len(fitted_sp):
+            fitted_sp = smoothing
+        return BamDiscreteFit(
+            coefficients=coefficients,
+            fitted_values=_r_array(self._stats.fitted(fit), dtype=np.float64),
+            deviance=float(self._stats.deviance(fit)[0]),
+            scale=float(fit.rx2("sig2")[0]),
+            edf_total=float(self._base.sum(fit.rx2("edf"))[0]),
+            score=float(fit.rx2("gcv.ubre")[0]),
+            converged=bool(self._ro.baseenv["isTRUE"](fit.rx2("converged"))[0]),
+            mgcv_converged=bool(self._ro.baseenv["isTRUE"](fit.rx2("mgcv.conv"))[0]),
+            smoothing_params=fitted_sp,
+            n_iter=int(fit.rx2("iter")[0]),
+            trial_records=trial_records,
+            covariance=covariance,
+            prediction=prediction,
+            prediction_se=prediction_se,
+        )
+
+    def _traced_bam_fit_chol(self, trials: list[np.ndarray]) -> Any:
+        """Clone bam's discrete caller chain and trace source proposals privately."""
+
+        def capture(
+            lsp: Any, n_sp: Any, log_phi: Any, crit: Any, proposal: Any
+        ) -> None:
+            proposal = self._ro.ListVector(proposal)
+            rho = _r_array(lsp, dtype=np.float64)[: int(n_sp[0])]
+            trials.append(
+                np.concatenate(
+                    (
+                        rho,
+                        _r_array(log_phi, dtype=np.float64),
+                        np.asarray(self._source_fitchol_tolerance(crit)),
+                        _r_array(proposal.rx2("step"), dtype=np.float64),
+                        _r_array(proposal.rx2("grad"), dtype=np.float64),
+                        _r_array(proposal.rx2("hess"), dtype=np.float64).ravel(
+                            order="F"
+                        ),
+                    )
+                )
+            )
+
+        return self._instrumented_bam_fit_chol(
+            ("lsp", "n.sp", "log.phi", "crit", "prop"), capture
+        )
+
+    def _source_fitchol_tolerance(self, crit: Any) -> np.ndarray:
+        """bgam.fitd's ``abs(crit)*.Machine$double.eps^.5`` evaluated in R."""
+        base = self._ro.baseenv
+        epsilon = base[".Machine"].rx2("double.eps")
+        return _r_array(
+            base["*"](
+                self._base.abs(crit), base["^"](epsilon, self._to_r_vector([0.5]))
+            ),
+            dtype=np.float64,
+        )
+
+    def _instrumented_bam_fit_chol(
+        self, capture_symbols: tuple[str, ...], callback: Any
+    ) -> Any:
+        """Private bam whose bgam.fitd calls back after each Sl.fitChol trial."""
+        from tests.r_ast import clone_function, find_call_paths, instrument_function
+
+        namespace = self._base.asNamespace("mgcv")
+        private = self._base.new_env(parent=namespace)
+        source = self._utils.getFromNamespace("bgam.fitd", "mgcv")
+        paths = find_call_paths(source, "<-", required_symbols=("prop", "Sl.fitChol"))
+        if len(paths) != 1:
+            raise RBridgeError("Pinned bgam.fitd Sl.fitChol proposal changed")
+        traced = instrument_function(
+            source,
+            path=paths[0],
+            expected_head="<-",
+            capture_symbols=capture_symbols,
+            callback=callback,
+            when="after",
+        )
+        private_fit = clone_function(traced, environment=private)
+        private["bgam.fitd"] = private_fit
+        bam = self._utils.getFromNamespace("bam", "mgcv")
+        fitter = clone_function(bam, environment=private)
+        fitter._jaxgam_callback_handles = (
+            traced,
+            private_fit,
+            *traced._jaxgam_callback_handles,
+        )
+        return fitter

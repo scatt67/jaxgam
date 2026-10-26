@@ -1,0 +1,314 @@
+"""Production fixed-sp Gaussian fitting on continuous-discrete designs."""
+
+from __future__ import annotations
+
+import math
+import weakref
+
+import numpy as np
+import pandas as pd
+import pytest
+
+import jaxgam.execution.discrete as discrete_execution
+from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
+from jaxgam.data.source import DataFrameRowSource
+from jaxgam.formula.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.continuous_setup import (
+    ContinuousDiscreteSetup,
+    build_continuous_discrete_setup,
+)
+from jaxgam.formula.discrete_design import (
+    DiscreteDesignControl,
+    DiscreteDesignUnavailable,
+)
+from jaxgam.formula.parser import parse_formula
+from tests.tolerances import STRICT
+
+
+class _CountingSource(DataFrameRowSource):
+    def __init__(self, frame: pd.DataFrame):
+        super().__init__(frame, response="y")
+        self.scans = 0
+
+    def scan(self, batch_rows):
+        self.scans += 1
+        yield from super().scan(batch_rows)
+
+
+def test_completed_fitting_scan_releases_batch_arrays_before_residual_scan(
+    monkeypatch,
+) -> None:
+    class ObservedSource(DataFrameRowSource):
+        fitting_started = False
+        fitting_scans = 0
+
+        def __init__(self, frame):
+            super().__init__(frame, response="y")
+            self.first_scan_arrays = []
+
+        def scan(self, batch_rows):
+            if not self.fitting_started:
+                yield from super().scan(batch_rows)
+                return
+            self.fitting_scans += 1
+            if self.fitting_scans == 2:
+                assert self.first_scan_arrays
+                assert all(reference() is None for reference in self.first_scan_arrays)
+            for batch in super().scan(batch_rows):
+                if self.fitting_scans == 1:
+                    self.first_scan_arrays.extend(
+                        weakref.ref(value)
+                        for value in (
+                            batch.y,
+                            batch.weight,
+                            batch.offset,
+                            batch.valid,
+                            batch.row_positions,
+                        )
+                    )
+                yield batch
+
+    source = ObservedSource(_frame())
+    transfer = discrete_execution.to_device_discrete_design
+
+    def mark_fitting(*args, **kwargs):
+        source.fitting_started = True
+        return transfer(*args, **kwargs)
+
+    monkeypatch.setattr(discrete_execution, "to_device_discrete_design", mark_fitting)
+    result = GAM("y ~ z + s(x,bs='cr',k=6)", sp=[0.65], control=_control(8)).fit(
+        source, result="prediction"
+    )
+    assert source.fitting_scans == result.fitting_source_scans == 2
+
+
+def _frame(n_rows: int = 75) -> pd.DataFrame:
+    position = np.arange(n_rows, dtype=float)
+    x = (position + 0.3 * np.sin(position)) / n_rows
+    z = np.cos(position * 0.31)
+    y = 0.7 - 0.4 * z + np.sin(5.0 * x)
+    return pd.DataFrame({"y": y, "x": x, "z": z})
+
+
+def _control(
+    batch_rows: int,
+    *,
+    m: int = 12,
+    memory_budget_bytes: int = 512 * 1024 * 1024,
+    selector_memmap_directory=None,
+    uncertainty: str = "none",
+) -> FitControl:
+    return FitControl(
+        execution="discrete",
+        batch_rows=batch_rows,
+        memory_budget_bytes=memory_budget_bytes,
+        uncertainty=uncertainty,
+        discretization=ContinuousDiscretizationControl(
+            m=m, selector_memmap_directory=selector_memmap_directory
+        ),
+    )
+
+
+def _snapped_frame(setup: ContinuousDiscreteSetup) -> pd.DataFrame:
+    columns = {}
+    for group in setup.compact.groups:
+        selector = group.index.selector
+        for name, values in zip(group.names, group.index.values, strict=True):
+            columns[name] = values[selector]
+    return pd.DataFrame(columns)
+
+
+def test_public_fixed_sp_fit_matches_identical_explicit_discretized_design() -> None:
+    frame = _frame()
+    formula = "y ~ z + s(x, bs='cr', k=6)"
+    weights = np.linspace(0.6, 1.4, len(frame))
+    offset = np.linspace(-0.1, 0.2, len(frame))
+    source = DataFrameRowSource(frame, response="y", weights=weights, offset=offset)
+    setup = build_continuous_discrete_setup(
+        parse_formula(formula), source, m=12, batch_rows=7
+    )
+    assert isinstance(setup, ContinuousDiscreteSetup)
+    descriptor = build_continuous_discrete_design(
+        setup, source, control=DiscreteDesignControl(batch_rows=7)
+    )
+    assert not isinstance(descriptor, DiscreteDesignUnavailable)
+    X = setup.predict_spec.build_predict_matrix(_snapped_frame(setup))
+    assert setup.penalties is not None
+    penalty = setup.penalties.materialize(np.log(np.array([0.65])))
+    expected = np.linalg.solve(
+        X.T @ (weights[:, None] * X) + penalty,
+        X.T @ (weights * (frame.y.to_numpy() - offset)),
+    )
+    expected_residual = frame.y.to_numpy() - (X @ expected + offset)
+    setup.cleanup()
+
+    result = GAM(formula, sp=[0.65], control=_control(7, m=12), device="cpu").fit(
+        DataFrameRowSource(frame, response="y", weights=weights, offset=offset),
+        result="prediction",
+    )
+    np.testing.assert_allclose(
+        result.coefficients, expected, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_allclose(
+        result.deviance,
+        weights @ (expected_residual * expected_residual),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert result.execution_route == "discrete"
+    assert result.smoothing_strategy == "fixed"
+    assert result.discretization_strategy == "mgcv_range_grid"
+    assert result.prediction_policy == "continuous_frozen_basis"
+    assert result.fitting_source_scans == 2
+    assert result.fitting_batches_scanned == 2 * math.ceil(len(frame) / 7)
+    assert result.fit_peak_bytes is not None
+    assert result.fit_memory_budget_bytes is not None
+    assert result.fit_peak_bytes <= result.fit_memory_budget_bytes
+    assert result.to_predictor().offset_was_nonzero
+
+
+def test_fit_is_batch_invariant_and_cleans_owned_selector_files(tmp_path) -> None:
+    frame = _frame(61)
+    formula = "y ~ z + s(x, bs='cr', k=6)"
+    results = []
+    for batch_rows in (1, 4, 13, 61):
+        directory = tmp_path / str(batch_rows)
+        directory.mkdir()
+        result = GAM(
+            formula,
+            sp=[0.4],
+            control=_control(batch_rows, m=10, selector_memmap_directory=directory),
+        ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
+        results.append(result)
+        assert not list(directory.iterdir())
+    for result in results[1:]:
+        np.testing.assert_allclose(
+            result.coefficients,
+            results[0].coefficients,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            [result.deviance, result.scale, result.edf_total, result.score],
+            [
+                results[0].deviance,
+                results[0].scale,
+                results[0].edf_total,
+                results[0].score,
+            ],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+
+def test_nearly_exact_fit_uses_direct_residual_scan() -> None:
+    x = np.linspace(-1.0, 1.0, 80)
+    y = 1.25 - 2.5 * x + 1e-10 * np.sin(np.arange(len(x)))
+    frame = pd.DataFrame({"y": y, "x": x})
+    result = GAM("y ~ x", sp=[], control=_control(9, m=100)).fit(
+        DataFrameRowSource(frame, response="y"), result="prediction"
+    )
+    X = np.column_stack((np.ones(len(x)), x))
+    beta = np.linalg.solve(X.T @ X, X.T @ y)
+    stable = float(np.sum((y - X @ beta) ** 2))
+    cancelled = float(y @ y - 2 * beta @ (X.T @ y) + beta @ (X.T @ X) @ beta)
+    np.testing.assert_allclose(result.deviance, stable, rtol=1e-6, atol=1e-28)
+    assert result.deviance > 0.0
+    assert abs(cancelled - stable) > stable
+
+
+def test_fit_workspace_rejects_before_device_transfer(monkeypatch) -> None:
+    called = False
+
+    def spy(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("device transfer must not run")
+
+    monkeypatch.setattr(discrete_execution, "to_device_discrete_design", spy)
+    with pytest.raises(MemoryError, match="Discrete fit workspace requires"):
+        GAM(
+            "y ~ z + s(x, bs='cr', k=6)",
+            sp=[0.5],
+            control=_control(8, memory_budget_bytes=1),
+        ).fit(DataFrameRowSource(_frame(), response="y"), result="prediction")
+    assert not called
+
+
+def test_public_route_rejects_unimplemented_domains() -> None:
+    source = DataFrameRowSource(_frame(), response="y")
+    with pytest.raises(NotImplementedError, match="requires explicit fixed sp"):
+        GAM("y ~ s(x)", control=_control(8)).fit(source, result="prediction")
+    with pytest.raises(NotImplementedError, match="Gaussian identity only"):
+        GAM("y ~ s(x)", family="poisson", sp=[1.0], control=_control(8)).fit(
+            source, result="prediction"
+        )
+    with pytest.raises(NotImplementedError, match="result='prediction' only"):
+        GAM("y ~ s(x)", sp=[1.0], control=_control(8)).fit(source, result="full")
+
+
+def test_fixed_sp_fit_matches_pinned_bam_on_valid_layout(r_bridge) -> None:
+    position = np.arange(72, dtype=float)
+    x = (position + 0.2 * np.sin(position * 0.7)) / 72
+    z = np.cos(position * 0.23)
+    y = 0.4 - 0.3 * z + np.sin(4.5 * x) + 0.05 * np.cos(position)
+    frame = pd.DataFrame({"y": y, "x": x, "z": z})
+    formula = "y ~ z + s(x, bs='cr', k=6)"
+    smoothing = np.array([0.55])
+    expected = r_bridge.fit_bam_discrete_fixed_sp(formula, frame, smoothing, m=30)
+    result = GAM(formula, sp=smoothing, control=_control(11, m=30)).fit(
+        DataFrameRowSource(frame, response="y"), result="prediction"
+    )
+    np.testing.assert_allclose(
+        result.coefficients,
+        expected.coefficients,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        [result.deviance, result.scale, result.edf_total, result.score],
+        [expected.deviance, expected.scale, expected.edf_total, expected.score],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_factor_tensor_fixed_sp_fit_matches_pinned_bam(r_bridge) -> None:
+    n_rows = 72
+    position = np.arange(1, n_rows + 1, dtype=float)
+    x = (position - 0.5) / n_rows + 0.03 * np.sin(position)
+    w = np.cos(position * 0.71) + position / n_rows
+    g = pd.Series(
+        pd.Categorical(
+            np.resize(np.array(("low", "mid", "high")), n_rows),
+            categories=("low", "mid", "high"),
+            ordered=True,
+        )
+    )
+    y = 0.2 + np.sin(2.5 * x) + np.where(g == "mid", 0.3 * w, -0.2 * w)
+    frame = pd.DataFrame({"y": y, "x": x, "w": w, "g": g})
+    formula = "y ~ te(x, w, bs='cr', k=3, by=g)"
+    smoothing = np.array([0.35, 0.7, 0.45, 0.8])
+    expected = r_bridge.fit_bam_discrete_fixed_sp(
+        formula, frame, smoothing, factor_names=("g",), m=30
+    )
+    control = FitControl(
+        execution="discrete",
+        batch_rows=9,
+        discretization=ContinuousDiscretizationControl(m=30, factor_names=("g",)),
+    )
+    result = GAM(formula, sp=smoothing, control=control).fit(
+        DataFrameRowSource(frame, response="y"), result="prediction"
+    )
+    np.testing.assert_allclose(
+        result.coefficients,
+        expected.coefficients,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        [result.deviance, result.scale, result.edf_total, result.score],
+        [expected.deviance, expected.scale, expected.edf_total, expected.score],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
