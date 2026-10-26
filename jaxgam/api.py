@@ -1184,9 +1184,12 @@ def _fit_fixed_sp(
     Returns
     -------
     NewtonResult
-        For standard families: ``n_iter=0``, ``convergence_info="fixed sp"``.
-        For estimated-theta families: the outer-optimizer result with theta
-        estimated at the fixed smoothing parameters.
+        For known-scale standard families: ``n_iter=0``,
+        ``convergence_info="fixed sp"``; a non-finite REML score is reported
+        as not converged (``"fixed sp: non-finite REML score"``).
+        For estimated-theta or unknown-scale families: the pinned
+        outer-optimizer result, with the supplied smoothing parameters held
+        bitwise (never clamped) and theta / scale estimated at them.
     """
     import jax.numpy as jnp
 
@@ -1240,16 +1243,20 @@ def _fit_fixed_sp(
     edf = criterion.edf
     scale = criterion.scale
     score = criterion.score(log_lambda)
+    # A non-finite REML score is a failed evaluation, never a converged fit.
+    finite_score = bool(jnp.isfinite(score))
 
     return NewtonResult(
         log_lambda=log_lambda,
         smoothing_params=jnp.exp(log_lambda),
-        converged=bool(pirls_result.converged),
+        converged=bool(pirls_result.converged) and finite_score,
         n_iter=0,
         score=score,
         gradient=jnp.zeros_like(log_lambda),
         edf=edf,
         scale=scale,
         pirls_result=pirls_result,
-        convergence_info="fixed sp",
+        convergence_info="fixed sp"
+        if finite_score
+        else "fixed sp: non-finite REML score",
     )

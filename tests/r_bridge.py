@@ -1521,7 +1521,14 @@ class RBridge:
             if outer is ro.NULL or outer.rx2("hess") is ro.NULL
             else _r_array(outer.rx2("hess"), dtype=np.float64)
         )
+        # gam() reports every smoothing parameter multiplying a penalty as
+        # full.sp = exp(L %*% log(free sp) + lsp0); a supplied sp enters only
+        # lsp0 = log(sp) (gam.setup). NULL for the unpenalized "y ~ x" model.
+        full_sp = fit.rx2("full.sp")
         return {
+            "full_sp": (
+                None if full_sp is ro.NULL else _r_array(full_sp, dtype=np.float64)
+            ),
             "theta": (
                 float(fit.rx2("family").rx2("getTheta")(True)[0])
                 if family_name == "nb"

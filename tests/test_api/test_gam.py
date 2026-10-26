@@ -378,6 +378,215 @@ class TestFixedSPNegativeBinomial:
 
 
 # ---------------------------------------------------------------------------
+# E2. Supplied smoothing parameters beyond the optimizer's log-sp box
+# ---------------------------------------------------------------------------
+
+_EXTREME_SP_FORMULA = 'y ~ s(x, bs="cr", k=8)'
+_EXTREME_SP_FAMILIES = ("gaussian", "gamma", "nb-fixed", "nb-estimated")
+
+
+def _extreme_sp_case(name: str):
+    """Rows, a jaxgam family factory and pinned-R family arguments.
+
+    The rows match ``RBridge.public_fixed_sp_fit``'s ``y ~ s(x, bs="cr",
+    k=8)`` model. A negative R theta asks pinned ``nb()`` to estimate theta
+    from 2, as ``NegativeBinomial(theta=2.0)`` does.
+    """
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.families.standard import Gamma, Gaussian
+
+    rng = np.random.default_rng(4101)
+    x = np.sort(rng.uniform(-1.0, 1.0, 120))
+    signal = 0.4 + 0.6 * np.sin(3.0 * x)
+    y_gaussian = signal + rng.normal(scale=0.2, size=x.size)
+    y_count = rng.poisson(np.exp(signal)).astype(float)
+    y_gamma = rng.gamma(4.0, np.exp(signal) / 4.0)
+    y, family, r_family = {
+        "gaussian": (y_gaussian, Gaussian, ("gaussian", "identity", None)),
+        "gamma": (y_gamma, lambda: Gamma("log"), ("gamma", "log", None)),
+        "nb-fixed": (
+            y_count,
+            lambda: NegativeBinomial(theta=2.0, fixed=True),
+            ("nb", "log", 2.0),
+        ),
+        "nb-estimated": (
+            y_count,
+            lambda: NegativeBinomial(theta=2.0),
+            ("nb", "log", -2.0),
+        ),
+    }[name]
+    return pd.DataFrame({"x": x, "y": y}), family, r_family
+
+
+def _pinned_smoothing_params(sp: float) -> np.ndarray:
+    """The supplied sp after jaxgam's single log transform at entry."""
+    import jax.numpy as jnp
+
+    from jaxgam.api import _fixed_log_smoothing_parameters
+
+    return np.asarray(jnp.exp(_fixed_log_smoothing_parameters([sp], 1)))
+
+
+class TestFixedSPBeyondOptimizerBox:
+    """Supplied sp outside the optimizer's ``|log sp| <= 40`` box stay pinned.
+
+    Bug: the dense pinned-Newton route (unknown scale, or estimated NB theta)
+    passed supplied smoothing parameters through the free-coordinate
+    ``lsp_max`` clamp, so a supplied log sp of +-41 was fitted and reported
+    as +-40; and a NaN REML score passed every convergence test, so NB at
+    log sp +41 returned ``score=nan`` with ``converged=True``. Pinned mgcv
+    keeps a supplied sp verbatim in ``lsp0`` (mgcv.r ``gam.setup``), and its
+    ``newton()`` has no log-sp bound (gam.fit3.r). Owned here because it
+    exercises the public fixed-``sp`` routing in ``GAM.fit`` /
+    ``_fit_fixed_sp``.
+    """
+
+    @pytest.mark.parametrize("family_name", _EXTREME_SP_FAMILIES)
+    def test_supplied_sp_stay_pinned_and_convergence_is_truthful(
+        self, family_name: str
+    ):
+        data, family, _ = _extreme_sp_case(family_name)
+        checks = _AssertCollector()
+        for log_sp in (-60.0, -41.0, 41.0, 60.0):
+            sp = float(np.exp(log_sp))
+            res = GAM(_EXTREME_SP_FORMULA, family=family(), sp=[sp]).fit(data)
+            score = float(res.score)
+            label = f"log sp {log_sp:+.0f}"
+            report = (
+                f"converged={res.converged} score={score!r} "
+                f"info={res.convergence_info!r}"
+            )
+            checks.check(
+                f"{label} pinned bitwise",
+                lambda res=res, sp=sp: np.testing.assert_array_equal(
+                    res.smoothing_params, _pinned_smoothing_params(sp)
+                ),
+            )
+            checks.check(
+                f"{label} non-finite score never converged",
+                lambda res=res, score=score, report=report: check_that(
+                    np.isfinite(score)
+                    or (not res.converged and "non-finite" in res.convergence_info),
+                    report,
+                ),
+            )
+            if log_sp < 0:
+                checks.check(
+                    f"{label} converged",
+                    lambda res=res, score=score, report=report: check_that(
+                        res.converged and np.isfinite(score), report
+                    ),
+                )
+        checks.raise_if_any(f"{family_name} supplied sp beyond the log-sp box")
+
+    def test_known_scale_nonfinite_score_is_not_converged(self, monkeypatch):
+        """The single-PIRLS known-scale route reports a NaN score as failed."""
+        import jax.numpy as jnp
+
+        import jaxgam.api as api_module
+
+        class _NonFiniteScore(api_module.REMLCriterion):
+            def score(self, _log_lambda):
+                return jnp.asarray(jnp.nan)
+
+        monkeypatch.setattr(api_module, "REMLCriterion", _NonFiniteScore)
+        res = GAM("y ~ s(x, k=10, bs='cr')", family="poisson", sp=[1.0]).fit(
+            _generate_family_data("poisson")
+        )
+        assert not res.converged
+        assert res.convergence_info == "fixed sp: non-finite REML score"
+        assert np.isnan(res.score)
+        np.testing.assert_array_equal(
+            res.smoothing_params, _pinned_smoothing_params(1.0)
+        )
+
+
+@pytest.mark.skipif(not r_available(), reason="R/mgcv not available")
+class TestFixedSPBeyondOptimizerBoxVsR:
+    """Supplied ``|log sp| > 40`` match pinned mgcv's ``lsp0`` fit at STRICT.
+
+    R reports ``full.sp = exp(lsp0)`` with the supplied sp kept verbatim.
+    The R fit uses mgcv's default control (``epsilon=1e-7``, newton
+    ``conv.tol=1e-6``), whose tolerances the dense non-Gaussian Newton route
+    ports (outer ``1e-6``, inner ``conv.tol / 100``); tighter R control moves
+    the estimated NB theta along its flat REML direction. Score, deviance,
+    scale, total EDF, theta and the smoothing parameter are compared at
+    STRICT. Log sp below -40 is the effectively unpenalized limit, where
+    pinned R converges and the clamped fit's score differed by
+    ``0.5 * rank * |log sp + 40|``.
+    """
+
+    @pytest.mark.parametrize("family_name", _EXTREME_SP_FAMILIES)
+    def test_supplied_small_sp_matches_pinned_r(self, family_name: str):
+        from tests.r_bridge import RBridge
+
+        data, family, (r_family, link, theta) = _extreme_sp_case(family_name)
+        bridge = RBridge(mode="rpy2")
+        weight = np.ones(len(data))
+        offset = np.zeros(len(data))
+        checks = _AssertCollector()
+        for log_sp in (-41.0, -60.0):
+            sp = float(np.exp(log_sp))
+            expected = bridge.public_fixed_sp_fit(
+                data,
+                weight,
+                offset,
+                r_family,
+                link,
+                theta=theta,
+                sp=sp,
+                r_epsilon=1e-7,
+                r_newton_tolerance=1e-6,
+            )
+            res = GAM(_EXTREME_SP_FORMULA, family=family(), sp=[sp]).fit(data)
+            label = f"log sp {log_sp:+.0f}"
+            checks.check(
+                f"{label} R inner converged",
+                lambda expected=expected: check_that(
+                    expected["inner_converged"],
+                    f"R inner loop did not converge (outer "
+                    f"{expected['outer_status']!r})",
+                ),
+            )
+            checks.check(
+                f"{label} jaxgam converged",
+                lambda res=res: check_that(res.converged, res.convergence_info),
+            )
+            # Smoothing parameters are compared on the log scale: at sp ~ e^-41
+            # STRICT's atol would absorb the whole e^-40 vs e^-41 difference.
+            fields = [
+                ("R log full.sp", np.log(expected["full_sp"]), [log_sp]),
+                (
+                    "log smoothing params",
+                    np.log(res.smoothing_params),
+                    np.log(expected["full_sp"]),
+                ),
+                ("score", res.score, expected["score"]),
+                ("deviance", res.deviance, expected["deviance"]),
+                ("scale", res.scale, expected["scale"]),
+                ("EDF", res.edf_total, expected["edf"]),
+            ]
+            if theta is not None:
+                fields.append(
+                    (
+                        "theta",
+                        res.family.get_theta(transformed=True)[0],
+                        expected["theta"],
+                    )
+                )
+            for name, actual, reference in fields:
+                checks.check(
+                    f"{label} {name}",
+                    lambda actual=actual, reference=reference: (
+                        np.testing.assert_allclose(
+                            actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+                        )
+                    ),
+                )
+        checks.raise_if_any(f"{family_name} supplied small sp vs pinned R")
+
+
+# ---------------------------------------------------------------------------
 # F. TestScopeGuards — v1.0 scope guards
 # ---------------------------------------------------------------------------
 

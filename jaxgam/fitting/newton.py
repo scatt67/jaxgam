@@ -745,7 +745,8 @@ class NewtonResult:
     pirls_result : PIRLSResult
         Final PIRLS output (coefficients, mu, etc.).
     convergence_info : str
-        ``"full convergence"`` | ``"step failed"`` | ``"iteration limit"``
+        ``"full convergence"`` | ``"step failed"`` | ``"iteration limit"`` |
+        ``"non-finite REML score or gradient"`` (never converged)
     theta : float or None
         Estimated theta for extended families (natural scale).
         ``None`` for standard families or fixed-theta extended families.
@@ -873,7 +874,13 @@ class NewtonOptimizer:
         line 1323 disabled), our AD gradient has slightly more noise
         than R's analytical IFT gradient, which can cause drift on flat
         REML surfaces. The cap acts as a safety net without affecting
-        well-determined directions. ``None`` disables clamping.
+        well-determined directions. ``None`` disables clamping. The cap
+        bounds only free coordinates; pinned smoothing parameters are
+        supplied values and are never clamped.
+    pin_lambda : bool
+        Hold the log smoothing parameters bitwise at ``fd.log_lambda_init``
+        and optimize only the remaining params (extended-family theta /
+        log scale).
     """
 
     def __init__(
@@ -998,14 +1005,23 @@ class NewtonOptimizer:
             self._diff_grad_hess = None
 
     def _clamp_params(self, params: jax.Array) -> jax.Array:
-        """Optionally clamp log smoothing parameters.
+        """Optionally clamp the free log smoothing parameters.
 
         When ``lsp_max`` is None, no clamping is applied. When set
-        (default ``40.0``), clamps to ``[-lsp_max, lsp_max]``.
+        (default ``40.0``), free log smoothing parameters are clamped to
+        ``[-lsp_max, lsp_max]``.
 
         For joint optimization, only the log_lambda portion is clamped;
-        log_theta and log_phi are left unclamped.
+        log_theta and log_phi are left unclamped. Pinned log smoothing
+        parameters are supplied values, not optimization coordinates: they
+        are restored bitwise from ``log_lambda_init`` and never clamped.
+        Pinned mgcv holds a supplied sp verbatim in ``lsp0`` (mgcv.r
+        ``gam.setup``) and its ``newton()`` has no log-sp bound (gam.fit3.r,
+        the ``lsp.max`` branch is disabled).
         """
+        if self._pin_lambda:
+            n_lambda = self._fd.n_penalties
+            return jnp.concatenate([self._fd.log_lambda_init, params[n_lambda:]])
         if self._lsp_max is None:
             return params
         lsp_max = self._lsp_max
@@ -1486,8 +1502,18 @@ class NewtonOptimizer:
         step_failed: bool,
         n_iter: int,
     ) -> NewtonResult:
-        """Assemble the final NewtonResult."""
-        if converged:
+        """Assemble the final NewtonResult.
+
+        A non-finite score or gradient is never reported as converged: every
+        comparison with NaN is false, so a NaN slips through the "exceeds
+        tolerance" tests (and the stuck-step exit). Finiteness is therefore
+        checked here, where every optimizer exit is assembled.
+        """
+        finite = bool(jnp.isfinite(score)) and bool(jnp.all(jnp.isfinite(gradient)))
+        if not finite:
+            converged = False
+            info = "non-finite REML score or gradient"
+        elif converged:
             info = "full convergence"
         elif step_failed:
             info = "step failed"
@@ -1613,6 +1639,22 @@ class NewtonOptimizer:
             is_pdef=True,
             pirls_result=pirls_result,
         )
+
+        if self._pin_lambda and not np.isfinite(float(score)):
+            # The supplied smoothing parameters cannot move, and no trial can
+            # be compared with a non-finite starting score (every comparison
+            # with NaN is false), so stop and report the failed evaluation
+            # instead of halving toward it.
+            return self._build_result(
+                params,
+                score,
+                grad,
+                criterion,
+                pirls_result,
+                converged=False,
+                step_failed=False,
+                n_iter=0,
+            )
 
         converged = False
         step_failed = False
@@ -1761,13 +1803,13 @@ def newton_optimize(
     max_step : float
         Maximum step component in log-lambda space.
     lsp_max : float or None
-        Maximum absolute value for log smoothing parameters. Defaults
+        Maximum absolute value for free log smoothing parameters. Defaults
         to ``40.0``. ``None`` disables clamping.
     pin_lambda : bool
-        If ``True``, hold the log smoothing parameters fixed at
-        ``log_lambda_init`` and optimize only the remaining parameters
-        (extended-family theta / scale). Used by the fixed-``sp`` path for
-        families with estimated theta.
+        If ``True``, hold the log smoothing parameters bitwise at
+        ``log_lambda_init`` (never clamped by ``lsp_max``) and optimize only
+        the remaining parameters (extended-family theta / scale). Used by the
+        fixed-``sp`` path for families with estimated theta or scale.
 
     Returns
     -------
