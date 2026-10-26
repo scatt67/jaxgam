@@ -323,3 +323,45 @@ def test_observed_operator_score_matches_dense_at_one_frozen_poisson_state():
         score.value, expected, rtol=STRICT.rtol, atol=STRICT.atol
     )
     assert logdet.diagnostics.source_scans == logdet.diagnostics.completed_actions
+
+
+@pytest.mark.parametrize("formula", ["y~0+s(g,bs='re')", "y~x+s(g,bs='re')"])
+def test_reductions_report_largest_public_row_l1_norm(formula):
+    row = np.arange(27)
+    frame = pd.DataFrame(
+        {
+            "y": np.asarray(row % 4, dtype=float),
+            "x": np.linspace(-1.5, 0.5, len(row)),
+            "g": pd.Categorical(np.resize(["a", "b", "c"], len(row))),
+        }
+    )
+    source = DataFrameRowSource(frame, response="y")
+    spec = parse_formula(formula)
+    model = prepare_operator_model(
+        spec,
+        source,
+        control=OperatorPreparationControl(
+            batch_rows=7, memory_budget_bytes=2 * 1024 * 1024
+        ),
+    )
+    state = FrozenOperatorWorkingState(
+        model,
+        Poisson(),
+        np.zeros(model.n_coef),
+        row_memory_budget_bytes=2 * 1024 * 1024,
+        state_memory_budget_bytes=2 * 1024 * 1024,
+    )
+    result = MatchedOperatorScoreReducer(
+        state,
+        source,
+        np.zeros(1),
+        score_phi=1.0,
+        memory_budget_bytes=8 * 1024 * 1024,
+    ).reduce()
+    dense = ModelSetup.build(spec, frame).X
+    np.testing.assert_allclose(
+        result.maximum_row_l1_norm,
+        np.max(np.sum(np.abs(dense), axis=1)),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )

@@ -106,6 +106,173 @@ class OperatorEFSState:
             raise ValueError("Known-scale operator EFS phi must remain one.")
 
 
+@dataclass(frozen=True)
+class OperatorScoreEnvelope:
+    """Separately reported terms of one empirical operator EFS score envelope.
+
+    ``arithmetic`` covers float64 row, diagonal and Schur reductions,
+    ``coefficient`` the final coefficient residual and ``determinant`` the
+    structured log-determinant rounding. The envelope is only a validated
+    bound when its regime's admission checks accept the state.
+    """
+
+    arithmetic: float
+    coefficient: float
+    determinant: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.arithmetic + self.coefficient + self.determinant
+
+
+def _score_magnitude(
+    components: MatchedOperatorEFSComponents, deviance_scale: float = 1.0
+) -> float:
+    terms = components.score_rows.terms
+    return math.fsum(
+        (
+            1.0,
+            abs(terms.penalized_deviance / deviance_scale),
+            abs(terms.saturated_loglik),
+            abs(components.penalty.value),
+            abs(components.score.value),
+        )
+    )
+
+
+def _identity_penalty_floor(fit: OperatorFitResult) -> float | None:
+    """Strong-convexity floor of one scaled identity penalty, if that is all."""
+    blocks = fit.model.penalties.blocks
+    if len(blocks) != 1:
+        return None
+    block = blocks[0]
+    if (
+        block.sp_indices != (0,)
+        or len(block.local_penalties) != 1
+        or not isinstance(block.local_penalties[0], IdentityPenalty)
+    ):
+        return None
+    floor = math.exp(float(fit.log_lambda[0])) * block.local_penalties[0].scale
+    return floor if math.isfinite(floor) and floor > 0 else None
+
+
+def _indexed_poisson_envelope(
+    fit: OperatorFitResult, components: MatchedOperatorEFSComponents
+) -> OperatorScoreEnvelope | None:
+    """Unadmitted pure-indexed Poisson envelope terms for one matched state."""
+    score = components.score
+    gradient = fit.diagnostics.final_gradient_norm
+    floor = _identity_penalty_floor(fit)
+    if (
+        score.strategy != "structured_diagonal"
+        or score.determinant_rounding_bound is None
+        or floor is None
+        or not math.isfinite(gradient)
+    ):
+        return None
+    model = fit.model
+    arithmetic = (
+        512
+        * np.finfo(np.float64).eps
+        * (model.n_obs + model.n_coef)
+        * _score_magnitude(components)
+    )
+    coefficient = model.n_coef * (gradient + gradient * gradient) / floor
+    return OperatorScoreEnvelope(
+        float(arithmetic), coefficient, score.determinant_rounding_bound
+    )
+
+
+def _indexed_gaussian_envelope(
+    fit: OperatorFitResult, components: MatchedOperatorEFSComponents
+) -> OperatorScoreEnvelope | None:
+    """Unadmitted pure-indexed Gaussian envelope terms at incoming phi."""
+    score = components.score
+    phi = components.score_rows.terms.score_phi
+    gradient = fit.diagnostics.final_gradient_norm
+    floor = _identity_penalty_floor(fit)
+    if (
+        score.strategy != "structured_diagonal"
+        or score.determinant_rounding_bound is None
+        or floor is None
+        or not math.isfinite(gradient)
+    ):
+        return None
+    model = fit.model
+    arithmetic = (
+        512
+        * np.finfo(np.float64).eps
+        * (model.n_obs + model.n_coef)
+        * _score_magnitude(components, phi)
+    )
+    coefficient = model.n_coef * (gradient + gradient * gradient) / (floor * phi)
+    return OperatorScoreEnvelope(
+        float(arithmetic), coefficient, score.determinant_rounding_bound
+    )
+
+
+def _arrowhead_poisson_envelope(
+    fit: OperatorFitResult, components: MatchedOperatorEFSComponents
+) -> OperatorScoreEnvelope | None:
+    """Unadmitted modest-plus-indexed Poisson envelope terms.
+
+    For a canonical family d log|H| / d beta_j = sum_i a_i x_ij, where the
+    weighted leverages a_i lie in [0, 1] and sum to the EDF. Its l1 norm is
+    therefore at most EDF times the largest row l1 norm. With
+    ||beta - beta_hat||_2 <= sqrt(p) g / (2 sigma), the first-order
+    determinant change is a quarter of the first coefficient term below.
+    The penalized deviance excess is at most p g^2 / (8 sigma). Both rely
+    on the empirical spectral estimate sigma, not a certified eigenvalue.
+    """
+    score = components.score
+    gradient = fit.diagnostics.final_gradient_norm
+    lower = score.spectral_lower_estimate
+    row_l1 = components.score_rows.maximum_row_l1_norm
+    if (
+        score.strategy != "structured_arrowhead"
+        or lower is None
+        or not math.isfinite(gradient)
+        or not math.isfinite(row_l1)
+        or not math.isfinite(components.edf_total)
+        or components.edf_total <= 0
+    ):
+        return None
+    model = fit.model
+    p = model.n_coef
+    k = len(model.modest_columns)
+    arithmetic = (
+        512
+        * np.finfo(np.float64).eps
+        * (model.n_obs + p + k * k)
+        * _score_magnitude(components)
+    )
+    first_order = components.edf_total * row_l1 * math.sqrt(p) * gradient
+    coefficient = (first_order + p * gradient * gradient) / lower
+    return OperatorScoreEnvelope(float(arithmetic), coefficient)
+
+
+def operator_efs_score_envelope(
+    fit: OperatorFitResult, components: MatchedOperatorEFSComponents
+) -> OperatorScoreEnvelope | None:
+    """Return the regime formula's terms without applying its admission.
+
+    Calibration uses this to measure the formula outside its released domain.
+    Production decisions must use the admitted bound functions instead.
+    """
+    if components.score.strategy == "structured_arrowhead":
+        return _arrowhead_poisson_envelope(fit, components)
+    if fit.family.scale_known:
+        return _indexed_poisson_envelope(fit, components)
+    return _indexed_gaussian_envelope(fit, components)
+
+
+def _admitted_total(envelope: OperatorScoreEnvelope | None) -> float | None:
+    if envelope is None:
+        return None
+    bound = envelope.total
+    return float(bound) if math.isfinite(bound) else None
+
+
 def _indexed_poisson_score_bound(
     fit: OperatorFitResult,
     components: MatchedOperatorEFSComponents,
@@ -156,23 +323,10 @@ def _indexed_poisson_score_bound(
     gradient = fit.diagnostics.final_gradient_norm
     if not math.isfinite(gradient) or gradient > 1e-5:
         return None
-    penalty_floor = math.exp(float(fit.log_lambda[0])) * block.local_penalties[0].scale
-    if not math.isfinite(penalty_floor) or penalty_floor < 1e-6:
+    penalty_floor = _identity_penalty_floor(fit)
+    if penalty_floor is None or penalty_floor < 1e-6:
         return None
-    terms = components.score_rows.terms
-    magnitude = math.fsum(
-        (
-            1.0,
-            abs(terms.penalized_deviance),
-            abs(terms.saturated_loglik),
-            abs(components.penalty.value),
-            abs(score.value),
-        )
-    )
-    arithmetic = 512 * np.finfo(np.float64).eps * (n + p) * magnitude
-    solve = p * (gradient + gradient * gradient) / penalty_floor
-    bound = arithmetic + solve + score.determinant_rounding_bound
-    return float(bound) if math.isfinite(bound) else None
+    return _admitted_total(_indexed_poisson_envelope(fit, components))
 
 
 def _indexed_gaussian_score_bound(
@@ -227,22 +381,10 @@ def _indexed_gaussian_score_bound(
     gradient = fit.diagnostics.final_gradient_norm
     if not math.isfinite(gradient) or gradient > 1e-5:
         return None
-    penalty_floor = math.exp(float(fit.log_lambda[0])) * block.local_penalties[0].scale
-    if not math.isfinite(penalty_floor) or penalty_floor < 1e-6:
+    penalty_floor = _identity_penalty_floor(fit)
+    if penalty_floor is None or penalty_floor < 1e-6:
         return None
-    magnitude = math.fsum(
-        (
-            1.0,
-            abs(rows.terms.penalized_deviance / phi),
-            abs(rows.terms.saturated_loglik),
-            abs(components.penalty.value),
-            abs(score.value),
-        )
-    )
-    arithmetic = 512 * np.finfo(np.float64).eps * (n + p) * magnitude
-    solve = p * (gradient + gradient * gradient) / (penalty_floor * phi)
-    bound = arithmetic + solve + score.determinant_rounding_bound
-    return float(bound) if math.isfinite(bound) else None
+    return _admitted_total(_indexed_gaussian_envelope(fit, components))
 
 
 def _arrowhead_poisson_score_bound(
@@ -262,7 +404,7 @@ def _arrowhead_poisson_score_bound(
     model = fit.model
     score = components.score
     rows = components.score_rows
-    p, n = model.n_coef, model.n_obs
+    n = model.n_obs
     k = len(model.modest_columns)
     indexed = model.random_effects[0].n_coef if model.random_effects else 0
     if not (
@@ -306,20 +448,27 @@ def _arrowhead_poisson_score_bound(
     gradient = fit.diagnostics.final_gradient_norm
     if not math.isfinite(gradient) or gradient > 1e-5:
         return None
-    terms = rows.terms
-    magnitude = math.fsum(
-        (
-            1.0,
-            abs(terms.penalized_deviance),
-            abs(terms.saturated_loglik),
-            abs(components.penalty.value),
-            abs(score.value),
-        )
-    )
-    arithmetic = 512 * np.finfo(np.float64).eps * (n + p + k * k) * magnitude
-    solve = p * gradient * gradient / score.spectral_lower_estimate
-    bound = arithmetic + solve
-    return float(bound) if math.isfinite(bound) else None
+    return _admitted_total(_arrowhead_poisson_envelope(fit, components))
+
+
+def admitted_operator_efs_score_bound(
+    fit: OperatorFitResult,
+    components: MatchedOperatorEFSComponents,
+    control: OperatorControl,
+) -> tuple[float | None, str]:
+    """Return the released bound and its method label, or ``unavailable``."""
+    if fit.family.scale_known:
+        bound = _indexed_poisson_score_bound(fit, components, control)
+        if bound is not None:
+            return bound, "indexed_poisson_empirical_v1"
+        bound = _arrowhead_poisson_score_bound(fit, components, control)
+        if bound is not None:
+            return bound, "arrowhead_poisson_empirical_v2"
+        return None, "unavailable"
+    bound = _indexed_gaussian_score_bound(fit, components, control)
+    if bound is not None:
+        return bound, "indexed_gaussian_empirical_v1"
+    return None, "unavailable"
 
 
 class OperatorEFSFitProvider(Protocol):
@@ -513,26 +662,9 @@ class SourceOperatorEFSFitProvider:
         self.completed_source_scans += components.source_scans
         self.completed_source_batches += components.source_batches
         if self.score_error_bound is None:
-            if fit.family.scale_known:
-                bound = _indexed_poisson_score_bound(fit, components, self.fit_control)
-                method = (
-                    "indexed_poisson_empirical_v1"
-                    if bound is not None
-                    else "unavailable"
-                )
-                if bound is None:
-                    bound = _arrowhead_poisson_score_bound(
-                        fit, components, self.fit_control
-                    )
-                    if bound is not None:
-                        method = "arrowhead_poisson_empirical_v1"
-            else:
-                bound = _indexed_gaussian_score_bound(fit, components, self.fit_control)
-                method = (
-                    "indexed_gaussian_empirical_v1"
-                    if bound is not None
-                    else "unavailable"
-                )
+            bound, method = admitted_operator_efs_score_bound(
+                fit, components, self.fit_control
+            )
         else:
             bound = self.score_error_bound(fit, components)
             method = "external" if bound is not None else "unavailable"

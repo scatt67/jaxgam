@@ -38,6 +38,9 @@ class OperatorScoreReductions:
     zero_offset: bool = False
     maximum_response: float = float("inf")
     maximum_absolute_response: float = float("inf")
+    # Largest l1 norm of one public design row (modest values plus indexed
+    # amplitudes); first-order score sensitivity to coefficient error uses it.
+    maximum_row_l1_norm: float = float("inf")
 
 
 class MatchedOperatorScoreReducer:
@@ -138,6 +141,7 @@ class MatchedOperatorScoreReducer:
         zero_offset = True
         maximum_response = 0.0
         maximum_absolute_response = 0.0
+        maximum_row_l1_norm = 0.0
         device = jax.devices("cpu")[0]
         padding = state.context.padding
         for batch in checked.scan(B):
@@ -149,6 +153,11 @@ class MatchedOperatorScoreReducer:
                     maximum_absolute_response, float(np.max(np.abs(batch.y)))
                 )
             rows = _evaluate_geometry(model, batch)
+            row_l1 = np.sum(np.abs(rows.modest_values), axis=1)
+            for _, amplitude, _, _ in rows.indexed_rows:
+                row_l1 = row_l1 + np.abs(amplitude)
+            if len(row_l1):
+                maximum_row_l1_norm = max(maximum_row_l1_norm, float(np.max(row_l1)))
             _, quantities = state.evaluate(batch, rows)
             if not bool(quantities.input_ok) or not bool(quantities.domain_ok):
                 raise ValueError("Matched score row domain is invalid.")
@@ -193,4 +202,5 @@ class MatchedOperatorScoreReducer:
             zero_offset,
             maximum_response,
             maximum_absolute_response,
+            maximum_row_l1_norm,
         )

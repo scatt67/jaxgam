@@ -14,6 +14,8 @@ from jaxgam.execution.operator_efs_controller import (
     SourceOperatorEFSFitProvider,
     _indexed_gaussian_score_bound,
     _indexed_poisson_score_bound,
+    admitted_operator_efs_score_bound,
+    operator_efs_score_envelope,
     run_operator_efs_gaussian_scale,
     run_operator_efs_known_scale,
 )
@@ -355,3 +357,15 @@ def test_gaussian_scale_envelope_refuses_unvalidated_rows(
         _indexed_gaussian_score_bound(selected.fit, components, _TIGHT_OPERATOR_CONTROL)
         is None
     )
+
+
+def test_released_bound_is_the_admitted_envelope_total(calibrated_single_index_fit):
+    _, _, operator, _, _, _ = calibrated_single_index_fit
+    selected = operator.accepted
+    bound, method = admitted_operator_efs_score_bound(
+        selected.fit, selected.components, _TIGHT_OPERATOR_CONTROL
+    )
+    envelope = operator_efs_score_envelope(selected.fit, selected.components)
+    assert (bound, method) == (selected.score_error_bound, selected.score_bound_method)
+    assert envelope is not None
+    assert bound == envelope.total

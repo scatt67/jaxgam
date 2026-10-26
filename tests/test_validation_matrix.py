@@ -179,7 +179,7 @@ def test_operator_efs_calibrated_coupled_poisson_full_fit_strict(
     assert reference["convergence"] == "full convergence"
     assert reference["inner_converged"]
     assert operator.outer_iterations == dense.n_iter == reference["outer_iterations"]
-    assert selected.score_bound_method == "arrowhead_poisson_empirical_v1"
+    assert selected.score_bound_method == "arrowhead_poisson_empirical_v2"
     assert operator.attempted_fits == len(errors)
     assert all(bound is not None for bound in bounds)
     assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))
