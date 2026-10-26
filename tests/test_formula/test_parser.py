@@ -13,6 +13,8 @@ Covers:
 10. No JAX imports (Phase 1 boundary)
 """
 
+import dataclasses
+
 import pytest
 
 from jaxgam.formula import FormulaSpec, SmoothSpec, parse_formula
@@ -515,6 +517,56 @@ class TestDeferredAndDuplicateArgs:
         """sp=None is the R default; accept and do not store it."""
         result = parse_formula("y ~ s(x1, sp=None)")
         assert "sp" not in result.smooth_terms[0].extra_args
+
+    def test_linked_id_raises_for_every_smooth_constructor(self) -> None:
+        """id= links smoothing parameters in mgcv; it must never be ignored.
+
+        R's s()/te()/ti() treat any non-NULL id (NA and non-literals included)
+        as a link, so every such spelling raises at parse time.
+        """
+        collector = _AssertCollector()
+        formulas = [
+            "y ~ s(x, id=1) + s(z, id=1)",
+            "y ~ s(x, by=fac, id=1)",
+            *(
+                f"y ~ {func}(x, z, id={value})"
+                for func in ("s", "te", "ti")
+                for value in ("1", "'a'", "1.5", "NA", "TRUE", "grp")
+            ),
+        ]
+        for formula in formulas:
+
+            def _raises(formula: str = formula) -> None:
+                try:
+                    parse_formula(formula)
+                except Exception as exc:  # the exception type is the check
+                    check_that(
+                        isinstance(exc, NotImplementedError)
+                        and "Linked smoothing parameters (id=)" in str(exc),
+                        f"raised {type(exc).__name__}: {exc}",
+                    )
+                else:
+                    check_that(False, "parsed without raising")
+
+            collector.check(formula, _raises)
+        collector.raise_if_any("id= must raise NotImplementedError")
+
+    def test_linked_id_none_accepted_and_not_stored(self) -> None:
+        """id=None is R's NULL default; it parses like the plain call."""
+        for func in ("s", "te", "ti"):
+            plain = parse_formula(f"y ~ {func}(x, z)").smooth_terms
+            with_none = parse_formula(f"y ~ {func}(x, z, id=None)").smooth_terms
+            assert with_none == plain
+            assert "id" not in with_none[0].extra_args
+        assert len(parse_formula("y ~ s(x) + s(x, id=None)").smooth_terms) == 1
+
+    def test_hand_built_smooth_spec_with_id_raises(self) -> None:
+        """Setup paths that take a hand-built SmoothSpec are guarded too."""
+        with pytest.raises(NotImplementedError, match="Linked smoothing parameters"):
+            SmoothSpec(variables=["x"], extra_args={"id": 1})
+        base = SmoothSpec(variables=["x"], extra_args={"id": None})
+        with pytest.raises(NotImplementedError, match="Linked smoothing parameters"):
+            dataclasses.replace(base, extra_args={"id": "a"})
 
     def test_duplicate_parametric_dedup(self) -> None:
         """y ~ x + x collapses to a single parametric term (matches R)."""
