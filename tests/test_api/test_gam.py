@@ -622,6 +622,61 @@ class TestScopeGuards:
         # optimizer="newton" should not raise
         GAM("y ~ s(x)", optimizer="newton")
 
+    def test_linked_smoothing_id_raises_on_every_fit_route(self):
+        """id= is never silently ignored: every dense and streamed route raises."""
+        from jaxgam.control import FitControl
+        from jaxgam.data.source import DataFrameRowSource
+
+        rng = np.random.default_rng(SEED)
+        n = 60
+        data = pd.DataFrame(
+            {
+                "x": rng.uniform(0, 1, n),
+                "z": rng.uniform(0, 1, n),
+                "y": rng.normal(0, 1, n),
+            }
+        )
+        source = DataFrameRowSource(data, response="y")
+        stream = FitControl(execution="stream")
+        stream_qr = FitControl(execution="stream", linear_solver="qr")
+        formulas = (
+            "y ~ s(x, id=1) + s(z, id=1)",
+            "y ~ te(x, z, id='a')",
+            "y ~ ti(x, z, id=1)",
+        )
+        routes = {
+            "dense_reml": lambda f: GAM(f).fit(data),
+            "dense_fixed_sp": lambda f: GAM(f, sp=[0.2, 0.2]).fit(data),
+            "dense_efs": lambda f: GAM(f, optimizer="efs").fit(data),
+            "stream_fixed_sp": lambda f: GAM(f, sp=[0.2, 0.2], control=stream).fit(
+                source, result="prediction"
+            ),
+            "stream_exact_reml": lambda f: GAM(f, control=stream_qr).fit(
+                source, result="prediction"
+            ),
+            "stream_efs": lambda f: GAM(f, optimizer="efs", control=stream_qr).fit(
+                source, result="prediction"
+            ),
+        }
+        collector = _AssertCollector()
+        for formula in formulas:
+            for route, fit in routes.items():
+
+                def _raises(formula=formula, fit=fit) -> None:
+                    try:
+                        fit(formula)
+                    except Exception as exc:  # the exception type is the check
+                        check_that(
+                            isinstance(exc, NotImplementedError)
+                            and "Linked smoothing parameters (id=)" in str(exc),
+                            f"raised {type(exc).__name__}: {exc}",
+                        )
+                    else:
+                        check_that(False, "fit without raising")
+
+                collector.check(f"{route}: {formula}", _raises)
+        collector.raise_if_any("id= on public fit routes")
+
 
 # ---------------------------------------------------------------------------
 # G. TestEdgeCases

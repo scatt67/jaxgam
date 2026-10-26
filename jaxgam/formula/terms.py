@@ -12,6 +12,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+#: mgcv links every smooth that shares a non-NULL ``id``: ``gam.setup`` clones
+#: the first such term's spec onto the others (``clone.smooth.spec``) and gives
+#: them one smoothing parameter (mgcv.r, ``gam.setup``). Ignoring ``id`` would
+#: silently fit a different model, so it is a deferred feature.
+LINKED_SMOOTHING_PARAMETERS_MESSAGE = (
+    "Linked smoothing parameters (id=) are planned for v1.1. "
+    "See docs/design.md Section 5.1."
+)
+
 
 @dataclass(frozen=True)
 class SmoothSpec:
@@ -35,6 +44,13 @@ class SmoothSpec:
         One of ``"s"``, ``"te"``, ``"ti"``.
     extra_args : dict[str, Any]
         Any additional keyword arguments not captured above.
+
+    Raises
+    ------
+    NotImplementedError
+        If ``extra_args`` carries a non-``None`` ``id`` (linked smoothing
+        parameters are deferred). This guards every setup path, including
+        specs built by hand rather than by ``parse_formula()``.
     """
 
     variables: list[str]
@@ -43,6 +59,10 @@ class SmoothSpec:
     by: str | None = None
     smooth_type: str = "s"
     extra_args: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.extra_args.get("id") is not None:
+            raise NotImplementedError(LINKED_SMOOTHING_PARAMETERS_MESSAGE)
 
 
 @dataclass(frozen=True)

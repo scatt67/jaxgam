@@ -24,7 +24,12 @@ from __future__ import annotations
 import ast
 from typing import Any
 
-from jaxgam.formula.terms import FormulaSpec, ParametricTerm, SmoothSpec
+from jaxgam.formula.terms import (
+    LINKED_SMOOTHING_PARAMETERS_MESSAGE,
+    FormulaSpec,
+    ParametricTerm,
+    SmoothSpec,
+)
 
 _SMOOTH_FUNCTIONS = frozenset({"s", "te", "ti"})
 
@@ -55,6 +60,9 @@ def parse_formula(formula_str: str) -> FormulaSpec:
     ValueError
         If the formula is malformed (missing ``~``, empty response or
         RHS, smooth function with no arguments, etc.).
+    NotImplementedError
+        If a smooth uses a deferred argument (``fx=True``, per-term ``sp=``
+        or a non-``None`` ``id=``).
     """
     # --- Split on ~ --------------------------------------------------------
     if "~" not in formula_str:
@@ -308,6 +316,12 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
                     "Section 4.3."
                 )
             # sp=None is the R default; accept and ignore it.
+        elif key == "id":
+            # R tests is.null(id) (smooth.r s()/te()), so only Python None, the
+            # spelling of R's NULL default, links nothing. Any other value,
+            # NA included, is an id, and an unevaluable one is still an id.
+            if not (isinstance(kw.value, ast.Constant) and kw.value.value is None):
+                raise NotImplementedError(LINKED_SMOOTHING_PARAMETERS_MESSAGE)
         else:
             extra_args[key] = _eval_kwarg_value(kw.value, key, func_name)
 
