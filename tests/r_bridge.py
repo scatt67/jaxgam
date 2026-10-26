@@ -176,6 +176,28 @@ class DiscreteOperatorLayout:
             object.__setattr__(self, "r_to_public", permutation)
 
 
+@dataclass(frozen=True)
+class CompressedDataFrame:
+    """Pinned ``mgcv:::compress.df`` representatives and zero-based selector."""
+
+    values: pd.DataFrame
+    selector: np.ndarray
+
+    def reconstruct(self) -> pd.DataFrame:
+        """Expand representative rows into the original scan order."""
+        return self.values.iloc[self.selector].reset_index(drop=True)
+
+
+@dataclass(frozen=True)
+class DiscreteModelFrame:
+    """Pinned ``discrete.mf`` padded frame and translated index metadata."""
+
+    frame: pd.DataFrame
+    row_indices: np.ndarray
+    n_unique: dict[str, int]
+    index_spans: dict[str, tuple[int, int]]
+
+
 class RBridge:
     """Interface to R's mgcv for reference comparison.
 
@@ -294,6 +316,14 @@ class RBridge:
         if values.dtype.kind != "f":
             raise TypeError("R numeric input must contain floating or integer values.")
         return self._ro.FloatVector(np.asarray(values, dtype=np.float64))
+
+    def source_numeric_tokens(self, values: np.ndarray) -> np.ndarray:
+        """Render numeric values with pinned R's ``paste0`` coercion."""
+        self._require_rpy2()
+        numbers = np.asarray(values, dtype=np.float64)
+        if numbers.ndim != 1:
+            raise ValueError("Numeric-token oracle requires a vector")
+        return _r_array(self._base.paste0(self._to_r_vector(numbers)), dtype=str)
 
     def _to_r_matrix(self, values: np.ndarray) -> Any:
         """Transfer matrix dimensions and column-major numeric values to R."""
@@ -6926,3 +6956,166 @@ if (!is.null(s$sp.criterion)) {{
                 result["sp_criterion"] = None
 
             return result
+
+    def _to_r_discrete_dataframe(
+        self,
+        data: pd.DataFrame,
+        factor_names: tuple[str, ...],
+        *,
+        preserve_order: bool,
+    ) -> Any:
+        """Transfer CSV-equivalent columns and declare source factor levels."""
+        raw = data.copy()
+        for name in raw.columns:
+            if isinstance(raw[name].dtype, pd.CategoricalDtype):
+                raw[name] = raw[name].astype(object)
+        frame = self._to_r_dataframe(raw)
+        for name in factor_names:
+            series = data[name]
+            levels = (
+                list(series.dtype.categories)
+                if isinstance(series.dtype, pd.CategoricalDtype)
+                else list(pd.unique(series))
+            )
+            constructor = (
+                self._base.ordered
+                if preserve_order
+                and isinstance(series.dtype, pd.CategoricalDtype)
+                and series.dtype.ordered
+                else self._base.factor
+            )
+            frame = self._ro.baseenv["[[<-"](
+                frame,
+                name,
+                value=constructor(
+                    frame.rx2(name),
+                    levels=self._ro.StrVector([str(level) for level in levels]),
+                ),
+            )
+        return frame
+
+    def _r_discrete_grid(self, m: int | tuple[int, ...] | None, *, default: Any) -> Any:
+        """Validate and transfer mgcv's scalar or per-term grid control."""
+        if isinstance(m, tuple):
+            if not m or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 2
+                for value in m
+            ):
+                raise ValueError("m tuple entries must be integers of at least 2")
+            return self._to_r_vector(np.asarray(m, dtype=np.int32))
+        if m is None:
+            return default
+        if isinstance(m, bool) or not isinstance(m, int) or m < 2:
+            raise ValueError("m must be an integer of at least 2")
+        return int(m)
+
+    def compress_dataframe(
+        self,
+        data: pd.DataFrame,
+        *,
+        factor_names: tuple[str, ...] = (),
+        m: int | None = None,
+        seed: int = 8547,
+    ) -> CompressedDataFrame:
+        """Call pinned ``compress.df`` with an isolated, restored R RNG state."""
+        self._require_rpy2()
+        if data.empty or data.shape[1] == 0:
+            raise ValueError("compress_dataframe requires a non-empty data frame")
+        if len(factor_names) != len(set(factor_names)) or not set(factor_names) <= set(
+            data.columns
+        ):
+            raise ValueError("factor_names must be distinct data-frame columns")
+        if m is not None and (isinstance(m, bool) or not isinstance(m, int) or m < 2):
+            raise ValueError("m must be an integer of at least 2")
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise ValueError("seed must be an integer")
+        frame = self._to_r_discrete_dataframe(data, factor_names, preserve_order=False)
+        with self._preserved_r_seed(1907):
+            expected_after = self._stats.runif(8)
+            self._ro.baseenv["set.seed"](1907)
+            old_seed = self._call_internal("temp.seed", seed)
+            try:
+                compressed = self._call_internal(
+                    "compress.df", frame, m=self._ro.NULL if m is None else m
+                )
+            finally:
+                self._call_internal("temp.seed", old_seed)
+            observed_after = self._stats.runif(8)
+            if not bool(
+                self._ro.baseenv["identical"](expected_after, observed_after)[0]
+            ):
+                raise RBridgeError("compress RNG state not restored")
+        selector = self._base.attr(compressed, "index")
+        if bool(self._ro.baseenv["is.matrix"](selector)[0]):
+            raise RBridgeError("matrix-valued terms are not supported by this oracle")
+        columns = {}
+        for name in compressed.names:
+            values = compressed.rx2(name)
+            if bool(self._ro.baseenv["is.factor"](values)[0]):
+                values = self._base.as_character(values)
+            columns[str(name)] = _r_array(values)
+        return CompressedDataFrame(
+            pd.DataFrame(columns), _r_array(selector, dtype=np.int32) - 1
+        )
+
+    def discrete_model_frame(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        *,
+        factor_names: tuple[str, ...] = (),
+        m: int | tuple[int, ...] | None = None,
+    ) -> DiscreteModelFrame:
+        """Call pinned ``discrete.mf`` and translate its one-based metadata."""
+        self._require_rpy2()
+        if len(factor_names) != len(set(factor_names)) or not set(factor_names) <= set(
+            data.columns
+        ):
+            raise ValueError("factor_names must be distinct data-frame columns")
+        grid = self._r_discrete_grid(m, default=self._ro.NULL)
+        frame = self._to_r_discrete_dataframe(data, factor_names, preserve_order=True)
+        interpreted = self._call_internal("interpret.gam", self._ro.Formula(formula))
+        model_frame = self._stats.model_frame(
+            interpreted.rx2("fake.formula"),
+            frame,
+            **{"drop.unused.levels": False},
+        )
+        parametric_frame = self._stats.model_frame(
+            interpreted.rx2("pf"), frame, **{"drop.unused.levels": False}
+        )
+        with self._preserved_r_seed(1907):
+            expected_after = self._stats.runif(8)
+            self._ro.baseenv["set.seed"](1907)
+            result = self._call_internal(
+                "discrete.mf",
+                interpreted,
+                model_frame,
+                self._base.names(parametric_frame),
+                m=grid,
+                full=True,
+            )
+            observed_after = self._stats.runif(8)
+            if not bool(
+                self._ro.baseenv["identical"](expected_after, observed_after)[0]
+            ):
+                raise RBridgeError("discrete.mf RNG not restored")
+        returned_frame = result.rx2("mf")
+        columns = {}
+        for name in returned_frame.names:
+            values = returned_frame.rx2(name)
+            if bool(self._ro.baseenv["is.factor"](values)[0]):
+                values = self._base.as_character(values)
+            columns[str(name)] = _r_array(values)
+        unique = result.rx2("nr")
+        spans = result.rx2("ks")
+        span_names = tuple(self._base.rownames(spans))
+        span_values = _r_array(spans, dtype=np.int64)
+        return DiscreteModelFrame(
+            pd.DataFrame(columns),
+            _r_array(result.rx2("k"), dtype=np.int32) - 1,
+            dict(zip(map(str, unique.names), map(int, unique), strict=True)),
+            {
+                str(name): (int(bounds[0]) - 1, int(bounds[1]) - 1)
+                for name, bounds in zip(span_names, span_values, strict=True)
+            },
+        )

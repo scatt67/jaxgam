@@ -51,6 +51,13 @@ test-discrete: docker-build ## run exact discrete representation/operator tests 
 		tests/test_data/test_discretize.py tests/test_formula/test_discrete_design.py \
 		tests/test_fitting/test_discrete_ops.py -x --tb=short -v
 
+.PHONY: test-continuous-discrete
+test-continuous-discrete: docker-build ## run continuous range-grid and exact-index tests in Docker
+	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
+		tests/test_data/test_discretize.py \
+		tests/test_data/test_continuous_discretize.py \
+		tests/test_data/test_continuous_frame.py -x --tb=short -v
+
 .PHONY: test-efs-factor
 test-efs-factor: docker-build ## run exact factor-action EFS contractions and dense kernel compatibility
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) uv run pytest \
