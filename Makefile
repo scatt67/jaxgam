@@ -244,6 +244,11 @@ benchmark-operator: ## benchmark fixed-sp high-cardinality operator fit (LEVELS=
 benchmark-operator-preconditioner: ## compare paired coarse/no-coarse PCG on correlated smooth and factor
 	$(UV) run python scripts/benchmark_operator_preconditioner.py --output-dir $${OUTPUT:-/tmp/jaxgam-operator-benchmark}
 
+.PHONY: benchmark-operator-efs-calibration
+benchmark-operator-efs-calibration: ## measure operator EFS score envelopes vs decimal references (ARGS="--regime indexed_poisson --levels 1024" OUTPUT=/tmp/jaxgam-operator-efs-calibration)
+	@test -n "$(ARGS)" || (echo 'Usage: make benchmark-operator-efs-calibration ARGS="--regime indexed_poisson --levels 1024"' && exit 1)
+	$(UV) run python scripts/benchmark_operator_efs_calibration.py --output-dir $${OUTPUT:-/tmp/jaxgam-operator-efs-calibration} $(ARGS)
+
 .PHONY: benchmark-efs
 benchmark-efs: ## benchmark dense Newton/EFS against pinned R EFS (OUTPUT=/tmp/jaxgam-efs-benchmark)
 	$(UV) run python scripts/benchmark_efs.py --output-dir $${OUTPUT:-/tmp/jaxgam-efs-benchmark}
