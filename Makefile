@@ -224,6 +224,15 @@ benchmark-efs-smoke: ## run the small end-to-end dense EFS benchmark gate
 benchmark-scaling: ## emit one isolated scaling evidence record (ARGS="--n 2000 --k 10 --execution stream-exact --result-mode prediction")
 	$(UV) run python scripts/benchmark_scaling.py $(ARGS)
 
+.PHONY: benchmark-discrete-approximation
+benchmark-discrete-approximation: ## PR11 discretization approximation study (OUTPUT=/path/outside/checkout.json ARGS=...)
+	@test -n "$(OUTPUT)" || (echo "Usage: make benchmark-discrete-approximation OUTPUT=/tmp/approximation.json [ARGS='--families gaussian --n 2000']" && exit 1)
+	$(UV) run python scripts/benchmark_discrete_approximation.py --output $(OUTPUT) $(ARGS)
+
+.PHONY: test-discrete-approximation-harness
+test-discrete-approximation-harness: ## test the PR11 approximation-study harness
+	$(UV) run pytest -q tests/test_benchmark_discrete_approximation.py $(ARGS)
+
 .PHONY: test-scaling-memory
 test-scaling-memory: ## test scaling harness isolation, scan/memory metadata, and bounded cases
 	$(UV) run pytest -q tests/test_benchmark_scaling.py $(ARGS)
