@@ -21,6 +21,7 @@ import numpy as np
 from jaxgam.control import FitControl
 from jaxgam.data.source import RowSource
 from jaxgam.families.base import ExponentialFamily
+from jaxgam.families.extended import ExtendedFamily
 from jaxgam.families.registry import get_family
 from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.initialization import initialize_beta
@@ -170,7 +171,8 @@ class GAM:
             Frozen full-diagnostic or lean-inference result. Streamed fitting
             returns ``result='prediction'`` and supports fixed smoothing
             parameters across the family execution contracts or EFS with QR.
-            Discrete fitting currently requires explicit fixed ``sp`` and
+            Discrete fitting accepts fixed ``sp`` or
+            ``smoothing_strategy='working_model_reml'`` and also returns
             ``result='prediction'``.
 
         Design doc reference: docs/refactor_gam_api/design.md §3.3
@@ -605,7 +607,13 @@ class GAM:
         result: Literal["full", "inference", "prediction"],
         family: ExponentialFamily,
     ) -> GAMPredictionResult:
-        """Run fixed or opt-in Gaussian working-model continuous-discrete fitting.
+        """Run continuous-discrete fitting with fixed or working-model sp.
+
+        Additive Gaussian (identity) models use the exact fixed-sp solve or
+        the frozen-statistic working model. Families exposing the
+        ``regular_performance_iteration`` capability (Poisson, Binomial and
+        Gamma with the links pinned ``bam`` accepts for them) use pinned
+        ``bgam.fitd``'s Fisher performance iteration.
 
         The route is taken only on an explicit ``execution='discrete'``
         request and owns its solves: ``linear_solver='qr'`` is rejected, and a
@@ -616,6 +624,7 @@ class GAM:
         ``optimizer='efs'`` selection is not a discrete strategy.
         """
         from jaxgam.execution.discrete import fit_discrete_gaussian
+        from jaxgam.execution.discrete_regular import fit_discrete_regular
         from jaxgam.families.standard import Gaussian
 
         if not isinstance(data, RowSource):
@@ -647,20 +656,36 @@ class GAM:
                 "smoothing_strategy='working_model_reml' selects its smoothing "
                 "parameters."
             )
-        if not isinstance(family, Gaussian) or not family.is_canonical:
+        capabilities = family.execution_capabilities()
+        if isinstance(family, ExtendedFamily) or capabilities.dynamic_theta:
             raise NotImplementedError(
-                "Discrete fitting currently supports Gaussian identity only."
+                f"Discrete fitting of the {family.family_name} family is not "
+                "implemented: bgam.fitd's extended-family working model "
+                "(dDeta Newton weights) and its nuisance update "
+                "(mgcv efam.r::estimate.theta, conditioning on the current mu) "
+                "remain to be ported."
+            )
+        additive = isinstance(family, Gaussian) and family.is_canonical
+        if not additive and not capabilities.regular_performance_iteration:
+            raise NotImplementedError(
+                "Discrete fitting supports Gaussian identity and the Poisson "
+                "(log, identity, sqrt), Binomial (logit, probit, cloglog, log) "
+                "and Gamma (inverse, identity, log) families; got "
+                f"{family!r}."
             )
         spec = parse_formula(self.formula)
-        state = fit_discrete_gaussian(
-            spec,
-            data,
-            self.sp,
-            control=self.control,
-            device=_resolve_device(self.device),
+        device = _resolve_device(self.device)
+        state = (
+            fit_discrete_gaussian(
+                spec, data, self.sp, control=self.control, device=device
+            )
+            if additive
+            else fit_discrete_regular(
+                spec, data, family, self.sp, control=self.control, device=device
+            )
         )
         return _with_execution_fallback_reason(
-            GAMPredictionResult._from_discrete_gaussian(
+            GAMPredictionResult._from_discrete(
                 fit_state=state,
                 family=family,
                 formula=self.formula,

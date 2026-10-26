@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from jaxgam.data.source import RowSource
-    from jaxgam.execution.discrete import DiscreteGaussianFit
+    from jaxgam.execution.discrete import DiscreteFit
     from jaxgam.families.base import ExponentialFamily
     from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
     from jaxgam.fitting.state import ConsumedFitResult, StreamFitState
@@ -474,16 +474,16 @@ class GAMPredictionResult:
         return covariance
 
     @classmethod
-    def _from_discrete_gaussian(
+    def _from_discrete(
         cls,
         *,
-        fit_state: DiscreteGaussianFit,
+        fit_state: DiscreteFit,
         family: ExponentialFamily,
         formula: str,
         method: str,
         control: FitControl,
     ) -> GAMPredictionResult:
-        """Build a row-free result for fixed or working-model Gaussian fitting."""
+        """Build a row-free result for any discrete-route fit state."""
         policy = control.discretization
         assert policy is not None
         # Record the policy prediction actually follows; the metadata also
@@ -519,21 +519,13 @@ class GAMPredictionResult:
             edf_total=fit_state.edf_total,
             converged=fit_state.converged,
             n_iter=fit_state.scale_iterations,
-            convergence_info=(
-                "fixed sp discrete Gaussian direct solve with pinned "
-                f"scale iteration ({fit_state.scale_iterations} iterations)"
-            )
-            if fit_state.smoothing_strategy == "fixed"
-            else (
-                "Gaussian working-model REML "
-                + ("converged" if fit_state.converged else "did not converge")
-                + f" after {fit_state.scale_iterations} iterations and "
-                + f"{fit_state.proposal_evaluations} proposals"
-            ),
+            convergence_info=_discrete_convergence_info(fit_state, family),
             method=method,
             lambda_strategy=fit_state.smoothing_strategy,
             execution_path=(
-                "jax_actions_numpy_solve"
+                "jax_actions_performance_iteration_numpy_postestimation"
+                if fit_state.performance_iteration
+                else "jax_actions_numpy_solve"
                 if fit_state.smoothing_strategy == "fixed"
                 else "jax_actions_working_model_numpy_postestimation"
             ),
@@ -1475,3 +1467,32 @@ def _extract_training_data(
             training[name] = np.asarray(col, dtype=np.float64).ravel()
 
     return training
+
+
+def _discrete_convergence_info(
+    fit_state: DiscreteFit, family: ExponentialFamily
+) -> str:
+    """Name the discrete strategy that actually ran and its finite outcome."""
+    outcome = "converged" if fit_state.converged else "did not converge"
+    if fit_state.performance_iteration:
+        smoothing = (
+            "fixed sp"
+            if fit_state.smoothing_strategy == "fixed"
+            else "working-model REML"
+        )
+        return (
+            f"{family.family_name} discrete Fisher performance iteration "
+            f"({smoothing}) {outcome} after {fit_state.scale_iterations} "
+            f"iterations, {fit_state.proposal_evaluations} proposals and "
+            f"{fit_state.coefficient_halvings} coefficient step halvings"
+        )
+    if fit_state.smoothing_strategy == "fixed":
+        return (
+            "fixed sp discrete Gaussian direct solve with pinned "
+            f"scale iteration ({fit_state.scale_iterations} iterations)"
+        )
+    return (
+        f"Gaussian working-model REML {outcome} after "
+        f"{fit_state.scale_iterations} iterations and "
+        f"{fit_state.proposal_evaluations} proposals"
+    )

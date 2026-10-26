@@ -1157,9 +1157,115 @@ def test_bam_discrete_prediction_flag_rejects_before_r_conversion(monkeypatch):
     def reject(*_args, **_kwargs):
         raise AssertionError("discrete_prediction must be checked before R input")
 
-    monkeypatch.setattr(RBridge, "_bam_discrete_gaussian_arguments", reject)
+    monkeypatch.setattr(RBridge, "_bam_discrete_arguments", reject)
     bridge = object.__new__(RBridge)
     with pytest.raises(ValueError, match="discrete_prediction"):
         bridge.fit_bam_discrete_gaussian(
             "y ~ s(x,bs='cr',k=6)", _working_frame(), m=30, discrete_prediction=1
         )
+
+
+def _poisson_frame() -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    frame = _working_frame()
+    rate = np.exp(0.2 + np.sin(4.5 * frame.x) - 0.3 * frame.z)
+    frame["y"] = np.random.default_rng(4).poisson(rate).astype(float)
+    weights = np.linspace(0.6, 1.4, len(frame))
+    offset = np.linspace(-0.1, 0.2, len(frame))
+    return frame, weights, offset
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+@pytest.mark.parametrize("selected", [False, True], ids=["fixed", "selected"])
+def test_trace_bam_regular_working_model_is_transparent_and_complete(
+    selected: bool,
+) -> None:
+    """The non-additive bgam.fitd trace changes no result and records its loop."""
+    frame, weights, offset = _poisson_frame()
+    bridge = RBridge(mode="rpy2")
+    arguments = {
+        "family": "poisson",
+        "sp": None if selected else np.array([0.7]),
+        "weights": weights,
+        "offset": offset,
+    }
+    trace = bridge.trace_bam_regular_working_model(
+        "y ~ z + s(x,bs='cr',k=6)", frame, **arguments
+    )
+    plain = bridge.fit_bam_discrete(
+        "y ~ z + s(x,bs='cr',k=6)", frame, m=30, **arguments
+    )
+    collector = _AssertCollector()
+    for name in ("coefficients", "smoothing_params", "fitted_values"):
+        collector.check(
+            f"untraced {name}",
+            lambda name=name: np.testing.assert_array_equal(
+                getattr(trace.fit, name), getattr(plain, name)
+            ),
+        )
+    first = trace.trials[0]
+    collector.check(
+        "iteration one starts from mustart",
+        lambda: check_that(
+            first.iteration == 1
+            and first.coefficients is None
+            and first.coefficient_trials == 1
+            and all(trial.coefficients is not None for trial in trace.trials[1:]),
+            "iteration one has no coefficients; later iterations do",
+        ),
+    )
+    collector.check(
+        "loop exit",
+        lambda: check_that(
+            trace.failure is None
+            and trace.converged
+            and trace.final_iteration == trace.fit.n_iter
+            and trace.final_iteration == trace.trials[-1].iteration + 1
+            and trace.final_coefficient_trials >= 1,
+            f"exit {trace.final_iteration}/{trace.fit.n_iter} conv={trace.converged}",
+        ),
+    )
+    collector.check(
+        "proposal shapes",
+        lambda: check_that(
+            all(
+                len(trial.proposal.step) == (1 if selected else 0)
+                and trial.gram.shape == trial.state.gram.shape
+                for trial in trace.trials
+            ),
+            "fixed sp has no free parameter; selected has one",
+        ),
+    )
+    collector.raise_if_any(f"regular bgam.fitd trace {selected=}")
+
+
+def test_regular_bam_family_arguments_reject_before_r_conversion() -> None:
+    bridge = object.__new__(RBridge)
+    frame, _, _ = _poisson_frame()
+    with pytest.raises(ValueError, match="unsupported bam family/link"):
+        bridge.fit_bam_discrete("y ~ s(x)", frame, family="tweedie")
+    with pytest.raises(ValueError, match="unsupported bam family/link"):
+        bridge.fit_bam_discrete("y ~ s(x)", frame, family="poisson", link="logit")
+    with pytest.raises(ValueError, match="additive Gaussian"):
+        bridge.trace_bam_regular_working_model("y ~ s(x)", frame, family="gaussian")
+    with pytest.raises(ValueError, match="allow_failure"):
+        bridge.trace_bam_regular_working_model(
+            "y ~ s(x)", frame, family="poisson", allow_failure=1
+        )
+    with pytest.raises(ValueError, match="Unknown bam family"):
+        bridge._bam_family("tweedie", None)
+    with pytest.raises(ValueError, match="pinned poisson link"):
+        bridge._bam_family("poisson", "logit")
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_family_dev_resids_returns_raw_rows_and_validates() -> None:
+    bridge = RBridge(mode="rpy2")
+    rows = bridge.family_dev_resids(
+        "poisson", np.array([0.0, 2.0]), np.array([-0.5, 1.0]), np.ones(2)
+    )
+    # R keeps 2*mu*wt for a zero count, even at a negative mean.
+    np.testing.assert_allclose(
+        rows, [-1.0, 2 * (2 * np.log(2.0) - 1.0)], rtol=STRICT.rtol
+    )
+    with pytest.raises(ValueError, match="matching 1-D"):
+        bridge.family_dev_resids("gamma", np.ones(2), np.ones(3), np.ones(2))

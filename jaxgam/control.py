@@ -176,6 +176,19 @@ class FitControl:
     policy. The discrete route owns its solves, so ``linear_solver='qr'`` is
     rejected there, and a ``gaussian_compression`` request is reported unmet
     in ``execution_fallback_reason``.
+
+    ``smoothing_strategy='working_model_reml'`` (discrete only) selects the
+    smoothing parameters by pinned mgcv ``bam(discrete=TRUE)``'s performance
+    iteration (``bgam.fitd``): one limited ``Sl.fitChol`` Newton proposal on
+    each iteration's working model, stopped when the penalized deviance (and
+    an estimated log scale) changes by less than ``working_model_epsilon``
+    within ``working_model_max_iterations``. Gaussian identity models use one
+    frozen working model; Poisson, Binomial and Gamma re-form a Fisher
+    working model (IRLS weights, no observed-curvature split) at every
+    iteration, with the scale fixed at one or, for Gamma, estimated. This is
+    not the nested exact REML optimization of the dense route. An explicit
+    ``sp`` instead runs the same iteration with every smoothing parameter
+    fixed.
     """
 
     execution: Literal["dense", "stream", "discrete"] = "dense"

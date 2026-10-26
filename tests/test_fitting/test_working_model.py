@@ -20,10 +20,14 @@ from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.working_model import (
     WorkingModelCriterionMetadata,
     WorkingModelFactor,
+    _double_double_sum,
+    _sequential_double_sum,
     _sl_newton_step,
     _source_penalty_determinant,
     _source_tcrossprod,
+    _x87_sum,
     gaussian_working_model_proposal,
+    source_sum,
     working_model_factor_inputs,
 )
 from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
@@ -962,3 +966,207 @@ def test_coupled_source_setup_root_products_match_pinned_sl_setup(r_bridge):
             rtol=STRICT.rtol,
             atol=STRICT.atol,
         )
+
+
+@pytest.mark.parametrize("scale_is_fixed", [False, True], ids=["free", "known"])
+def test_fixed_smoothing_proposal_keeps_only_the_scale_coordinate(
+    compact_working_model, scale_is_fixed
+):
+    """Sl.fitChol with a zero-column L: t(L) reml1 and t(L) reml2 L.
+
+    Every log(sp) still enters the system; the gradient, Hessian and step keep
+    only log(phi), or nothing when the scale is fixed too. Compiled and run.
+    """
+    frame, _, smoothing, X, metadata, weights, offset = compact_working_model
+    statistics = _statistics(X, frame.y.to_numpy(), weights, offset, 13)
+    parameters = np.log(smoothing) if scale_is_fixed else np.r_[np.log(smoothing), -3.0]
+    lam = jnp.asarray(source_exponentials(np.log(smoothing)))
+    factors = factor_working_model(
+        jax.jit(working_model_factor_inputs)(statistics[0], metadata, lam)
+    )
+    proposal = jax.jit(
+        gaussian_working_model_proposal,
+        static_argnames=("scale_is_fixed", "fixed_smoothing"),
+    )
+    full = proposal(
+        jnp.asarray(parameters),
+        *statistics,
+        metadata,
+        factors,
+        smoothing=lam,
+        scale_is_fixed=scale_is_fixed,
+        log_scale=-3.0,
+    )
+    fixed = proposal(
+        jnp.asarray(parameters),
+        *statistics,
+        metadata,
+        factors,
+        smoothing=lam,
+        scale_is_fixed=scale_is_fixed,
+        fixed_smoothing=True,
+        log_scale=-3.0,
+    )
+    free = slice(len(smoothing), None)
+    collector = _AssertCollector()
+    for name in ("coefficients", "criterion", "logdet_hessian", "logdet_penalty"):
+        collector.check(
+            name,
+            lambda name=name: np.testing.assert_array_equal(
+                getattr(fixed, name), getattr(full, name)
+            ),
+        )
+    collector.check(
+        "restricted gradient and Hessian",
+        lambda: (
+            np.testing.assert_array_equal(fixed.gradient, full.gradient[free]),
+            np.testing.assert_array_equal(fixed.hessian, full.hessian[free, free]),
+        ),
+    )
+    collector.check(
+        "restricted step",
+        lambda: np.testing.assert_allclose(
+            fixed.step,
+            _sl_newton_step(full.gradient[free], full.hessian[free, free], 0.0),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "shapes",
+        lambda: check_that(
+            fixed.step.shape == ((0,) if scale_is_fixed else (1,)),
+            f"fixed-smoothing step shape {fixed.step.shape}",
+        ),
+    )
+    collector.raise_if_any(f"fixed-smoothing proposal {scale_is_fixed=}")
+
+
+def test_source_sum_is_rs_long_double_sum_and_compiles():
+    """R's sum: element order, C long double accumulator, one rounding.
+
+    NumPy's longdouble is the same C type as R's LDOUBLE on this platform,
+    so its sequential sum is the reference. The values cancel to about 1e-3
+    of their magnitude, where XLA's reduction and a double sum differ.
+    """
+    rng = np.random.default_rng(3)
+    compiled = jax.jit(source_sum)
+    for size in (1, 2, 7, 23, 64):
+        for _ in range(50):
+            values = rng.normal(scale=1e3, size=size)
+            values[-1] = -np.sum(values[:-1]) + rng.normal()
+            expected = np.longdouble(0.0)
+            for value in values:
+                expected += np.longdouble(value)
+            assert float(compiled(jnp.asarray(values))) == float(expected)
+    assert float(compiled(jnp.zeros(0))) == 0.0
+
+
+def _rounded(value: Fraction, bits: int) -> Fraction:
+    """``value`` to ``bits`` significant bits, ties to even (no exponent limit)."""
+    if value == 0:
+        return value
+    sign = -1 if value < 0 else 1
+    value = abs(value)
+    exponent = value.numerator.bit_length() - value.denominator.bit_length()
+    if Fraction(2) ** exponent > value:
+        exponent -= 1
+    quantum = Fraction(2) ** (exponent - bits + 1)
+    scaled = value / quantum
+    whole = scaled.numerator // scaled.denominator
+    remainder = scaled - whole
+    if remainder > Fraction(1, 2) or (remainder == Fraction(1, 2) and whole % 2):
+        whole += 1
+    return sign * whole * quantum
+
+
+def _accumulated(values, bits: int) -> float:
+    """Exact model of a ``bits``-significant-bit sequential accumulator."""
+    total = Fraction(0)
+    for value in values:
+        total = _rounded(total + Fraction(float(value)), bits)
+    return float(total)
+
+
+def test_every_long_double_accumulator_matches_its_exact_model():
+    """``source_sum`` and each LDOUBLE accumulator against an exact model.
+
+    ``source_sum`` is checked at the width ``np.finfo(np.longdouble)``
+    reports here, so native x86_64 runs exercise its 80-bit path.
+
+    Double (53 bits, macOS arm64), x87 extended (64 bits, x86_64 Linux) and
+    quad (113 bits, aarch64 Linux) are modelled by rounding the exact running
+    sum to that many bits after every addition. On all three, pinned R's
+    ``sum`` and NumPy's sequential ``longdouble`` sum were checked equal to
+    this model (1209 cases, x86_64 under emulation). The cases include x87
+    half-ulp ties that a wider accumulator resolves differently.
+    """
+    rng = np.random.default_rng(7)
+    cases = []
+    for size in (1, 2, 3, 7, 23, 64):
+        for _ in range(40):
+            values = rng.normal(scale=10.0 ** rng.integers(-3, 4), size=size)
+            if size > 1:
+                values[-1] = -np.sum(values[:-1]) + rng.normal() * 1e-6
+            cases.append(values)
+    tie = 2.0**-64
+    cases += [
+        np.array([1.0, tie, tie, tie]),
+        np.array([1.0, tie, -tie, tie, tie]),
+        np.array([1.0, 3 * tie, tie]),
+        np.array([2.0**53, 1.0, 2.0**-11, -(2.0**53)]),
+        np.array([1.0, -(2.0**-65), -(2.0**-65)]),
+        np.array([1.0 + 2.0**-52, 2.0**-64 + 2.0**-116]),
+        np.array([-1.0, -tie, -tie]),
+        np.array([0.0, 0.0]),
+        np.array([1.0, 2.0**-53, tie]),
+    ]
+    collector = _AssertCollector()
+    # source_sum itself, against the exact model of the width this platform's
+    # C long double reports (np.finfo): the 80-bit path on x86_64 CI.
+    platform_bits = int(np.finfo(np.longdouble).nmant) + 1
+    compiled_source = jax.jit(source_sum)
+    platform_mismatches = [
+        index
+        for index, values in enumerate(cases)
+        if float(compiled_source(jnp.asarray(values)))
+        != _accumulated(values, platform_bits)
+    ]
+    collector.check(
+        f"source_sum at {platform_bits} bits",
+        lambda: check_that(
+            not platform_mismatches,
+            f"source_sum differs from the {platform_bits}-bit model in cases "
+            f"{platform_mismatches}",
+        ),
+    )
+    for name, accumulate, bits in (
+        ("double", _sequential_double_sum, 53),
+        ("x87", _x87_sum, 64),
+        ("quad", _double_double_sum, 113),
+    ):
+        compiled = jax.jit(accumulate)
+        mismatches = [
+            index
+            for index, values in enumerate(cases)
+            if float(compiled(jnp.asarray(values))) != _accumulated(values, bits)
+        ]
+        collector.check(
+            name,
+            lambda name=name, mismatches=mismatches: check_that(
+                not mismatches, f"{name} accumulator differs in cases {mismatches}"
+            ),
+        )
+    # x87 rounds 1 + 2^-53 + 2^-64 to even at 64 bits, then to 1.0; quad
+    # keeps it above the double midpoint, so the final double differs.
+    separating = cases[-1]
+    collector.check(
+        "x87 ties",
+        lambda: check_that(
+            float(jax.jit(_x87_sum)(jnp.asarray(separating))) == 1.0
+            and float(jax.jit(_double_double_sum)(jnp.asarray(separating)))
+            == 1.0 + 2.0**-52,
+            "tie case must separate x87 from quad",
+        ),
+    )
+    collector.raise_if_any("long double accumulators")

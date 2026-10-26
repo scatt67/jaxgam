@@ -374,6 +374,54 @@ class SourceWorkingModelTrace:
     fit: BamDiscreteFit
 
 
+@dataclass(frozen=True)
+class SourceRegularWorkingTrial:
+    """Non-additive ``bgam.fitd`` locals after one ``Sl.fitChol`` trial.
+
+    ``coefficients`` is ``coef`` after this iteration's step control (``None``
+    at iteration one, which starts from ``linkfun(mustart)``) and
+    ``coefficient_trials`` its ``kk``. ``gram``/``rhs``/``response_square_sum``
+    are ``qrx$R``, ``qrx$f`` and ``qrx$y.norm2`` in model coordinates, and
+    ``state`` holds the same moments after ``Sl.initial.repara`` with the
+    fit's ``Sl``. ``accepted``/``step``/``deviance``/``previous_deviance``/
+    ``criterion`` are ``lsp0``, ``Nstep``, ``dev``, ``devold`` and ``crit``
+    before this trial's acceptance decision.
+    """
+
+    iteration: int
+    coefficient_trials: int
+    coefficients: np.ndarray | None
+    gram: np.ndarray
+    rhs: np.ndarray
+    state: SourceWorkingModelState
+    accepted: np.ndarray
+    step: np.ndarray
+    deviance: float
+    previous_deviance: float
+    criterion: float
+    proposal: SourceWorkingProposal
+
+
+@dataclass(frozen=True)
+class SourceRegularWorkingModelTrace:
+    """Pinned non-additive ``bgam.fitd`` trial sequence and final fit.
+
+    ``final_iteration``/``final_coefficient_trials``/``converged`` are
+    ``iter``, ``kk`` and ``conv`` when the fitting loop ends: at convergence
+    ``kk`` belongs to the converging iteration, which makes no proposal.
+    When pinned R stops with an error instead (and the caller allowed it),
+    ``failure`` holds R's message, ``trials`` the trials made before it, and
+    ``fit`` and the loop-exit fields are ``None``.
+    """
+
+    trials: tuple[SourceRegularWorkingTrial, ...]
+    fit: BamDiscreteFit | None
+    final_iteration: int | None
+    final_coefficient_trials: int | None
+    converged: bool | None
+    failure: str | None = None
+
+
 def _same_source_working_state(
     first: SourceWorkingModelState, second: SourceWorkingModelState
 ) -> bool:
@@ -7535,13 +7583,17 @@ if (!is.null(s$sp.criterion)) {{
         offset: np.ndarray | None = None,
         newdata: pd.DataFrame | None = None,
         discrete_prediction: bool = False,
+        family: str = "gaussian",
+        link: str | None = None,
     ) -> BamDiscreteFit:
-        """Fit pinned additive Gaussian ``bam`` at caller-owned smoothing."""
+        """Fit pinned discrete ``bam`` at caller-owned smoothing parameters."""
         if sp is None:
             raise ValueError("sp must contain positive finite values")
-        return self.fit_bam_discrete_gaussian(
+        return self.fit_bam_discrete(
             formula,
             data,
+            family=family,
+            link=link,
             sp=sp,
             factor_names=factor_names,
             m=m,
@@ -7552,10 +7604,18 @@ if (!is.null(s$sp.criterion)) {{
         )
 
     def fit_bam_discrete_gaussian(
+        self, formula: str, data: pd.DataFrame, **kwargs: Any
+    ) -> BamDiscreteFit:
+        """Pinned Gaussian identity :meth:`fit_bam_discrete`."""
+        return self.fit_bam_discrete(formula, data, family="gaussian", **kwargs)
+
+    def fit_bam_discrete(
         self,
         formula: str,
         data: pd.DataFrame,
         *,
+        family: str = "gaussian",
+        link: str | None = None,
         sp: np.ndarray | None = None,
         initial_sp: np.ndarray | None = None,
         initial_scale: float | None = None,
@@ -7570,20 +7630,24 @@ if (!is.null(s$sp.criterion)) {{
         newdata: pd.DataFrame | None = None,
         discrete_prediction: bool = False,
     ) -> BamDiscreteFit:
-        """Fit pinned Gaussian bam with fixed or performance-iteration smoothing.
+        """Fit pinned discrete bam with fixed or performance-iteration smoothing.
 
+        ``family``/``link`` name a pinned ``stats`` family constructor
+        (``gaussian``, ``poisson``, ``binomial`` or ``gamma``) and its link.
         ``sp`` fixes smoothing. ``initial_sp`` and ``initial_scale`` instead
         supply mgcv's ``in.out`` start for a selected working-model replay.
-        ``scale`` is R's Gaussian scale control: negative estimates scale,
-        while a positive value fixes it. ``newdata`` is predicted on the link
+        ``scale`` is R's scale control: negative estimates scale, while a
+        positive value fixes it. ``newdata`` is predicted on the link
         scale with standard errors by ``predict.bam``: exactly
         (``discrete=FALSE``, ``predict.gam``) by default, or through
         ``predict.bamd``'s request compression when ``discrete_prediction``.
         """
         if not isinstance(discrete_prediction, bool):
             raise ValueError("discrete_prediction must be a boolean")
-        smoothing, arguments = self._bam_discrete_gaussian_arguments(
+        smoothing, arguments = self._bam_discrete_arguments(
             data,
+            family=family,
+            link=link,
             sp=sp,
             initial_sp=initial_sp,
             initial_scale=initial_scale,
@@ -7598,7 +7662,7 @@ if (!is.null(s$sp.criterion)) {{
         trials: list[np.ndarray] = []
         fitter = self._traced_bam_fit_chol(trials) if capture_trials else self._mgcv.bam
         fit = fitter(self._ro.Formula(formula), **arguments)
-        return self._bam_discrete_gaussian_result(
+        return self._bam_discrete_result(
             fit,
             smoothing,
             newdata=newdata,
@@ -7606,10 +7670,64 @@ if (!is.null(s$sp.criterion)) {{
             discrete_prediction=discrete_prediction,
         )
 
-    def _bam_discrete_gaussian_arguments(
+    _BAM_FAMILY_LINKS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "gaussian": ("identity", "log", "inverse"),
+        "poisson": ("log", "identity", "sqrt"),
+        "binomial": ("logit", "probit", "cloglog", "log"),
+        "gamma": ("inverse", "identity", "log"),
+    }
+
+    def _bam_family(self, family: str, link: str | None) -> Any:
+        """Construct one pinned ``stats`` family object by typed name."""
+        links = self._BAM_FAMILY_LINKS.get(family)
+        if links is None:
+            raise ValueError(
+                f"Unknown bam family {family!r}; expected one of "
+                f"{sorted(self._BAM_FAMILY_LINKS)}"
+            )
+        if link is not None and link not in links:
+            raise ValueError(f"link {link!r} is not a pinned {family} link")
+        constructor = {
+            "gaussian": self._stats.gaussian,
+            "poisson": self._stats.poisson,
+            "binomial": self._stats.binomial,
+            "gamma": self._stats.Gamma,
+        }[family]
+        return constructor() if link is None else constructor(link=link)
+
+    def family_dev_resids(
+        self,
+        family: str,
+        y: np.ndarray,
+        mu: np.ndarray,
+        weight: np.ndarray,
+        *,
+        link: str | None = None,
+    ) -> np.ndarray:
+        """Evaluate one pinned ``stats`` family's ``dev.resids`` per row.
+
+        No domain check is applied: means outside the family domain return
+        whatever R's arithmetic returns (``NaN`` included), which is what
+        ``bgam.fitd``'s step control sums.
+        """
+        self._require_rpy2()
+        arrays = [np.asarray(values, dtype=np.float64) for values in (y, mu, weight)]
+        if any(
+            values.ndim != 1 or values.shape != arrays[0].shape for values in arrays
+        ):
+            raise ValueError("y, mu and weight must be matching 1-D arrays")
+        constructor = self._bam_family(family, link)
+        y_r, mu_r, weight_r = (self._to_r_vector(values) for values in arrays)
+        return _r_array(
+            constructor.rx2("dev.resids")(y_r, mu_r, weight_r), dtype=np.float64
+        )
+
+    def _bam_discrete_arguments(
         self,
         data: pd.DataFrame,
         *,
+        family: str = "gaussian",
+        link: str | None = None,
         sp: np.ndarray | None,
         initial_sp: np.ndarray | None,
         initial_scale: float | None,
@@ -7621,7 +7739,11 @@ if (!is.null(s$sp.criterion)) {{
         max_iterations: int,
         epsilon: float,
     ) -> tuple[np.ndarray, dict[str, Any]]:
-        """Validate pinned Gaussian ``bam`` controls and build its arguments."""
+        """Validate pinned discrete ``bam`` controls and build its arguments."""
+        if family not in self._BAM_FAMILY_LINKS or (
+            link is not None and link not in self._BAM_FAMILY_LINKS[family]
+        ):
+            raise ValueError(f"unsupported bam family/link {family!r}/{link!r}")
         self._require_rpy2()
         ok, reason = self.check_versions()
         if not ok:
@@ -7730,7 +7852,7 @@ if (!is.null(s$sp.criterion)) {{
             )
         arguments: dict[str, Any] = {
             "data": frame,
-            "family": self._stats.gaussian(),
+            "family": self._bam_family(family, link),
             "method": "fREML",
             "discrete": m_value,
             "control": self._call_internal(
@@ -7751,7 +7873,7 @@ if (!is.null(s$sp.criterion)) {{
             arguments["scale"] = scale
         return smoothing, arguments
 
-    def _bam_discrete_gaussian_result(
+    def _bam_discrete_result(
         self,
         fit: Any,
         smoothing: np.ndarray,
@@ -7760,7 +7882,7 @@ if (!is.null(s$sp.criterion)) {{
         trial_records: np.ndarray | None,
         discrete_prediction: bool = False,
     ) -> BamDiscreteFit:
-        """Translate one pinned Gaussian ``bam`` fit into typed fields."""
+        """Translate one pinned discrete ``bam`` fit into typed fields."""
         coefficients = _r_array(self._stats.coef(fit), dtype=np.float64)
         covariance = _r_array(fit.rx2("Vp"), dtype=np.float64)
         prediction = prediction_se = None
@@ -7833,9 +7955,18 @@ if (!is.null(s$sp.criterion)) {{
         )
 
     def _instrumented_bam_fit_chol(
-        self, capture_symbols: tuple[str, ...], callback: Any
+        self,
+        capture_symbols: tuple[str, ...],
+        callback: Any,
+        *,
+        final_symbols: tuple[str, ...] = (),
+        final_callback: Any = None,
     ) -> Any:
-        """Private bam whose bgam.fitd calls back after each Sl.fitChol trial."""
+        """Private bam whose bgam.fitd calls back after each Sl.fitChol trial.
+
+        ``final_callback`` optionally receives ``final_symbols`` once, when
+        the fitting loop has ended (before ``if (!conv) warning(...)``).
+        """
         from tests.r_ast import clone_function, find_call_paths, instrument_function
 
         namespace = self._base.asNamespace("mgcv")
@@ -7852,6 +7983,24 @@ if (!is.null(s$sp.criterion)) {{
             callback=callback,
             when="after",
         )
+        if final_callback is not None:
+            ends = tuple(
+                path
+                for path in find_call_paths(
+                    traced, "if", required_symbols=("conv", "warning")
+                )
+                if len(path) == 1
+            )
+            if len(ends) != 1:
+                raise RBridgeError("Pinned bgam.fitd loop exit changed")
+            traced = instrument_function(
+                traced,
+                path=ends[0],
+                expected_head="if",
+                capture_symbols=final_symbols,
+                callback=final_callback,
+                when="before",
+            )
         private_fit = clone_function(traced, environment=private)
         private["bgam.fitd"] = private_fit
         bam = self._utils.getFromNamespace("bam", "mgcv")
@@ -7882,7 +8031,7 @@ if (!is.null(s$sp.criterion)) {{
         Additive Gaussian ``bgam.fitd`` freezes ``qrx`` and ``Sl`` after its
         first iteration; every trial must report the identical frozen state.
         """
-        smoothing, arguments = self._bam_discrete_gaussian_arguments(
+        smoothing, arguments = self._bam_discrete_arguments(
             data,
             sp=None,
             initial_sp=initial_sp,
@@ -7988,9 +8137,179 @@ if (!is.null(s$sp.criterion)) {{
         return SourceWorkingModelTrace(
             states[0],
             tuple(trials),
-            self._bam_discrete_gaussian_result(
-                fit, smoothing, newdata=None, trial_records=None
+            self._bam_discrete_result(fit, smoothing, newdata=None, trial_records=None),
+        )
+
+    def trace_bam_regular_working_model(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        *,
+        family: str,
+        link: str | None = None,
+        sp: np.ndarray | None = None,
+        factor_names: tuple[str, ...] = (),
+        m: int | tuple[int, ...] | None = 30,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+        max_iterations: int = 200,
+        epsilon: float = 1e-7,
+        allow_failure: bool = False,
+    ) -> SourceRegularWorkingModelTrace:
+        """Replayable pinned non-additive ``bgam.fitd`` state at every trial.
+
+        Every ``Sl.fitChol`` trial reports the iteration's own working model
+        (``qrx``), its step-controlled coefficients and ``kk``, and the exact
+        proposal with R's ``exp(rho)``. ``sp`` fixes every smoothing
+        parameter, so ``rho`` is ``Sl.fitChol``'s ``rho0`` (R's ``log(sp)``).
+        ``allow_failure`` returns an R error (for example ``bgam.fitd``'s
+        ``"Non-finite deviance"`` stop) as a trace with ``failure`` set
+        instead of raising.
+        """
+        if not isinstance(allow_failure, bool):
+            raise ValueError("allow_failure must be a boolean")
+        if family == "gaussian" and link in (None, "identity"):
+            raise ValueError("additive Gaussian traces use trace_bam_working_model")
+        smoothing, arguments = self._bam_discrete_arguments(
+            data,
+            family=family,
+            link=link,
+            sp=sp,
+            initial_sp=None,
+            initial_scale=None,
+            scale=None,
+            factor_names=factor_names,
+            m=m,
+            weights=weights,
+            offset=offset,
+            max_iterations=max_iterations,
+            epsilon=epsilon,
+        )
+        from rpy2 import rinterface
+
+        fixed_rho = (
+            None
+            if sp is None
+            else _r_array(
+                self._base.log(self._to_r_vector(smoothing)), dtype=np.float64
+            )
+        )
+        blocks_cache: list[tuple[SourceWorkingPenaltyBlock, ...]] = []
+        trials: list[SourceRegularWorkingTrial] = []
+
+        def vector(value: Any) -> np.ndarray:
+            return _r_array(value, dtype=np.float64).ravel()
+
+        def capture(
+            iteration: Any,
+            accepted: Any,
+            step: Any,
+            lsp: Any,
+            n_sp: Any,
+            log_phi: Any,
+            crit: Any,
+            dev: Any,
+            devold: Any,
+            proposal: Any,
+            qrx: Any,
+            blocks: Any,
+            null_dimension: Any,
+            n_obs: Any,
+            coefficient_trials: Any,
+            coefficients: Any,
+        ) -> None:
+            qrx = self._ro.ListVector(qrx)
+            if not blocks_cache:
+                blocks_cache.append(self._source_working_blocks(blocks))
+            parameters = vector(lsp)
+            count = int(n_sp[0])
+            rho = parameters[:count] if fixed_rho is None else fixed_rho
+            previous = vector(step)
+            if previous.shape != parameters.shape:
+                if previous.shape != (1,) or previous[0] != 0.0:
+                    raise RBridgeError("unexpected bgam.fitd Nstep shape")
+                previous = np.zeros_like(parameters)
+            start = vector(accepted)
+            if start.shape != parameters.shape:
+                raise RBridgeError("unexpected bgam.fitd lsp0 shape")
+            trials.append(
+                SourceRegularWorkingTrial(
+                    int(iteration[0]),
+                    int(coefficient_trials[0]),
+                    None
+                    if coefficients.typeof == rinterface.RTYPES.NILSXP
+                    else vector(coefficients),
+                    _r_array(qrx.rx2("R"), dtype=np.float64),
+                    vector(qrx.rx2("f")),
+                    SourceWorkingModelState(
+                        blocks_cache[0],
+                        _r_array(qrx.rx2("XX"), dtype=np.float64),
+                        vector(qrx.rx2("Xy")),
+                        float(qrx.rx2("y.norm2")[0]),
+                        int(n_obs[0]),
+                        int(null_dimension[0]),
+                    ),
+                    start,
+                    previous,
+                    float(dev[0]),
+                    float(devold[0]),
+                    float(crit[0]),
+                    self._source_working_proposal(
+                        proposal,
+                        rho,
+                        float(log_phi[0]),
+                        self._source_fitchol_tolerance(crit),
+                        len(parameters),
+                    ),
+                )
+            )
+
+        ending: list[tuple[int, int, bool]] = []
+
+        def finish(iteration: Any, coefficient_trials: Any, converged: Any) -> None:
+            ending.append(
+                (int(iteration[0]), int(coefficient_trials[0]), bool(converged[0]))
+            )
+
+        fitter = self._instrumented_bam_fit_chol(
+            (
+                "iter",
+                "lsp0",
+                "Nstep",
+                "lsp",
+                "n.sp",
+                "log.phi",
+                "crit",
+                "dev",
+                "devold",
+                "prop",
+                "qrx",
+                "Sl",
+                "Mp",
+                "nobs",
+                "kk",
+                "coef",
             ),
+            capture,
+            final_symbols=("iter", "kk", "conv"),
+            final_callback=finish,
+        )
+        from rpy2.rinterface_lib.embedded import RRuntimeError
+
+        try:
+            fit = fitter(self._ro.Formula(formula), **arguments)
+        except RRuntimeError as error:
+            if not allow_failure:
+                raise
+            return SourceRegularWorkingModelTrace(
+                tuple(trials), None, None, None, None, failure=str(error)
+            )
+        if not trials or len(ending) != 1:
+            raise RBridgeError("bgam.fitd made no Sl.fitChol trial or loop exit")
+        return SourceRegularWorkingModelTrace(
+            tuple(trials),
+            self._bam_discrete_result(fit, smoothing, newdata=None, trial_records=None),
+            *ending[0],
         )
 
     def _source_working_blocks(

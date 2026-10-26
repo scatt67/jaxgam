@@ -1,8 +1,18 @@
-"""Bounded fixed and working-model Gaussian continuous-discrete fitting."""
+"""Bounded continuous-discrete fitting: shared setup and additive Gaussian.
+
+Every discrete fit shares :func:`_prepared_discrete` (compact setup, fitted
+grid record and indexed descriptor) and returns a row-free
+:class:`DiscreteFit`. Additive Gaussian models use a direct fixed-sp solve or
+the frozen-statistic working-model controller here; Poisson, Binomial and
+Gamma use pinned ``bgam.fitd``'s Fisher performance iteration in
+:mod:`jaxgam.execution.discrete_regular`.
+"""
 
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -12,6 +22,7 @@ import scipy.linalg as sla
 from jaxgam.control import ContinuousDiscretizationControl, FitControl
 from jaxgam.data.continuous_request import RequestCompressionSpec
 from jaxgam.data.source import RowSource
+from jaxgam.execution.regular_working_model import RegularWorkingModelIteration
 from jaxgam.execution.working_model import (
     WorkingModelIteration,
     fit_gaussian_working_model_statistics,
@@ -29,6 +40,7 @@ from jaxgam.formula.continuous_metadata import (
     build_request_compression,
 )
 from jaxgam.formula.continuous_setup import (
+    ContinuousDiscreteSetup,
     ContinuousSetupUnavailable,
     build_continuous_discrete_setup,
 )
@@ -36,6 +48,7 @@ from jaxgam.formula.discrete_design import (
     DiscreteDesignControl,
     DiscreteDesignUnavailable,
     DiscreteMemoryPlan,
+    FrozenDiscreteDesign,
 )
 from jaxgam.formula.fitting_prepare import total_penalty_spaces
 from jaxgam.formula.predict_matrix import PredictSpec
@@ -58,8 +71,14 @@ class DiscreteFitMemoryPlan:
 
 
 @dataclass(frozen=True)
-class DiscreteGaussianFit:
-    """Row-free Gaussian state with its actual smoothing strategy."""
+class DiscreteFit:
+    """Row-free discrete-route fit state with its actual smoothing strategy.
+
+    ``performance_iteration`` marks a regular family fitted by ``bgam.fitd``'s
+    Fisher performance iteration (fixed or working-model smoothing), whose
+    ``scale_iterations`` are its outer iterations and whose
+    ``coefficient_halvings`` count the coefficient step halvings.
+    """
 
     coefficients: npt.NDArray[np.float64]
     deviance: float
@@ -79,11 +98,15 @@ class DiscreteGaussianFit:
     smoothing_strategy: str = "fixed"
     converged: bool = True
     proposal_evaluations: int = 0
-    working_model_trace: tuple[WorkingModelIteration, ...] = ()
+    working_model_trace: tuple[
+        WorkingModelIteration | RegularWorkingModelIteration, ...
+    ] = ()
     fisher_qr_factor: PivotedQRFisherFactor | None = None
     fisher_transforms: tuple[tuple[int, int, str, np.ndarray], ...] = ()
     discretization: ContinuousDiscretizationMetadata | None = None
     request_compression: RequestCompressionSpec | None = None
+    performance_iteration: bool = False
+    coefficient_halvings: int = 0
 
 
 def _reject_unsupported_formula(spec: FormulaSpec) -> None:
@@ -345,40 +368,65 @@ def _pinned_fixed_scale(
     raise RuntimeError("Pinned fixed-sp Gaussian scale iteration did not converge.")
 
 
-def fit_fixed_sp_discrete_gaussian(
-    spec: FormulaSpec,
-    source: RowSource,
-    sp: npt.ArrayLike,
-    *,
-    control: FitControl,
-    device: object | None = None,
-) -> DiscreteGaussianFit:
-    """Fit an explicit fixed-sp Gaussian model on the compact design."""
-    return fit_discrete_gaussian(spec, source, sp, control=control, device=device)
+class CenteredMoments:
+    """Unweighted ``var(y)`` from batch moments merged around one origin.
+
+    Centering on the first value keeps a large response location from
+    cancelling a small variance, as raw ``y'y`` moments would.
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.mean = 0.0
+        self.centered_square_sum = 0.0
+        self.origin: float | None = None
+
+    def add(self, values: np.ndarray) -> None:
+        if self.origin is None:
+            self.origin = float(values[0])
+        centered = values - self.origin
+        batch_mean = float(np.mean(centered))
+        batch_square_sum = float(np.sum((centered - batch_mean) ** 2))
+        combined = self.count + len(values)
+        delta = batch_mean - self.mean
+        self.centered_square_sum += (
+            batch_square_sum + delta * delta * self.count * len(values) / combined
+        )
+        self.mean += delta * len(values) / combined
+        self.count = combined
+
+    def variance(self) -> float:
+        if self.count < 2:
+            raise FloatingPointError("Scale initialization needs two rows.")
+        return self.centered_square_sum / (self.count - 1)
 
 
-def fit_discrete_gaussian(
-    spec: FormulaSpec,
-    source: RowSource,
-    sp: npt.ArrayLike | None,
-    *,
-    control: FitControl,
-    device: object | None = None,
-) -> DiscreteGaussianFit:
-    """Fit one Gaussian identity model using bounded indexed actions.
+@dataclass(frozen=True)
+class _PreparedDiscrete:
+    """Frozen compact setup, fitted grid record and indexed descriptor."""
 
-    Two fitting scans are intentional. The first forms sufficient statistics;
-    the second accumulates selected-row residuals directly, avoiding unstable
-    cancellation for nearly exact fits.
+    setup: ContinuousDiscreteSetup
+    discretization: ContinuousDiscretizationMetadata
+    request_compression: RequestCompressionSpec | None
+    descriptor: FrozenDiscreteDesign
+    penalties: PenaltyStructure
+    fingerprint: str
+
+
+@contextmanager
+def _prepared_discrete(
+    spec: FormulaSpec, source: RowSource, control: FitControl
+) -> Iterator[_PreparedDiscrete]:
+    """Build the bounded compact problem shared by every discrete fit.
+
+    The result owns only frozen prediction metadata. Compact selectors,
+    including any memmap files, are fitting-time resources released on exit.
     """
     policy = control.discretization
-    working_model = sp is None
-    if working_model and control.smoothing_strategy != "working_model_reml":
-        raise NotImplementedError("Discrete estimated sp requires working_model_reml.")
     if control.execution != "discrete" or not isinstance(
         policy, ContinuousDiscretizationControl
     ):
-        raise ValueError("fixed-sp discrete fitting requires its explicit policy")
+        raise ValueError("discrete fitting requires its explicit policy")
     _reject_unsupported_formula(spec)
     fingerprint = source.fingerprint()
     setup = build_continuous_discrete_setup(
@@ -427,7 +475,61 @@ def fit_discrete_gaussian(
                 f"budget is {descriptor.budget_bytes}."
             )
         assert descriptor.memory_plan is not None
-        penalties = setup.penalties or PenaltyStructure(descriptor.n_coef, ())
+        yield _PreparedDiscrete(
+            setup,
+            discretization,
+            request_compression,
+            descriptor,
+            setup.penalties or PenaltyStructure(descriptor.n_coef, ()),
+            fingerprint,
+        )
+    finally:
+        setup.cleanup()
+
+
+def _check_fit_budget(memory: DiscreteFitMemoryPlan) -> None:
+    if memory.fit_peak_bytes > memory.budget_bytes:
+        raise MemoryError(
+            "Discrete fit workspace requires "
+            f"{memory.fit_peak_bytes} bytes, exceeding "
+            f"FitControl.memory_budget_bytes={memory.budget_bytes}."
+        )
+
+
+def fit_fixed_sp_discrete_gaussian(
+    spec: FormulaSpec,
+    source: RowSource,
+    sp: npt.ArrayLike,
+    *,
+    control: FitControl,
+    device: object | None = None,
+) -> DiscreteFit:
+    """Fit an explicit fixed-sp Gaussian model on the compact design."""
+    return fit_discrete_gaussian(spec, source, sp, control=control, device=device)
+
+
+def fit_discrete_gaussian(
+    spec: FormulaSpec,
+    source: RowSource,
+    sp: npt.ArrayLike | None,
+    *,
+    control: FitControl,
+    device: object | None = None,
+) -> DiscreteFit:
+    """Fit one Gaussian identity model using bounded indexed actions.
+
+    Two fitting scans are intentional. The first forms sufficient statistics;
+    the second accumulates selected-row residuals directly, avoiding unstable
+    cancellation for nearly exact fits.
+    """
+    working_model = sp is None
+    if working_model and control.smoothing_strategy != "working_model_reml":
+        raise NotImplementedError("Discrete estimated sp requires working_model_reml.")
+    with _prepared_discrete(spec, source, control) as problem:
+        setup = problem.setup
+        descriptor = problem.descriptor
+        penalties = problem.penalties
+        fingerprint = problem.fingerprint
         memory = _solver_plan(
             setup.retained_table_bytes,
             descriptor.memory_plan,
@@ -435,12 +537,7 @@ def fit_discrete_gaussian(
             penalties,
             control,
         )
-        if memory.fit_peak_bytes > memory.budget_bytes:
-            raise MemoryError(
-                "Discrete fit workspace requires "
-                f"{memory.fit_peak_bytes} bytes, exceeding "
-                f"FitControl.memory_budget_bytes={memory.budget_bytes}."
-            )
+        _check_fit_budget(memory)
         if not working_model:
             smoothing, log_smoothing = _fixed_sp(sp, penalties.n_penalties)
             penalty = penalties.materialize(log_smoothing)
@@ -449,10 +546,7 @@ def fit_discrete_gaussian(
         rhs = np.zeros(descriptor.n_coef)
         cursor = 0
         batches = 0
-        y_count = 0
-        y_mean = 0.0
-        y_centered_square_sum = 0.0
-        y_origin = None
+        moments = CenteredMoments()
         response_square_sum = 0.0
         offset_nonzero = False
         for batch in source.scan(control.batch_rows):
@@ -486,28 +580,14 @@ def fit_discrete_gaussian(
             )
             if working_model:
                 response_square_sum += float(np.sum(weights * (y - offset) ** 2))
-            # R initializes log(phi) from unweighted var(y).  Merge centered
-            # batch moments around one fixed origin, so a large response
-            # location cannot cancel its small variance in raw y'y moments.
-            if y_origin is None:
-                y_origin = float(y[0])
-            centered_y = y - y_origin
-            batch_mean = float(np.mean(centered_y))
-            batch_centered_square_sum = float(np.sum((centered_y - batch_mean) ** 2))
-            combined_count = y_count + size
-            mean_delta = batch_mean - y_mean
-            y_centered_square_sum += (
-                batch_centered_square_sum
-                + mean_delta * mean_delta * y_count * size / combined_count
-            )
-            y_mean += mean_delta * size / combined_count
-            y_count = combined_count
+            # R initializes log(phi) from unweighted var(y).
+            moments.add(y)
             offset_nonzero |= bool(np.any(offset != 0.0))
             cursor += size
             batches += 1
             # A finished fitting batch must not retain its response or source
             # columns while the next batch (or residual scan) is constructed.
-            del batch, valid, y, weights, offset, rows, selectors, centered_y
+            del batch, valid, y, weights, offset, rows, selectors
         if cursor != source.n_rows:
             raise RuntimeError("RowSource yielded fewer fitting rows than declared.")
         if source.fingerprint() != fingerprint:
@@ -522,7 +602,7 @@ def fit_discrete_gaussian(
                 gram,
                 rhs,
                 response_square_sum,
-                y_centered_square_sum / (source.n_rows - 1),
+                moments.centered_square_sum / (source.n_rows - 1),
                 penalties,
                 source.n_rows,
                 determinant_penalties=setup.source_determinant_penalties,
@@ -619,7 +699,7 @@ def fit_discrete_gaussian(
                 penalized,
                 source.n_rows,
                 null_dimension,
-                y_centered_square_sum,
+                moments.centered_square_sum,
             )
         else:
             # bgam.fitd's criterion penalty lives in Sl.setup coordinates;
@@ -669,7 +749,7 @@ def fit_discrete_gaussian(
         if control.uncertainty != "fisher":
             qr_factor = None
             transforms = ()
-        return DiscreteGaussianFit(
+        return DiscreteFit(
             np.asarray(beta),
             deviance,
             score,
@@ -691,10 +771,6 @@ def fit_discrete_gaussian(
             selected.trace if selected is not None else (),
             qr_factor,
             transforms,
-            discretization,
-            request_compression,
+            problem.discretization,
+            problem.request_compression,
         )
-    finally:
-        # The result owns only frozen prediction metadata. Compact selectors,
-        # including any memmap files, are fitting-time resources.
-        setup.cleanup()

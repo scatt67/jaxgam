@@ -33,6 +33,123 @@ from jaxgam.penalties.structure import PenaltyStructure
 
 jax.config.update("jax_enable_x64", True)
 
+# R's ``sum`` (``rsum``) accumulates in C ``long double`` (LDOUBLE) in element
+# order and rounds once. NumPy's ``longdouble`` is the same C type on this
+# platform: double on macOS arm64 (52 stored mantissa bits), the x87 80-bit
+# format on x86_64 Linux (63) and IEEE quad on aarch64 Linux (112).
+_LONG_DOUBLE_MANTISSA_BITS = int(np.finfo(np.longdouble).nmant)
+_DOUBLE_MANTISSA_BITS = int(np.finfo(np.float64).nmant)
+_X87_MANTISSA_BITS = 63
+
+
+def _two_sum(left: jax.Array, right: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Knuth's TwoSum: ``left + right == total + error`` exactly."""
+    total = left + right
+    virtual = total - left
+    error = (left - (total - virtual)) + (right - virtual)
+    return total, error
+
+
+def _sequential_double_sum(values: jax.Array) -> jax.Array:
+    """``long double`` is ``double``: R's element-order double sum."""
+    zero = jnp.zeros((), dtype=values.dtype)
+    return jax.lax.fori_loop(
+        0, values.size, lambda index, total: total + values[index], zero
+    )
+
+
+def _double_double_sum(values: jax.Array) -> jax.Array:
+    """Element-order TwoSum accumulator (about 106 bits), rounded once.
+
+    Serves an IEEE quad ``long double`` (113 bits): the two accumulators
+    round to the same double unless the exact sum lies within about 1e-32
+    relative of a rounding boundary.
+    """
+    zero = jnp.zeros((), dtype=values.dtype)
+
+    def accumulate(index, carry):
+        total, compensation = carry
+        total, error = _two_sum(total, values[index])
+        return total, compensation + error
+
+    total, compensation = jax.lax.fori_loop(0, values.size, accumulate, (zero, zero))
+    return total + compensation
+
+
+def _x87_add(state: tuple[jax.Array, jax.Array], value: jax.Array):
+    """One x87 ``fadd`` at 64-bit precision on an exact double-double state.
+
+    ``state = (high, low)`` holds an x87 extended value exactly, with
+    ``|low| <= ulp(high)/2``. The exact sum with ``value`` is formed as
+    ``high + low + tail`` and rounded to 64 significant bits, ties to even,
+    as the x87 unit rounds every addition. Finite, normal-range inputs only.
+    """
+    high, low = state
+    total, first = _two_sum(high, value)
+    middle, second = _two_sum(first, low)
+    head, rest = _two_sum(total, middle)
+    rest, tail = _two_sum(rest, second)
+    head, rest = _two_sum(head, rest)
+    # Exact sum: head + rest + tail, |rest| <= ulp(head)/2, |tail| tiny.
+    bits = jax.lax.bitcast_convert_type(head, jnp.int64)
+    biased = jnp.right_shift(bits, 52) & 0x7FF
+    power_of_two = (bits & ((1 << 52) - 1)) == 0
+    below = rest + tail
+    lower = power_of_two & (below != 0.0) & ((below < 0.0) != (head < 0.0))
+    exponent = biased - 1023 - lower.astype(jnp.int64)
+    quantum = jax.lax.bitcast_convert_type(
+        jnp.left_shift(exponent - _X87_MANTISSA_BITS + 1023, 52), jnp.float64
+    )
+    scaled = rest / quantum
+    small = tail / quantum
+    nearest = jnp.round(scaled)
+    fraction = scaled - nearest
+    upper = fraction - 0.5
+    lower_edge = fraction + 0.5
+    odd = jnp.fmod(nearest, 2.0) != 0.0
+    up = (upper > -small) | ((upper == -small) & odd)
+    down = (lower_edge < -small) | ((lower_edge == -small) & odd)
+    count = nearest + up.astype(head.dtype) - down.astype(head.dtype)
+    rounded = _two_sum(head, count * quantum)
+    exact_zero = head == 0.0
+    return (
+        jnp.where(exact_zero, tail, rounded[0]),
+        jnp.where(exact_zero, 0.0, rounded[1]),
+    )
+
+
+def _x87_sum(values: jax.Array) -> jax.Array:
+    """R's ``sum`` on x86_64: an x87 80-bit accumulator, rounded once."""
+    zero = jnp.zeros((), dtype=values.dtype)
+    high, low = jax.lax.fori_loop(
+        0,
+        values.size,
+        lambda index, state: _x87_add(state, values[index]),
+        (zero, zero),
+    )
+    return high + low
+
+
+def source_sum(values: jax.Array) -> jax.Array:
+    """Port R's ``sum`` of a double vector: element order, LDOUBLE, one rounding.
+
+    The accumulator follows this platform's C ``long double``, the type R's
+    LDOUBLE is: a sequential double sum where it is ``double``, an exact x87
+    64-bit-precision emulation where it is the 80-bit format, and a TwoSum
+    accumulator beyond quad precision otherwise. ``Sl.fitChol``'s
+    ``rss.bSb = yy - sum(beta*f)`` cancels its two terms to the
+    scale-gradient size, so XLA's own reduction order is not source
+    arithmetic there.
+    """
+    values = jnp.ravel(values)
+    if not values.size:
+        return jnp.zeros((), dtype=values.dtype)
+    if _LONG_DOUBLE_MANTISSA_BITS == _DOUBLE_MANTISSA_BITS:
+        return _sequential_double_sum(values)
+    if _LONG_DOUBLE_MANTISSA_BITS == _X87_MANTISSA_BITS:
+        return _x87_sum(values)
+    return _double_double_sum(values)
+
 
 @jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
@@ -575,7 +692,8 @@ def _source_gaussian_state(
     S_value, S_first, S_second = _source_penalty_determinant(
         rho, metadata, factors.penalties, smoothing
     )
-    penalized = yy - jnp.vdot(beta, rhs).real
+    # Sl.fitChol: rss.bSb <- yy - sum(beta*f).
+    penalized = yy - source_sum(beta * rhs)
     first, second, _ = _source_ift_chol(
         gram,
         beta,
@@ -618,7 +736,7 @@ def _source_gaussian_state(
     )
 
 
-@partial(jax.jit, static_argnames=("scale_is_fixed", "debug"))
+@partial(jax.jit, static_argnames=("scale_is_fixed", "fixed_smoothing", "debug"))
 def gaussian_working_model_proposal(
     parameters: jax.Array,
     gram: jax.Array,
@@ -629,18 +747,26 @@ def gaussian_working_model_proposal(
     *,
     smoothing: jax.Array,
     scale_is_fixed: bool = False,
+    fixed_smoothing: bool = False,
     log_scale: jax.Array = 0.0,
     tolerance: jax.Array = 0.0,
     debug: bool = False,
 ) -> GaussianWorkingModelProposal:
-    """Evaluate one row-free Gaussian trial at log smoothing/scale parameters.
+    """Evaluate one row-free ``Sl.fitChol`` trial at log smoothing/scale.
 
+    The proposal is the same for every family's working model: an additive
+    Gaussian model passes its frozen ``X'X``/``X'y``, and a regular family
+    passes ``bgam.fitd``'s current Fisher ``X'WX``/``X'Wz``/``sum(w z^2)``.
     Unknown-scale parameters append log(phi) to log(sp); fixed-scale mode
     takes log(sp) and the separate log_scale argument. ``tolerance`` owns the
     source active-coordinate filter, and must be finite and nonnegative.
     The returned step caps its maximum absolute coordinate at four. This
     function does not accept the proposal, perform a line search, or decide
     convergence. With no free parameters its gradient/Hessian/step are empty.
+    ``fixed_smoothing`` ports ``Sl.fitChol``'s zero-column ``L`` (every
+    smoothing parameter supplied): log(sp) still enters through
+    ``parameters``, but the gradient, Hessian and step keep only the trailing
+    log(phi) coordinate, or are empty when the scale is fixed too.
     Response square sums have the same cancellation boundary as pinned
     ``Sl.fitChol``; stable final selected-residual evaluation belongs to the
     surrounding execution controller. ``smoothing`` is the trial's
@@ -674,6 +800,11 @@ def gaussian_working_model_proposal(
             smoothing,
         )
     )
+    if fixed_smoothing:
+        # t(L) %*% reml1 and t(L) %*% reml2 %*% L with every column of L fixed.
+        free = slice(metadata.penalties.n_penalties, None)
+        gradient = gradient[free]
+        hessian = hessian[free, free]
     step = _sl_newton_step(gradient, hessian, tolerance)
     if debug:
         jax.debug.print(

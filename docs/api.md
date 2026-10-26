@@ -277,6 +277,50 @@ full result.
 
 ---
 
+## Discrete execution
+
+`FitControl(execution="discrete")` fits on mgcv's compact discretized design
+(`bam(discrete=TRUE)`) from a replayable `RowSource`, under an explicit
+`ContinuousDiscretizationControl` grid policy and memory budget, and returns a
+row-free prediction result (`result="prediction"`). Smoothing parameters are
+either fixed with `sp=` or selected with
+`smoothing_strategy="working_model_reml"`, pinned `bgam.fitd`'s performance
+iteration (one limited `Sl.fitChol` Newton proposal per working model). This
+is a different fitting method from the dense route's nested exact REML.
+
+| Family | Links | Working model | Scale |
+|---|---|---|---|
+| Gaussian | identity | one frozen `X'WX`/`X'Wy` | estimated |
+| Poisson | log, identity, sqrt | Fisher IRLS weights re-formed each iteration | 1 |
+| Binomial | logit, probit, cloglog, log | Fisher IRLS weights re-formed each iteration | 1 |
+| Gamma | inverse, identity, log | Fisher IRLS weights re-formed each iteration | estimated (`log.phi`) |
+
+Non-Gaussian families use Fisher weights for every link (there is no
+observed-curvature split), halve a coefficient step while the raw penalized
+`sum(dev.resids)` rises, and converge on the penalized deviance change.
+Negative binomial is not yet available on this route (its `estimate.theta`
+nuisance update is unported) and raises `NotImplementedError`.
+
+```python
+from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
+from jaxgam.data.source import DataFrameRowSource
+
+control = FitControl(
+    execution="discrete",
+    smoothing_strategy="working_model_reml",
+    discretization=ContinuousDiscretizationControl(m=30),
+)
+source = DataFrameRowSource(frame, response="y", weights=w, offset=off)
+fit = GAM("y ~ s(x) + s(z)", family="poisson", control=control).fit(
+    source, result="prediction"
+)
+fit.predict(newdata, pred_type="response")
+```
+
+::: jaxgam.control.FitControl
+
+---
+
 ## GAMResults
 
 Frozen full-results object returned by `GAM.fit()` by default. All

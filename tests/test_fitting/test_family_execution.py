@@ -728,3 +728,57 @@ def test_execution_inventory_matches_pinned_r_constructors_and_evidence() -> Non
             else:
                 found = False
             assert found, evidence
+
+
+_PERFORMANCE_ITERATION = [
+    (Poisson(), True),
+    (Poisson(link="identity"), True),
+    (Poisson(link="sqrt"), True),
+    (Binomial(), True),
+    (Binomial(link="probit"), True),
+    (Binomial(link="cloglog"), True),
+    (Binomial(link="log"), True),
+    (Gamma(), True),
+    (Gamma(link="log"), True),
+    (Gamma(link="identity"), True),
+    # Additive Gaussian has its own frozen working model; other links and
+    # estimated-theta NB are not ported to the discrete performance iteration.
+    (Gaussian(), False),
+    (Gaussian(link="log"), False),
+    (NegativeBinomial(), False),
+    (NegativeBinomial(theta=2.0, fixed=True), False),
+]
+
+
+@pytest.mark.parametrize(("family", "expected"), _PERFORMANCE_ITERATION, ids=repr)
+def test_regular_performance_iteration_capability_names_pinned_links(
+    family, expected
+) -> None:
+    """Pinned poisson()/binomial()/Gamma() links, and nothing else."""
+    capability = family.execution_capabilities().regular_performance_iteration
+    assert capability is expected
+    if capability:
+        rows = family.source_dev_resids(
+            jnp.asarray([0.25, 0.75]), jnp.asarray([0.4, 0.6]), jnp.ones(2)
+        )
+        np.testing.assert_allclose(
+            rows,
+            family.deviance_contributions(
+                jnp.asarray([0.25, 0.75]), jnp.asarray([0.4, 0.6]), jnp.ones(2)
+            ),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+
+def test_source_dev_resids_is_explicit_per_family() -> None:
+    """Inside the domain it is the direct deviance; the base fails closed."""
+    with pytest.raises(NotImplementedError, match=r"pinned dev\.resids"):
+        _UnregisteredQuadraticFamily().source_dev_resids(
+            np.ones(2), np.ones(2), np.ones(2)
+        )
+    np.testing.assert_allclose(
+        Gaussian().source_dev_resids(np.array([1.0, 2.0]), np.ones(2), np.ones(2)),
+        [0.0, 1.0],
+        rtol=STRICT.rtol,
+    )

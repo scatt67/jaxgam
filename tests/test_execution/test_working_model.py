@@ -963,3 +963,31 @@ def test_advance_rejects_nonfinite_deviance_before_any_proposal():
         working.advance_gaussian_working_model(
             state, propose, np.ones(3), np.inf, 10, 1, 1e-7
         )
+
+
+def test_compiled_fixed_smoothing_proposal_maps_free_parameters(statistics):
+    """Fixed sp owns every log(sp); only log(phi) (or nothing) stays free."""
+    gram, rhs, yy, _, penalties, n_obs = statistics
+    arguments = {
+        "determinant_penalties": None,
+        "control": _control(),
+        "available_workspace_bytes": 512 * 1024 * 1024,
+        "device": None,
+    }
+    with pytest.raises(ValueError, match="every log"):
+        working.compile_working_model_proposal(
+            penalties, n_obs, fixed_log_smoothing=np.zeros(2), **arguments
+        )
+    fixed = np.log([0.55])
+    for scale_is_fixed, trial in ((False, np.array([-2.0])), (True, np.zeros(0))):
+        compiled = working.compile_working_model_proposal(
+            penalties,
+            n_obs,
+            scale_is_fixed=scale_is_fixed,
+            fixed_log_smoothing=fixed,
+            **arguments,
+        )
+        np.testing.assert_array_equal(compiled.log_smoothing(trial), fixed)
+        proposal = compiled(trial, 0.0, compiled.transfer(gram, rhs, yy))
+        assert np.asarray(proposal.step).shape == trial.shape
+        assert np.all(np.isfinite(np.asarray(proposal.coefficients)))

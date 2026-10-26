@@ -147,7 +147,7 @@ class WorkingModelAdvance:
     factor: AcceptedWorkingModelFactor | None
 
 
-def _source_penalty_quadratic(
+def source_penalty_quadratic(
     coefficients: np.ndarray,
     log_smoothing: np.ndarray,
     metadata: WorkingModelCriterionMetadata,
@@ -228,6 +228,7 @@ def evaluate_gaussian_working_model_proposal(
     metadata: WorkingModelCriterionMetadata,
     *,
     scale_is_fixed: bool = False,
+    fixed_smoothing: bool = False,
     log_scale: float = 0.0,
     tolerance: float = 0.0,
     smoothing: np.ndarray | None = None,
@@ -237,6 +238,8 @@ def evaluate_gaussian_working_model_proposal(
 
     ``smoothing`` defaults to :func:`source_exponentials` of the trial's
     log smoothing parameters; a matched-state caller may supply R's own.
+    ``fixed_smoothing`` keeps only the log(phi) gradient/Hessian/step, as
+    ``Sl.fitChol`` does when every smoothing parameter is supplied.
     """
     parameters = np.asarray(parameters, dtype=np.float64)
     if smoothing is None:
@@ -256,6 +259,7 @@ def evaluate_gaussian_working_model_proposal(
         factors,
         smoothing=smoothing,
         scale_is_fixed=scale_is_fixed,
+        fixed_smoothing=fixed_smoothing,
         log_scale=log_scale,
         tolerance=tolerance,
         debug=debug,
@@ -306,6 +310,102 @@ def _prospective_memory(
     return host, device, statistics, state
 
 
+@dataclass(frozen=True)
+class AcceptedWorkingModelProposal:
+    """``bgam.fitd``'s accepted ``Sl.fitChol`` trial after Nstep halving.
+
+    ``parameters`` is the accepted ``lsp``; ``proposed_step`` the next
+    ``Nstep``; ``coefficients`` are in public coordinates; ``criterion`` is
+    the kernel's working criterion at the trial.
+    """
+
+    parameters: np.ndarray
+    coefficients: np.ndarray
+    criterion: float
+    proposed_step: np.ndarray
+    factor: AcceptedWorkingModelFactor
+    evaluations: int
+
+
+def accept_working_model_proposal(
+    parameters: np.ndarray,
+    step: np.ndarray,
+    criterion: float,
+    deviance: float,
+    propose: Callable[[np.ndarray, float], GaussianWorkingModelProposal],
+) -> AcceptedWorkingModelProposal:
+    """Port bgam.fitd's sp/scale update loop (``bam.r`` lines 698-749).
+
+    The carried ``Nstep`` is tried from ``lsp0`` and halved while the
+    directional gradient ``sum(grad*Nstep)`` exceeds ``dev*1e-7``; a zero
+    carried step is accepted at once (``max(Nstep)==0``). ``criterion`` is
+    ``crit``, whose ``abs(crit)*sqrt(eps)`` sets the proposal's active-set
+    tolerance, and ``deviance`` the penalized deviance at the iteration top.
+    """
+    next_step = step.copy()
+    trial_evaluations = 0
+    while True:
+        trial = parameters + next_step
+        tolerance = abs(criterion) * np.sqrt(np.finfo(float).eps)
+        proposal = propose(trial, tolerance)
+        trial_criterion = float(proposal.criterion)
+        trial_beta = np.asarray(proposal.coefficients).copy()
+        gradient = np.asarray(proposal.gradient).copy()
+        hessian = np.asarray(proposal.hessian).copy()
+        proposed_step = np.asarray(proposal.step).copy()
+        trial_upper = np.asarray(proposal.factor_upper).copy()
+        trial_pivots = np.asarray(proposal.factor_pivots).copy()
+        trial_rank = int(proposal.factor_rank)
+        trial_diagonal = np.asarray(proposal.factor_diagonal).copy()
+        trial_logdet_hessian = float(proposal.logdet_hessian)
+        trial_logdet_penalty = float(proposal.logdet_penalty)
+        for factor_array in (trial_upper, trial_pivots, trial_diagonal):
+            factor_array.setflags(write=False)
+        del proposal  # Do not retain old device outputs during the next call.
+        trial_evaluations += 1
+        if (
+            not np.isfinite(trial_criterion)
+            or not np.all(np.isfinite(trial_beta))
+            or not np.all(np.isfinite(gradient))
+            or not np.all(np.isfinite(hessian))
+            or not np.all(np.isfinite(proposed_step))
+            or not np.all(np.isfinite(trial_upper))
+            or not np.all(np.isfinite(trial_diagonal))
+            or not np.isfinite(trial_logdet_hessian)
+            or not np.isfinite(trial_logdet_penalty)
+            or not 0 <= trial_rank <= len(trial_beta)
+        ):
+            raise FloatingPointError("Non-finite working-model proposal.")
+        del hessian
+        # Preserve max(Nstep)==0 exactly, including source state timing. An
+        # empty step (every smoothing parameter and the scale fixed) is R's
+        # scalar zero Nstep.
+        if (
+            not len(next_step)
+            or np.max(next_step) == 0.0
+            or gradient @ next_step <= deviance * 1e-7
+        ):
+            break
+        next_step *= 0.5
+        del trial_beta, gradient, proposed_step
+        del trial_upper, trial_pivots, trial_diagonal
+    return AcceptedWorkingModelProposal(
+        trial,
+        trial_beta,
+        trial_criterion,
+        proposed_step,
+        AcceptedWorkingModelFactor(
+            trial_upper,
+            trial_pivots,
+            trial_rank,
+            trial_diagonal,
+            trial_logdet_hessian,
+            trial_logdet_penalty,
+        ),
+        trial_evaluations,
+    )
+
+
 def advance_gaussian_working_model(
     state: WorkingModelState,
     propose: Callable[[np.ndarray, float], GaussianWorkingModelProposal],
@@ -337,82 +437,214 @@ def advance_gaussian_working_model(
         and abs(state.step[-1]) < epsilon * (abs(state.parameters[-1]) + 1.0)
     ):
         return WorkingModelAdvance(state, True, deviance, None, 0, None)
-    next_step = state.step.copy()
-    trial_evaluations = 0
-    while True:
-        trial = state.parameters + next_step
-        tolerance = abs(state.criterion) * np.sqrt(np.finfo(float).eps)
-        proposal = propose(trial, tolerance)
-        criterion = float(proposal.criterion)
-        trial_beta = np.asarray(proposal.coefficients).copy()
-        gradient = np.asarray(proposal.gradient).copy()
-        hessian = np.asarray(proposal.hessian).copy()
-        proposed_step = np.asarray(proposal.step).copy()
-        trial_upper = np.asarray(proposal.factor_upper).copy()
-        trial_pivots = np.asarray(proposal.factor_pivots).copy()
-        trial_rank = int(proposal.factor_rank)
-        trial_diagonal = np.asarray(proposal.factor_diagonal).copy()
-        trial_logdet_hessian = float(proposal.logdet_hessian)
-        trial_logdet_penalty = float(proposal.logdet_penalty)
-        for factor_array in (trial_upper, trial_pivots, trial_diagonal):
-            factor_array.setflags(write=False)
-        del proposal  # Do not retain old device outputs during the next call.
-        trial_evaluations += 1
-        if (
-            not np.isfinite(criterion)
-            or not np.all(np.isfinite(trial_beta))
-            or not np.all(np.isfinite(gradient))
-            or not np.all(np.isfinite(hessian))
-            or not np.all(np.isfinite(proposed_step))
-            or not np.all(np.isfinite(trial_upper))
-            or not np.all(np.isfinite(trial_diagonal))
-            or not np.isfinite(trial_logdet_hessian)
-            or not np.isfinite(trial_logdet_penalty)
-            or not 0 <= trial_rank <= len(trial_beta)
-        ):
-            raise FloatingPointError("Non-finite Gaussian working-model proposal.")
-        del hessian
-        # Preserve max(Nstep)==0 exactly, including source state timing.
-        if np.max(next_step) == 0.0 or gradient @ next_step <= deviance * 1e-7:
-            break
-        next_step *= 0.5
-        del trial_beta, gradient, proposed_step
-        del trial_upper, trial_pivots, trial_diagonal
+    accepted = accept_working_model_proposal(
+        state.parameters, state.step, state.criterion, deviance, propose
+    )
+    trial = accepted.parameters
     phi = float(np.exp(trial[-1]))
-    penalized = response_square_sum - float(trial_beta @ rhs)
+    penalized = response_square_sum - float(accepted.coefficients @ rhs)
     normalization = (n_obs - null_dimension) * np.log(2 * np.pi * phi) / 2
     # bgam.fitd's control criterion uses deviance BEFORE this proposal.
-    criterion_control = criterion + (deviance - penalized) / (2 * phi) - normalization
+    criterion_control = (
+        accepted.criterion + (deviance - penalized) / (2 * phi) - normalization
+    )
     record = WorkingModelIteration(
         iteration,
         trial.copy(),
-        proposed_step.copy(),
+        accepted.proposed_step.copy(),
         deviance,
         penalized,
         criterion_control,
-        trial_evaluations,
+        accepted.evaluations,
     )
     return WorkingModelAdvance(
         WorkingModelState(
             iteration,
             trial,
-            proposed_step,
-            trial_beta,
+            accepted.proposed_step,
+            accepted.coefficients,
             deviance,
             criterion_control,
         ),
         False,
         deviance,
         record,
-        trial_evaluations,
-        AcceptedWorkingModelFactor(
-            trial_upper,
-            trial_pivots,
-            trial_rank,
-            trial_diagonal,
-            trial_logdet_hessian,
-            trial_logdet_penalty,
-        ),
+        accepted.evaluations,
+        accepted.factor,
+    )
+
+
+class CompiledWorkingModelProposal:
+    """Compiled host-factored ``Sl.fitChol`` trial with its measured workspace.
+
+    One instance serves every trial of a fit. Frozen Gaussian statistics are
+    transferred once; a regular family transfers each iteration's Fisher
+    statistics with :meth:`transfer` (equal shapes, so no recompilation).
+    The caller passes free parameters: the free log smoothing parameters and,
+    when estimated, log(phi). With ``fixed_log_smoothing`` every smoothing
+    parameter is supplied and only log(phi) (or nothing) is free.
+    """
+
+    def __init__(
+        self,
+        metadata: WorkingModelCriterionMetadata,
+        memory_plan: WorkingModelMemoryPlan,
+        factor_executable: Callable[..., WorkingModelFactorInputs],
+        executable: Callable[..., GaussianWorkingModelProposal],
+        device: jax.Device | None,
+        *,
+        scale_is_fixed: bool,
+        fixed_log_smoothing: np.ndarray | None,
+    ) -> None:
+        self.metadata = metadata
+        self.memory_plan = memory_plan
+        self._factor_executable = factor_executable
+        self._executable = executable
+        self._device = device
+        self.scale_is_fixed = scale_is_fixed
+        self.fixed_log_smoothing = fixed_log_smoothing
+
+    def transfer(
+        self, gram: np.ndarray, rhs: np.ndarray, response_square_sum: float
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """Place one set of working statistics on the proposal device."""
+        return (
+            jax.device_put(gram, self._device),
+            jax.device_put(rhs, self._device),
+            jax.device_put(np.asarray(response_square_sum), self._device),
+        )
+
+    def kernel_parameters(self, trial: np.ndarray) -> np.ndarray:
+        """Map free trial parameters to the kernel's log(sp)/log(phi) vector."""
+        trial = np.asarray(trial, dtype=np.float64)
+        if self.fixed_log_smoothing is None:
+            return trial
+        return np.r_[self.fixed_log_smoothing, trial]
+
+    def log_smoothing(self, trial: np.ndarray) -> np.ndarray:
+        """The trial's full log smoothing vector (``rho`` in ``Sl.fitChol``)."""
+        parameters = self.kernel_parameters(trial)
+        return parameters if self.scale_is_fixed else parameters[:-1]
+
+    def __call__(
+        self,
+        trial: np.ndarray,
+        tolerance: float,
+        statistics: tuple[jax.Array, jax.Array, jax.Array],
+    ) -> GaussianWorkingModelProposal:
+        smoothing = source_exponentials(self.log_smoothing(trial))
+        gram, rhs, yy = statistics
+        inputs = self._factor_executable(gram, self.metadata, smoothing)
+        factors = jax.device_put(factor_working_model(inputs), self._device)
+        del inputs
+        return self._executable(
+            self.kernel_parameters(trial),
+            gram,
+            rhs,
+            yy,
+            self.metadata,
+            factors,
+            smoothing=smoothing,
+            tolerance=np.asarray(tolerance),
+        )
+
+
+def compile_working_model_proposal(
+    penalties: PenaltyStructure,
+    n_obs: int,
+    *,
+    determinant_penalties: PenaltyStructure | None,
+    control: FitControl,
+    available_workspace_bytes: int,
+    device: jax.Device | None,
+    statistics: tuple[np.ndarray, np.ndarray, float] | None = None,
+    scale_is_fixed: bool = False,
+    fixed_log_smoothing: np.ndarray | None = None,
+) -> CompiledWorkingModelProposal:
+    """Budget, transfer metadata and compile the ``Sl.fitChol`` trial kernels.
+
+    The available budget is the remainder after retained setup, descriptor
+    action peak and the caller's own row/solver ledger. Compilation precedes
+    numerical execution so measured executable scratch is checked before
+    proposals allocate it. ``statistics`` optionally supplies the arrays to
+    lower with (shapes are otherwise zero placeholders).
+    """
+    if fixed_log_smoothing is not None:
+        fixed_log_smoothing = np.array(fixed_log_smoothing, dtype=np.float64)
+        if fixed_log_smoothing.shape != (penalties.n_penalties,):
+            raise ValueError("Fixed log smoothing must hold every log(sp).")
+        fixed_log_smoothing.setflags(write=False)
+    prospective = _prospective_memory(penalties, control, determinant_penalties)
+    preliminary = sum(prospective)
+    if preliminary > available_workspace_bytes:
+        raise MemoryError(
+            f"Working-model arguments require {preliminary} additional bytes; "
+            f"available workspace is {available_workspace_bytes}."
+        )
+    metadata = WorkingModelCriterionMetadata.from_structure(
+        penalties,
+        n_obs,
+        device,
+        determinant_structure=determinant_penalties,
+    )
+    p = penalties.n_coef
+    if statistics is None:
+        statistics = (np.zeros((p, p)), np.zeros(p), 0.0)
+    gram, rhs, yy = statistics
+    gram_device = jax.device_put(gram, device)
+    rhs_device = jax.device_put(rhs, device)
+    yy_device = jax.device_put(np.asarray(yy), device)
+    n_kernel_parameters = penalties.n_penalties + (not scale_is_fixed)
+    parameter_shape = jax.ShapeDtypeStruct((n_kernel_parameters,), np.float64)
+    smoothing_shape = jax.ShapeDtypeStruct((penalties.n_penalties,), np.float64)
+    tolerance_shape = jax.ShapeDtypeStruct((), np.float64)
+    factor_executable = working_model_factor_inputs.lower(
+        gram_device, metadata, smoothing_shape
+    ).compile()
+    executable = gaussian_working_model_proposal.lower(
+        parameter_shape,
+        gram_device,
+        rhs_device,
+        yy_device,
+        metadata,
+        _factor_shapes(metadata),
+        smoothing=smoothing_shape,
+        scale_is_fixed=scale_is_fixed,
+        fixed_smoothing=fixed_log_smoothing is not None,
+        tolerance=tolerance_shape,
+    ).compile()
+    del gram_device, rhs_device, yy_device
+    analyses = (factor_executable.memory_analysis(), executable.memory_analysis())
+    if any(analysis is None for analysis in analyses):
+        raise NotImplementedError(
+            "Working-model backend cannot report compiled memory."
+        )
+    temporary = sum(analysis.temp_size_in_bytes for analysis in analyses)
+    output = sum(analysis.output_size_in_bytes for analysis in analyses)
+    alias = sum(analysis.alias_size_in_bytes for analysis in analyses)
+    # Per factored matrix: its host copy, the DPSTRF workspace (which owns the
+    # returned factor) and the factor's device copy for the proposal.
+    factor_workspace = sum(
+        8 * n * n + source_pivoted_cholesky_workspace_bound(n) + 8 * n * n + 12 * n + 4
+        for n in _factor_sizes(metadata)
+    )
+    required = preliminary + temporary + output - alias + factor_workspace
+    memory = WorkingModelMemoryPlan(
+        *prospective, temporary, output, alias, factor_workspace, required
+    )
+    if required > available_workspace_bytes:
+        raise MemoryError(
+            f"Working-model compiled workspace requires {required} additional bytes; "
+            f"available workspace is {available_workspace_bytes}."
+        )
+    return CompiledWorkingModelProposal(
+        metadata,
+        memory,
+        factor_executable,
+        executable,
+        device,
+        scale_is_fixed=scale_is_fixed,
+        fixed_log_smoothing=fixed_log_smoothing,
     )
 
 
@@ -462,77 +694,21 @@ def fit_gaussian_working_model_statistics(
     state = WorkingModelState.initial(initial_parameters, p)
     if state.parameters.shape != (penalties.n_penalties + 1,):
         raise ValueError("Working-model start needs log(sp) and log(scale).")
-    prospective = _prospective_memory(penalties, control, determinant_penalties)
-    preliminary = sum(prospective)
-    if preliminary > available_workspace_bytes:
-        raise MemoryError(
-            f"Working-model arguments require {preliminary} additional bytes; "
-            f"available workspace is {available_workspace_bytes}."
-        )
-    metadata = WorkingModelCriterionMetadata.from_structure(
+    compiled = compile_working_model_proposal(
         penalties,
         n_obs,
-        device,
-        determinant_structure=determinant_penalties,
+        determinant_penalties=determinant_penalties,
+        control=control,
+        available_workspace_bytes=available_workspace_bytes,
+        device=device,
+        statistics=(gram, rhs, response_square_sum),
     )
-    gram_device = jax.device_put(gram, device)
-    rhs_device = jax.device_put(rhs, device)
-    yy_device = jax.device_put(np.asarray(response_square_sum), device)
-    parameter_shape = jax.ShapeDtypeStruct(state.parameters.shape, np.float64)
-    smoothing_shape = jax.ShapeDtypeStruct(state.parameters[:-1].shape, np.float64)
-    tolerance_shape = jax.ShapeDtypeStruct((), np.float64)
-    factor_executable = working_model_factor_inputs.lower(
-        gram_device, metadata, smoothing_shape
-    ).compile()
-    executable = gaussian_working_model_proposal.lower(
-        parameter_shape,
-        gram_device,
-        rhs_device,
-        yy_device,
-        metadata,
-        _factor_shapes(metadata),
-        smoothing=smoothing_shape,
-        tolerance=tolerance_shape,
-    ).compile()
-    analyses = (factor_executable.memory_analysis(), executable.memory_analysis())
-    if any(analysis is None for analysis in analyses):
-        raise NotImplementedError(
-            "Working-model backend cannot report compiled memory."
-        )
-    temporary = sum(analysis.temp_size_in_bytes for analysis in analyses)
-    output = sum(analysis.output_size_in_bytes for analysis in analyses)
-    alias = sum(analysis.alias_size_in_bytes for analysis in analyses)
-    # Per factored matrix: its host copy, the DPSTRF workspace (which owns the
-    # returned factor) and the factor's device copy for the proposal.
-    factor_workspace = sum(
-        8 * n * n + source_pivoted_cholesky_workspace_bound(n) + 8 * n * n + 12 * n + 4
-        for n in _factor_sizes(metadata)
-    )
-    required = preliminary + temporary + output - alias + factor_workspace
-    memory = WorkingModelMemoryPlan(
-        *prospective, temporary, output, alias, factor_workspace, required
-    )
-    if required > available_workspace_bytes:
-        raise MemoryError(
-            f"Working-model compiled workspace requires {required} additional bytes; "
-            f"available workspace is {available_workspace_bytes}."
-        )
+    metadata = compiled.metadata
+    memory = compiled.memory_plan
+    statistics = compiled.transfer(gram, rhs, response_square_sum)
 
     def propose(trial: np.ndarray, tolerance: float) -> GaussianWorkingModelProposal:
-        smoothing = source_exponentials(trial[:-1])
-        inputs = factor_executable(gram_device, metadata, smoothing)
-        factors = jax.device_put(factor_working_model(inputs), device)
-        del inputs
-        return executable(
-            trial,
-            gram_device,
-            rhs_device,
-            yy_device,
-            metadata,
-            factors,
-            smoothing=smoothing,
-            tolerance=np.asarray(tolerance),
-        )
+        return compiled(trial, tolerance, statistics)
 
     converged = False
     evaluations = 0
@@ -581,5 +757,5 @@ def fit_gaussian_working_model_statistics(
         factor.logdet_hessian,
         factor.logdet_penalty,
         tuple(transforms),
-        _source_penalty_quadratic(state.coefficients, log_smoothing, metadata),
+        source_penalty_quadratic(state.coefficients, log_smoothing, metadata),
     )

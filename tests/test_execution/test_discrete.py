@@ -12,6 +12,7 @@ import pytest
 import jaxgam.execution.discrete as discrete_execution
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
+from jaxgam.families.standard import Gaussian
 from jaxgam.formula.continuous_design import build_continuous_discrete_design
 from jaxgam.formula.continuous_setup import (
     ContinuousDiscreteSetup,
@@ -239,8 +240,15 @@ def test_public_route_rejects_unimplemented_domains() -> None:
     source = DataFrameRowSource(_frame(), response="y")
     with pytest.raises(NotImplementedError, match="requires explicit fixed sp"):
         GAM("y ~ s(x)", control=_control(8)).fit(source, result="prediction")
-    with pytest.raises(NotImplementedError, match="Gaussian identity only"):
-        GAM("y ~ s(x)", family="poisson", sp=[1.0], control=_control(8)).fit(
+    # Poisson/Binomial/Gamma now run bgam.fitd's performance iteration
+    # (tests/test_execution/test_discrete_regular.py); a noncanonical Gaussian
+    # and the estimated-theta NB family remain unimplemented.
+    with pytest.raises(NotImplementedError, match="supports Gaussian identity"):
+        GAM("y ~ s(x)", family=Gaussian(link="log"), sp=[1.0], control=_control(8)).fit(
+            source, result="prediction"
+        )
+    with pytest.raises(NotImplementedError, match=r"estimate\.theta"):
+        GAM("y ~ s(x)", family="nb", sp=[1.0], control=_control(8)).fit(
             source, result="prediction"
         )
     with pytest.raises(NotImplementedError, match="result='prediction' only"):

@@ -17,12 +17,17 @@ import pandas as pd
 import pytest
 
 import jaxgam.execution.discrete as discrete_execution
+import jaxgam.execution.discrete_regular as discrete_regular_execution
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
 from tests.helpers import _AssertCollector
 
 _FORMULA = "y ~ z + s(x, bs='cr', k=6)"
-_DISCRETE_ENTRY_POINTS = ("fit_fixed_sp_discrete_gaussian", "fit_discrete_gaussian")
+_DISCRETE_ENTRY_POINTS = (
+    (discrete_execution, "fit_fixed_sp_discrete_gaussian"),
+    (discrete_execution, "fit_discrete_gaussian"),
+    (discrete_regular_execution, "fit_discrete_regular"),
+)
 _COMPARED_FIELDS = (
     "coefficients",
     "deviance",
@@ -95,8 +100,8 @@ def forbid_discrete_route(monkeypatch):
         raise AssertionError("a non-discrete fit entered the discrete route")
 
     monkeypatch.setattr(GAM, "_fit_discrete", forbidden)
-    for name in _DISCRETE_ENTRY_POINTS:
-        monkeypatch.setattr(discrete_execution, name, forbidden)
+    for module, name in _DISCRETE_ENTRY_POINTS:
+        monkeypatch.setattr(module, name, forbidden)
 
 
 @pytest.mark.parametrize(

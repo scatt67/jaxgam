@@ -106,6 +106,12 @@ class FamilyExecutionCapabilities:
     initial_alpha_resolution: Literal[
         "no_known_resolution_gap", "unresolved_near_zero"
     ] = "no_known_resolution_gap"
+    #: Pinned ``bgam.fitd`` Fisher performance iteration is validated for this
+    #: family/link (``bam(discrete=TRUE)``'s non-additive route): row-local
+    #: ``mustart``, ``mu.eta``/``variance`` working weights, pinned
+    #: ``dev.resids`` arithmetic (:meth:`ExponentialFamily.source_dev_resids`)
+    #: and a link the pinned R family constructor accepts.
+    regular_performance_iteration: bool = False
 
 
 @dataclass(frozen=True)
@@ -521,6 +527,23 @@ class ExponentialFamily(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement direct deviance "
             "contributions for bounded execution."
+        )
+
+    def source_dev_resids(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Return pinned ``stats`` ``family$dev.resids`` arithmetic per row.
+
+        Unlike :meth:`deviance_contributions` there is no domain safeguard: a
+        mean outside the family domain yields exactly what R yields (a finite
+        value where R's formula stays finite, otherwise ``nan``). Pinned
+        ``bgam.fitd`` performs no ``validmu`` check between iterations, so
+        its step control sees this raw ``sum(dev.resids)``. Families that
+        report ``regular_performance_iteration`` implement it.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement pinned dev.resids "
+            "arithmetic for the discrete performance iteration."
         )
 
     def deviance_derivative_contributions(

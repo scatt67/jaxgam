@@ -30,7 +30,16 @@ from jaxgam.families.base import (
     StreamReductionPolicy,
 )
 from jaxgam.jax_utils import _materialize_source_operation, array_module
-from jaxgam.links.links import IdentityLink, InverseLink, Link, LogitLink, LogLink
+from jaxgam.links.links import (
+    CloglogLink,
+    IdentityLink,
+    InverseLink,
+    Link,
+    LogitLink,
+    LogLink,
+    ProbitLink,
+    SqrtLink,
+)
 
 # Numerical stability constants for clamping near boundaries.
 _MU_EPS = 1e-10
@@ -101,6 +110,12 @@ class Gaussian(ExponentialFamily):
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
     ) -> np.ndarray:
         return wt * (y - mu) ** 2
+
+    def source_dev_resids(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """``gaussian()$dev.resids``: ``wt * ((y - mu)^2)``."""
+        return wt * ((y - mu) ** 2)
 
     def aic(
         self,
@@ -383,6 +398,22 @@ class Binomial(ExponentialFamily):
             )
         )
 
+    def source_dev_resids(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """``C_binomial_dev_resids``: ``2*wt*(y_log_y(y,mu) + y_log_y(1-y,1-mu))``.
+
+        ``y_log_y(y, mu)`` is ``y*log(y/mu)`` for ``y != 0`` and zero
+        otherwise; means outside ``(0, 1)`` give R's ``nan``.
+        """
+        xp = array_module(y)
+
+        def y_log_y(response, mean):
+            safe = xp.where(response != 0.0, response, 1.0)
+            return xp.where(response != 0.0, safe * xp.log(safe / mean), 0.0)
+
+        return 2.0 * wt * (y_log_y(y, mu) + y_log_y(1.0 - y, 1.0 - mu))
+
     def aic(
         self,
         y: np.ndarray,
@@ -425,8 +456,17 @@ class Binomial(ExponentialFamily):
         return xp.where(prior_weight == 0.0, 0.0, y)
 
     def execution_capabilities(self) -> FamilyExecutionCapabilities:
-        """Keep the unresolved Binomial/log cancellation boundary explicit."""
-        capabilities = super().execution_capabilities()
+        """Keep the unresolved Binomial/log cancellation boundary explicit.
+
+        Pinned ``binomial()`` accepts logit, probit, cauchit, log and cloglog;
+        every one JaxGAM implements runs the discrete performance iteration.
+        """
+        capabilities = replace(
+            super().execution_capabilities(),
+            regular_performance_iteration=isinstance(
+                self.link, (LogitLink, ProbitLink, CloglogLink, LogLink)
+            ),
+        )
         if isinstance(self.link, LogLink):
             return replace(
                 capabilities, initial_alpha_resolution="unresolved_near_zero"
@@ -552,6 +592,20 @@ class Poisson(ExponentialFamily):
         y_pos = xp.where(y > 0, y, 1.0)
         return 2.0 * wt * (y * xp.log(y_pos / mu_safe) - (y - mu_safe))
 
+    def source_dev_resids(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """``poisson()$dev.resids``: ``2*wt*(y*log(y/mu) - (y-mu))``, ``2*mu*wt``
+        at ``y = 0``.
+
+        A nonpositive mean stays finite on zero counts, as it does in R.
+        """
+        xp = array_module(y)
+        positive = xp.where(y > 0, y, 1.0)
+        return 2.0 * xp.where(
+            y > 0, wt * (positive * xp.log(positive / mu) - (y - mu)), mu * wt
+        )
+
     def aic(
         self,
         y: np.ndarray,
@@ -583,6 +637,15 @@ class Poisson(ExponentialFamily):
         evaluation of the working quantities.
         """
         return y + 0.1
+
+    def execution_capabilities(self) -> FamilyExecutionCapabilities:
+        """Pinned ``poisson()`` accepts the log, identity and sqrt links."""
+        return replace(
+            super().execution_capabilities(),
+            regular_performance_iteration=isinstance(
+                self.link, (LogLink, IdentityLink, SqrtLink)
+            ),
+        )
 
     def valid_mu(self, mu: np.ndarray) -> np.ndarray:
         """Valid mu for Poisson: mu > 0."""
@@ -627,7 +690,14 @@ class Gamma(ExponentialFamily):
         the current streamed coefficient/score route, which still rejects
         Gamma until its observed-system policy is separately implemented.
         """
-        return replace(super().execution_capabilities(), regular_fletcher_scale=True)
+        return replace(
+            super().execution_capabilities(),
+            regular_fletcher_scale=True,
+            # Pinned Gamma() accepts the inverse, identity and log links.
+            regular_performance_iteration=isinstance(
+                self.link, (InverseLink, IdentityLink, LogLink)
+            ),
+        )
 
     def stream_reduction_policy(self) -> StreamReductionPolicy:
         """Declare Fletcher reporting without claiming an outer score policy."""
@@ -735,6 +805,13 @@ class Gamma(ExponentialFamily):
     ) -> np.ndarray:
         """Interior Gamma deviance; unlike reporting it has no max kink."""
         return self._direct_deviance_contributions(y, mu, wt)
+
+    def source_dev_resids(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """``Gamma()$dev.resids``: ``-2*wt*(log(ifelse(y==0,1,y/mu)) - (y-mu)/mu)``."""
+        xp = array_module(y)
+        return -2.0 * wt * (xp.log(xp.where(y == 0, 1.0, y / mu)) - (y - mu) / mu)
 
     def aic(
         self,
