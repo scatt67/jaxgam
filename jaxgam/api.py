@@ -13,6 +13,7 @@ Design doc reference: docs/refactor_gam_api/design.md §3.3
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, overload
 
@@ -341,6 +342,8 @@ class GAM:
             and family_obj.n_theta > 0
         ):
             family_obj.put_theta(np.log(np.asarray([fit_result.theta])))
+
+        _warn_factor_regularization(fit_result)
 
         # Phase 2→3: construct the selected result materialization
         return GAMResults._from_fit(
@@ -1747,6 +1750,30 @@ def _fixed_log_smoothing_parameters(sp: np.ndarray | list, n_penalties: int):
             f"internally); got invalid value(s) {bad.tolist()}."
         )
     return jnp.log(jnp.array(sp_arr))
+
+
+def _warn_factor_regularization(fit_result: NewtonResult) -> None:
+    """Surface the ``cho_factor`` fallback of the returned fit explicitly.
+
+    The dense penalized Hessian is factored without any jitter unless the
+    plain Cholesky fails; a positive ``factor_regularization`` therefore means
+    the reported coefficients, EDF and covariance rest on a regularized
+    (non positive definite) Hessian, which the caller must be told about.
+    """
+    level = float(
+        np.max(
+            np.asarray(getattr(fit_result.pirls_result, "factor_regularization", 0.0))
+        )
+    )
+    if level > 0.0:
+        warnings.warn(
+            "The penalized Hessian of the final fit was not numerically positive "
+            "definite; its Cholesky factor needed a relative diagonal jitter of "
+            f"{level:g}. Coefficients, EDF and covariance are regularized; check "
+            "the model for unidentifiable or unpenalized aliased terms.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
 
 
 def _fit_fixed_sp(

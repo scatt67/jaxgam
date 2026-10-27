@@ -136,6 +136,7 @@ class _PIRLSState:
     XtWX: jax.Array
     L: jax.Array
     W: jax.Array
+    regularization: jax.Array
 
 
 _PIRLS_STATE_FIELDS = [f.name for f in fields(_PIRLSState)]
@@ -186,6 +187,7 @@ class _BetaStepResult:
     L: jax.Array
     W: jax.Array
     proposal_valid: jax.Array | None = None
+    factor_regularization: jax.Array | None = None
 
 
 _BETA_STEP_FIELDS = [f.name for f in fields(_BetaStepResult)]
@@ -234,7 +236,7 @@ def _beta_step(
     W, z = compute_W_and_z(mu, eta_cur)
     factors_valid = jnp.all(jnp.isfinite(W)) & jnp.all(jnp.isfinite(z))
     XtWX, XtWz = form_wls(W, z)
-    beta_new, L, _ = penalized_solve(XtWX, S_lambda, XtWz)
+    beta_new, L, regularization = penalized_solve(XtWX, S_lambda, XtWz)
     solver_valid = (
         jnp.all(jnp.isfinite(XtWX))
         & jnp.all(jnp.isfinite(XtWz))
@@ -316,6 +318,7 @@ def _beta_step(
         XtWX=XtWX,
         L=L,
         W=W,
+        factor_regularization=regularization,
     )
 
 
@@ -785,6 +788,11 @@ class PIRLSResult:
         Cholesky factor of Fisher-weighted penalized Hessian. For
         standard families this equals ``L``. Used for EDF and Bayesian
         covariance.
+    factor_regularization : jax.Array
+        Largest relative diagonal jitter that ``cho_factor`` had to add to any
+        penalized Hessian of this fit (proposals and final factors). ``0``
+        means every factor was the plain Cholesky; a positive value is the
+        explicit diagnostic that the fallback regularization fired.
     """
 
     coefficients: jax.Array
@@ -800,6 +808,7 @@ class PIRLSResult:
     working_weights: jax.Array
     XtWX_fisher: jax.Array
     L_fisher: jax.Array
+    factor_regularization: jax.Array | float = 0.0
 
 
 # Register as JAX pytree so PIRLSResult can be returned from jax.jit
@@ -1014,6 +1023,7 @@ def _pirls_loop_jit(
         XtWX=jnp.zeros((p, p)),
         L=jnp.eye(p),
         W=jnp.ones(n),
+        regularization=jnp.zeros(()),
     )
 
     def _cond(state: _PIRLSState):
@@ -1065,6 +1075,9 @@ def _pirls_loop_jit(
             XtWX=beta_step.XtWX,
             L=beta_step.L,
             W=beta_step.W,
+            regularization=jnp.maximum(
+                state.regularization, beta_step.factor_regularization
+            ),
         )
 
     final = jax.lax.while_loop(_cond, _body, init_state)
@@ -1081,13 +1094,13 @@ def _pirls_loop_jit(
         # Extended families (NB): observed (signed) weights for the REML log|H|.
         W_final, _ = _compute_W_and_z(final.mu, eta_final)  # 0.5 d²D/dη², signed
         XtWX_final = _signed_XtWX(W_final, X)
-        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
+        L_final, reg_final = penalized_cholesky(XtWX_final, S_lambda)
         # Fisher (nonnegative) for EDF and Bayesian covariance.
         _ww_fisher_fn = family.working_weights_fn(wt)
         W_fisher = jnp.clip(_ww_fisher_fn(eta_final, log_theta), _W_MIN, _W_MAX)
         WX_fisher = jnp.sqrt(W_fisher)[:, None] * X
         XtWX_fisher = WX_fisher.T @ WX_fisher
-        L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+        L_fisher, reg_fisher = penalized_cholesky(XtWX_fisher, S_lambda)
     elif not family.is_canonical:
         # Non-canonical standard family: the PIRLS solve used Fisher weights
         # (nonnegative) -> keep for EDF/covariance; rebuild the REML-log|H| XtWX
@@ -1096,19 +1109,20 @@ def _pirls_loop_jit(
         W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
         WX_fisher = jnp.sqrt(W_final)[:, None] * X
         XtWX_fisher = WX_fisher.T @ WX_fisher
-        L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+        L_fisher, reg_fisher = penalized_cholesky(XtWX_fisher, S_lambda)
         W_obs = _observed_weights(family, X, y, wt, final.beta, offset)  # signed
         XtWX_final = _signed_XtWX(W_obs, X)
-        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
+        L_final, reg_final = penalized_cholesky(XtWX_final, S_lambda)
     else:
         # Canonical standard family: Fisher == Newton (weights nonnegative).
         W_final, _ = _compute_W_and_z(final.mu, eta_final)
         W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
         WX_final = jnp.sqrt(W_final)[:, None] * X
         XtWX_final = WX_final.T @ WX_final
-        L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
+        L_final, reg_final = penalized_cholesky(XtWX_final, S_lambda)
         XtWX_fisher = XtWX_final
         L_fisher = L_final
+        reg_fisher = reg_final
 
     dev_final = _compute_dev(final.mu, eta_final)
     scale = jnp.where(
@@ -1131,6 +1145,9 @@ def _pirls_loop_jit(
         working_weights=W_final,
         XtWX_fisher=XtWX_fisher,
         L_fisher=L_fisher,
+        factor_regularization=jnp.maximum(
+            final.regularization, jnp.maximum(reg_final, reg_fisher)
+        ),
     )
 
 
@@ -1520,13 +1537,13 @@ def _efs_theta_pirls_loop_jit(
     final_factors = final_compute_working_factors(mu_final, eta_final)
     W_final = final_factors.weight
     XtWX_final = _signed_XtWX(W_final, X)
-    L_final, _ = penalized_cholesky(XtWX_final, S_lambda)
+    L_final, reg_final = penalized_cholesky(XtWX_final, S_lambda)
     W_fisher = jnp.clip(
         family.working_weights_fn(wt)(eta_final, final.log_theta), _W_MIN, _W_MAX
     )
     WX_fisher = jnp.sqrt(W_fisher)[:, None] * X
     XtWX_fisher = WX_fisher.T @ WX_fisher
-    L_fisher, _ = penalized_cholesky(XtWX_fisher, S_lambda)
+    L_fisher, reg_fisher = penalized_cholesky(XtWX_fisher, S_lambda)
     dev_final = final_compute_dev(mu_final, eta_final)
     pdev_final = dev_final + final.beta @ S_lambda @ final.beta
     final_valid = (
@@ -1561,6 +1578,7 @@ def _efs_theta_pirls_loop_jit(
         working_weights=W_final,
         XtWX_fisher=XtWX_fisher,
         L_fisher=L_fisher,
+        factor_regularization=jnp.maximum(reg_final, reg_fisher),
     )
     return EFSThetaPIRLSResult(
         pirls_result=pirls_result,

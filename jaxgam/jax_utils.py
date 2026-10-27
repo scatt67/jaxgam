@@ -5,7 +5,7 @@ Provides:
   backend-agnostic code (links, families).
 - ``to_jax`` / ``to_numpy``: Phase 1→2 and Phase 2→3 device transfer
   boundaries (design.md §1.3).
-- ``cho_factor``: Cholesky with scale-relative jitter (design.md §4.8).
+- ``cho_factor``: plain Cholesky with a diagonal-relative fallback jitter.
 - ``penalized_cholesky`` / ``penalized_solve``: penalized Hessian solves
   for PIRLS.
 - ``numerical_rank``: rank estimation via pivoted QR.
@@ -303,21 +303,34 @@ def stable_log_pseudo_det(S: jax.Array, U_range: jax.Array) -> jax.Array:
 
 
 _CHOLESKY_SMALL_RELATIVE_JITTER = 1e-12
+_CHOLESKY_LARGE_RELATIVE_JITTER = 1e-6
 
 
 @jax.jit
 def cho_factor(
     H: jax.Array,
 ) -> tuple[jax.Array, jax.Array]:
-    """Cholesky factorization with two-level scale-relative jitter.
+    """Plain Cholesky factorization, regularized only when it fails.
 
-    Follows the stabilization strategy from design.md §4.8 (lines 3190-3212):
-    always applies a small jitter ``eps_small * trace(H)/p``, and falls back
-    to a larger jitter ``eps_large * trace(H)/p`` if the first attempt
-    produces NaN (indicating non-positive-definiteness under JIT).
+    mgcv never adds a diagonal jitter to a penalized fit: ``pls_fit1`` and
+    ``gdiPK`` (gdi.c) factor by pivoted QR with explicit rank handling.  A
+    jitter proportional to ``trace(H)/p`` is dominated by the penalty at large
+    smoothing parameters and then swamps the data curvature of unpenalized
+    directions, so the factor here is the *plain* Cholesky of ``H`` whenever
+    that is finite.  Only if it fails (``H`` not numerically positive
+    definite) is a diagonal-relative jitter ``eps * |diag(H)|`` added, first
+    ``eps = 1e-12`` and then ``eps = 1e-6``.  That regularization is
+    scale-free in every coordinate (a zero diagonal entry uses unit scale).
 
-    Uses ``jax.lax.cond`` for the fallback, which is gradient-safe
-    (only differentiates the executed branch).
+    A plain factor whose smallest relative pivot ``L_ii**2 / |H_ii|`` is below
+    ``1e-12`` counts as failed too: ``H`` is then numerically singular (for
+    example aliased unpenalized columns, which ``pls_fit1`` would drop by its
+    rank test), the pivot is roundoff and the solve would be garbage in that
+    direction.  The relative pivot is scale-free, so a large smoothing
+    parameter alone never triggers the fallback.
+
+    ``jax.lax.cond`` selects the branch, which is gradient-safe (only the
+    executed branch is differentiated).
 
     Parameters
     ----------
@@ -330,30 +343,39 @@ def cho_factor(
         Lower-triangular Cholesky factor. Pass ``(L, True)`` to
         ``jax.scipy.linalg.cho_solve``.
     jitter_applied : jax.Array
-        Scalar jitter level that was actually used (for diagnostics).
+        Relative diagonal jitter level used: ``0`` for the plain factor,
+        otherwise the fallback ``eps``.  Callers surface a nonzero level as an
+        explicit regularization diagnostic.
     """
-    p = H.shape[0]
-    I_p = jnp.eye(p)
-    trace_H = jnp.trace(H)
-
-    eps_small = jnp.maximum(_CHOLESKY_SMALL_RELATIVE_JITTER * trace_H / p, 1e-14)
-    eps_large = jnp.maximum(1e-6 * trace_H / p, 1e-10)
-
-    L_small = jnp.linalg.cholesky(H + eps_small * I_p)
-    has_nan = jnp.any(jnp.isnan(L_small))
-
-    def _use_large_jitter(_: None) -> tuple[jax.Array, jax.Array]:
-        L_large = jnp.linalg.cholesky(H + eps_large * I_p)
-        return L_large, eps_large
-
-    def _use_small_jitter(_: None) -> tuple[jax.Array, jax.Array]:
-        return L_small, eps_small
-
-    L, jitter_applied = jax.lax.cond(
-        has_nan, _use_large_jitter, _use_small_jitter, None
+    L_plain = jnp.linalg.cholesky(H)
+    magnitude = jnp.abs(jnp.diag(H))
+    scale = jnp.where(magnitude > 0.0, magnitude, 1.0)
+    relative_pivot = jnp.diag(L_plain) ** 2 / scale
+    plain_ok = jnp.all(jnp.isfinite(L_plain)) & jnp.all(
+        relative_pivot >= _CHOLESKY_SMALL_RELATIVE_JITTER
     )
+    reference = jnp.diag(scale)
+    zero = jnp.zeros((), dtype=H.dtype)
 
-    return L, jitter_applied
+    def _use_plain(_: None) -> tuple[jax.Array, jax.Array]:
+        return L_plain, zero
+
+    def _use_fallback(_: None) -> tuple[jax.Array, jax.Array]:
+        small = jnp.asarray(_CHOLESKY_SMALL_RELATIVE_JITTER, dtype=H.dtype)
+        large = jnp.asarray(_CHOLESKY_LARGE_RELATIVE_JITTER, dtype=H.dtype)
+        L_small = jnp.linalg.cholesky(H + small * reference)
+
+        def _use_large(_: None) -> tuple[jax.Array, jax.Array]:
+            return jnp.linalg.cholesky(H + large * reference), large
+
+        def _use_small(_: None) -> tuple[jax.Array, jax.Array]:
+            return L_small, small
+
+        return jax.lax.cond(
+            jnp.all(jnp.isfinite(L_small)), _use_small, _use_large, None
+        )
+
+    return jax.lax.cond(plain_ok, _use_plain, _use_fallback, None)
 
 
 @jax.jit
@@ -374,7 +396,8 @@ def penalized_cholesky(
     L : jax.Array, shape (p, p)
         Lower-triangular Cholesky factor.
     jitter_applied : jax.Array
-        Jitter level used (for diagnostics).
+        Relative diagonal jitter level of the ``cho_factor`` fallback, or
+        ``0`` when the plain factor succeeded.
     """
     H = XtWX + S_lambda
     return cho_factor(H)
@@ -405,7 +428,8 @@ def penalized_solve(
         Lower-triangular Cholesky factor, retained for downstream use
         (e.g. EDF computation, log-determinant).
     jitter_applied : jax.Array
-        Jitter level used.
+        Relative diagonal jitter level of the ``cho_factor`` fallback, or
+        ``0`` when the plain factor succeeded.
     """
     L, jitter_applied = penalized_cholesky(XtWX, S_lambda)
     beta = jsla.cho_solve((L, True), rhs)

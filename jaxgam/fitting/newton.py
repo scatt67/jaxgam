@@ -68,7 +68,7 @@ from jaxgam.fitting.reml import (
     estimate_edf,
     fletcher_scale,
 )
-from jaxgam.jax_utils import _CHOLESKY_SMALL_RELATIVE_JITTER, cho_factor
+from jaxgam.jax_utils import cho_factor
 
 # R's default Newton convergence tolerance (gam.control()$newton$conv.tol).
 # This is ~67x looser than sqrt(eps) ≈ 1.5e-8, matching R's deliberate
@@ -659,15 +659,11 @@ def _gaussian_score_change(
         + beta_trial @ delta_S @ beta_trial
     )
 
-    # _criterion_core normalizes H to unit diagonal, then cho_factor adds
-    # its small relative jitter. In original coordinates this is precisely
-    # jitter * diag(H). Preserve that same regularized determinant in both
-    # states; comparisons requiring the larger fallback remain unsupported.
-    delta_log_H = _logdet_change(
-        XtWX + S_base,
-        delta_S,
-        relative_diagonal_jitter=_CHOLESKY_SMALL_RELATIVE_JITTER,
-    )
+    # _criterion_core takes the plain Cholesky of the unit-diagonal H, so the
+    # same unregularized determinant is differenced here. A state that needs
+    # cho_factor's fallback makes this change nonfinite (the plain factor
+    # fails), and the host then retains its ordinary score comparison.
+    delta_log_H = _logdet_change(XtWX + S_base, delta_S)
     delta_log_S = jnp.array(0.0)
     for index, rank in zip(singleton_sp_indices, singleton_ranks, strict=True):
         delta_log_S = delta_log_S + rank * delta_rho[index]

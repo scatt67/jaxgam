@@ -1531,6 +1531,7 @@ class RBridge:
             "fitted_values": _r_array(fit.rx2("fitted.values"), dtype=np.float64),
             "deviance": float(fit.rx2("deviance")[0]),
             "converged": bool(fit.rx2("converged")[0]),
+            "score": float(fit.rx2("gcv.ubre")[0]),
         }
         if with_uncertainty:
             prediction = self._stats.predict(fit, type="link", **{"se.fit": True})

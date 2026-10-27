@@ -117,18 +117,19 @@ def test_efs_fisher_factor_jit_exact_and_rejects_invalid_information() -> None:
     penalty = jnp.zeros((2, 2))
     lower, valid = compiled(crossproduct, penalty)
     assert bool(valid)
-    # The shared coefficient factor's scale-relative jitter moves this pivot
-    # by about 1e-8 relative; the EFS factor must reproduce exact algebra.
+    # The EFS factor must reproduce exact algebra.
     np.testing.assert_allclose(
         np.asarray(lower),
         np.diag([1e-4, 2.0]),
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
-    jittered, _ = penalized_cholesky(crossproduct, penalty)
-    assert not np.allclose(
-        np.asarray(jittered), np.asarray(lower), rtol=STRICT.rtol, atol=STRICT.atol
-    )
+    # The shared coefficient factor no longer adds a scale-relative jitter
+    # (plain Cholesky first; dense structural null space series), so on this
+    # valid system it is the same exact factor and reports no regularization.
+    shared, regularization = penalized_cholesky(crossproduct, penalty)
+    np.testing.assert_array_equal(np.asarray(shared), np.asarray(lower))
+    assert float(regularization) == 0.0
     # A coupled SPD system matches an independent unjittered NumPy factor.
     fisher = np.array([[4.0, 0.6, 0.1], [0.6, 2.5, -0.3], [0.1, -0.3, 1.5]])
     coupled_penalty = np.array([[0.0, 0.0, 0.0], [0.0, 2.0, 0.5], [0.0, 0.5, 1.0]])

@@ -19,9 +19,7 @@ from scipy import linalg
 from jaxgam.penalties.structure import (
     DenseLocalPenalty,
     DenseTransform,
-    DiagonalPenalty,
     DiagonalTransform,
-    IdentityPenalty,
     IdentityTransform,
     PenaltyBlock,
     PenaltyStructure,
@@ -437,17 +435,35 @@ def _make_transform(D: np.ndarray) -> object:
     return DenseTransform(D)
 
 
-def _make_penalty(S: np.ndarray) -> object:
-    diagonal = np.diag(S)
-    if np.array_equal(S, np.diag(diagonal)):
-        if len(diagonal) and np.all(diagonal == diagonal[0]):
-            return IdentityPenalty(len(diagonal), float(diagonal[0]))
-        return DiagonalPenalty(diagonal)
-    return DenseLocalPenalty(0.5 * (S + S.T))
+def _scaled_eigenbasis(
+    S: npt.NDArray[np.floating],
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.bool_]]:
+    """Return ``U diag(1/sqrt(e))`` on active eigendirections and the mask."""
+    eigs, U = np.linalg.eigh(S)
+    active = eigs > max(float(np.max(eigs)), 0.0) * _EPS_TWO_THIRDS
+    scale = np.ones(len(eigs))
+    scale[active] = 1.0 / np.sqrt(eigs[active])
+    return U * scale, active
 
 
 def reparameterize_structure(structure: PenaltyStructure) -> PenaltyStructure:
-    """Apply mgcv-style local D transforms without globally padded matrices."""
+    """Apply mgcv-style local transforms with a structural penalty null space.
+
+    Every block is rotated so that its fitting coordinates split orthogonally
+    into the null and range spaces of its penalty (mgcv ``totalPenaltySpace``,
+    gam.fit3.r).  As in ``gam.fit3``, which pads every penalty root and the
+    total penalty ``St`` with ``Mp`` exact zero rows for the null space, the
+    transformed local penalties hold *exact* zeros on null rows and columns.
+    Forming ``D' S D`` numerically instead leaves roundoff of order
+    ``eps * |S|`` there, which a large smoothing parameter amplifies into a
+    spurious (possibly negative) null-space penalty.
+
+    A single penalty becomes the exact 0/1 diagonal implied by its scaled
+    eigenbasis.  Overlapping penalties use the orthogonal eigenbasis of the
+    norm-balanced total ``sum_j S_j / |S_j|_F``, mgcv's range/null split, and
+    keep their transformed range blocks.  Ranks are the structural active
+    counts, so downstream root and determinant metadata agree with them.
+    """
     result: list[PenaltyBlock] = []
     for block in structure.blocks:
         penalties = block.dense_penalties()
@@ -456,34 +472,51 @@ def reparameterize_structure(structure: PenaltyStructure) -> PenaltyStructure:
             result.append(block)
             continue
         if len(penalties) == 1:
-            eigs, U = np.linalg.eigh(penalties[0])
-            active = eigs > max(float(np.max(eigs)), 0.0) * _EPS_TWO_THIRDS
-            scale = np.ones(k)
-            scale[active] = 1.0 / np.sqrt(eigs[active])
-            D = U * scale
+            D, active = _scaled_eigenbasis(penalties[0])
+            local = (np.diag(active.astype(float)),)
+            ranks = (int(np.sum(active)),)
         elif penalties_non_overlapping(list(penalties)):
             D = np.eye(k)
+            local_list: list[np.ndarray] = []
             for S in penalties:
+                diagonal = np.zeros(k)
                 rows = np.flatnonzero(np.sum(np.abs(S), axis=1) > 0)
-                if not len(rows):
-                    continue
-                first, last = int(rows[0]), int(rows[-1]) + 1
-                eigs, U = np.linalg.eigh(S[first:last, first:last])
-                active = eigs > max(float(np.max(eigs)), 0.0) * _EPS_TWO_THIRDS
-                scale = np.ones(last - first)
-                scale[active] = 1.0 / np.sqrt(eigs[active])
-                D[first:last, first:last] = U * scale
+                if len(rows):
+                    first, last = int(rows[0]), int(rows[-1]) + 1
+                    D_local, active = _scaled_eigenbasis(S[first:last, first:last])
+                    D[first:last, first:last] = D_local
+                    diagonal[first:last] = active.astype(float)
+                local_list.append(np.diag(diagonal))
+            local = tuple(local_list)
+            ranks = tuple(int(np.sum(np.diag(S))) for S in local)
         else:
-            D = np.linalg.eigh(np.add.reduce(penalties))[1]
-        local = tuple(D.T @ S @ D for S in penalties)
+            balanced = np.zeros((k, k))
+            for S in penalties:
+                norm = np.linalg.norm(S, "fro")
+                if norm:
+                    balanced += S / norm
+            eigs, D = np.linalg.eigh(0.5 * (balanced + balanced.T))
+            null = eigs <= max(float(np.max(eigs)), 0.0) * _EPS_TWO_THIRDS
+            local_list = []
+            for S in penalties:
+                transformed = D.T @ S @ D
+                transformed = 0.5 * (transformed + transformed.T)
+                transformed[null, :] = 0.0
+                transformed[:, null] = 0.0
+                local_list.append(transformed)
+            local = tuple(local_list)
+            ranks = block.ranks
         result.append(
             PenaltyBlock(
                 block.start,
                 block.stop,
                 block.sp_indices,
-                tuple(_make_penalty(S) for S in local),
+                # Dense local storage, as the numerically formed D'SD always
+                # had: the structural zeros are exact either way, and the
+                # representation stays the one downstream digests bind.
+                tuple(DenseLocalPenalty(S) for S in local),
                 _make_transform(D),
-                block.ranks,
+                ranks,
             )
         )
     return PenaltyStructure(structure.n_coef, tuple(result))
