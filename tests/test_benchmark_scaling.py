@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -258,6 +258,7 @@ def test_canonical_penalty_contract_matches_legacy_global_and_local_storage() ->
         ("dense", "public", "full"),
         ("stream", "public", "prediction"),
         ("stream-qr", "public", "prediction"),
+        ("stream-gaussian-qr", "public", "prediction"),
         ("efs", "public", "prediction"),
     ],
 )
@@ -453,6 +454,56 @@ def test_tiny_public_exact_route_records_source_bytes_and_optimizer(
         assert parity["reference"].endswith("RBridge(mode='rpy2')")
         assert parity["fields"]["score"]["available"]
         assert parity["fields"]["smoothing"]["available"]
+
+
+def test_tiny_public_gaussian_qr_route_scans_the_source_once_per_fit(
+    minimal_git_checkout: Path,
+) -> None:
+    case = ScalingCase(
+        31,
+        6,
+        execution="stream-gaussian-qr",
+        batch_rows=7,
+        repeats=2,
+        result_mode="prediction",
+    )
+    record = benchmark_scaling.run_isolated(case, minimal_git_checkout)
+
+    assert record["within_run_consistency"]["valid"]
+    assert record["setup"]["route"]["fixed_smoothing_parameter_values"] is None
+    result = record["fit"]["result"]
+    assert result["execution_route"] == "stream_gaussian_qr"
+    assert result["execution_fallback_reason"] is None
+    assert result["lambda_strategy"] is not None
+    assert result["converged"]
+    assert result["outer_iterations"] == result["n_iter"] > 0
+    scans = result["source_scans"]
+    # Each end-to-end fit scans the source only to prepare: prepare_model's
+    # passes (measured alone by the setup child) plus the one pass that
+    # freezes the Gaussian QR statistics. REML smoothing (n_iter > 0 outer
+    # iterations) and finalization add none, so every fit scans equally.
+    prepared_scans = record["setup"]["source_scans"]["setup_delta"]
+    assert prepared_scans > 0
+    assert scans["cold_fit_delta"] == prepared_scans + 1
+    assert scans["warm_fit_deltas"] == [prepared_scans + 1] * 2
+    assert scans["cold_fit_batch_bytes"] == scans["warm_fit_batch_bytes"][0] > 0
+    assert scans["training_source_scan_delta_during_prediction"] == 0
+
+
+def test_gaussian_qr_mode_fails_closed_on_a_fallback_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = benchmark_scaling._build_fit
+
+    def exact_route(case, data):
+        return original(replace(case, execution="stream-exact"), data)
+
+    monkeypatch.setattr(benchmark_scaling, "_build_fit", exact_route)
+    case = ScalingCase(
+        31, 6, execution="stream-gaussian-qr", batch_rows=7, result_mode="prediction"
+    )
+    with pytest.raises(RuntimeError, match="no fallback route"):
+        benchmark_scaling.run_case(case, Path.cwd())
 
 
 def test_pinned_r_exact_parity_rejects_unsupported_or_oversized_case() -> None:
@@ -863,7 +914,9 @@ def _pin_setup_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-@pytest.mark.parametrize("execution", ["stream", "stream-qr", "stream-exact"])
+@pytest.mark.parametrize(
+    "execution", ["stream", "stream-qr", "stream-exact", "stream-gaussian-qr"]
+)
 def test_run_setup_stream_uses_case_batch_and_memory_controls(
     execution: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

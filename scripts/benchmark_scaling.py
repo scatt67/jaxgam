@@ -28,6 +28,9 @@ import numpy as np
 import pandas as pd
 
 _MAX_COMPARISON_COEFFICIENTS = 2_048
+_STREAM_EXECUTIONS = frozenset(
+    {"stream", "stream-qr", "stream-exact", "stream-gaussian-qr"}
+)
 _MAX_CHILD_DIAGNOSTIC_CHARS = 4_096
 
 
@@ -80,18 +83,19 @@ class ScalingCase:
             "stream",
             "stream-qr",
             "stream-exact",
+            "stream-gaussian-qr",
             "efs",
         }:
             raise ValueError(
                 "execution must be 'dense', 'stream', 'stream-qr', "
-                "'stream-exact', or 'efs'."
+                "'stream-exact', 'stream-gaussian-qr', or 'efs'."
             )
         if self.result_mode not in {"full", "inference", "prediction"}:
             raise ValueError(
                 "result_mode must be 'full', 'inference', or 'prediction'."
             )
         if (
-            self.execution in {"stream", "stream-qr", "stream-exact", "efs"}
+            self.execution in _STREAM_EXECUTIONS | {"efs"}
             and self.result_mode != "prediction"
         ):
             raise ValueError(
@@ -523,6 +527,24 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
 
         return _FitPlan(fit, formula, source)
 
+    if case.execution == "stream-gaussian-qr":
+        # PR9's frozen Gaussian QR route: one preparation scan, then REML
+        # smoothing on the frozen statistics. The harness fails closed if the
+        # public fit falls back to another route (see run_case).
+        compression_control = FitControl(
+            execution="stream",
+            gaussian_compression=True,
+            batch_rows=case.batch_rows,
+            uncertainty="fisher",
+        )
+
+        def fit() -> Any:
+            return GAM(formula, family="gaussian", control=compression_control).fit(
+                source, result="prediction"
+            )
+
+        return _FitPlan(fit, formula, source)
+
     if case.execution == "stream-exact":
         exact_control = FitControl(
             execution="stream",
@@ -575,6 +597,14 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
             "strategy": "exact streamed Gaussian REML with estimated smoothing",
             "result_mode": "prediction",
         },
+        "stream-gaussian-qr": {
+            "adapter": "public",
+            "strategy": (
+                "frozen streamed Gaussian QR REML with estimated smoothing "
+                "(one preparation scan)"
+            ),
+            "result_mode": "prediction",
+        },
         "efs": {
             "adapter": "public",
             "strategy": "dense Poisson/log EFS with estimated smoothing",
@@ -586,7 +616,7 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
         "smoothing_parameter_order": _smoothing_parameter_order(case),
         "fixed_smoothing_parameter_values": (
             _fixed_smoothing_parameters(case)
-            if case.execution not in {"efs", "stream-exact"}
+            if case.execution not in {"efs", "stream-exact", "stream-gaussian-qr"}
             else None
         ),
         **contracts[case.execution],
@@ -959,7 +989,7 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
     )
     prediction_se_s: float | None = None
     prediction_se_status = "not requested for the EFS prediction-only route"
-    if case.execution in {"dense", "stream", "stream-qr", "stream-exact"}:
+    if case.execution in _STREAM_EXECUTIONS | {"dense"}:
         started = time.perf_counter()
         _, standard_error = cold_result.predict(data.iloc[:128], se_fit=True)
         prediction_se_s = time.perf_counter() - started
@@ -979,6 +1009,20 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
             if exact_diagnostics is None
             else exact_diagnostics.cumulative_inner_iterations
         )
+        outer_iterations = public_iterations
+    elif case.execution == "stream-gaussian-qr":
+        route_name = getattr(cold_result, "execution_route", None)
+        if route_name != "stream_gaussian_qr":
+            raise RuntimeError(
+                "stream-gaussian-qr fit took route "
+                f"{route_name!r} ("
+                f"{getattr(cold_result, 'execution_fallback_reason', None)!r}); "
+                "no fallback route is benchmarked under this mode."
+            )
+        iteration_semantics = (
+            "outer REML optimizer iterations on frozen Gaussian QR statistics"
+        )
+        inner_iterations = None
         outer_iterations = public_iterations
     elif case.execution == "efs":
         iteration_semantics = "outer EFS optimizer iterations"
@@ -1103,6 +1147,10 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
         },
         "execution_route": getattr(cold_result, "execution_route", None),
         "execution_route_available": hasattr(cold_result, "execution_route"),
+        "execution_fallback_reason": getattr(
+            cold_result, "execution_fallback_reason", None
+        ),
+        "lambda_strategy": getattr(cold_result, "lambda_strategy", None),
         "route": route,
     }
     # Do not retain a cold result while collecting warm-fit RSS evidence.
@@ -1475,7 +1523,7 @@ def compare_memory_growth(
     )
     if (
         not same_shape_controls
-        or small_case["execution"] not in {"stream", "stream-qr", "stream-exact"}
+        or small_case["execution"] not in _STREAM_EXECUTIONS
         or small_case["n_rows"] >= large_case["n_rows"]
         or not smaller["within_run_consistency"]["valid"]
         or not larger["within_run_consistency"]["valid"]
@@ -1526,7 +1574,14 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument(
         "--execution",
-        choices=("dense", "stream", "stream-qr", "stream-exact", "efs"),
+        choices=(
+            "dense",
+            "stream",
+            "stream-qr",
+            "stream-exact",
+            "stream-gaussian-qr",
+            "efs",
+        ),
         default="dense",
     )
     parser.add_argument("--batch-rows", type=int, default=1_024)
