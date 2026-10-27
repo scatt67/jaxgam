@@ -312,6 +312,8 @@ def _local_probe_case(
         value.gradient = np.array([0.0, gradient])
         value.source_scans = 4
         value.batches_scanned = 44
+        value.derivative_elapsed_s = 0.125
+        value.final_refit_solves = 1
         value.source_fingerprint = source
         value.basis_fingerprint = "basis"
         value.family_name = "nb"
@@ -327,6 +329,7 @@ def _local_probe_case(
         state.converged = not invalid_inner
         state.line_search_failed = False
         state.stationarity = 1e-14
+        state.n_iter = 3
         state.saturated_loglik = -280.0
         state.coefficient_factor = factor
         value.fit_result = SimpleNamespace(
@@ -358,6 +361,9 @@ def _local_probe_case(
         n_evaluations=0,
         cumulative_source_scans=0,
         cumulative_batches_scanned=0,
+        cumulative_inner_iterations=0,
+        cumulative_final_refit_solves=0,
+        cumulative_derivative_s=0.0,
     )
     return objective, accepted, candidate, live
 
@@ -377,6 +383,9 @@ def test_nb_local_score_comparison_streams_three_probes_with_bounded_retention()
     assert objective.n_evaluations == 3
     assert objective.cumulative_source_scans == 12
     assert objective.cumulative_batches_scanned == 132
+    assert objective.cumulative_inner_iterations == 9
+    assert objective.cumulative_final_refit_solves == 3
+    assert objective.cumulative_derivative_s == 0.375
     for ownership in live.values():
         assert sum(item() is not None for item in ownership) == 2
 
@@ -479,6 +488,7 @@ def _profile_trial(params, *, score=None, gradient=None, **overrides):
         converged=overrides.pop("converged", True),
         line_search_failed=False,
         stationarity=1e-14,
+        n_iter=3,
         saturated_loglik=-280.0,
         coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 19.0),
     )
@@ -488,6 +498,8 @@ def _profile_trial(params, *, score=None, gradient=None, **overrides):
         gradient=np.array([0.3, exact_gradient if gradient is None else gradient]),
         source_scans=2,
         batches_scanned=5,
+        derivative_elapsed_s=0.25,
+        final_refit_solves=1,
         source_fingerprint="source",
         basis_fingerprint="basis",
         family_name="nb",
@@ -633,6 +645,10 @@ def test_theta_secant_completion_finishes_roundoff_stops(monkeypatch, message, s
     assert result.n_evaluations == len(profile.requests)
     assert result.cumulative_source_scans == 2 * len(profile.requests)
     assert result.cumulative_batches_scanned == 5 * len(profile.requests)
+    # Work counters include every completion trial.
+    assert result.cumulative_inner_iterations == 3 * len(profile.requests)
+    assert result.cumulative_final_refit_solves == len(profile.requests)
+    assert result.cumulative_derivative_s == 0.25 * len(profile.requests)
     assert result.n_accepted == 2 + result.theta_completion_steps
     history = np.asarray(result.accepted_score_history)
     assert history[-1] == float(result.trial.score)
@@ -1085,6 +1101,91 @@ def _optimize_no_smooth(link, monkeypatch=None, record=None, stop="abnormal"):
     )
 
 
+def _optimize_fixed_theta_smooth(link, monkeypatch=None, record=None, stop="abnormal"):
+    """Fixed theta with one smooth: log sp is the only free coordinate."""
+    stream, family, initial = _optimizer_case(link, estimated=False, smooth=True)
+    assert family.n_theta == 0
+    assert stream.prepared.fitting.penalty_structure.n_penalties == 1
+    assert initial.shape == (1,)
+    if monkeypatch is not None:
+        # The scripted stage leaves a plateau trial between gtol and 1e-5, as
+        # the native roundoff stops do; one Newton step then reaches the
+        # float64 gradient floor. The completion stops once gtol is met, so a
+        # far stop would end only gtol-stationary.
+        monkeypatch.setattr(
+            reml_execution,
+            "minimize",
+            _plateau_then_abnormal(record, stop, plateau_gtol=1e-5),
+        )
+    result = nb_reml_execution.optimize_nb_stream_reml(
+        stream,
+        family,
+        initial,
+        maximum_bytes=_OPTIMIZER_MAXIMUM_BYTES,
+        pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+        control=_PUBLIC_CONTROL,
+    )
+    return stream, result
+
+
+@pytest.mark.parametrize("stop", sorted(_ROUNDOFF_STOPS))
+@pytest.mark.parametrize("link", _LINKS)
+def test_fixed_theta_smooth_roundoff_stop_completes_to_unforced_endpoint(
+    monkeypatch, link, stop
+):
+    """Fixed theta keeps newton() iterating on the free log smoothing parameter.
+
+    A scripted L-BFGS-B stop at a valid plateau trial above gtol continues
+    through the free-parameter completion to the unforced endpoint, restates
+    convergence on the completed trial, keeps the L-BFGS-B status, and
+    charges every completion probe and step to the work counters.
+    """
+    _, reference = _optimize_fixed_theta_smooth(link)
+    record = {}
+    stream, forced = _optimize_fixed_theta_smooth(link, monkeypatch, record, stop)
+    message, status = _ROUNDOFF_STOPS[stop]
+    assert reference.converged, reference.message
+    assert abs(record["plateau_gradient"]) > _PUBLIC_CONTROL.gtol
+    assert forced.status == status
+    assert forced.message.startswith(message)
+    assert "free-parameter curvature Newton completion" in forced.message
+    assert "stopped by converged" in forced.message
+    assert forced.converged, forced.message
+    assert forced.projected_gradient_inf <= _PUBLIC_CONTROL.gtol
+    assert forced.theta_completion_stop is None
+    assert forced.theta_completion_steps == 0
+    # One fixed-theta free rho charges the curvature completion ledger.
+    retained, history, lbfgs = reml_execution._parameterized_optimizer_workspace_bytes(
+        stream.prepared.n_coef, 1, _PUBLIC_CONTROL, _OPTIMIZER_PIRLS_CONTROL
+    )
+    assert forced.outer_workspace_bytes == retained + history + lbfgs + 8 * (1 + 24)
+    # Every exact trial, completion probes and steps included, is counted.
+    assert forced.cumulative_source_scans == stream.source.scans
+    assert forced.cumulative_final_refit_solves == forced.n_evaluations
+    checks = _AssertCollector()
+    for name, actual, expected in (
+        ("log sp", forced.trial.params, reference.trial.params),
+        ("score", forced.trial.score, reference.trial.score),
+        (
+            "coefficients",
+            forced.trial.fit_result.state.coefficients,
+            reference.trial.fit_result.state.coefficients,
+        ),
+        (
+            "deviance",
+            forced.trial.fit_result.state.deviance,
+            reference.trial.fit_result.state.deviance,
+        ),
+    ):
+        checks.check(
+            name,
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                actual, expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    checks.raise_if_any(f"forced {stop} fixed-theta NB/{link} completion")
+
+
 def _assert_forced_completion(forced, record, stop):
     message, status = _ROUNDOFF_STOPS[stop]
     # The completion starts from a valid plateau trial that misses gtol.
@@ -1169,3 +1270,231 @@ def test_no_smooth_estimated_theta_abnormal_completion_matches_pinned_r(
             ),
         )
     checks.raise_if_any(f"no-smooth NB/{link} forced ABNORMAL pinned R parity")
+
+
+# ---------------------------------------------------------------------------
+# Completion routing: pinned log theta before the free-parameter completion
+# ---------------------------------------------------------------------------
+
+
+def _routing_nb_trial(params, hessian, target):
+    """Exact quadratic NB source trial; log theta is the final coordinate."""
+    params = np.array(params, dtype=np.float64, copy=True)
+    difference = params - target
+    state = SimpleNamespace(
+        converged=True,
+        line_search_failed=False,
+        stationarity=0.0,
+        n_iter=1,
+        saturated_loglik=-280.0,
+        coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 19.0),
+    )
+    return _ProfileTrial(
+        params=params,
+        score=np.float64(
+            _PROFILE_SCORE + 0.5 * float(difference @ hessian @ difference)
+        ),
+        gradient=hessian @ difference,
+        source_scans=2,
+        batches_scanned=5,
+        source_fingerprint="source",
+        basis_fingerprint="basis",
+        family_name="nb",
+        link_name="IdentityLink",
+        source_factor_residual=1e-15,
+        observed_factor_residual=1e-15,
+        workspace=SimpleNamespace(required_bytes=256),
+        fit_result=SimpleNamespace(
+            log_theta=params[-1:].copy(),
+            score_penalized_deviance=190.0,
+            state=state,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("n_penalties", "pin_lambda", "estimated", "route"),
+    [
+        (1, True, True, "theta"),
+        (0, False, True, "theta"),
+        (0, True, True, "theta"),
+        (1, False, True, "free"),
+        (2, False, True, None),
+        (1, False, False, "free"),
+        (2, False, False, "free"),
+        (4, False, False, "free"),
+        (5, False, False, None),
+        (1, True, False, "fixed"),
+        (0, False, False, "fixed"),
+    ],
+)
+def test_nb_completion_routing_prefers_pinned_log_theta(
+    monkeypatch, n_penalties, pin_lambda, estimated, route
+):
+    """At most one newton() completion runs; the pinned log-theta one wins.
+
+    With every rho pinned, or none, free log theta is the only free
+    coordinate and takes the secant completion. The free-parameter completion
+    needs a free rho: one free rho with free log theta, or one to four free
+    rho with fixed theta. Fixed theta with every rho pinned, or none, has no
+    free coordinate and returns its exact evaluation without a completion.
+    """
+    n_params = n_penalties + int(estimated)
+    hessian = np.diag(np.linspace(2.0, 3.0, n_params)) + 0.25
+    target = np.linspace(-1.0, 1.0, n_params)
+    start = target + 0.01
+    evaluated = []
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        evaluated.append(np.asarray(params, dtype=np.float64).copy())
+        trial = _routing_nb_trial(params, hessian, target)
+        trial.final_refit_solves = 1
+        trial.derivative_elapsed_s = 0.25
+        return trial
+
+    def accept_then_stop(fun, x0, *, callback, **_kwargs):
+        # Two accepted log-theta steps resolve the secant, then a roundoff
+        # stop leaves the projected gradient above gtol.
+        x = np.asarray(x0, dtype=np.float64).copy()
+        fun(x)
+        for _ in range(2):
+            x = x.copy()
+            x[-1] -= 0.003
+            fun(x)
+            callback(OptimizeResult(x=x.copy(), fun=0.0))
+        return SimpleNamespace(
+            x=x.copy(),
+            success=True,
+            status=0,
+            message="CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+            nit=2,
+        )
+
+    flags = []
+    original = nb_reml_execution._run_parameterized_stream_reml
+
+    def record(*args, **kwargs):
+        flags.append(
+            (
+                kwargs["roundoff_stationary_completion"],
+                kwargs["curvature_stationary_completion"],
+            )
+        )
+        return original(*args, **kwargs)
+
+    fitting = SimpleNamespace(
+        penalty_structure=SimpleNamespace(n_penalties=n_penalties)
+    )
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(fitting=fitting, n_coef=2),
+    )
+    monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", accept_then_stop)
+    monkeypatch.setattr(nb_reml_execution, "_run_parameterized_stream_reml", record)
+    result = nb_reml_execution.optimize_nb_stream_reml(
+        stream,
+        NegativeBinomial(theta=2.7, fixed=not estimated, link="identity"),
+        start,
+        maximum_bytes=1_000_000,
+        pin_lambda=pin_lambda,
+        pirls_control=StreamPIRLSControl(solver_policy="qr", tol=_INNER_TOLERANCE),
+        control=_PUBLIC_CONTROL,
+    )
+    assert flags == [(route == "theta", route == "free")]
+    np.testing.assert_array_equal(
+        np.asarray(result.trial.params)[: n_penalties if pin_lambda else 0],
+        start[: n_penalties if pin_lambda else 0],
+    )
+    # Work counters charge every exact trial, completion trials included.
+    assert result.n_evaluations == len(evaluated)
+    assert result.cumulative_source_scans == 2 * len(evaluated)
+    assert result.cumulative_inner_iterations == len(evaluated)
+    assert result.cumulative_final_refit_solves == len(evaluated)
+    assert result.cumulative_derivative_s == 0.25 * len(evaluated)
+    if route == "theta":
+        assert result.theta_completion_stop is not None
+        assert not result.theta_completion_stop.startswith("not run")
+        assert result.theta_completion_steps >= 1
+        assert "secant Newton completion" in result.message
+        assert "free-parameter curvature" not in result.message
+        assert result.converged, result.message
+    elif route == "free":
+        assert result.theta_completion_stop is None
+        assert result.theta_completion_steps == 0
+        assert (
+            "free-parameter curvature Newton completion: 1 accepted step(s), "
+            "stopped by converged" in result.message
+        )
+        assert "secant Newton completion" not in result.message
+        assert result.converged, result.message
+        np.testing.assert_allclose(
+            np.asarray(result.trial.params),
+            target,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+    elif route == "fixed":
+        # No free coordinate: the exact evaluation is returned unchanged.
+        assert len(evaluated) == 1
+        assert result.theta_completion_stop is None
+        assert "All parameter coordinates are fixed" in result.message
+        assert "Newton completion" not in result.message
+        assert result.converged
+        np.testing.assert_array_equal(np.asarray(result.trial.params), start)
+    else:
+        assert result.theta_completion_stop is None
+        assert "curvature Newton completion" not in result.message
+        assert "secant Newton completion" not in result.message
+        assert not result.converged
+        assert "exceeds gtol" in result.message
+
+
+def test_fixed_theta_completion_restates_unconverged_indefinite_curvature(
+    monkeypatch,
+):
+    """A roundoff stop the completion cannot finish stays truthfully open."""
+    hessian = np.array([[-2.0]])
+    target = np.array([-1.0])
+    start = target + 0.01
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        return _routing_nb_trial(params, hessian, target)
+
+    def relative_stop(fun, x0, **_kwargs):
+        fun(np.asarray(x0))
+        return SimpleNamespace(
+            x=np.asarray(x0).copy(),
+            success=True,
+            status=0,
+            message="CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+            nit=0,
+        )
+
+    fitting = SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=1))
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(fitting=fitting, n_coef=2),
+    )
+    monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", relative_stop)
+    result = nb_reml_execution.optimize_nb_stream_reml(
+        stream,
+        NegativeBinomial(theta=2.7, fixed=True, link="identity"),
+        start,
+        maximum_bytes=1_000_000,
+        pirls_control=StreamPIRLSControl(solver_policy="qr", tol=_INNER_TOLERANCE),
+        control=_PUBLIC_CONTROL,
+    )
+    assert not result.converged
+    assert result.status == 0
+    assert (
+        "free-parameter curvature Newton completion: 0 accepted step(s), "
+        "stopped by indefinite curvature" in result.message
+    )
+    assert "exceeds gtol" in result.message
+    assert result.projected_gradient_inf > _PUBLIC_CONTROL.gtol
+    np.testing.assert_array_equal(np.asarray(result.trial.params), start)
+    # The two curvature probes are charged as exact trials.
+    assert result.n_evaluations == 3
+    assert result.n_accepted == 0

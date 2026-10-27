@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numbers
 import sys
+import time
 from dataclasses import dataclass, replace
 
 import jax
@@ -26,6 +27,7 @@ from jaxgam.execution.regular_stream import (
     preflight_regular_stream_workspace,
 )
 from jaxgam.execution.reml import (
+    _CURVATURE_COMPLETION_MAX_FREE,
     StreamREMLControl,
     _abnormal_line_search_stop,
     _AcceptedParameterizedTrialObjective,
@@ -37,7 +39,10 @@ from jaxgam.execution.reml import (
     _projected_gradient_for_bounds,
     _run_parameterized_stream_reml,
     _ScaleNewtonCompletion,
+    _synchronize_fitted_state,
+    _trial_inner_iterations,
     _valid_exact_trial,
+    _validate_max_step,
 )
 from jaxgam.execution.stream import (
     StreamPIRLSControl,
@@ -86,6 +91,8 @@ class NBStreamREMLTrial:
     basis_fingerprint: str
     family_name: str
     link_name: str
+    derivative_elapsed_s: float = 0.0
+    final_refit_solves: int = 0
 
 
 @dataclass(frozen=True)
@@ -114,6 +121,9 @@ class NBStreamREMLOptimization:
     outer_workspace_bytes: int
     theta_completion_steps: int = 0
     theta_completion_stop: str | None = None
+    cumulative_inner_iterations: int = 0
+    cumulative_final_refit_solves: int = 0
+    cumulative_derivative_s: float = 0.0
 
     @property
     def required_bytes(self) -> int:
@@ -324,6 +334,8 @@ def evaluate_nb_stream_reml(
         start_is_absent=initial is None,
         estimate_theta=False,
     )
+    _synchronize_fitted_state(result.state)
+    derivative_started = time.perf_counter()
     state = result.state
     if (
         not state.converged
@@ -473,6 +485,8 @@ def evaluate_nb_stream_reml(
     lineage.validate(stream.prepared, family)
     if stream.source.fingerprint() != lineage.source_fingerprint:
         raise RuntimeError("RowSource changed during NB REML evaluation")
+    jax.block_until_ready((core.score, gradient))
+    derivative_elapsed_s = time.perf_counter() - derivative_started
     return NBStreamREMLTrial(
         params=jax.device_put(jnp.asarray(params, dtype=jnp.float64), device),
         score=core.score,
@@ -488,6 +502,8 @@ def evaluate_nb_stream_reml(
         basis_fingerprint=stream.prepared.basis_fingerprint,
         family_name=family.family_name,
         link_name=type(family.link).__qualname__,
+        derivative_elapsed_s=derivative_elapsed_s,
+        final_refit_solves=1,
     )
 
 
@@ -700,6 +716,11 @@ def _nb_local_stationary_score_change(
         objective.n_evaluations += 1
         objective.cumulative_source_scans += probe.source_scans
         objective.cumulative_batches_scanned += probe.batches_scanned
+        objective.cumulative_inner_iterations += _trial_inner_iterations(probe)
+        objective.cumulative_final_refit_solves += getattr(
+            probe, "final_refit_solves", 0
+        )
+        objective.cumulative_derivative_s += getattr(probe, "derivative_elapsed_s", 0.0)
         if (
             not np.array_equal(np.asarray(probe.params), probe_params)
             or any(
@@ -920,6 +941,9 @@ def _complete_pinned_nb_theta(
             cumulative_batches_scanned=objective.cumulative_batches_scanned,
             projected_gradient_inf=projected_gradient_inf,
             accepted_score_history=objective.accepted_score_history,
+            cumulative_inner_iterations=objective.cumulative_inner_iterations,
+            cumulative_final_refit_solves=objective.cumulative_final_refit_solves,
+            cumulative_derivative_s=objective.cumulative_derivative_s,
         ),
         completion,
     )
@@ -935,6 +959,7 @@ def optimize_nb_stream_reml(
     pirls_control: StreamPIRLSControl | None = None,
     control: StreamREMLControl | None = None,
     initial_coefficients: np.ndarray | None = None,
+    max_step: float | None = None,
     device: jax.Device | None = None,
 ) -> NBStreamREMLOptimization:
     """Optimize exact NB REML jointly over smoothing and free theta.
@@ -945,9 +970,15 @@ def optimize_nb_stream_reml(
     log-theta remains free and unbounded. Whenever log theta is the only free
     coordinate (every rho pinned, or no smoothing parameter at all), the
     roundoff stationary comparison and the log-theta secant Newton completion
-    follow the L-BFGS-B stage.
+    follow the L-BFGS-B stage; this pinned route takes precedence. Otherwise
+    the free-parameter curvature completion follows an L-BFGS-B roundoff stop
+    whenever a smoothing parameter is free: for one free rho with free log
+    theta, and, with fixed theta, for one to four free rho (as the regular
+    known-scale route does). At most one completion runs; with fixed theta
+    and every rho pinned, or none, no coordinate is free and none runs.
     """
     reml_control = StreamREMLControl() if control is None else control
+    _validate_max_step(max_step)
     if (
         not isinstance(maximum_bytes, numbers.Integral)
         or isinstance(maximum_bytes, bool)
@@ -1004,11 +1035,11 @@ def optimize_nb_stream_reml(
         )
     )
     # SciPy can discard a fully stationary free-theta trial when the score
-    # rises by one float64 ULP. Retaining that trial across subsequent probes
+    # rises by one float64 ULP. A model with no penalties has the same single
+    # free theta coordinate as a pinned-smoothing model, matching the regular
+    # single-free-log-scale rule. Retaining that trial across subsequent probes
     # adds one p²-owned result and its bounded penalized-deviance history
     # alongside accepted and active candidate states.
-    # Log theta is the only free coordinate when every rho is pinned or none
-    # exists, matching the regular single-free-log-scale rule.
     theta_only = family.n_theta == 1 and (pin_lambda or n_lambda == 0)
     stationary_trial_bytes = (
         retained_trial_bytes + retained_history_bytes if theta_only else 0
@@ -1016,12 +1047,34 @@ def optimize_nb_stream_reml(
     # The log-theta completion records two host scalars per promotion; its
     # own trials reuse the accepted/candidate slots after L-BFGS-B returns.
     theta_secant_bytes = _THETA_SECANT_BYTES if theta_only else 0
+    # The pinned log-theta route takes precedence; the free-parameter
+    # completion needs a free smoothing parameter, so the two never both
+    # follow one L-BFGS-B stage. Pinned newton() keeps iterating on free log
+    # smoothing parameters whatever the theta mode: with free log theta the
+    # completion covers the (rho, log theta) pair; with fixed theta, as on the
+    # regular known-scale route, one to four free log smoothing parameters.
+    curvature_completion = (
+        not theta_only
+        and not pin_lambda
+        and (
+            (family.n_theta == 1 and n_lambda == 1)
+            or (family.n_theta == 0 and 1 <= n_lambda <= _CURVATURE_COMPLETION_MAX_FREE)
+        )
+    )
+    # The completion holds the m-by-m finite-gradient curvature model, its
+    # eigenvalue/solve copies and about fourteen m-vectors of parameters,
+    # gradients, probes and steps while accepted and candidate trials
+    # coexist; for m <= 4, 3m^2 + 14m <= m^2 + 24m.
+    curvature_completion_bytes = (
+        8 * (n_params * n_params + 24 * n_params) if curvature_completion else 0
+    )
     outer_workspace_bytes = (
         retained_trial_bytes
         + stationary_trial_bytes
         + theta_secant_bytes
         + retained_history_bytes
         + lbfgs_workspace_bytes
+        + curvature_completion_bytes
     )
     if outer_workspace_bytes >= maximum_bytes:
         raise MemoryError(
@@ -1047,8 +1100,13 @@ def optimize_nb_stream_reml(
         bounds,
         reml_control,
         roundoff_stationary_completion=theta_only,
-        completion_inner_tolerance=pirls_control.tol if theta_only else None,
+        curvature_stationary_completion=curvature_completion,
+        completion_inner_tolerance=(
+            pirls_control.tol if theta_only or curvature_completion else None
+        ),
+        completion_score_roundoff=_nb_score_roundoff,
         local_score_change=(_nb_local_stationary_score_change if theta_only else None),
+        max_step=max_step,
     )
     completion = None
     if theta_only:
@@ -1081,4 +1139,7 @@ def optimize_nb_stream_reml(
         outer_workspace_bytes=outer_workspace_bytes,
         theta_completion_steps=0 if completion is None else completion.steps,
         theta_completion_stop=None if completion is None else completion.stop,
+        cumulative_inner_iterations=optimized.cumulative_inner_iterations,
+        cumulative_final_refit_solves=optimized.cumulative_final_refit_solves,
+        cumulative_derivative_s=optimized.cumulative_derivative_s,
     )

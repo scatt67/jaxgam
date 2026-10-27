@@ -5,8 +5,8 @@ Usage::
     uv run python scripts/benchmark_vs_r.py
 
 Reports two Python timings per configuration:
-- **cold**: first fit at each (smooth, family, n) — includes JIT compilation
-  for that array shape. Reflects the one-shot experience.
+- **first fit**: first fit at each (smooth, family, n). Its persistent-cache
+  state is unknown; isolated cold evidence comes from ``benchmark_scaling.py``.
 - **warm**: median of subsequent fits after JIT cache is hot for that shape.
   Reflects the repeated-fit experience (iteration, CV, bootstrap).
 
@@ -16,9 +16,6 @@ R timing is measured with system.time() inside R to avoid rpy2 overhead.
 from __future__ import annotations
 
 import csv
-import os
-import pathlib
-import shutil
 import time
 from statistics import median
 
@@ -179,10 +176,15 @@ def check_r_available() -> bool:
 
 
 def setup_r():
-    """Initialize rpy2 and load mgcv."""
+    """Initialize the pinned R/mgcv reference runtime."""
     import rpy2.robjects as ro
     from rpy2.robjects.packages import importr
 
+    from tests.r_bridge import RBridge
+
+    ok, reason = RBridge.check_versions()
+    if not ok:
+        raise RuntimeError(f"Pinned R/mgcv benchmark reference unavailable: {reason}")
     importr("mgcv")
     return ro
 
@@ -282,21 +284,12 @@ def main() -> None:
     print(f"  {len(datasets)} datasets ready.\n")
 
     # ---------------------------------------------------------------------------
-    # True cold pass: first-ever fit at largest n, BEFORE any JIT warmup.
-    # This measures the worst case: full trace compilation + XLA compilation
-    # + actual fitting, all in one shot.
+    # First fit at largest n, before this script's JIT warmup. It is not an
+    # isolated cold measurement because persistent compilation state is left
+    # unchanged.
     # ---------------------------------------------------------------------------
-    # Clear persistent compilation cache so XLA must recompile from scratch.
-    cache_dir = os.environ.get(
-        "JAX_COMPILATION_CACHE_DIR",
-        str(pathlib.Path.home() / ".cache" / "jaxgam" / "jax"),
-    )
-    if os.path.isdir(cache_dir):
-        shutil.rmtree(cache_dir)
-        print(f"Cleared JAX compilation cache: {cache_dir}")
-
     true_cold_n = DATA_SIZES[-1]
-    print(f"True cold benchmark (no prior JIT, n={true_cold_n})...")
+    print(f"First-fit benchmark (persistent cache state unknown, n={true_cold_n})...")
     true_cold_results: dict[tuple[str, str], tuple[float, int]] = {}
     total_tc = len(SMOOTH_CONFIGS) * len(FAMILIES)
     done_tc = 0
@@ -315,7 +308,7 @@ def main() -> None:
 
     # Minimal JIT warmup: one tiny fit per (smooth, family) to compile
     # the function traces. Shape-specific recompilation for each n is
-    # measured as part of the "cold" benchmark.
+    # measured as part of the first-shape-fit benchmark.
     print("JIT warmup (minimal — compile traces only)...")
     for smooth_key, cfg in SMOOTH_CONFIGS.items():
         for family in FAMILIES:
@@ -328,10 +321,9 @@ def main() -> None:
     print()
 
     # ---------------------------------------------------------------------------
-    # Cold pass: first fit at each (smooth, family, n)
-    # For n > smallest, this includes JIT recompilation for the new shape.
+    # First-shape-fit pass. It may reuse a persistent compilation cache.
     # ---------------------------------------------------------------------------
-    print("Cold benchmark (includes JIT shape recompilation)...")
+    print("First-shape-fit benchmark (persistent cache state unknown)...")
     cold_results: dict[tuple[str, str, int], tuple[float, int]] = {}
     total = len(SMOOTH_CONFIGS) * len(FAMILIES) * len(DATA_SIZES)
     done = 0
@@ -433,10 +425,10 @@ def main() -> None:
         return f"{ratio:.1f}x" if ratio >= 1.0 else f"{ratio:.2f}x"
 
     # ---------------------------------------------------------------------------
-    # True cold summary (n=100k only)
+    # First-fit summary (largest n only)
     # ---------------------------------------------------------------------------
     print("=" * 110)
-    print(f"TRUE COLD vs R (n={true_cold_n}, no prior JIT)")
+    print(f"FIRST FIT vs R (n={true_cold_n}, persistent cache state unknown)")
     print("=" * 110)
     print()
     tc_header = (

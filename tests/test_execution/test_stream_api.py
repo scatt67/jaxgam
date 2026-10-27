@@ -264,7 +264,9 @@ def test_public_stream_covariance_budget_and_route_guards() -> None:
         GAM(formula, sp=[0.2], control=FitControl(execution="stream")).fit(data)
     with pytest.raises(NotImplementedError, match="result='prediction'"):
         GAM(formula, sp=[0.2], control=FitControl(execution="stream")).fit(source)
-    with pytest.raises(NotImplementedError, match="requires explicit fixed sp"):
+    with pytest.raises(
+        NotImplementedError, match="Exact streamed REML requires linear_solver='qr'"
+    ):
         GAM(formula, control=FitControl(execution="stream")).fit(
             source, result="prediction"
         )

@@ -27,6 +27,8 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -37,7 +39,7 @@ from jaxgam.api import GAM
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda, efs_initial_log_scale
-from jaxgam.execution.reml import evaluate_regular_stream_reml
+from jaxgam.execution.reml import StreamREMLControl, evaluate_regular_stream_reml
 from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
@@ -62,6 +64,121 @@ from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
 # Unknown-scale score scales are judged by pinned R's own matched-state
 # stationarity instead (see _matched_r_score_scale_checks).
 _PR76_KNOWN_BOUNDARY_CASES = frozenset({(Poisson, "identity"), (Binomial, "log")})
+
+
+# PR8.3 field eligibility is named per generated model and the four-pass audit.
+# Every score remains STRICT. See the live RBridge comparison below.
+_PR83_REGULAR_MODERATE_FIELDS = {
+    ("gaussian", "identity"): frozenset(
+        ["coefficients", "score_scale", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("gaussian", "log"): frozenset(["coefficients", "smoothing"]),
+    ("gaussian", "inverse"): frozenset(
+        ["coefficients", "score_scale", "smoothing", "edf", "link_se"]
+    ),
+    ("gaussian", "sqrt"): frozenset(["smoothing"]),
+    ("gaussian", "logit"): frozenset(["coefficients", "smoothing"]),
+    ("gaussian", "probit"): frozenset(["coefficients", "smoothing"]),
+    ("gaussian", "cloglog"): frozenset(["score_scale", "smoothing"]),
+    ("gaussian", "inverse_squared"): frozenset(
+        ["coefficients", "score_scale", "smoothing", "edf", "link_se"]
+    ),
+    ("gamma", "identity"): frozenset(
+        ["coefficients", "score_scale", "smoothing", "edf", "link_se"]
+    ),
+    ("gamma", "log"): frozenset(["coefficients", "score_scale", "smoothing", "edf"]),
+    ("gamma", "inverse"): frozenset(
+        [
+            "coefficients",
+            "scale",
+            "score_scale",
+            "deviance",
+            "smoothing",
+            "edf",
+            "fitted_values",
+            "link_se",
+        ]
+    ),
+    ("gamma", "sqrt"): frozenset(["score_scale", "smoothing"]),
+    ("gamma", "logit"): frozenset(["coefficients", "smoothing", "edf", "link_se"]),
+    ("gamma", "probit"): frozenset(["coefficients", "smoothing", "edf", "link_se"]),
+    ("gamma", "cloglog"): frozenset(["coefficients", "score_scale", "smoothing"]),
+    ("poisson", "identity"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("poisson", "log"): frozenset(["coefficients", "smoothing"]),
+    ("poisson", "inverse"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("poisson", "sqrt"): frozenset(
+        ["coefficients", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("poisson", "inverse_squared"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "identity"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "log"): frozenset(["smoothing", "link_se"]),
+    ("binomial", "inverse"): frozenset(
+        ["coefficients", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "sqrt"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "logit"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "probit"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "cloglog"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+    ("binomial", "inverse_squared"): frozenset(
+        ["coefficients", "deviance", "smoothing", "edf", "fitted_values", "link_se"]
+    ),
+}
+_PR83_NB_MODERATE_FIELDS = {
+    (True, False, "identity"): frozenset(
+        ["coefficients", "deviance", "edf", "fitted_values", "link_se", "smoothing"]
+    ),
+    (True, False, "sqrt"): frozenset(["edf", "fitted_values", "link_se", "smoothing"]),
+    (True, True, "log"): frozenset(
+        ["theta", "coefficients", "edf", "fitted_values", "link_se", "smoothing"]
+    ),
+    (True, True, "sqrt"): frozenset(
+        [
+            "theta",
+            "coefficients",
+            "deviance",
+            "edf",
+            "fitted_values",
+            "link_se",
+            "smoothing",
+        ]
+    ),
+}
+
+# Estimated Gamma endpoints whose raw pinned-R field is judged by R's own
+# stationarity. Pinned newton() decides its last step on raw-score roundoff,
+# so for these generated rows it ends in "full convergence" or "step failed"
+# depending on the platform (host, aarch64 and amd64 Linux disagree even with
+# one BLAS thread), returning sp or scale up to one Newton correction from
+# its stationary point. The four-pass endpoint audit's correction attempts
+# cannot reproduce that stop; the named field's raw R comparison is STRICT
+# where R's matched-state derivatives show it stationary at STRICT
+# resolution and MODERATE otherwise (see _pr83_r_endpoint_checks).
+# JAX's own endpoint is only guaranteed to gtol: L-BFGS-B can stop one step
+# earlier on another platform (native amd64 CI, batch_rows=96: projected
+# gradient below gtol, sp 1.5e-7 short of stationary). Physical fields are
+# then judged at JAX's Newton-completed point (see _PR83Endpoint).
+_PR83_R_STATIONARITY_FIELDS = {
+    ("gamma", "logit"): "score_scale",
+    ("gamma", "inverse_squared"): "smoothing",
+}
+_PR83_R_ENDPOINT_COORDINATES = {"smoothing": 0, "score_scale": 1}
+_PR83_ZERO_PENALTY_MODERATE_FIELDS = frozenset({"score_scale"})
 
 
 def _public_fixed_regular_case(family_class, link: str):
@@ -185,6 +302,1251 @@ def test_pr76_nb_reviewed_case_rejects_changed_data_or_mode() -> None:
     changed_model = GAM('y~s(x,bs="cr",k=6)', family=family, sp=[0.5], control=control)
     with pytest.raises(AssertionError):
         _assert_pr76_nb_case(source, changed_model, "identity")
+
+
+def _public_exact_regular_case(family_class, _link: str):
+    """Generate the same nonlinear, noncanonical release rows in both runtimes."""
+    n = 96
+    x = np.linspace(-0.75, 0.75, n)
+    row = np.arange(n)
+    weight = 0.6 + 0.15 * (row % 5)
+    weight[[9, 47]] = 0.0
+    offset = 0.015 * np.sin(3.0 * x)
+    rng = np.random.default_rng(83076)
+    noise = rng.normal(0.0, 0.015, n)
+    y_real = np.clip(
+        0.5 + 0.20 * np.sin(5.3 * x) + 0.07 * np.cos(10.1 * x) + noise,
+        0.08,
+        0.92,
+    )
+    probability = np.clip(
+        0.46 + 0.35 * np.sin(5.3 * x) + 0.08 * np.cos(10.1 * x),
+        0.06,
+        0.94,
+    )
+    y_discrete = (rng.uniform(size=n) < probability).astype(float)
+    if family_class is Binomial:
+        y = np.round(20.0 * probability) / 20.0
+        weight = np.full(n, 20.0)
+        weight[[9, 47]] = 0.0
+    elif family_class is Poisson:
+        y = y_discrete
+    else:
+        y = y_real
+    return pd.DataFrame({"x": x, "y": y}), weight, offset
+
+
+def _assert_pr83_regular_case(
+    family_class, link, source, model, *, smooth: bool = True, batch_rows: int = 17
+) -> None:
+    """Bind approved fields to generated rows and exact public controls."""
+    data, weight, offset = _public_exact_regular_case(family_class, link)
+    expected = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    assert source.n_rows == expected.n_rows == 96
+    assert source.fingerprint() == expected.fingerprint()
+    assert type(model.family) is family_class
+    assert type(model.family.link) is type(family_class(link).link)
+    assert model.formula == ('y~s(x,bs="cr",k=6)' if smooth else "y~x")
+    assert model.optimizer == "newton"
+    assert model.method == "REML"
+    assert model.sp is None
+    assert model.control == FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=batch_rows,
+        uncertainty="fisher",
+    )
+
+
+def _pr83_newton_completed(
+    rho: np.ndarray, gradient: np.ndarray, hessian: np.ndarray
+) -> np.ndarray:
+    """Return one Newton completion of a (log sp, log scale) endpoint."""
+    return np.asarray(rho, dtype=np.float64) - np.linalg.solve(
+        np.asarray(hessian, dtype=np.float64), np.asarray(gradient, dtype=np.float64)
+    )
+
+
+def _pr83_field_stationary(field: str, value: float, completed: np.ndarray) -> bool:
+    """Whether a raw sp or scale equals its Newton-completed value at STRICT."""
+    target = np.exp(completed[_PR83_R_ENDPOINT_COORDINATES[field]])
+    return bool(np.isclose(value, target, rtol=STRICT.rtol, atol=STRICT.atol))
+
+
+def test_pr83_r_stationarity_rule_selects_raw_tolerance_per_coordinate():
+    """Only an endpoint one correction from stationary relaxes its own field."""
+    hessian = np.array([[1.8663, -1.8756], [-1.8756, 46.477]])
+    stationary = np.log([0.0136, 0.0256])
+    np.testing.assert_array_equal(
+        _pr83_newton_completed(stationary, np.zeros(2), hessian), stationary
+    )
+    # One Newton correction of 1e-8 in log sp: the gradient there is H d.
+    offset = np.array([1e-8, 0.0])
+    completed = _pr83_newton_completed(stationary + offset, hessian @ offset, hessian)
+    np.testing.assert_allclose(completed, stationary, rtol=STRICT.rtol, atol=0.0)
+    assert _pr83_field_stationary("smoothing", 0.0136, completed)
+    assert not _pr83_field_stationary(
+        "smoothing", float(np.exp(stationary[0] + 1e-8)), completed
+    )
+    # The scale coordinate is judged on its own.
+    assert _pr83_field_stationary("score_scale", 0.0256, completed)
+    assert set(_PR83_R_STATIONARITY_FIELDS) == {
+        ("gamma", "logit"),
+        ("gamma", "inverse_squared"),
+    }
+
+
+def _pr83_physical_fields(result, data: pd.DataFrame, offset: np.ndarray) -> dict:
+    """Return a public result's physical fields under pinned-R field names."""
+    return {
+        "coefficients": result.coefficients,
+        "score": result.score,
+        "scale": result.scale,
+        "score_scale": result.score_scale,
+        "deviance": result.deviance,
+        "smoothing": result.smoothing_params[0],
+        "edf": result.edf_total,
+        "fitted_values": result.predict(data[["x"]], offset=offset),
+        "link_se": result.predict(
+            data[["x"]], pred_type="link", se_fit=True, offset=offset
+        )[1],
+    }
+
+
+@dataclass(frozen=True)
+class _PR83Endpoint:
+    """Pinned-R endpoint judgement of one estimated Gamma fit.
+
+    ``field`` is the named oracle field whose plain raw-R comparison the
+    caller drops; ``add`` adds the endpoint checks. ``physical`` is the
+    public result whose physical fields the caller compares with pinned R at
+    the cell's existing tolerances: the raw fit where JAX's endpoint is
+    stationary at STRICT resolution, otherwise a public fixed-sp refit at
+    JAX's own Newton-completed smoothing parameter. ``prefix`` names the
+    refit in those checks ("" for the raw endpoint).
+    """
+
+    field: str
+    add: Callable[[_AssertCollector], None]
+    physical: object
+    prefix: str
+
+    def physical_fields(self, data: pd.DataFrame, offset: np.ndarray) -> dict:
+        return _pr83_physical_fields(self.physical, data, offset)
+
+
+def _pr83_r_endpoint_checks(
+    family_class,
+    link: str,
+    source: DataFrameRowSource,
+    model: GAM,
+    result,
+    expected: dict,
+    derivatives: dict,
+    *,
+    label: str,
+) -> _PR83Endpoint:
+    """Judge an estimated Gamma endpoint by pinned R's own stationarity.
+
+    ``derivatives`` are pinned gam.fit3's matched-state REML gradient g_R and
+    Hessian H_R over (log sp, log scale) at R's returned endpoint rho_R
+    (RBridge.public_exact_reml_derivatives). rho_R - H_R^{-1} g_R is R's own
+    Newton-completed stationary point, whether newton() reported full
+    convergence or a step failure. The checks are:
+
+    * provenance at STRICT: the matched evaluation reproduces R's returned
+      sp, scale and score with a converged inner fit and a positive definite
+      Hessian, and JAX's exact source trial at rho_R carries R's derivatives
+      (log-scale curvature against H_R; the gradient in parameter units,
+      H_R^{-1} g, because R's Gamma fix.family.ls ls[2]*phi term carries up
+      to 1.2e-12 of digamma cancellation, see _matched_r_score_scale_checks);
+    * the JAX endpoint, Newton-completed with its own exact gradient, equals
+      R's Newton-completed endpoint at STRICT, and so does the raw JAX
+      endpoint wherever JAX is itself stationary at STRICT resolution;
+    * the cell's named raw field against raw R at STRICT where both raw
+      endpoints are stationary in that coordinate at STRICT resolution, and
+      otherwise at MODERATE bound to the generated rows and controls;
+    * the raw JAX endpoint keeps its convergence contract (converged with
+      projected gradient at most gtol).
+
+    The exact outer optimizer only guarantees its endpoint to gtol. Where JAX's
+    raw endpoint is not stationary at STRICT resolution (L-BFGS-B stopped one
+    step earlier, as on native amd64 CI), its physical fields are not claimed
+    against R at STRICT. The caller judges them instead from a public fixed-sp
+    refit at exp(rho_jax*[0]) with the same FitControl, whose pinned log-scale
+    completion re-estimates the scale; the refit must converge truthfully
+    (exact log-scale gradient at its returned scale at most gtol) and
+    reproduce JAX's completed scale exp(rho_jax*[1]) at STRICT. The raw
+    endpoint's score, second order in its offset, stays STRICT against R.
+    """
+    family = family_class(link)
+    field = _PR83_R_STATIONARITY_FIELDS[(family.family_name.lower(), link)]
+    coordinate = _PR83_R_ENDPOINT_COORDINATES[field]
+    rho_r = np.asarray(derivatives["log_parameters"], dtype=np.float64)
+    hessian = np.asarray(derivatives["hessian"], dtype=np.float64)
+    rho_star = _pr83_newton_completed(rho_r, derivatives["gradient"], hessian)
+    stream = StreamDesign(
+        prepare_model(parse_formula(model.formula), source, family=family), source
+    )
+    pirls_control = StreamPIRLSControl(
+        batch_rows=model.control.batch_rows, solver_policy="qr", tol=1e-11
+    )
+
+    def exact_trial(params: np.ndarray):
+        return evaluate_regular_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=model.control.memory_budget_bytes,
+            control=pirls_control,
+        )
+
+    at_r = exact_trial(rho_r)
+    jax_value = float(
+        result.smoothing_params[0] if field == "smoothing" else result.score_scale
+    )
+    rho_jax = np.log([result.smoothing_params[0], result.score_scale])
+    at_jax = exact_trial(rho_jax)
+    rho_jax_star = _pr83_newton_completed(rho_jax, at_jax.gradient, hessian)
+    implied_from_r = _pr83_newton_completed(rho_r, at_r.gradient, hessian)
+    jax_stationary = bool(
+        np.allclose(rho_jax_star, rho_jax, rtol=STRICT.rtol, atol=STRICT.atol)
+    )
+    r_field_stationary = _pr83_field_stationary(field, expected[field], rho_star)
+    jax_field_stationary = _pr83_field_stationary(field, jax_value, rho_jax_star)
+    raw_strict = r_field_stationary and jax_field_stationary
+    raw_tolerance = STRICT if raw_strict else MODERATE
+    raw_name = "STRICT" if raw_strict else "MODERATE"
+    if not raw_strict:
+        _assert_pr83_regular_case(
+            family_class, link, source, model, batch_rows=model.control.batch_rows
+        )
+    gtol = StreamREMLControl().gtol
+    detail = (
+        f"R outer status={derivatives['outer_status']}, rho_R={rho_r.tolist()}, "
+        f"g_R={np.asarray(derivatives['gradient']).tolist()}, "
+        f"H_R={hessian.tolist()}, R rho*={rho_star.tolist()}; "
+        f"JAX gradient at rho_R={np.asarray(at_r.gradient).tolist()}, "
+        f"JAX rho={rho_jax.tolist()}, "
+        f"JAX gradient at rho={np.asarray(at_jax.gradient).tolist()}, "
+        f"JAX Newton-completed rho={rho_jax_star.tolist()}; "
+        f"{field} stationary at STRICT: R={r_field_stationary}, "
+        f"JAX={jax_field_stationary}; JAX endpoint stationary={jax_stationary}"
+    )
+    logger = logging.getLogger(__name__)
+    # Record the pinned oracle's raw-tolerance selection in the test log.
+    logger.warning(
+        f"PR8.3 Gamma/{link} {label} raw {field} tolerance: {raw_name} "
+        f"(R {field}*/{field}_R - 1 = "
+        f"{np.expm1(rho_star - rho_r)[coordinate]:.3e}, JAX {field}*/{field} - 1 "
+        f"= {np.expm1(rho_jax_star - rho_jax)[coordinate]:.3e}, R outer status = "
+        f"{derivatives['outer_status']})"
+    )
+    raw_diagnostics = result.exact_optimizer_diagnostics
+    raw_gradient_inf = (
+        np.nan if raw_diagnostics is None else raw_diagnostics.projected_gradient_inf
+    )
+    refit = None
+    refit_gradient = None
+    if not jax_stationary:
+        refit = GAM(
+            model.formula,
+            family=family_class(link),
+            sp=[float(np.exp(rho_jax_star[0]))],
+            control=model.control,
+        ).fit(source, result="prediction")
+        refit_gradient = np.asarray(
+            exact_trial(np.log([refit.smoothing_params[0], refit.score_scale])).gradient
+        )
+    # Record which result supplies the physical fields in the test log.
+    logger.warning(
+        f"PR8.3 Gamma/{link} {label} physical fields: "
+        + (
+            "raw endpoint (JAX stationary at STRICT resolution)"
+            if refit is None
+            else "fixed-sp refit at JAX's Newton-completed sp (raw endpoint "
+            f"rho*/rho - 1 = {np.expm1(rho_jax_star - rho_jax).tolist()}, "
+            f"projected gradient {raw_gradient_inf:.3e})"
+        )
+    )
+
+    def provenance() -> None:
+        assert derivatives["inner_converged"], detail
+        assert derivatives["smoothing"] == expected["smoothing"], detail
+        assert derivatives["returned_scale"] == expected["score_scale"], detail
+        assert np.all(np.linalg.eigvalsh(0.5 * (hessian + hessian.T)) > 0.0), detail
+        np.testing.assert_array_equal(np.asarray(at_r.params), rho_r)
+        for actual, reference in (
+            (derivatives["reml_scale"], derivatives["returned_scale"]),
+            (derivatives["score"], derivatives["returned_score"]),
+            (derivatives["returned_score"], expected["score"]),
+            (at_r.log_phi_curvature, hessian[1, 1]),
+            (implied_from_r, rho_star),
+        ):
+            np.testing.assert_allclose(
+                actual, reference, rtol=STRICT.rtol, atol=STRICT.atol, err_msg=detail
+            )
+
+    def completed_endpoint() -> None:
+        np.testing.assert_allclose(
+            rho_jax_star, rho_star, rtol=STRICT.rtol, atol=STRICT.atol, err_msg=detail
+        )
+        if jax_stationary:
+            np.testing.assert_allclose(
+                rho_jax, rho_star, rtol=STRICT.rtol, atol=STRICT.atol, err_msg=detail
+            )
+
+    def raw_r() -> None:
+        np.testing.assert_allclose(
+            jax_value,
+            expected[field],
+            rtol=raw_tolerance.rtol,
+            atol=raw_tolerance.atol,
+            err_msg=detail,
+        )
+
+    def raw_contract() -> None:
+        diagnostics = result.exact_optimizer_diagnostics
+        assert result.converged, f"{result.convergence_info}; {detail}"
+        assert diagnostics is not None, detail
+        assert diagnostics.projected_gradient_inf <= gtol, detail
+
+    def refit_contract() -> None:
+        refit_detail = (
+            f"refit status={refit.convergence_info}, refit exact gradient at "
+            f"its returned scale={refit_gradient.tolist()}; {detail}"
+        )
+        assert refit.converged, refit_detail
+        assert refit.execution_route == "stream_qr", refit_detail
+        np.testing.assert_array_equal(
+            refit.smoothing_params, [np.exp(rho_jax_star[0])], err_msg=refit_detail
+        )
+        assert np.all(np.isfinite(refit_gradient)), refit_detail
+        assert abs(refit_gradient[1]) <= gtol, refit_detail
+        np.testing.assert_allclose(
+            refit.score_scale,
+            np.exp(rho_jax_star[1]),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=refit_detail,
+        )
+
+    def raw_score() -> None:
+        # The REML score is second order in the endpoint offset, so the raw
+        # gtol endpoint keeps its STRICT score claim against pinned R.
+        np.testing.assert_allclose(
+            result.score,
+            expected["score"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=detail,
+        )
+
+    def add(checks: _AssertCollector) -> None:
+        checks.check(f"{label} R endpoint provenance", provenance)
+        checks.check(f"{label} R Newton-completed endpoint", completed_endpoint)
+        checks.check(f"{label} {field} raw R ({raw_name})", raw_r)
+        checks.check(f"{label} raw endpoint convergence contract", raw_contract)
+        if refit is not None:
+            checks.check(f"{label} Newton-completed refit convergence", refit_contract)
+            checks.check(f"{label} raw score", raw_score)
+
+    return _PR83Endpoint(
+        field=field,
+        add=add,
+        physical=result if refit is None else refit,
+        prefix="" if refit is None else "Newton-completed refit ",
+    )
+
+
+def _assert_pr83_nb_case(source, model, link, *, estimated, smooth) -> None:
+    """Bind reviewed NB fields to its generated theta/penalty profile."""
+    data, weight, offset = nb_optimizer_case_data()
+    expected = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    assert source.n_rows == expected.n_rows == 180
+    assert source.fingerprint() == expected.fingerprint()
+    assert type(model.family) is NegativeBinomial
+    assert model.family.n_theta == int(estimated)
+    assert type(model.family.link) is type(NegativeBinomial(link=link).link)
+    np.testing.assert_array_equal(model.family.get_theta(transformed=True), [2.7])
+    assert model.formula == ('y~s(x,bs="cr",k=8)' if smooth else "y~x")
+    assert model.optimizer == "newton"
+    assert model.method == "REML"
+    assert model.sp is None
+    assert model.control == FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=17,
+        uncertainty="fisher",
+    )
+
+
+def test_pr83_regular_tolerance_guard_rejects_data_model_control_changes() -> None:
+    data, weight, offset = _public_exact_regular_case(Gamma, "log")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=17,
+        uncertainty="fisher",
+    )
+    model = GAM('y~s(x,bs="cr",k=6)', family=Gamma("log"), control=control)
+    _assert_pr83_regular_case(Gamma, "log", source, model)
+    changed = data.copy()
+    changed.loc[0, "y"] = np.nextafter(changed.loc[0, "y"], np.inf)
+    with pytest.raises(AssertionError):
+        _assert_pr83_regular_case(
+            Gamma,
+            "log",
+            DataFrameRowSource(changed, response="y", weights=weight, offset=offset),
+            model,
+        )
+    for alternative in (
+        GAM('y~s(x,bs="cr",k=7)', family=Gamma("log"), control=control),
+        GAM(
+            'y~s(x,bs="cr",k=6)',
+            family=Gamma("log"),
+            control=replace(control, batch_rows=18),
+        ),
+        GAM('y~s(x,bs="cr",k=6)', family=Gamma("identity"), control=control),
+    ):
+        with pytest.raises(AssertionError):
+            _assert_pr83_regular_case(Gamma, "log", source, alternative)
+
+
+def test_pr83_nb_tolerance_guard_rejects_data_theta_mode_and_control() -> None:
+    data, weight, offset = nb_optimizer_case_data()
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=17,
+        uncertainty="fisher",
+    )
+    formula = 'y~s(x,bs="cr",k=8)'
+    model = GAM(
+        formula,
+        family=NegativeBinomial(theta=2.7, link="sqrt"),
+        control=control,
+    )
+    _assert_pr83_nb_case(source, model, "sqrt", estimated=True, smooth=True)
+    changed_weight = weight.copy()
+    changed_weight[1] = np.nextafter(changed_weight[1], np.inf)
+    with pytest.raises(AssertionError):
+        _assert_pr83_nb_case(
+            DataFrameRowSource(
+                data, response="y", weights=changed_weight, offset=offset
+            ),
+            model,
+            "sqrt",
+            estimated=True,
+            smooth=True,
+        )
+    for alternative in (
+        GAM(
+            formula,
+            family=NegativeBinomial(theta=2.7, fixed=True, link="sqrt"),
+            control=control,
+        ),
+        GAM(
+            formula,
+            family=NegativeBinomial(theta=2.7, link="sqrt"),
+            control=replace(control, batch_rows=18),
+        ),
+        GAM("y~x", family=NegativeBinomial(theta=2.7, link="sqrt"), control=control),
+    ):
+        with pytest.raises(AssertionError):
+            _assert_pr83_nb_case(
+                source, alternative, "sqrt", estimated=True, smooth=True
+            )
+
+
+def _public_exact_regular_pinned_r(
+    _tmp_path: Path,
+    data: pd.DataFrame,
+    weight: np.ndarray,
+    offset: np.ndarray,
+    family_name: str,
+    link: str,
+    *,
+    smooth: bool = True,
+) -> dict[str, np.ndarray | float | bool]:
+    """Use the live pinned-R bridge for one regular public release cell."""
+    return RBridge(mode="rpy2").public_exact_reml_fit(
+        data, weight, offset, family_name, link, smooth=smooth
+    )
+
+
+def _public_exact_nb_pinned_r(
+    _tmp_path: Path,
+    data: pd.DataFrame,
+    weight: np.ndarray,
+    offset: np.ndarray,
+    link: str,
+    *,
+    estimated: bool,
+    smooth: bool,
+    initial_smoothing: float | None = None,
+) -> dict[str, np.ndarray | float | bool]:
+    """Use the live pinned-R bridge for one NB public release cell."""
+    return RBridge(mode="rpy2").public_exact_reml_fit(
+        data,
+        weight,
+        offset,
+        "nb",
+        link,
+        smooth=smooth,
+        estimated_theta=estimated,
+        initial_smoothing=initial_smoothing,
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("family_class", [Gaussian, Gamma, Poisson, Binomial])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "identity",
+        "log",
+        "inverse",
+        "sqrt",
+        "logit",
+        "probit",
+        "cloglog",
+        "inverse_squared",
+    ],
+)
+def test_public_estimated_regular_all_links_pinned_r(
+    tmp_path: Path, family_class, link: str
+) -> None:
+    """Public exact selection retains each supported R family/link result."""
+    data, weight, offset = _public_exact_regular_case(family_class, link)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    family = family_class(link)
+    model = GAM(
+        'y~s(x,bs="cr",k=6)',
+        family=family,
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+    if family_class is Poisson and link in {"logit", "probit", "cloglog"}:
+        with pytest.raises(ValueError, match="startup mustart predictor"):
+            model.fit(source, result="prediction")
+        r_error = pytest.importorskip("rpy2.rinterface_lib.embedded").RRuntimeError
+        with pytest.raises(r_error, match=r"out of range|missing value"):
+            _public_exact_regular_pinned_r(
+                tmp_path, data, weight, offset, "poisson", link
+            )
+        return
+
+    moderate_fields = _PR83_REGULAR_MODERATE_FIELDS.get(
+        (family.family_name.lower(), link), frozenset()
+    )
+    if moderate_fields:
+        _assert_pr83_regular_case(family_class, link, source, model)
+    result = model.fit(source, result="prediction")
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, family.family_name.lower(), link
+    )
+    endpoint = None
+    if (family.family_name.lower(), link) in _PR83_R_STATIONARITY_FIELDS:
+        endpoint = _pr83_r_endpoint_checks(
+            family_class,
+            link,
+            source,
+            model,
+            result,
+            expected,
+            RBridge(mode="rpy2").public_exact_reml_derivatives(
+                data, weight, offset, family.family_name.lower(), link
+            ),
+            label="estimated",
+        )
+    # Physical fields come from the raw fit, or from the fixed-sp refit at
+    # JAX's Newton-completed sp where its endpoint is only stationary to gtol.
+    physical = _pr83_physical_fields(result, data, offset)
+    prefix = ""
+    if endpoint is not None:
+        physical = endpoint.physical_fields(data, offset)
+        prefix = endpoint.prefix
+    assert expected["inner_converged"]
+    assert result.converged
+    assert result.execution_route == "stream_exact_reml_qr"
+    assert result.lambda_strategy == "exact_reml"
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-6
+    assert result.source_scans >= 2 + result.exact_optimizer_diagnostics.n_evaluations
+    assert result.known_workspace_bytes <= model.control.memory_budget_bytes
+    assert result.n == source.n_rows
+    assert result.deviance >= -STRICT.atol
+    checks = _AssertCollector()
+    for name, field in (
+        ("coefficients", "coefficients"),
+        ("score", "score"),
+        ("reported scale", "scale"),
+        ("score scale", "score_scale"),
+        ("deviance", "deviance"),
+        ("smoothing", "smoothing"),
+        ("total EDF", "edf"),
+        ("fitted values", "fitted_values"),
+        ("link SE", "link_se"),
+    ):
+        if endpoint is not None and field == endpoint.field:
+            continue
+        tolerance = MODERATE if field in moderate_fields else STRICT
+        checks.check(
+            prefix + name,
+            lambda actual=physical[field], field=field, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
+                )
+            ),
+        )
+    if endpoint is not None:
+        endpoint.add(checks)
+    checks.raise_if_any(f"public estimated {family.family_name}/{link} R parity")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_exact_gamma_inverse_squared_partition_stationarity(
+    tmp_path: Path,
+) -> None:
+    """Exact score reduction and convergence survive different batch cuts."""
+    data, weight, offset = _public_exact_regular_case(Gamma, "inverse_squared")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, "gamma", "inverse_squared"
+    )
+    derivatives = RBridge(mode="rpy2").public_exact_reml_derivatives(
+        data, weight, offset, "gamma", "inverse_squared"
+    )
+    assert expected["inner_converged"]
+    checks = _AssertCollector()
+    for batch_rows in (13, 17, 32, 96):
+        model = GAM(
+            'y~s(x,bs="cr",k=6)',
+            family=Gamma("inverse_squared"),
+            control=FitControl(
+                execution="stream",
+                linear_solver="qr",
+                batch_rows=batch_rows,
+                uncertainty="fisher",
+            ),
+        )
+        result = model.fit(source, result="prediction")
+        assert result.converged, f"batch_rows={batch_rows}: {result.convergence_info}"
+        endpoint = _pr83_r_endpoint_checks(
+            Gamma,
+            "inverse_squared",
+            source,
+            model,
+            result,
+            expected,
+            derivatives,
+            label=f"batch {batch_rows}",
+        )
+        diagnostics = result.exact_optimizer_diagnostics
+        assert diagnostics is not None
+        assert diagnostics.projected_gradient_inf <= 1e-6
+        assert np.all(np.diff(diagnostics.accepted_score_history) <= STRICT.atol)
+        physical = endpoint.physical_fields(data, offset)
+        for name, field in (
+            ("score", "score"),
+            ("smoothing", "smoothing"),
+            ("coefficients", "coefficients"),
+            ("scale", "scale"),
+            ("link SE", "link_se"),
+        ):
+            if field == endpoint.field:
+                continue
+            checks.check(
+                f"batch {batch_rows} {endpoint.prefix}{name}",
+                lambda actual=physical[field], field=field: np.testing.assert_allclose(
+                    actual, expected[field], rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+        endpoint.add(checks)
+    checks.raise_if_any("Gamma inverse-squared exact partition parity")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_exact_gamma_inverse_squared_roundoff_stops_complete_pinned_r(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forced L-BFGS-B roundoff stops complete to the unforced endpoint and R.
+
+    The scripted first-order stage stops by relative reduction or ABNORMAL at
+    the pinned-Linux B=13 offset from the unforced optimum (projected
+    gradient ~1.4e-6 > gtol). In the ABNORMAL run the accepted raw score is
+    also lowered to 30 ULPs below the completed trial's own raw score, the
+    lucky-low roundoff draw that defeated the former one-ULP raw-score test.
+    """
+    from jaxgam.execution import reml as reml_execution
+
+    data, weight, offset = _public_exact_regular_case(Gamma, "inverse_squared")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+
+    def model() -> GAM:
+        return GAM(
+            'y~s(x,bs="cr",k=6)',
+            family=Gamma("inverse_squared"),
+            control=FitControl(
+                execution="stream",
+                linear_solver="qr",
+                batch_rows=17,
+                uncertainty="fisher",
+            ),
+        )
+
+    unforced = model().fit(source, result="prediction")
+    assert unforced.converged, unforced.convergence_info
+    stop = np.array(
+        [np.log(unforced.smoothing_params[0]), np.log(unforced.score_scale)]
+    ) + np.array([-2.1056e-7, 2.172e-8])
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, "gamma", "inverse_squared"
+    )
+    derivatives = RBridge(mode="rpy2").public_exact_reml_derivatives(
+        data, weight, offset, "gamma", "inverse_squared"
+    )
+    assert expected["inner_converged"]
+    actual_evaluate = reml_execution.evaluate_regular_stream_reml
+    stop_scores: dict[bytes, float] = {}
+
+    def evaluate(*args, **kwargs):
+        trial = actual_evaluate(*args, **kwargs)
+        params = np.asarray(trial.params, dtype=np.float64).tobytes()
+        if params in stop_scores:
+            trial = replace(trial, score=np.float64(stop_scores[params]))
+        return trial
+
+    def scripted_stop(abnormal: bool):
+        def minimize(fun, _x0, *, callback, **_kwargs):
+            fun(stop)
+            callback(SimpleNamespace(x=stop))
+            return SimpleNamespace(
+                x=stop.copy(),
+                success=not abnormal,
+                status=2 if abnormal else 0,
+                message=(
+                    "ABNORMAL: "
+                    if abnormal
+                    else "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
+                ),
+                nit=1,
+            )
+
+        return minimize
+
+    checks = _AssertCollector()
+    # The unforced reference is itself only guaranteed to gtol; it supplies
+    # its physical fields from its Newton-completed point where it is not
+    # stationary at STRICT resolution.
+    unforced_endpoint = _pr83_r_endpoint_checks(
+        Gamma,
+        "inverse_squared",
+        source,
+        model(),
+        unforced,
+        expected,
+        derivatives,
+        label="unforced",
+    )
+    unforced_endpoint.add(checks)
+    unforced_physical = unforced_endpoint.physical_fields(data, offset)
+    completed_score = None
+    for abnormal in (False, True):
+        if abnormal:
+            stop_scores[stop.tobytes()] = completed_score - 30 * np.spacing(
+                abs(completed_score)
+            )
+        # Script only the public fit; endpoint refits use the real optimizer.
+        with monkeypatch.context() as patch:
+            patch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+            patch.setattr(reml_execution, "minimize", scripted_stop(abnormal))
+            fitted_model = model()
+            result = fitted_model.fit(source, result="prediction")
+        label = "abnormal" if abnormal else "relative reduction"
+        endpoint = _pr83_r_endpoint_checks(
+            Gamma,
+            "inverse_squared",
+            source,
+            fitted_model,
+            result,
+            expected,
+            derivatives,
+            label=label,
+        )
+        diagnostics = result.exact_optimizer_diagnostics
+        assert diagnostics is not None
+        assert result.converged, f"{label}: {result.convergence_info}"
+        assert diagnostics.status == (2 if abnormal else 0)
+        assert diagnostics.projected_gradient_inf <= 1e-6
+        assert (
+            "free-parameter curvature Newton completion: 1 accepted step(s), "
+            "stopped by converged" in result.convergence_info
+        )
+        history = diagnostics.accepted_score_history
+        rise = history[-1] - history[-2]
+        assert rise <= STRICT.atol
+        if abnormal:
+            assert history[-1] == completed_score
+            assert rise == 30 * np.spacing(abs(completed_score))
+        else:
+            completed_score = history[-1]
+        physical = endpoint.physical_fields(data, offset)
+        for name, field in (
+            ("score", "score"),
+            ("smoothing", "smoothing"),
+            ("coefficients", "coefficients"),
+            ("scale", "scale"),
+            ("score scale", "score_scale"),
+            ("link SE", "link_se"),
+        ):
+            checks.check(
+                f"{label} {endpoint.prefix}unforced {unforced_endpoint.prefix}{name}",
+                lambda actual=physical[field], field=field: np.testing.assert_allclose(
+                    actual,
+                    unforced_physical[field],
+                    rtol=STRICT.rtol,
+                    atol=STRICT.atol,
+                ),
+            )
+        for name in (
+            "coefficients",
+            "score",
+            "scale",
+            "score_scale",
+            "deviance",
+            "smoothing",
+            "edf",
+            "fitted_values",
+            "link_se",
+        ):
+            if name == endpoint.field:
+                continue
+            checks.check(
+                f"{label} {endpoint.prefix}pinned R {name}",
+                lambda actual=physical[name], name=name: np.testing.assert_allclose(
+                    actual, expected[name], rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+        if endpoint.prefix or unforced_endpoint.prefix:
+            # Raw scores are second order in either endpoint's offset.
+            checks.check(
+                f"{label} raw unforced score",
+                lambda score=result.score: np.testing.assert_allclose(
+                    score, unforced.score, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+        endpoint.add(checks)
+    checks.raise_if_any("Gamma inverse-squared forced roundoff completion")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_exact_gamma_inverse_squared_gtol_stop_judged_at_completed_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gtol-converged, non-stationary endpoint is judged at its completed point.
+
+    The scripted first-order stage stops at native amd64 CI's batch_rows=96
+    endpoint offset (run 40301858423): log sp 1.494e-7 below the unforced
+    optimum, log scale on its conditional optimum there (-H_10/H_11 times the
+    sp offset, about -6.0e-9). Its projected gradient (~2.7e-7) is within
+    gtol, so the public fit truthfully converges without a completion, yet
+    its raw coefficients, scale and link SE miss pinned R at STRICT. The
+    physical fields are judged at STRICT from the public fixed-sp refit at
+    JAX's own Newton-completed sp instead (_pr83_r_endpoint_checks).
+    """
+    from jaxgam.execution import reml as reml_execution
+
+    data, weight, offset = _public_exact_regular_case(Gamma, "inverse_squared")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+
+    def model() -> GAM:
+        return GAM(
+            'y~s(x,bs="cr",k=6)',
+            family=Gamma("inverse_squared"),
+            control=FitControl(
+                execution="stream",
+                linear_solver="qr",
+                batch_rows=96,
+                uncertainty="fisher",
+            ),
+        )
+
+    unforced = model().fit(source, result="prediction")
+    assert unforced.converged, unforced.convergence_info
+    stop = np.array(
+        [np.log(unforced.smoothing_params[0]), np.log(unforced.score_scale)]
+    ) + np.array([-1.494e-7, -6.0e-9])
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, "gamma", "inverse_squared"
+    )
+    derivatives = RBridge(mode="rpy2").public_exact_reml_derivatives(
+        data, weight, offset, "gamma", "inverse_squared"
+    )
+    assert expected["inner_converged"]
+
+    def minimize(fun, _x0, *, callback, **_kwargs):
+        fun(stop)
+        callback(SimpleNamespace(x=stop))
+        return SimpleNamespace(
+            x=stop.copy(),
+            success=True,
+            status=0,
+            message="CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+            nit=1,
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reml_execution, "minimize", minimize)
+        fitted_model = model()
+        result = fitted_model.fit(source, result="prediction")
+    diagnostics = result.exact_optimizer_diagnostics
+    assert diagnostics is not None
+    assert result.converged, result.convergence_info
+    assert diagnostics.status == 0
+    assert 0.0 < diagnostics.projected_gradient_inf <= StreamREMLControl().gtol
+    assert "Newton completion" not in result.convergence_info
+    np.testing.assert_array_equal(
+        np.log([result.smoothing_params[0], result.score_scale]), stop
+    )
+    endpoint = _pr83_r_endpoint_checks(
+        Gamma,
+        "inverse_squared",
+        source,
+        fitted_model,
+        result,
+        expected,
+        derivatives,
+        label="gtol stop",
+    )
+    assert endpoint.physical is not result
+    raw = _pr83_physical_fields(result, data, offset)
+    physical = endpoint.physical_fields(data, offset)
+
+    def strict_excess(actual, reference) -> float:
+        actual = np.asarray(actual, dtype=np.float64)
+        reference = np.asarray(reference, dtype=np.float64)
+        return float(
+            np.max(
+                np.abs(actual - reference)
+                / (STRICT.atol + STRICT.rtol * np.abs(reference))
+            )
+        )
+
+    # Record the raw endpoint's gap to pinned R in multiples of STRICT.
+    logging.getLogger(__name__).warning(
+        "PR8.3 Gamma/inverse_squared gtol stop raw/R STRICT excess: "
+        + ", ".join(
+            f"{name}={strict_excess(raw[name], expected[name]):.3g}" for name in raw
+        )
+        + "; completed refit/R STRICT excess: "
+        + ", ".join(
+            f"{name}={strict_excess(physical[name], expected[name]):.3g}"
+            for name in physical
+        )
+    )
+    checks = _AssertCollector()
+    for name in ("coefficients", "scale", "link_se"):
+        checks.check(
+            f"raw {name} misses pinned R at STRICT",
+            lambda name=name: check_that(
+                not np.allclose(
+                    raw[name], expected[name], rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+                f"raw {name} unexpectedly matches pinned R at STRICT",
+            ),
+        )
+    for name in physical:
+        if name == endpoint.field:
+            continue
+        checks.check(
+            f"{endpoint.prefix}pinned R {name}",
+            lambda actual=physical[name], name=name: np.testing.assert_allclose(
+                actual, expected[name], rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    endpoint.add(checks)
+    checks.raise_if_any("Gamma inverse-squared gtol-stop completed-point parity")
+
+
+def test_public_exact_large_row_fit_stays_within_stream_budget() -> None:
+    """The exact public fit workspace stays below its dense-X byte budget.
+
+    FitControl.memory_budget_bytes also budgets Phase-1 setup, whose exact
+    cubic-knot scan holds a fixed SQLite scope independent of the row count.
+    A public budget below this model's dense X is therefore rejected by setup
+    first. The fit-stage known workspace does not depend on the budget and
+    must still fit the dense-X budget.
+    """
+    n = 8192
+    x = np.linspace(-1.0, 1.0, n)
+    mu = np.exp(0.2 + 0.5 * np.sin(4.0 * x))
+    y = np.random.default_rng(83083).poisson(mu)
+    data = pd.DataFrame({"x": x, "y": y})
+    source = DataFrameRowSource(data, response="y")
+    fit_budget = 1_100_000
+    control = FitControl(
+        execution="stream",
+        linear_solver="qr",
+        batch_rows=128,
+        memory_budget_bytes=fit_budget,
+        uncertainty="fisher",
+    )
+    with pytest.raises(MemoryError, match="Phase-1 streamed setup requires"):
+        GAM('y~s(x,bs="cr",k=24)', family=Poisson(), control=control).fit(
+            source, result="prediction"
+        )
+    # A budget that admits setup's fixed knot-scan scope.
+    budget = 20_000_000
+    model = GAM(
+        'y~s(x,bs="cr",k=24)',
+        family=Poisson(),
+        control=replace(control, memory_budget_bytes=budget),
+    )
+    result = model.fit(source, result="prediction")
+    assert result.converged
+    assert result.execution_route == "stream_exact_reml_qr"
+    assert result.lambda_strategy == "exact_reml"
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-6
+    assert np.all(
+        np.diff(result.exact_optimizer_diagnostics.accepted_score_history)
+        <= STRICT.atol
+    )
+    assert result.source_scans >= 2 + result.exact_optimizer_diagnostics.n_evaluations
+    assert result.n == n
+    assert 0 < result.known_workspace_bytes <= budget
+    assert result.known_workspace_bytes <= fit_budget
+    assert fit_budget < n * result.coefficients.size * np.dtype(np.float64).itemsize
+    assert not any(
+        value.shape == (n,)
+        for value in result.__dict__.values()
+        if isinstance(value, np.ndarray)
+    )
+    fitted, se = result.predict(data[["x"]].iloc[:8], se_fit=True)
+    assert np.all(np.isfinite(fitted))
+    assert np.all(np.isfinite(se))
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("family_class", [Gaussian, Gamma])
+def test_public_exact_zero_penalty_unknown_scale_pinned_r(
+    tmp_path: Path, family_class
+) -> None:
+    """An unpenalized unknown-scale model still selects its score scale."""
+    data, weight, offset = _public_exact_regular_case(family_class, "identity")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    model = GAM(
+        "y~x",
+        family=family_class("identity"),
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+    _assert_pr83_regular_case(family_class, "identity", source, model, smooth=False)
+    result = model.fit(source, result="prediction")
+    expected = _public_exact_regular_pinned_r(
+        tmp_path,
+        data,
+        weight,
+        offset,
+        family_class.__name__.lower(),
+        "identity",
+        smooth=False,
+    )
+    assert result.converged
+    assert result.lambda_strategy == "exact_reml"
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.startup_source_scans == 0
+    assert result.smoothing_params.size == 0
+    checks = _AssertCollector()
+    for name, actual in (
+        ("score", result.score),
+        ("scale", result.scale),
+        ("score scale", result.score_scale),
+        ("coefficients", result.coefficients),
+        ("fitted values", result.predict(data[["x"]], offset=offset)),
+    ):
+        field = {
+            "score scale": "score_scale",
+            "fitted values": "fitted_values",
+        }.get(name, name)
+        tolerance = MODERATE if field in _PR83_ZERO_PENALTY_MODERATE_FIELDS else STRICT
+        checks.check(
+            name,
+            lambda actual=actual, field=field, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
+                )
+            ),
+        )
+    checks.raise_if_any(f"zero-penalty {family_class.__name__} exact selection")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_exact_original_gaussian_recovery_case_pinned_r(
+    tmp_path: Path,
+) -> None:
+    """The original flat-score source case must finish its coefficient fit."""
+    from tests.test_execution.test_efs_stream_start import _regular
+
+    stream = _regular(Gaussian())
+    batch = next(stream.source.source.scan(stream.prepared.n_obs))
+    data = pd.DataFrame({"x": np.asarray(batch.columns["x"]), "y": batch.y})
+    weight = np.asarray(batch.weight)
+    offset = np.asarray(batch.offset)
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, "gaussian", "identity"
+    )
+    result = GAM(
+        'y~s(x,bs="cr",k=6)',
+        family=Gaussian(),
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=11,
+            uncertainty="fisher",
+        ),
+    ).fit(
+        DataFrameRowSource(data, response="y", weights=weight, offset=offset),
+        result="prediction",
+    )
+    assert expected["inner_converged"]
+    assert expected["outer_converged"]
+    assert result.converged
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-6
+    assert result.source_scans > result.exact_optimizer_diagnostics.startup_source_scans
+    assert np.isfinite(result.score)
+    assert np.all(np.isfinite(result.coefficients))
+    assert np.all(np.isfinite(result.predict(data[["x"]], offset=offset)))
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
+@pytest.mark.parametrize("estimated", [False, True])
+@pytest.mark.parametrize("smooth", [False, True])
+def test_public_estimated_nb_theta_modes_pinned_r(
+    tmp_path: Path, link: str, estimated: bool, smooth: bool
+) -> None:
+    """Public NB selection jointly retains theta with or without penalties."""
+    data, weight, offset = nb_optimizer_case_data()
+    family = NegativeBinomial(theta=2.7, fixed=not estimated, link=link)
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+    model = GAM(
+        'y~s(x,bs="cr",k=8)' if smooth else "y~x",
+        family=family,
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    )
+    moderate_fields = _PR83_NB_MODERATE_FIELDS.get(
+        (smooth, estimated, link), frozenset()
+    )
+    if moderate_fields:
+        _assert_pr83_nb_case(source, model, link, estimated=estimated, smooth=smooth)
+    result = model.fit(source, result="prediction")
+    expected = _public_exact_nb_pinned_r(
+        tmp_path, data, weight, offset, link, estimated=estimated, smooth=smooth
+    )
+    if smooth and estimated and link == "sqrt":
+        # The default mgcv Newton start can stop on score roundoff for these
+        # unchanged binary rows, depending on the host. Record either truthful
+        # status, then always use a declared in.out start for field parity.
+        assert expected["outer_status"] in {"full convergence", "step failed"}
+        default_score = expected["score"]
+        expected = _public_exact_nb_pinned_r(
+            tmp_path,
+            data,
+            weight,
+            offset,
+            link,
+            estimated=estimated,
+            smooth=smooth,
+            initial_smoothing=20.0,
+        )
+        assert expected["outer_status"] == "full convergence"
+        np.testing.assert_allclose(
+            default_score, expected["score"], rtol=STRICT.rtol, atol=STRICT.atol
+        )
+    fitted = result.predict(data[["x"]], offset=offset)
+    _, link_se = result.predict(
+        data[["x"]], pred_type="link", se_fit=True, offset=offset
+    )
+    assert expected["inner_converged"]
+    assert result.converged
+    assert result.lambda_strategy == (
+        "exact_reml_no_parameters" if not smooth and not estimated else "exact_reml"
+    )
+    assert result.execution_route == "stream_exact_reml_qr"
+    if smooth or estimated:
+        assert result.exact_optimizer_diagnostics is not None
+        assert result.exact_optimizer_diagnostics.projected_gradient_inf <= 1e-9
+        assert (
+            result.source_scans
+            > result.exact_optimizer_diagnostics.startup_source_scans
+        )
+    assert result.known_workspace_bytes <= model.control.memory_budget_bytes
+    if estimated:
+        assert result.theta is not None
+        assert result.family.n_theta == 1
+        np.testing.assert_array_equal(
+            result.family.get_theta(transformed=True), [result.theta]
+        )
+    else:
+        assert result.theta is None
+    checks = _AssertCollector()
+    for name, actual in (
+        ("theta", result.family.get_theta(transformed=True)[0]),
+        ("coefficients", result.coefficients),
+        ("score", result.score),
+        ("scale", result.scale),
+        ("deviance", result.deviance),
+        ("EDF", result.edf_total),
+        ("fitted values", fitted),
+        ("link SE", link_se),
+    ):
+        field = {
+            "EDF": "edf",
+            "fitted values": "fitted_values",
+            "link SE": "link_se",
+        }.get(name, name)
+        tolerance = MODERATE if field in moderate_fields else STRICT
+        checks.check(
+            name,
+            lambda actual=actual, field=field, tolerance=tolerance: (
+                np.testing.assert_allclose(
+                    actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
+                )
+            ),
+        )
+    if smooth:
+        smoothing_tolerance = MODERATE if "smoothing" in moderate_fields else STRICT
+        checks.check(
+            "smoothing",
+            lambda: np.testing.assert_allclose(
+                result.smoothing_params,
+                [expected["smoothing"]],
+                rtol=smoothing_tolerance.rtol,
+                atol=smoothing_tolerance.atol,
+            ),
+        )
+    else:
+        np.testing.assert_array_equal(result.smoothing_params, [])
+    checks.raise_if_any(f"public estimated NB/{link} {estimated=} {smooth=}")
 
 
 @pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")

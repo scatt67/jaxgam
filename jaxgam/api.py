@@ -31,7 +31,12 @@ from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
-from jaxgam.results import GAMInferenceResult, GAMPredictionResult, GAMResults
+from jaxgam.results import (
+    GAMInferenceResult,
+    GAMPredictionResult,
+    GAMResults,
+    StreamExactOptimizerDiagnostics,
+)
 
 if TYPE_CHECKING:
     import jax
@@ -324,17 +329,19 @@ class GAM:
                 "full and inference results retain unsupported row diagnostics."
             )
         estimated_efs = self.optimizer == "efs" and self.sp is None
+        estimated_exact = self.optimizer == "newton" and self.sp is None
         if estimated_efs:
             if self.control.linear_solver != "qr":
                 raise NotImplementedError(
                     "Streamed optimizer='efs' requires linear_solver='qr'."
                 )
             _check_stream_efs_family(family)
-        elif self.sp is None:
-            raise NotImplementedError(
-                "Streamed fitting currently requires explicit fixed sp; "
-                "streamed smoothing-parameter optimization is not implemented."
-            )
+        elif estimated_exact:
+            if self.control.linear_solver != "qr":
+                raise NotImplementedError(
+                    "Exact streamed REML requires linear_solver='qr'."
+                )
+            _check_stream_fixed_family(family, "qr")
         else:
             _check_stream_fixed_family(family, self.control.linear_solver)
         spec = parse_formula(self.formula)
@@ -386,6 +393,16 @@ class GAM:
             linear_solver=self.control.linear_solver,
         )
         metadata = PreparedFittingMetadata.from_prepared(prepared, family, jax_device)
+        if estimated_exact:
+            return _fit_stream_exact_reml(
+                stream,
+                family,
+                metadata,
+                formula=self.formula,
+                method=self.method,
+                control=self.control,
+                device=jax_device,
+            )
         log_lambda = _fixed_log_smoothing_parameters(self.sp, metadata.n_penalties)
         from jaxgam.families.negative_binomial import NegativeBinomial
 
@@ -688,6 +705,168 @@ def _fit_stream_fixed_nb(
         source_scans=source_scans,
         batches_scanned=batches_scanned,
         known_workspace_bytes=known_workspace_bytes,
+    )
+
+
+def _fit_stream_exact_reml(
+    stream: StreamDesign,
+    family: ExponentialFamily,
+    metadata: PreparedFittingMetadata,
+    *,
+    formula: str,
+    method: str,
+    control: FitControl,
+    device: jax.Device | None,
+) -> GAMPredictionResult:
+    """Expose one accepted exact source trial through the public result seam."""
+    from jaxgam.execution.efs_stream_start import prepare_stream_reml_start
+    from jaxgam.execution.nb_reml import optimize_nb_stream_reml
+    from jaxgam.execution.reml import (
+        StreamREMLControl,
+        optimize_regular_stream_reml,
+    )
+    from jaxgam.execution.stream import StreamPIRLSControl
+    from jaxgam.families.negative_binomial import NegativeBinomial
+
+    n_lambda = metadata.n_penalties
+    if n_lambda == 0 and family.n_theta == 0 and family.scale_known:
+        # Pinned gam.outer uses a plain coefficient fit when there is no
+        # smoothing, dispersion, or theta parameter to select.
+        empty = np.empty(0, dtype=np.float64)
+        result = (
+            _fit_stream_fixed_nb(
+                stream,
+                family,
+                empty,
+                metadata,
+                formula=formula,
+                method=method,
+                control=control,
+                device=device,
+            )
+            if isinstance(family, NegativeBinomial)
+            else _fit_stream_fixed_regular(
+                stream,
+                family,
+                empty,
+                metadata,
+                formula=formula,
+                method=method,
+                control=control,
+                device=device,
+            )
+        )
+        return replace(
+            result,
+            lambda_strategy="exact_reml_no_parameters",
+            execution_route="stream_exact_reml_qr",
+        )
+
+    if n_lambda:
+        startup = prepare_stream_reml_start(
+            stream,
+            family,
+            maximum_bytes=control.memory_budget_bytes,
+            batch_rows=control.batch_rows,
+        )
+        initial_log_lambda = startup.log_lambda
+        initial_score_phi = startup.score_phi
+        startup_source_scans = startup.source_scans
+        startup_batches_scanned = startup.batches_scanned
+        startup_workspace_bytes = startup.workspace_bytes
+        retained_startup_bytes = 8 * (
+            startup.log_lambda.size + startup.null_coefficients.size + 64
+        )
+    else:
+        # Pinned mgcv.r:estimate.gam skips initial.spg when length(G$sp)==0.
+        # The free dispersion/theta coordinate still takes the exact joint
+        # optimizer; it must not enter the fixed-theta parametric bypass.
+        initial_log_lambda = np.empty(0, dtype=np.float64)
+        initial_score_phi = 1.0
+        startup_source_scans = 0
+        startup_batches_scanned = 0
+        startup_workspace_bytes = 0
+        retained_startup_bytes = 0
+    if startup_workspace_bytes + retained_startup_bytes > control.memory_budget_bytes:
+        raise MemoryError("Exact REML startup exceeds the known workspace budget.")
+    trial_budget = control.memory_budget_bytes - retained_startup_bytes
+    coefficient_control = StreamPIRLSControl(
+        batch_rows=control.batch_rows,
+        solver_policy="qr",
+    )
+    if isinstance(family, NegativeBinomial):
+        nb_coefficient_control = replace(coefficient_control, tol=1e-11)
+        initial_params = np.r_[
+            initial_log_lambda,
+            family.get_theta(transformed=False) if family.n_theta else [],
+        ]
+        optimized = optimize_nb_stream_reml(
+            stream,
+            family,
+            initial_params,
+            maximum_bytes=trial_budget,
+            pirls_control=nb_coefficient_control,
+            control=StreamREMLControl(gtol=1e-9, ftol=0.0),
+            max_step=5.0,
+            device=device,
+        )
+        state = optimized.trial.fit_result.state
+        theta = None
+        if family.n_theta:
+            theta = float(np.exp(np.asarray(optimized.trial.params)[-1]))
+            family.put_theta(np.log(np.asarray([theta])))
+    else:
+        initial_params = np.r_[
+            initial_log_lambda,
+            [] if family.scale_known else [np.log(initial_score_phi)],
+        ]
+        optimized = optimize_regular_stream_reml(
+            stream,
+            family,
+            initial_params,
+            maximum_bytes=trial_budget,
+            pirls_control=coefficient_control,
+            control=StreamREMLControl(ftol=0.0),
+            max_step=5.0,
+            device=device,
+        )
+        state = optimized.trial.fit_result.state
+        theta = None
+    selected = _selected_stream_fit(
+        state,
+        float(np.asarray(optimized.trial.score)),
+        converged=optimized.converged,
+        n_iter=optimized.n_iter,
+        convergence_info=optimized.message,
+        theta=theta,
+    )
+    return GAMPredictionResult._from_stream_fit(
+        stream_state=state,
+        prepared=stream.prepared,
+        metadata=metadata,
+        family=family,
+        formula=formula,
+        method=method,
+        control=control,
+        execution_route="stream_exact_reml_qr",
+        selected_fit=selected,
+        lambda_strategy="exact_reml",
+        source_scans=startup_source_scans + optimized.cumulative_source_scans,
+        batches_scanned=startup_batches_scanned + optimized.cumulative_batches_scanned,
+        known_workspace_bytes=max(startup_workspace_bytes, optimized.required_bytes)
+        + retained_startup_bytes,
+        exact_optimizer_diagnostics=StreamExactOptimizerDiagnostics(
+            status=optimized.status,
+            n_evaluations=optimized.n_evaluations,
+            n_accepted=optimized.n_accepted,
+            projected_gradient_inf=optimized.projected_gradient_inf,
+            accepted_score_history=optimized.accepted_score_history,
+            startup_source_scans=startup_source_scans,
+            startup_batches_scanned=startup_batches_scanned,
+            cumulative_inner_iterations=optimized.cumulative_inner_iterations,
+            cumulative_final_refit_solves=optimized.cumulative_final_refit_solves,
+            cumulative_derivative_s=optimized.cumulative_derivative_s,
+        ),
     )
 
 

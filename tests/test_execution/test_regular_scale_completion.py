@@ -52,8 +52,11 @@ def _trial(params, *, score=None, gradient=None, curvature=None, **lineage):
         log_phi_curvature=exact_curvature if curvature is None else curvature,
         source_scans=2,
         batches_scanned=5,
+        derivative_elapsed_s=0.25,
+        final_refit_solves=1,
         fit_result=SimpleNamespace(
             state=SimpleNamespace(
+                n_iter=3,
                 score_scale=jnp.asarray(phi),
                 saturated_loglik=jnp.asarray(-200.0),
                 coefficient_factor=SimpleNamespace(
@@ -335,6 +338,10 @@ def test_optimizer_applies_completion_only_to_pinned_unknown_scale(monkeypatch):
     assert result.n_evaluations == len(profile.requests)
     assert result.n_accepted == result.scale_completion_steps
     assert result.cumulative_source_scans == 2 * len(profile.requests)
+    # Work counters include every completion trial.
+    assert result.cumulative_inner_iterations == 3 * len(profile.requests)
+    assert result.cumulative_final_refit_solves == len(profile.requests)
+    assert result.cumulative_derivative_s == 0.25 * len(profile.requests)
     assert result.accepted_score_history[-1] == float(result.trial.score)
     assert result.required_bytes < 1_000_000
 

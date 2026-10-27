@@ -239,6 +239,9 @@ def test_r_failed_fit_is_reported(tmp_path: Path, monkeypatch) -> None:
     config = _config(tmp_path)
 
     class FailedReference:
+        def __init__(self, *, mode: str) -> None:
+            assert mode == "rpy2"
+
         def benchmark_efs(self, *_args, **_kwargs):
             raise benchmark_efs.RBridgeError("pinned failure")
 

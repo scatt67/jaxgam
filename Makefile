@@ -197,6 +197,14 @@ benchmark-efs: ## benchmark dense Newton/EFS against pinned R EFS (OUTPUT=/tmp/j
 benchmark-efs-smoke: ## run the small end-to-end dense EFS benchmark gate
 	$(UV) run python scripts/benchmark_efs.py --smoke --warm-repeats 1 --comparison-tolerance MODERATE --output-dir $${OUTPUT:-/tmp/jaxgam-efs-benchmark-smoke}
 
+.PHONY: benchmark-scaling
+benchmark-scaling: ## emit one isolated scaling evidence record (ARGS="--n 2000 --k 10 --execution stream-exact --result-mode prediction")
+	$(UV) run python scripts/benchmark_scaling.py $(ARGS)
+
+.PHONY: test-scaling-memory
+test-scaling-memory: ## test scaling harness isolation, scan/memory metadata, and bounded cases
+	$(UV) run pytest -q tests/test_benchmark_scaling.py $(ARGS)
+
 .PHONY: efs-fixture
 efs-fixture: ## generate a reproducible pinned EFS oracle fixture (OUTPUT=path.csv)
 	@test -n "$(OUTPUT)" || (echo "Usage: make efs-fixture OUTPUT=/tmp/efs.csv" && exit 1)

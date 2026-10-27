@@ -347,7 +347,10 @@ def test_nb_optimizer_selected_trial_stationarity_and_nearby_dense_derivatives(
         _OPTIMIZER_CONTROL,
         _OPTIMIZER_PIRLS_CONTROL,
     )
-    assert result.outer_workspace_bytes == retained + history + lbfgs
+    # One free rho, with or without free log theta, charges the free-parameter
+    # curvature completion.
+    curvature_bytes = 8 * (len(selected) ** 2 + 24 * len(selected))
+    assert result.outer_workspace_bytes == retained + history + lbfgs + curvature_bytes
     assert 0 < _retained_numeric_bytes(result.trial) <= retained
 
 
@@ -705,6 +708,9 @@ def test_nb_local_stationary_comparison_replays_generated_source():
         n_evaluations=0,
         cumulative_source_scans=0,
         cumulative_batches_scanned=0,
+        cumulative_inner_iterations=0,
+        cumulative_final_refit_solves=0,
+        cumulative_derivative_s=0.0,
     )
     comparison = nb_reml_execution._nb_local_stationary_score_change(
         objective, accepted, selected.trial, _OPTIMIZER_PIRLS_CONTROL.tol
@@ -717,6 +723,10 @@ def test_nb_local_stationary_comparison_replays_generated_source():
     assert objective.n_evaluations == 3
     assert objective.cumulative_source_scans > 0
     assert objective.cumulative_batches_scanned > 0
+    # Every reconverged probe is charged as real fit and derivative work.
+    assert objective.cumulative_inner_iterations > 0
+    assert objective.cumulative_final_refit_solves == objective.n_evaluations
+    assert objective.cumulative_derivative_s > 0.0
 
 
 @pytest.mark.skipif(not r_available(), reason="requires pinned R/mgcv")
@@ -774,6 +784,55 @@ def test_nb_optimizer_supports_parametric_theta_only_and_zero_coordinate_cases(
         assert "exact evaluation" in result.message
 
 
+def test_parametric_theta_only_charges_and_enables_roundoff_retention(monkeypatch):
+    """No penalty leaves the same one free theta coordinate as pinned rho."""
+    stream, family, params = _optimizer_case("log", estimated=True, smooth=False)
+    retained, history, lbfgs = reml_execution._parameterized_optimizer_workspace_bytes(
+        stream.prepared.n_coef,
+        len(params),
+        _OPTIMIZER_CONTROL,
+        _OPTIMIZER_PIRLS_CONTROL,
+    )
+    # The theta-only route also charges the log-theta completion's two
+    # recorded secant scalars.
+    required = (
+        2 * retained + 2 * history + lbfgs + nb_reml_execution._THETA_SECANT_BYTES
+    )
+    with (
+        patch.object(nb_reml_execution, "evaluate_nb_stream_reml") as evaluate,
+        pytest.raises(MemoryError, match="retention"),
+    ):
+        optimize_nb_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=required,
+            pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+            control=_OPTIMIZER_CONTROL,
+        )
+    evaluate.assert_not_called()
+
+    original = nb_reml_execution._run_parameterized_stream_reml
+    policies: list[bool] = []
+
+    def capture(*args, **kwargs):
+        policies.append(kwargs["roundoff_stationary_completion"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(nb_reml_execution, "_run_parameterized_stream_reml", capture)
+    result = optimize_nb_stream_reml(
+        stream,
+        family,
+        params,
+        maximum_bytes=64_000_000,
+        pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+        control=_OPTIMIZER_CONTROL,
+    )
+    assert policies == [True]
+    assert result.outer_workspace_bytes == required
+    assert result.converged
+
+
 def test_nb_optimizer_preflights_retention_and_keeps_accepted_on_failed_candidate(
     monkeypatch,
 ):
@@ -809,6 +868,23 @@ def test_nb_optimizer_preflights_retention_and_keeps_accepted_on_failed_candidat
             params,
             maximum_bytes=2 * retained + 2 * history + lbfgs,
             pin_lambda=True,
+            pirls_control=_OPTIMIZER_PIRLS_CONTROL,
+            control=_OPTIMIZER_CONTROL,
+        )
+    evaluate.assert_not_called()
+
+    # The unpinned two-coordinate correction charges its host curvature and
+    # probe vectors before the first source replay as well.
+    curvature_bytes = 8 * (len(params) ** 2 + 24 * len(params))
+    with (
+        patch.object(nb_reml_execution, "evaluate_nb_stream_reml") as evaluate,
+        pytest.raises(MemoryError, match="retention"),
+    ):
+        optimize_nb_stream_reml(
+            stream,
+            family,
+            params,
+            maximum_bytes=retained + history + lbfgs + curvature_bytes,
             pirls_control=_OPTIMIZER_PIRLS_CONTROL,
             control=_OPTIMIZER_CONTROL,
         )
@@ -891,3 +967,189 @@ def test_nb_optimizer_rejects_non_boolean_pin_lambda_before_trial(
             pirls_control=_CONTROL,
         )
     evaluate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    (
+        "curvature_sign",
+        "valid_inner",
+        "maxfun",
+        "start_rho",
+        "max_step",
+        "max_iter",
+        "reported_iter",
+    ),
+    [
+        (1.0, True, 500, 0.0, None, 100, 0),
+        (-1.0, True, 500, 0.0, None, 100, 0),
+        (1.0, False, 500, 0.0, None, 100, 0),
+        (1.0, True, 5, 0.0, None, 100, 0),
+        (1.0, True, 500, 40.0, None, 100, 0),
+        (1.0, True, 500, 0.0, 5e-7, 100, 0),
+        (1.0, True, 500, 0.0, None, 1, 1),
+    ],
+)
+def test_nb_two_parameter_roundoff_completion_requires_exact_stationarity(
+    monkeypatch,
+    curvature_sign: float,
+    valid_inner: bool,
+    maxfun: int,
+    start_rho: float,
+    max_step: float | None,
+    max_iter: int,
+    reported_iter: int,
+) -> None:
+    """A rounded score continues newton() only from reconverged exact trials.
+
+    The free-parameter completion forms a central-difference Hessian from
+    four exact-gradient probes, caps each Newton step at ``max_step`` from
+    the accepted warm start and halves rejected steps at most three times.
+    """
+    start = np.array([start_rho, 0.0])
+    target = start + np.array([-1e-6 if start_rho == 40.0 else 1e-6, -1e-6])
+    hessian = np.diag([curvature_sign * 2.0, 3.0])
+    source = SimpleNamespace(fingerprint=lambda: "source")
+
+    def evaluate(_stream, _family, params, **kwargs):
+        params = np.asarray(params, dtype=np.float64)
+        warm_start = kwargs["warm_start"]
+        if max_step is not None and warm_start is not None:
+            assert np.max(np.abs(params - np.asarray(warm_start.params))) <= max_step
+        return SimpleNamespace(
+            params=params.copy(),
+            score=jnp.array(1.0),
+            gradient=jnp.asarray(hessian @ (params - target)),
+            fit_result=SimpleNamespace(
+                score_penalized_deviance=0.0,
+                state=SimpleNamespace(
+                    converged=True,
+                    line_search_failed=False,
+                    stationarity=(
+                        1e-8
+                        if not valid_inner and np.max(np.abs(params - target)) < 1e-10
+                        else 0.0
+                    ),
+                    saturated_loglik=0.0,
+                    coefficient_factor=SimpleNamespace(logdet_hessian=lambda: 0.0),
+                ),
+            ),
+            source_scans=3,
+            batches_scanned=5,
+            source_fingerprint="source",
+        )
+
+    def rounded_stop(objective, params, **_kwargs):
+        objective(np.asarray(params))
+        return SimpleNamespace(
+            x=np.asarray(params),
+            success=True,
+            message="CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+            status=0,
+            nit=reported_iter,
+        )
+
+    monkeypatch.setattr(nb_reml_execution, "evaluate_nb_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", rounded_stop)
+    control = StreamREMLControl(gtol=1e-9, ftol=0.0, maxfun=maxfun, max_iter=max_iter)
+    objective = nb_reml_execution._AcceptedNBTrialObjective(
+        SimpleNamespace(source=source),
+        NegativeBinomial(theta=2.7),
+        start,
+        _CONTROL,
+        control,
+        1_000_000,
+        None,
+        None,
+    )
+    result = reml_execution._run_parameterized_stream_reml(
+        objective,
+        start,
+        [(-40.0, 40.0), (None, None)],
+        control,
+        curvature_stationary_completion=True,
+        completion_inner_tolerance=1e-11,
+        completion_score_roundoff=nb_reml_execution._nb_score_roundoff,
+        max_step=max_step,
+    )
+    expect_converged = (
+        curvature_sign > 0.0
+        and valid_inner
+        and maxfun > 5
+        and start_rho == 0.0
+        and reported_iter < max_iter
+    )
+    assert result.converged is expect_converged
+    if maxfun <= 5 or start_rho == 40.0 or reported_iter >= max_iter:
+        expected_evaluations, expected_accepted = 1, 0
+        expected_stop = (
+            "evaluation limit"
+            if maxfun <= 5
+            else "curvature probe outside bounds"
+            if start_rho == 40.0
+            else "not run: iteration limit"
+        )
+    elif curvature_sign < 0.0:
+        expected_evaluations, expected_accepted = 5, 0
+        expected_stop = "indefinite curvature"
+    elif not valid_inner:
+        # Each of the three Newton iterations forms its curvature from four
+        # probes; the full step lands on the invalid inner fit and its exact
+        # half step is accepted, so 7/8 of the correction remains a valid
+        # nonstationary trial at the step limit.
+        expected_evaluations, expected_accepted = 1 + 3 * (4 + 2), 3
+        expected_stop = "step limit"
+    elif max_step is not None:
+        # newton() scales the first step to the cap; the second iteration's
+        # full step reaches the minimizer.
+        expected_evaluations, expected_accepted = 1 + 2 * (4 + 1), 2
+        expected_stop = "converged"
+    else:
+        expected_evaluations, expected_accepted = 6, 1
+        expected_stop = "converged"
+    assert result.n_evaluations == expected_evaluations
+    assert result.n_accepted == expected_accepted
+    assert result.completion_stop == expected_stop
+    assert result.completion_steps == expected_accepted
+    assert result.n_iter == reported_iter + expected_accepted
+    assert result.cumulative_source_scans == 3 * result.n_evaluations
+    assert result.cumulative_batches_scanned == 5 * result.n_evaluations
+    if expect_converged:
+        # The completion must land on the synthetic quadratic's minimizer to
+        # float64 roundoff; a missing or halved step is >= 5e-7 away.
+        np.testing.assert_allclose(
+            np.asarray(result.trial.params),
+            target,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert result.projected_gradient_inf <= control.gtol
+    elif expected_accepted:
+        np.testing.assert_allclose(
+            np.asarray(result.trial.params),
+            start + 0.875 * (target - start),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert result.trial.fit_result.state.stationarity == 0.0
+        assert result.projected_gradient_inf > control.gtol
+        assert "exceeds gtol" in result.message
+    else:
+        np.testing.assert_array_equal(result.trial.params, start)
+        assert result.projected_gradient_inf > control.gtol
+        assert "exceeds gtol" in result.message
+
+
+@pytest.mark.parametrize("max_step", [0.0, np.inf, True])
+def test_nb_optimizer_rejects_invalid_step_window_before_source_scan(
+    max_step,
+) -> None:
+    stream, family, initial = _optimizer_case("log", estimated=True)
+    with pytest.raises(ValueError, match="max_step must be finite and positive"):
+        optimize_nb_stream_reml(
+            stream,
+            family,
+            initial,
+            maximum_bytes=_OPTIMIZER_MAXIMUM_BYTES,
+            max_step=max_step,
+        )
+    assert stream.source.scans == 0

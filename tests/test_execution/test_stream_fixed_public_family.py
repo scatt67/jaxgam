@@ -111,6 +111,62 @@ def test_public_custom_family_contract_retains_only_snapshot() -> None:
     assert restored.family is not family
 
 
+def test_public_exact_custom_family_snapshot_and_source_ownership() -> None:
+    """Exact selection reaches a conformant unregistered family through QR."""
+    x = np.linspace(-0.5, 0.5, 31)
+    data = pd.DataFrame({"x": x, "y": 0.5 + 0.2 * x + 0.03 * np.sin(7 * x)})
+    family = _ConformantUnregisteredFamily()
+    model = GAM(
+        'y~s(x,bs="cr",k=6)',
+        family=family,
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=7,
+            uncertainty="fisher",
+        ),
+    )
+    result = model.fit(DataFrameRowSource(data, response="y"), result="prediction")
+    assert result.converged
+    assert result.lambda_strategy == "exact_reml"
+    assert result.execution_route == "stream_exact_reml_qr"
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.source_scans >= result.exact_optimizer_diagnostics.n_evaluations
+    assert result.known_workspace_bytes <= model.control.memory_budget_bytes
+    assert result.family is not family
+    assert not any(
+        value.shape == (len(data),)
+        for value in result.__dict__.values()
+        if isinstance(value, np.ndarray)
+    )
+    fitted = result.predict(data[["x"]])
+    restored = pickle.loads(pickle.dumps(result))
+    np.testing.assert_allclose(
+        restored.predict(data[["x"]]),
+        fitted,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    _, link_se = restored.predict(data[["x"]], pred_type="link", se_fit=True)
+    assert np.all(np.isfinite(link_se))
+
+
+def test_public_exact_regular_phase2_observed_derivative_compiles() -> None:
+    """The source QR route retains the JIT-compatible Phase 2 derivative."""
+    x = jnp.linspace(-0.5, 0.5, 19)
+    X = jnp.column_stack((jnp.ones_like(x), x))
+    y = 0.5 + 0.2 * x + 0.03 * x * x
+    weight = jnp.ones_like(y).at[::5].set(0.0)
+    family = Gaussian("identity")
+    curvature = jax.jit(
+        lambda coefficients: _observed_weights(
+            family, X, y, weight, coefficients, jnp.zeros_like(y)
+        )
+    )(jnp.asarray([0.5, 0.2]))
+    assert np.all(np.isfinite(curvature))
+    np.testing.assert_allclose(np.asarray(curvature)[::5], 0.0, atol=STRICT.atol)
+
+
 @pytest.mark.parametrize("link", ["log", "identity", "sqrt"])
 def test_fixed_nb_family_snapshot_and_prediction_uncertainty(link: str) -> None:
     saved = _nb_case_frame()
@@ -141,7 +197,9 @@ def test_fixed_nb_family_snapshot_and_prediction_uncertainty(link: str) -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
-    assert result.family.get_theta(transformed=True)[0] == pytest.approx(2.7)
+    assert result.family.get_theta(transformed=True)[0] == pytest.approx(
+        2.7, rel=STRICT.rtol, abs=STRICT.atol
+    )
     assert result.score_scale == 1.0
     assert result.source_scans > 0
     assert result.known_workspace_bytes > 0
@@ -173,7 +231,9 @@ def test_estimated_nb_zero_penalty_theta_snapshot_and_pickle() -> None:
     )
     assert result.theta is not None
     assert result.smoothing_params.size == 0
-    assert result.family.get_theta(transformed=True)[0] == pytest.approx(result.theta)
+    assert result.family.get_theta(transformed=True)[0] == pytest.approx(
+        result.theta, rel=STRICT.rtol, abs=STRICT.atol
+    )
     original = result.predict(data[["x"]], offset=offset)
     family.put_theta(np.asarray([np.log(0.9)]))
     restored = pickle.loads(pickle.dumps(result))
@@ -182,6 +242,51 @@ def test_estimated_nb_zero_penalty_theta_snapshot_and_pickle() -> None:
         original,
         rtol=STRICT.rtol,
         atol=STRICT.atol,
+    )
+    _, se = restored.predict(data[["x"]], pred_type="link", se_fit=True, offset=offset)
+    assert np.all(np.isfinite(se))
+
+
+def test_public_exact_nb_zero_penalty_theta_snapshot_and_pickle() -> None:
+    saved = _nb_case_frame()
+    data = saved[["x", "y"]]
+    offset = saved.offset.to_numpy()
+    family = NegativeBinomial(theta=2.7, link="log")
+    result = GAM(
+        "y~x",
+        family=family,
+        control=FitControl(
+            execution="stream",
+            linear_solver="qr",
+            batch_rows=17,
+            uncertainty="fisher",
+        ),
+    ).fit(
+        DataFrameRowSource(
+            data, response="y", weights=saved.weight.to_numpy(), offset=offset
+        ),
+        result="prediction",
+    )
+    assert result.converged
+    assert result.lambda_strategy == "exact_reml"
+    assert result.exact_optimizer_diagnostics is not None
+    assert result.exact_optimizer_diagnostics.startup_source_scans == 0
+    assert result.theta is not None
+    assert result.smoothing_params.size == 0
+    assert result.family.get_theta(transformed=True)[0] == pytest.approx(
+        result.theta, rel=STRICT.rtol, abs=STRICT.atol
+    )
+    original = result.predict(data[["x"]], offset=offset)
+    family.put_theta(np.asarray([np.log(0.9)]))
+    restored = pickle.loads(pickle.dumps(result))
+    np.testing.assert_allclose(
+        restored.predict(data[["x"]], offset=offset),
+        original,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert restored.family.get_theta(transformed=True)[0] == pytest.approx(
+        result.theta, rel=STRICT.rtol, abs=STRICT.atol
     )
     _, se = restored.predict(data[["x"]], pred_type="link", se_fit=True, offset=offset)
     assert np.all(np.isfinite(se))
@@ -310,7 +415,7 @@ def test_regular_fixed_sp_pins_rho_outside_estimated_bounds(monkeypatch) -> None
     class CapturedBounds(Exception):
         pass
 
-    def capture(_objective, params, bounds, _control):
+    def capture(_objective, params, bounds, _control, **_kwargs):
         observed.append((np.asarray(params).copy(), tuple(bounds)))
         raise CapturedBounds
 
