@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -638,16 +639,50 @@ def _rlanczos_kernel(case: str) -> tuple[np.ndarray, int]:
 _RLANCZOS_CASES = ("gp/uniform", "gp/clustered", "gp/planar", "tprs/clustered")
 
 
+def _rlanczos_kernel_digest(case: str, E: np.ndarray, k: int, tol: float) -> str:
+    """Digest of one generated Rlanczos input matrix and its controls."""
+    control = json.dumps(
+        {"case": case, "k": k, "tol": float(tol).hex()},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(
+        np.asarray(E, dtype="<f8").tobytes(order="C") + control
+    ).hexdigest()
+
+
+# Against R linked to a BLAS other than the pinned OpenBLAS 0.3.26 (macOS
+# Accelerate), Accelerate's dsymv/ddot/daxpy reorder the Lanczos reductions,
+# and the production port deliberately keeps the pinned OpenBLAS arithmetic
+# (platform rule), so no source correction applies. Measured Ritz-vector
+# gaps there: gp/clustered (Matern 5/2 on two tight clusters, k=6) 1.05e-8
+# abs / 1.1e-6 rel and gp/planar (k=27) 5.4e-12 abs / 4.5e-8 rel; the other
+# kernels are within STRICT. Root approved MODERATE for exactly these two
+# digest-bound kernels (2026-10-26); pinned-OpenBLAS R stays bitwise.
+_OTHER_BLAS_RITZ_MODERATE_DIGESTS = {
+    "gp/clustered": (
+        "7e3ca82db48450ee16ed2f7d060cd0457bf8ab9f6870bdefcca60cdcdb1cd4d1"
+    ),
+    "gp/planar": "32ea6e3dfcf50fdf1898ec55b8797e148cd11ae4244bddfec2ec9fbdf9597733",
+}
+
+
+def _other_blas_ritz_tolerance(case: str, E: np.ndarray, k: int, tol: float):
+    """MODERATE only for a reviewed kernel whose input digest is unchanged."""
+    reviewed = _OTHER_BLAS_RITZ_MODERATE_DIGESTS.get(case)
+    if reviewed is not None and _rlanczos_kernel_digest(case, E, k, tol) == reviewed:
+        return MODERATE
+    return STRICT
+
+
 def test_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
     """source_lanczos ports mat.c::Rlanczos and its BLAS/LAPACK calls.
 
     Against an R that links the pinned OpenBLAS 0.3.26, every Ritz pair is
     bitwise identical. R linked to another BLAS (macOS Accelerate) reorders
-    ``dsymv``/``ddot``; there the Ritz values match at STRICT, while its Ritz
-    vectors are BLAS-dependent beyond STRICT for ill-conditioned kernels
-    (measured on Accelerate R: 9.6e-9 for the clustered Matern kernel, 5.0e-12
-    for the planar one) and are not compared. The Gaussian-process raw-basis
-    gates compare the resulting bases against that R at STRICT.
+    ``dsymv``/``ddot``; there the Ritz values match at STRICT and the Ritz
+    vectors at STRICT, except the two reviewed digest-bound kernels at
+    MODERATE.
     """
     if r_bridge.mode != "rpy2":
         pytest.skip("Identical-input slanczos oracle requires rpy2.")
@@ -672,6 +707,16 @@ def test_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
                     np.testing.assert_array_equal(vectors, expected["vectors"]),
                 ),
             )
+        else:
+            tolerance = _other_blas_ritz_tolerance(case, E, k, tol)
+            collector.check(
+                f"{case}/Ritz vectors",
+                lambda vectors=vectors, expected=expected, t=tolerance: (
+                    np.testing.assert_allclose(
+                        vectors, expected["vectors"], rtol=t.rtol, atol=t.atol
+                    )
+                ),
+            )
         collector.check(
             f"{case}/orthonormal Ritz vectors",
             lambda vectors=vectors, k=k: np.testing.assert_allclose(
@@ -679,6 +724,25 @@ def test_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
             ),
         )
     collector.raise_if_any("source Rlanczos")
+
+
+def test_other_blas_ritz_allowance_is_bound_to_the_reviewed_kernels(
+    monkeypatch,
+) -> None:
+    """Changing a reviewed kernel, its controls or its case loses MODERATE."""
+    tol = np.finfo(float).eps ** 0.5
+    E, k = _rlanczos_kernel("gp/planar")
+    # Bind to this platform's kernel bytes (libm may differ across platforms).
+    digest = _rlanczos_kernel_digest("gp/planar", E, k, tol)
+    monkeypatch.setitem(_OTHER_BLAS_RITZ_MODERATE_DIGESTS, "gp/planar", digest)
+    assert _other_blas_ritz_tolerance("gp/planar", E, k, tol) is MODERATE
+    changed = E.copy()
+    changed[0, 1] = np.nextafter(changed[0, 1], np.inf)
+    assert _other_blas_ritz_tolerance("gp/planar", changed, k, tol) is STRICT
+    assert _other_blas_ritz_tolerance("gp/planar", E, k - 1, tol) is STRICT
+    assert _other_blas_ritz_tolerance("gp/planar", E, k, tol / 2) is STRICT
+    assert _other_blas_ritz_tolerance("gp/uniform", E, k, tol) is STRICT
+    assert set(_OTHER_BLAS_RITZ_MODERATE_DIGESTS) == {"gp/clustered", "gp/planar"}
 
 
 def test_rlanczos_keeps_leading_pairs_without_convergence(monkeypatch) -> None:
