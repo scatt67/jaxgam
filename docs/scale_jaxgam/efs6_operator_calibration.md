@@ -78,9 +78,12 @@ Three terms changed from v1:
   changes the score by at most `p g^2 / (8 floor phi)`; v1's extra first-order
   part `p g / (floor phi)` was not needed. It was removed after the held-out
   complete fits showed it could dominate the comparison radius (1.4e-5 at
-  3000 levels). Against every recorded Gaussian state the measured
-  coefficient-induced error is at most 0.086 of the new term (theory: 1/8),
-  and a fresh Gaussian held-out set was run after the change.
+  3000 levels). Two facts support the change despite that timing: it has a
+  theoretical basis (the beta-independence of `log|H|` above), and it was
+  re-validated on a fresh Gaussian held-out set run afterwards (52 states,
+  maximum error/bound 1.5e-6). Against every recorded Gaussian state the
+  measured coefficient-induced error is at most 0.086 of the new term
+  (theory: 1/8).
 
 The indexed Poisson coefficient term is unchanged: each
 `d log H_gg / d beta_g` is at most one, so the first-order change is a quarter
@@ -173,8 +176,10 @@ every field agrees within STRICT. Across all complete-fit audits, which
 include every evaluated trial, no state's total error exceeded its bound. The
 largest error/bound ratio was 1e-4 (indexed Poisson, 1536 levels).
 
-Six fits (3 of 18 calibration fits at 2048-4096 levels, 3 of 11 held-out
-fits) stopped as `indeterminate_score`. In each, the undecided comparison was
+Six of the 41 measured complete fits stopped as `indeterminate_score`: 5 of
+the 24 fits at 2048 levels or more, and one held-out Gaussian fit at 1300
+levels (3 of 18 calibration fits at 2048-4096 levels, 3 of 11 held-out
+fits). In each, the undecided comparison was
 a genuine score difference smaller than the sum of two bounds; the decimal
 reference confirms both scores to about 1e-12:
 
@@ -272,7 +277,10 @@ done here. If an unjittered dense EFS score is wanted, dense EFS can pass its
 own exact Fisher factor's log determinant through the existing
 `log_det_hessian` argument of `reml_criterion_from_penalized_deviance` when the
 family's observed information equals its Fisher information. That change is
-EFS-owned, would need dense EFS pinned-R revalidation, and is low priority.
+EFS-owned, would need dense EFS pinned-R revalidation, and is low priority. A
+planned dense source-parity series is expected to remove the default jitter
+later; the operator calibration does not depend on it, because it uses the
+decimal reference rather than dense EFS scores as ground truth.
 
 ## Limitations
 
@@ -288,11 +296,15 @@ EFS-owned, would need dense EFS pinned-R revalidation, and is low priority.
   rejected. Arrowhead models with 3 or 4 modest coefficients remain admitted
   as in v1 but were not measured.
 * Complete fits can still stop truthfully as `indeterminate_score` inside
-  the domain (6 of 41 measured complete fits; see above). They report
-  `converged=False` and keep the last accepted state. A tighter decision
-  needs a bound on score *differences* between nearby states, whose rounding
-  errors are strongly correlated, rather than the sum of two absolute bounds.
-  That is a separate design change.
+  the domain: 6 of the 41 measured complete fits, 5 of the 24 at 2048 levels
+  or more. Near convergence the per-state absolute bounds stay roughly
+  constant while genuine late score differences shrink quadratically in the
+  step, so a comparison can become undecidable before efsudr's
+  deviance-change stop fires. These fits report `converged=False` and keep
+  the last accepted state. A tighter decision needs a bound on score
+  *differences* between nearby states, whose rounding errors are strongly
+  correlated, rather than the sum of two absolute bounds. That is recorded as
+  a deferred follow-up.
 * Public-default operator controls (`tolerance=1e-7`) give larger final
   gradients; some states then fail the unchanged `g <= 1e-5` gate (3 of 20
   arrowhead states measured), which ends the fit as indeterminate.
