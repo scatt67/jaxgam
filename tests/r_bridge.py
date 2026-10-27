@@ -664,11 +664,11 @@ class RBridge:
         source = self._to_r_dataframe(pd.DataFrame({"x": x}))
         smooth = self._mgcv.smoothCon(spec, source, absorb_cons=False)[0]
         frame = self._to_r_dataframe(pd.DataFrame({"x": new_x}))
-        return np.asarray(self._mgcv.PredictMat(smooth, frame))
+        return _r_array(self._mgcv.PredictMat(smooth, frame))
 
     def source_cubic_knots(self, x: np.ndarray, *, basis: str, k: int) -> np.ndarray:
         """Return pinned cubic knot placement from ``smooth.construct``."""
-        return np.asarray(self.source_cubic_smooth(x, basis=basis, k=k).rx2("xp"))
+        return _r_array(self.source_cubic_smooth(x, basis=basis, k=k).rx2("xp"))
 
     def source_cubic_shrinkage_penalty(self, penalty: np.ndarray) -> np.ndarray:
         """Apply pinned R eigenvalue shrinkage to an identical raw penalty."""
@@ -688,7 +688,7 @@ class RBridge:
             value=base["*"](base["["](values, count - 1), 0.1),
         )
         vectors = eigensystem.rx2("vectors")
-        return np.asarray(
+        return _r_array(
             base["%*%"](
                 vectors,
                 base["*"](self._base.as_numeric(values), self._base.t(vectors)),
@@ -795,15 +795,10 @@ class RBridge:
         public_factor = fit.rx2("rV")
         covariance = matrix_product(public_factor, self._base.t(public_factor))
         return {
-            "X": np.asarray(design, dtype=np.float64).copy(),
-            "S": [
-                np.asarray(penalty, dtype=np.float64).copy()
-                for penalty in setup.rx2("S")
-            ],
-            "coefficients": np.asarray(
-                fit.rx2("coefficients"), dtype=np.float64
-            ).copy(),
-            "covariance": np.asarray(covariance, dtype=np.float64).copy(),
+            "X": _r_array(design, dtype=np.float64),
+            "S": [_r_array(penalty, dtype=np.float64) for penalty in setup.rx2("S")],
+            "coefficients": _r_array(fit.rx2("coefficients"), dtype=np.float64),
+            "covariance": _r_array(covariance, dtype=np.float64),
             "score": float(fit.rx2("REML")[0]),
         }
 
@@ -854,15 +849,15 @@ class RBridge:
         setup = self._call_internal(
             "gam.setup", interpreted, self._stats.terms(interpreted.rx2("pf")), frame
         )
-        design = np.asarray(setup.rx2("X"), dtype=np.float64)
-        response = np.asarray(setup.rx2("y"), dtype=np.float64)
+        design = _r_array(setup.rx2("X"), dtype=np.float64)
+        response = _r_array(setup.rx2("y"), dtype=np.float64)
         square_root_weight = np.sqrt(weight_array)
         qr = self._call_internal(
             "qr_update",
             self._to_r_matrix(square_root_weight[:, None] * design),
             self._to_r_vector(square_root_weight * (response - offset_array)),
         )
-        fitted = np.asarray(qr.rx2("f"), dtype=np.float64)
+        fitted = _r_array(qr.rx2("f"), dtype=np.float64)
         tail = float(qr.rx2("y.norm2")[0]) - float(np.sum(fitted * fitted))
         prepared = self._call_internal(
             "Sl.Xprep", self._call_internal("Sl.setup", setup), qr.rx2("R")
@@ -882,13 +877,10 @@ class RBridge:
         )
         return {
             "X": design.copy(),
-            "S": [
-                np.asarray(penalty, dtype=np.float64).copy()
-                for penalty in setup.rx2("S")
-            ],
+            "S": [_r_array(penalty, dtype=np.float64) for penalty in setup.rx2("S")],
             "score": float(result.rx2("reml")[0]),
-            "gradient": np.asarray(result.rx2("reml1"), dtype=np.float64).copy(),
-            "hessian": np.asarray(result.rx2("reml2"), dtype=np.float64).copy(),
+            "gradient": _r_array(result.rx2("reml1"), dtype=np.float64),
+            "hessian": _r_array(result.rx2("reml2"), dtype=np.float64),
         }
 
     def source_gaussian_fixed_rho_qr_refit(
@@ -960,9 +952,9 @@ class RBridge:
             raise ValueError("Tensor Sl.fit requires two finite log penalties")
         n = 53
         with self._preserved_r_seed(742):
-            x = np.asarray(self._stats.runif(n), dtype=np.float64)
-            z = np.asarray(self._stats.runif(n), dtype=np.float64)
-            noise = np.asarray(self._stats.rnorm(n, sd=0.17), dtype=np.float64)
+            x = _r_array(self._stats.runif(n), dtype=np.float64)
+            z = _r_array(self._stats.runif(n), dtype=np.float64)
+            noise = _r_array(self._stats.rnorm(n, sd=0.17), dtype=np.float64)
         offset = np.linspace(-0.15, 0.25, n)
         weights = 0.4 + (np.arange(1, n + 1) % 9) / 7
         response = 0.3 + np.sin(3 * x) - 0.5 * np.cos(4 * z) + offset + noise
@@ -975,15 +967,15 @@ class RBridge:
         base = self._ro.baseenv
         setup = base["[[<-"](setup, "w", value=self._to_r_vector(weights))
         setup = base["[[<-"](setup, "offset", value=self._to_r_vector(offset))
-        design = np.asarray(setup.rx2("X"), dtype=np.float64)
-        target = np.asarray(setup.rx2("y"), dtype=np.float64) - offset
+        design = _r_array(setup.rx2("X"), dtype=np.float64)
+        target = _r_array(setup.rx2("y"), dtype=np.float64) - offset
         square_root_weight = np.sqrt(weights)
         qr = self._call_internal(
             "qr_update",
             self._to_r_matrix(square_root_weight[:, None] * design),
             self._to_r_vector(square_root_weight * target),
         )
-        transformed_response = np.asarray(qr.rx2("f"), dtype=np.float64)
+        transformed_response = _r_array(qr.rx2("f"), dtype=np.float64)
         residual_tail = float(qr.rx2("y.norm2")[0]) - float(
             np.sum(transformed_response * transformed_response)
         )
@@ -1020,7 +1012,7 @@ class RBridge:
         block_columns = np.arange(
             int(block.rx2("start")[0]), int(block.rx2("stop")[0]) + 1
         )
-        selected = np.asarray(block.rx2("ind"))
+        selected = _r_array(block.rx2("ind"))
         active = (
             block_columns[
                 selected.astype(bool)
@@ -1032,7 +1024,7 @@ class RBridge:
         )
         roots = []
         for value in grouped.rx2("rS"):
-            matrix = np.asarray(value, dtype=np.float64)
+            matrix = _r_array(value, dtype=np.float64)
             root = np.zeros((matrix.shape[0], width))
             root[:, active] = matrix.T
             roots.append(root)
@@ -1041,28 +1033,26 @@ class RBridge:
         )
         prediction = base["%*%"](prepared.rx2("X"), refit_coefficients)
         return {
-            "R": np.asarray(
+            "R": _r_array(
                 self._call_internal(
                     "Sl.repara", determinant.rx2("rp"), prepared.rx2("X")
                 ),
                 dtype=np.float64,
-            ).copy(),
+            ),
             "qtz": transformed_response.copy(),
             "residual_tail": residual_tail,
-            "root": np.asarray(determinant.rx2("E"), dtype=np.float64).copy(),
+            "root": _r_array(determinant.rx2("E"), dtype=np.float64),
             "score": float(fit.rx2("reml")[0]),
             "roots": roots,
-            "root_ranks": np.asarray(
-                setup.rx2("smooth")[0].rx2("rank"), dtype=int
-            ).copy(),
-            "gradient": np.asarray(fit.rx2("reml1"), dtype=np.float64).copy(),
-            "hessian": np.asarray(fit.rx2("reml2"), dtype=np.float64).copy(),
+            "root_ranks": _r_array(setup.rx2("smooth")[0].rx2("rank"), dtype=int),
+            "gradient": _r_array(fit.rx2("reml1"), dtype=np.float64),
+            "hessian": _r_array(fit.rx2("reml2"), dtype=np.float64),
             "penalty_nullity": int(prepared.rx2("Mp")[0]),
             "n_obs": n,
             "n_positive_weights": int(np.count_nonzero(weights > 0)),
             "sum_log_positive_weights": float(np.log(weights).sum()),
             "scale": float(np.exp(log_phi)),
-            "prediction": np.asarray(prediction, dtype=np.float64).ravel().copy(),
+            "prediction": _r_array(prediction, dtype=np.float64).ravel().copy(),
         }
 
     def fix_dependence(
@@ -6203,11 +6193,11 @@ for (i in seq_len(n_smooths)) {{
         """
         smooth = self._smooth_objects_rpy2(smooth_expr, data, False)[0]
         result: dict[str, Any] = {
-            "X": np.array(smooth.rx2("X"), dtype=np.float64),
-            "S": [np.array(penalty, dtype=np.float64) for penalty in smooth.rx2("S")],
+            "X": _r_array(smooth.rx2("X"), dtype=np.float64),
+            "S": [_r_array(penalty, dtype=np.float64) for penalty in smooth.rx2("S")],
         }
         if new_data is not None:
-            result["prediction"] = np.array(
+            result["prediction"] = _r_array(
                 self._mgcv.PredictMat(smooth, self._to_r_dataframe(new_data)),
                 dtype=np.float64,
             )
