@@ -19,6 +19,7 @@ from jaxgam.data.continuous_frame import (
 from jaxgam.data.discretize import DiscretizationBudget
 from jaxgam.data.source import ArrayRowSource
 from jaxgam.formula.parser import parse_formula
+from jaxgam.formula.terms import SmoothSpec
 from tests.helpers import r_available
 from tests.tolerances import STRICT
 
@@ -251,12 +252,17 @@ def test_linked_smoothing_rejects_before_source_scan() -> None:
         def scan(self, _batch_rows):
             raise AssertionError("id= must fail before source scan")
 
-    with pytest.raises(NotImplementedError, match=r"\['s\(x\)', 'te\(z,w\)'\]"):
+    # The shared formula/spec guard refuses id= (mgcv links smoothing
+    # parameters through it, which JaxGAM does not implement), so neither the
+    # compact frame nor any source scan is reached.
+    with pytest.raises(NotImplementedError, match=r"Linked smoothing parameters"):
         build_compact_setup_frame(
             parse_formula("y ~ s(x, id=1) + te(z, w, id=1) + s(g, bs='re')"),
             NoScanSource(),
             m=4,
         )
+    with pytest.raises(NotImplementedError, match=r"Linked smoothing parameters"):
+        SmoothSpec(variables=["x"], extra_args={"id": 1})
 
 
 @pytest.mark.skipif(not r_available(), reason="R with pinned mgcv not available")
