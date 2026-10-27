@@ -33,7 +33,7 @@ from jaxgam.fitting.pirls import (
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import _AssertCollector, check_that, r_available
-from tests.r_bridge import RBridge, RBridgeError
+from tests.r_bridge import RBridge, RBridgeError, _r_array
 from tests.tolerances import LOOSE, MODERATE, STRICT
 
 FORMULA = "y ~ s(x, bs='cr', k=6) + s(z, bs='cr', k=5)"
@@ -741,7 +741,7 @@ def test_efs_bridge_fixed_nb_theta_requires_positive_nb_family() -> None:
     family = bridge._get_efs_family_rpy2("nb", 2.7)
     assert str(family.rx2("family")[0]) == "negative binomial"
     np.testing.assert_allclose(
-        np.asarray(family.rx2("getTheta")(trans=True)),
+        _r_array(family.rx2("getTheta")(trans=True)),
         2.7,
         rtol=STRICT.rtol,
         atol=STRICT.atol,
