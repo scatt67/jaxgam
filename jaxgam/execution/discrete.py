@@ -60,7 +60,14 @@ from jaxgam.smooths.by_variable import FactorBySmooth
 
 @dataclass(frozen=True)
 class DiscreteFitMemoryPlan:
-    """Conservative combined retained/action/solver byte bound."""
+    """Conservative combined retained/action/solver byte bound.
+
+    ``fit_peak_bytes`` is the bound the discrete route checks against
+    ``memory_budget_bytes``: the retained Phase-1 compact setup tables plus
+    the fit workspace. :attr:`fit_workspace_bytes` excludes those retained
+    setup tables, as the streamed routes' ``known_workspace_bytes`` excludes
+    their prepared setup.
+    """
 
     setup_retained_bytes: int
     descriptor_host_retained_bytes: int
@@ -68,6 +75,15 @@ class DiscreteFitMemoryPlan:
     solver_workspace_bytes: int
     fit_peak_bytes: int
     budget_bytes: int
+
+    @property
+    def fit_workspace_bytes(self) -> int:
+        """Known live fit workspace: indexed design, device actions, solver."""
+        return (
+            self.descriptor_host_retained_bytes
+            + self.descriptor_device_peak_bytes
+            + self.solver_workspace_bytes
+        )
 
 
 @dataclass(frozen=True)

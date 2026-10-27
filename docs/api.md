@@ -303,6 +303,14 @@ deviance change. An estimated negative-binomial theta is updated once per
 iteration conditionally on the current mean (it is not jointly optimized with
 the smoothing parameters); the result reports the final `theta`.
 
+As on the streamed routes, `source_scans` and `batches_scanned` count the
+source scans and batches read by the fit itself (Phase-1 setup scans are
+excluded) and `known_workspace_bytes` is the conservative known
+fit-workspace bound: here the indexed design (host tables and device
+actions) and the solver workspace. `fit_peak_bytes` adds the retained
+compact setup tables; it is the bound the discrete route checks against
+`memory_budget_bytes` (reported as `fit_memory_budget_bytes`).
+
 ```python
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource

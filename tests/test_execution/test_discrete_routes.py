@@ -45,8 +45,9 @@ _COMPARED_FIELDS = (
     "smoothing_strategy",
     "discretization_strategy",
     "prediction_policy",
-    "fitting_source_scans",
-    "fitting_batches_scanned",
+    "source_scans",
+    "batches_scanned",
+    "known_workspace_bytes",
     "working_model_proposal_evaluations",
     "fit_peak_bytes",
     "fit_memory_budget_bytes",
@@ -164,7 +165,8 @@ def test_published_routes_never_enter_the_discrete_route(
     assert result.smoothing_strategy is None
     assert result.discretization_strategy is None
     assert result.prediction_policy is None
-    assert result.fitting_source_scans is None
+    assert result.fit_peak_bytes is None
+    assert result.fit_memory_budget_bytes is None
     assert result.execution_route == route
 
 

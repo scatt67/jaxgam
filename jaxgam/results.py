@@ -329,6 +329,18 @@ class GAMPredictionResult:
     :class:`GAMPredictor`.  Discrete fits also record ``prediction_policy``
     and ``discretization``: a bounded per-group/per-term record of the
     fitted ``compress.df`` grids whose size does not depend on ``n``.
+
+    ``source_scans`` and ``batches_scanned`` count the complete source scans
+    and batches read by the fit itself, excluding Phase-1 setup scans, on the
+    streamed and discrete routes alike. ``known_workspace_bytes`` is the
+    route's conservative known fit-workspace bound, excluding retained
+    Phase-1 preparation; on the discrete route it covers the indexed design
+    (host tables, device actions) and the solver workspace. Discrete fits
+    additionally report ``fit_peak_bytes``, which adds the retained compact
+    setup tables and is the bound that route checks against
+    ``fit_memory_budget_bytes`` (``FitControl.memory_budget_bytes``); the
+    streamed routes have no counterpart because their prepared setup is
+    budgeted separately during preparation.
     """
 
     _predictor: GAMPredictor
@@ -362,8 +374,6 @@ class GAMPredictionResult:
     discretization: ContinuousDiscretizationMetadata | None = field(
         default=None, kw_only=True
     )
-    fitting_source_scans: int | None = field(default=None, kw_only=True)
-    fitting_batches_scanned: int | None = field(default=None, kw_only=True)
     working_model_proposal_evaluations: int | None = field(default=None, kw_only=True)
     fit_peak_bytes: int | None = field(default=None, kw_only=True)
     fit_memory_budget_bytes: int | None = field(default=None, kw_only=True)
@@ -541,8 +551,9 @@ class GAMPredictionResult:
             discretization_strategy="mgcv_range_grid",
             prediction_policy=prediction_policy,
             discretization=fit_state.discretization,
-            fitting_source_scans=fit_state.fitting_source_scans,
-            fitting_batches_scanned=fit_state.fitting_batches_scanned,
+            source_scans=fit_state.fitting_source_scans,
+            batches_scanned=fit_state.fitting_batches_scanned,
+            known_workspace_bytes=fit_state.memory_plan.fit_workspace_bytes,
             working_model_proposal_evaluations=fit_state.proposal_evaluations,
             fit_peak_bytes=fit_state.memory_plan.fit_peak_bytes,
             fit_memory_budget_bytes=fit_state.memory_plan.budget_bytes,

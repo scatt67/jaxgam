@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 import jaxgam.execution.discrete as discrete_execution
+import jaxgam.execution.discrete_regular as discrete_regular_execution
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.families.standard import Gaussian
@@ -80,7 +81,7 @@ def test_completed_fitting_scan_releases_batch_arrays_before_residual_scan(
     result = GAM("y ~ z + s(x,bs='cr',k=6)", sp=[0.65], control=_control(8)).fit(
         source, result="prediction"
     )
-    assert source.fitting_scans == result.fitting_source_scans == 2
+    assert source.fitting_scans == result.source_scans == 2
 
 
 def _frame(n_rows: int = 75) -> pd.DataFrame:
@@ -160,12 +161,71 @@ def test_public_fixed_sp_fit_matches_identical_explicit_discretized_design() -> 
     assert result.smoothing_strategy == "fixed"
     assert result.discretization_strategy == "mgcv_range_grid"
     assert result.prediction_policy == "continuous_frozen_basis"
-    assert result.fitting_source_scans == 2
-    assert result.fitting_batches_scanned == 2 * math.ceil(len(frame) / 7)
+    assert result.source_scans == 2
+    assert result.batches_scanned == 2 * math.ceil(len(frame) / 7)
     assert result.fit_peak_bytes is not None
     assert result.fit_memory_budget_bytes is not None
     assert result.fit_peak_bytes <= result.fit_memory_budget_bytes
     assert result.to_predictor().offset_was_nonzero
+
+
+@pytest.mark.parametrize(
+    ("family", "module", "plan_name"),
+    [
+        ("gaussian", discrete_execution, "_solver_plan"),
+        ("poisson", discrete_regular_execution, "_regular_solver_plan"),
+    ],
+)
+def test_result_reports_the_published_fit_accounting(
+    monkeypatch, family, module, plan_name
+) -> None:
+    """Fit scans exclude setup scans; the workspace excludes retained setup."""
+    frame = _frame()
+    if family == "poisson":
+        frame = frame.assign(y=np.round(np.exp(frame["y"])))
+    source = _CountingSource(frame)
+    plans = []
+    setup_scans = []
+    planner = getattr(module, plan_name)
+    transfer = module.to_device_discrete_design
+
+    def recording_plan(*args, **kwargs):
+        plans.append(planner(*args, **kwargs))
+        return plans[-1]
+
+    def recording_transfer(*args, **kwargs):
+        setup_scans.append(source.scans)
+        return transfer(*args, **kwargs)
+
+    monkeypatch.setattr(module, plan_name, recording_plan)
+    monkeypatch.setattr(module, "to_device_discrete_design", recording_transfer)
+    result = GAM(
+        "y ~ z + s(x, bs='cr', k=6)", family=family, sp=[0.65], control=_control(7)
+    ).fit(source, result="prediction")
+    (plan,) = plans
+    (scans_before_fit,) = setup_scans
+    assert scans_before_fit > 0
+    assert result.source_scans == source.scans - scans_before_fit
+    assert result.source_scans >= 2
+    assert result.batches_scanned == result.source_scans * math.ceil(len(frame) / 7)
+    planned_workspace = (
+        plan.descriptor_host_retained_bytes
+        + plan.descriptor_device_peak_bytes
+        + plan.solver_workspace_bytes
+    )
+    # The performance iteration adds its compiled proposal workspace to the
+    # solver workspace after this first plan; the Gaussian route does not.
+    if family == "gaussian":
+        assert result.known_workspace_bytes == planned_workspace
+    else:
+        assert result.known_workspace_bytes > planned_workspace
+    assert plan.setup_retained_bytes > 0
+    assert result.fit_peak_bytes == (
+        plan.setup_retained_bytes + result.known_workspace_bytes
+    )
+    assert result.fit_memory_budget_bytes == 512 * 1024 * 1024
+    assert 0 < result.known_workspace_bytes < result.fit_peak_bytes
+    assert result.fit_peak_bytes <= result.fit_memory_budget_bytes
 
 
 def test_fit_is_batch_invariant_and_cleans_owned_selector_files(tmp_path) -> None:

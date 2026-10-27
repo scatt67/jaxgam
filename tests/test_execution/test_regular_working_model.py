@@ -371,9 +371,9 @@ def test_public_regular_fit_is_batch_invariant_and_pickles():
             and "poisson discrete Fisher performance iteration"
             in baseline.convergence_info
             and baseline.converged
-            and baseline.fitting_source_scans >= baseline.n_iter
-            and baseline.fitting_batches_scanned
-            == baseline.fitting_source_scans * int(np.ceil(len(frame) / 7))
+            and baseline.source_scans >= baseline.n_iter
+            and baseline.batches_scanned
+            == baseline.source_scans * int(np.ceil(len(frame) / 7))
             and baseline.fit_peak_bytes <= baseline.fit_memory_budget_bytes,
             "regular discrete result metadata",
         ),
@@ -447,7 +447,7 @@ def test_iteration_limit_warns_and_reports_non_convergence():
     assert result.n_iter == 2
     assert "did not converge" in result.convergence_info
     # Two iteration scans plus the final deviance-only scan.
-    assert result.fitting_source_scans == 3
+    assert result.source_scans == 3
 
 
 class _NoScanSource(DataFrameRowSource):

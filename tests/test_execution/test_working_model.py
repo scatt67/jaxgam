@@ -135,7 +135,7 @@ def test_gaussian_performance_fit_matches_pinned_bam(r_bridge, case):
             == result.lambda_strategy
             == "working_model_reml"
             and result.execution_route == "discrete"
-            and result.fitting_source_scans == 2
+            and result.source_scans == 2
             and result.working_model_proposal_evaluations >= result.n_iter - 1,
             "Gaussian route must report actual finite iterations and strategy",
         ),
@@ -358,10 +358,8 @@ def test_gaussian_results_covariance_pickle_and_batch_scan_ownership():
                         )
                     ),
                 )
-            assert result.fitting_source_scans == 2
-            assert result.fitting_batches_scanned == 2 * int(
-                np.ceil(len(frame) / batch_rows)
-            )
+            assert result.source_scans == 2
+            assert result.batches_scanned == 2 * int(np.ceil(len(frame) / batch_rows))
             restored = pickle.loads(pickle.dumps(result))
             assert not restored.coefficients.flags.writeable
             assert not np.shares_memory(restored.coefficients, result.coefficients)
@@ -439,7 +437,7 @@ def test_gaussian_nearly_exact_deviance_uses_selected_residuals():
     # prediction; this absolute gate still detects cancellation of RSS.
     assert abs(result.deviance - expected) < 1e-20
     assert 0.0 < result.deviance < 1e-11
-    assert result.fitting_source_scans == 2
+    assert result.source_scans == 2
 
 
 def test_gaussian_selected_repeated_source_preserves_scan_ordinals():
@@ -474,7 +472,7 @@ def test_gaussian_selected_repeated_source_preserves_scan_ordinals():
                 ),
             )
         assert actual.n == len(selection)
-        assert actual.fitting_source_scans == 2
+        assert actual.source_scans == 2
     collector.raise_if_any("selected repeated working-model source")
 
 
@@ -520,7 +518,7 @@ def test_rank_dropped_numeric_by_covariance_prediction_and_pickle(r_bridge):
                     ),
                 )
             assert result.converged
-            assert result.fitting_source_scans == 2
+            assert result.source_scans == 2
             assert not restored.coefficients.flags.writeable
             assert not np.shares_memory(result.coefficients, restored.coefficients)
             collector.check(
