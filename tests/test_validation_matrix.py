@@ -71,6 +71,7 @@ from tests.tolerances import LOOSE, MODERATE, STRICT, ToleranceClass
         (400, 4024, 2, "balanced"),
         (257, 211, 3, "balanced"),
         (512, 712, 3, "unbalanced"),
+        (1024, 7101, 2, "balanced"),
     ],
 )
 def test_operator_efs_calibrated_indexed_poisson_full_fit_strict(
@@ -152,6 +153,7 @@ def test_operator_efs_calibrated_indexed_poisson_full_fit_strict(
         (300, 32031, 2, "balanced"),
         (257, 32032, 3, "balanced"),
         (512, 32033, 3, "unbalanced"),
+        (1024, 7103, 2, "balanced"),
     ],
 )
 def test_operator_efs_calibrated_coupled_poisson_full_fit_strict(
@@ -333,6 +335,7 @@ def test_public_fixed_sp_operator_prediction_result_matches_pinned_r_strict(
         (300, 908, 2, "balanced"),
         (400, 909, 2, "balanced"),
         (512, 910, 3, "unbalanced"),
+        (1024, 7102, 3, "balanced"),
     ],
 )
 def test_operator_efs_calibrated_indexed_gaussian_scale_full_fit_strict(

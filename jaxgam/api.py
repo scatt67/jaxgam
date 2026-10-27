@@ -459,6 +459,8 @@ class GAM:
     ) -> GAMPredictionResult:
         """Materialize calibrated indexed and modest-indexed Poisson EFS fits."""
         from jaxgam.execution.operator_efs_controller import (
+            CALIBRATED_OPERATOR_EFS_DOMAIN,
+            CALIBRATED_OPERATOR_EFS_MAX_MODEST,
             SourceOperatorEFSFitProvider,
             run_operator_efs_known_scale,
         )
@@ -476,9 +478,15 @@ class GAM:
             raise NotImplementedError(
                 "Operator EFS currently supports calibrated Poisson/log indexed fits."
             )
-        if self.control.batch_rows != 64:
+        domain = CALIBRATED_OPERATOR_EFS_DOMAIN
+        if not (
+            domain.minimum_batch_rows
+            <= self.control.batch_rows
+            <= domain.maximum_batch_rows
+        ):
             raise NotImplementedError(
-                "Calibrated operator EFS currently requires batch_rows=64."
+                "Calibrated operator EFS requires batch_rows "
+                f"{domain.minimum_batch_rows}-{domain.maximum_batch_rows}."
             )
         spec = parse_formula(self.formula)
         total = self.control.memory_budget_bytes
@@ -497,14 +505,13 @@ class GAM:
         )
         modest = len(model.modest_columns)
         if (
-            not 256 < indexed <= 512
-            or modest > 4
+            not domain.admits(indexed, model.n_obs, self.control.batch_rows)
+            or modest > CALIBRATED_OPERATOR_EFS_MAX_MODEST
             or model.n_coef != indexed + modest
-            or not 2 * indexed <= model.n_obs <= 3 * indexed
         ):
             raise NotImplementedError(
-                "Calibrated operator EFS requires 257-512 indexed levels, "
-                "at most four modest coefficients, and 2-3 rows per level."
+                f"Calibrated operator EFS requires {domain.describe()}, and at "
+                f"most {CALIBRATED_OPERATOR_EFS_MAX_MODEST} modest coefficients."
             )
         start = prepare_indexed_operator_efs_start(
             model, source, family, memory_budget_bytes=preparation_budget
@@ -543,6 +550,7 @@ class GAM:
             base,
             score=selected.components.score.value,
             score_error_bound=selected.score_error_bound,
+            score_bound_method=selected.score_bound_method,
             scale=selected.reported_phi,
             score_scale=selected.score_phi,
             edf_total=selected.components.edf_total,

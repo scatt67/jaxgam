@@ -293,3 +293,82 @@ def test_public_operator_efs_rejects_unreleased_regime_before_source_replay(
     )
     with pytest.raises(NotImplementedError, match=r"Calibrated|supports calibrated"):
         model.fit(source, result="prediction")
+
+
+def _indexed_poisson_frame(levels: int, rows: int, seed: int) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    group = np.arange(levels * rows) % levels
+    return pd.DataFrame(
+        {
+            "y": rng.poisson(np.exp(0.2 + 0.3 * np.sin(group / 31))),
+            "g": pd.Categorical.from_codes(
+                group, categories=[f"g{index}" for index in range(levels)]
+            ),
+        }
+    )
+
+
+def test_public_operator_efs_labels_admitted_bound_beyond_p512():
+    from jaxgam.execution.operator_efs_controller import (
+        CALIBRATED_OPERATOR_EFS_DOMAIN as domain,
+    )
+
+    frame = _indexed_poisson_frame(1100, domain.minimum_rows_per_level, 5401)
+    fitted = GAM(
+        "y~0+s(g,bs='re')",
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=domain.maximum_batch_rows,
+            operator=OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15),
+        ),
+    ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
+    assert fitted.converged
+    assert fitted.score_bound_method == "indexed_poisson_empirical_v2"
+    assert fitted.score_error_bound is not None
+    assert fitted.execution_route == "operator"
+    assert fitted.lambda_strategy == "efs_reml"
+
+
+def test_public_operator_efs_rejects_levels_beyond_calibration_before_efs():
+    from jaxgam.execution.operator_efs_controller import (
+        CALIBRATED_OPERATOR_EFS_DOMAIN as domain,
+    )
+
+    frame = _indexed_poisson_frame(
+        domain.maximum_levels + 1, domain.minimum_rows_per_level, 5402
+    )
+
+    class _CountingSource(DataFrameRowSource):
+        def __init__(self, data):
+            super().__init__(data, response="y")
+            self.scans = 0
+
+        def scan(self, batch_rows):
+            self.scans += 1
+            yield from super().scan(batch_rows)
+
+    source = _CountingSource(frame)
+    model = GAM(
+        "y~0+s(g,bs='re')",
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=domain.maximum_batch_rows,
+        ),
+    )
+    with pytest.raises(NotImplementedError, match="Calibrated operator EFS requires"):
+        model.fit(source, result="prediction")
+    preparation = _CountingSource(frame)
+    prepared = prepare_operator_model(
+        parse_formula("y~0+s(g,bs='re')"),
+        preparation,
+        control=OperatorPreparationControl(
+            domain.maximum_batch_rows, (512 << 20) // 8, 64
+        ),
+    )
+    assert source.scans == preparation.scans == prepared.started_preparation_scans

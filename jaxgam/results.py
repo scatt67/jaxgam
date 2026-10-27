@@ -368,6 +368,9 @@ class GAMPredictionResult:
     execution_fallback_reason: str | None = field(default=None, kw_only=True)
     score_scale: float | None = field(default=None, kw_only=True)
     score_error_bound: float | None = field(default=None, kw_only=True)
+    # Calibration that produced ``score_error_bound``; "unavailable" when an
+    # operator EFS fit ended without an admitted bound.
+    score_bound_method: str | None = field(default=None, kw_only=True)
     source_scans: int | None = field(default=None, kw_only=True)
     batches_scanned: int | None = field(default=None, kw_only=True)
     known_workspace_bytes: int | None = field(default=None, kw_only=True)

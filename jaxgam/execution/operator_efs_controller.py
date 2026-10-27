@@ -107,6 +107,60 @@ class OperatorEFSState:
 
 
 @dataclass(frozen=True)
+class OperatorEFSCalibratedDomain:
+    """Model shapes over which an empirical score envelope was measured.
+
+    Admission also needs the regime's family, row, control and conditioning
+    checks. The measured distributions behind these limits are summarized in
+    ``docs/scale_jaxgam/efs6_operator_calibration.md``.
+    """
+
+    minimum_levels: int
+    maximum_levels: int
+    minimum_rows_per_level: int
+    maximum_rows_per_level: int
+    minimum_batch_rows: int
+    maximum_batch_rows: int
+
+    def admits(self, levels: int, n_obs: int, batch_rows: int) -> bool:
+        return (
+            self.minimum_levels <= levels <= self.maximum_levels
+            and self.minimum_rows_per_level * levels
+            <= n_obs
+            <= self.maximum_rows_per_level * levels
+            and self.minimum_batch_rows <= batch_rows <= self.maximum_batch_rows
+        )
+
+    def describe(self) -> str:
+        return (
+            f"{self.minimum_levels}-{self.maximum_levels} indexed levels, "
+            f"{self.minimum_rows_per_level}-{self.maximum_rows_per_level} rows per "
+            f"level and batch_rows {self.minimum_batch_rows}-"
+            f"{self.maximum_batch_rows}"
+        )
+
+
+# One measured domain is shared by the indexed Poisson, indexed Gaussian and
+# modest-plus-indexed Poisson envelopes (calibration v2).
+CALIBRATED_OPERATOR_EFS_DOMAIN = OperatorEFSCalibratedDomain(
+    minimum_levels=257,
+    maximum_levels=4096,
+    minimum_rows_per_level=1,
+    maximum_rows_per_level=16,
+    minimum_batch_rows=64,
+    maximum_batch_rows=65536,
+)
+CALIBRATED_OPERATOR_EFS_MAX_MODEST = 4
+
+
+# Row deviance/saturated terms, penalty quadratics and indexed diagonal sums
+# each have one sign, so batched recursive summation gives a first-order
+# rounding bound of about (n + p) eps M. Calibration v2 measured at most
+# 6.7e-4 (n + p) eps M over every calibration state; v1 used 512.
+_ARITHMETIC_ROUNDING_FACTOR = 32
+
+
+@dataclass(frozen=True)
 class OperatorScoreEnvelope:
     """Separately reported terms of one empirical operator EFS score envelope.
 
@@ -172,7 +226,7 @@ def _indexed_poisson_envelope(
         return None
     model = fit.model
     arithmetic = (
-        512
+        _ARITHMETIC_ROUNDING_FACTOR
         * np.finfo(np.float64).eps
         * (model.n_obs + model.n_coef)
         * _score_magnitude(components)
@@ -186,7 +240,12 @@ def _indexed_poisson_envelope(
 def _indexed_gaussian_envelope(
     fit: OperatorFitResult, components: MatchedOperatorEFSComponents
 ) -> OperatorScoreEnvelope | None:
-    """Unadmitted pure-indexed Gaussian envelope terms at incoming phi."""
+    """Unadmitted pure-indexed Gaussian envelope terms at incoming phi.
+
+    For Gaussian identity log|H| does not depend on beta, and H >= floor I
+    everywhere, so a coefficient residual changes the score by at most
+    p g^2 / (8 floor phi); no first-order term is needed.
+    """
     score = components.score
     phi = components.score_rows.terms.score_phi
     gradient = fit.diagnostics.final_gradient_norm
@@ -200,12 +259,12 @@ def _indexed_gaussian_envelope(
         return None
     model = fit.model
     arithmetic = (
-        512
+        _ARITHMETIC_ROUNDING_FACTOR
         * np.finfo(np.float64).eps
         * (model.n_obs + model.n_coef)
         * _score_magnitude(components, phi)
     )
-    coefficient = model.n_coef * (gradient + gradient * gradient) / (floor * phi)
+    coefficient = model.n_coef * gradient * gradient / (floor * phi)
     return OperatorScoreEnvelope(
         float(arithmetic), coefficient, score.determinant_rounding_bound
     )
@@ -241,7 +300,7 @@ def _arrowhead_poisson_envelope(
     p = model.n_coef
     k = len(model.modest_columns)
     arithmetic = (
-        512
+        _ARITHMETIC_ROUNDING_FACTOR
         * np.finfo(np.float64).eps
         * (model.n_obs + p + k * k)
         * _score_magnitude(components)
@@ -287,11 +346,10 @@ def _indexed_poisson_score_bound(
     """
     model = fit.model
     score = components.score
-    p, n = model.n_coef, model.n_obs
     if not (
-        256 < p <= 512
-        and 2 * p <= n <= 3 * p
-        and model.batch_rows == 64
+        CALIBRATED_OPERATOR_EFS_DOMAIN.admits(
+            model.n_coef, model.n_obs, model.batch_rows
+        )
         and isinstance(fit.family, Poisson)
         and fit.family.is_canonical
         and not fit.offset_was_nonzero
@@ -345,11 +403,10 @@ def _indexed_gaussian_score_bound(
     score = components.score
     rows = components.score_rows
     phi = rows.terms.score_phi
-    p, n = model.n_coef, model.n_obs
     if not (
-        256 < p <= 512
-        and 2 * p <= n <= 3 * p
-        and model.batch_rows == 64
+        CALIBRATED_OPERATOR_EFS_DOMAIN.admits(
+            model.n_coef, model.n_obs, model.batch_rows
+        )
         and isinstance(fit.family, Gaussian)
         and isinstance(fit.family.link, IdentityLink)
         and rows.unit_weights
@@ -404,14 +461,11 @@ def _arrowhead_poisson_score_bound(
     model = fit.model
     score = components.score
     rows = components.score_rows
-    n = model.n_obs
     k = len(model.modest_columns)
     indexed = model.random_effects[0].n_coef if model.random_effects else 0
     if not (
-        256 < indexed <= 512
-        and 1 <= k <= 4
-        and 2 * indexed <= n <= 3 * indexed
-        and model.batch_rows == 64
+        CALIBRATED_OPERATOR_EFS_DOMAIN.admits(indexed, model.n_obs, model.batch_rows)
+        and 1 <= k <= CALIBRATED_OPERATOR_EFS_MAX_MODEST
         and len(model.random_effects) == 1
         and len(model.penalties.blocks) == 1
         and isinstance(fit.family, Poisson)
@@ -460,14 +514,14 @@ def admitted_operator_efs_score_bound(
     if fit.family.scale_known:
         bound = _indexed_poisson_score_bound(fit, components, control)
         if bound is not None:
-            return bound, "indexed_poisson_empirical_v1"
+            return bound, "indexed_poisson_empirical_v2"
         bound = _arrowhead_poisson_score_bound(fit, components, control)
         if bound is not None:
             return bound, "arrowhead_poisson_empirical_v2"
         return None, "unavailable"
     bound = _indexed_gaussian_score_bound(fit, components, control)
     if bound is not None:
-        return bound, "indexed_gaussian_empirical_v1"
+        return bound, "indexed_gaussian_empirical_v2"
     return None, "unavailable"
 
 
