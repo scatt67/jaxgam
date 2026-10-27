@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -11,7 +13,7 @@ from jaxgam.fitting.rank_coordinates import jit_reduced_augmented_qr
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.rank_coordinates import global_rank_coordinate_map
-from tests.helpers import _AssertCollector
+from tests.helpers import _AssertCollector, r_links_pinned_openblas
 from tests.r_bridge import RBridge
 from tests.test_validation_matrix import SMOOTH_CONFIGS, _get_data
 from tests.tolerances import MODERATE, STRICT
@@ -132,21 +134,64 @@ def test_python_global_rank_map_matches_pinned_public_gp_covariance(
             atol=STRICT.atol,
         ),
     )
-    collector.check(
-        "public coefficients",
-        lambda: np.testing.assert_allclose(
-            beta, expected_beta, rtol=MODERATE.rtol, atol=MODERATE.atol
-        ),
+    pinned = r_links_pinned_openblas(bridge)
+    branch = (
+        "pinned-OpenBLAS R: public-gauge coefficients and covariance"
+        if pinned
+        else "other-BLAS R: gauge-invariant fitted values, covariance and EDF"
     )
-    collector.check(
-        "public covariance",
-        lambda: np.testing.assert_allclose(
-            covariance,
-            expected_covariance,
-            rtol=MODERATE.rtol,
-            atol=MODERATE.atol,
-        ),
-    )
+    warnings.warn(f"weighted GP rank-map gate branch: {branch}", stacklevel=1)
+    if pinned:
+        collector.check(
+            "public coefficients",
+            lambda: np.testing.assert_allclose(
+                beta, expected_beta, rtol=MODERATE.rtol, atol=MODERATE.atol
+            ),
+        )
+        collector.check(
+            "public covariance",
+            lambda: np.testing.assert_allclose(
+                covariance,
+                expected_covariance,
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol,
+            ),
+        )
+    else:
+        # x and the GP null function are exactly aliased, and which member of
+        # the tied pair gdiPK drops is BLAS-dependent in pinned R itself:
+        # OpenBLAS 0.3.26 R keeps x, macOS Accelerate R zeroes it (their public
+        # coefficients differ by 8.30/0.081/0.564 for these three sp). JaxGAM
+        # follows the pinned-OpenBLAS gauge everywhere, so against other-BLAS
+        # R the gauge-invariant fit is compared at STRICT (root, 2026-10-26).
+        X = np.asarray(setup.X)
+        X_r = r_setup["X"]
+        weighted_gram = X.T @ (weights[:, None] * X)
+        weighted_gram_r = X_r.T @ (weights[:, None] * X_r)
+        collector.check(
+            "fitted values (gauge-invariant)",
+            lambda: np.testing.assert_allclose(
+                X @ beta, X_r @ expected_beta, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+        collector.check(
+            "linear-predictor covariance (gauge-invariant)",
+            lambda: np.testing.assert_allclose(
+                X @ covariance @ X.T,
+                X_r @ expected_covariance @ X_r.T,
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
+        collector.check(
+            "EDF (gauge-invariant)",
+            lambda: np.testing.assert_allclose(
+                np.trace(covariance @ weighted_gram),
+                np.trace(expected_covariance @ weighted_gram_r),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+        )
     collector.check(
         "REML scalar",
         lambda: np.testing.assert_allclose(
@@ -164,7 +209,7 @@ def test_python_global_rank_map_matches_pinned_public_gp_covariance(
             atol=MODERATE.atol,
         ),
     )
-    collector.raise_if_any("pinned weighted GP rank map")
+    collector.raise_if_any(f"pinned weighted GP rank map [{branch}]")
 
 
 @pytest.mark.parametrize(
