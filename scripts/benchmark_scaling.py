@@ -1,9 +1,18 @@
 """Emit isolated, reproducible scaling-evidence records as JSON.
 
 This harness deliberately benchmarks one estimator at a time. It does not
-compare dense REML, streamed fixed-sp PIRLS, QR, EFS, or ``mgcv::bam`` as if
-they estimated the same quantity. A cold run is always a fresh subprocess
-with a task-owned JAX compilation cache; no user or shared cache is deleted.
+compare dense REML, streamed fixed-sp PIRLS, QR, EFS, the continuous-discrete
+routes, or ``mgcv::bam`` as if they estimated the same quantity. A cold run is
+always a fresh subprocess with a task-owned JAX compilation cache; no user or
+shared cache is deleted.
+
+The ``discrete`` and ``discrete-wm`` executions fit the public
+``execution='discrete'`` route (``bam(discrete=TRUE)``'s compact design) with
+fixed smoothing parameters or ``smoothing_strategy='working_model_reml'``.
+``family`` (Gaussian, Poisson, negative binomial with estimated theta) and
+``model`` (additive cubic smooths or one cubic tensor) select the same data
+and formula for every route that supports them, so the discrete routes can
+be measured beside the undiscretized streamed QR and exact-REML routes.
 """
 
 from __future__ import annotations
@@ -32,6 +41,20 @@ _STREAM_EXECUTIONS = frozenset(
     {"stream", "stream-qr", "stream-exact", "stream-gaussian-qr"}
 )
 _MAX_CHILD_DIAGNOSTIC_CHARS = 4_096
+_DISCRETE_EXECUTIONS = frozenset({"discrete", "discrete-wm"})
+_EXECUTIONS = (
+    frozenset({"dense", "dense-reml", "efs"})
+    | _STREAM_EXECUTIONS
+    | _DISCRETE_EXECUTIONS
+)
+_FAMILIES = frozenset({"gaussian", "poisson", "nb"})
+_FAMILY_EXECUTIONS = (
+    frozenset({"dense-reml", "stream-qr", "stream-exact"}) | _DISCRETE_EXECUTIONS
+)
+# Negative binomial data are drawn at this theta; fits estimate theta from
+# the same start on every route.
+_NB_DATA_THETA = 3.0
+_NB_START_THETA = 1.0
 
 
 def _tolerance_record(tolerance: Any) -> dict[str, float]:
@@ -66,6 +89,9 @@ class ScalingCase:
     seed: int = 42
     result_mode: str = "full"
     smooth_count: int = 1
+    family: str = "gaussian"
+    model: str = "additive"
+    discretization_m: int | None = None
 
     def __post_init__(self) -> None:
         if self.n_rows <= 0:
@@ -78,28 +104,51 @@ class ScalingCase:
             raise ValueError("repeats must be positive.")
         if self.smooth_count <= 0:
             raise ValueError("smooth_count must be positive.")
-        if self.execution not in {
-            "dense",
-            "stream",
-            "stream-qr",
-            "stream-exact",
-            "stream-gaussian-qr",
-            "efs",
-        }:
+        if self.execution not in _EXECUTIONS:
             raise ValueError(
-                "execution must be 'dense', 'stream', 'stream-qr', "
-                "'stream-exact', 'stream-gaussian-qr', or 'efs'."
+                "execution must be 'dense', 'dense-reml', 'stream', 'stream-qr', "
+                "'stream-exact', 'stream-gaussian-qr', 'efs', 'discrete', or "
+                "'discrete-wm'."
             )
         if self.result_mode not in {"full", "inference", "prediction"}:
             raise ValueError(
                 "result_mode must be 'full', 'inference', or 'prediction'."
             )
         if (
-            self.execution in _STREAM_EXECUTIONS | {"efs"}
+            self.execution not in {"dense", "dense-reml"}
             and self.result_mode != "prediction"
         ):
             raise ValueError(
                 f"execution={self.execution!r} supports result_mode='prediction' only."
+            )
+        if self.family not in _FAMILIES:
+            raise ValueError("family must be 'gaussian', 'poisson', or 'nb'.")
+        if self.family != "gaussian" and self.execution not in _FAMILY_EXECUTIONS:
+            raise ValueError(
+                f"family={self.family!r} requires execution 'dense-reml', "
+                "'stream-qr', 'stream-exact', 'discrete', or 'discrete-wm'."
+            )
+        if self.model not in {"additive", "tensor"}:
+            raise ValueError("model must be 'additive' or 'tensor'.")
+        if self.model == "tensor" and (
+            self.execution == "efs"
+            or self.execution in _STREAM_EXECUTIONS
+            or self.smooth_count != 1
+        ):
+            raise ValueError(
+                "model='tensor' fixes its two covariates and excludes EFS and the "
+                "streamed routes, whose prepared setup has no tensor smooths; "
+                "leave smooth_count at 1."
+            )
+        if self.discretization_m is not None and (
+            self.execution not in _DISCRETE_EXECUTIONS
+            or isinstance(self.discretization_m, bool)
+            or not isinstance(self.discretization_m, int)
+            or self.discretization_m < 2
+        ):
+            raise ValueError(
+                "discretization_m must be an integer of at least 2 and applies "
+                "only to the discrete executions."
             )
 
 
@@ -231,13 +280,17 @@ def _directory_bytes(path: Path | None) -> int | None:
 
 def _smooth_variables(case: ScalingCase) -> tuple[str, ...]:
     """Return stable additive term names, preserving the one-smooth fixture."""
+    if case.model == "tensor":
+        return ("x0", "x1")
     if case.smooth_count == 1:
         return ("x",)
     return tuple(f"x{index}" for index in range(case.smooth_count))
 
 
 def _formula(case: ScalingCase) -> str:
-    """Build one ordered additive-CR formula for every route and child."""
+    """Build one ordered additive-CR or tensor formula for every route and child."""
+    if case.model == "tensor":
+        return f"y ~ te(x0, x1, k={case.basis_dimension}, bs='cr')"
     terms = " + ".join(
         f"s({variable}, k={case.basis_dimension}, bs='cr')"
         for variable in _smooth_variables(case)
@@ -247,18 +300,39 @@ def _formula(case: ScalingCase) -> str:
 
 def _smoothing_parameter_order(case: ScalingCase) -> list[str]:
     """Name the fixed-sp vector order derived from the formula term order."""
+    if case.model == "tensor":
+        return ["te(x0,x1):margin x0", "te(x0,x1):margin x1"]
     return [f"s({variable})" for variable in _smooth_variables(case)]
 
 
 def _fixed_smoothing_parameters(case: ScalingCase) -> list[float]:
-    return [1.0] * case.smooth_count
+    return [1.0] * len(_smoothing_parameter_order(case))
+
+
+def _effective_family(case: ScalingCase) -> str:
+    """The family the route fits; EFS keeps its Poisson/log contract."""
+    return "poisson" if case.execution == "efs" else case.family
+
+
+def _family_object(case: ScalingCase) -> Any:
+    """Construct the fitted family, estimating NB theta on every route."""
+    family = _effective_family(case)
+    if family == "nb":
+        from jaxgam.families.negative_binomial import NegativeBinomial
+
+        return NegativeBinomial(theta=_NB_START_THETA, fixed=False, link="log")
+    return family
 
 
 def _make_data(case: ScalingCase) -> pd.DataFrame:
     rng = np.random.default_rng(case.seed)
     variables = _smooth_variables(case)
     columns = {variable: rng.uniform(0.0, 1.0, case.n_rows) for variable in variables}
-    if case.smooth_count == 1:
+    if case.model == "tensor":
+        signal = (
+            0.8 * np.sin(2.0 * np.pi * columns["x0"]) * np.cos(np.pi * columns["x1"])
+        )
+    elif case.smooth_count == 1:
         # Preserve the original one-smooth generator byte-for-byte so the
         # c1a3134 dense adapter remains a valid paired baseline.
         signal = np.sin(2.0 * np.pi * columns["x"])
@@ -267,9 +341,21 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
             0.4 * np.sin(2.0 * np.pi * (index + 1) * columns[variable])
             for index, variable in enumerate(variables)
         )
-    if case.execution == "efs":
-        poisson_signal = 0.4 * signal if case.smooth_count == 1 else signal
-        y = rng.poisson(np.exp(0.2 + poisson_signal))
+    family = _effective_family(case)
+    if family in {"poisson", "nb"}:
+        # The EFS Poisson generator, shared by every Poisson route.
+        count_signal = (
+            0.4 * signal
+            if case.model == "additive" and case.smooth_count == 1
+            else signal
+        )
+        mu = np.exp(0.2 + count_signal)
+        if family == "poisson":
+            y = rng.poisson(mu)
+        else:
+            y = rng.negative_binomial(
+                _NB_DATA_THETA, _NB_DATA_THETA / (_NB_DATA_THETA + mu)
+            )
     else:
         y = signal + rng.normal(0.0, 0.3, case.n_rows)
     return pd.DataFrame({**columns, "y": y})
@@ -281,14 +367,13 @@ def _input_provenance(data: pd.DataFrame, case: ScalingCase) -> dict[str, Any]:
         digest.update(name.encode())
         digest.update(b"\0")
         digest.update(_array_sha256(data[name].to_numpy()).encode())
+    family = _effective_family(case)
+    if case.model == "tensor":
+        shape = "tensor_sine"
+    else:
+        shape = "sine" if case.smooth_count == 1 else "additive_sine"
     return {
-        "generator": (
-            ("poisson_sine" if case.smooth_count == 1 else "poisson_additive_sine")
-            if case.execution == "efs"
-            else (
-                "gaussian_sine" if case.smooth_count == 1 else "gaussian_additive_sine"
-            )
-        ),
+        "generator": f"{family}_{shape}",
         "seed": case.seed,
         "smooth_variables": list(_smooth_variables(case)),
         "frame_sha256": digest.hexdigest(),
@@ -484,6 +569,7 @@ def _partial_public_dataclass_array_inventory(value: Any) -> dict[str, int]:
 def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
     """Build one bounded route without silently changing its estimator."""
     from jaxgam import GAM
+    from jaxgam.control import FitControl
 
     formula = _formula(case)
     fixed_sp = _fixed_smoothing_parameters(case)
@@ -505,7 +591,16 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
 
         return _FitPlan(fit, formula, None)
 
-    from jaxgam.control import FitControl
+    if case.execution == "dense-reml":
+        reml_family = _family_object(case)
+
+        def fit() -> Any:
+            return GAM(
+                formula, family=reml_family, control=FitControl(uncertainty="fisher")
+            ).fit(data, result=case.result_mode)
+
+        return _FitPlan(fit, formula, None)
+
     from jaxgam.data.source import ArrayRowSource
 
     source = _CountingArrayRowSource(
@@ -514,6 +609,19 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
             y=data.y.to_numpy(),
         )
     )
+    family = _family_object(case)
+
+    if case.execution in _DISCRETE_EXECUTIONS:
+        discrete_control = _discrete_control(case)
+        discrete_sp = None if case.execution == "discrete-wm" else fixed_sp
+
+        def fit() -> Any:
+            return GAM(
+                formula, family=family, sp=discrete_sp, control=discrete_control
+            ).fit(source, result="prediction")
+
+        return _FitPlan(fit, formula, source)
+
     control = FitControl(
         execution="stream", batch_rows=case.batch_rows, uncertainty="fisher"
     )
@@ -554,7 +662,7 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
         )
 
         def fit() -> Any:
-            return GAM(formula, family="gaussian", control=exact_control).fit(
+            return GAM(formula, family=family, control=exact_control).fit(
                 source, result="prediction"
             )
 
@@ -567,11 +675,26 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
             batch_rows=case.batch_rows,
             uncertainty="fisher",
         )
-        return GAM(formula, family="gaussian", sp=fixed_sp, control=qr_control).fit(
+        return GAM(formula, family=family, sp=fixed_sp, control=qr_control).fit(
             source, result="prediction"
         )
 
     return _FitPlan(fit, formula, source)
+
+
+def _discrete_control(case: ScalingCase) -> Any:
+    """The public discrete-route control the case's fit and setup both use."""
+    from jaxgam.control import ContinuousDiscretizationControl, FitControl
+
+    return FitControl(
+        execution="discrete",
+        batch_rows=case.batch_rows,
+        uncertainty="fisher",
+        smoothing_strategy=(
+            "working_model_reml" if case.execution == "discrete-wm" else "exact_reml"
+        ),
+        discretization=ContinuousDiscretizationControl(m=case.discretization_m),
+    )
 
 
 def _route_contract(case: ScalingCase) -> dict[str, Any]:
@@ -610,17 +733,75 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
             "strategy": "dense Poisson/log EFS with estimated smoothing",
             "result_mode": "prediction",
         },
+        "dense-reml": {
+            "adapter": "public",
+            "strategy": "dense Newton REML with estimated smoothing",
+            "result_mode": case.result_mode,
+        },
+        "discrete": {
+            "adapter": "public",
+            "strategy": (
+                "fixed-sp continuous-discrete fit on bam(discrete=TRUE)'s compact "
+                "design (Gaussian direct solve or bgam.fitd performance iteration)"
+            ),
+            "result_mode": "prediction",
+        },
+        "discrete-wm": {
+            "adapter": "public",
+            "strategy": (
+                "continuous-discrete working-model REML (bgam.fitd performance "
+                "iteration) with estimated smoothing"
+            ),
+            "result_mode": "prediction",
+        },
     }
-    return {
+    if case.execution in _FAMILY_EXECUTIONS and case.family != "gaussian":
+        family_label = (
+            "Poisson/log" if case.family == "poisson" else "NB/log, estimated theta"
+        )
+        strategy = (
+            "exact streamed REML with estimated smoothing"
+            if case.execution == "stream-exact"
+            else contracts[case.execution]["strategy"]
+        )
+        contracts[case.execution] = {
+            **contracts[case.execution],
+            "strategy": f"{strategy} ({family_label})",
+        }
+    contract = {
         "requested_execution": case.execution,
         "smoothing_parameter_order": _smoothing_parameter_order(case),
         "fixed_smoothing_parameter_values": (
             _fixed_smoothing_parameters(case)
-            if case.execution not in {"efs", "stream-exact", "stream-gaussian-qr"}
+            if case.execution
+            not in {
+                "efs",
+                "dense-reml",
+                "stream-exact",
+                "stream-gaussian-qr",
+                "discrete-wm",
+            }
             else None
         ),
         **contracts[case.execution],
     }
+    # Recorded only when they differ from the original Gaussian additive
+    # cases, whose route contracts stay byte-identical.
+    if case.family != "gaussian" or case.model != "additive":
+        contract["family"] = _effective_family(case)
+        contract["model"] = case.model
+    if case.family == "nb":
+        contract["theta"] = (
+            f"estimated from start {_NB_START_THETA} (data drawn at {_NB_DATA_THETA})"
+        )
+    if case.execution in _DISCRETE_EXECUTIONS:
+        contract["discretization_m"] = case.discretization_m
+        contract["discretization_m_semantics"] = (
+            "mgcv's bam(discrete=TRUE) default grid"
+            if case.discretization_m is None
+            else "per-margin range-grid points"
+        )
+    return contract
 
 
 def _thread_configuration() -> dict[str, str | None]:
@@ -810,12 +991,16 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
     loaded_runtime = loaded_source_identity(jaxgam, root)
     data = _make_data(case)
     formula = _formula(case)
-    family_name = "poisson" if case.execution == "efs" else "gaussian"
+    family_object = _family_object(case)
+    family_instance = (
+        get_family(family_object) if isinstance(family_object, str) else family_object
+    )
+    discrete_ledger: dict[str, Any] | None = None
     rss_high_water_before_setup = peak_rss_bytes()
     rss_current_before_setup = current_rss_bytes()
     started = time.perf_counter()
     spec = parse_formula(formula)
-    if case.execution in {"dense", "efs"}:
+    if case.execution in {"dense", "dense-reml", "efs"}:
         from jaxgam.fitting.data import FittingData
         from jaxgam.formula.design import ModelSetup
 
@@ -827,7 +1012,7 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         n_coef = int(setup.X.shape[1])
         n_penalties = 0 if setup.penalties is None else setup.penalties.n_penalties
         fingerprint_kind = "dense_model_matrix_sha256"
-        fitting_data = FittingData.from_setup(setup, get_family(family_name))
+        fitting_data = FittingData.from_setup(setup, family_instance)
         public_penalties = setup.penalties
         rank_deficit = fitting_data.rank_deficit
     else:
@@ -841,24 +1026,62 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
                 y=data.y.to_numpy(),
             )
         )
-        # Public streamed fits thread FitControl.batch_rows and
+        # Public streamed and discrete fits thread FitControl.batch_rows and
         # memory_budget_bytes into Phase-1 setup; measure setup under the
         # same controls the case's public fit uses.
-        setup_control = FitControl(execution="stream", batch_rows=case.batch_rows)
+        setup_control = (
+            _discrete_control(case)
+            if case.execution in _DISCRETE_EXECUTIONS
+            else FitControl(execution="stream", batch_rows=case.batch_rows)
+        )
         source_scans_before = source.scan_calls
         source_bytes_before = source.batch_bytes
-        prepared = prepare_model(
-            spec,
-            source,
-            family=get_family(family_name),
-            batch_rows=setup_control.batch_rows,
-            maximum_bytes=setup_control.memory_budget_bytes,
-        )
-        source_scans_after = source.scan_calls
-        source_bytes_after = source.batch_bytes
-        setup_s = time.perf_counter() - started
-        rss_high_water_after_setup = peak_rss_bytes()
-        rss_current_after_setup = current_rss_bytes()
+        if case.execution in _DISCRETE_EXECUTIONS:
+            from jaxgam.execution.discrete import _prepared_discrete
+
+            # The discrete route's own Phase-1 setup: compact frame, frozen
+            # basis, fitted-grid record and indexed design.
+            with _prepared_discrete(spec, source, setup_control) as problem:
+                source_scans_after = source.scan_calls
+                source_bytes_after = source.batch_bytes
+                setup_s = time.perf_counter() - started
+                rss_high_water_after_setup = peak_rss_bytes()
+                rss_current_after_setup = current_rss_bytes()
+                basis_fingerprint = problem.setup.basis_fingerprint
+                n_coef = problem.descriptor.n_coef
+                n_penalties = problem.penalties.n_penalties
+                public_penalties = problem.penalties
+                memory_plan = problem.descriptor.memory_plan
+                discrete_ledger = {
+                    "setup_retained_table_bytes": problem.setup.retained_table_bytes,
+                    "setup_construction_peak_bytes": (
+                        problem.setup.construction_peak_bytes
+                    ),
+                    "descriptor_host_retained_bytes": (memory_plan.host_retained_bytes),
+                    "descriptor_selector_resident_bytes": (
+                        memory_plan.selector_resident_bytes
+                    ),
+                    "descriptor_device_peak_bytes": memory_plan.device_peak_bytes,
+                    "compact_rows_per_group": [
+                        int(group.index.n_unique)
+                        for group in problem.setup.compact.groups
+                    ],
+                }
+            fingerprint_kind = "discrete_compact_basis_fingerprint"
+            rank_deficit = None
+        else:
+            prepared = prepare_model(
+                spec,
+                source,
+                family=family_instance,
+                batch_rows=setup_control.batch_rows,
+                maximum_bytes=setup_control.memory_budget_bytes,
+            )
+            source_scans_after = source.scan_calls
+            source_bytes_after = source.batch_bytes
+            setup_s = time.perf_counter() - started
+            rss_high_water_after_setup = peak_rss_bytes()
+            rss_current_after_setup = current_rss_bytes()
         setup_max_batch_rows = source.max_batch_rows
         if setup_max_batch_rows > case.batch_rows:
             raise RuntimeError(
@@ -867,14 +1090,15 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
             )
         setup_batch_rows_requested = setup_control.batch_rows
         setup_memory_budget_bytes = setup_control.memory_budget_bytes
-        basis_fingerprint = prepared.basis_fingerprint
-        n_coef = prepared.n_coef
-        assert prepared.fitting is not None
-        n_penalties = prepared.fitting.penalty_structure.n_penalties
-        fingerprint_kind = "stream_prepared_basis_fingerprint"
-        public_penalties = prepared.penalties
-        rank_deficit = prepared.fitting.unpenalized_rank_deficit
-    if case.execution in {"dense", "efs"}:
+        if case.execution not in _DISCRETE_EXECUTIONS:
+            basis_fingerprint = prepared.basis_fingerprint
+            n_coef = prepared.n_coef
+            assert prepared.fitting is not None
+            n_penalties = prepared.fitting.penalty_structure.n_penalties
+            fingerprint_kind = "stream_prepared_basis_fingerprint"
+            public_penalties = prepared.penalties
+            rank_deficit = prepared.fitting.unpenalized_rank_deficit
+    if case.execution in {"dense", "dense-reml", "efs"}:
         source_scans_before = None
         source_scans_after = None
         source_bytes_before = None
@@ -885,7 +1109,7 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
     frozen_contract = _model_contract(
         basis_fingerprint, n_coef, public_penalties, rank_deficit
     )
-    return {
+    record = {
         "formula": formula,
         "route": _route_contract(case),
         "input": _input_provenance(data, case),
@@ -943,6 +1167,19 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
             **harness_identity(),
         },
     }
+    if discrete_ledger is not None:
+        record["discrete_setup"] = discrete_ledger
+        record["memory"]["rss_scope"] = (
+            "fresh-process high-water/current RSS sampled inside the discrete "
+            "route's Phase-1 setup (compact frame, frozen basis, fitted-grid "
+            "record and indexed design) before its selectors are released; "
+            "includes imports and generated input"
+        )
+        record["source_scans"]["status"] = (
+            "measured RowSource.scan invocations during discrete preparation "
+            "(started scan iterations)"
+        )
+    return record
 
 
 def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
@@ -989,7 +1226,7 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
     )
     prediction_se_s: float | None = None
     prediction_se_status = "not requested for the EFS prediction-only route"
-    if case.execution in _STREAM_EXECUTIONS | {"dense"}:
+    if case.execution != "efs":
         started = time.perf_counter()
         _, standard_error = cold_result.predict(data.iloc[:128], se_fit=True)
         prediction_se_s = time.perf_counter() - started
@@ -1024,10 +1261,23 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
         )
         inner_iterations = None
         outer_iterations = public_iterations
+    elif case.execution == "dense-reml":
+        iteration_semantics = "outer dense Newton REML iterations"
+        inner_iterations = None
+        outer_iterations = public_iterations
     elif case.execution == "efs":
         iteration_semantics = "outer EFS optimizer iterations"
         inner_iterations = (
             None if efs_diagnostics is None else efs_diagnostics.inner_iterations
+        )
+        outer_iterations = public_iterations
+    elif case.execution in _DISCRETE_EXECUTIONS:
+        iteration_semantics = (
+            "discrete-route outer iterations: bgam.fitd performance-iteration "
+            "steps, or the Gaussian fixed-sp pinned scale iterations"
+        )
+        inner_iterations = getattr(
+            cold_result, "working_model_proposal_evaluations", None
         )
         outer_iterations = public_iterations
     else:
@@ -1049,6 +1299,8 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
             "evaluations; final source coefficient score solves recorded "
             "separately, excluding observed/Fisher factor solves"
             if case.execution == "stream-exact" and exact_diagnostics is not None
+            else "Sl.fitChol working-model proposal evaluations"
+            if case.execution in _DISCRETE_EXECUTIONS
             else None
         ),
         "final_refit_solves": (
@@ -1070,6 +1322,28 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
         "edf_total": float(cold_result.edf_total),
         "smoothing_params": np.asarray(cold_result.smoothing_params).tolist(),
         "known_workspace_bytes": getattr(cold_result, "known_workspace_bytes", None),
+        "public_fit_accounting": {
+            "source_scans": getattr(cold_result, "source_scans", None),
+            "batches_scanned": getattr(cold_result, "batches_scanned", None),
+            "fit_peak_bytes": getattr(cold_result, "fit_peak_bytes", None),
+            "working_model_proposal_evaluations": getattr(
+                cold_result, "working_model_proposal_evaluations", None
+            ),
+            "smoothing_strategy": getattr(cold_result, "smoothing_strategy", None),
+            "discretization_strategy": getattr(
+                cold_result, "discretization_strategy", None
+            ),
+            "theta": (
+                None
+                if getattr(cold_result, "theta", None) is None
+                else float(cold_result.theta)
+            ),
+            "scope": (
+                "public result fields: scans/batches read by the fit after "
+                "Phase-1 setup, its known fit workspace and, for discrete fits, "
+                "the peak including retained compact setup"
+            ),
+        },
         "exact_optimizer_diagnostics": (
             None
             if getattr(cold_result, "exact_optimizer_diagnostics", None) is None
@@ -1581,8 +1855,28 @@ def main() -> None:
             "stream-exact",
             "stream-gaussian-qr",
             "efs",
+            "dense-reml",
+            "discrete",
+            "discrete-wm",
         ),
         default="dense",
+    )
+    parser.add_argument(
+        "--family",
+        choices=("gaussian", "poisson", "nb"),
+        default="gaussian",
+        help="fitted family for dense-reml, stream-qr, stream-exact and discrete",
+    )
+    parser.add_argument(
+        "--model",
+        choices=("additive", "tensor"),
+        default="additive",
+        help="additive cubic smooths or one te(x0, x1) cubic tensor",
+    )
+    parser.add_argument(
+        "--discretization-m",
+        type=int,
+        help="per-margin discrete grid points (default: bam's default grid)",
     )
     parser.add_argument("--batch-rows", type=int, default=1_024)
     parser.add_argument("--repeats", type=int, default=1)
@@ -1647,6 +1941,9 @@ def main() -> None:
         repeats=args.repeats,
         result_mode=args.result_mode,
         smooth_count=args.smooth_count,
+        family=args.family,
+        model=args.model,
+        discretization_m=args.discretization_m,
     )
     if args.memory_pair_n is not None:
         if args.r_parity or args.baseline_checkout is not None:
