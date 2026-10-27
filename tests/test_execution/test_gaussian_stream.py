@@ -21,7 +21,10 @@ from jaxgam.execution.gaussian import (
     estimate_streamed_gaussian_qr_workspace,
     preflight_streamed_gaussian_qr_workspace,
 )
-from jaxgam.execution.gaussian_optimizer import build_stream_gaussian_qr_provider
+from jaxgam.execution.gaussian_optimizer import (
+    build_stream_gaussian_qr_provider,
+    optimize_gaussian_qr_lbfgs,
+)
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting.data import PreparedFittingMetadata
 from jaxgam.fitting.newton import newton_optimize
@@ -87,8 +90,8 @@ class _CountingSource:
             yield batch
 
 
-def _prepared_provider(batch_rows: int = 17):
-    formula, data, weight, offset = _inputs()
+def _prepared_provider(batch_rows: int = 17, inputs=None):
+    formula, data, weight, offset = _inputs() if inputs is None else inputs
     base = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
     prepared = prepare_model(parse_formula(formula), base, family=Gaussian())
     source = _CountingSource(base)
@@ -179,6 +182,55 @@ def test_one_preparation_scan_and_no_smoothing_or_finalization_rescan(
     # coefficient solve is direct; outer Newton status is carried separately.
     assert state.backtracks == 0
     assert not state.line_search_failed
+
+
+@pytest.mark.parametrize("pin_lambda", [False, True], ids=["estimated", "fixed"])
+@pytest.mark.parametrize("route", ["newton", "lbfgs"])
+def test_smoothing_optimization_never_rescans_the_frozen_source(
+    route: str, pin_lambda: bool
+) -> None:
+    """PR9 no-rescan gate: once the Gaussian statistics are frozen, neither
+    outer optimizer (Newton, or L-BFGS on the m = 51 problem that selects it;
+    estimated or fixed sp) nor finalization reads another source row."""
+    if route == "lbfgs":
+        formula, data = _large_m_inputs()
+        inputs = (formula, data, None, None)
+    else:
+        inputs = None
+    *_, source, metadata, provider = _prepared_provider(batch_rows=17, inputs=inputs)
+    frozen = (source.scan_calls, source.batch_calls)
+    assert frozen == (1, math.ceil(metadata.n_obs / 17))
+    evaluations = []
+    evaluate = provider.evaluate
+
+    def counted(params):
+        evaluations.append(params)
+        return evaluate(params)
+
+    provider.evaluate = counted
+    log_lambda = (
+        np.log(np.linspace(0.7, 1.3, metadata.n_penalties)) if pin_lambda else None
+    )
+    if route == "newton":
+        result = newton_optimize(
+            metadata,
+            score_provider=provider,
+            log_lambda_init=log_lambda,
+            pin_lambda=pin_lambda,
+        )
+    else:
+        result = optimize_gaussian_qr_lbfgs(
+            metadata, provider, log_lambda_init=log_lambda, pin_lambda=pin_lambda
+        )
+    assert result.converged
+    assert len(evaluations) > 1
+    assert (source.scan_calls, source.batch_calls) == frozen
+    state = provider.to_stream_state(result)
+    assert (source.scan_calls, source.batch_calls) == frozen
+    assert provider.source_scans == state.source_scans == 1
+    assert state.batches_scanned == frozen[1]
+    if pin_lambda:
+        np.testing.assert_array_equal(np.asarray(result.log_lambda), log_lambda)
 
 
 def test_stream_provider_jaxprs_and_retained_state_have_no_row_dimension() -> None:
