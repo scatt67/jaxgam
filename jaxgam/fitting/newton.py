@@ -172,6 +172,7 @@ def _diff_score(
     max_y: int = 0,
     integer_counts: bool = True,
     rank_deficit: int = 0,
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None = None,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
@@ -344,8 +345,17 @@ def _diff_score(
         )
         direct_nb_dev = family.deviance_fn(y, wt) if fixed_nb else None
 
+        # The QR inner solve takes E(rho) with E'E = S_lambda as an extra
+        # primal. The solution depends on S_lambda only, so the IFT below uses
+        # dS and the redundant tangent of E is ignored.
+        penalty_root = (
+            None
+            if penalty_roots is None
+            else penalty_ops.augmented_root(penalty_roots, log_lambda)
+        )
+
         @jax.custom_jvp
-        def _pirls_out(S_lambda_inner, beta_warm_inner):
+        def _pirls_out(S_lambda_inner, root_inner, beta_warm_inner):
             result = pirls_loop(
                 X,
                 y,
@@ -355,15 +365,16 @@ def _diff_score(
                 wt,
                 offset,
                 tol=pirls_tol,
+                penalty_root=root_inner,
             )
             return result.coefficients, result.XtWX, result.deviance
 
         @_pirls_out.defjvp
         def _pirls_jvp(primals, tangents):
-            S_lambda_inner, beta_warm_inner = primals
-            dS, _ = tangents
+            S_lambda_inner, root_inner, beta_warm_inner = primals
+            dS = tangents[0]
 
-            beta, XtWX, dev = _pirls_out(S_lambda_inner, beta_warm_inner)
+            beta, XtWX, dev = _pirls_out(S_lambda_inner, root_inner, beta_warm_inner)
 
             # IFT: dβ = -H⁻¹(dS @ β)
             H = XtWX + S_lambda_inner
@@ -417,7 +428,7 @@ def _diff_score(
 
             return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
 
-        beta, XtWX, dev = _pirls_out(S_lambda, beta_warm)
+        beta, XtWX, dev = _pirls_out(S_lambda, penalty_root, beta_warm)
 
     # ---- Criterion score ----
     core = _criterion_core(
@@ -530,6 +541,7 @@ def _fit_and_score_impl(
     max_y: int = 0,
     integer_counts: bool = True,
     rank_deficit: int = 0,
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None = None,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
@@ -597,6 +609,11 @@ def _fit_and_score_impl(
         offset,
         tol=pirls_tol,
         log_theta=log_theta,
+        penalty_root=(
+            None
+            if penalty_roots is None
+            else penalty_ops.augmented_root(penalty_roots, log_lambda)
+        ),
     )
 
     core = _criterion_core(
@@ -1045,6 +1062,7 @@ class NewtonOptimizer:
                 "penalty_structure": fd.penalty_structure,
                 "singleton_eig_constants": fd.singleton_eig_constants,
                 "multi_block_proj_S": fd.multi_block_proj_S,
+                "penalty_roots": fd.penalty_roots,
                 "count_indices": (
                     fd.count_prefix_plan.indices
                     if fd.count_prefix_plan is not None
@@ -1735,6 +1753,7 @@ class NewtonOptimizer:
                 fd.offset,
                 tol=self._pirls_tol,
                 log_theta=log_theta,
+                penalty_root=fd.penalty_root(log_lambda),
             )
             criterion = self._make_criterion(pirls_result)
             score = criterion.score(log_lambda)
@@ -1778,6 +1797,7 @@ class NewtonOptimizer:
                 fd.offset,
                 tol=self._pirls_tol,
                 log_theta=log_theta_init_for_pirls,
+                penalty_root=fd.penalty_root(log_lambda),
             )
             # Fisher-weighted EDF (XtWX may be observed info for non-canonical).
             edf_init = estimate_edf(pirls_init.XtWX_fisher, pirls_init.L_fisher)

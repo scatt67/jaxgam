@@ -45,6 +45,7 @@ from jaxgam.fitting.efs_theta import (
     _efs_nb_deviance,
     _efs_nb_log_deviance,
 )
+from jaxgam.fitting.qr import penalized_qr_solve
 from jaxgam.jax_utils import penalized_cholesky, penalized_solve
 from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
 
@@ -221,6 +222,7 @@ def _beta_step(
     max_halvings: int,
     first_iteration_accepts_any: bool,
     require_valid_factors: bool,
+    qr_solve=None,
 ) -> _BetaStepResult:
     """Take one WLS proposal and beta-only step-halving at fixed theta.
 
@@ -235,11 +237,18 @@ def _beta_step(
     eta_cur = X @ beta + offset if eta_current is None else eta_current
     W, z = compute_W_and_z(mu, eta_cur)
     factors_valid = jnp.all(jnp.isfinite(W)) & jnp.all(jnp.isfinite(z))
-    XtWX, XtWz = form_wls(W, z)
-    beta_new, L, regularization = penalized_solve(XtWX, S_lambda, XtWz)
+    if qr_solve is None:
+        XtWX, XtWz = form_wls(W, z)
+        beta_new, L, regularization = penalized_solve(XtWX, S_lambda, XtWz)
+        rhs_finite = jnp.all(jnp.isfinite(XtWz))
+    else:
+        # pls_fit1's QR solve (penalized_qr_solve): no normal equations.
+        beta_new, XtWX, L = qr_solve(W, z)
+        regularization = jnp.zeros((), dtype=beta_new.dtype)
+        rhs_finite = jnp.all(jnp.isfinite(z))
     solver_valid = (
         jnp.all(jnp.isfinite(XtWX))
-        & jnp.all(jnp.isfinite(XtWz))
+        & rhs_finite
         & jnp.all(jnp.isfinite(beta_new))
         & jnp.all(jnp.isfinite(L))
         & jnp.all(jnp.diag(L) > 0.0)
@@ -879,6 +888,7 @@ def _pirls_loop_jit(
     tol: float = 1e-7,
     log_theta: jax.Array | None = None,
     extended_observed: bool = False,
+    penalty_root: jax.Array | None = None,
 ) -> PIRLSResult:
     """Run the PIRLS inner loop to convergence.
 
@@ -927,6 +937,11 @@ def _pirls_loop_jit(
         EFS uses this only for fixed-theta NB to mirror ``gam.fit4``'s
         observed scoring and Fisher EDF split without adding a theta
         optimization coordinate.
+    penalty_root : jax.Array, shape (r, p), optional
+        ``E`` with ``E' E = S_lambda`` (``penalty_ops.augmented_root``) for a
+        structurally full-rank model.  When given, every nonnegative-weight
+        solve uses ``pls_fit1``'s QR (``penalized_qr_solve``) instead of the
+        normal equations; signed observed systems keep the Cholesky factor.
 
     Returns
     -------
@@ -1007,6 +1022,17 @@ def _pirls_loop_jit(
             wx = w_sqrt[:, None] * X
             return wx.T @ wx, wx.T @ (w_sqrt * z)
 
+    qr_solve = None
+    extended_path = use_extended_observed and log_theta is not None
+    if penalty_root is not None and not extended_path:
+
+        def qr_solve(W, z):
+            """Clipped positive weights, solved by ``pls_fit1``'s QR."""
+            w_sqrt = jnp.sqrt(jnp.clip(W, _W_MIN, _W_MAX))
+            wx = w_sqrt[:, None] * X
+            beta, L = penalized_qr_solve(wx, w_sqrt * z, penalty_root)
+            return beta, wx.T @ wx, L
+
     # Initial mu from beta_init
     eta_init = X @ beta_init + offset
     mu_init = family.link.inverse(eta_init)
@@ -1049,6 +1075,7 @@ def _pirls_loop_jit(
             max_halvings=_MAX_HALVINGS,
             first_iteration_accepts_any=True,
             require_valid_factors=False,
+            qr_solve=qr_solve,
         )
         beta_next = beta_step.beta
         pen_dev_next = beta_step.penalized_deviance
@@ -1105,21 +1132,29 @@ def _pirls_loop_jit(
         # Non-canonical standard family: the PIRLS solve used Fisher weights
         # (nonnegative) -> keep for EDF/covariance; rebuild the REML-log|H| XtWX
         # from OBSERVED (Newton) weights, preserving their sign (matching mgcv).
-        W_final, _ = _compute_W_and_z(final.mu, eta_final)  # Fisher for standard
+        W_final, z_final = _compute_W_and_z(final.mu, eta_final)  # Fisher
         W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
         WX_fisher = jnp.sqrt(W_final)[:, None] * X
         XtWX_fisher = WX_fisher.T @ WX_fisher
-        L_fisher, reg_fisher = penalized_cholesky(XtWX_fisher, S_lambda)
+        if qr_solve is None:
+            L_fisher, reg_fisher = penalized_cholesky(XtWX_fisher, S_lambda)
+        else:
+            _, _, L_fisher = qr_solve(W_final, z_final)
+            reg_fisher = jnp.zeros(())
         W_obs = _observed_weights(family, X, y, wt, final.beta, offset)  # signed
         XtWX_final = _signed_XtWX(W_obs, X)
         L_final, reg_final = penalized_cholesky(XtWX_final, S_lambda)
     else:
         # Canonical standard family: Fisher == Newton (weights nonnegative).
-        W_final, _ = _compute_W_and_z(final.mu, eta_final)
+        W_final, z_final = _compute_W_and_z(final.mu, eta_final)
         W_final = jnp.clip(W_final, _W_MIN, _W_MAX)
         WX_final = jnp.sqrt(W_final)[:, None] * X
         XtWX_final = WX_final.T @ WX_final
-        L_final, reg_final = penalized_cholesky(XtWX_final, S_lambda)
+        if qr_solve is None:
+            L_final, reg_final = penalized_cholesky(XtWX_final, S_lambda)
+        else:
+            _, _, L_final = qr_solve(W_final, z_final)
+            reg_final = jnp.zeros(())
         XtWX_fisher = XtWX_final
         L_fisher = L_final
         reg_fisher = reg_final
@@ -1749,6 +1784,7 @@ def pirls_loop(
     tol: float = 1e-7,
     log_theta: jax.Array | None = None,
     extended_observed: bool = False,
+    penalty_root: jax.Array | None = None,
 ) -> PIRLSResult:
     """Run PIRLS, passing estimated theta as dynamic JAX data.
 
@@ -1776,6 +1812,7 @@ def pirls_loop(
         tol=tol,
         log_theta=log_theta,
         extended_observed=extended_observed,
+        penalty_root=penalty_root,
     )
 
 

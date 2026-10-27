@@ -708,3 +708,128 @@ def test_pr11_factor_by_study_rows_match_pinned_r_from_1e_4_to_1e4(r_bridge) -> 
             )
         _assert_hard_gates(fit, label, collector)
     collector.raise_if_any("PR11 factor-by study rows")
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: pls_fit1 QR inner solve
+# ---------------------------------------------------------------------------
+
+
+def test_penalized_qr_solve_and_augmented_root_compile_and_are_exact() -> None:
+    """The QR kernel solves the penalized system without normal equations."""
+    from fractions import Fraction
+
+    from jaxgam.fitting.qr import penalized_qr_solve
+
+    rng = np.random.default_rng(3)
+    n, p = 30, 5
+    X = rng.standard_normal((n, p))
+    w = rng.uniform(0.5, 2.0, n)
+    z = rng.standard_normal(n)
+    roots = penalty_ops.JaxPenaltyRoots(
+        n_coef=p,
+        starts=(1, 2),
+        stops=(4, 5),
+        sp_indices=(0, 1),
+        roots=(jnp.asarray(rng.standard_normal((2, 3))), jnp.asarray(np.eye(3))),
+    )
+    rho = jnp.asarray([2.5, -1.0])
+    E = jax.jit(penalty_ops.augmented_root)(roots, rho)
+    S = np.zeros((p, p))
+    S[1:4, 1:4] += (
+        np.exp(2.5) * np.asarray(roots.roots[0]).T @ np.asarray(roots.roots[0])
+    )
+    S[2:5, 2:5] += np.exp(-1.0) * np.eye(3)
+    _assert_strict(np.asarray(E).T @ np.asarray(E), S)
+
+    wx, wz = np.sqrt(w)[:, None] * X, np.sqrt(w) * z
+    beta, L = jax.jit(penalized_qr_solve)(jnp.asarray(wx), jnp.asarray(wz), E)
+    H = wx.T @ wx + np.asarray(E).T @ np.asarray(E)
+    _assert_strict(np.asarray(L) @ np.asarray(L).T, H)
+    assert np.all(np.diag(np.asarray(L)) > 0)
+
+    exact = [[Fraction(float(v)) for v in row] for row in H]
+    rhs = [Fraction(float(v)) for v in wx.T @ wz]
+    for c in range(p):  # exact Gauss-Jordan on the float inputs
+        inv = 1 / exact[c][c]
+        exact[c], rhs[c] = [v * inv for v in exact[c]], rhs[c] * inv
+        for r in range(p):
+            if r != c:
+                f = exact[r][c]
+                exact[r] = [a - f * b for a, b in zip(exact[r], exact[c], strict=True)]
+                rhs[r] -= f * rhs[c]
+    _assert_strict(np.asarray(beta), np.array([float(v) for v in rhs]))
+
+
+def test_qr_roots_follow_the_lambda_free_structural_rank() -> None:
+    """Full-rank models get QR roots; a structurally aliased model keeps Cholesky."""
+    rng = np.random.default_rng(11)
+    n = 80
+    x = np.sort(rng.uniform(0, 1, n))
+    data = pd.DataFrame(
+        {"x": x, "z": rng.uniform(0, 1, n), "y": np.sin(4 * x) + rng.normal(0, 0.2, n)}
+    )
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
+
+    full = FittingData.from_setup(
+        ModelSetup.build(parse_formula("y ~ s(x, bs='cr', k=8)"), data), Gaussian()
+    )
+    assert full.penalty_roots is not None
+    E = np.asarray(full.penalty_root(jnp.asarray([0.3])))
+    _assert_strict(E.T @ E, np.asarray(full.S_lambda(jnp.asarray([0.3]))))
+    aliased = FittingData.from_setup(
+        ModelSetup.build(parse_formula("y ~ z + s(z, bs='cr', k=6)"), data), Gaussian()
+    )
+    assert aliased.rank_deficit == 1
+    assert aliased.penalty_roots is None
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize(
+    ("layout", "term", "compare_coefficients"),
+    [
+        ("regular", "s(x,bs='tp',k=4)", True),
+        ("irregular", "ti(x,z,bs='tp',k=c(8,8))", False),
+        ("regular", "ti(x,z,bs='tp',k=c(8,8))", False),
+    ],
+)
+def test_r_exact_design_at_r_reml_sp_matches_pinned_r(
+    r_bridge, layout: str, term: str, compare_coefficients: bool
+) -> None:
+    """At R's REML sp (cond(H) up to ~1e15) the QR inner fit reproduces R.
+
+    The regular ti optimum is essentially unpenalized (sp ~1e-20) with
+    cond(X) ~5e14: the normal-equation Hessian is numerically singular and the
+    Cholesky route could only regularize it.  Coefficients of such models are
+    not identifiable to STRICT by any method (R's included), so only fitted
+    values and deviance are compared there.
+    """
+    data = _parity_frame(layout)
+    with contextlib.redirect_stdout(io.StringIO()):
+        components = r_bridge.get_smooth_components(
+            "y~" + term, data, "gaussian", "REML"
+        )
+    sp = np.asarray(components["smoothing_params"], dtype=np.float64)
+    fit, coefficients, fitted, deviance = _dense_fit_on_r_design(
+        components, data.y.to_numpy(), sp
+    )
+    collector = _AssertCollector()
+    collector.check(
+        "fitted", lambda: _assert_strict(fitted, components["fitted_values"])
+    )
+    collector.check(
+        "deviance", lambda: _assert_strict(deviance, components["deviance"])
+    )
+    if compare_coefficients:
+        collector.check(
+            "coefficients",
+            lambda: _assert_strict(coefficients, components["coefficients"]),
+        )
+    collector.check(
+        "unregularized QR",
+        lambda: check_that(
+            float(fit.pirls_result.factor_regularization) == 0.0, "fallback fired"
+        ),
+    )
+    collector.raise_if_any(f"R-exact dense at R's REML sp {layout} {term}")

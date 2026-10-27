@@ -16,6 +16,7 @@ from jaxgam.fitting.initialization import initialize_beta_cpu
 from jaxgam.formula.fitting_prepare import (
     apply_transforms_to_design,
     initial_log_sp_from_diagonal,
+    qr_penalty_roots,
     reparameterize_structure,
     total_penalty_spaces,
 )
@@ -161,6 +162,18 @@ class FittingData:
     # boundary. Manual FittingData fixtures retain the compatibility fallback.
     beta_init: jax.Array | None = None
 
+    # Unscaled structural penalty roots when the lambda-free pls_fit1 rank
+    # test finds the data/penalty system structurally full rank; the dense
+    # inner fit then solves by QR. None keeps the Cholesky solve (manual
+    # fixtures, unpenalized models and structurally rank-deficient models).
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None = None
+
+    def penalty_root(self, log_lambda: jax.Array) -> jax.Array | None:
+        """``E(rho)`` for the QR inner solve, or ``None`` for Cholesky."""
+        if self.penalty_roots is None:
+            return None
+        return penalty_ops.augmented_root(self.penalty_roots, log_lambda)
+
     @property
     def n_penalties(self) -> int:
         return self.penalty_structure.n_penalties
@@ -255,6 +268,9 @@ class FittingData:
             count_prefix_plan=count_prefix_plan,
             rank_deficit=cls._unpenalized_rank_deficit(transformed, X_np),
             beta_init=beta_init,
+            penalty_roots=_structural_penalty_roots(
+                transformed, X_np, np.asarray(setup.weights, dtype=np.float64), device
+            ),
         )
 
     @staticmethod
@@ -311,6 +327,42 @@ class FittingData:
         if design_null.shape[1] == 0:
             return 0
         return design_null.shape[1] - int(np.linalg.matrix_rank(design_null))
+
+
+def _structural_penalty_roots(
+    structure: PenaltyStructure,
+    X: np.ndarray,
+    weights: np.ndarray,
+    device: jax.Device | None,
+) -> penalty_ops.JaxPenaltyRoots | None:
+    """Device roots for the QR inner solve when the system is full rank.
+
+    ``pls_fit1`` decides identifiability once on the lambda-free system
+    ``[R1/|R1|; Es/|Es|]`` (gdi.c, ``R_cond`` with ``rank.tol = 100 eps``),
+    with ``R1`` the factor of the prior-weighted design.  A structurally
+    deficient system would have its unidentifiable columns dropped by
+    ``pls_fit1``; that drop is not ported, so such models keep the Cholesky
+    solve and its explicit fallback diagnostic.
+    """
+    if not structure.blocks or structure.n_penalties == 0:
+        return None
+    # Imported here: jaxgam.execution imports streamed routes that import
+    # this module.
+    from jaxgam.execution.qr import structural_rank
+
+    roots = qr_penalty_roots(structure)
+    weighted = np.sqrt(np.maximum(weights, 0.0))[:, None] * X
+    data_R = np.linalg.qr(weighted, mode="r")
+    local = [(slice(root.start, root.stop), root.root) for root in roots]
+    if structural_rank(data_R, local, X.shape[1]) < X.shape[1]:
+        return None
+    return penalty_ops.JaxPenaltyRoots(
+        n_coef=X.shape[1],
+        starts=tuple(root.start for root in roots),
+        stops=tuple(root.stop for root in roots),
+        sp_indices=tuple(root.sp_index for root in roots),
+        roots=tuple(to_jax(root.root, device=device) for root in roots),
+    )
 
 
 def _to_jax_penalty(

@@ -96,6 +96,56 @@ class JaxPenaltyStructure:
         )
 
 
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class JaxPenaltyRoots:
+    """Unscaled local penalty roots ``E_j`` (``E_j' E_j = S_j``), one per sp.
+
+    Placement metadata is static; the roots are device leaves.  These are the
+    fitting-coordinate roots of the structural penalties, so their null
+    columns are exactly zero.
+    """
+
+    n_coef: int
+    starts: tuple[int, ...]
+    stops: tuple[int, ...]
+    sp_indices: tuple[int, ...]
+    roots: tuple[jax.Array, ...]
+
+    def tree_flatten(self):
+        return self.roots, (self.n_coef, self.starts, self.stops, self.sp_indices)
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        n_coef, starts, stops, sp_indices = aux
+        return cls(n_coef, starts, stops, sp_indices, tuple(children))
+
+    @property
+    def n_rows(self) -> int:
+        return sum(root.shape[0] for root in self.roots)
+
+
+def augmented_root(roots: JaxPenaltyRoots, rho: jax.Array) -> jax.Array:
+    """Return ``E(rho)`` with ``E' E = S_lambda``, stacking scaled local roots.
+
+    Each penalty keeps its own rows, scaled by ``exp(rho_j / 2)``, so
+    penalties of very different size are never summed before factorization
+    (the machine-zero leakage that mgcv's ``gam.reparam`` avoids).
+    """
+    blocks = [
+        jnp.zeros((root.shape[0], roots.n_coef), dtype=rho.dtype)
+        .at[:, start:stop]
+        .set(jnp.exp(0.5 * rho[sp]) * root)
+        for start, stop, sp, root in zip(
+            roots.starts, roots.stops, roots.sp_indices, roots.roots, strict=True
+        )
+        if root.shape[0]
+    ]
+    if not blocks:
+        return jnp.zeros((0, roots.n_coef), dtype=rho.dtype)
+    return jnp.concatenate(blocks, axis=0)
+
+
 def _apply_local(penalty: JaxLocalPenalty, vector: jax.Array) -> jax.Array:
     if penalty.kind == "dense":
         return penalty.values @ vector

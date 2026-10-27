@@ -1883,6 +1883,7 @@ def _fit_fixed_sp(
         wt=fd.wt,
         offset=fd.offset,
         log_theta=log_theta,
+        penalty_root=fd.penalty_root(log_lambda),
     )
 
     # Known-scale standard families (Poisson/Binomial): no free dispersion

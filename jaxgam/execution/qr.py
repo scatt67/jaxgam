@@ -273,6 +273,18 @@ def _structural_rank(
     return _triangular_rank(balanced.R)
 
 
+def structural_rank(
+    data_R: np.ndarray, roots: Iterable[LocalPenaltyRoot], n_coef: int
+) -> int:
+    """Lambda-free ``pls_fit1`` rank of the norm-balanced data/penalty system.
+
+    ``data_R`` is a triangular factor of the (prior-weighted) design and
+    ``roots`` the unscaled local penalty roots; the rank follows gdi.c's
+    ``100 * eps * R_cond`` policy on ``[R1/|R1|; Es/|Es|]``.
+    """
+    return _structural_rank(data_R, roots, n_coef)
+
+
 def _triangular_rank(R: np.ndarray) -> int:
     """Apply the pinned ``pls_fit1`` condition policy to a pivoted QR factor."""
     rank = min(R.shape)

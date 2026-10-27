@@ -864,6 +864,7 @@ def _fit_state(
             extended_observed=(
                 isinstance(fd.family, NegativeBinomial) and fd.family.n_theta == 0
             ),
+            penalty_root=fd.penalty_root(rho),
         )
     fisher_factor_valid = jnp.array(True)
     if not exact_fisher_factor:
