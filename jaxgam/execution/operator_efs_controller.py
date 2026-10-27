@@ -873,6 +873,9 @@ def _run_operator_efs(
             )
             if result.status != "indeterminate":
                 return old, trial, current, result.status, count
+            if trial.components.score.strategy != "stochastic_lanczos":
+                # Structured scores have no probes or Krylov depth to refine.
+                return old, trial, current, "indeterminate", count
             probes = min(maximum_probes, 2 * current.probes)
             depth = min(maximum_depth, 2 * current.lanczos_depth)
             if probes == current.probes and depth == current.lanczos_depth:
@@ -1001,8 +1004,12 @@ def _run_operator_efs(
                 refinements += count
                 if decision == "indeterminate":
                     indeterminate += 1
-                    stop = "indeterminate_score"
-                    break
+                    if multiplier > 1:
+                        stop = "indeterminate_score"
+                        break
+                    # efsudr leaves its contraction loop once mult <= 1
+                    # whatever the score, so this undecided comparison
+                    # cannot change the accepted minimum-multiplier step.
             if stop in {"indeterminate_score", "inner_failure"}:
                 break
             # Pinned efsudr allows a worsening minimum-multiplier step.

@@ -1,7 +1,7 @@
 """Accepted/trial and adaptive score gates for internal operator EFS."""
 
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -431,6 +431,68 @@ def test_operator_efs_contracts_worse_extended_trial_then_accepts_minimum_step()
     assert result.multiplier == 1.0
     np.testing.assert_allclose(result.accepted.fit.log_lambda, [optimum + np.log(1.02)])
     np.testing.assert_allclose(provider.fit_calls[3][1], provider.fit_calls[4][1])
+
+
+class _ScriptedBoundProvider(_ControlledProvider):
+    """Controlled states with a per-rho bound and a chosen score strategy."""
+
+    def __init__(self, *, bound_at=None, strategy="stochastic_lanczos", **kwargs):
+        super().__init__(**kwargs)
+        self.bound_at = bound_at
+        self.strategy = strategy
+
+    def evaluate(self, fit, control):
+        state = super().evaluate(fit, control)
+        state.components.score = replace(state.components.score, strategy=self.strategy)
+        if self.bound_at is not None:
+            state.score_error_bound = self.bound_at(float(fit.log_lambda[0]))
+        return state
+
+
+def test_undecided_contraction_to_unit_multiplier_accepts_minimum_step():
+    optimum = 2.5 + 2 * np.log(1.02)
+    minimum_step = optimum + np.log(1.02)
+    provider = _ScriptedBoundProvider(
+        direction=lambda rho: (rho - optimum) ** 2,
+        bound=0.0,
+        ratio=1.02,
+        bound_at=lambda rho: 1.0 if np.isclose(rho, minimum_step) else 0.0,
+    )
+    result = _run(provider, outer_limit=2)
+    assert result.stop_reason == "iteration_limit"
+    assert result.indeterminate_comparisons == 1
+    assert result.attempted_fits == 5
+    assert result.multiplier == 1.0
+    np.testing.assert_allclose(result.accepted.fit.log_lambda, [minimum_step])
+
+
+def test_undecided_contraction_above_unit_multiplier_still_stops():
+    step = np.log(1.02)
+    optimum = 2.5 + 7 * step
+    # Two accepted extensions reach multiplier 4; the worse 2.5 + 10 step
+    # trial contracts to multiplier 2, where efsudr's action depends on sign.
+    provider = _ScriptedBoundProvider(
+        direction=lambda rho: (rho - optimum) ** 2,
+        bound=0.0,
+        ratio=1.02,
+        bound_at=lambda rho: 1.0 if np.isclose(rho, 2.5 + 8 * step) else 0.0,
+    )
+    result = _run(provider, outer_limit=3)
+    assert result.stop_reason == "indeterminate_score"
+    assert not result.converged
+    assert result.attempted_fits == 7
+    assert result.indeterminate_comparisons == 1
+    np.testing.assert_allclose(result.accepted.fit.log_lambda, [2.5 + 6 * step])
+
+
+def test_structured_scores_are_not_refined_when_undecided():
+    provider = _ScriptedBoundProvider(
+        direction=-1.0, bound=None, strategy="structured_diagonal"
+    )
+    result = _run(provider, maximum_probes=4, maximum_depth=4)
+    assert result.stop_reason == "indeterminate_score"
+    assert result.accuracy_refinements == 0
+    assert len(provider.evaluations) == 2
 
 
 def test_operator_efs_source_refit_matches_dense_score_bound_at_moderate_p():
