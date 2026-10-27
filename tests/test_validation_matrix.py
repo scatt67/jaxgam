@@ -39,7 +39,7 @@ from jaxgam.api import GAM
 from jaxgam.control import FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.execution.efs import efs_initial_log_lambda, efs_initial_log_scale
-from jaxgam.execution.reml import evaluate_regular_stream_reml
+from jaxgam.execution.reml import StreamREMLControl, evaluate_regular_stream_reml
 from jaxgam.execution.stream import StreamPIRLSControl
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
@@ -169,6 +169,10 @@ _PR83_NB_MODERATE_FIELDS = {
 # cannot reproduce that stop; the named field's raw R comparison is STRICT
 # where R's matched-state derivatives show it stationary at STRICT
 # resolution and MODERATE otherwise (see _pr83_r_endpoint_checks).
+# JAX's own endpoint is only guaranteed to gtol: L-BFGS-B can stop one step
+# earlier on another platform (native amd64 CI, batch_rows=96: projected
+# gradient below gtol, sp 1.5e-7 short of stationary). Physical fields are
+# then judged at JAX's Newton-completed point (see _PR83Endpoint).
 _PR83_R_STATIONARITY_FIELDS = {
     ("gamma", "logit"): "score_scale",
     ("gamma", "inverse_squared"): "smoothing",
@@ -392,6 +396,45 @@ def test_pr83_r_stationarity_rule_selects_raw_tolerance_per_coordinate():
     }
 
 
+def _pr83_physical_fields(result, data: pd.DataFrame, offset: np.ndarray) -> dict:
+    """Return a public result's physical fields under pinned-R field names."""
+    return {
+        "coefficients": result.coefficients,
+        "score": result.score,
+        "scale": result.scale,
+        "score_scale": result.score_scale,
+        "deviance": result.deviance,
+        "smoothing": result.smoothing_params[0],
+        "edf": result.edf_total,
+        "fitted_values": result.predict(data[["x"]], offset=offset),
+        "link_se": result.predict(
+            data[["x"]], pred_type="link", se_fit=True, offset=offset
+        )[1],
+    }
+
+
+@dataclass(frozen=True)
+class _PR83Endpoint:
+    """Pinned-R endpoint judgement of one estimated Gamma fit.
+
+    ``field`` is the named oracle field whose plain raw-R comparison the
+    caller drops; ``add`` adds the endpoint checks. ``physical`` is the
+    public result whose physical fields the caller compares with pinned R at
+    the cell's existing tolerances: the raw fit where JAX's endpoint is
+    stationary at STRICT resolution, otherwise a public fixed-sp refit at
+    JAX's own Newton-completed smoothing parameter. ``prefix`` names the
+    refit in those checks ("" for the raw endpoint).
+    """
+
+    field: str
+    add: Callable[[_AssertCollector], None]
+    physical: object
+    prefix: str
+
+    def physical_fields(self, data: pd.DataFrame, offset: np.ndarray) -> dict:
+        return _pr83_physical_fields(self.physical, data, offset)
+
+
 def _pr83_r_endpoint_checks(
     family_class,
     link: str,
@@ -402,7 +445,7 @@ def _pr83_r_endpoint_checks(
     derivatives: dict,
     *,
     label: str,
-) -> tuple[str, Callable[[_AssertCollector], None]]:
+) -> _PR83Endpoint:
     """Judge an estimated Gamma endpoint by pinned R's own stationarity.
 
     ``derivatives`` are pinned gam.fit3's matched-state REML gradient g_R and
@@ -422,10 +465,19 @@ def _pr83_r_endpoint_checks(
       endpoint wherever JAX is itself stationary at STRICT resolution;
     * the cell's named raw field against raw R at STRICT where both raw
       endpoints are stationary in that coordinate at STRICT resolution, and
-      otherwise at MODERATE bound to the generated rows and controls.
+      otherwise at MODERATE bound to the generated rows and controls;
+    * the raw JAX endpoint keeps its convergence contract (converged with
+      projected gradient at most gtol).
 
-    Returns the named field, whose plain raw-R comparison the caller drops,
-    and the function adding these checks.
+    The exact outer optimizer only guarantees its endpoint to gtol. Where JAX's
+    raw endpoint is not stationary at STRICT resolution (L-BFGS-B stopped one
+    step earlier, as on native amd64 CI), its physical fields are not claimed
+    against R at STRICT. The caller judges them instead from a public fixed-sp
+    refit at exp(rho_jax*[0]) with the same FitControl, whose pinned log-scale
+    completion re-estimates the scale; the refit must converge truthfully
+    (exact log-scale gradient at its returned scale at most gtol) and
+    reproduce JAX's completed scale exp(rho_jax*[1]) at STRICT. The raw
+    endpoint's score, second order in its offset, stays STRICT against R.
     """
     family = family_class(link)
     field = _PR83_R_STATIONARITY_FIELDS[(family.family_name.lower(), link)]
@@ -469,6 +521,7 @@ def _pr83_r_endpoint_checks(
         _assert_pr83_regular_case(
             family_class, link, source, model, batch_rows=model.control.batch_rows
         )
+    gtol = StreamREMLControl().gtol
     detail = (
         f"R outer status={derivatives['outer_status']}, rho_R={rho_r.tolist()}, "
         f"g_R={np.asarray(derivatives['gradient']).tolist()}, "
@@ -480,13 +533,41 @@ def _pr83_r_endpoint_checks(
         f"{field} stationary at STRICT: R={r_field_stationary}, "
         f"JAX={jax_field_stationary}; JAX endpoint stationary={jax_stationary}"
     )
+    logger = logging.getLogger(__name__)
     # Record the pinned oracle's raw-tolerance selection in the test log.
-    logging.getLogger(__name__).warning(
+    logger.warning(
         f"PR8.3 Gamma/{link} {label} raw {field} tolerance: {raw_name} "
         f"(R {field}*/{field}_R - 1 = "
         f"{np.expm1(rho_star - rho_r)[coordinate]:.3e}, JAX {field}*/{field} - 1 "
         f"= {np.expm1(rho_jax_star - rho_jax)[coordinate]:.3e}, R outer status = "
         f"{derivatives['outer_status']})"
+    )
+    raw_diagnostics = result.exact_optimizer_diagnostics
+    raw_gradient_inf = (
+        np.nan if raw_diagnostics is None else raw_diagnostics.projected_gradient_inf
+    )
+    refit = None
+    refit_gradient = None
+    if not jax_stationary:
+        refit = GAM(
+            model.formula,
+            family=family_class(link),
+            sp=[float(np.exp(rho_jax_star[0]))],
+            control=model.control,
+        ).fit(source, result="prediction")
+        refit_gradient = np.asarray(
+            exact_trial(np.log([refit.smoothing_params[0], refit.score_scale])).gradient
+        )
+    # Record which result supplies the physical fields in the test log.
+    logger.warning(
+        f"PR8.3 Gamma/{link} {label} physical fields: "
+        + (
+            "raw endpoint (JAX stationary at STRICT resolution)"
+            if refit is None
+            else "fixed-sp refit at JAX's Newton-completed sp (raw endpoint "
+            f"rho*/rho - 1 = {np.expm1(rho_jax_star - rho_jax).tolist()}, "
+            f"projected gradient {raw_gradient_inf:.3e})"
+        )
     )
 
     def provenance() -> None:
@@ -524,12 +605,58 @@ def _pr83_r_endpoint_checks(
             err_msg=detail,
         )
 
+    def raw_contract() -> None:
+        diagnostics = result.exact_optimizer_diagnostics
+        assert result.converged, f"{result.convergence_info}; {detail}"
+        assert diagnostics is not None, detail
+        assert diagnostics.projected_gradient_inf <= gtol, detail
+
+    def refit_contract() -> None:
+        refit_detail = (
+            f"refit status={refit.convergence_info}, refit exact gradient at "
+            f"its returned scale={refit_gradient.tolist()}; {detail}"
+        )
+        assert refit.converged, refit_detail
+        assert refit.execution_route == "stream_qr", refit_detail
+        np.testing.assert_array_equal(
+            refit.smoothing_params, [np.exp(rho_jax_star[0])], err_msg=refit_detail
+        )
+        assert np.all(np.isfinite(refit_gradient)), refit_detail
+        assert abs(refit_gradient[1]) <= gtol, refit_detail
+        np.testing.assert_allclose(
+            refit.score_scale,
+            np.exp(rho_jax_star[1]),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=refit_detail,
+        )
+
+    def raw_score() -> None:
+        # The REML score is second order in the endpoint offset, so the raw
+        # gtol endpoint keeps its STRICT score claim against pinned R.
+        np.testing.assert_allclose(
+            result.score,
+            expected["score"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+            err_msg=detail,
+        )
+
     def add(checks: _AssertCollector) -> None:
         checks.check(f"{label} R endpoint provenance", provenance)
         checks.check(f"{label} R Newton-completed endpoint", completed_endpoint)
         checks.check(f"{label} {field} raw R ({raw_name})", raw_r)
+        checks.check(f"{label} raw endpoint convergence contract", raw_contract)
+        if refit is not None:
+            checks.check(f"{label} Newton-completed refit convergence", refit_contract)
+            checks.check(f"{label} raw score", raw_score)
 
-    return field, add
+    return _PR83Endpoint(
+        field=field,
+        add=add,
+        physical=result if refit is None else refit,
+        prefix="" if refit is None else "Newton-completed refit ",
+    )
 
 
 def _assert_pr83_nb_case(source, model, link, *, estimated, smooth) -> None:
@@ -725,9 +852,9 @@ def test_public_estimated_regular_all_links_pinned_r(
     expected = _public_exact_regular_pinned_r(
         tmp_path, data, weight, offset, family.family_name.lower(), link
     )
-    oracle_field = None
+    endpoint = None
     if (family.family_name.lower(), link) in _PR83_R_STATIONARITY_FIELDS:
-        oracle_field, add_oracle = _pr83_r_endpoint_checks(
+        endpoint = _pr83_r_endpoint_checks(
             family_class,
             link,
             source,
@@ -739,10 +866,13 @@ def test_public_estimated_regular_all_links_pinned_r(
             ),
             label="estimated",
         )
-    fitted = result.predict(data[["x"]], offset=offset)
-    _, link_se = result.predict(
-        data[["x"]], pred_type="link", se_fit=True, offset=offset
-    )
+    # Physical fields come from the raw fit, or from the fixed-sp refit at
+    # JAX's Newton-completed sp where its endpoint is only stationary to gtol.
+    physical = _pr83_physical_fields(result, data, offset)
+    prefix = ""
+    if endpoint is not None:
+        physical = endpoint.physical_fields(data, offset)
+        prefix = endpoint.prefix
     assert expected["inner_converged"]
     assert result.converged
     assert result.execution_route == "stream_exact_reml_qr"
@@ -754,38 +884,30 @@ def test_public_estimated_regular_all_links_pinned_r(
     assert result.n == source.n_rows
     assert result.deviance >= -STRICT.atol
     checks = _AssertCollector()
-    for name, actual in (
-        ("coefficients", result.coefficients),
-        ("score", result.score),
-        ("reported scale", result.scale),
-        ("score scale", result.score_scale),
-        ("deviance", result.deviance),
-        ("smoothing", result.smoothing_params[0]),
-        ("total EDF", result.edf_total),
-        ("fitted values", fitted),
-        ("link SE", link_se),
+    for name, field in (
+        ("coefficients", "coefficients"),
+        ("score", "score"),
+        ("reported scale", "scale"),
+        ("score scale", "score_scale"),
+        ("deviance", "deviance"),
+        ("smoothing", "smoothing"),
+        ("total EDF", "edf"),
+        ("fitted values", "fitted_values"),
+        ("link SE", "link_se"),
     ):
-        field = {
-            "reported scale": "scale",
-            "score scale": "score_scale",
-            "smoothing": "smoothing",
-            "total EDF": "edf",
-            "fitted values": "fitted_values",
-            "link SE": "link_se",
-        }.get(name, name)
-        if field == oracle_field:
+        if endpoint is not None and field == endpoint.field:
             continue
         tolerance = MODERATE if field in moderate_fields else STRICT
         checks.check(
-            name,
-            lambda actual=actual, field=field, tolerance=tolerance: (
+            prefix + name,
+            lambda actual=physical[field], field=field, tolerance=tolerance: (
                 np.testing.assert_allclose(
                     actual, expected[field], rtol=tolerance.rtol, atol=tolerance.atol
                 )
             ),
         )
-    if oracle_field is not None:
-        add_oracle(checks)
+    if endpoint is not None:
+        endpoint.add(checks)
     checks.raise_if_any(f"public estimated {family.family_name}/{link} R parity")
 
 
@@ -817,7 +939,7 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
         )
         result = model.fit(source, result="prediction")
         assert result.converged, f"batch_rows={batch_rows}: {result.convergence_info}"
-        oracle_field, add_oracle = _pr83_r_endpoint_checks(
+        endpoint = _pr83_r_endpoint_checks(
             Gamma,
             "inverse_squared",
             source,
@@ -831,28 +953,23 @@ def test_public_exact_gamma_inverse_squared_partition_stationarity(
         assert diagnostics is not None
         assert diagnostics.projected_gradient_inf <= 1e-6
         assert np.all(np.diff(diagnostics.accepted_score_history) <= STRICT.atol)
-        for name, actual, reference in (
-            ("score", result.score, expected["score"]),
-            ("smoothing", result.smoothing_params[0], expected["smoothing"]),
-            ("coefficients", result.coefficients, expected["coefficients"]),
-            ("scale", result.scale, expected["scale"]),
-            (
-                "link SE",
-                result.predict(
-                    data[["x"]], pred_type="link", se_fit=True, offset=offset
-                )[1],
-                expected["link_se"],
-            ),
+        physical = endpoint.physical_fields(data, offset)
+        for name, field in (
+            ("score", "score"),
+            ("smoothing", "smoothing"),
+            ("coefficients", "coefficients"),
+            ("scale", "scale"),
+            ("link SE", "link_se"),
         ):
-            if name == oracle_field:
+            if field == endpoint.field:
                 continue
             checks.check(
-                f"batch {batch_rows} {name}",
-                lambda actual=actual, reference=reference: np.testing.assert_allclose(
-                    actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+                f"batch {batch_rows} {endpoint.prefix}{name}",
+                lambda actual=physical[field], field=field: np.testing.assert_allclose(
+                    actual, expected[field], rtol=STRICT.rtol, atol=STRICT.atol
                 ),
             )
-        add_oracle(checks)
+        endpoint.add(checks)
     checks.raise_if_any("Gamma inverse-squared exact partition parity")
 
 
@@ -925,19 +1042,36 @@ def test_public_exact_gamma_inverse_squared_roundoff_stops_complete_pinned_r(
 
         return minimize
 
-    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
     checks = _AssertCollector()
+    # The unforced reference is itself only guaranteed to gtol; it supplies
+    # its physical fields from its Newton-completed point where it is not
+    # stationary at STRICT resolution.
+    unforced_endpoint = _pr83_r_endpoint_checks(
+        Gamma,
+        "inverse_squared",
+        source,
+        model(),
+        unforced,
+        expected,
+        derivatives,
+        label="unforced",
+    )
+    unforced_endpoint.add(checks)
+    unforced_physical = unforced_endpoint.physical_fields(data, offset)
     completed_score = None
     for abnormal in (False, True):
         if abnormal:
             stop_scores[stop.tobytes()] = completed_score - 30 * np.spacing(
                 abs(completed_score)
             )
-        monkeypatch.setattr(reml_execution, "minimize", scripted_stop(abnormal))
-        fitted_model = model()
-        result = fitted_model.fit(source, result="prediction")
+        # Script only the public fit; endpoint refits use the real optimizer.
+        with monkeypatch.context() as patch:
+            patch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+            patch.setattr(reml_execution, "minimize", scripted_stop(abnormal))
+            fitted_model = model()
+            result = fitted_model.fit(source, result="prediction")
         label = "abnormal" if abnormal else "relative reduction"
-        oracle_field, add_oracle = _pr83_r_endpoint_checks(
+        endpoint = _pr83_r_endpoint_checks(
             Gamma,
             "inverse_squared",
             source,
@@ -964,48 +1098,182 @@ def test_public_exact_gamma_inverse_squared_roundoff_stops_complete_pinned_r(
             assert rise == 30 * np.spacing(abs(completed_score))
         else:
             completed_score = history[-1]
-        fitted = result.predict(data[["x"]], offset=offset)
-        link_se = result.predict(
-            data[["x"]], pred_type="link", se_fit=True, offset=offset
-        )[1]
-        unforced_link_se = unforced.predict(
-            data[["x"]], pred_type="link", se_fit=True, offset=offset
-        )[1]
-        for name, actual, reference in (
-            ("score", result.score, unforced.score),
-            ("smoothing", result.smoothing_params, unforced.smoothing_params),
-            ("coefficients", result.coefficients, unforced.coefficients),
-            ("scale", result.scale, unforced.scale),
-            ("score scale", result.score_scale, unforced.score_scale),
-            ("link SE", link_se, unforced_link_se),
+        physical = endpoint.physical_fields(data, offset)
+        for name, field in (
+            ("score", "score"),
+            ("smoothing", "smoothing"),
+            ("coefficients", "coefficients"),
+            ("scale", "scale"),
+            ("score scale", "score_scale"),
+            ("link SE", "link_se"),
         ):
             checks.check(
-                f"{label} unforced {name}",
-                lambda actual=actual, reference=reference: np.testing.assert_allclose(
-                    actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+                f"{label} {endpoint.prefix}unforced {unforced_endpoint.prefix}{name}",
+                lambda actual=physical[field], field=field: np.testing.assert_allclose(
+                    actual,
+                    unforced_physical[field],
+                    rtol=STRICT.rtol,
+                    atol=STRICT.atol,
                 ),
             )
-        for name, actual in (
-            ("coefficients", result.coefficients),
-            ("score", result.score),
-            ("scale", result.scale),
-            ("score_scale", result.score_scale),
-            ("deviance", result.deviance),
-            ("smoothing", result.smoothing_params[0]),
-            ("edf", result.edf_total),
-            ("fitted_values", fitted),
-            ("link_se", link_se),
+        for name in (
+            "coefficients",
+            "score",
+            "scale",
+            "score_scale",
+            "deviance",
+            "smoothing",
+            "edf",
+            "fitted_values",
+            "link_se",
         ):
-            if name == oracle_field:
+            if name == endpoint.field:
                 continue
             checks.check(
-                f"{label} pinned R {name}",
-                lambda actual=actual, name=name: np.testing.assert_allclose(
+                f"{label} {endpoint.prefix}pinned R {name}",
+                lambda actual=physical[name], name=name: np.testing.assert_allclose(
                     actual, expected[name], rtol=STRICT.rtol, atol=STRICT.atol
                 ),
             )
-        add_oracle(checks)
+        if endpoint.prefix or unforced_endpoint.prefix:
+            # Raw scores are second order in either endpoint's offset.
+            checks.check(
+                f"{label} raw unforced score",
+                lambda score=result.score: np.testing.assert_allclose(
+                    score, unforced.score, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+        endpoint.add(checks)
     checks.raise_if_any("Gamma inverse-squared forced roundoff completion")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_exact_gamma_inverse_squared_gtol_stop_judged_at_completed_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gtol-converged, non-stationary endpoint is judged at its completed point.
+
+    The scripted first-order stage stops at native amd64 CI's batch_rows=96
+    endpoint offset (run 40301858423): log sp 1.494e-7 below the unforced
+    optimum, log scale on its conditional optimum there (-H_10/H_11 times the
+    sp offset, about -6.0e-9). Its projected gradient (~2.7e-7) is within
+    gtol, so the public fit truthfully converges without a completion, yet
+    its raw coefficients, scale and link SE miss pinned R at STRICT. The
+    physical fields are judged at STRICT from the public fixed-sp refit at
+    JAX's own Newton-completed sp instead (_pr83_r_endpoint_checks).
+    """
+    from jaxgam.execution import reml as reml_execution
+
+    data, weight, offset = _public_exact_regular_case(Gamma, "inverse_squared")
+    source = DataFrameRowSource(data, response="y", weights=weight, offset=offset)
+
+    def model() -> GAM:
+        return GAM(
+            'y~s(x,bs="cr",k=6)',
+            family=Gamma("inverse_squared"),
+            control=FitControl(
+                execution="stream",
+                linear_solver="qr",
+                batch_rows=96,
+                uncertainty="fisher",
+            ),
+        )
+
+    unforced = model().fit(source, result="prediction")
+    assert unforced.converged, unforced.convergence_info
+    stop = np.array(
+        [np.log(unforced.smoothing_params[0]), np.log(unforced.score_scale)]
+    ) + np.array([-1.494e-7, -6.0e-9])
+    expected = _public_exact_regular_pinned_r(
+        tmp_path, data, weight, offset, "gamma", "inverse_squared"
+    )
+    derivatives = RBridge(mode="rpy2").public_exact_reml_derivatives(
+        data, weight, offset, "gamma", "inverse_squared"
+    )
+    assert expected["inner_converged"]
+
+    def minimize(fun, _x0, *, callback, **_kwargs):
+        fun(stop)
+        callback(SimpleNamespace(x=stop))
+        return SimpleNamespace(
+            x=stop.copy(),
+            success=True,
+            status=0,
+            message="CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+            nit=1,
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reml_execution, "minimize", minimize)
+        fitted_model = model()
+        result = fitted_model.fit(source, result="prediction")
+    diagnostics = result.exact_optimizer_diagnostics
+    assert diagnostics is not None
+    assert result.converged, result.convergence_info
+    assert diagnostics.status == 0
+    assert 0.0 < diagnostics.projected_gradient_inf <= StreamREMLControl().gtol
+    assert "Newton completion" not in result.convergence_info
+    np.testing.assert_array_equal(
+        np.log([result.smoothing_params[0], result.score_scale]), stop
+    )
+    endpoint = _pr83_r_endpoint_checks(
+        Gamma,
+        "inverse_squared",
+        source,
+        fitted_model,
+        result,
+        expected,
+        derivatives,
+        label="gtol stop",
+    )
+    assert endpoint.physical is not result
+    raw = _pr83_physical_fields(result, data, offset)
+    physical = endpoint.physical_fields(data, offset)
+
+    def strict_excess(actual, reference) -> float:
+        actual = np.asarray(actual, dtype=np.float64)
+        reference = np.asarray(reference, dtype=np.float64)
+        return float(
+            np.max(
+                np.abs(actual - reference)
+                / (STRICT.atol + STRICT.rtol * np.abs(reference))
+            )
+        )
+
+    # Record the raw endpoint's gap to pinned R in multiples of STRICT.
+    logging.getLogger(__name__).warning(
+        "PR8.3 Gamma/inverse_squared gtol stop raw/R STRICT excess: "
+        + ", ".join(
+            f"{name}={strict_excess(raw[name], expected[name]):.3g}" for name in raw
+        )
+        + "; completed refit/R STRICT excess: "
+        + ", ".join(
+            f"{name}={strict_excess(physical[name], expected[name]):.3g}"
+            for name in physical
+        )
+    )
+    checks = _AssertCollector()
+    for name in ("coefficients", "scale", "link_se"):
+        checks.check(
+            f"raw {name} misses pinned R at STRICT",
+            lambda name=name: check_that(
+                not np.allclose(
+                    raw[name], expected[name], rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+                f"raw {name} unexpectedly matches pinned R at STRICT",
+            ),
+        )
+    for name in physical:
+        if name == endpoint.field:
+            continue
+        checks.check(
+            f"{endpoint.prefix}pinned R {name}",
+            lambda actual=physical[name], name=name: np.testing.assert_allclose(
+                actual, expected[name], rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    endpoint.add(checks)
+    checks.raise_if_any("Gamma inverse-squared gtol-stop completed-point parity")
 
 
 def test_public_exact_large_row_fit_stays_within_stream_budget() -> None:
