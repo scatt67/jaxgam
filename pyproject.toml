@@ -15,8 +15,14 @@ dependencies = [
     # the exact mat.c::Rlanczos port (DSYMV/DDOT/DAXPY/DSTEDC) for
     # Gaussian-process bases, and the GP basis products (DGEMM/DGEMV).
     # scipy-openblas64 (OpenBLAS 0.3.30, ILP64) served only the retained GP
-    # block-Lanczos route, which the exact Rlanczos port replaced; dropped on
-    # 2026-10-26 after the single-wheel retry (see the commit message).
+    # block-Lanczos route, which the exact Rlanczos port replaced. Single-wheel
+    # retry, 2026-10-26 (kept by root): every cubic-shrinkage, Lanczos,
+    # rank-coordinate and source gate stays STRICT on pinned Linux (312/312
+    # owning gates, 250/250 GP consumers, 50/50 gp validation cells) and on
+    # macOS (309 passed, 250/250, 50/50; the 3 weighted GP rank-map cases are
+    # the aliased tie Accelerate R breaks the other way, failing identically
+    # with two wheels, and are now judged by the other-BLAS gauge-invariant
+    # gate).
     "scipy-openblas32==0.3.26.0.4",
     "numba>=0.58",
     "jax>=0.4.20",
