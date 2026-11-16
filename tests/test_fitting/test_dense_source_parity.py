@@ -638,3 +638,73 @@ def test_every_fallback_jitter_is_visible_in_the_result() -> None:
         ),
     )
     collector.raise_if_any("fallback visibility")
+
+
+def _pr11_study_factor_by_frame() -> pd.DataFrame:
+    """The exact rows of the PR11 dense factor-by large-sp repro.
+
+    ``benchmark_discrete_approximation.make_data`` for the Gaussian 'study'
+    case at its default seed 20261025 and n=600.
+    """
+    rng = np.random.default_rng(20261025)
+    x0, x1, x2 = rng.uniform(size=(3, 600))
+    levels = ("a", "b", "c")
+    fac = pd.Categorical(rng.choice(levels, 600), categories=levels)
+    groups = tuple(f"g{index:02d}" for index in range(20))
+    g = pd.Categorical(rng.choice(groups, 600), categories=groups)
+    code = np.asarray(fac.codes)
+    effect = np.random.default_rng(20261025 + 2).normal(0.0, 0.3, len(groups))
+    eta = (
+        0.4 * np.sin(2.0 * np.pi * x0)
+        + 2.0 * (x1 - 0.5) ** 2
+        + 0.6 * np.sin(np.pi * x0) * np.cos(2.0 * np.pi * x1)
+        + np.array([0.0, 0.3, -0.2])[code]
+        + np.select(
+            [code == 0, code == 1], [np.sin(3.0 * x2), -x2], 0.5 * np.cos(4.0 * x2)
+        )
+        + effect[np.asarray(g.codes)]
+    )
+    y = eta + rng.normal(0.0, 0.5, 600)
+    return pd.DataFrame({"x0": x0, "x1": x1, "x2": x2, "fac": fac, "g": g, "y": y})
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_pr11_factor_by_study_rows_match_pinned_r_from_1e_4_to_1e4(r_bridge) -> None:
+    """The PR11 repro rows, at R's REML sp with the by-smooth sp scaled.
+
+    ``dense_factor_by_large_sp_repro.py`` scaled the middle sp by 1, 1e-2 and
+    1e-4; the same study's large side (1e2, 1e4) is included.  Every field is
+    STRICT against pinned R's fixed-sp fit.
+    """
+    data = _pr11_study_factor_by_frame()
+    formula = "y ~ fac + s(x2, bs='cr', k=8, by=fac)"
+    with contextlib.redirect_stdout(io.StringIO()):
+        reml = r_bridge.fit_gam(formula, data, "gaussian", "REML")
+    base = np.asarray(reml["smoothing_params"], dtype=np.float64)
+    collector = _AssertCollector()
+    for scale in (1e-4, 1e-2, 1.0, 1e2, 1e4):
+        sp = base * np.array([1.0, scale, 1.0])
+        with contextlib.redirect_stdout(io.StringIO()):
+            reference = r_bridge.fit_fixed_sp(
+                formula, data, "gaussian", sp, with_uncertainty=True
+            )
+        fit = GAM(formula, sp=list(sp)).fit(data)
+        _, link_se = fit.predict(data, pred_type="link", se_fit=True)
+        label = f"scale {scale:g}"
+        for name, actual, expected in (
+            ("coefficients", fit.coefficients, reference["coefficients"]),
+            ("fitted", fit.fitted_values, reference["fitted_values"]),
+            ("deviance", fit.deviance, reference["deviance"]),
+            ("score", fit.score, reference["score"]),
+            ("scale", fit.scale, reference["scale"]),
+            ("Vp", fit.Vp, reference["Vp"]),
+            ("link_se", link_se, reference["link_se"]),
+        ):
+            collector.check(
+                f"{label}: {name}",
+                lambda actual=actual, expected=expected: _assert_strict(
+                    actual, expected
+                ),
+            )
+        _assert_hard_gates(fit, label, collector)
+    collector.raise_if_any("PR11 factor-by study rows")
