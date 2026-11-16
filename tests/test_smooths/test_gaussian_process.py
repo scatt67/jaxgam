@@ -805,6 +805,111 @@ def test_raw_basis_penalty_and_prediction_match_pinned_smoothcon(r_bridge) -> No
     collector.raise_if_any("GP raw basis vs pinned smoothCon")
 
 
+def _sampled_knot_cases() -> dict[str, tuple[pd.DataFrame, list[str], int, int, int]]:
+    """Runtime-generated GP cases around smooth.construct.gp's knot sample.
+
+    Negative covariates make R's ``uniquecombs`` label order differ from the
+    numeric order, duplicated rows exercise its first-row deduplication, and
+    ``max_knots`` equal to (no sample) and one below (sample) the unique-row
+    count bracket the sampling condition. Entries are (data, variables, k,
+    max_knots, seed).
+    """
+    rng = np.random.default_rng(20261116)
+    base = pd.DataFrame({"x": rng.normal(size=45), "z": rng.uniform(-2.0, 3.0, 45)})
+    duplicated = pd.concat([base, base, base, base.iloc[[4]]], ignore_index=True)
+    unit = pd.DataFrame({"x": rng.uniform(0, 1, 60), "z": rng.uniform(0, 1, 60)})
+    return {
+        "one/seed3": (
+            pd.DataFrame({"x": rng.uniform(-2.0, 3.0, 120)}),
+            ["x"],
+            10,
+            40,
+            3,
+        ),
+        "two/negative": (
+            pd.DataFrame({"x": rng.normal(size=100), "z": rng.uniform(-2, 3, 100)}),
+            ["x", "z"],
+            12,
+            30,
+            1,
+        ),
+        "three/seed7": (
+            pd.DataFrame({name: rng.normal(size=90) for name in ("x", "z", "w")}),
+            ["x", "z", "w"],
+            15,
+            35,
+            7,
+        ),
+        "two/duplicated": (duplicated, ["x", "z"], 10, 30, 11),
+        # Labels of values in (0, 1) sort like the numbers, so the unsampled
+        # unique-row order is R's as well.
+        "two/max_knots=nu": (unit, ["x", "z"], 10, 60, 5),
+        "two/max_knots=nu-1": (unit, ["x", "z"], 10, 59, 5),
+    }
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.skipif(not r_available(), reason="R+mgcv not available")
+def test_sampled_knots_match_pinned_smoothcon(r_bridge) -> None:
+    """Sampled knots, basis, penalty and PredictMat rows against pinned mgcv.
+
+    With more unique rows than ``max_knots``, smooth.construct.gp samples
+    ``uniquecombs(x, TRUE)`` under ``temp.seed(seed)``. The selected centered
+    knots are bitwise R's on every platform (a row selection and the shared
+    ``colMeans`` shift); X, S and new-row predictions are bitwise against R
+    linked to the pinned OpenBLAS 0.3.26 and STRICT against other-BLAS R.
+    """
+    if r_bridge.mode != "rpy2":
+        pytest.skip("Raw GP basis oracle requires rpy2.")
+    pinned = r_links_pinned_openblas(r_bridge)
+    rng = np.random.default_rng(37)
+    collector = _AssertCollector()
+
+    def compare(label: str, actual: np.ndarray, expected: np.ndarray) -> None:
+        if pinned:
+            collector.check(
+                f"{label} bitwise",
+                lambda: np.testing.assert_array_equal(actual, expected),
+            )
+        else:
+            collector.check(
+                f"{label} STRICT", lambda: _assert_close(actual, expected, STRICT)
+            )
+
+    for label, (data, variables, k, max_knots, seed) in _sampled_knot_cases().items():
+        spec = _make_spec(variables, k=k, xt={"max_knots": max_knots, "seed": seed})
+        smooth = GaussianProcessSmooth(spec)
+        smooth.setup(_data_dict(data))
+        term = (
+            f"s({','.join(variables)}, bs='gp', k={k}, "
+            f"xt=list(max.knots={max_knots}, seed={seed}))"
+        )
+        construct = r_bridge.smooth_construct(term, data)
+        knots = construct["knt"].reshape(-1, len(variables))
+        collector.check(
+            f"{label}/knots bitwise",
+            lambda smooth=smooth, knots=knots: np.testing.assert_array_equal(
+                smooth._knt, knots
+            ),
+        )
+        rows = 2 * len(knots) + 1
+        new = pd.DataFrame(
+            {
+                name: rng.uniform(data[name].min(), data[name].max(), rows)
+                for name in variables
+            }
+        )
+        expected = r_bridge.source_smooth_basis(term, data, new)
+        compare(f"{label}/X", smooth.training_design_matrix(), expected["X"])
+        compare(f"{label}/S", smooth.build_penalty_matrices()[0].S, expected["S"][0])
+        compare(
+            f"{label}/PredictMat",
+            smooth.predict_matrix(_data_dict(new)),
+            expected["prediction"],
+        )
+    collector.raise_if_any("GP sampled knots vs pinned smoothCon")
+
+
 class TestSourceArithmetic:
     """Source-order helpers behind the GP basis, checked without R."""
 

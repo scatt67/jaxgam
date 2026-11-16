@@ -14,6 +14,7 @@ import warnings
 import numpy as np
 import numpy.typing as npt
 
+from jaxgam.data.source_tokens import r_sample_knot_rows, r_uniquecombs_ordered
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
@@ -22,7 +23,6 @@ from jaxgam.smooths.source_lapack import source_lanczos, source_r_matprod
 from jaxgam.smooths.utils import (
     DISTANCE_BATCH_ROWS,
     _get_unique_rows,
-    _subsample_knots,
     source_column_means,
 )
 
@@ -151,8 +151,21 @@ class GaussianProcessSmooth(Smooth):
         max_knots: int,
         seed: int,
     ) -> npt.NDArray[np.floating]:
+        """Port smooth.construct.gp's knot choice.
+
+        Without sampling the knots are the unique rows. When more unique rows
+        than ``max_knots`` exist, R takes ``uniquecombs(x, TRUE)`` (its
+        ordered unique rows) and samples ``max_knots`` of them with
+        ``temp.seed(seed)``; the sampled path reproduces both.
+        """
         xu, _ = _get_unique_rows(x)
-        return _subsample_knots(xu, max_knots, seed=seed)
+        if xu.shape[0] <= max_knots:
+            return xu
+        r_unique = r_uniquecombs_ordered(x)
+        if r_unique.shape[0] <= max_knots:
+            # uniquecombs merged rows equal to R's 15 significant digits.
+            return r_unique
+        return r_sample_knot_rows(r_unique, max_knots, seed)
 
     def _gp_T(self, x_centered: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         n = x_centered.shape[0]

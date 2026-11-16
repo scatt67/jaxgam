@@ -114,9 +114,11 @@ Other in-scope items (apply to both pathways):
   `2.0` gives squared-exponential).
 - `xt` argument with `max_knots` (default 2000) and `seed` (default 1) for
   reproducible knot subsampling.
-- Random-sampled knot selection via a seeded `np.random.RandomState`
-  (legacy API, single helper `_subsample_knots`). Knot sets do **not**
-  match mgcv bit-for-bit when subsampling fires — see §10.6.
+- Random-sampled knot selection as mgcv does it: the ordered unique rows of
+  `uniquecombs(x, TRUE)` sampled by R's default RNG under `temp.seed(seed)`
+  (`r_uniquecombs_ordered` / `r_sample_knot_rows` in
+  `jaxgam/data/source_tokens.py`, shared with the operator route), so
+  sampled knot sets equal mgcv's — see §10.6.
 - Truncated symmetric eigendecomposition (top-`k` largest-magnitude
   eigenvalues, matching R's `slanczos(E, k, -1)`).
 - Standard sum-to-zero centering constraint via `smoothCon` pipeline.
@@ -1829,17 +1831,22 @@ cubic.
 
 ### 10.6 Knot Sampling and R Parity
 
-R's `sample()` differs from `numpy.random.default_rng().choice()` in
-algorithm. We cannot match knot selection bit-for-bit when subsampling.
+When the data have more unique covariate rows than `max_knots`,
+`smooth.construct.gp.smooth.spec` takes `xu <- uniquecombs(x, TRUE)` and
+`xu[sample(1:nu, max.knots), ]` under `temp.seed(xt$seed)` (R's default
+Mersenne-Twister and rejection sampler). The dense constructor ports both:
+one column uses R's `sort(unique(x))`; several columns deduplicate by R's
+15-significant-digit `paste0` row label and order the labels in C-locale
+byte order; the sample is the first `max_knots` draws of the ported
+`sample.int`. Sampled knots therefore equal mgcv's, and the sampled basis is
+compared with pinned `smoothCon` at STRICT
+(`test_sampled_knots_match_pinned_smoothcon`).
 
-**Test strategy**:
-- For STRICT smooth-construct tests (kernel evaluation, penalty values),
-  use small data where no subsampling occurs (`n ≤ max.knots`), OR pass
-  explicit `knots`.
-- For validation-matrix tests (fitted models), use MODERATE/LOOSE
-  tolerance on coefficients (or fitted values) — the model is robust to
-  which 2000 knots get sampled.
-- Document this in design.md and test docstrings.
+Without sampling the dense knots are the exactly unique rows in NumPy's
+lexicographic order. For one covariate that is R's order. For several
+covariates whose labels do not sort like the numbers (for example negative
+values), R's order differs, which changes the Lanczos start and hence the
+basis; that unsampled ordering is not yet ported.
 
 ---
 
