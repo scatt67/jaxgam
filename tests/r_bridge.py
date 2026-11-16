@@ -5646,6 +5646,10 @@ class RBridge:
             not np.isfinite(initial_scale) or initial_scale <= 0
         ):
             raise ValueError("EFS initial_scale must be finite and positive")
+        if initial_scale is not None and initial is None:
+            # Pinned gam() takes a scale start only inside in.out beside sp;
+            # without a smoothing start it would be silently dropped.
+            raise ValueError("EFS initial_scale requires initial_smoothing")
         r_data = self._to_r_dataframe(data)
         r_family = self._get_efs_family_rpy2(family, theta)
         r_formula = self._ro.Formula(formula)

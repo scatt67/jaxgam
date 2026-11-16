@@ -398,6 +398,18 @@ class TestRBridgeEFS:
             with pytest.raises(ValueError, match="initial_smoothing needs"):
                 oracle(formula, data, "gaussian", initial_smoothing=np.array([0.8]))
 
+    def test_fit_efs_rejects_scale_start_without_smoothing_start(self) -> None:
+        """A scale start the public fit cannot bind is refused, not dropped."""
+        x = np.linspace(-1.0, 1.0, 20)
+        data = pd.DataFrame({"x": x, "y": 1.0 + x**2})
+        bridge = RBridge(mode="rpy2")
+        for oracle in (
+            bridge.fit_efs,
+            bridge.fit_efs_selected_before_offset_null_deviance,
+        ):
+            with pytest.raises(ValueError, match="initial_scale requires"):
+                oracle("y~s(x,bs='cr',k=5)", data, "gaussian", initial_scale=0.5)
+
     def test_selected_efs_oracle_isolates_offset_null_deviance_failure(self) -> None:
         """The bounded-link source clone neither mutates nor masks public R."""
         x = np.linspace(-0.6, 0.7, 79)
