@@ -56,6 +56,7 @@ def test_public_operator_result_shared_prediction_offsets_pickle_and_lineage(
     assert fitted.converged
     assert fitted.score is None
     assert fitted.scale is None
+    assert fitted.edf_total is None
     assert fitted.execution_route == "operator"
     assert fitted.lambda_strategy == "fixed"
     assert fitted.operator_diagnostics is not None

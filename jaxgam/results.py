@@ -345,8 +345,9 @@ class GAMPredictionResult:
 
     Fixed-sp operator fits have ``score=None`` when no score provider exists
     and ``scale=None`` for unknown-scale families; known-scale families
-    report their actual scale of one. Other routes retain their existing
-    numeric score and scale.
+    report their actual scale of one. Operator fits also report
+    ``edf_total=None`` until a trace provider computes it. Other routes
+    retain their existing numeric score, scale, and EDF.
     """
 
     _predictor: GAMPredictor
@@ -355,7 +356,7 @@ class GAMPredictionResult:
     scale: float | None
     theta: float | None
     smoothing_params: np.ndarray
-    edf_total: float
+    edf_total: float | None
     converged: bool
     n_iter: int
     convergence_info: str
@@ -625,6 +626,7 @@ class GAMPredictionResult:
             scale=1.0 if fitted.family.scale_known else None,
             theta=theta,
             smoothing_params=sp,
+            edf_total=None,
             converged=fitted.converged,
             n_iter=fitted.n_iter,
             convergence_info=fitted.convergence_info,
