@@ -36,7 +36,15 @@ from jaxgam.penalties.structure import (
     PenaltyBlock,
     PenaltyStructure,
 )
+from jaxgam.results import BULK_CALIBRATION_MAX_STANDARD_ERRORS
 from tests.tolerances import STRICT
+
+# Monte Carlo estimates are gated in units of their own standard error, at the
+# public bulk_link_variance default.
+_MAX_SE = BULK_CALIBRATION_MAX_STANDARD_ERRORS
+# Requested PCG relative tolerance; bitwise 1e-11 (STRICT.rtol / 10 rounds to
+# 1.0000000000000001e-11, so the bitwise-equal STRICT composition is used).
+_PCG_RTOL = STRICT.atol * 10
 
 
 def _fisher_provider(frame, formula, family, sp, *, scale=1.0, probes=32, seed=18):
@@ -66,7 +74,7 @@ def _fisher_provider(frame, formula, family, sp, *, scale=1.0, probes=32, seed=1
         memory_budget_bytes=16 * 1024 * 1024,
         probes=probes,
         seed=seed,
-        control=PCGControl(rtol=1e-11, max_iterations=200),
+        control=PCGControl(rtol=_PCG_RTOL, max_iterations=200),
     )
     return source, fitted, provider
 
@@ -111,9 +119,9 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
     )
     assert np.all(
         np.abs(calibration.estimated - calibration.exact)
-        <= 5 * calibration.monte_carlo_se
+        <= _MAX_SE * calibration.monte_carlo_se
     )
-    assert calibration.maximum_standardized_error <= 5
+    assert calibration.maximum_standardized_error <= _MAX_SE
     assert provider.diagnostics.calibration_rows == len(selected)
     assert provider.diagnostics.calibration_source_scans == (
         calibration.selected_source_scans
@@ -128,7 +136,7 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
                 memory_budget_bytes=16 * 1024 * 1024,
                 probes=48,
                 seed=held_out_seed,
-                control=PCGControl(rtol=1e-11, max_iterations=200),
+                control=PCGControl(rtol=_PCG_RTOL, max_iterations=200),
             ).build()
             held_out_calibration = held_out.calibrate(selected)
             assert held_out.diagnostics.fisher_construction_scans == (
@@ -140,7 +148,7 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
                 rtol=STRICT.rtol,
                 atol=STRICT.atol,
             )
-            assert held_out_calibration.maximum_standardized_error <= 5
+            assert held_out_calibration.maximum_standardized_error <= _MAX_SE
             assert not np.array_equal(
                 held_out_calibration.estimated, calibration.estimated
             )
@@ -151,7 +159,7 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
     bulk_monte_carlo_se = np.concatenate([batch.monte_carlo_se for batch in batches])
     assert np.all(
         np.abs(bulk_variance - reference["link_se"] ** 2)
-        <= 5 * bulk_monte_carlo_se + STRICT.atol
+        <= _MAX_SE * bulk_monte_carlo_se + STRICT.atol
     )
     np.testing.assert_allclose(
         np.concatenate([batch.link_se**2 for batch in batches]),
@@ -165,7 +173,7 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
     assert provider.diagnostics.training_source_scans == (
         provider.probes + provider.diagnostics.normal_actions
     )
-    assert provider.diagnostics.maximum_relative_residual <= 1e-11
+    assert provider.diagnostics.maximum_relative_residual <= provider.control.rtol
     assert fitted.coefficients.shape == (provider.geometry.n_coef,)
 
 
@@ -275,11 +283,11 @@ def test_public_operator_bulk_result_replays_fit_and_reports_approximation(monke
             execution="operator",
             linear_solver="pcg",
             batch_rows=11,
-            operator=OperatorControl(cg_rtol=1e-11),
+            operator=OperatorControl(cg_rtol=_PCG_RTOL),
         ),
     ).fit(source, result="prediction")
     selected = frame.iloc[[0, 3, 9, 20]].copy()
-    control = PCGControl(rtol=1e-11, max_iterations=200)
+    control = PCGControl(rtol=_PCG_RTOL, max_iterations=200)
     seen_controls = []
     solve = FrozenScanSystem.solve
 
@@ -307,7 +315,7 @@ def test_public_operator_bulk_result_replays_fit_and_reports_approximation(monke
         + provider.diagnostics.training_source_scans
         + provider.diagnostics.calibration_source_scans
     )
-    assert calibration.maximum_standardized_error <= 5
+    assert calibration.maximum_standardized_error <= _MAX_SE
     with pytest.raises(ValueError, match="at least one row"):
         result.bulk_link_variance(
             source,
@@ -413,7 +421,7 @@ def test_bulk_pcg_bias_is_separate_from_monte_carlo_error(monkeypatch):
         * (1 + 64 * np.finfo(float).eps)
     )
     assert relative_solution_error <= condition_bound + STRICT.atol
-    assert provider.diagnostics.maximum_relative_residual <= 1e-11
+    assert provider.diagnostics.maximum_relative_residual <= provider.control.rtol
 
 
 def test_local_penalty_noise_preserves_null_spaces_and_rejects_negative_energy():
@@ -431,7 +439,7 @@ def test_local_penalty_noise_preserves_null_spaces_and_rejects_negative_energy()
     observed = np.mean(draws[:, 0] ** 2)
     expected = 2.0
     empirical_standard_error = np.std(draws[:, 0] ** 2, ddof=1) / np.sqrt(len(draws))
-    assert abs(observed - expected) <= 5 * empirical_standard_error
+    assert abs(observed - expected) <= _MAX_SE * empirical_standard_error
 
     diagonal = PenaltyBlock(
         0,
@@ -562,6 +570,6 @@ def test_public_tensor_tprs_bulk_variance_uses_source_matched_basis(r_bridge):
     error = np.concatenate([batch.monte_carlo_se for batch in batches])
     assert np.all(
         np.abs(variance - reference["link_se"][[0, 11, 0, 60]] ** 2)
-        <= 5 * error + STRICT.atol
+        <= _MAX_SE * error + STRICT.atol
     )
     np.testing.assert_array_equal(variance[[0, 2]], variance[0])

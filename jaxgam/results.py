@@ -328,6 +328,11 @@ class StreamExactOptimizerDiagnostics:
     cumulative_derivative_s: float = 0.0
 
 
+#: Default limit, in Monte Carlo standard errors, for the selected exact
+#: calibration in :meth:`GAMPredictionResult.bulk_link_variance`.
+BULK_CALIBRATION_MAX_STANDARD_ERRORS = 5.0
+
+
 @dataclass(frozen=True)
 class GAMPredictionResult:
     """Small, picklable result surface for bounded new-data prediction.
@@ -484,7 +489,7 @@ class GAMPredictionResult:
         memory_budget_bytes: int,
         control: PCGControl | None = None,
         scale: float | None = None,
-        max_calibration_standard_errors: float = 5.0,
+        max_calibration_standard_errors: float = BULK_CALIBRATION_MAX_STANDARD_ERRORS,
     ) -> tuple[BulkOperatorVariance, BulkVarianceCalibration]:
         """Build calibrated bulk Fisher uncertainty for an operator fit.
 
