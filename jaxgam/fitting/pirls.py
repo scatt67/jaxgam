@@ -544,7 +544,12 @@ def _efs_beta_step_with_recovery(
                 working_factors.weighted_response
                 + (positive_weight - working_factors.weight) * (eta - offset)
             ),
-            use_weighted_response=working_factors.use_weighted_response,
+            # The retry's wz keeps -0.5 Deta on the zero-weight rows
+            # (gam.fit4.r 400-405), so X'wz differs from R'Q'sqrt(w)z and
+            # pls_fit1's stability test switches to the X'wz right side
+            # (gdi.c 3121-3133): the full-gradient Newton step on the
+            # nonnegative curvature.  w*z would drop those rows' gradient.
+            use_weighted_response=jnp.asarray(True),
             valid=working_factors.valid & jnp.any(positive),
         )
         XtWX_positive, XtWz_positive = form_wls(positive_factors)

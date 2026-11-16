@@ -1925,25 +1925,17 @@ def test_source_loops_hold_the_hard_gates_under_jit() -> None:
 
 
 @pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
-def test_gam_fit4_positive_weight_retry_is_taken_where_pinned_pls_fit1_is_indefinite(
-    r_bridge,
-) -> None:
+def test_gam_fit4_positive_weight_retry_matches_pinned_pls_fit1(r_bridge) -> None:
     """gam.fit4's positive-weight branch at a chosen indefinite state (3e).
 
     NB/identity at a state where zero counts give negative observed weights
-    and the penalty is too weak to make X'WX + S positive definite: JaxGAM's
-    observed Cholesky must fail exactly where pinned C_pls_fit1 returns
-    n < 0, and JaxGAM must take the positive-weight retry.
-
-    STOP item (review packet, root decision 8): the retry's *coefficients*
-    differ from pinned R's.  gam.fit4 (gam.fit4.r 391-416) keeps -Deta/2 in
-    wz for the zero-weight rows, so pls_fit1's stability test switches to
-    the X'wz right side (gdi.c 3121-3133); JaxGAM uses w*z, which drops those
-    rows' gradient.  The fix (always use wz in the retry) changes the outcome
-    of the existing test_efs_theta_pirls.py::
-    test_efs_indefinite_observed_system_retries_positive_curvature_under_jit,
-    whose hand-derived expectation encodes the w*z rule, so it is not
-    applied here pending the root decision; the measured gap is recorded.
+    (0.5 d2D/deta2 = y/mu^2 - (y+theta)/(mu+theta)^2 < 0) and the penalty is
+    too weak to make X'WX + S positive definite (the state is chosen so the
+    retry step itself stays in the identity link's mu > 0 domain, so no
+    halving follows it).  Pinned C_pls_fit1 must
+    report the same indefiniteness (n < 0) as JaxGAM's observed Cholesky, and
+    the retry on the nonnegative weights (gam.fit4.r 391-416) must give R's
+    coefficients at STRICT.
     """
     from jaxgam.families.negative_binomial import NegativeBinomial
     from jaxgam.fitting import pirls
@@ -2016,6 +2008,18 @@ def test_gam_fit4_positive_weight_retry_is_taken_where_pinned_pls_fit1_is_indefi
             E,
             use_weighted_response=use_wy,
         )
+        positive = W > 0
+        w_pos = np.where(positive, W, 0.0)
+        wz_pos = wz + (w_pos - W) * mu
+        # gam.fit4 zeroes the nonpositive weights and keeps every finite row
+        _, _, r_beta = r_bridge.source_signed_pls_fit1(
+            X,
+            w_pos,
+            z.copy(),
+            wz_pos,
+            E,
+            use_weighted_response=use_wy,
+        )
     collector = _AssertCollector()
     collector.check(
         "state is indefinite with negative weights",
@@ -2024,6 +2028,10 @@ def test_gam_fit4_positive_weight_retry_is_taken_where_pinned_pls_fit1_is_indefi
     collector.check(
         "JaxGAM takes the positive-weight retry",
         lambda: check_that(bool(step.positive_curvature_retry), "no retry"),
+    )
+    collector.check(
+        "retry coefficients equal R's pls_fit1",
+        lambda: _assert_strict(step.beta, r_beta),
     )
     collector.raise_if_any("gam.fit4 positive-weight retry")
 

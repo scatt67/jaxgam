@@ -7,6 +7,9 @@ immutable beta/theta state and the pinned ``gam.fit4`` ordering first.
 
 from __future__ import annotations
 
+import contextlib
+import io
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -40,6 +43,12 @@ from jaxgam.formula.parser import parse_formula
 from tests.helpers import _AssertCollector, check_that, r_available
 from tests.r_bridge import RBridge
 from tests.tolerances import MODERATE, STRICT
+
+#: gam.fit4's retry at the state below: (diag(0, 3) + 0.1 I)^-1 X'wz with
+#: X = I and wz = (-8, 15) (the zeroed row keeps its -Deta/2).
+_POSITIVE_RETRY_RAW = np.linalg.solve(
+    np.diag([0.0, 3.0]) + 0.1 * np.eye(2), np.asarray([-8.0, 15.0])
+)
 
 
 def test_efs_indefinite_observed_system_retries_positive_curvature_under_jit() -> None:
@@ -87,9 +96,16 @@ def test_efs_indefinite_observed_system_retries_positive_curvature_under_jit() -
         )
 
     result = jax.jit(run)()
-    expected = np.linalg.solve(
-        np.diag([0.0, 3.0]) + 0.1 * np.eye(2), np.asarray([0.0, 15.0])
-    )
+    # gam.fit4.r 400-405 zeroes the nonpositive weight but keeps that row's
+    # wz = w (eta - offset) - Deta/2 = -8 (here eta = offset = 0), so
+    # pls_fit1's stability test switches to the X'wz right side (gdi.c
+    # 3121-3133): the positive-curvature Newton step keeps the full gradient.
+    # The raw retry is checked against pinned C_pls_fit1 at this state in
+    # test_efs_positive_curvature_retry_expectation_matches_pinned_pls_fit1.
+    raw_retry = _POSITIVE_RETRY_RAW
+    # Penalized deviance 0.1 |raw|^2 = 642 exceeds the baseline 100, so the
+    # divergence control halves twice toward the zero anchor (160.6, 40.1).
+    expected = raw_retry / 4.0
     assert bool(result.accepted)
     assert bool(result.factors_valid)
     assert bool(result.solver_valid)
@@ -1603,3 +1619,22 @@ def test_efs_production_observed_prefix_matches_pinned_recovery(
         ),
     )
     collector.raise_if_any(f"{label} production EFS recovery")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_efs_positive_curvature_retry_expectation_matches_pinned_pls_fit1(
+    r_bridge,
+) -> None:
+    """The retry expectation above is pinned C_pls_fit1 at the same state."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        _, _, beta = r_bridge.source_signed_pls_fit1(
+            np.eye(2),
+            np.asarray([0.0, 3.0]),
+            np.asarray([4.0, 5.0]),
+            np.asarray([-8.0, 15.0]),
+            np.sqrt(0.1) * np.eye(2),
+            use_weighted_response=False,
+        )
+    np.testing.assert_allclose(
+        _POSITIVE_RETRY_RAW, beta, rtol=STRICT.rtol, atol=STRICT.atol
+    )
