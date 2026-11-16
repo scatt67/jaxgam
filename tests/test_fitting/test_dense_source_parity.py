@@ -2026,3 +2026,41 @@ def test_gam_fit4_positive_weight_retry_is_taken_where_pinned_pls_fit1_is_indefi
         lambda: check_that(bool(step.positive_curvature_retry), "no retry"),
     )
     collector.raise_if_any("gam.fit4 positive-weight retry")
+
+
+def test_source_loop_epsilon_is_an_explicit_parameter() -> None:
+    """The source loops' epsilon is explicit (root decision 3), never ``tol``.
+
+    The default is R's tight control 1e-11 (documented deviation from R's
+    default 1e-7); a caller's looser epsilon is honored, not reinterpreted.
+    """
+    import inspect
+
+    from jaxgam.fitting.source_pirls import SOURCE_EPSILON, source_pirls
+
+    parameters = inspect.signature(source_pirls).parameters
+    assert "tol" not in parameters
+    assert parameters["epsilon"].default == SOURCE_EPSILON == 1e-11
+    rng = np.random.default_rng(12)
+    n = 120
+    x = np.sort(rng.uniform(0.0, 1.0, n))
+    X = jnp.asarray(np.column_stack([np.ones(n), x, np.sin(4 * x), np.cos(4 * x)]))
+    S = jnp.diag(jnp.asarray([0.0, 0.0, 1.0, 1.0]))
+    y = jnp.asarray(rng.gamma(3.0, np.exp(0.5 + np.sin(4 * x)) / 3.0))
+    null_beta = jnp.zeros(4).at[0].set(jnp.log(jnp.mean(y)))
+    fits = {
+        epsilon: source_pirls(
+            X,
+            y,
+            null_beta,
+            S,
+            Gamma(link="log"),
+            jnp.ones(n),
+            None,
+            null_beta,
+            epsilon=epsilon,
+        ).pirls_result
+        for epsilon in (1e-4, SOURCE_EPSILON)
+    }
+    assert all(bool(fit.converged) for fit in fits.values())
+    assert int(fits[1e-4].n_iter) < int(fits[SOURCE_EPSILON].n_iter)

@@ -35,9 +35,11 @@ from jaxgam.fitting.pirls import PIRLSResult
 SOURCE_REGULAR = "regular"
 SOURCE_NB = "nb"
 
-#: Convergence epsilon of the source loops: R's tight pinned control
-#: (gam.control(epsilon=1e-11)).  R's default 1e-7 stops its gradient test
-#: about 1e-9 short of the stationary point; a caller may tighten further.
+#: Default convergence epsilon of the source loops: R's tight pinned control
+#: (gam.control(epsilon=1e-11)), a documented deviation from R's default
+#: 1e-7, whose gradient test stops about 1e-9 short of the stationary point.
+#: It is an explicit internal parameter of ``source_pirls`` (``epsilon``);
+#: the outer optimizer's PIRLS tolerance is not reinterpreted as it.
 SOURCE_EPSILON = 1e-11
 
 _REGULAR_MESSAGES = {
@@ -127,16 +129,16 @@ def source_pirls(
     integer_counts: bool = True,
     penalty_root: jax.Array | None = None,
     max_iter: int = 200,
-    tol: float = 1e-7,
+    epsilon: float = SOURCE_EPSILON,
 ) -> SourcePIRLSOutcome:
     """Fit coefficients at fixed smoothing (and NB theta) by the source loop.
 
     ``beta_start`` is the retained start (``start=`` in R) and ``null_beta``
     R's ``null.coef`` anchor for the first-iteration divergence and validity
     recovery.  ``scale`` is the dispersion in gam.fit3's convergence scale;
-    ``tol`` is capped at ``SOURCE_EPSILON``.
+    ``epsilon`` is gam.control's ``epsilon`` for both loops' convergence
+    tests (default ``SOURCE_EPSILON``).
     """
-    tol = min(tol, SOURCE_EPSILON)
     if offset is None:
         offset = jnp.zeros_like(y)
     initial_eta = X @ beta_start + offset
@@ -165,7 +167,7 @@ def source_pirls(
             integer_counts=integer_counts,
             estimate_theta=False,
             max_iter=max_iter,
-            tol=tol,
+            tol=epsilon,
             penalty_root=penalty_root,
         )
         return SourcePIRLSOutcome(
@@ -187,7 +189,7 @@ def source_pirls(
         jnp.asarray(scale, dtype=X.dtype),
         start_present=True,
         max_iter=max_iter,
-        tol=tol,
+        tol=epsilon,
         penalty_root=penalty_root,
     )
     return SourcePIRLSOutcome(

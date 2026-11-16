@@ -132,8 +132,9 @@ def _inner_fit(
     """Coefficient fit at fixed smoothing: pinned source loop or ordinary.
 
     ``null_beta`` (R's ``null.coef``) selects the pinned ``gam.fit3`` /
-    ``gam.fit4`` loop (``source_pirls``); without it (structurally
-    rank-deficient models, manual fixtures) the ordinary loop runs.
+    ``gam.fit4`` loop (``source_pirls``, at its explicit ``epsilon``,
+    ``SOURCE_EPSILON``); without it (structurally rank-deficient models,
+    manual fixtures) the ordinary loop runs at ``tol``.
     """
     if null_beta is None:
         return pirls_loop(
@@ -163,7 +164,6 @@ def _inner_fit(
         max_y=max_y,
         integer_counts=integer_counts,
         penalty_root=penalty_root,
-        tol=tol,
     ).pirls_result
 
 
