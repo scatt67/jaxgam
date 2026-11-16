@@ -492,8 +492,13 @@ class GAMPredictionResult:
         formula: str,
         method: str,
         control: FitControl,
+        supplied_smoothing_params: npt.ArrayLike | None = None,
     ) -> GAMPredictionResult:
-        """Build a row-free result for any discrete-route fit state."""
+        """Build a row-free result for any discrete-route fit state.
+
+        ``supplied_smoothing_params`` is the caller's ``sp``; it is reported
+        verbatim (see :func:`_report_smoothing_params`).
+        """
         policy = control.discretization
         assert policy is not None
         # Record the policy prediction actually follows; the metadata also
@@ -531,7 +536,9 @@ class GAMPredictionResult:
             theta=None
             if fit_state.log_theta is None
             else float(np.exp(fit_state.log_theta)),
-            smoothing_params=fit_state.smoothing_params,
+            smoothing_params=_report_smoothing_params(
+                fit_state.smoothing_params, supplied_smoothing_params
+            ),
             edf_total=fit_state.edf_total,
             converged=fit_state.converged,
             n_iter=fit_state.scale_iterations,

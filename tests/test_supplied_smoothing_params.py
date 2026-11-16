@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from jaxgam import GAM, FitControl
+from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
@@ -178,6 +178,23 @@ def test_streamed_fixed_sp_reports_supplied_values(family, solver, compression):
     ).fit(source, result="prediction")
     if compression:
         assert result.execution_route == "stream_gaussian_qr"
+    _assert_verbatim(result, SUPPLIED)
+
+
+@pytest.mark.parametrize("family", ["gaussian", "poisson", "gamma", "nb_estimated"])
+def test_discrete_fixed_sp_reports_supplied_values(family):
+    frame, weights, offset = _frame(_data_family(family))
+    source = DataFrameRowSource(frame, response="y", weights=weights, offset=offset)
+    result = GAM(
+        FORMULA,
+        family=_FAMILIES[family](),
+        sp=list(SUPPLIED),
+        control=FitControl(
+            execution="discrete",
+            batch_rows=48,
+            discretization=ContinuousDiscretizationControl(),
+        ),
+    ).fit(source, result="prediction")
     _assert_verbatim(result, SUPPLIED)
 
 

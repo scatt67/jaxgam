@@ -698,6 +698,7 @@ class GAM:
                 formula=self.formula,
                 method=self.method,
                 control=self.control,
+                supplied_smoothing_params=self.sp,
             ),
             _discrete_gaussian_qr_request_fallback(self.control),
         )
