@@ -26,6 +26,7 @@ from jaxgam.penalties.structure import (
     PenaltyBlock,
     PenaltyStructure,
 )
+from jaxgam.smooths.source_arithmetic import libm_exp
 from jaxgam.smooths.source_penalty_coordinates import (
     scipy_uses_accelerate_lapack,
     source_symmetric_eigh,
@@ -279,7 +280,8 @@ def _stable_range_rotation(
         raise ValueError("global penalty roots and smoothing parameters disagree")
     if log_sp.ndim != 1 or not np.all(np.isfinite(log_sp)):
         raise ValueError("global penalty log smoothing parameters must be finite")
-    smoothing_parameters = np.exp(log_sp)
+    # gdi.c's sp[i] = exp(lsp[i]) is the C library's exp.
+    smoothing_parameters = libm_exp(log_sp)
     if not np.all(np.isfinite(smoothing_parameters)) or np.any(
         smoothing_parameters <= 0
     ):
@@ -368,7 +370,8 @@ def global_penalty_coordinates(
         raise ValueError("global penalties and smoothing parameters disagree")
     if log_sp.ndim != 1 or not np.all(np.isfinite(log_sp)):
         raise ValueError("global penalty log smoothing parameters must be finite")
-    smoothing_parameters = np.exp(log_sp)
+    # gdi.c's sp[i] = exp(lsp[i]) is the C library's exp.
+    smoothing_parameters = libm_exp(log_sp)
     if not np.all(np.isfinite(smoothing_parameters)) or np.any(
         smoothing_parameters <= 0
     ):
