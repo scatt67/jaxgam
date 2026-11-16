@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from fractions import Fraction
 
 import numpy as np
 import pytest
 
 from jaxgam.smooths import source_arithmetic as sa
+from tests.helpers import _AssertCollector
 
 
 def _exact_fma(a: float, b: float, c: float) -> float:
@@ -227,3 +229,108 @@ def test_lanczos_kernels_match_source_loops(contract: bool) -> None:
                     contract,
                 )
     np.testing.assert_array_equal(out, expected)
+
+
+def _transcendental_inputs() -> np.ndarray:
+    """Adversarial arguments: 1-ulp neighbourhoods, tiny, huge and random."""
+    rng = np.random.default_rng(20261116)
+    anchors = np.array(
+        [
+            1e-300,
+            5e-324,
+            2.2250738585072014e-308,
+            1e-10,
+            0.5,
+            np.log(2.0),
+            1.0,
+            2.0,
+            3.0,
+            10.0,
+            100.0,
+            700.0,
+            709.78,
+        ]
+    )
+    neighbours = np.concatenate(
+        [anchors, np.nextafter(anchors, 0), np.nextafter(anchors, np.inf)]
+    )
+    return np.concatenate(
+        [
+            neighbours,
+            rng.uniform(0.0, 5.0, 20_000),
+            10.0 ** rng.uniform(-30, 30, 5_000),
+            np.arange(1, 2000) / 997.0,
+        ]
+    )
+
+
+def test_libm_helpers_equal_the_c_library_bitwise() -> None:
+    """The helpers are libm's own results on every CPU, never a SIMD variant.
+
+    Python's ``math`` functions call the same C library. A future build that
+    vectorized these loops (or routed them through a vector math library)
+    would differ in the last bit on some CPUs and fail here.
+    """
+    values = _transcendental_inputs()
+    collector = _AssertCollector()
+    collector.check(
+        "exp",
+        lambda: np.testing.assert_array_equal(
+            sa.libm_exp(-values),
+            np.array([math.exp(-value) for value in values]),
+        ),
+    )
+    collector.check(
+        "exp of positive arguments",
+        lambda: np.testing.assert_array_equal(
+            sa.libm_exp(values[values < 700]),
+            np.array([math.exp(value) for value in values[values < 700]]),
+        ),
+    )
+    positive = values[values > 0]
+    collector.check(
+        "log",
+        lambda: np.testing.assert_array_equal(
+            sa.libm_log(positive),
+            np.array([math.log(value) for value in positive]),
+        ),
+    )
+    collector.check(
+        "log10",
+        lambda: np.testing.assert_array_equal(
+            sa.libm_log10(positive),
+            np.array([math.log10(value) for value in positive]),
+        ),
+    )
+    for exponent in (3.0, 1.5, 0.5, 0.3, 7.0, -1.5):
+        finite = values[(values > 1e-100) & (values < 1e40)]
+        collector.check(
+            f"pow {exponent}",
+            lambda exponent=exponent, finite=finite: np.testing.assert_array_equal(
+                sa.r_pow(finite, exponent),
+                np.array([math.pow(value, exponent) for value in finite]),
+            ),
+        )
+    collector.raise_if_any("libm helpers")
+
+
+def test_r_pow_follows_r_special_cases_and_keeps_shape() -> None:
+    x = np.array([[0.0, -0.0, 1.0], [2.5, -3.0, 1e-200]])
+    np.testing.assert_array_equal(sa.r_pow(x, 2.0), x * x)
+    cube = sa.r_pow(x, 3.0)
+    assert cube.shape == x.shape
+    # R_pow returns +0 for a zero base with y > 0 (C pow gives -0 for -0^3).
+    assert np.signbit(cube[0, 1]) == np.False_
+    assert cube[0, 2] == 1.0
+    assert cube[1, 1] == math.pow(-3.0, 3.0)
+    np.testing.assert_array_equal(sa.r_pow(x, 0.0), np.ones_like(x))
+    assert sa.r_pow(np.array([0.0]), -1.0)[0] == np.inf
+    with pytest.raises(ValueError, match="finite"):
+        sa.r_pow(np.array([np.inf]), 2.0)
+    with pytest.raises(ValueError, match="finite"):
+        sa.r_pow(np.array([1.0]), np.nan)
+    with pytest.raises(ValueError, match="positive"):
+        sa.libm_log(np.array([0.0]))
+    with pytest.raises(ValueError, match="positive"):
+        sa.libm_log10(np.array([-1.0]))
+    assert sa.libm_exp(np.zeros((2, 3))).shape == (2, 3)

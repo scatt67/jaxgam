@@ -17,6 +17,9 @@ or contracts the plain expressions; the fused form uses the exact
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
+import functools
 import platform
 
 import numba
@@ -300,3 +303,111 @@ def ritz_accumulate(
             scale = coefficients[step, column]
             for i in range(out.shape[0]):
                 out[i, column] = _madd(basis[i, step], scale, out[i, column], contract)
+
+
+@functools.lru_cache(maxsize=1)
+def _libm() -> ctypes.CDLL:
+    """The C math library that R and Python's ``math`` module call.
+
+    glibc's ``libm.so.6`` on Linux and libSystem's on macOS. NumPy's own
+    ``exp``/``log``/``power`` loops may instead dispatch to SIMD
+    implementations (AVX-512 on x86_64) whose last bits differ from libm.
+    """
+    name = ctypes.util.find_library("m")
+    library = ctypes.CDLL(name) if name else ctypes.CDLL(None)
+    for symbol, arguments in (("exp", 1), ("log", 1), ("log10", 1), ("pow", 2)):
+        function = getattr(library, symbol)
+        function.argtypes = [ctypes.c_double] * arguments
+        function.restype = ctypes.c_double
+    return library
+
+
+@functools.lru_cache(maxsize=1)
+def _compiled_libm_loops():
+    """Compile scalar loops that call libm through opaque function pointers.
+
+    An external call through a ctypes pointer is never vectorized by LLVM,
+    so every element is libm's own result on every CPU. Not cached on disk:
+    the pointers are process addresses.
+    """
+    library = _libm()
+    c_exp, c_log, c_log10, c_pow = library.exp, library.log, library.log10, library.pow
+
+    @numba.njit
+    def exp_loop(values, out):  # pragma: no cover - Numba
+        for i in range(values.size):
+            out[i] = c_exp(values[i])
+
+    @numba.njit
+    def log_loop(values, out):  # pragma: no cover - Numba
+        for i in range(values.size):
+            out[i] = c_log(values[i])
+
+    @numba.njit
+    def log10_loop(values, out):  # pragma: no cover - Numba
+        for i in range(values.size):
+            out[i] = c_log10(values[i])
+
+    @numba.njit
+    def r_pow_loop(values, exponent, out):  # pragma: no cover - Numba
+        for i in range(values.size):
+            x = values[i]
+            if exponent == 2.0:
+                out[i] = x * x
+            elif x == 1.0 or exponent == 0.0:
+                out[i] = 1.0
+            elif x == 0.0:
+                out[i] = 0.0 if exponent > 0.0 else np.inf
+            else:
+                out[i] = c_pow(x, exponent)
+
+    return exp_loop, log_loop, r_pow_loop, log10_loop
+
+
+def _flat_float64(values: npt.ArrayLike) -> tuple[np.ndarray, tuple[int, ...]]:
+    array = np.ascontiguousarray(values, dtype=np.float64)
+    return array.reshape(-1), array.shape
+
+
+def libm_exp(values: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    """Elementwise C-library ``exp``, as R's ``exp`` evaluates it."""
+    flat, shape = _flat_float64(values)
+    out = np.empty_like(flat)
+    _compiled_libm_loops()[0](flat, out)
+    return out.reshape(shape)
+
+
+def libm_log(values: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    """Elementwise C-library ``log`` (R's ``R_log`` for positive values)."""
+    flat, shape = _flat_float64(values)
+    if np.any(~(flat > 0.0)) or not np.all(np.isfinite(flat)):
+        raise ValueError("libm_log is defined here for positive finite values.")
+    out = np.empty_like(flat)
+    _compiled_libm_loops()[1](flat, out)
+    return out.reshape(shape)
+
+
+def libm_log10(values: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    """Elementwise C-library ``log10`` (R's number formatting uses it)."""
+    flat, shape = _flat_float64(values)
+    if np.any(~(flat > 0.0)) or not np.all(np.isfinite(flat)):
+        raise ValueError("libm_log10 is defined here for positive finite values.")
+    out = np.empty_like(flat)
+    _compiled_libm_loops()[3](flat, out)
+    return out.reshape(shape)
+
+
+def r_pow(values: npt.ArrayLike, exponent: float) -> npt.NDArray[np.float64]:
+    """R's ``x ^ y`` (arithmetic.c ``R_pow``) for finite ``x`` and scalar ``y``.
+
+    ``R_pow`` returns ``x * x`` when ``y == 2``, 1 when ``x == 1`` or
+    ``y == 0``, 0 for ``x == 0`` and ``y > 0`` (``Inf`` for ``y < 0``), and
+    otherwise the C library's ``pow(x, y)`` (``powl`` only on 64-bit Windows).
+    """
+    exponent = float(exponent)
+    flat, shape = _flat_float64(values)
+    if not np.isfinite(exponent) or not np.all(np.isfinite(flat)):
+        raise ValueError("r_pow is ported here for finite operands only.")
+    out = np.empty_like(flat)
+    _compiled_libm_loops()[2](flat, exponent, out)
+    return out.reshape(shape)
