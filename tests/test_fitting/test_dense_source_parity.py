@@ -426,3 +426,49 @@ def test_factor_by_fixed_sp_matches_pinned_r_at_every_scale(r_bridge) -> None:
         )
         _assert_hard_gates(fit, label, collector)
     collector.raise_if_any("factor-by fixed sp")
+
+
+def _ti_tp_frame() -> pd.DataFrame:
+    """The public ti(tp) case of root question Q7 (n=300, Gaussian)."""
+    rng = np.random.default_rng(20261116)
+    x = rng.uniform(0.0, 1.0, 300)
+    z = rng.uniform(0.0, 1.0, 300)
+    y = np.sin(2 * np.pi * x) + 0.5 * np.cos(3 * z) + 0.3 * x * z
+    return pd.DataFrame({"x": x, "z": z, "y": y + rng.normal(scale=0.3, size=300)})
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_public_ti_tp_fixed_at_r_reml_sp_matches_pinned_r(r_bridge) -> None:
+    """Public dense ti(x,z,bs='tp',k=6) at pinned R's REML sp is STRICT.
+
+    Before the series the trace-scaled jitter (1.8e-3 at these sp) acted as a
+    ridge on the unpenalized bilinear direction (curvature 5.42), costing
+    3.4e-4 EDF and 5e-5 in fitted values.  Gauge-invariant fields are checked
+    (host R may use another BLAS, which can flip the TPRS eigenvector gauge);
+    coefficients and Vp are gauge-dependent and not asserted here.
+    """
+    data = _ti_tp_frame()
+    r_formula = "y~ti(x,z,bs='tp',k=c(6,6))"
+    with contextlib.redirect_stdout(io.StringIO()):
+        reml = r_bridge.fit_gam(r_formula, data, "gaussian", "REML")
+        sp = np.asarray(reml["smoothing_params"], dtype=np.float64)
+        reference = r_bridge.fit_fixed_sp(
+            r_formula, data, "gaussian", sp, with_uncertainty=True
+        )
+    fit = GAM("y ~ ti(x, z, bs='tp', k=6)", sp=list(sp)).fit(data)
+    _, link_se = fit.predict(data, pred_type="link", se_fit=True)
+    collector = _AssertCollector()
+    for name, actual, expected in (
+        ("fitted", fit.fitted_values, reference["fitted_values"]),
+        ("deviance", fit.deviance, reference["deviance"]),
+        ("score", fit.score, reference["score"]),
+        ("scale", fit.scale, reference["scale"]),
+        ("edf", fit.edf_total, reml["edf_total"]),
+        ("link_se", link_se, reference["link_se"]),
+    ):
+        collector.check(
+            name,
+            lambda actual=actual, expected=expected: _assert_strict(actual, expected),
+        )
+    _assert_hard_gates(fit, "ti tp at R's sp", collector)
+    collector.raise_if_any("public ti(tp) at R's REML sp")
