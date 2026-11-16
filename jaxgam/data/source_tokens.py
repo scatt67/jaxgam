@@ -339,6 +339,27 @@ def r_row_token(row: Any) -> str:
     return "*".join(_r_number_text(value) for value in row)
 
 
+#: Conservative bytes per value of a batch of row labels: its formatted text,
+#: its share of the joined label and the list and index arrays holding them.
+ROW_LABEL_BYTES_PER_VALUE = 192
+
+
+def r_row_tokens(columns: list[np.ndarray]) -> list[str]:
+    """:func:`r_row_token` for every row of equal-length columns.
+
+    Each column's distinct values are formatted once by the vectorized
+    :func:`_r_number_texts`, which equals the scalar port value by value, so
+    every label is identical to ``r_row_token`` of the same row.
+    """
+    labels = []
+    for column in columns:
+        distinct, inverse = np.unique(
+            np.asarray(column, dtype=np.float64), return_inverse=True
+        )
+        labels.append(np.asarray(_r_number_texts(distinct), dtype=object)[inverse])
+    return ["*".join(parts) for parts in zip(*labels, strict=True)]
+
+
 def r_uniquecombs_ordered(x: np.ndarray) -> np.ndarray:
     """Port the unique rows of ``uniquecombs(x, ordered=TRUE)`` in R's order.
 

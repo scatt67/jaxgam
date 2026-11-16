@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
-from jaxgam.data.source_tokens import r_row_token, r_sample_knot_rows
+from jaxgam.data.source_tokens import (
+    ROW_LABEL_BYTES_PER_VALUE,
+    r_row_token,
+    r_row_tokens,
+    r_sample_knot_rows,
+)
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.smooths.gaussian_process import GaussianProcessSmooth
 from jaxgam.smooths.source_lapack import (
@@ -177,6 +182,18 @@ def _collect_rows(
             ):
                 raise ValueError("Radial smooth covariates must be finite vectors.")
             columns.append(values)
+        labels = None
+        if token is not None and d > 1:
+            # Format each covariate's distinct batch values once; the labels
+            # equal _row_key's per-row r_row_token text exactly.
+            label_bytes = ROW_LABEL_BYTES_PER_VALUE * (d + 1) * len(columns[0])
+            _check_budget(base_reserved + retained + label_bytes, control)
+            peak = max(peak, base_reserved + retained + label_bytes)
+            labels = r_row_tokens(
+                [values - shift[j] for j, values in enumerate(columns)]
+                if spec.bs in {"tp", "ts"}
+                else columns
+            )
         for local in range(len(batch.row_positions)):
             row = tuple(float(values[local]) for values in columns)
             key_row = (
@@ -187,7 +204,11 @@ def _collect_rows(
             for mapping, mode in ((exact, "exact"), (token, "r_token")):
                 if mapping is None:
                     continue
-                key = _row_key(key_row, mode)
+                key = (
+                    labels[local]
+                    if mode == "r_token" and labels is not None
+                    else _row_key(key_row, mode)
+                )
                 if key in mapping:
                     continue
                 q = len(mapping) + 1
@@ -206,7 +227,7 @@ def _collect_rows(
                 retained += payload + max(0, sys.getsizeof(mapping) - old_size)
                 source.reserved_bytes = base_reserved + retained
                 peak = max(peak, required)
-        del batch, columns
+        del batch, columns, labels
     if spec.bs == "gp" or (
         source.n_rows > max_knots and token is not None and len(token) > max_knots
     ):

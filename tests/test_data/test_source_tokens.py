@@ -10,6 +10,7 @@ from jaxgam.data.source_tokens import (
     _r_sample_without_replacement,
     _RRandom,
     r_row_token,
+    r_row_tokens,
     r_sample_knot_rows,
     r_uniquecombs_ordered,
 )
@@ -156,3 +157,12 @@ def test_number_labels_match_pinned_r_paste0(r_bridge):
     expected = r_bridge.paste0_number_labels(values)
     assert _r_number_texts(values) == expected
     assert [_r_number_text(float(value)) for value in values] == expected
+
+
+def test_batched_row_labels_equal_the_per_row_labels():
+    values = _adversarial_doubles()
+    rng = np.random.default_rng(8)
+    columns = [rng.choice(values, 5000), rng.choice(values, 5000)]
+    columns.append(np.r_[columns[0][:2500], -0.0 * columns[0][2500:]])
+    rows = zip(*columns, strict=True)
+    assert r_row_tokens(columns) == [r_row_token(row) for row in rows]
