@@ -764,3 +764,58 @@ def test_result_is_frozen_and_inputs_are_not_modified() -> None:
     assert all(np.array_equal(a, b) for a, b in zip(roots, before, strict=True))
     with pytest.raises(AttributeError):
         result.det = 0.0  # type: ignore[misc]
+
+
+def test_pinned_provider_branch_gives_same_determinants(monkeypatch) -> None:
+    """Off Accelerate both DSYEVR calls use the pinned provider (as on Linux)."""
+    import jaxgam.penalties.stable_reparam as module
+
+    roots = _range_roots("te_cr_k4_3d")
+    collector = _AssertCollector()
+    for rho in (
+        np.zeros(3),
+        np.array([40.0, 0.0, -40.0]),
+        np.array([-20.0, 20.0, 0.0]),
+    ):
+        monkeypatch.setattr(module, "scipy_uses_accelerate_lapack", lambda: True)
+        scipy_result = stable_reparam(roots, rho, deriv=2)
+        monkeypatch.setattr(module, "scipy_uses_accelerate_lapack", lambda: False)
+        provider_result = stable_reparam(roots, rho, deriv=2)
+        label = f"rho={rho.tolist()}"
+        for field in ("det", "det1", "det2"):
+            collector.check(
+                f"{label} {field}",
+                partial(
+                    _close,
+                    getattr(provider_result, field),
+                    getattr(scipy_result, field),
+                    field,
+                ),
+            )
+        collector.check(
+            f"{label} stages",
+            partial(
+                check_that,
+                provider_result.stage_ranks == scipy_result.stage_ranks,
+                "stage ranks differ",
+            ),
+        )
+        Qs = provider_result.Qs
+        collector.check(
+            f"{label} Qs'Qs", partial(_close, Qs.T @ Qs, np.eye(len(Qs)), "Qs")
+        )
+    collector.raise_if_any("pinned provider branch")
+
+
+def test_global_penalty_rotation_delegates_to_stable_reparam() -> None:
+    """fitting_prepare's global rotation is this port's Qs and roots, bitwise."""
+    from jaxgam.formula.fitting_prepare import _stable_range_rotation
+
+    roots = _range_roots("te_cr_k5")
+    for rho in (np.zeros(2), np.array([40.0, 0.0])):
+        qs, transformed = _stable_range_rotation(roots, rho)
+        expected = stable_reparam(roots, rho, deriv=0)
+        assert np.array_equal(qs, expected.Qs)
+        assert all(
+            np.array_equal(a, b) for a, b in zip(transformed, expected.rS, strict=True)
+        )

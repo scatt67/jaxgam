@@ -16,6 +16,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy import linalg
 
+from jaxgam.penalties.stable_reparam import stable_reparam
 from jaxgam.penalties.structure import (
     DenseLocalPenalty,
     DenseTransform,
@@ -267,11 +268,12 @@ def _root_columns(matrix: np.ndarray, rank: int | None = None) -> np.ndarray:
 def _stable_range_rotation(
     roots: tuple[np.ndarray, ...], log_lambda: npt.ArrayLike
 ) -> tuple[np.ndarray, tuple[np.ndarray, ...]]:
-    """Port ``gdi.c::get_stableS``'s orthogonal range-space rotation.
+    """``gdi.c::get_stableS``'s orthogonal range-space rotation.
 
-    The grouping and rank cutoffs are deliberately source-specific.  The
-    routine returns ``Qs`` and transformed root *columns* in range
-    coordinates; callers append the global penalty null space afterwards.
+    Delegates to ``jaxgam.penalties.stable_reparam`` (the full
+    ``gam.reparam`` port) and returns its ``Qs`` and transformed root
+    *columns* in range coordinates; callers append the global penalty null
+    space afterwards.
     """
     log_sp = np.asarray(log_lambda, dtype=float)
     if len(roots) != len(log_sp):
@@ -289,68 +291,9 @@ def _stable_range_rotation(
     q = roots[0].shape[0]
     if any(root.ndim != 2 or root.shape[0] != q for root in roots):
         raise ValueError("global penalty roots have incompatible dimensions")
-    transformed_roots = [np.array(root, copy=True) for root in roots]
-    gamma = np.ones(len(roots), dtype=bool)
-    qf = np.eye(q)
-    k = 0
-    current = q
-    d_tol = np.finfo(float).eps ** 0.3
-    r_tol = np.finfo(float).eps ** 0.75
-
-    while True:
-        norms = np.array(
-            [
-                np.linalg.norm(root[k:, :].T @ root[k:, :], ord="fro")
-                if active
-                else 0.0
-                for root, active in zip(transformed_roots, gamma, strict=True)
-            ]
-        )
-        weighted_norms = norms * smoothing_parameters
-        maximum = float(np.max(weighted_norms, initial=0.0))
-        alpha = gamma & (weighted_norms > maximum * d_tol)
-        if not np.any(alpha):
-            raise ValueError("global penalty rotation has no active penalty")
-        gamma_next = gamma & ~alpha
-        if np.any(gamma_next):
-            scaled = np.zeros((current, current))
-            for root, norm, active in zip(transformed_roots, norms, alpha, strict=True):
-                if active:
-                    tail = root[k:, :]
-                    scaled += tail @ tail.T / norm
-            values, _ = _symmetric_eigh(scaled)
-            rank = 1
-            while rank < current and values[current - rank - 1] > values[-1] * r_tol:
-                rank += 1
-        else:
-            rank = current
-
-        if rank == current:
-            break
-
-        dominant = np.zeros((current, current))
-        for index, root in enumerate(transformed_roots):
-            if alpha[index]:
-                tail = root[k:, :]
-                dominant += smoothing_parameters[index] * tail @ tail.T
-        values, vectors = _symmetric_eigh(dominant)
-        values, rotation = values[::-1], vectors[:, ::-1]
-        qf[:, k:] = qf[:, k:] @ rotation
-        for index, root in enumerate(transformed_roots):
-            tail = root[k:, :]
-            rotated = rotation.T @ tail
-            if alpha[index]:
-                root[k : k + rank, :] = rotated[:rank, :]
-                root[k + rank :, :] = 0.0
-            elif gamma_next[index]:
-                root[k:, :] = rotated
-        gamma = gamma_next
-        k += rank
-        current -= rank
-        if current == 0:
-            break
-
-    return qf, tuple(transformed_roots)
+    # One get_stableS implementation: gam.reparam's rotation and roots.
+    result = stable_reparam(roots, log_sp, deriv=0)
+    return result.Qs, result.rS
 
 
 def global_penalty_coordinates(

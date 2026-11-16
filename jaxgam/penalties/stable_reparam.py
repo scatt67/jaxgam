@@ -25,7 +25,9 @@ LAPACK provenance: ``mgcv_symeig`` with ``use_dsyevd=0`` calls DSYEVR
 (``uplo='L'``, ``range='A'``, ``abstol=0``); ``mgcv_qr`` calls DGEQP3;
 ``mgcv_qrqy`` calls DORMQR; ``mgcv_backsolve`` calls DTRSM; ``mroot`` calls
 R's ``chol(pivot=TRUE, tol=0)``, i.e. DPSTRF.  This module calls the same
-routines through SciPy's LAPACK.
+routines through SciPy's LAPACK, except that both DSYEVR calls follow
+``fitting_prepare._symmetric_eigh``'s provider policy (the pinned OpenBLAS
+provider when SciPy is not the audited Accelerate build).
 
 This is Phase 1 code: NumPy and SciPy only, no JAX.
 """
@@ -40,6 +42,10 @@ import numpy.typing as npt
 from scipy.linalg import blas, lapack
 
 from jaxgam.smooths.source_lapack import source_frobenius_norm
+from jaxgam.smooths.source_penalty_coordinates import (
+    _source_symmetric_eigen,
+    scipy_uses_accelerate_lapack,
+)
 
 # gam.fit3.r:31,33 -- d.tol groups "similar sized" penalties; r.tol decides rank.
 D_TOL: float = float(np.finfo(np.float64).eps ** 0.3)
@@ -80,17 +86,37 @@ class StableReparam:
     stage_ranks: tuple[int, ...]
 
 
+def _dsyevr(
+    matrix: npt.NDArray[np.float64], *, vectors: bool
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64] | None]:
+    """DSYEVR(range='A', uplo='L', abstol=0), eigenvalues ascending.
+
+    Provider policy shared with ``fitting_prepare._symmetric_eigh``: SciPy's
+    LAPACK when SciPy is the audited Accelerate build, otherwise the pinned
+    OpenBLAS provider (the LAPACK pinned Linux R links), so the eigen gauge
+    follows the same source on every platform.
+    """
+    matrix = np.asarray(matrix, dtype=np.float64)
+    if not scipy_uses_accelerate_lapack():
+        return _source_symmetric_eigen(matrix, vectors=vectors)
+    size = len(matrix)
+    values, vectors_out, count, _, info = lapack.dsyevr(
+        matrix, compute_v=int(vectors), range="A", lower=1, abstol=0.0
+    )
+    if info != 0 or count != size:
+        raise np.linalg.LinAlgError(f"DSYEVR failed with info={info}.")
+    return (
+        np.asarray(values[:size], dtype=np.float64),
+        np.asarray(vectors_out[:, :size], dtype=np.float64) if vectors else None,
+    )
+
+
 def _symeig_values(matrix: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """``mgcv_symeig(A, ev, n, use_dsyevd=0, get_vectors=0, descending=0)``.
 
     DSYEVR on the lower triangle; eigenvalues ascending (mat.c:3467-3540).
     """
-    values, _, count, _, info = lapack.dsyevr(
-        matrix, compute_v=0, range="A", lower=1, abstol=0.0
-    )
-    if info != 0 or count != len(matrix):
-        raise np.linalg.LinAlgError(f"DSYEVR failed with info={info}.")
-    return np.asarray(values[: len(matrix)], dtype=np.float64)
+    return _dsyevr(matrix, vectors=False)[0]
 
 
 def _symeig_descending(
@@ -101,16 +127,9 @@ def _symeig_descending(
     DSYEVR on the lower triangle, then mgcv reverses the eigenvector columns
     and the eigenvalues into descending order (mat.c:3520-3545).
     """
-    values, vectors, count, _, info = lapack.dsyevr(
-        matrix, compute_v=1, range="A", lower=1, abstol=0.0
-    )
-    size = len(matrix)
-    if info != 0 or count != size:
-        raise np.linalg.LinAlgError(f"DSYEVR failed with info={info}.")
-    return (
-        np.asarray(values[:size][::-1], dtype=np.float64),
-        np.asarray(vectors[:, :size][:, ::-1], dtype=np.float64),
-    )
+    values, vectors = _dsyevr(matrix, vectors=True)
+    assert vectors is not None
+    return values[::-1].copy(), np.asarray(vectors[:, ::-1], dtype=np.float64)
 
 
 def _qr_ldet_inv(
