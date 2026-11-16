@@ -372,3 +372,90 @@ def test_public_operator_efs_rejects_levels_beyond_calibration_before_efs():
         ),
     )
     assert source.scans == preparation.scans == prepared.started_preparation_scans
+
+
+def test_public_operator_efs_rejects_batch_rows_above_calibration_before_replay():
+    from jaxgam.execution.operator_efs_controller import (
+        CALIBRATED_OPERATOR_EFS_DOMAIN as domain,
+    )
+
+    frame = _indexed_poisson_frame(300, 1, 5403)
+
+    class _UnreadableSource(DataFrameRowSource):
+        def scan(self, _batch_rows):
+            pytest.fail("Unsupported operator EFS scanned the source")
+
+        def fingerprint(self):
+            pytest.fail("Unsupported operator EFS fingerprinted the source")
+
+    model = GAM(
+        "y~0+s(g,bs='re')",
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=domain.maximum_batch_rows + 1,
+        ),
+    )
+    with pytest.raises(NotImplementedError, match="Calibrated operator EFS requires"):
+        model.fit(_UnreadableSource(frame, response="y"), result="prediction")
+
+
+@pytest.mark.parametrize("edge", ["levels_below", "rows_above", "modest_above"])
+def test_public_operator_efs_rejects_shapes_outside_calibration_before_efs(edge):
+    """Every admission limit rejects after preparation, before any EFS refit."""
+    from jaxgam.execution.operator_efs_controller import (
+        CALIBRATED_OPERATOR_EFS_DOMAIN as domain,
+    )
+    from jaxgam.execution.operator_efs_controller import (
+        CALIBRATED_OPERATOR_EFS_MAX_MODEST,
+    )
+
+    formula = "y~0+s(g,bs='re')"
+    if edge == "levels_below":
+        frame = _indexed_poisson_frame(domain.minimum_levels - 1, 1, 5404)
+    elif edge == "rows_above":
+        frame = _indexed_poisson_frame(
+            domain.minimum_levels, domain.maximum_rows_per_level + 1, 5405
+        )
+    else:
+        frame = _indexed_poisson_frame(domain.minimum_levels + 43, 2, 5406)
+        rng = np.random.default_rng(5407)
+        names = [f"x{index}" for index in range(CALIBRATED_OPERATOR_EFS_MAX_MODEST)]
+        for name in names:
+            frame[name] = rng.uniform(-1.0, 1.0, len(frame))
+        # The intercept plus one column per name exceeds the measured limit.
+        formula = "y~" + "+".join(names) + "+s(g,bs='re')"
+
+    class _CountingSource(DataFrameRowSource):
+        def __init__(self, data):
+            super().__init__(data, response="y")
+            self.scans = 0
+
+        def scan(self, batch_rows):
+            self.scans += 1
+            yield from super().scan(batch_rows)
+
+    source = _CountingSource(frame)
+    model = GAM(
+        formula,
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=domain.minimum_batch_rows,
+        ),
+    )
+    with pytest.raises(NotImplementedError, match="Calibrated operator EFS requires"):
+        model.fit(source, result="prediction")
+    preparation = _CountingSource(frame)
+    prepared = prepare_operator_model(
+        parse_formula(formula),
+        preparation,
+        control=OperatorPreparationControl(
+            domain.minimum_batch_rows, (512 << 20) // 8, 64
+        ),
+    )
+    assert source.scans == preparation.scans == prepared.started_preparation_scans
