@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -10,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from jaxgam import GAM
 from jaxgam.data.source import ArrayRowSource
 from jaxgam.execution.reml import (
     StreamREMLControl,
@@ -30,7 +33,12 @@ from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import prepare_model
-from tests.helpers import _AssertCollector, r_available
+from tests.helpers import (
+    _AssertCollector,
+    check_flat_ridge_endpoint,
+    check_that,
+    r_available,
+)
 from tests.r_bridge import RBridge
 from tests.tolerances import MODERATE, STRICT
 
@@ -610,27 +618,108 @@ def test_stream_reml_lbfgsb_real_trials_decrease_from_callback_accepts() -> None
     assert result.n_accepted == result.n_iter
 
 
-def test_stream_reml_lbfgsb_null_smooth_fails_closed_at_high_conditioning() -> None:
-    """Do not report a residue-driven large-rho optimum as a valid fit."""
+def _null_smooth_problem():
     rng = np.random.default_rng(72)
     x, z = rng.uniform(-1.0, 1.0, (2, 113))
-    family = Poisson()
+    formula = "y ~ s(x, bs='cr', k=6) + s(z, bs='cr', k=5)"
     source = ArrayRowSource({"x": x, "z": z}, y=np.ones(113))
     stream = StreamDesign(
-        prepare_model(
-            parse_formula("y ~ s(x, bs='cr', k=6) + s(z, bs='cr', k=5)"),
-            source,
-            family=family,
-        ),
-        source,
+        prepare_model(parse_formula(formula), source, family=Poisson()), source
     )
+    data = pd.DataFrame({"x": x, "z": z, "y": np.ones(113)})
+    return formula, stream, data
+
+
+@pytest.mark.skipif(not r_available(), reason="pinned R/mgcv oracle unavailable")
+def test_stream_reml_lbfgsb_null_smooth_reaches_the_flat_ridge_truthfully(
+    r_bridge,
+) -> None:
+    """y == 1 Poisson: the REML infimum lies along sp -> inf, reported truthfully.
+
+    This gate used to require an observed-adjoint ``LinAlgError``: before the
+    structural penalty null space (ebc2449) roundoff of order eps*|S| in the
+    penalty null block, amplified by lambda, poisoned the adjoint at large
+    rho.  With the null space exact the streamed optimizer converges at
+    rho ~ (22.1, 21.9), score 115.271, below pinned R's 115.745 at
+    (6.62, 6.79); the two criteria agree to 1.4e-14 at both endpoints.  It is
+    judged by the flat-ridge rule (root decisions 1 and 2, 2026-11-16).
+    """
+    formula, stream, data = _null_smooth_problem()
+    result = optimize_stream_reml(
+        stream,
+        Poisson(),
+        np.zeros(2),
+        pirls_control=StreamPIRLSControl(batch_rows=19),
+        control=StreamREMLControl(max_iter=30, maxfun=100, gtol=1e-7),
+    )
+    with contextlib.redirect_stdout(io.StringIO()):
+        reference = r_bridge.fit_gam(formula, data, "poisson", "REML")
+    fits: dict[str, object] = {}
+
+    def jax_fixed(sp):
+        fit = GAM(formula, family=Poisson(), sp=list(np.asarray(sp))).fit(data)
+        fits[repr(np.asarray(sp).tolist())] = fit
+        return {
+            "score": fit.score,
+            "fitted_values": fit.fitted_values,
+            "deviance": fit.deviance,
+        }
+
+    def r_fixed(sp):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return r_bridge.fit_fixed_sp(formula, data, "poisson", np.asarray(sp))
+
+    endpoint = np.exp(np.asarray(result.trial.rho, dtype=np.float64))
+    collector = _AssertCollector()
+    check_flat_ridge_endpoint(
+        collector,
+        "y == 1 Poisson",
+        converged=bool(result.converged),
+        jax_sp=endpoint,
+        jax_score=float(np.asarray(result.trial.score)),
+        r_sp=np.asarray(reference["smoothing_params"]),
+        r_score=float(reference["reml_score"]),
+        jax_fixed=jax_fixed,
+        r_fixed=r_fixed,
+    )
+    endpoint_fit = fits[repr(endpoint.tolist())]
+
+    def _hard_gates() -> None:
+        check_that(endpoint_fit.deviance >= 0.0, "negative deviance")
+        check_that(np.all(np.isfinite(endpoint_fit.fitted_values)), "non-finite fitted")
+        p = len(endpoint_fit.coefficients)
+        check_that(0.0 <= endpoint_fit.edf_total <= p, "EDF out of [0, p]")
+        Vp = np.asarray(endpoint_fit.Vp)
+        np.testing.assert_allclose(Vp, Vp.T, rtol=STRICT.rtol, atol=STRICT.atol)
+        check_that(
+            float(np.asarray(result.trial.adjoint_jitter)) == 0.0,
+            "adjoint needed jitter",
+        )
+
+    collector.check("hard gates at the streamed endpoint", _hard_gates)
+    collector.raise_if_any("streamed null-smooth flat ridge")
+
+
+def test_stream_reml_observed_adjoint_fails_closed_on_a_bad_residual(
+    monkeypatch,
+) -> None:
+    """An unacceptable scaled adjoint residual raises, never returns a trial."""
+    import jaxgam.execution.reml as stream_reml_module
+
+    _formula, stream, _data = _null_smooth_problem()
+    exact = stream_reml_module.solve_observed_adjoint
+
+    def bad_residual(*args, **kwargs):
+        adjoint, jitter, _residual = exact(*args, **kwargs)
+        return adjoint, jitter, jnp.asarray(1e-6)
+
+    monkeypatch.setattr(stream_reml_module, "solve_observed_adjoint", bad_residual)
     with pytest.raises(np.linalg.LinAlgError, match="observed-adjoint"):
-        optimize_stream_reml(
+        evaluate_stream_reml(
             stream,
-            family,
+            Poisson(),
             np.zeros(2),
-            pirls_control=StreamPIRLSControl(batch_rows=19),
-            control=StreamREMLControl(max_iter=30, maxfun=100, gtol=1e-7),
+            control=StreamPIRLSControl(batch_rows=19),
         )
 
 
