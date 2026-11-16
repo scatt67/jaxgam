@@ -170,6 +170,50 @@ accepted score history, startup scans, cumulative PIRLS passes, final score
 refits and derivative time. These counts include the `newton()` continuation
 trials.
 
+### Fixed-sp operator fitting
+
+Use CPU operator fitting when an indexed random-effect design has too many
+coefficients for a dense coefficient system:
+
+```python
+from jaxgam import FitControl, GAM, OperatorControl
+
+result = GAM(
+    'y ~ s(group, bs="re")',
+    family="poisson",
+    sp=[1.0],
+    control=FitControl(
+        execution="operator",
+        linear_solver="pcg",
+        batch_rows=4096,
+        memory_budget_bytes=512 * 1024 * 1024,
+        operator=OperatorControl(cg_rtol=1e-10),
+    ),
+).fit(source, result="prediction")
+```
+
+The source owns weights and offsets. Supply positive finite smoothing
+parameters and, for negative binomial, fixed theta. Preparation represents
+random-effect levels and interactions by indices. Supported cubic,
+thin-plate, Gaussian-process and tensor terms use bounded modest blocks;
+`max_modest_coefficients` and the memory budget limit those blocks.
+
+The coefficient driver keeps the family state and working system fixed during
+each PCG solve. A working system must satisfy the bounded positive-definiteness
+checks. Signed systems outside that certificate reject explicitly, including
+some mathematically positive-definite systems; fitting does not silently
+switch to Fisher scoring. Diagnostics report actual Krylov iterations,
+residuals, source scans and workspace bounds. Check `converged` before using a
+fit.
+
+The prediction result retains indexed geometry and coefficients, without the
+training source or a dense covariance. This fixed-sp route has `score=None`
+and `edf_total=None`; unknown-scale families also have `scale=None`. These
+quantities require additional trace and score providers. Standard errors,
+full/inference results, estimated theta and automatic smoothing selection are
+not available on this route. Dense and streamed direct routes retain their
+existing numeric results and uncertainty options.
+
 ### Extended Fellner--Schall fitting
 
 Select the dense extended Fellner--Schall controller explicitly with

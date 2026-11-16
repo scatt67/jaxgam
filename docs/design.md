@@ -3953,6 +3953,19 @@ def auto_select_path(n: int, p: int, has_sparse_basis: bool,
     return ExecutionPath.SPARSE_CPU
 ```
 
+**Implemented fixed-sp operator route.** `FitControl(execution="operator",
+linear_solver="pcg")` explicitly selects CPU host orchestration with pure
+numerical kernels. `OperatorControl` composes coefficient and Krylov limits.
+Preparation combines indexed random effects with bounded modest basis blocks;
+it must budget setup as well as fitting and may not materialize an n-by-p
+design, p-by-p system, dense range basis or covariance. Observed working states
+and preconditioners are frozen during every solve, and admission requires a
+bounded positive-definiteness certificate. An uncertified system rejects
+rather than changing the fitting equation. Compact prediction results retain
+geometry but not the source; absent score/EDF/unknown-scale providers are
+represented by `None`. Fixed theta and smoothing are required until the
+separately validated parameter, trace and score providers are integrated.
+
 ### 10.2 Structured Penalty Representations
 
 **v1.4 fix:** v1.3's `PenaltySet.to_dense_jax()` built a full `(p, p)` dense matrix via `jnp.zeros((p, p))` + `jnp.diag(...)`, making the "structured penalty" narrative fiction. The solver consumed only a materialized matrix, so diagonal/Kronecker structure provided zero benefit.
@@ -4303,7 +4316,15 @@ Not all penalty structures can provide exact `log_pseudo_det()`. The REML criter
 | Soap film / Duchon | O(p²) dense | O(p²) dense | O(p³) exact (dense block) | O(p²) | Dense-GPU if p small; Sparse-CPU otherwise |
 | Adaptive (spatially varying λ) | Depends on base | Depends on base | **Approximated** - stochastic trace est. for REML gradient | Depends | Sparse-CPU + Fellner-Schall |
 
-**Routing rule:** If any penalty in the `CompositePenalty` cannot provide exact `log_pseudo_det()`, the REML optimizer either (a) routes to Sparse-CPU where `CHOLMOD` can compute log-det of the full `H` directly, or (b) uses the Fellner-Schall update (Section 8.3) which requires only traces, not log-dets. This is declared per penalty via:
+**Routing rule:** A REML optimizer needs a valid score provider for the
+penalty pseudo-determinant and the observed-system determinant. In a future
+sparse path, an appropriate sparse factorization can supply those quantities.
+EFS trace ratios do not remove this requirement: its trial comparisons and
+score-window stopping still use REML scores. Operator smoothing therefore
+requires a separately validated exact or approximate score provider, with
+explicit uncertainty for approximate comparisons. An unavailable determinant
+must not be replaced by a finite placeholder score or bypassed by selecting
+EFS. Penalty capability is declared via:
 
 ```python
 class StructuredPenalty(ABC):
