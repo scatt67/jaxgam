@@ -223,3 +223,58 @@ def test_pinned_bam_setup_default_uses_discrete_grid(r_bridge) -> None:
     assert setup.expanded_design.shape[0] == len(frame)
     assert setup.expanded_design.shape[1] > 1
     assert np.all(np.isfinite(setup.expanded_design))
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize(
+    ("python_formula", "r_formula"),
+    [
+        (
+            "y ~ s(x, bs='tp', k=8, max_knots=40, seed=3)",
+            "y ~ s(x,bs='tp',k=8,xt=list(max.knots=40,seed=3))",
+        ),
+        (
+            "y ~ s(x, z, bs='tp', k=12, xt={'max_knots': 40, 'seed': 3})",
+            "y ~ s(x,z,bs='tp',k=12,xt=list(max.knots=40,seed=3))",
+        ),
+        (
+            "y ~ s(x, bs='gp', k=8, xt={'max_knots': 40, 'seed': 5})",
+            "y ~ s(x,bs='gp',k=8,xt=list(max.knots=40,seed=5))",
+        ),
+        (
+            "y ~ s(x, z, bs='gp', k=10, xt={'max_knots': 40, 'seed': 5})",
+            "y ~ s(x,z,bs='gp',k=10,xt=list(max.knots=40,seed=5))",
+        ),
+    ],
+)
+def test_sampled_radial_knots_match_pinned_bam_compact_frame(
+    r_bridge, python_formula: str, r_formula: str
+) -> None:
+    """bam(discrete=TRUE) samples tp/gp knots from its compact frame."""
+    rng = np.random.default_rng(20261118)
+    n_rows = 2500
+    frame = pd.DataFrame(
+        {"x": rng.uniform(-3, 12, n_rows), "z": rng.normal(0, 8, n_rows)}
+    )
+    frame["y"] = np.sin(frame.x / 2) + rng.normal(scale=0.3, size=n_rows)
+    source = _source(frame)
+    setup = build_continuous_discrete_setup(
+        parse_formula(python_formula), source, m=120, batch_rows=97
+    )
+    assert isinstance(setup, ContinuousDiscreteSetup)
+    # The cap applies to the compact frame's discretized covariate rows:
+    # fewer distinct rows than data rows, but more than the cap.
+    variables = list(parse_formula(python_formula).smooth_terms[0].variables)
+    compact_rows = np.unique(setup.compact.frame[variables].to_numpy(), axis=0)
+    assert 40 < len(compact_rows) < n_rows
+    descriptor = build_continuous_discrete_design(
+        setup, source, control=DiscreteDesignControl(batch_rows=n_rows)
+    )
+    assert not isinstance(descriptor, DiscreteDesignUnavailable)
+    expected = r_bridge.bam_discrete_setup(r_formula, frame, m=120).expanded_design
+    np.testing.assert_allclose(
+        descriptor.evaluate_batch(np.arange(n_rows)),
+        expected,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )

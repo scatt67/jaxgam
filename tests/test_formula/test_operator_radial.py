@@ -304,6 +304,24 @@ def test_r_sampled_tp_knots_and_transform_match_pinned_source(r_bridge) -> None:
     )
 
 
+def test_r_sampled_tp_knots_accept_the_xt_spelling(r_bridge) -> None:
+    """The operator reads tp's knot cap and seed from xt as R does."""
+    frame = _frame(83)
+    spec = parse_formula("y~0+s(x,z,bs='tp',k=6,xt={'max_knots':11,'seed':7})")
+    model = prepare_operator_model(
+        spec,
+        DataFrameRowSource(frame, response="y"),
+        control=OperatorPreparationControl(batch_rows=9),
+    )
+    smooth = model.modest.predict_spec.coef_map.terms[0].smooth
+    expected = r_bridge.smooth_construct(
+        "s(x,z,bs='tp',k=6,xt=list(max.knots=11,seed=7))",
+        frame,
+        absorb_cons=False,
+    )
+    np.testing.assert_array_equal(smooth._Xu, expected["Xu"])
+
+
 def test_radial_budget_rejects_before_kernel_eigendecomposition(monkeypatch) -> None:
     calls: list[object] = []
 
