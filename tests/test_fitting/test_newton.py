@@ -901,6 +901,131 @@ class TestStepFailureConvergence:
         assert not opt._gradient_within_tol(outside, params, score_scale)
 
 
+class _NonFiniteScoreProbe(NewtonOptimizer):
+    """Report a NaN REML score at every evaluation, keeping the real PIRLS.
+
+    The criterion, gradient and Hessian are still computed from the real
+    PIRLS fit, so only the score is non-finite: a deterministic stand-in for
+    the extreme-sp evaluations whose score overflows to NaN.
+    """
+
+    evaluations = 0
+
+    def _fit_and_score(self, params, beta_init):
+        self.evaluations += 1
+        pirls_result, _score = super()._fit_and_score(params, beta_init)
+        return pirls_result, jnp.asarray(jnp.nan)
+
+
+class TestPinnedSmoothingParameters:
+    """Supplied (pinned) smoothing parameters are never clamped or moved.
+
+    Bug: the dense pinned-Newton route (fixed ``sp`` with an estimated scale
+    or NB theta) passed every trial through the ``lsp_max`` clamp, so a
+    supplied log sp of +-41 was fitted and reported as +-40. Pinned mgcv
+    keeps a supplied sp verbatim in ``lsp0`` (mgcv.r ``gam.setup``) and its
+    ``newton()`` has no log-sp bound (gam.fit3.r). A NaN score also passed
+    the convergence tests (every NaN comparison is false), so a non-finite
+    fit could be reported as converged.
+    """
+
+    FORMULA = "y ~ s(x, k=10, bs='cr')"
+
+    @staticmethod
+    def _pinned_fd(family_name: str, family, log_sp: float) -> FittingData:
+        fd = _setup_fd(
+            TestPinnedSmoothingParameters.FORMULA,
+            _generate_family_data(family_name),
+            family,
+        )
+        return dataclasses.replace(fd, log_lambda_init=jnp.asarray([log_sp]))
+
+    @pytest.mark.parametrize("log_sp", [-60.0, -41.0, -40.0, 0.3, 40.0, 41.0, 60.0])
+    def test_clamp_restores_pinned_values_bitwise(self, log_sp: float):
+        fd = self._pinned_fd("gaussian", Gaussian(), log_sp)
+        pinned = NewtonOptimizer(fd, pin_lambda=True)
+        free = NewtonOptimizer(fd)
+        moved = jnp.asarray([log_sp + 7.0, -1.7])  # [log lambda, log phi]
+        expected = np.asarray([log_sp, -1.7])
+        clamp_jit = jax.jit(pinned._clamp_params)
+        for actual in (pinned._clamp_params(moved), clamp_jit(moved)):
+            np.testing.assert_array_equal(np.asarray(actual), expected)
+        # A non-finite trial coordinate cannot leak into a pinned value.
+        nan_trial = jnp.asarray([jnp.nan, -1.7])
+        np.testing.assert_array_equal(np.asarray(clamp_jit(nan_trial)), expected)
+        # Free coordinates keep the optimizer's box; log phi stays unclamped.
+        np.testing.assert_array_equal(
+            np.asarray(free._clamp_params(moved)),
+            [np.clip(log_sp + 7.0, -40.0, 40.0), -1.7],
+        )
+        np.testing.assert_array_equal(
+            np.asarray(jax.jit(free._clamp_params)(moved)),
+            np.asarray(free._clamp_params(moved)),
+        )
+
+    def test_build_result_never_reports_nonfinite_as_converged(self):
+        fd = _setup_fd(self.FORMULA, _generate_family_data("poisson"), Poisson())
+        opt = NewtonOptimizer(fd)
+        params = fd.log_lambda_init
+        pirls_result, score = opt._fit_and_score(params, opt._initial_beta())
+        criterion = opt._make_criterion(pirls_result)
+        assert bool(jnp.isfinite(score))
+
+        def build(score_value, gradient):
+            return opt._build_result(
+                params,
+                score_value,
+                gradient,
+                criterion,
+                pirls_result,
+                converged=True,
+                step_failed=False,
+                n_iter=2,
+            )
+
+        finite = build(score, jnp.zeros(1))
+        assert finite.converged
+        assert finite.convergence_info == "full convergence"
+        for score_value, gradient in (
+            (jnp.asarray(jnp.nan), jnp.zeros(1)),
+            (jnp.asarray(jnp.inf), jnp.zeros(1)),
+            (score, jnp.asarray([jnp.nan])),
+        ):
+            result = build(score_value, gradient)
+            assert not result.converged
+            assert result.convergence_info == "non-finite REML score or gradient"
+            # The failed evaluation is reported as it is, never replaced
+            # (assert_array_equal treats NaN as equal to NaN).
+            np.testing.assert_array_equal(
+                np.asarray(result.score), np.asarray(score_value)
+            )
+
+    @pytest.mark.parametrize(
+        ("family_name", "family"),
+        [("gaussian", Gaussian()), ("gamma", Gamma())],
+        ids=["gaussian", "gamma"],
+    )
+    def test_pinned_nonfinite_start_stops_without_steps(self, family_name, family):
+        fd = self._pinned_fd(family_name, family, 41.0)
+        probe = _NonFiniteScoreProbe(fd, pin_lambda=True)
+        result = probe.run()
+        assert probe.evaluations == 1
+        assert not result.converged
+        assert result.n_iter == 0
+        assert result.convergence_info == "non-finite REML score or gradient"
+        assert np.isnan(float(result.score))
+        np.testing.assert_array_equal(np.asarray(result.log_lambda), [41.0])
+
+    def test_unpinned_stuck_nonfinite_score_is_not_converged(self):
+        """The non-Gaussian stuck exit no longer converges on a NaN score."""
+        fd = _setup_fd(self.FORMULA, _generate_family_data("poisson"), Poisson())
+        probe = _NonFiniteScoreProbe(fd)
+        result = probe.run()
+        assert probe.evaluations > 1  # estimated sp keeps the step search
+        assert not result.converged
+        assert result.convergence_info == "non-finite REML score or gradient"
+
+
 # ---- G. Step-halving ----
 
 

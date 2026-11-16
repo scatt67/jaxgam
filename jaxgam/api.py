@@ -300,9 +300,7 @@ class GAM:
             method=self.method,
             result_mode=result,
             control=self.control,
-            supplied_smoothing_params=_fitted_supplied_sp(
-                self.sp, fit_result, fd.n_penalties
-            ),
+            supplied_smoothing_params=self.sp,
         )
 
     def _fit_stream(
@@ -1168,28 +1166,6 @@ def _fixed_log_smoothing_parameters(sp: np.ndarray | list, n_penalties: int):
     return jnp.log(jnp.array(sp_arr))
 
 
-def _fitted_supplied_sp(
-    sp: np.ndarray | list | float | None,
-    fit_result: NewtonResult,
-    n_penalties: int,
-) -> np.ndarray | list | float | None:
-    """The caller's ``sp`` for verbatim reporting, when the fit used it.
-
-    The known-scale fixed-sp route fits at ``log(sp)`` exactly. The pinned
-    Newton route (unknown scale or estimated theta) still passes its pinned
-    coordinates through the optimizer's ``|log sp| <= 40`` box, which leaves
-    in-box values unchanged but fits a supplied sp beyond the box at the
-    bound. Report the supplied values only when the fit's log smoothing
-    parameters are exactly ``log(sp)``; otherwise keep the fit's own values,
-    so the report never names smoothing parameters that were not fitted.
-    """
-    if sp is None:
-        return None
-    fitted = np.asarray(fit_result.log_lambda)
-    supplied = np.asarray(_fixed_log_smoothing_parameters(sp, n_penalties))
-    return sp if np.array_equal(fitted, supplied) else None
-
-
 def _fit_fixed_sp(
     fd: FittingData, sp: np.ndarray | list, method: str = "REML"
 ) -> NewtonResult:
@@ -1216,9 +1192,12 @@ def _fit_fixed_sp(
     Returns
     -------
     NewtonResult
-        For standard families: ``n_iter=0``, ``convergence_info="fixed sp"``.
-        For estimated-theta families: the outer-optimizer result with theta
-        estimated at the fixed smoothing parameters.
+        For known-scale standard families: ``n_iter=0``,
+        ``convergence_info="fixed sp"``; a non-finite REML score is reported
+        as not converged (``"fixed sp: non-finite REML score"``).
+        For estimated-theta or unknown-scale families: the pinned
+        outer-optimizer result, with the supplied smoothing parameters held
+        bitwise (never clamped) and theta / scale estimated at them.
     """
     import jax.numpy as jnp
 
@@ -1272,16 +1251,20 @@ def _fit_fixed_sp(
     edf = criterion.edf
     scale = criterion.scale
     score = criterion.score(log_lambda)
+    # A non-finite REML score is a failed evaluation, never a converged fit.
+    finite_score = bool(jnp.isfinite(score))
 
     return NewtonResult(
         log_lambda=log_lambda,
         smoothing_params=jnp.exp(log_lambda),
-        converged=bool(pirls_result.converged),
+        converged=bool(pirls_result.converged) and finite_score,
         n_iter=0,
         score=score,
         gradient=jnp.zeros_like(log_lambda),
         edf=edf,
         scale=scale,
         pirls_result=pirls_result,
-        convergence_info="fixed sp",
+        convergence_info="fixed sp"
+        if finite_score
+        else "fixed sp: non-finite REML score",
     )

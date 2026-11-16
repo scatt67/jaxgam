@@ -17,15 +17,12 @@ this for NumPy and JAX on the running host.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import pytest
 
 from jaxgam import GAM, FitControl
-from jaxgam.api import _fitted_supplied_sp
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
@@ -162,13 +159,3 @@ def test_single_penalty_scalar_sp_is_reported_verbatim():
         frame, weights=weights, offset=offset
     )
     _assert_verbatim(result, [SP_A])
-
-
-def test_supplied_sp_is_reported_only_where_the_fit_used_it():
-    """A pinned fit whose log sp differ from log(sp) keeps its own values."""
-    supplied = list(SUPPLIED)
-    used = SimpleNamespace(log_lambda=jnp.log(jnp.asarray(supplied)))
-    assert _fitted_supplied_sp(supplied, used, 2) is supplied
-    moved = SimpleNamespace(log_lambda=jnp.log(jnp.asarray(supplied)).at[0].set(40.0))
-    assert _fitted_supplied_sp(supplied, moved, 2) is None
-    assert _fitted_supplied_sp(None, used, 2) is None
