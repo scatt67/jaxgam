@@ -9,7 +9,8 @@ smooth bases must be bitwise identical; both are compared with pinned
 
 from __future__ import annotations
 
-import os
+import hashlib
+import json
 
 import numpy as np
 import pandas as pd
@@ -26,20 +27,29 @@ from jaxgam.formula.operator_prepare import (
 from jaxgam.formula.parser import parse_formula
 from jaxgam.smooths.tensor import TensorInteractionSmooth
 from jaxgam.smooths.tprs import TPRSSmooth
-from tests.helpers import _AssertCollector, check_that
-from tests.tolerances import STRICT
+from tests.helpers import _AssertCollector, check_that, r_links_pinned_openblas
+from tests.tolerances import MODERATE, STRICT
 
 _LAYOUTS = ("regular", "irregular", "clustered", "shifted")
 _RANKS = (4, 6, 8)
 _CASES = [
     (layout, k, kind) for layout in _LAYOUTS for k in _RANKS for kind in ("s", "ti")
 ]
-# Rlanczos reduces through R's linked BLAS. These two ti bases amplify that
-# rounding through the margin reparameterization (cond(Xp) ~ 1e3): they are
-# bitwise equal to R linked to the pinned OpenBLAS 0.3.26, but not to R linked
-# to another BLAS. Their raw basis is asserted only against the pinned build;
-# the penalty and fixed-sp fit are asserted everywhere.
-_PINNED_BLAS_BASES = {("irregular", 8, "ti"), ("clustered", 6, "ti")}
+# Rlanczos reduces through R's linked BLAS. These two ti raw bases amplify
+# that rounding through the margin reparameterization (cond(Xp) ~ 1e3): they
+# are bitwise equal to R linked to the pinned OpenBLAS 0.3.26 and are STRICT
+# there. Against R linked to any other BLAS (macOS Accelerate: 1.5e-10 and
+# 5.8e-10 absolute after four documented PR12 correction passes) only their
+# raw basis is compared at MODERATE, bound to these reviewed generated inputs
+# and controls. Penalties and fixed-sp fits stay STRICT everywhere.
+_OTHER_BLAS_BASIS_ALLOWANCES = {
+    ("irregular", 8, "ti"): (
+        "aeebfed8c89984ed2454c9c359264c83fab6acae5cced7826f2bef170d74ca2d"
+    ),
+    ("clustered", 6, "ti"): (
+        "6cf184fb1e56b11ae5ad82bbc93e3c58d5bcf4030ad9130c61169e53a19944f8"
+    ),
+}
 
 
 def _frame(layout: str) -> pd.DataFrame:
@@ -64,9 +74,22 @@ def _expressions(kind: str, k: int) -> tuple[str, str]:
     return f"ti(x,z,bs='tp',k={k})", f"ti(x,z,bs='tp',k=c({k},{k}))"
 
 
-def _links_pinned_openblas(r_bridge) -> bool:
-    name = os.path.basename(r_bridge.linked_lapack())
-    return "openblas" in name and "0.3.26" in name
+def _input_digest(data: pd.DataFrame, python: str, r_expression: str) -> str:
+    """Digest of the generated covariate bytes and the construction controls."""
+    raw = np.column_stack((data.x.to_numpy(), data.z.to_numpy())).astype(
+        "<f8", copy=False
+    )
+    control = json.dumps(
+        {
+            "batch_rows": 7,
+            "formula": python,
+            "n": len(data),
+            "r_formula": r_expression,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(raw.tobytes(order="C") + control).hexdigest()
 
 
 def _operator_rows(formula: str, data: pd.DataFrame):
@@ -110,14 +133,21 @@ def test_tprs_basis_penalty_and_fit_match_pinned_source(
             _dense_raw_basis(kind, python, data),
         ),
     )
-    if (layout, k, kind) not in _PINNED_BLAS_BASES or _links_pinned_openblas(r_bridge):
-        for name, actual in (("dense", dense.X), ("operator", rows)):
-            collector.check(
-                f"{name} basis",
-                lambda actual=actual: np.testing.assert_allclose(
-                    actual, expected["X"], rtol=STRICT.rtol, atol=STRICT.atol
-                ),
-            )
+    basis_tolerance = STRICT
+    allowance = _OTHER_BLAS_BASIS_ALLOWANCES.get((layout, k, kind))
+    if allowance is not None and not r_links_pinned_openblas(r_bridge):
+        assert _input_digest(data, python, r_expression) == allowance
+        basis_tolerance = MODERATE
+    for name, actual in (("dense", dense.X), ("operator", rows)):
+        collector.check(
+            f"{name} basis",
+            lambda actual=actual: np.testing.assert_allclose(
+                actual,
+                expected["X"],
+                rtol=basis_tolerance.rtol,
+                atol=basis_tolerance.atol,
+            ),
+        )
     for name, actual in (
         ("dense", dense.penalties.materialize()),
         ("operator", model.penalties.materialize()),

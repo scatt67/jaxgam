@@ -790,13 +790,35 @@ def _tprs_margin_kernel(layout: str, variable: str, k: int):
     return _source_tps_e_matrix(smooth._Xu, smooth._m)
 
 
+def _kernel_digest(E: np.ndarray, k: int, tol: float) -> str:
+    """Digest of one generated knot kernel and the Rlanczos controls."""
+    control = json.dumps(
+        {"k": k, "tol": float(tol).hex()}, sort_keys=True, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(
+        np.asarray(E, dtype="<f8").tobytes(order="C") + control
+    ).hexdigest()
+
+
+# Against R linked to a BLAS other than the pinned OpenBLAS 0.3.26 (macOS
+# Accelerate), the clustered k=8 margin's Ritz vectors differ from R's by
+# 1.9x the STRICT bound after four documented PR12 correction passes; the
+# other margins stay within STRICT. Only that reviewed kernel is compared at
+# MODERATE there.
+_OTHER_BLAS_RITZ_ALLOWANCES = {
+    ("clustered", "x", 8): (
+        "56076fa7f724209d3011dd49a01e70790a09fdd99ad7d8bead9ed9bbfe197706"
+    ),
+}
+
+
 def test_tprs_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
     """The TPRS route ports mat.c::Rlanczos and its BLAS/LAPACK calls.
 
     Against an R that links the pinned OpenBLAS 0.3.26, every Ritz pair is
     bitwise identical. R linked to another BLAS (macOS Accelerate) reorders
-    ``dsymv``/``ddot``; there the Ritz values match at STRICT and the vectors
-    are certified through the input operator instead.
+    ``dsymv``/``ddot``; there the Ritz values and vectors are compared at
+    STRICT, except one reviewed kernel's vectors at MODERATE.
     """
     if r_bridge.mode != "rpy2":
         pytest.skip("Identical-input slanczos oracle requires rpy2.")
@@ -826,6 +848,20 @@ def test_tprs_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
                 lambda values=values, vectors=vectors, expected=expected: (
                     np.testing.assert_array_equal(values, expected["values"]),
                     np.testing.assert_array_equal(vectors, expected["vectors"]),
+                ),
+            )
+        else:
+            vector_tolerance = STRICT
+            allowance = _OTHER_BLAS_RITZ_ALLOWANCES.get((layout, variable, k))
+            if allowance is not None:
+                assert _kernel_digest(E, k, tol) == allowance
+                vector_tolerance = MODERATE
+            collector.check(
+                f"{label}/Ritz vectors",
+                lambda vectors=vectors, expected=expected, t=vector_tolerance: (
+                    np.testing.assert_allclose(
+                        vectors, expected["vectors"], rtol=t.rtol, atol=t.atol
+                    )
                 ),
             )
         collector.check(
