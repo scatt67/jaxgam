@@ -12,10 +12,7 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
-from jaxgam.data.source_tokens import (
-    _r_number_text,
-    _r_sample_without_replacement,
-)
+from jaxgam.data.source_tokens import r_row_token, r_sample_knot_rows
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.smooths.gaussian_process import GaussianProcessSmooth
 from jaxgam.smooths.source_lapack import (
@@ -89,7 +86,7 @@ def _row_key(row: tuple[float, ...], mode: Literal["exact", "r_token"]):
     if len(row) == 1:
         # mgcv uniquecombs uses its numeric single-column path.
         return row
-    return "*".join(_r_number_text(value) for value in row)
+    return r_row_token(row)
 
 
 def _setup_bytes(q: int, d: int, k: int, batch_rows: int) -> int:
@@ -242,8 +239,7 @@ def _collect_rows(
     unique = np.asarray(rows, dtype=np.float64)
     sampled = source.n_rows > max_knots and len(unique) > max_knots
     if sampled:
-        permutation = _r_sample_without_replacement(len(unique), seed)
-        unique = unique[permutation[:max_knots]].copy()
+        unique = r_sample_knot_rows(unique, max_knots, seed)
     if spec.bs in {"tp", "ts"}:
         # tprs.c passes supplied knots through Xd_strip, which sorts the
         # sampled locations before E/T and exposes that order as object$Xu.

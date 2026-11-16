@@ -7,6 +7,9 @@ from jaxgam.data.source_tokens import (
     _r_number_text,
     _r_sample_without_replacement,
     _RRandom,
+    r_row_token,
+    r_sample_knot_rows,
+    r_uniquecombs_ordered,
 )
 
 # Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
@@ -50,3 +53,31 @@ def test_tokens_next_to_powers_of_ten_match_pinned_r(r_bridge):
     expected = r_bridge.source_numeric_tokens(values)
     actual = np.asarray([_r_number_text(value) for value in values])
     np.testing.assert_array_equal(actual, expected)
+
+
+def test_uniquecombs_orders_one_column_numerically_and_rows_by_c_labels():
+    np.testing.assert_array_equal(
+        r_uniquecombs_ordered(np.array([[2.0], [-1.0], [2.0], [0.5]])),
+        [[-1.0], [0.5], [2.0]],
+    )
+    rows = np.array([[-0.1, 1.0], [-0.2, 1.0], [10.0, 0.0], [9.0, 0.0], [-0.1, 1.0]])
+    # C collation of the labels: "-0.1*1" < "-0.2*1" < "10*0" < "9*0".
+    np.testing.assert_array_equal(
+        r_uniquecombs_ordered(rows), [[-0.1, 1.0], [-0.2, 1.0], [10.0, 0.0], [9.0, 0.0]]
+    )
+    assert r_row_token((-0.1, 1.0)) == "-0.1*1"
+
+
+def test_uniquecombs_merges_rows_equal_to_fifteen_digits_keeping_the_first():
+    later = 0.1 + 2.0**-55  # prints as 0.1 at 15 significant digits
+    rows = np.array([[later, 1.0], [0.3, 2.0], [0.1, 1.0]])
+    unique = r_uniquecombs_ordered(rows)
+    np.testing.assert_array_equal(unique, [[later, 1.0], [0.3, 2.0]])
+    with pytest.raises(ValueError, match="two-dimensional"):
+        r_uniquecombs_ordered(np.empty((0, 2)))
+
+
+def test_knot_sample_is_the_pinned_r_draw_prefix(r_bridge):
+    rows = np.arange(26.0).reshape(13, 2)
+    expected = r_bridge.sample_int_permutation(13, 5)[:4] - 1
+    np.testing.assert_array_equal(r_sample_knot_rows(rows, 4, 5), rows[expected])

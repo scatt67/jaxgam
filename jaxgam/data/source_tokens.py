@@ -171,3 +171,49 @@ def _r_number_text(value: Any) -> str:
     exponent_value = int(exponent)
     exponent_width = exponent_digits_minus_one + 1
     return f"{mantissa}e{exponent_value:+0{exponent_width + 1}d}"
+
+
+def r_row_token(row: Any) -> str:
+    """Return mgcv ``uniquecombs``'s label of one multi-column row.
+
+    ``paste0`` of each value's R numeric text, separated by ``"*"``.
+    """
+    return "*".join(_r_number_text(value) for value in row)
+
+
+def r_uniquecombs_ordered(x: np.ndarray) -> np.ndarray:
+    """Port the unique rows of ``uniquecombs(x, ordered=TRUE)`` in R's order.
+
+    One column follows R's ``sort(unique(x))``. Several columns are
+    deduplicated by their :func:`r_row_token` label, keeping each label's
+    first row in data order, and ordered by the labels' C-locale collation
+    (byte order), as ``uniquecombs`` does under ``Sys.setlocale("C")``.
+    Exactly equal rows always share a label, so labels are formatted once
+    per exactly unique row.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    if x.ndim != 2 or x.shape[0] == 0:
+        raise ValueError("uniquecombs needs a nonempty two-dimensional array.")
+    if x.shape[1] == 1:
+        return np.unique(x[:, 0])[:, np.newaxis]
+    exact, first_index = np.unique(x, axis=0, return_index=True)
+    first: dict[str, int] = {}
+    for row, index in zip(exact, first_index, strict=True):
+        token = r_row_token(row)
+        if token not in first or index < first[token]:
+            first[token] = int(index)
+    order = sorted(first, key=lambda token: token.encode())
+    return x[[first[token] for token in order]].copy()
+
+
+def r_sample_knot_rows(
+    unique_rows: np.ndarray, max_knots: int, seed: int
+) -> np.ndarray:
+    """Port smooth.construct.{gp,tp}'s large-data knot sample.
+
+    ``temp.seed(seed)`` (R's default RNG kinds), then
+    ``xu[sample(1:nu, max.knots, replace=FALSE), ]``: the first ``max_knots``
+    draws of ``sample.int(nu, nu)``, in draw order.
+    """
+    permutation = _r_sample_without_replacement(len(unique_rows), seed)
+    return np.asarray(unique_rows)[permutation[:max_knots]].copy()
