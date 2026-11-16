@@ -55,16 +55,20 @@ class PreparedModel:
     n_obs: int
     response: str
     fitting: FittingPreparation | None = None
+    # Prediction-state copies that can also replay source training rows; the
+    # prediction spec itself never retains training-only knot rows.
+    training_spec: predict_matrix.PredictSpec | None = None
 
     @property
     def n_coef(self) -> int:
         return self.predict_spec.total_coefs
 
     def evaluate_batch(self, batch: RowBatch) -> npt.NDArray[np.floating]:
-        """Evaluate one bounded public-coordinate design batch."""
+        """Evaluate one bounded public-coordinate training design batch."""
         if not batch.columns and self.predict_spec.has_intercept:
             return np.ones((len(batch.row_positions), self.n_coef))
-        return self.predict_spec.build_predict_matrix(dict(batch.columns))
+        spec = self.predict_spec if self.training_spec is None else self.training_spec
+        return spec.build_training_matrix(dict(batch.columns))
 
     def evaluate_fitting_batch(self, batch: RowBatch) -> npt.NDArray[np.floating]:
         """Evaluate one batch in frozen local-D fitting coordinates."""

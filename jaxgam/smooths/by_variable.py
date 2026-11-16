@@ -103,6 +103,25 @@ class FactorBySmooth:
         clone.base_smooth = self.base_smooth.copy_for_prediction()
         return clone
 
+    def copy_for_training(self) -> FactorBySmooth:
+        """Return a predict-only copy whose base can evaluate training rows."""
+        clone = self.copy_for_prediction()
+        clone.base_smooth = self.base_smooth.copy_for_training()
+        return clone
+
+    def training_matrix(
+        self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame
+    ) -> npt.NDArray[np.floating]:
+        """Compose factor blocks from the base smooth's source training rows."""
+        by_col = np.asarray(get_col(data, self.by_variable))
+        X_base = self.base_smooth.training_matrix(data)
+        X = np.zeros((len(by_col), self.n_coefs))
+        for level_idx, level in enumerate(self.levels):
+            mask = np.asarray(by_col == level)
+            col_start = level_idx * self.k_per_level
+            X[mask, col_start : col_start + self.k_per_level] = X_base[mask]
+        return X
+
     def build_design_matrix(
         self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame
     ) -> npt.NDArray[np.floating]:
@@ -337,6 +356,19 @@ class NumericBySmooth:
             clone._X = None
         clone.base_smooth = self.base_smooth.copy_for_prediction()
         return clone
+
+    def copy_for_training(self) -> NumericBySmooth:
+        """Return a predict-only copy whose base can evaluate training rows."""
+        clone = self.copy_for_prediction()
+        clone.base_smooth = self.base_smooth.copy_for_training()
+        return clone
+
+    def training_matrix(
+        self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame
+    ) -> npt.NDArray[np.floating]:
+        """Multiply the base smooth's source training rows by the by column."""
+        by_col = np.asarray(get_col(data, self.by_variable), dtype=float)
+        return by_col[:, np.newaxis] * self.base_smooth.training_matrix(data)
 
     def build_design_matrix(
         self, data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame

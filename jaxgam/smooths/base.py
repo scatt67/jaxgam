@@ -66,6 +66,26 @@ class Smooth(ABC):
                 setattr(clone, attr, None)
         return clone
 
+    def copy_for_training(self) -> Smooth:
+        """Return a predict-only copy that can still evaluate training rows.
+
+        Bounded row-replay setup evaluates the training source batch by batch.
+        Smooths whose training rows equal their prediction rows need nothing
+        beyond :meth:`copy_for_prediction`.
+        """
+        return self.copy_for_prediction()
+
+    def training_matrix(
+        self, data: dict[str, npt.NDArray[np.floating]]
+    ) -> npt.NDArray[np.floating]:
+        """Evaluate rows of the setup source in the training parameterization.
+
+        mgcv's model matrix for most bases is their prediction matrix at the
+        data. Bases whose constructor builds training rows differently
+        (thin-plate knot rows) override this; it is never a prediction route.
+        """
+        return self.predict_matrix(data)
+
     def training_design_matrix(self) -> npt.NDArray[np.floating]:
         """Return the basis constructed during :meth:`setup`.
 

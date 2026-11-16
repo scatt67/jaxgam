@@ -770,6 +770,94 @@ def test_rlanczos_keeps_leading_pairs_without_convergence(monkeypatch) -> None:
     assert vectors.shape == (len(E), 4)
 
 
+def _tprs_margin_kernel(layout: str, variable: str, k: int):
+    """Source knot kernel of one PR12 parity margin, built from runtime data."""
+    from jaxgam.smooths.tprs import TPRSSmooth, _source_tps_e_matrix
+    from tests.helpers import make_smooth_spec
+
+    rng = np.random.default_rng(92613)
+    regular = np.linspace(-1.3, 1.7, 61)
+    irregular = np.sort(rng.uniform(-1.7, 2.4, 61))
+    clustered = np.sort(np.r_[rng.normal(-1, 0.05, 30), rng.normal(1.2, 0.08, 31)])
+    values = {
+        "regular": regular,
+        "irregular": irregular,
+        "clustered": clustered,
+        "z": np.sin(np.linspace(-0.8, 2.2, 61)) + np.linspace(0, 0.1, 61),
+    }[layout if variable == "x" else "z"]
+    smooth = TPRSSmooth(make_smooth_spec([variable], bs="tp", k=k))
+    smooth.setup({variable: values})
+    return _source_tps_e_matrix(smooth._Xu, smooth._m)
+
+
+def test_tprs_rlanczos_matches_pinned_slanczos(r_bridge) -> None:
+    """The TPRS route ports mat.c::Rlanczos and its BLAS/LAPACK calls.
+
+    Against an R that links the pinned OpenBLAS 0.3.26, every Ritz pair is
+    bitwise identical. R linked to another BLAS (macOS Accelerate) reorders
+    ``dsymv``/``ddot``; there the Ritz values match at STRICT and the vectors
+    are certified through the input operator instead.
+    """
+    if r_bridge.mode != "rpy2":
+        pytest.skip("Identical-input slanczos oracle requires rpy2.")
+    pinned = r_links_pinned_openblas(r_bridge)
+    tol = np.finfo(float).eps ** 0.7
+    collector = _AssertCollector()
+    for layout, variable, k in (
+        ("regular", "x", 4),
+        ("irregular", "x", 8),
+        ("irregular", "z", 8),
+        ("clustered", "x", 6),
+        ("clustered", "x", 8),
+    ):
+        E = _tprs_margin_kernel(layout, variable, k)
+        values, vectors = source_lapack.source_lanczos(E, k, tol=tol)
+        expected = r_bridge.source_slanczos(E, k, tol)
+        label = f"{layout}/{variable}/k{k}"
+        collector.check(
+            f"{label}/values",
+            lambda values=values, expected=expected: np.testing.assert_allclose(
+                values, expected["values"], rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+        if pinned:
+            collector.check(
+                f"{label}/bitwise",
+                lambda values=values, vectors=vectors, expected=expected: (
+                    np.testing.assert_array_equal(values, expected["values"]),
+                    np.testing.assert_array_equal(vectors, expected["vectors"]),
+                ),
+            )
+        collector.check(
+            f"{label}/orthonormal Ritz vectors",
+            lambda vectors=vectors, k=k: np.testing.assert_allclose(
+                vectors.T @ vectors, np.eye(k), rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.raise_if_any("source TPRS Rlanczos")
+
+
+def test_tprs_rlanczos_keeps_leading_pairs_without_convergence(monkeypatch) -> None:
+    """A run that never certifies convergence keeps Rlanczos's m=k, lm=0."""
+    E = _tprs_margin_kernel("clustered", "x", 4)
+    original = source_lapack.source_trisymeig
+
+    def uncertified(diagonal, off_diagonal):
+        values, vectors = original(diagonal, off_diagonal)
+        vectors = vectors.copy()
+        vectors[-1, :] = 1.0  # every Ritz error bound is then |beta_j| > 0
+        return values, vectors
+
+    monkeypatch.setattr(source_lapack, "source_trisymeig", uncertified)
+    values, vectors = source_lapack.source_lanczos(E, 4, tol=np.finfo(float).tiny)
+    complete = np.sort(np.linalg.eigvalsh(E))[::-1]
+    # The leading algebraic pairs, not the largest magnitudes (E has a large
+    # negative eigenvalue that the converged selection would retain).
+    assert np.abs(complete[-1]) > np.abs(complete[3])
+    np.testing.assert_allclose(values, complete[:4], rtol=STRICT.rtol, atol=STRICT.atol)
+    assert vectors.shape == (len(E), 4)
+
+
 def test_source_trisymeig_returns_descending_tridiagonal_pairs() -> None:
     diagonal = np.array([2.0, -1.0, 3.0, 0.5])
     off_diagonal = np.array([0.3, -0.7, 0.2])

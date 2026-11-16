@@ -134,7 +134,7 @@ def _make_tensor(term, source, control):
         sums = [np.zeros(margin.n_coefs) for margin in margins]
         for batch in source.scan(control.batch_rows):
             for i, margin in enumerate(margins):
-                sums[i] += margin.predict_matrix(batch.columns).sum(axis=0)
+                sums[i] += margin.training_matrix(batch.columns).sum(axis=0)
         tensor._Z_list = [
             np.linalg.qr(C[:, None], mode="complete")[0][:, 1:] for C in sums
         ]
@@ -330,7 +330,7 @@ def prepare_modest_cubic_by(
     )
     for batch in source.scan(control.batch_rows):
         for i, base in enumerate(bases):
-            X = base.predict_matrix(batch.columns)
+            X = base.training_matrix(batch.columns)
             sums[i] += np.sum(X, axis=0)
             norms[i] = max(norms[i], float(np.max(np.sum(np.abs(X), axis=1))))
             if terms[i].by is not None and i not in levels:
@@ -417,7 +417,7 @@ def prepare_modest_cubic_by(
         if n_parametric:
             components.append(parametric.evaluate_batch(batch))
         for smooth, Z in zip(smooths, transforms, strict=True):
-            X = smooth.predict_matrix(batch.columns)
+            X = smooth.training_matrix(batch.columns)
             components.append(X if Z is None else X @ Z)
         rows = np.column_stack(components)
         if not np.all(np.isfinite(rows)):
@@ -437,24 +437,25 @@ def prepare_modest_cubic_by(
         intercept_reference=R[:, 0] if spec.has_intercept else None,
     )
     term_blocks = list(parametric_spec.coef_map.terms)
+    training_blocks = list(parametric_spec.coef_map.terms)
     offset = n_parametric
     penalty_offset = 0
     for smooth, Z, X, S, deleted in zip(
         smooths, transforms, blocks, penalties, deletions, strict=True
     ):
-        term_blocks.append(
-            TermBlock(
-                CoefficientMap.smooth_label(smooth),
-                offset,
-                X.shape[1],
-                smooth.n_coefs,
-                "smooth",
-                smooth.copy_for_prediction(),
-                tuple(range(penalty_offset, penalty_offset + len(S))),
-                Z,
-                deleted or (),
-            )
+        block = TermBlock(
+            CoefficientMap.smooth_label(smooth),
+            offset,
+            X.shape[1],
+            smooth.n_coefs,
+            "smooth",
+            smooth.copy_for_prediction(),
+            tuple(range(penalty_offset, penalty_offset + len(S))),
+            Z,
+            deleted or (),
         )
+        term_blocks.append(block)
+        training_blocks.append(replace(block, smooth=smooth.copy_for_training()))
         offset += X.shape[1]
         penalty_offset += len(S)
     coef_map = CoefficientMap(
@@ -507,7 +508,15 @@ def prepare_modest_cubic_by(
         ):
             if margin.spec.bs not in {"tp", "ts", "gp"}:
                 continue
-            for name in ("_Xu", "_UZ", "_shift", "_col_norms", "_knt", "_S"):
+            for name in (
+                "_Xu",
+                "_UZ",
+                "_shift",
+                "_col_norms",
+                "_knt",
+                "_S",
+                "_knot_rows",
+            ):
                 value = getattr(margin, name, None)
                 if isinstance(value, np.ndarray):
                     radial_retained += int(value.nbytes)
@@ -517,6 +526,10 @@ def prepare_modest_cubic_by(
         + 8 * (2 * n_penalties + 16) * (raw_width + 1) ** 2
     )
     construction = max(construction, source.peak_bound_bytes)
+    training = replace(
+        prediction,
+        coef_map=replace(coef_map, terms=tuple(training_blocks)),
+    )
     model = PreparedModel(
         prediction,
         structure,
@@ -525,5 +538,6 @@ def prepare_modest_cubic_by(
         basis.hexdigest(),
         source.n_rows,
         spec.response,
+        training_spec=training,
     )
     return model, raw_width, retained, construction

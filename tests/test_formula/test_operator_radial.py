@@ -24,7 +24,8 @@ from jaxgam.formula.operator_prepare import (
 from jaxgam.formula.parser import parse_formula
 from jaxgam.inference.operator_geometry import OperatorPredictionGeometry
 from jaxgam.smooths import source_lapack
-from tests.helpers import _AssertCollector
+from jaxgam.smooths.tprs import TPRSSmooth
+from tests.helpers import _AssertCollector, make_smooth_spec
 from tests.tolerances import (
     MODERATE,
     STRICT,
@@ -214,6 +215,64 @@ def test_random_ti_k6_retains_exact_fixture_and_narrow_moderate_basis(r_bridge) 
     np.testing.assert_allclose(
         model.penalties.materialize(),
         sum(expected["S"]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+@pytest.mark.parametrize(
+    ("layout", "k"),
+    [
+        ("regular", 4),
+        ("irregular", 4),
+        ("clustered", 4),
+        ("shifted", 4),
+        ("regular", 6),
+        ("shifted", 6),
+        ("regular", 8),
+        ("shifted", 8),
+    ],
+)
+def test_tprs_source_mean_kernel_basis_and_penalty(
+    r_bridge, layout: str, k: int
+) -> None:
+    """Source mean, knot kernel, and Ritz gauge match at stable ranks."""
+    rng = np.random.default_rng(92613)
+    regular = np.linspace(-1.3, 1.7, 61)
+    irregular = np.sort(rng.uniform(-1.7, 2.4, 61))
+    clustered = np.sort(np.r_[rng.normal(-1, 0.05, 30), rng.normal(1.2, 0.08, 31)])
+    x = {
+        "regular": regular,
+        "irregular": irregular,
+        "clustered": clustered,
+        "shifted": regular + 111.3,
+    }[layout]
+    frame = pd.DataFrame({"x": x, "y": np.cos(1.7 * x)})
+    expression = f"s(x,bs='tp',k={k})"
+    model, rows = _operator_matrix("y~0+" + expression, frame, 7)
+    expected = r_bridge.smooth_construct(expression, frame, absorb_cons=True)
+    dense_expected = r_bridge.smooth_construct(expression, frame, absorb_cons=False)
+    dense = TPRSSmooth(make_smooth_spec(["x"], bs="tp", k=k))
+    dense.setup({"x": x})
+    np.testing.assert_array_equal(dense._shift, dense_expected["shift"])
+    np.testing.assert_allclose(
+        dense.build_design_matrix({"x": x}),
+        dense_expected["X"],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    np.testing.assert_allclose(
+        dense.build_penalty_matrices()[0].S,
+        dense_expected["S"][0],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    smooth = model.modest.predict_spec.coef_map.terms[0].smooth
+    np.testing.assert_array_equal(smooth._shift, expected["shift"])
+    np.testing.assert_allclose(rows, expected["X"], rtol=STRICT.rtol, atol=STRICT.atol)
+    np.testing.assert_allclose(
+        model.penalties.materialize(),
+        expected["S"][0],
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )

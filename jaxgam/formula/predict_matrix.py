@@ -67,6 +67,15 @@ class PredictSpec:
         """Build the full constrained prediction matrix for ``newdata``."""
         return build_predict_matrix(self, newdata)
 
+    def build_training_matrix(self, data: Data) -> npt.NDArray[np.floating]:
+        """Build constrained training rows for a batch of the setup source.
+
+        Smooths evaluate :meth:`training_matrix`, mgcv's constructor model
+        matrix, rather than their prediction transform. Only setup-source
+        replay may use this; prediction always uses ``build_predict_matrix``.
+        """
+        return build_predict_matrix(self, data, training=True)
+
 
 def build_predict_spec(setup: ModelSetup) -> PredictSpec:
     """Create prediction-only state without mutating the live model setup.
@@ -99,8 +108,14 @@ def build_predict_spec(setup: ModelSetup) -> PredictSpec:
 def build_predict_matrix(
     spec: PredictSpec,
     newdata: Data,
+    *,
+    training: bool = False,
 ) -> npt.NDArray[np.floating]:
-    """Build a constrained prediction matrix from a concrete ``PredictSpec``."""
+    """Build a constrained prediction matrix from a concrete ``PredictSpec``.
+
+    ``training=True`` evaluates each smooth's source training rows instead of
+    its prediction rows; see :meth:`PredictSpec.build_training_matrix`.
+    """
     data_dict = _to_dict(newdata)
 
     if not data_dict:
@@ -140,7 +155,11 @@ def build_predict_matrix(
     for term in coef_map.terms:
         if term.term_type == "parametric":
             continue
-        X_raw = term.smooth.predict_matrix(data_dict)
+        X_raw = (
+            term.smooth.training_matrix(data_dict)
+            if training
+            else term.smooth.predict_matrix(data_dict)
+        )
         # Pass the TermBlock, not term.label: label-colliding smooths must use
         # their own Z_centering/del_index rather than the first label match.
         blocks.append(coef_map.transform_X(X_raw, term))

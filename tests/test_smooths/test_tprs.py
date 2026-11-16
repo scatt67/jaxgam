@@ -832,13 +832,13 @@ class TestCoveragePaths:
         batch_rows = 11
         monkeypatch.setattr(tprs_module, "DISTANCE_BATCH_ROWS", batch_rows)
         calls: list[int] = []
-        original = tprs_module._compute_distance_matrix
+        original = tprs_module._source_tps_rows
 
-        def recorded_distance(X1, X2):
-            calls.append(len(X1))
-            return original(X1, X2)
+        def recorded_rows(rows, knots, m):
+            calls.append(len(rows))
+            return original(rows, knots, m)
 
-        monkeypatch.setattr(tprs_module, "_compute_distance_matrix", recorded_distance)
+        monkeypatch.setattr(tprs_module, "_source_tps_rows", recorded_rows)
         x = np.linspace(0.01, 0.99, 29)
         smooth = TPRSSmooth(make_smooth_spec(["x"], k=8))
         smooth.setup({"x": x})

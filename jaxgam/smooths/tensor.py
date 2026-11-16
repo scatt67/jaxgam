@@ -66,6 +66,14 @@ class TensorProductSmooth(Smooth):
         ]
         return clone
 
+    def copy_for_training(self) -> TensorProductSmooth:
+        """Return a predict-only copy whose margins evaluate training rows."""
+        clone = self.copy_for_prediction()
+        clone._marginals = [
+            marginal.copy_for_training() for marginal in self._marginals
+        ]
+        return clone
+
     @staticmethod
     def _svd_reparameterize(
         marginal: Smooth,
@@ -402,7 +410,21 @@ class TensorProductSmooth(Smooth):
     ) -> npt.NDArray[np.floating]:
         """Build prediction matrix for new data."""
         self._require_setup()
-        matrices = [m.predict_matrix(new_data) for m in self._marginals]
+        return self._compose_margins(
+            [m.predict_matrix(new_data) for m in self._marginals]
+        )
+
+    def training_matrix(
+        self, data: dict[str, npt.NDArray[np.floating]]
+    ) -> npt.NDArray[np.floating]:
+        """Row-tensor the margins' source training rows (smoothCon's ``X``)."""
+        self._require_setup()
+        return self._compose_margins([m.training_matrix(data) for m in self._marginals])
+
+    def _compose_margins(
+        self, matrices: list[npt.NDArray[np.floating]]
+    ) -> npt.NDArray[np.floating]:
+        """Apply stored margin reparameterizations and form the row tensor."""
         for j, XP in enumerate(self._XP_list):
             if XP is not None:
                 matrices[j] = matrices[j] @ XP
@@ -559,12 +581,13 @@ class TensorInteractionSmooth(TensorProductSmooth):
         constraint absorption and SVD reparameterization to new data.
         """
         self._require_setup()
-        X_list_raw = [m.predict_matrix(new_data) for m in self._marginals]
-        matrices = []
-        for j, (X, Z) in enumerate(zip(X_list_raw, self._Z_list, strict=True)):
-            X_j = X @ Z
-            XP = self._XP_list[j]
-            if XP is not None:
-                X_j = X_j @ XP
-            matrices.append(X_j)
-        return self._build_tensor_design(matrices)
+        return self._compose_margins(
+            [m.predict_matrix(new_data) for m in self._marginals]
+        )
+
+    def _compose_margins(
+        self, matrices: list[npt.NDArray[np.floating]]
+    ) -> npt.NDArray[np.floating]:
+        """Absorb margin constraints, reparameterize and form the row tensor."""
+        constrained = [X @ Z for X, Z in zip(matrices, self._Z_list, strict=True)]
+        return super()._compose_margins(constrained)

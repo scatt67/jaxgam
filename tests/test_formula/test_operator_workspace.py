@@ -83,14 +83,22 @@ def test_radial_workspace_is_knot_aware_and_rejects_before_evaluation(
     assert old_width_only_bound == 4080
     expected = model.evaluate_batch(next(source.scan(7))).modest_values
     calls = 0
-    original = type(smooth).predict_matrix
 
-    def observed(self, data):
-        nonlocal calls
-        calls += 1
-        return original(self, data)
+    def observe(name: str) -> None:
+        original = getattr(type(smooth), name)
 
-    monkeypatch.setattr(type(smooth), "predict_matrix", observed)
+        def observed(self, data):
+            nonlocal calls
+            calls += 1
+            return original(self, data)
+
+        monkeypatch.setattr(type(smooth), name, observed)
+
+    # Training replay evaluates constructor rows; thin-plate smooths own their
+    # knot rows, while other radial smooths train on their prediction rows.
+    observe("predict_matrix")
+    if isinstance(smooth, TPRSSmooth):
+        observe("training_matrix")
     batch = next(source.scan(7))
     with pytest.raises(MemoryError, match="workspace"):
         model.evaluate_batch(batch, available_workspace_bytes=old_width_only_bound)
@@ -169,6 +177,7 @@ def test_setup_stats_reject_radial_scratch_before_predictor(monkeypatch) -> None
         pytest.fail("Radial predictor ran before prospective setup rejection.")
 
     monkeypatch.setattr(TPRSSmooth, "predict_matrix", forbidden)
+    monkeypatch.setattr(TPRSSmooth, "training_matrix", forbidden)
     with pytest.raises(MemoryError):
         operator_radial._stream_design_stats(smooth, checked, control, rms=True)
     assert calls == 0
@@ -202,6 +211,7 @@ def test_by_tensor_radial_workspace_rejects_before_any_margin(
         pytest.fail("A radial margin ran before the model workspace preflight.")
 
     monkeypatch.setattr(TPRSSmooth, "predict_matrix", forbidden)
+    monkeypatch.setattr(TPRSSmooth, "training_matrix", forbidden)
     monkeypatch.setattr(GaussianProcessSmooth, "predict_matrix", forbidden)
     with pytest.raises(MemoryError, match="workspace"):
         model.evaluate_batch(

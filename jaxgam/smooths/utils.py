@@ -22,6 +22,39 @@ from scipy.spatial.distance import cdist
 DISTANCE_BATCH_ROWS = 8192
 
 
+class _SourceMeanAccumulator:
+    """Reproduce R's two-pass column mean with O(number of columns) state."""
+
+    def __init__(self, columns: int) -> None:
+        self._sum = np.zeros(columns, dtype=np.longdouble)
+        self._mean: npt.NDArray[np.longdouble] | None = None
+        self._correction: npt.NDArray[np.longdouble] | None = None
+        self.count = 0
+
+    def add_first(self, row: npt.ArrayLike) -> None:
+        self._sum += np.asarray(row, dtype=np.longdouble)
+        self.count += 1
+
+    def begin_correction(self) -> None:
+        if self.count == 0:
+            raise ValueError("Cannot calculate a source mean without rows.")
+        self._mean = self._sum / np.longdouble(self.count)
+        self._correction = np.zeros_like(self._sum)
+
+    def add_correction(self, row: npt.ArrayLike) -> None:
+        if self._mean is None or self._correction is None:
+            raise RuntimeError("Begin the source mean correction before adding rows.")
+        self._correction += np.asarray(row, dtype=np.longdouble) - self._mean
+
+    def result(self) -> npt.NDArray[np.float64]:
+        if self.count == 0:
+            raise ValueError("Cannot calculate a source mean without rows.")
+        mean = self._sum / np.longdouble(self.count)
+        if self._correction is not None:
+            mean += self._correction / np.longdouble(self.count)
+        return np.asarray(mean, dtype=np.float64)
+
+
 def is_factor(col: pd.Series | npt.NDArray) -> bool:
     """Detect whether a column should be treated as a factor.
 

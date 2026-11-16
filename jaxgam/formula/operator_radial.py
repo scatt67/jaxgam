@@ -26,13 +26,12 @@ from jaxgam.smooths.tprs import (
     TPRSShrinkageSmooth,
     TPRSSmooth,
     _default_k,
-    _null_space_basis_r,
-    compute_polynomial_basis,
+    _source_tprs_knot_basis,
+    _SourceColumnSquares,
     default_penalty_order,
     null_space_dimension,
-    tps_semi_kernel,
 )
-from jaxgam.smooths.utils import _compute_distance_matrix
+from jaxgam.smooths.utils import _SourceMeanAccumulator
 
 if TYPE_CHECKING:
     from jaxgam.formula.operator_prepare import (
@@ -117,8 +116,12 @@ def _collect_rows(
     *,
     max_knots: int,
     seed: int,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """Collect bounded source-equivalent knots and the full-source shift."""
+) -> tuple[np.ndarray, np.ndarray, int, bool]:
+    """Collect bounded source-equivalent knots and the full-source shift.
+
+    The final flag reports whether the knots were sampled, i.e. supplied to
+    tprs_setup as ``knt`` rather than taken as the data's unique rows.
+    """
     from jaxgam.formula.operator_prepare import _check_budget
 
     d = len(spec.variables)
@@ -129,8 +132,7 @@ def _collect_rows(
         {} if spec.bs == "gp" or source.n_rows > max_knots else None
     )
     retained = sys.getsizeof(exact) + (sys.getsizeof(token) if token is not None else 0)
-    sums = np.zeros(d, dtype=np.longdouble)
-    count = 0
+    source_mean = _SourceMeanAccumulator(d)
     peak = base_reserved + retained
     for batch in source.scan(control.batch_rows):
         columns = []
@@ -145,12 +147,31 @@ def _collect_rows(
             columns.append(values)
         for local in range(len(batch.row_positions)):
             row = tuple(float(values[local]) for values in columns)
-            sums += np.asarray(row, dtype=np.longdouble)
-            count += 1
+            source_mean.add_first(row)
         del batch, columns
-    if count != source.n_rows:
+    if source_mean.count != source.n_rows:
         raise RuntimeError("Radial smooth source count changed during setup.")
-    shift = np.asarray(sums / np.longdouble(count), dtype=np.float64)
+    if spec.bs in {"tp", "ts"}:
+        # R's mean.default corrects the extended-precision first-pass mean
+        # with a second pass over x - mean(x). A one-ULP shift can change
+        # Lanczos Ritz signs and therefore the tensor penalty scale.
+        # Reserve the O(d) accumulator, row conversion, and column references
+        # so the replay scan's per-row preflight includes this live workspace.
+        correction_bytes = 128 * d + 256
+        _check_budget(source.reserved_bytes + correction_bytes, control)
+        source.reserved_bytes += correction_bytes
+        try:
+            source_mean.begin_correction()
+            for batch in source.scan(control.batch_rows):
+                columns = [
+                    np.asarray(batch.columns[name], dtype=np.float64)
+                    for name in spec.variables
+                ]
+                for local in range(len(batch.row_positions)):
+                    source_mean.add_correction(tuple(col[local] for col in columns))
+        finally:
+            source.reserved_bytes -= correction_bytes
+    shift = source_mean.result()
     # smooth.construct.tp centers before uniquecombs; GP harvests unique rows
     # before centering. The distinction changes R's formatted joint-row order.
     for batch in source.scan(control.batch_rows):
@@ -219,7 +240,8 @@ def _collect_rows(
         base_reserved + materialize + _setup_bytes(len(rows), d, k, control.batch_rows),
     )
     unique = np.asarray(rows, dtype=np.float64)
-    if source.n_rows > max_knots and len(unique) > max_knots:
+    sampled = source.n_rows > max_knots and len(unique) > max_knots
+    if sampled:
         permutation = _r_sample_without_replacement(len(unique), seed)
         unique = unique[permutation[:max_knots]].copy()
     if spec.bs in {"tp", "ts"}:
@@ -228,7 +250,7 @@ def _collect_rows(
         order = np.lexsort(tuple(unique[:, j] for j in reversed(range(d))))
         unique = unique[order].copy()
     source.reserved_bytes = base_reserved + int(unique.nbytes) + shift.nbytes
-    return unique, shift, peak
+    return unique, shift, peak, sampled
 
 
 def _stream_design_stats(
@@ -248,15 +270,16 @@ def _stream_design_stats(
     source.peak_bound_bytes = max(
         source.peak_bound_bytes, source.reserved_bytes + workspace
     )
-    sumsq = np.zeros(smooth.n_coefs)
+    squares = _SourceColumnSquares(smooth.n_coefs)
     infinity = 0.0
     for batch in source.scan(control.batch_rows):
-        rows = smooth.predict_matrix(batch.columns)
-        sumsq += np.sum(rows * rows, axis=0)
+        rows = smooth.training_matrix(batch.columns)
+        squares.add(rows)
         infinity = max(infinity, float(np.max(np.sum(np.abs(rows), axis=1))))
         del rows, batch
-    scales = np.sqrt(sumsq / source.n_rows) if rms else np.ones(smooth.n_coefs)
-    scales[scales == 0] = 1.0
+    if squares.count != source.n_rows:
+        raise RuntimeError("Radial smooth source count changed during setup.")
+    scales = squares.scales() if rms else np.ones(smooth.n_coefs)
     return scales, infinity
 
 
@@ -267,7 +290,7 @@ def prepare_radial_smooth(
 ) -> tuple[TPRSSmooth | GaussianProcessSmooth, int]:
     """Prepare one frozen TP/TS/GP evaluator without retaining training rows."""
     max_knots, seed = _radial_options(spec)
-    knots, shift, peak = _collect_rows(
+    knots, shift, peak, sampled = _collect_rows(
         spec, source, control, max_knots=max_knots, seed=seed
     )
     d = len(spec.variables)
@@ -279,44 +302,39 @@ def prepare_radial_smooth(
         null = null_space_dimension(d, order)
         k = radial_width(spec)
         centered = knots - shift
-        E = tps_semi_kernel(_compute_distance_matrix(centered, centered), order, d)
-        T = compute_polynomial_basis(centered, order)
-        lanczos_live = centered.nbytes + E.nbytes + T.nbytes
-        available = control.memory_budget_bytes - source.reserved_bytes - lanczos_live
-        values, vectors = source_lanczos(
-            E,
-            k,
-            available_workspace_bytes=max(available, 0),
+        available = (
+            control.memory_budget_bytes - source.reserved_bytes - centered.nbytes
         )
-        Z = _null_space_basis_r(T.T @ vectors)
+        # The dense constructor and this bounded replay share tprs_setup.
+        basis = _source_tprs_knot_basis(
+            centered, order, k, available_workspace_bytes=max(available, 0)
+        )
         rank = k - null
-        UZ = np.zeros((len(centered) + null, k))
-        UZ[: len(centered), :rank] = vectors @ Z
-        UZ[len(centered) :, rank:] = np.eye(null)
-        S = np.zeros((k, k))
-        S[:rank, :rank] = Z.T @ np.diag(values) @ Z
         smooth._d = d
         smooth._m = order
         smooth._M = null
         smooth._k = k
         smooth._shift = shift
         smooth._Xu = centered
-        smooth._UZ = UZ
+        # Unscaled training rows and UZ give tprs_setup's column statistics.
+        smooth._UZ = basis.UZ
+        smooth._knots_from_data = not sampled and basis.knot_rows is not None
+        smooth._knot_rows = basis.knot_rows if smooth._knots_from_data else None
         smooth.n_coefs = k
         smooth.rank = rank
         smooth.null_space_dim = null
         smooth._is_setup = True
-        del E, T, values, vectors, Z, knots
+        del knots
         retained = sum(
-            int(value.nbytes) for value in (smooth._Xu, smooth._UZ, smooth._shift, S)
+            int(value.nbytes)
+            for value in (smooth._Xu, basis.UZ, smooth._shift, basis.S)
+            + ((basis.knot_rows,) if basis.knot_rows is not None else ())
         )
         source.reserved_bytes += retained
         source.peak_bound_bytes = max(source.peak_bound_bytes, peak)
         scales, _ = _stream_design_stats(smooth, source, control, rms=True)
-        smooth._UZ = UZ / scales[np.newaxis, :]
-        S = S / np.outer(scales, scales)
-        smooth._col_norms = scales
-        smooth._S = smooth._apply_shrinkage((S + S.T) * 0.5)
+        smooth._apply_source_scaling(basis, scales, smooth._knots_from_data)
+        smooth._S = smooth._apply_shrinkage(smooth._S)
         if spec.bs == "ts":
             smooth.rank = k
             smooth.null_space_dim = 0
