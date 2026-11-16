@@ -1331,3 +1331,56 @@ def test_exact_input_ill_conditioned_fit_is_closer_to_the_truth_than_r(
         ),
     )
     collector.raise_if_any("exact-input ill-conditioned fit")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_qr_route_additive_disparate_sp_matches_pinned_r(r_bridge) -> None:
+    """Two smooths whose log sp differ by up to 50 stay STRICT on the QR route.
+
+    Each penalty keeps its own exp(rho/2)-scaled root rows (never summed), so
+    an exp(40) penalty cannot swamp an exp(0) or exp(-20) one.
+    """
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
+
+    rng = np.random.default_rng(31)
+    x, z = rng.uniform(0.0, 1.0, (2, 200))
+    y = (
+        np.sin(2 * np.pi * x)
+        + 0.5 * np.cos(3 * z)
+        + 0.4 * x * z
+        + rng.normal(0.0, 0.3, 200)
+    )
+    data = pd.DataFrame({"x": x, "z": z, "y": y})
+    formula = "y ~ s(x, bs='cr', k=8) + s(z, bs='cr', k=6)"
+    fd = FittingData.from_setup(
+        ModelSetup.build(parse_formula(formula), data), Gaussian()
+    )
+    assert fd.penalty_roots is not None
+    collector = _AssertCollector()
+    for log_sp in ((40.0, 0.0), (0.0, 40.0), (40.0, 40.0), (-20.0, 30.0)):
+        sp = np.exp(np.asarray(log_sp))
+        with contextlib.redirect_stdout(io.StringIO()):
+            reference = r_bridge.fit_fixed_sp(
+                formula, data, "gaussian", sp, with_uncertainty=True
+            )
+        fit = GAM(formula, sp=list(sp)).fit(data)
+        _, link_se = fit.predict(data, pred_type="link", se_fit=True)
+        label = f"log sp {log_sp}"
+        for name, actual, expected in (
+            ("coefficients", fit.coefficients, reference["coefficients"]),
+            ("fitted", fit.fitted_values, reference["fitted_values"]),
+            ("deviance", fit.deviance, reference["deviance"]),
+            ("score", fit.score, reference["score"]),
+            ("scale", fit.scale, reference["scale"]),
+            ("Vp", fit.Vp, reference["Vp"]),
+            ("link_se", link_se, reference["link_se"]),
+        ):
+            collector.check(
+                f"{label}: {name}",
+                lambda actual=actual, expected=expected: _assert_strict(
+                    actual, expected
+                ),
+            )
+        _assert_hard_gates(fit, label, collector, must_converge=reference["converged"])
+    collector.raise_if_any("QR route, additive disparate sp")
