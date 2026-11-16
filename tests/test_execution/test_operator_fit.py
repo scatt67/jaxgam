@@ -1314,7 +1314,8 @@ def test_working_snapshot_owns_beta_summary_and_validates_cached_dispatch():
         FrozenOperatorWorkingState(model, Gaussian(), np.full(2, np.nan), 1024, 1024)
 
 
-def test_noncanonical_outer_iteration_limit_keeps_finite_last_accepted_fit():
+@pytest.mark.parametrize("family", [Poisson(), Gaussian(link=LogLink())])
+def test_nonconstant_outer_iteration_limit_keeps_finite_last_accepted_fit(family):
     frame = pd.DataFrame(
         {"y": np.resize([1.0, 2.0, 3.0], 31), "x": np.linspace(-1, 1, 31)}
     )
@@ -1325,7 +1326,7 @@ def test_noncanonical_outer_iteration_limit_keeps_finite_last_accepted_fit():
     fitted = fit_operator_fixed_sp(
         model,
         source,
-        Poisson(),
+        family,
         np.empty(0),
         control=OperatorControl(max_iterations=1),
         memory_budget_bytes=8 * 1024 * 1024,

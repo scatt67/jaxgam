@@ -102,6 +102,11 @@ class FamilyExecutionCapabilities:
     coefficient_system: Literal["fisher", "observed"] = "fisher"
     fisher_equals_observed_for_score: bool = False
     regular_fletcher_scale: bool = False
+    # gam.fit3's strictly additive working system (gam.fit3.r:227-228,445):
+    # curvature is independent of beta at fixed prior weights, so the first
+    # accepted coefficient solve is final. This is stricter than
+    # Fisher==observed: canonical Poisson/binomial still update their weights
+    # with the mean at each PIRLS iteration.
     single_step_pirls: bool = False
     initial_alpha_resolution: Literal[
         "no_known_resolution_gap", "unresolved_near_zero"

@@ -13,7 +13,7 @@ from jaxgam.fitting.family_execution import (
     FamilyExecutionParameters,
 )
 from jaxgam.fitting.operator_family import operator_family_rows
-from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
+from jaxgam.links.links import IdentityLink, InverseLink, LogLink, SqrtLink
 from tests.helpers import _AssertCollector
 from tests.tolerances import STRICT
 
@@ -248,7 +248,31 @@ def test_fixed_theta_observed_rows_match_pinned_ddeta_and_wz(r_bridge, link_name
     collector.raise_if_any("pinned NB observed row system")
 
 
-def test_strictly_additive_information_is_owned_by_family_capabilities():
-    assert Gaussian().execution_capabilities().single_step_pirls
-    assert not Gaussian(link=LogLink()).execution_capabilities().single_step_pirls
-    assert not Poisson().execution_capabilities().single_step_pirls
+@pytest.mark.parametrize(
+    ("family", "response", "constant"),
+    [
+        (Gaussian(), 1.5, True),
+        (Gaussian(link=LogLink()), 1.5, False),
+        (Gaussian(link=InverseLink()), 1.5, False),
+        (Poisson(), 2.0, False),
+        (Binomial(), 0.5, False),
+        (Gamma(), 1.5, False),
+        (Gamma(link=LogLink()), 1.5, False),
+        (NegativeBinomial(theta=2.0, fixed=True), 2.0, False),
+    ],
+)
+def test_single_step_capability_matches_actual_row_curvature(
+    family, response, constant
+):
+    """One-step convergence is certified only where curvature ignores beta."""
+    capability = family.execution_capabilities()
+    assert capability.single_step_pirls is constant
+    first = float(_rows(family, [0.4], [response]).observed_weight[0])
+    second = float(_rows(family, [0.9], [response]).observed_weight[0])
+    if constant:
+        np.testing.assert_allclose(first, second, rtol=STRICT.rtol, atol=STRICT.atol)
+    else:
+        assert not np.isclose(first, second, rtol=STRICT.rtol, atol=STRICT.atol)
+    if isinstance(family, (Poisson, Binomial)):
+        assert capability.fisher_equals_observed_for_score
+        assert not capability.single_step_pirls
