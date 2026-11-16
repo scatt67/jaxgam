@@ -1096,6 +1096,10 @@ class OperatorFitResult:
         object.__setattr__(self, "coefficients", beta)
 
 
+#: Residual refinements of a strictly additive (single-step) operator solve.
+_STRICTLY_ADDITIVE_REFINEMENTS = 3
+
+
 def _remaining_memory(budget: int, reserved: int) -> int:
     if reserved >= budget:
         raise MemoryError(
@@ -1373,6 +1377,53 @@ def fit_operator_fixed_sp(
         solves += 1
         candidate = solved.solution.copy()
         del solved, rhs, working
+        if context.capabilities.single_step_pirls:
+            # A strictly additive system is solved once, so this solution is
+            # final. Refine it against its true residual, reduced row by row
+            # at the frozen state as -(X'(half gradient) + S beta); the
+            # normal-form action b - H beta loses that residual to cancellation.
+            for _ in range(_STRICTLY_ADDITIVE_REFINEMENTS):
+                residual_state = state(candidate)
+                residual = -_reduce_rhs(
+                    residual_state,
+                    counted,
+                    reserved=reserve,
+                    budget=memory_budget_bytes,
+                    gradient=True,
+                )
+                residual -= np.asarray(
+                    system._penalty(
+                        system._penalties, residual_state.beta_device, system._rho
+                    )
+                )
+                rhs_scans += 1
+                del residual_state
+                correction = system.solve(
+                    residual,
+                    control=PCGControl(
+                        rtol=control.cg_rtol,
+                        atol=control.cg_atol,
+                        max_iterations=control.cg_max_iterations,
+                    ),
+                )
+                actions += correction.matvec_count
+                diagnostics.normal_actions += correction.matvec_count
+                iterations += correction.iterations
+                peak = max(
+                    peak,
+                    extra
+                    + system.action_peak_bound_bytes
+                    + correction.additional_peak_bound_bytes,
+                )
+                step = correction.solution
+                del correction, residual
+                if not np.all(np.isfinite(step)):
+                    break
+                candidate = candidate + step
+                if np.max(np.abs(step), initial=0.0) <= np.finfo(float).eps * np.max(
+                    np.abs(candidate), initial=0.0
+                ):
+                    break
         trial = state(candidate)
         divergence = 10 * (0.1 + abs(old_objective)) * np.sqrt(np.finfo(float).eps)
         for halving in range(101):

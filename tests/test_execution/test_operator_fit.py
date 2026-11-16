@@ -1336,3 +1336,93 @@ def test_nonconstant_outer_iteration_limit_keeps_finite_last_accepted_fit(family
     assert "Maximum" in fitted.convergence_info
     assert np.all(np.isfinite(fitted.coefficients))
     assert np.isfinite(fitted.deviance)
+
+
+def _exact_penalized_wls(X, S, weights, response):
+    """Exact rational solution of (X'WX + S) beta = X'W r for float64 inputs."""
+    from fractions import Fraction
+
+    p = X.shape[1]
+    system = [[Fraction(float(S[a, b])) for b in range(p)] for a in range(p)]
+    rhs = [Fraction(0)] * p
+    for row, weight, value in zip(X, weights, response, strict=True):
+        weight = Fraction(float(weight))
+        if weight == 0:
+            continue
+        row = [Fraction(float(entry)) for entry in row]
+        value = Fraction(float(value))
+        for a in range(p):
+            rhs[a] += weight * row[a] * value
+            for b in range(p):
+                system[a][b] += weight * row[a] * row[b]
+    augmented = [system[a] + [rhs[a]] for a in range(p)]
+    for column in range(p):
+        pivot = max(range(column, p), key=lambda k: abs(augmented[k][column]))
+        augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+        for k in range(p):
+            if k != column and augmented[k][column] != 0:
+                factor = augmented[k][column] / augmented[column][column]
+                augmented[k] = [
+                    augmented[k][j] - factor * augmented[column][j]
+                    for j in range(p + 1)
+                ]
+    return np.array([float(augmented[a][p] / augmented[a][a]) for a in range(p)])
+
+
+def test_strictly_additive_solve_is_refined_to_the_exact_solution():
+    """The single Gaussian identity solve is refined on its true residual.
+
+    With one-row batches the frozen normal-form reductions alone left the
+    PCG solution 2.3e-12 from the exact solution (cond 3.3e4, 1.25x STRICT).
+    Residual refinement reaches it at STRICT for every batch size.
+    """
+    x = np.linspace(-1, 1, 53)
+    frame = pd.DataFrame(
+        {
+            "x": x,
+            "z": 1.2 + x**2,
+            "g": pd.Categorical(np.resize(["g1", "g2"], len(x))),
+            "y": 1.0 + 0.2 * np.sin(x),
+            "w": np.linspace(0.6, 1.4, len(x)),
+            "o": 0.01 * x,
+        }
+    )
+    frame.loc[::7, "w"] = 0.0
+    formula = "y~s(g,bs='re')+s(x,bs='cr',k=5,by=z)"
+    sp = np.array([0.8, 1.2])
+    setup = ModelSetup.build(parse_formula(formula), frame)
+    exact = _exact_penalized_wls(
+        np.asarray(setup.X),
+        np.asarray(setup.penalties.materialize(np.log(sp))),
+        frame.w.to_numpy(),
+        (frame.y - frame.o).to_numpy(),
+    )
+    collector = _AssertCollector()
+    for B in (1, 7, 19):
+        source = DataFrameRowSource(
+            frame, response="y", weights=frame.w, offset=frame.o
+        )
+        model = prepare_operator_model(
+            parse_formula(formula),
+            source,
+            control=OperatorPreparationControl(batch_rows=B),
+        )
+        fitted = fit_operator_fixed_sp(
+            model,
+            source,
+            Gaussian(),
+            sp,
+            control=OperatorControl(cg_rtol=1e-13, cg_atol=1e-14),
+            memory_budget_bytes=64 * 1024 * 1024,
+        )
+        assert fitted.converged
+        # One RHS, at least one residual refinement and the final gradient.
+        assert fitted.diagnostics.rhs_scans >= 3
+        assert fitted.diagnostics.completed_solves == 1
+        collector.check(
+            f"B{B}",
+            lambda fitted=fitted: np.testing.assert_allclose(
+                fitted.coefficients, exact, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.raise_if_any("refined strictly additive operator solve")
