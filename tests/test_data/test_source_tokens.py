@@ -114,3 +114,45 @@ def test_sample_int_matches_pinned_r_draws(r_bridge, size, count):
     np.testing.assert_array_equal(_r_sample_int(size, count, 11), expected)
     with pytest.raises(ValueError, match="count"):
         _r_sample_int(3, 4, 1)
+
+
+def _adversarial_doubles() -> np.ndarray:
+    """A few thousand doubles where R's 15-digit labels are hardest to port."""
+    rng = np.random.default_rng(20261116)
+    ties = []
+    for _ in range(600):
+        # Decimal values with a 5 in the 16th significant digit, and their
+        # neighbouring doubles: 15-digit rounding ties in every direction.
+        mantissa = rng.integers(10**14, 10**15)
+        exponent = int(rng.integers(-20, 25))
+        value = float(f"{mantissa}5e{exponent - 15}")
+        ties += [value, np.nextafter(value, 0), np.nextafter(value, np.inf)]
+    large = [1e15, 1e15 - 1, 1e15 + 1, 999999999999999.5, 2.0**53, 2.0**53 + 2]
+    large += [1e16, 1e21, 1e22, 1e23, 8956883870379507.0, 1.7976931348623157e308]
+    subnormal = [5e-324, 1e-320, 2.2250738585072009e-308, 2.2250738585072014e-308]
+    subnormal += [1e-310, 4.9406564584124654e-324 * 12345]
+    powers = 10.0 ** np.arange(-300, 300, 7, dtype=float)
+    scattered = rng.uniform(-1, 1, 1500) * 10.0 ** rng.integers(-30, 30, 1500)
+    values = np.concatenate(
+        [
+            ties,
+            large,
+            subnormal,
+            powers,
+            np.nextafter(powers, 0),
+            np.nextafter(powers, np.inf),
+            scattered,
+            np.round(rng.normal(0, 100, 300), 3),
+        ]
+    )
+    return np.concatenate([values, -values])
+
+
+def test_number_labels_match_pinned_r_paste0(r_bridge):
+    """Both label ports equal R's own paste0 text, incl. long-double branches."""
+    if r_bridge.mode != "rpy2":
+        pytest.skip("R label oracle requires rpy2.")
+    values = _adversarial_doubles()
+    expected = r_bridge.paste0_number_labels(values)
+    assert _r_number_texts(values) == expected
+    assert [_r_number_text(float(value)) for value in values] == expected

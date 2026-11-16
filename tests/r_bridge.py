@@ -1461,6 +1461,19 @@ class RBridge:
         with self._preserved_r_seed(seed):
             return _r_array(self._base.sample_int(size, size), dtype=np.int64)
 
+    def paste0_number_labels(self, values: np.ndarray) -> list[str]:
+        """Pinned R ``paste0(x)`` labels of a double vector (uniquecombs' text).
+
+        R formats each double with ``as.character``'s 15 significant digits,
+        the representation ``uniquecombs`` sorts and deduplicates rows by.
+        """
+        self._require_rpy2()
+        array = np.asarray(values, dtype=np.float64)
+        if array.ndim != 1:
+            raise ValueError("Label oracle input must be one-dimensional.")
+        labels = self._base.paste0(self._to_r_vector(array))
+        return [str(label) for label in labels]
+
     def sample_int_draws(self, size: int, count: int, seed: int) -> np.ndarray:
         """Pinned R ``sample.int(size, count)`` (one-based) after ``set.seed``.
 
