@@ -459,3 +459,42 @@ def test_public_operator_efs_rejects_shapes_outside_calibration_before_efs(edge)
         ),
     )
     assert source.scans == preparation.scans == prepared.started_preparation_scans
+
+
+def test_public_operator_efs_without_admitted_bound_is_not_converged(monkeypatch):
+    """An unbounded score comparison stops truthfully on the public result."""
+    import jaxgam.execution.operator_efs_controller as controller
+
+    monkeypatch.setattr(
+        controller,
+        "admitted_operator_efs_score_bound",
+        lambda *_args: (None, "unavailable"),
+    )
+    frame = _indexed_poisson_frame(300, 2, 5408)
+    fitted = GAM(
+        "y~0+s(g,bs='re')",
+        family="poisson",
+        optimizer="efs",
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=64,
+            operator=OperatorControl(tolerance=1e-11, cg_rtol=1e-13, cg_atol=1e-15),
+        ),
+    ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
+    assert not fitted.converged
+    assert fitted.convergence_info == "indeterminate_score"
+    assert fitted.score_error_bound is None
+    assert fitted.score_bound_method == "unavailable"
+    assert fitted.lambda_strategy == "efs_reml"
+    assert np.isfinite(fitted.score)
+    # The last accepted state is the shifted start: no trial was accepted.
+    np.testing.assert_allclose(
+        np.log(fitted.smoothing_params),
+        efs_initial_log_lambda(
+            ModelSetup.build(parse_formula("y~0+s(g,bs='re')"), frame), Poisson()
+        )
+        + 2.5,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
