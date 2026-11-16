@@ -198,6 +198,19 @@ def test_discrete_fixed_sp_reports_supplied_values(family):
     _assert_verbatim(result, SUPPLIED)
 
 
+@pytest.mark.parametrize("family", ["gaussian", "nb_fixed"])
+def test_operator_fixed_sp_reports_supplied_values(family):
+    frame, weights, offset = _frame(_data_family(family))
+    source = DataFrameRowSource(frame, response="y", weights=weights, offset=offset)
+    result = GAM(
+        FORMULA,
+        family=_FAMILIES[family](),
+        sp=list(SUPPLIED),
+        control=FitControl(execution="operator", linear_solver="pcg", batch_rows=48),
+    ).fit(source, result="prediction")
+    _assert_verbatim(result, SUPPLIED)
+
+
 def test_single_penalty_scalar_sp_is_reported_verbatim():
     """A scalar sp for a one-penalty model, as in the CI refit."""
     frame, weights, offset = _frame("gamma")

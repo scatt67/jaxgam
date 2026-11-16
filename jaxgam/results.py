@@ -625,7 +625,7 @@ class GAMPredictionResult:
             score=None,
             scale=1.0 if fitted.family.scale_known else None,
             theta=theta,
-            smoothing_params=sp,
+            smoothing_params=_report_smoothing_params(sp, sp),
             edf_total=None,
             converged=fitted.converged,
             n_iter=fitted.n_iter,
