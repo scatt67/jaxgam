@@ -81,13 +81,16 @@ def _fisher_provider(frame, formula, family, sp, *, scale=1.0, probes=32, seed=1
 
 @pytest.mark.parametrize("family", [Gaussian(), Poisson()])
 def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, family):
+    # Branch on the family class: a name literal ("Gaussian" against the
+    # reported "gaussian") previously left both Gaussian branches dead.
+    gaussian = isinstance(family, Gaussian)
     row = np.arange(47)
     x = np.linspace(0.1, 1.4, len(row))
     frame = pd.DataFrame(
         {
             "y": (
                 1.3 + np.sin(2 * x) + 0.1 * np.cos(row)
-                if family.family_name == "Gaussian"
+                if gaussian
                 else np.resize([1, 3, 2, 4, 2, 5], len(row))
             ),
             "x": x,
@@ -126,7 +129,7 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
     assert provider.diagnostics.calibration_source_scans == (
         calibration.selected_source_scans
     )
-    if family.family_name == "Gaussian":
+    if gaussian:
         # Multiple independent seeds must calibrate against the same pinned
         # oracle; one favorable random draw is not the acceptance evidence.
         for held_out_seed in (9157, 27182, 31415):
