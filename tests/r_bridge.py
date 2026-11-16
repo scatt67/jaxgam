@@ -321,6 +321,23 @@ class SourceWorkingPenaltyBlock:
 
 
 @dataclass(frozen=True)
+class SourceStableReparam:
+    """Pinned ``mgcv:::gam.reparam(rS, lsp, deriv)`` for one penalty block.
+
+    ``det1``/``det2`` are ``None`` when ``deriv`` is below 1/2, as in R.
+    """
+
+    S: np.ndarray
+    E: np.ndarray
+    Qs: np.ndarray
+    rS: tuple[np.ndarray, ...]
+    det: float
+    det1: np.ndarray | None
+    det2: np.ndarray | None
+    fixed_penalty: bool
+
+
+@dataclass(frozen=True)
 class SourceWorkingModelState:
     """Pinned ``Sl.fitChol`` inputs after ``Sl.initial.repara``."""
 
@@ -1023,6 +1040,58 @@ class RBridge:
                 )
             )
         return np.asarray(values, dtype=np.float64)
+
+    def source_gam_reparam(
+        self,
+        roots: list[np.ndarray] | tuple[np.ndarray, ...],
+        log_smoothing: np.ndarray,
+        deriv: int,
+    ) -> SourceStableReparam:
+        """Call pinned ``gam.reparam`` (``C_get_stableS``) on identical roots.
+
+        ``roots`` are the ``q`` by ``r_j`` penalty square roots of one block,
+        one per log smoothing parameter and optionally one trailing fixed
+        root; R detects the fixed root from the length mismatch.
+        """
+        from rpy2 import rinterface
+
+        self._require_rpy2()
+        rho = np.asarray(log_smoothing, dtype=np.float64)
+        matrices = [np.asarray(root, dtype=np.float64) for root in roots]
+        if (
+            rho.ndim != 1
+            or not matrices
+            or len(matrices) not in (len(rho), len(rho) + 1)
+            or deriv not in (0, 1, 2)
+            or any(root.ndim != 2 for root in matrices)
+            or any(root.shape[0] != matrices[0].shape[0] for root in matrices)
+            or not all(np.all(np.isfinite(value)) for value in [rho, *matrices])
+        ):
+            raise ValueError("gam.reparam oracle inputs are invalid")
+        reparam = self._call_internal(
+            "gam.reparam",
+            rinterface.ListSexpVector([self._to_r_matrix(root) for root in matrices]),
+            self._to_r_vector(rho),
+            int(deriv),
+        )
+
+        def optional(name: str) -> np.ndarray | None:
+            value = reparam.rx2(name)
+            if bool(self._base.is_null(value)[0]):
+                return None
+            return _r_array(value, dtype=np.float64)
+
+        det2 = optional("det2")
+        return SourceStableReparam(
+            S=_r_array(reparam.rx2("S"), dtype=np.float64),
+            E=_r_array(reparam.rx2("E"), dtype=np.float64),
+            Qs=_r_array(reparam.rx2("Qs"), dtype=np.float64),
+            rS=tuple(_r_array(root, dtype=np.float64) for root in reparam.rx2("rS")),
+            det=float(_r_array(reparam.rx2("det"), dtype=np.float64)[0]),
+            det1=optional("det1"),
+            det2=None if det2 is None else det2.reshape(len(rho), len(rho)),
+            fixed_penalty=bool(_r_array(reparam.rx2("fixed.penalty"))[0]),
+        )
 
     def source_gaussian_rank_fit(
         self,
