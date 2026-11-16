@@ -290,6 +290,12 @@ def test_r_exact_design_fixed_sp_matches_pinned_r(
     collector.raise_if_any(f"R-exact dense fixed sp {layout} {term}")
 
 
+def _fixed_nb():
+    from jaxgam.families.negative_binomial import NegativeBinomial
+
+    return NegativeBinomial(theta=2.0, fixed=True)
+
+
 def _sweep_frame() -> pd.DataFrame:
     rng = np.random.default_rng(4101)
     x = np.sort(rng.uniform(-1.0, 1.0, 120))
@@ -343,8 +349,9 @@ def _assert_hard_gates(
         (lambda: Gamma(link="log"), "gamma", "log", "gamma"),
         (Poisson, "poisson", "log", "count"),
         (Binomial, "binomial", "logit", "binary"),
+        (_fixed_nb, "nb", "log", "count"),
     ],
-    ids=["gaussian", "gamma-log", "poisson", "binomial"],
+    ids=["gaussian", "gamma-log", "poisson", "binomial", "nb-fixed-theta"],
 )
 def test_supplied_sp_sweep_to_exp40_matches_pinned_r(
     r_bridge, family, r_family: str, link: str, column: str
@@ -361,9 +368,10 @@ def test_supplied_sp_sweep_to_exp40_matches_pinned_r(
     collector = _AssertCollector()
     for log_sp in _LOG_SP_SWEEP:
         sp = float(np.exp(log_sp))
+        theta = 2.0 if r_family == "nb" else None
         with contextlib.redirect_stdout(io.StringIO()):
             reference = r_bridge.public_fixed_sp_fit(
-                data, np.ones(n), np.zeros(n), r_family, link, sp=sp
+                data, np.ones(n), np.zeros(n), r_family, link, theta=theta, sp=sp
             )
         fit = GAM('y ~ s(x, bs="cr", k=8)', family=family(), sp=[sp]).fit(data)
         label = f"log sp {log_sp:+.0f}"
@@ -1440,3 +1448,581 @@ def test_qr_route_additive_disparate_sp_matches_pinned_r(r_bridge) -> None:
             )
         _assert_hard_gates(fit, label, collector, must_converge=reference["converged"])
     collector.raise_if_any("QR route, additive disparate sp")
+
+
+# ---------------------------------------------------------------------------
+# Finding 2, Option A: pinned gam.fit3 / gam.fit4 inner loops
+# ---------------------------------------------------------------------------
+
+
+def test_sqrt_link_owns_the_positive_eta_domain() -> None:
+    """R make.link("sqrt")$valideta is eta > 0; NB and Poisson delegate to it."""
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.links.links import LogLink, SqrtLink
+
+    eta = np.array([-0.5, 0.0, 1e-300, 2.0, np.inf])
+    np.testing.assert_array_equal(
+        SqrtLink().valid_eta(eta), [False, False, True, True, False]
+    )
+    np.testing.assert_array_equal(
+        LogLink().valid_eta(eta), [True, True, True, True, False]
+    )
+    for family in (
+        NegativeBinomial(theta=2.0, fixed=True, link="sqrt"),
+        Poisson(link="sqrt"),
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(family.valid_eta(jnp.asarray(eta))),
+            SqrtLink().valid_eta(eta),
+        )
+    np.testing.assert_array_equal(
+        np.asarray(Poisson().valid_eta(jnp.asarray(eta))), LogLink().valid_eta(eta)
+    )
+
+
+def test_source_inner_loops_compile_and_converge_under_jit() -> None:
+    """gam.fit3 and gam.fit4 inner loops run under jax.jit with dynamic theta."""
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.fitting.source_pirls import source_pirls
+
+    rng = np.random.default_rng(5)
+    n = 120
+    x = np.sort(rng.uniform(0, 1, n))
+    X = jnp.asarray(np.column_stack([np.ones(n), x, np.sin(4 * x), np.cos(4 * x)]))
+    S = jnp.diag(jnp.asarray([0.0, 0.0, 1.0, 1.0]))
+    counts = jnp.asarray(rng.poisson(np.exp(0.5 + np.sin(4 * x))).astype(float))
+    wt = jnp.ones(n)
+    null_beta = jnp.asarray([float(np.log(np.mean(counts))), 0.0, 0.0, 0.0])
+    beta0 = jnp.zeros(4).at[0].set(null_beta[0])
+
+    def regular(beta_start):
+        return source_pirls(
+            X, counts, beta_start, S, Gamma(link="log"), wt, None, null_beta
+        ).pirls_result
+
+    gamma_fit = jax.jit(regular)(beta0)
+    assert bool(gamma_fit.converged)
+    assert int(gamma_fit.inner_status) == 0
+
+    estimated = NegativeBinomial(theta=2.0)
+    indices = jnp.asarray(np.asarray(counts, dtype=np.int64))
+    max_y = int(np.max(np.asarray(counts)))
+
+    def nb(log_theta):
+        return source_pirls(
+            X,
+            counts,
+            beta0,
+            S,
+            estimated,
+            wt,
+            None,
+            null_beta,
+            log_theta=log_theta,
+            count_indices=indices,
+            max_y=max_y,
+        ).pirls_result
+
+    compiled = jax.jit(nb)
+    for log_theta in (0.3, 1.2):
+        result = compiled(jnp.asarray([log_theta]))
+        assert bool(result.converged)
+        assert int(result.inner_status) == 0
+
+
+def _nb_sqrt_frame(seed: int, shift: float) -> pd.DataFrame:
+    """The PR11 explicit-design NB case (n=160, cr+cr+re, weights, offset)."""
+    n = 160
+    position = np.arange(n, dtype=float)
+    x = (position + 0.2 * np.sin(position * 0.7)) / n
+    z = np.cos(position * 0.23) + 0.07 * np.sin(position * 0.91)
+    levels = ("a", "b", "c", "d")
+    g = pd.Categorical(np.resize(np.array(levels), n), categories=levels)
+    eta = (
+        shift
+        + 1.2 * np.sin(5.0 * x)
+        + 0.7 * np.cos(3.0 * z)
+        + 0.6 * np.array([-1.0, 0.4, 1.0, -0.6])[np.asarray(g.codes)]
+    )
+    rng = np.random.default_rng(seed)
+    mean = np.exp(eta)
+    y = rng.negative_binomial(3.0, 3.0 / (3.0 + mean)).astype(float)
+    return pd.DataFrame(
+        {
+            "x": x,
+            "z": z,
+            "g": g,
+            "y": y,
+            "w": np.linspace(0.6, 1.4, n),
+            "off": np.linspace(-0.1, 0.2, n),
+        }
+    )
+
+
+_NB_SQRT_FORMULA = "y ~ s(x,bs='cr',k=6) + s(z,bs='cr',k=5) + s(g,bs='re')"
+
+
+_NB_SQRT_SP = np.array([0.6, 1.5, 0.8])
+
+
+def _fit_nb_sqrt(data: pd.DataFrame):
+    from jaxgam.families.negative_binomial import NegativeBinomial
+
+    family = NegativeBinomial(theta=2.5, fixed=True, link="sqrt")
+    return GAM(_NB_SQRT_FORMULA, family=family, sp=list(_NB_SQRT_SP)).fit(
+        data, weights=data.w.to_numpy(), offset=data.off.to_numpy()
+    )
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize(("seed", "shift"), [(11, 1.0), (3, 2.0)])
+def test_nb_fixed_theta_sqrt_matches_pinned_r_where_r_converges(
+    r_bridge, seed: int, shift: float
+) -> None:
+    """Where pinned gam.fit4 converges, the dense NB/sqrt fit is STRICT.
+
+    Seed 11 stalled before: Fisher scoring contracted at about 0.93 per
+    iteration near mu -> 0. Seed 3 started at eta < 0 and Newton without the
+    sqrt domain reached a mirror stationary point.
+    """
+    data = _nb_sqrt_frame(seed, shift)
+    with contextlib.redirect_stdout(io.StringIO()):
+        reference = r_bridge.fit_fixed_sp(
+            _NB_SQRT_FORMULA + " + offset(off)",
+            data,
+            "nb_sqrt",
+            _NB_SQRT_SP,
+            weights="w",
+            theta=2.5,
+        )
+    fit = _fit_nb_sqrt(data)
+    collector = _AssertCollector()
+    collector.check(
+        "converged",
+        lambda: check_that(fit.converged and reference["converged"], "not converged"),
+    )
+    collector.check(
+        "fitted", lambda: _assert_strict(fit.fitted_values, reference["fitted_values"])
+    )
+    collector.check(
+        "coefficients",
+        lambda: _assert_strict(fit.coefficients, reference["coefficients"]),
+    )
+    collector.check(
+        "deviance", lambda: _assert_strict(fit.deviance, reference["deviance"])
+    )
+    collector.check(
+        "sqrt domain",
+        lambda: check_that(np.all(fit.linear_predictor > 0), "eta <= 0 returned"),
+    )
+    collector.raise_if_any(f"NB fixed-theta sqrt seed {seed}")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_nb_and_poisson_sqrt_fail_truthfully_where_pinned_r_errors(r_bridge) -> None:
+    """Where pinned R stops ("inner loop 2; can't correct step size") the dense
+    fit reports non-convergence with the inner-loop reason; it never returns a
+    converged fit at a boundary point or one with eta < 0 (the old drift)."""
+    rpy2_error = pytest.importorskip("rpy2.rinterface_lib.embedded").RRuntimeError
+    data = _nb_sqrt_frame(5, 0.3)
+    with (
+        contextlib.redirect_stdout(io.StringIO()),
+        pytest.raises(rpy2_error, match="can't correct step size"),
+    ):
+        r_bridge.fit_fixed_sp(
+            _NB_SQRT_FORMULA + " + offset(off)",
+            data,
+            "nb_sqrt",
+            _NB_SQRT_SP,
+            weights="w",
+            theta=2.5,
+        )
+    nb_fit = _fit_nb_sqrt(data)
+    assert not nb_fit.converged
+    assert "can't correct step size" in nb_fit.convergence_info
+
+    rng = np.random.default_rng(1)
+    n = 150
+    x = np.sort(rng.uniform(0, 1, n))
+    poisson_data = pd.DataFrame(
+        {"x": x, "y": rng.poisson(np.exp(-1.5 + 2.5 * np.sin(6 * x))).astype(float)}
+    )
+    with (
+        contextlib.redirect_stdout(io.StringIO()),
+        pytest.raises(rpy2_error, match="can't correct step size"),
+    ):
+        r_bridge.public_fixed_sp_fit(
+            poisson_data,
+            np.linspace(0.6, 1.4, n),
+            np.zeros(n),
+            "poisson",
+            "sqrt",
+            sp=0.1,
+        )
+    poisson_fit = GAM(
+        'y ~ s(x, bs="cr", k=8)', family=Poisson(link="sqrt"), sp=[0.1]
+    ).fit(poisson_data, weights=np.linspace(0.6, 1.4, n))
+    assert not poisson_fit.converged
+    assert "inner fit did not converge" in poisson_fit.convergence_info
+    assert np.all(poisson_fit.linear_predictor > 0)
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_poisson_sqrt_near_the_boundary_matches_pinned_r(r_bridge) -> None:
+    """Near mu -> 0 the Newton (alpha) inner fit reproduces R at STRICT.
+
+    The former Fisher loop stopped about 9e-9 short on this case.
+    """
+    rng = np.random.default_rng(7)
+    n = 150
+    x = np.sort(rng.uniform(0, 1, n))
+    data = pd.DataFrame(
+        {"x": x, "y": rng.poisson(np.exp(-2.0 + 2.5 * np.sin(6 * x))).astype(float)}
+    )
+    weight = np.linspace(0.6, 1.4, n)
+    collector = _AssertCollector()
+    for sp in (0.01, 0.1, 1.0):
+        with contextlib.redirect_stdout(io.StringIO()):
+            reference = r_bridge.public_fixed_sp_fit(
+                data, weight, np.zeros(n), "poisson", "sqrt", sp=sp
+            )
+        fit = GAM('y ~ s(x, bs="cr", k=8)', family=Poisson(link="sqrt"), sp=[sp]).fit(
+            data, weights=weight
+        )
+        for name, actual, expected in (
+            ("fitted", fit.fitted_values, reference["fitted_values"]),
+            ("coefficients", fit.coefficients, reference["coefficients"]),
+            ("deviance", fit.deviance, reference["deviance"]),
+        ):
+            collector.check(
+                f"sp={sp}: {name}",
+                lambda actual=actual, expected=expected: _assert_strict(
+                    actual, expected
+                ),
+            )
+        _assert_hard_gates(fit, f"sp={sp}", collector)
+    collector.raise_if_any("Poisson sqrt near the boundary")
+
+
+def test_source_status_messages_name_r_stopping_reasons() -> None:
+    """Every non-converged inner fit reports a specific, R-worded reason."""
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.fitting import efs_regular_pirls, pirls
+    from jaxgam.fitting.source_pirls import status_message, uses_source_loop
+
+    nb = NegativeBinomial(theta=2.0, fixed=True)
+    assert "iteration limit" in status_message(Gaussian(), 0)
+    assert "inner loop 2" in status_message(
+        Poisson(), efs_regular_pirls.EFS_REGULAR_STATUS_DOMAIN_RECOVERY_FAILED
+    )
+    assert "inner loop 3" in status_message(
+        nb, pirls._EFS_STATUS_DIVERGENCE_RECOVERY_FAILED
+    )
+    assert status_message(Gamma(), 99) == "inner-loop status 99"
+    assert all(uses_source_loop(f) for f in (Gaussian(), Binomial(), Poisson(), nb))
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_gam_fit3_fisher_retry_is_taken_at_pinned_r_states(r_bridge) -> None:
+    """The dense gam.fit3 loop retries with Fisher weights exactly where R does.
+
+    Matched state: at every iteration the JAX loop's own state is handed to
+    pinned ``C_pls_fit1`` with the Newton (alpha) weights; R's indefinite flag
+    (``oo$n < 0``) must equal JAX's.  The loop runs on the QR route (an empty
+    penalty root) under ``jax.jit`` and reproduces pinned gam.fit3's recovery
+    count, coefficients, deviance and Fisher covariance ``rV rV'``.
+    """
+    from jaxgam.fitting.efs_regular_pirls import (
+        _checked_exact_solve,
+        _form_system,
+        _regular_factors,
+        efs_regular_pirls_loop,
+    )
+
+    rng = np.random.default_rng(1)
+    x = np.linspace(-0.9, 0.9, 41)
+    y = np.exp(rng.normal(0.0, 2.0, len(x)))
+    weight = 0.1 + rng.uniform(size=len(x))
+    offset = 0.02 * np.sin(x)
+    X = np.column_stack((np.ones(len(x)), x))
+    with contextlib.redirect_stdout(io.StringIO()):
+        oracle = r_bridge.gamma_fisher_recovery_reference(X, y, weight, offset)
+    family = Gamma("identity")
+    Xj, yj, wj, oj = (jnp.asarray(v) for v in (X, y, weight, offset))
+    null_beta = jnp.asarray([np.mean(y), 0.0])
+
+    def run(max_iter: int):
+        # R: eta = linkfun(mustart) with mustart = y, scale = exp(log 0.7).
+        return efs_regular_pirls_loop(
+            Xj,
+            yj,
+            jnp.zeros(2),
+            yj,
+            null_beta,
+            Xj @ null_beta + oj,
+            jnp.zeros((2, 2)),
+            family,
+            wj,
+            oj,
+            jnp.asarray(0.7),
+            start_present=False,
+            max_iter=max_iter,
+            tol=1e-10,
+            penalty_root=jnp.zeros((0, 2)),
+        )
+
+    result = run(100)
+    fit = result.pirls_result
+    collector = _AssertCollector()
+    collector.check("converged", lambda: check_that(bool(fit.converged), "failed"))
+    collector.check(
+        "recovery count",
+        lambda: check_that(
+            int(result.n_fisher_fallbacks) == oracle["recoveries"],
+            f"{int(result.n_fisher_fallbacks)} != R {oracle['recoveries']}",
+        ),
+    )
+    collector.check(
+        "coefficients and deviance",
+        lambda: _assert_strict(
+            np.r_[fit.coefficients, fit.deviance], oracle["reference"][:3]
+        ),
+    )
+    collector.check(
+        "Fisher covariance",
+        lambda: _assert_strict(
+            np.asarray(jax.scipy.linalg.cho_solve((fit.L_fisher, True), jnp.eye(2))),
+            oracle["covariance"],
+        ),
+    )
+    retries = 0
+    for completed in range(int(fit.n_iter)):
+        state = run(completed).pirls_result if completed else None
+        eta = yj if state is None else state.eta
+        mu = family.link.inverse(eta)
+        W, z, _ = _regular_factors(family, yj, wj, oj, mu, eta, fisher=False)
+        XtWX, rhs = _form_system(Xj, W, z)
+        _, _, _, indefinite = _checked_exact_solve(XtWX, jnp.zeros((2, 2)), rhs)
+        with contextlib.redirect_stdout(io.StringIO()):
+            r_rank, _, _ = r_bridge.source_signed_pls_fit1(
+                X,
+                np.asarray(W),
+                np.asarray(z),
+                np.asarray(W * z),
+                np.zeros((1, 2)),
+                use_weighted_response=False,
+            )
+        retries += int(bool(indefinite))
+        collector.check(
+            f"iteration {completed + 1}: indefinite flag",
+            lambda indefinite=indefinite, r_rank=r_rank: check_that(
+                bool(indefinite) == (r_rank < 0),
+                f"JAX {bool(indefinite)} vs R n={r_rank}",
+            ),
+        )
+    collector.check(
+        "retry replay",
+        lambda: check_that(retries == oracle["recoveries"] > 0, f"{retries} retries"),
+    )
+    collector.raise_if_any("gam.fit3 Fisher retry at matched states")
+
+
+def test_source_loops_hold_the_hard_gates_under_jit() -> None:
+    """Objective monotonicity, H symmetry/PSD, penalty PSD and rank, compiled.
+
+    Each source loop (canonical Poisson and noncanonical Gamma/log on the QR
+    route, fixed-theta NB/sqrt on gam.fit4) is replayed under ``jax.jit`` with
+    an increasing iteration cap: the penalized deviance never rises by more
+    than R's divergence threshold, and the converged penalized Hessian (the
+    Newton one for noncanonical links) is symmetric positive definite.
+    """
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.fitting.source_pirls import source_pirls
+
+    rng = np.random.default_rng(17)
+    n = 150
+    x = np.sort(rng.uniform(0.0, 1.0, n))
+    X = jnp.asarray(
+        np.column_stack([np.ones(n), x, np.sin(4 * x), np.cos(4 * x), np.sin(7 * x)])
+    )
+    S = np.diag([0.0, 0.0, 1.0, 1.0, 2.0])
+    root = jnp.asarray(np.sqrt(S)[2:])
+    signal = 0.8 + 0.6 * np.sin(4 * x)
+    counts = jnp.asarray(rng.poisson(np.exp(signal)).astype(float))
+    positive = jnp.asarray(rng.gamma(3.0, np.exp(signal) / 3.0))
+    wt = jnp.linspace(0.7, 1.3, n)
+    nb = NegativeBinomial(theta=2.5, fixed=True, link="sqrt")
+    cases = (
+        ("poisson/log", Poisson(), counts, jnp.log(jnp.mean(counts)), root),
+        ("gamma/log", Gamma(link="log"), positive, jnp.log(jnp.mean(positive)), root),
+        ("nb/sqrt", nb, counts, jnp.sqrt(jnp.mean(counts)), None),
+    )
+    collector = _AssertCollector()
+    for label, family, y, intercept, penalty_root in cases:
+        null_beta = jnp.zeros(5).at[0].set(intercept)
+        start = null_beta.at[1].set(0.1)
+
+        def fit(
+            max_iter,
+            family=family,
+            y=y,
+            null_beta=null_beta,
+            start=start,
+            penalty_root=penalty_root,
+        ):
+            return source_pirls(
+                X,
+                y,
+                start,
+                jnp.asarray(S),
+                family,
+                wt,
+                None,
+                null_beta,
+                penalty_root=penalty_root,
+                max_iter=max_iter,
+            ).pirls_result
+
+        compiled = jax.jit(fit, static_argnums=0)
+        final = compiled(200)
+        collector.check(
+            f"{label}: converged",
+            lambda final=final: check_that(
+                bool(final.converged) and int(final.inner_status) == 0, "failed"
+            ),
+        )
+        history = []
+        for cap in range(1, int(final.n_iter) + 1):
+            step = compiled(cap)
+            beta = np.asarray(step.coefficients)
+            history.append(float(step.deviance) + beta @ S @ beta)
+
+        def _monotone(history=history) -> None:
+            for before, after in itertools.pairwise(history):
+                threshold = 10.0 * (0.1 + abs(before)) * np.sqrt(np.finfo(float).eps)
+                check_that(after - before <= threshold, f"{before} -> {after}")
+
+        collector.check(f"{label}: penalized deviance monotone", _monotone)
+
+        def _hessian(final=final) -> None:
+            H = np.asarray(final.XtWX) + S
+            _assert_strict(H, H.T)
+            eig = np.linalg.eigvalsh(H)
+            check_that(eig.min() > 0.0, f"H not PD: {eig.min()}")
+            L = np.asarray(final.L_fisher)
+            check_that(np.all(np.diag(L) > 0.0), "Fisher factor not PD")
+
+        collector.check(f"{label}: H symmetric PD", _hessian)
+    collector.check(
+        "penalty PSD and rank",
+        lambda: check_that(
+            np.linalg.eigvalsh(S).min() >= 0.0
+            and np.linalg.matrix_rank(np.asarray(X)) == X.shape[1],
+            "penalty or design rank",
+        ),
+    )
+    collector.raise_if_any("source loop hard gates")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_gam_fit4_positive_weight_retry_is_taken_where_pinned_pls_fit1_is_indefinite(
+    r_bridge,
+) -> None:
+    """gam.fit4's positive-weight branch at a chosen indefinite state (3e).
+
+    NB/identity at a state where zero counts give negative observed weights
+    and the penalty is too weak to make X'WX + S positive definite: JaxGAM's
+    observed Cholesky must fail exactly where pinned C_pls_fit1 returns
+    n < 0, and JaxGAM must take the positive-weight retry.
+
+    STOP item (review packet, root decision 8): the retry's *coefficients*
+    differ from pinned R's.  gam.fit4 (gam.fit4.r 391-416) keeps -Deta/2 in
+    wz for the zero-weight rows, so pls_fit1's stability test switches to
+    the X'wz right side (gdi.c 3121-3133); JaxGAM uses w*z, which drops those
+    rows' gradient.  The fix (always use wz in the retry) changes the outcome
+    of the existing test_efs_theta_pirls.py::
+    test_efs_indefinite_observed_system_retries_positive_curvature_under_jit,
+    whose hand-derived expectation encodes the w*z rule, so it is not
+    applied here pending the root decision; the measured gap is recorded.
+    """
+    from jaxgam.families.negative_binomial import NegativeBinomial
+    from jaxgam.fitting import pirls
+
+    rng = np.random.default_rng(16)
+    n = 60
+    x = np.linspace(0.0, 1.0, n)
+    X = np.column_stack([np.ones(n), x, np.sin(4 * x), np.cos(4 * x)])
+    mu = 4.0 + 1.2 * np.sin(5 * x)
+    y = np.where(rng.uniform(size=n) < 0.6, 0.0, rng.poisson(2.0 * mu)).astype(float)
+    E = np.diag([0.0, 0.0, 1e-3, 1e-3])[2:]
+    S = E.T @ E
+    family = NegativeBinomial(theta=2.0, fixed=True, link="identity")
+    log_theta = jnp.reshape(jnp.log(2.0), (1,))
+    eta = jnp.asarray(mu)
+    offset = jnp.zeros(n)
+    wt = jnp.ones(n)
+    factors = pirls._efs_nb_observed_working_factors(
+        eta, log_theta, jnp.asarray(y), wt, offset, family
+    )
+
+    def compute_working_factors(_mu, eta_value):
+        return pirls._efs_nb_observed_working_factors(
+            eta_value, log_theta, jnp.asarray(y), wt, offset, family
+        )
+
+    def form_wls(f):
+        Wc = jnp.clip(f.weight, -pirls._W_MAX, pirls._W_MAX)
+        rhs = jnp.where(f.use_weighted_response, f.weighted_response, Wc * f.response)
+        Xj = jnp.asarray(X)
+        return (Wc[:, None] * Xj).T @ Xj, Xj.T @ rhs
+
+    def compute_dev(_mu, eta_value):
+        return pirls._efs_nb_deviance(eta_value, log_theta, jnp.asarray(y), wt, family)
+
+    beta0 = jnp.asarray(np.linalg.lstsq(X, mu, rcond=None)[0])
+    step = jax.jit(
+        lambda b: pirls._efs_beta_step_with_recovery(
+            X=jnp.asarray(X),
+            S_lambda=jnp.asarray(S),
+            offset=offset,
+            family=family,
+            beta=b,
+            eta=eta,
+            mu=family.link.inverse(eta),
+            beta_old=b,
+            eta_old=eta,
+            null_beta=b,
+            null_eta=eta,
+            initial_start_retained=jnp.asarray(False),
+            iteration=jnp.asarray(1),
+            baseline=jnp.asarray(1e300),
+            compute_working_factors=compute_working_factors,
+            form_wls=form_wls,
+            compute_dev=compute_dev,
+            max_recovery_halvings=100,
+        )
+    )(beta0)
+    # Private host copies: the pinned .C entry may write into its inputs.
+    W = np.array(factors.weight, copy=True)
+    z = np.array(factors.response, copy=True)
+    wz = np.array(factors.weighted_response, copy=True)
+    use_wy = bool(factors.use_weighted_response)
+    with contextlib.redirect_stdout(io.StringIO()):
+        r_rank, _, _ = r_bridge.source_signed_pls_fit1(
+            X,
+            W.copy(),
+            z.copy(),
+            wz.copy(),
+            E,
+            use_weighted_response=use_wy,
+        )
+    collector = _AssertCollector()
+    collector.check(
+        "state is indefinite with negative weights",
+        lambda: check_that(np.any(W < 0) and r_rank < 0, f"R n={r_rank}"),
+    )
+    collector.check(
+        "JaxGAM takes the positive-weight retry",
+        lambda: check_that(bool(step.positive_curvature_retry), "no retry"),
+    )
+    collector.raise_if_any("gam.fit4 positive-weight retry")

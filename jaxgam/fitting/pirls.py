@@ -802,6 +802,10 @@ class PIRLSResult:
         penalized Hessian of this fit (proposals and final factors). ``0``
         means every factor was the plain Cholesky; a positive value is the
         explicit diagnostic that the fallback regularization fired.
+    inner_status : jax.Array
+        Termination status of a pinned source inner loop (``source_pirls``);
+        ``0`` is convergence and every other code names R's stopping reason.
+        The ordinary loop leaves it ``0`` and reports only ``converged``.
     fisher_hat, fisher_edf : jax.Array or None
         For a structurally full-rank dense fit, the Fisher influence matrix
         ``F = (X'W_fX + S)^-1 X'W_fX`` and ``tr(F)`` from the pls_fit1 QR
@@ -823,6 +827,7 @@ class PIRLSResult:
     XtWX_fisher: jax.Array
     L_fisher: jax.Array
     factor_regularization: jax.Array | float = 0.0
+    inner_status: jax.Array | int = 0
     fisher_hat: jax.Array | None = None
     fisher_edf: jax.Array | None = None
 
@@ -1299,6 +1304,7 @@ def _efs_theta_pirls_loop_jit(
     estimate_theta: bool,
     max_iter: int,
     tol: float,
+    penalty_root: jax.Array | None = None,
 ) -> EFSThetaPIRLSResult:
     """Pinned EFS NB beta/theta alternation in one JAX while-loop.
 
@@ -1526,7 +1532,11 @@ def _efs_theta_pirls_loop_jit(
                 & next_factors.valid
                 & gradient_finite
             )
-            converged = valid_post_theta & pdev_small & stationary
+            # gam.fit4.r:523 tests convergence only after a posdef observed
+            # step: an iteration that needed the positive-weight retry never
+            # converges, whatever its gradient.
+            posdef = ~beta_step.positive_curvature_retry
+            converged = valid_post_theta & posdef & pdev_small & stationary
             status = jnp.where(
                 ~theta_ok,
                 jnp.array(_EFS_STATUS_THETA_FAILED, dtype=jnp.int32),
@@ -1591,7 +1601,17 @@ def _efs_theta_pirls_loop_jit(
     )
     WX_fisher = jnp.sqrt(W_fisher)[:, None] * X
     XtWX_fisher = WX_fisher.T @ WX_fisher
-    L_fisher, reg_fisher = penalized_cholesky(XtWX_fisher, S_lambda)
+    if penalty_root is None:
+        L_fisher, reg_fisher = penalized_cholesky(XtWX_fisher, S_lambda)
+        fisher_hat = fisher_edf = None
+    else:
+        # Dense structurally full-rank fit: gam.fit4's Fisher (EDF and Vp)
+        # factor from pls_fit1's QR of [sqrt(W_f) X; E], no normal equations.
+        _, L_fisher = penalized_qr_solve(
+            WX_fisher, jnp.zeros_like(W_fisher), penalty_root
+        )
+        reg_fisher = jnp.zeros((), dtype=X.dtype)
+        fisher_hat, fisher_edf = penalized_qr_hat(WX_fisher, penalty_root)
     dev_final = final_compute_dev(mu_final, eta_final)
     pdev_final = dev_final + final.beta @ S_lambda @ final.beta
     final_valid = (
@@ -1627,6 +1647,8 @@ def _efs_theta_pirls_loop_jit(
         XtWX_fisher=XtWX_fisher,
         L_fisher=L_fisher,
         factor_regularization=jnp.maximum(reg_final, reg_fisher),
+        fisher_hat=fisher_hat,
+        fisher_edf=fisher_edf,
     )
     return EFSThetaPIRLSResult(
         pirls_result=pirls_result,

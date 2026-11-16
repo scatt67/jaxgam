@@ -35,6 +35,7 @@ from jaxgam.fitting.newton import (
 )
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion
+from jaxgam.fitting.source_pirls import source_pirls, status_message
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
@@ -1874,17 +1875,38 @@ def _fit_fixed_sp(
     if fd.family.n_theta > 0:
         log_theta = jnp.asarray(fd.family.get_theta(transformed=False))
 
-    pirls_result = pirls_loop(
-        fd.X,
-        fd.y,
-        beta_init,
-        S_lam,
-        fd.family,
-        wt=fd.wt,
-        offset=fd.offset,
-        log_theta=log_theta,
-        penalty_root=fd.penalty_root(log_lambda),
-    )
+    if fd.uses_source_loop:
+        pirls_result = source_pirls(
+            fd.X,
+            fd.y,
+            beta_init,
+            S_lam,
+            fd.family,
+            fd.wt,
+            fd.offset,
+            fd.null_beta,
+            log_theta=log_theta,
+            count_indices=(
+                fd.count_prefix_plan.indices if fd.count_prefix_plan else None
+            ),
+            max_y=fd.max_y,
+            integer_counts=(
+                fd.count_prefix_plan.integer_counts if fd.count_prefix_plan else True
+            ),
+            penalty_root=fd.penalty_root(log_lambda),
+        ).pirls_result
+    else:
+        pirls_result = pirls_loop(
+            fd.X,
+            fd.y,
+            beta_init,
+            S_lam,
+            fd.family,
+            wt=fd.wt,
+            offset=fd.offset,
+            log_theta=log_theta,
+            penalty_root=fd.penalty_root(log_lambda),
+        )
 
     # Known-scale standard families (Poisson/Binomial): no free dispersion
     # parameter, so the REML score is a single criterion evaluation at the fixed
@@ -1899,21 +1921,27 @@ def _fit_fixed_sp(
     score = criterion.score(log_lambda)
     # A non-finite REML score is a failed evaluation, never a converged fit.
     finite_score = bool(jnp.isfinite(score))
-    levels = factorization_fallbacks(fd, pirls_result, log_lambda, include_ift=False)
 
+    levels = factorization_fallbacks(fd, pirls_result, log_lambda, include_ift=False)
+    inner_converged = bool(pirls_result.converged)
+    if not inner_converged:
+        info = "fixed sp: inner fit did not converge: " + status_message(
+            fd.family, int(np.asarray(pirls_result.inner_status))
+        )
+    elif not finite_score:
+        info = "fixed sp: non-finite REML score"
+    else:
+        info = "fixed sp"
     return NewtonResult(
         log_lambda=log_lambda,
         smoothing_params=jnp.exp(log_lambda),
-        converged=bool(pirls_result.converged) and finite_score,
+        converged=inner_converged and finite_score,
         n_iter=0,
         score=score,
         gradient=jnp.zeros_like(log_lambda),
         edf=edf,
         scale=scale,
         pirls_result=pirls_result,
-        convergence_info=(
-            "fixed sp" if finite_score else "fixed sp: non-finite REML score"
-        )
-        + fallback_note(levels),
+        convergence_info=info + fallback_note(levels),
         factor_regularization=max(levels.values()),
     )

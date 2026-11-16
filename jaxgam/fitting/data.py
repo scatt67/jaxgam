@@ -12,7 +12,7 @@ import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.fitting import penalty_ops
-from jaxgam.fitting.initialization import initialize_beta_cpu
+from jaxgam.fitting.initialization import initialize_beta_cpu, r_null_coefficients
 from jaxgam.formula.fitting_prepare import (
     apply_transforms_to_design,
     initial_log_sp_from_diagonal,
@@ -168,6 +168,25 @@ class FittingData:
     # fixtures, unpenalized models and structurally rank-deficient models).
     penalty_roots: penalty_ops.JaxPenaltyRoots | None = None
 
+    # R's get.null.coef anchor in fitting coordinates, used by the pinned
+    # gam.fit3/gam.fit4 inner loops; None for manual fixtures.
+    null_beta: jax.Array | None = None
+
+    @property
+    def uses_source_loop(self) -> bool:
+        """Whether the dense inner fit runs the pinned mgcv loop.
+
+        Structurally rank-deficient systems keep the regularized solve:
+        pls_fit1's unidentifiable-column drop is not ported.
+        """
+        from jaxgam.fitting.source_pirls import uses_source_loop
+
+        return (
+            self.null_beta is not None
+            and self.rank_deficit == 0
+            and uses_source_loop(self.family)
+        )
+
     def penalty_root(self, log_lambda: jax.Array) -> jax.Array | None:
         """``E(rho)`` for the QR inner solve, or ``None`` for Cholesky."""
         if self.penalty_roots is None:
@@ -271,6 +290,7 @@ class FittingData:
             penalty_roots=_structural_penalty_roots(
                 transformed, X_np, np.asarray(setup.weights, dtype=np.float64), device
             ),
+            null_beta=_null_beta(X_np, setup.y, family, device),
         )
 
     @staticmethod
@@ -327,6 +347,16 @@ class FittingData:
         if design_null.shape[1] == 0:
             return 0
         return design_null.shape[1] - int(np.linalg.matrix_rank(design_null))
+
+
+def _null_beta(
+    X: np.ndarray, y: np.ndarray, family: ExponentialFamily, device
+) -> jax.Array | None:
+    """R's ``null.coef`` anchor, or None when the link mean is not finite."""
+    try:
+        return to_jax(r_null_coefficients(X, y, family), device=device)
+    except ValueError:
+        return None
 
 
 def _structural_penalty_roots(

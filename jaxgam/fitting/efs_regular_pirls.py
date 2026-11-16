@@ -1,9 +1,10 @@
-"""EFS-only regular-family PIRLS with pinned ``gam.fit3`` scoring.
+"""Regular-family PIRLS with pinned ``gam.fit3`` scoring.
 
-The ordinary dense PIRLS loop deliberately retains its historical Fisher
-coefficient steps.  This module is the opt-in EFS counterpart: noncanonical
-regular links use the pinned full-Newton ``alpha`` system, while the final
-result retains observed score factors and Fisher EDF/covariance factors.
+Noncanonical regular links use the pinned full-Newton ``alpha`` system with a
+same-step Fisher retry, while the final result retains observed score factors
+and Fisher EDF/covariance factors.  EFS uses it for noncanonical links; the
+dense inner fit (``source_pirls``) uses it for every regular family, passing
+the structural penalty root so nonnegative-weight systems solve by QR.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import jax.scipy.linalg as jsla
 
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.fitting.pirls import PIRLSResult, _is_valid_trial, _signed_XtWX
+from jaxgam.fitting.qr import penalized_qr_hat, penalized_qr_solve
 
 EFS_REGULAR_STATUS_CONVERGED = 0
 EFS_REGULAR_STATUS_ITERATION_LIMIT = 1
@@ -165,7 +167,13 @@ def _checked_exact_solve(
     source's same-step Fisher retry; a bare Cholesky failure never does.
     """
     H = XtWX + S_lambda
-    eig = jnp.linalg.eigvalsh(H)
+    # Classify curvature on the unit-diagonal H: like pls_fit1's norm-balanced
+    # rank test it is independent of the smoothing-parameter magnitude, so a
+    # large penalty cannot push the eigenvalue roundoff of data directions
+    # (about eps * lambda * |S|) below zero.
+    magnitude = jnp.abs(jnp.diag(H))
+    inverse_root = jax.lax.rsqrt(jnp.where(magnitude > 0.0, magnitude, 1.0))
+    eig = jnp.linalg.eigvalsh(H * (inverse_root[:, None] * inverse_root[None, :]))
     finite = jnp.all(jnp.isfinite(H)) & jnp.all(jnp.isfinite(rhs))
     scale = jnp.maximum(1.0, jnp.max(jnp.abs(eig)))
     rank_tol = 100.0 * jnp.finfo(jnp.float64).eps
@@ -182,6 +190,25 @@ def _checked_exact_solve(
         & jnp.all(jnp.isfinite(beta))
     )
     return beta, L, solved, indefinite
+
+
+def _positive_qr_solve(
+    X: jax.Array, weight: jax.Array, response: jax.Array, penalty_root: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """``pls_fit1``'s QR solve of a nonnegative-weight system (Stage 2).
+
+    Used only for Fisher systems (all ``W >= 0``) of a structurally full-rank
+    model; returns the same ``(beta, L, solved)`` contract as the checked
+    normal-equation solve without forming ``X' W X``.
+    """
+    w_sqrt = jnp.sqrt(jnp.maximum(weight, 0.0))
+    beta, L = penalized_qr_solve(w_sqrt[:, None] * X, w_sqrt * response, penalty_root)
+    solved = (
+        jnp.all(jnp.isfinite(beta))
+        & jnp.all(jnp.isfinite(L))
+        & jnp.all(jnp.diag(L) > 0.0)
+    )
+    return beta, L, solved
 
 
 def _recover(
@@ -242,12 +269,18 @@ def _efs_regular_pirls_loop_jit(
     wt: jax.Array,
     offset: jax.Array,
     scale: jax.Array,
+    penalty_root: jax.Array | None = None,
     *,
     start_present: bool,
     max_iter: int,
     tol: float,
 ) -> EFSRegularPIRLSResult:
-    """Compiled EFS regular loop for a static family/start-origin policy."""
+    """Compiled regular ``gam.fit3`` loop for a static family/start policy.
+
+    ``penalty_root`` (``E' E = S_lambda``) switches every nonnegative-weight
+    system (canonical steps, the Fisher retry and the Fisher factor) to the
+    QR solve; signed observed systems keep the checked normal equations.
+    """
     initial_mu = family.link.inverse(initial_eta)
     null_mu = family.link.inverse(null_eta)
     null_dev = family.dev_resids(y, null_mu, wt)
@@ -317,18 +350,27 @@ def _efs_regular_pirls_loop_jit(
         factors_valid = (
             jnp.any(good) & jnp.all(jnp.isfinite(W_obs)) & jnp.all(jnp.isfinite(z_obs))
         )
-        XtWX_obs, rhs_obs = _form_system(X, W_obs, z_obs)
-        beta_obs, _L_obs, obs_solved, obs_indefinite = _checked_exact_solve(
-            XtWX_obs, S_lambda, rhs_obs
-        )
-
         W_fisher, z_fisher, _ = _regular_factors(
             family, y, wt, offset, current.mu, current.eta, fisher=True
         )
-        XtWX_fisher, rhs_fisher = _form_system(X, W_fisher, z_fisher)
-        beta_fisher, _L_fisher, fisher_solved, _ = _checked_exact_solve(
-            XtWX_fisher, S_lambda, rhs_fisher
-        )
+        if penalty_root is None:
+            XtWX_fisher, rhs_fisher = _form_system(X, W_fisher, z_fisher)
+            beta_fisher, _L_fisher, fisher_solved, _ = _checked_exact_solve(
+                XtWX_fisher, S_lambda, rhs_fisher
+            )
+        else:
+            beta_fisher, _L_fisher, fisher_solved = _positive_qr_solve(
+                X, W_fisher, z_fisher, penalty_root
+            )
+        if use_fisher and penalty_root is not None:
+            # Canonical: the observed system is the Fisher system.
+            beta_obs, obs_solved = beta_fisher, fisher_solved
+            obs_indefinite = jnp.array(False)
+        else:
+            XtWX_obs, rhs_obs = _form_system(X, W_obs, z_obs)
+            beta_obs, _L_obs, obs_solved, obs_indefinite = _checked_exact_solve(
+                XtWX_obs, S_lambda, rhs_obs
+            )
         retry_fisher = jnp.asarray(not use_fisher) & obs_indefinite
         beta_raw = jnp.where(retry_fisher, beta_fisher, beta_obs)
         W_used = jnp.where(retry_fisher, W_fisher, W_obs)
@@ -488,7 +530,9 @@ def _efs_regular_pirls_loop_jit(
         gradient_scale = tol * (
             jnp.abs(after_divergence.penalized_deviance) + jnp.abs(scale)
         )
-        strictly_additive = family.family_name == "gaussian" and family.is_canonical
+        # One rule, one place (PR12): gam.fit3's strictly.additive branch
+        # (gam.fit3.r:227-228,445) is the family's single_step_pirls capability.
+        strictly_additive = family.execution_capabilities().single_step_pirls
         converged = accepted & (
             strictly_additive
             | (
@@ -540,11 +584,29 @@ def _efs_regular_pirls_loop_jit(
     )
     XtWX = _signed_XtWX(W_obs, X)
     XtWX_fisher = _signed_XtWX(W_fisher, X)
-    L = jnp.linalg.cholesky(XtWX + S_lambda)
-    L_fisher = jnp.linalg.cholesky(XtWX_fisher + S_lambda)
-    gdi1_beta, _gdi1_L, gdi1_solved, _gdi1_indefinite = _checked_exact_solve(
-        XtWX, S_lambda, X.T @ (W_obs * z_obs)
-    )
+    fisher_hat = fisher_edf = None
+    if penalty_root is None:
+        L = jnp.linalg.cholesky(XtWX + S_lambda)
+        L_fisher = jnp.linalg.cholesky(XtWX_fisher + S_lambda)
+        gdi1_beta, _gdi1_L, gdi1_solved, _gdi1_indefinite = _checked_exact_solve(
+            XtWX, S_lambda, X.T @ (W_obs * z_obs)
+        )
+    else:
+        _, L_fisher, _ = _positive_qr_solve(X, W_fisher, _z_fisher, penalty_root)
+        # gdi1 rebuilds P and K from the QR of [sqrt(wf) X; E] for the EDF
+        # (gdi.c 2763-2811): F and tr(F) from that QR, no normal equations.
+        fisher_hat, fisher_edf = penalized_qr_hat(
+            jnp.sqrt(jnp.maximum(W_fisher, 0.0))[:, None] * X, penalty_root
+        )
+        if family.is_canonical:
+            gdi1_beta, L, gdi1_solved = _positive_qr_solve(
+                X, W_obs, z_obs, penalty_root
+            )
+        else:
+            L = jnp.linalg.cholesky(XtWX + S_lambda)
+            gdi1_beta, _gdi1_L, gdi1_solved, _gdi1_indefinite = _checked_exact_solve(
+                XtWX, S_lambda, X.T @ (W_obs * z_obs)
+            )
     gdi1_eta = X @ gdi1_beta + offset
     gdi1_mu = family.link.inverse(gdi1_eta)
     gdi1_candidate_valid = (
@@ -581,6 +643,8 @@ def _efs_regular_pirls_loop_jit(
         working_weights=W_obs,
         XtWX_fisher=XtWX_fisher,
         L_fisher=L_fisher,
+        fisher_hat=fisher_hat,
+        fisher_edf=fisher_edf,
     )
     return EFSRegularPIRLSResult(
         pirls_result=pirls_result,
@@ -613,8 +677,9 @@ def efs_regular_pirls_loop(
     start_present: bool,
     max_iter: int = 100,
     tol: float = 1e-7,
+    penalty_root: jax.Array | None = None,
 ) -> EFSRegularPIRLSResult:
-    """Run the dedicated JIT-compatible EFS regular-family PIRLS loop."""
+    """Run the dedicated JIT-compatible regular-family ``gam.fit3`` loop."""
     if offset is None:
         offset = jnp.zeros(X.shape[0], dtype=X.dtype)
     return _efs_regular_pirls_loop_jit(
@@ -629,6 +694,7 @@ def efs_regular_pirls_loop(
         wt,
         offset,
         scale,
+        penalty_root,
         start_present=start_present,
         max_iter=max_iter,
         tol=tol,

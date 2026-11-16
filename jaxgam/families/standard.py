@@ -652,9 +652,8 @@ class Poisson(ExponentialFamily):
         return mu > 0
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
-        """All finite eta are valid for Poisson."""
-        xp = array_module(eta)
-        return xp.isfinite(eta)
+        """R ``poisson()$valideta`` is its link's ``make.link`` domain."""
+        return self.link.valid_eta(eta)
 
 
 class Gamma(ExponentialFamily):

@@ -69,6 +69,7 @@ from jaxgam.fitting.reml import (
     fletcher_scale,
     uses_qr_log_det,
 )
+from jaxgam.fitting.source_pirls import source_pirls, status_message
 from jaxgam.jax_utils import cho_factor
 
 # R's default Newton convergence tolerance (gam.control()$newton$conv.tol).
@@ -110,27 +111,60 @@ _GRAD_FILTER_THRESH = 0.001
 # significantly increasing compile and run time.
 
 
-def _hessian_qr(
-    family: ExponentialFamily,
-    penalty_roots: penalty_ops.JaxPenaltyRoots | None,
-    rank_deficit: int,
+def _inner_fit(
     X: jax.Array,
-    weights: jax.Array,
-) -> tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None:
-    """QR log|H| inputs for a nonnegative-weight full-rank system, else None.
+    y: jax.Array,
+    beta_start: jax.Array,
+    S_lambda: jax.Array,
+    family: ExponentialFamily,
+    wt: jax.Array,
+    offset: jax.Array | None,
+    *,
+    tol: float,
+    log_theta: jax.Array | None = None,
+    penalty_root: jax.Array | None = None,
+    null_beta: jax.Array | None = None,
+    scale: jax.Array | float = 1.0,
+    count_indices: jax.Array | None = None,
+    max_y: int = 0,
+    integer_counts: bool = True,
+) -> PIRLSResult:
+    """Coefficient fit at fixed smoothing: pinned source loop or ordinary.
 
-    Mirrors ``reml.uses_qr_log_det`` with the traced arguments of the fused
-    and differentiable scores (``family``, the roots' presence and
-    ``rank_deficit`` are static there).
+    ``null_beta`` (R's ``null.coef``) selects the pinned ``gam.fit3`` /
+    ``gam.fit4`` loop (``source_pirls``); without it (structurally
+    rank-deficient models, manual fixtures) the ordinary loop runs.
     """
-    if (
-        penalty_roots is None
-        or rank_deficit != 0
-        or not family.is_canonical
-        or family.n_theta != 0
-    ):
-        return None
-    return jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * X, penalty_roots
+    if null_beta is None:
+        return pirls_loop(
+            X,
+            y,
+            beta_start,
+            S_lambda,
+            family,
+            wt,
+            offset,
+            tol=tol,
+            log_theta=log_theta,
+            penalty_root=penalty_root,
+        )
+    return source_pirls(
+        X,
+        y,
+        beta_start,
+        S_lambda,
+        family,
+        wt,
+        offset,
+        null_beta,
+        scale=scale,
+        log_theta=log_theta,
+        count_indices=count_indices,
+        max_y=max_y,
+        integer_counts=integer_counts,
+        penalty_root=penalty_root,
+        tol=tol,
+    ).pirls_result
 
 
 def factorization_fallbacks(
@@ -169,6 +203,29 @@ def fallback_note(levels: dict[str, float]) -> str:
     return f"; fallback jitter {max(fired.values()):g} in " + ", ".join(fired)
 
 
+def _hessian_qr(
+    family: ExponentialFamily,
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None,
+    rank_deficit: int,
+    X: jax.Array,
+    weights: jax.Array,
+) -> tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None:
+    """QR log|H| inputs for a nonnegative-weight full-rank system, else None.
+
+    Mirrors ``reml.uses_qr_log_det`` with the traced arguments of the fused
+    and differentiable scores (``family``, the roots' presence and
+    ``rank_deficit`` are static there).
+    """
+    if (
+        penalty_roots is None
+        or rank_deficit != 0
+        or not family.is_canonical
+        or family.n_theta != 0
+    ):
+        return None
+    return jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * X, penalty_roots
+
+
 def _diff_score(
     # Dynamic args (JAX arrays, differentiated through)
     params: jax.Array,
@@ -197,6 +254,7 @@ def _diff_score(
     integer_counts: bool = True,
     rank_deficit: int = 0,
     penalty_roots: penalty_ops.JaxPenaltyRoots | None = None,
+    null_beta: jax.Array | None = None,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
@@ -311,7 +369,7 @@ def _diff_score(
 
         @jax.custom_jvp
         def _pirls_out_ext(S_lam, lt, bw):
-            result = pirls_loop(
+            result = _inner_fit(
                 X,
                 y,
                 bw,
@@ -321,6 +379,10 @@ def _diff_score(
                 offset,
                 tol=pirls_tol,
                 log_theta=lt,
+                null_beta=null_beta,
+                count_indices=count_indices,
+                max_y=max_y,
+                integer_counts=integer_counts,
             )
             return result.coefficients, result.XtWX, result.deviance
 
@@ -380,8 +442,8 @@ def _diff_score(
         )
 
         @jax.custom_jvp
-        def _pirls_out(S_lambda_inner, root_inner, beta_warm_inner):
-            result = pirls_loop(
+        def _pirls_out(S_lambda_inner, root_inner, scale_inner, beta_warm_inner):
+            result = _inner_fit(
                 X,
                 y,
                 beta_warm_inner,
@@ -391,6 +453,11 @@ def _diff_score(
                 offset,
                 tol=pirls_tol,
                 penalty_root=root_inner,
+                null_beta=null_beta,
+                scale=scale_inner,
+                count_indices=count_indices,
+                max_y=max_y,
+                integer_counts=integer_counts,
             )
             return (
                 result.coefficients,
@@ -401,11 +468,13 @@ def _diff_score(
 
         @_pirls_out.defjvp
         def _pirls_jvp(primals, tangents):
-            S_lambda_inner, root_inner, beta_warm_inner = primals
+            # The scale only sets gam.fit3's convergence threshold; like E, its
+            # tangent carries no information about the stationary point.
+            S_lambda_inner, root_inner, scale_inner, beta_warm_inner = primals
             dS = tangents[0]
 
             beta, XtWX, dev, weights = _pirls_out(
-                S_lambda_inner, root_inner, beta_warm_inner
+                S_lambda_inner, root_inner, scale_inner, beta_warm_inner
             )
 
             # IFT: dβ = -H⁻¹(dS @ β)
@@ -460,7 +529,7 @@ def _diff_score(
 
             return (beta, XtWX, dev, weights), (dbeta, dXtWX, ddev, dW)
 
-        beta, XtWX, dev, weights = _pirls_out(S_lambda, penalty_root, beta_warm)
+        beta, XtWX, dev, weights = _pirls_out(S_lambda, penalty_root, phi, beta_warm)
         hessian_qr = _hessian_qr(family, penalty_roots, rank_deficit, X, weights)
 
     # ---- Criterion score ----
@@ -576,6 +645,7 @@ def _fit_and_score_impl(
     integer_counts: bool = True,
     rank_deficit: int = 0,
     penalty_roots: penalty_ops.JaxPenaltyRoots | None = None,
+    null_beta: jax.Array | None = None,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
@@ -633,7 +703,7 @@ def _fit_and_score_impl(
             ls_sat = family.saturated_loglik(y, wt, phi, max_y=max_y)
 
     S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
-    pirls_result = pirls_loop(
+    pirls_result = _inner_fit(
         X,
         y,
         beta_init,
@@ -648,6 +718,11 @@ def _fit_and_score_impl(
             if penalty_roots is None
             else penalty_ops.augmented_root(penalty_roots, log_lambda)
         ),
+        null_beta=null_beta,
+        scale=phi,
+        count_indices=count_indices,
+        max_y=max_y,
+        integer_counts=integer_counts,
     )
 
     core = _criterion_core(
@@ -1100,6 +1175,7 @@ class NewtonOptimizer:
                 "singleton_eig_constants": fd.singleton_eig_constants,
                 "multi_block_proj_S": fd.multi_block_proj_S,
                 "penalty_roots": fd.penalty_roots,
+                "null_beta": fd.null_beta if fd.uses_source_loop else None,
                 "count_indices": (
                     fd.count_prefix_plan.indices
                     if fd.count_prefix_plan is not None
@@ -1154,6 +1230,16 @@ class NewtonOptimizer:
             self._diff_grad_hess = _grad_hess_fn
         else:
             self._diff_grad_hess = None
+
+    def _source_kwargs(self) -> dict:
+        """Source inner-loop arguments shared by eager PIRLS calls."""
+        kw = self._jit_kwargs
+        return {
+            "null_beta": kw.get("null_beta"),
+            "count_indices": kw.get("count_indices"),
+            "max_y": kw.get("max_y", 0),
+            "integer_counts": kw.get("integer_counts", True),
+        }
 
     def _clamp_params(self, params: jax.Array) -> jax.Array:
         """Optionally clamp the free log smoothing parameters.
@@ -1712,6 +1798,17 @@ class NewtonOptimizer:
             info = "step failed"
         else:
             info = "iteration limit"
+        # The compressed Gaussian QR score provider (PR9) has no inner loop.
+        source_loop = self._jit_kwargs.get("null_beta") is not None
+        if finite and source_loop and not bool(pirls_result.converged):
+            # The final coefficients are those of a failed pinned inner fit (R
+            # stops there with "inner loop k; can't correct step size"): never
+            # a converged result.  The ordinary loop (structurally
+            # rank-deficient models) keeps its existing outer-only report.
+            converged = False
+            info = f"{info}; inner fit did not converge: " + status_message(
+                self._fd.family, int(np.asarray(pirls_result.inner_status))
+            )
 
         n_lambda = self._fd.n_penalties
         log_lambda = params[:n_lambda]
@@ -1780,7 +1877,7 @@ class NewtonOptimizer:
             log_theta = None
             if fd.family.n_theta > 0:
                 log_theta = jnp.asarray(fd.family.get_theta(transformed=False))
-            pirls_result = pirls_loop(
+            pirls_result = _inner_fit(
                 fd.X,
                 fd.y,
                 self._initial_beta(),
@@ -1791,6 +1888,7 @@ class NewtonOptimizer:
                 tol=self._pirls_tol,
                 log_theta=log_theta,
                 penalty_root=fd.penalty_root(log_lambda),
+                **self._source_kwargs(),
             )
             criterion = self._make_criterion(pirls_result)
             score = criterion.score(log_lambda)
@@ -1824,7 +1922,7 @@ class NewtonOptimizer:
                 log_theta_init_for_pirls = jnp.asarray(
                     fd.family.get_theta(transformed=False)
                 )
-            pirls_init = pirls_loop(
+            pirls_init = _inner_fit(
                 fd.X,
                 fd.y,
                 self._initial_beta(),
@@ -1835,6 +1933,7 @@ class NewtonOptimizer:
                 tol=self._pirls_tol,
                 log_theta=log_theta_init_for_pirls,
                 penalty_root=fd.penalty_root(log_lambda),
+                **self._source_kwargs(),
             )
             # Fisher-weighted EDF (XtWX may be observed info for non-canonical).
             edf_init = fisher_edf(pirls_init)

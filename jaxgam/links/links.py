@@ -131,6 +131,14 @@ class Link(ABC):
         """Alias for ``inverse``: μ = g⁻¹(η)."""
         return self.inverse(eta)
 
+    def valid_eta(self, eta: Array) -> Array:
+        """Elementwise R ``make.link(...)$valideta`` domain of the link.
+
+        Links whose inverse is defined for every finite eta accept all finite
+        values; links with a restricted domain override this.
+        """
+        return array_module(eta).isfinite(eta)
+
     def mu_eta(self, eta: Array) -> Array:
         """Derivative of the inverse link: dμ/dη = 1/g'(g⁻¹(η)).
 
@@ -461,6 +469,17 @@ class SqrtLink(Link):
     def source_g2g(self, mu: Array) -> Array:
         """``- mu^-.5``."""
         return -(mu**-0.5)
+
+    def valid_eta(self, eta: Array) -> Array:
+        """R ``make.link("sqrt")$valideta``: finite and strictly positive.
+
+        ``mu = eta**2`` would also map negative eta to a positive mean, but
+        that branch is outside the link's model: ``g(mu) = sqrt(mu)`` and the
+        mu-based working quantities (``g'(mu) = 1/(2 sqrt(mu))``) assume
+        ``eta > 0``.
+        """
+        xp = array_module(eta)
+        return xp.isfinite(eta) & (eta > 0)
 
 
 class InverseSquaredLink(Link):

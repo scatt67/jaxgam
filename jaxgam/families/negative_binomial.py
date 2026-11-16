@@ -309,9 +309,8 @@ class NegativeBinomial(ExtendedFamily):
         return mu > 0
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
-        """All finite eta are valid for NB."""
-        xp = array_module(eta)
-        return xp.isfinite(eta)
+        """R ``nb()$valideta`` is its link's ``make.link`` domain (efam.r)."""
+        return self.link.valid_eta(eta)
 
     # ------------------------------------------------------------------
     # Pure-function factories (explicit theta for AD in custom_jvp)
