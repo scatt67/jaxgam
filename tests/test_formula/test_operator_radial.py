@@ -25,7 +25,7 @@ from jaxgam.formula.parser import parse_formula
 from jaxgam.inference.operator_geometry import OperatorPredictionGeometry
 from jaxgam.smooths import source_lapack
 from jaxgam.smooths.tprs import TPRSSmooth
-from tests.helpers import _AssertCollector, make_smooth_spec
+from tests.helpers import _AssertCollector, make_smooth_spec, r_links_pinned_openblas
 from tests.tolerances import (
     MODERATE,
     STRICT,
@@ -185,7 +185,12 @@ def test_radial_operator_matches_pinned_smoothcon(
 
 
 def test_random_ti_k6_retains_exact_fixture_and_narrow_moderate_basis(r_bridge) -> None:
-    """The sole conditioned cross-provider residue keeps its exact fixture."""
+    """The conditioned random ti k6 basis keeps its exact fixture.
+
+    It is bitwise equal to R linked to the pinned OpenBLAS 0.3.26 and is STRICT
+    there; the reviewed MODERATE basis allowance remains only against R linked
+    to another BLAS, whose Rlanczos rounds differently.
+    """
     rng = np.random.default_rng(92612)
     x = rng.normal(size=73)
     z = 0.3 * x + rng.normal(size=73)
@@ -209,9 +214,8 @@ def test_random_ti_k6_retains_exact_fixture_and_narrow_moderate_basis(r_bridge) 
     expected = r_bridge.smooth_construct(
         "ti(x,z,bs='tp',k=c(6,6))", frame, absorb_cons=True
     )
-    np.testing.assert_allclose(
-        rows, expected["X"], rtol=MODERATE.rtol, atol=MODERATE.atol
-    )
+    basis = STRICT if r_links_pinned_openblas(r_bridge) else MODERATE
+    np.testing.assert_allclose(rows, expected["X"], rtol=basis.rtol, atol=basis.atol)
     np.testing.assert_allclose(
         model.penalties.materialize(),
         sum(expected["S"]),
