@@ -438,6 +438,133 @@ def test_fixed_penalty_matches_r_and_is_left_untransformed(r_bridge) -> None:
     collector.raise_if_any("fixed penalty")
 
 
+# Multi-smooth models: per smooth either ("single", cr k) or a tensor block
+# name.  Log sp differ by up to 60 across blocks; within a multi-penalty block
+# no two log sp are exactly 10 apart (the reviewed grouped regime above).
+_MODELS = {
+    "s+te": (
+        (("single", 10), "te_cr_k5"),
+        [
+            (0.0, 0.0, 0.0),
+            (60.0, 0.0, 0.0),
+            (0.0, 60.0, 0.0),
+            (-60.0, 0.0, 40.0),
+            (30.0, -30.0, 30.0),
+            (-40.0, 20.0, -40.0),
+        ],
+    ),
+    "s+ti+te3": (
+        (("single", 8), "ti_tp_k6", "te_cr_k4_3d"),
+        [
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            (60.0, 0.0, 5.0, -20.0, 0.0, 20.0),
+            (-60.0, 40.0, 0.0, 0.0, 0.0, 0.0),
+            (0.0, -30.0, 10.0, 60.0, 40.0, 20.0),
+            (20.0, 20.0, 20.0, -40.0, -40.0, -40.0),
+            (-40.0, 60.0, 0.0, 30.0, -10.0, 10.0),
+        ],
+    ),
+    "s+s+te": (
+        (("single", 10), ("single", 6), "te_tp_k5"),
+        [
+            (0.0, 0.0, 0.0, 0.0),
+            (60.0, -60.0, 0.0, 20.0),
+            (-30.0, 30.0, 40.0, 0.0),
+            (0.0, 0.0, -60.0, 0.0),
+        ],
+    ),
+}
+
+
+# STOP item for root (2026-11-16), not a tolerance: det2 of the per-block sum
+# misses R's global call at STRICT at these four points, always in one entry,
+# det2[1,1] (ti tp k6, first penalty), whose value det1_i - sp_i^2 tr(...)
+# inherits det1's absolute rounding.  Against a 110-digit evaluation of the
+# global problem (stables-logs/perblock_truth.log), max |det2 error| is
+# (per-block, R global, port global):
+#   (60,0,5,-20,0,20)    3.4e-15, 5.3e-10, 4.5e-10
+#   (-60,40,0,0,0,0)     3.2e-11, 1.1e-10, 1.0e-10
+#   (0,-30,10,60,40,20)  1.0e-12, 1.1e-11, 2.9e-12
+#   (-40,60,0,30,-10,10) 5.7e-11, 4.2e-11, 3.4e-11
+# so the global call is the less accurate side at three of the four.  det and
+# det1 remain STRICT at these points; only det2 is held out pending decision.
+_PER_BLOCK_DET2_HELD_OUT = {
+    ("s+ti+te3", (60.0, 0.0, 5.0, -20.0, 0.0, 20.0)),
+    ("s+ti+te3", (-60.0, 40.0, 0.0, 0.0, 0.0, 0.0)),
+    ("s+ti+te3", (0.0, -30.0, 10.0, 60.0, 40.0, 20.0)),
+    ("s+ti+te3", (-40.0, 60.0, 0.0, 30.0, -10.0, 10.0)),
+}
+
+
+def _model_block_roots(model: str) -> list[tuple[np.ndarray, ...]]:
+    return [
+        (_cubic_range_root(block[1]),)
+        if isinstance(block, tuple)
+        else _range_roots(block)
+        for block in _MODELS[model][0]
+    ]
+
+
+def _global_roots(blocks: list[tuple[np.ndarray, ...]]) -> list[np.ndarray]:
+    """Embed every block's range roots in one global coordinate vector."""
+    size = sum(roots[0].shape[0] for roots in blocks)
+    result, offset = [], 0
+    for roots in blocks:
+        rows = roots[0].shape[0]
+        for root in roots:
+            embedded = np.zeros((size, root.shape[1]))
+            embedded[offset : offset + rows] = root
+            result.append(embedded)
+        offset += rows
+    return result
+
+
+def _per_block_determinant(blocks, rho: np.ndarray):
+    """Sum of per-block det, det1, det2; singleton blocks use rank*rho + const."""
+    n_sp = len(rho)
+    det, det1, det2 = 0.0, np.zeros(n_sp), np.zeros((n_sp, n_sp))
+    start = 0
+    for roots in blocks:
+        index = slice(start, start + len(roots))
+        if len(roots) == 1:
+            rank = roots[0].shape[1]
+            constant = np.linalg.slogdet(roots[0] @ roots[0].T)[1]
+            det += rank * rho[start] + constant
+            det1[start] = rank
+        else:
+            local = stable_reparam(roots, rho[index], deriv=2)
+            det += local.det
+            det1[index] = local.det1
+            det2[index, index] = local.det2
+        start += len(roots)
+    return det, det1, det2
+
+
+@pytest.mark.parametrize("model", list(_MODELS))
+def test_per_block_determinants_sum_to_pinned_global_reparam(
+    model: str, r_bridge
+) -> None:
+    """Justify the per-block call: it reproduces R's single global call.
+
+    Pinned gam.fit3 calls gam.reparam once on all UrS; the sum of per-block
+    det/det1/det2 (singletons exact) equals it at STRICT, except det2 at the
+    four held-out points above.
+    """
+    blocks = _model_block_roots(model)
+    roots = _global_roots(blocks)
+    collector = _AssertCollector()
+    for values in _MODELS[model][1]:
+        rho = np.asarray(values)
+        det, det1, det2 = _per_block_determinant(blocks, rho)
+        theirs = r_bridge.source_gam_reparam(roots, rho, 2)
+        label = f"{model} rho={values}"
+        collector.check(f"{label} det", partial(_close, det, theirs.det, "det"))
+        collector.check(f"{label} det1", partial(_close, det1, theirs.det1, "det1"))
+        if (model, values) not in _PER_BLOCK_DET2_HELD_OUT:
+            collector.check(f"{label} det2", partial(_close, det2, theirs.det2, "det2"))
+    collector.raise_if_any(f"{model} per-block vs global")
+
+
 def _null_dimension(S: np.ndarray) -> int:
     """Null dimension of S after gam.reparam's diagonal pre-conditioning."""
     diagonal = np.sqrt(np.abs(np.diag(S)))
