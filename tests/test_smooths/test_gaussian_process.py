@@ -806,18 +806,26 @@ def test_raw_basis_penalty_and_prediction_match_pinned_smoothcon(r_bridge) -> No
 
 
 def _sampled_knot_cases() -> dict[str, tuple[pd.DataFrame, list[str], int, int, int]]:
-    """Runtime-generated GP cases around smooth.construct.gp's knot sample.
+    """Runtime-generated GP cases around smooth.construct.gp's knot choice.
 
-    Negative covariates make R's ``uniquecombs`` label order differ from the
-    numeric order, duplicated rows exercise its first-row deduplication, and
-    ``max_knots`` equal to (no sample) and one below (sample) the unique-row
-    count bracket the sampling condition. Entries are (data, variables, k,
-    max_knots, seed).
+    Negative covariates and values of 10 or more make R's ``uniquecombs``
+    label order differ from the numeric order (sampled and unsampled),
+    duplicated rows exercise its first-row deduplication, and ``max_knots``
+    equal to (no sample) and one below (sample) the unique-row count bracket
+    the sampling condition. Entries are (data, variables, k, max_knots, seed).
     """
     rng = np.random.default_rng(20261116)
     base = pd.DataFrame({"x": rng.normal(size=45), "z": rng.uniform(-2.0, 3.0, 45)})
     duplicated = pd.concat([base, base, base, base.iloc[[4]]], ignore_index=True)
     unit = pd.DataFrame({"x": rng.uniform(0, 1, 60), "z": rng.uniform(0, 1, 60)})
+    wide = pd.DataFrame({"x": rng.uniform(-15, 25, 80), "z": rng.normal(0, 8, 80)})
+    wide3 = pd.DataFrame(
+        {
+            "x": rng.uniform(-15, 25, 70),
+            "z": rng.normal(0, 8, 70),
+            "w": rng.uniform(-3, 12, 70),
+        }
+    )
     return {
         "one/seed3": (
             pd.DataFrame({"x": rng.uniform(-2.0, 3.0, 120)}),
@@ -841,20 +849,23 @@ def _sampled_knot_cases() -> dict[str, tuple[pd.DataFrame, list[str], int, int, 
             7,
         ),
         "two/duplicated": (duplicated, ["x", "z"], 10, 30, 11),
-        # Labels of values in (0, 1) sort like the numbers, so the unsampled
-        # unique-row order is R's as well.
         "two/max_knots=nu": (unit, ["x", "z"], 10, 60, 5),
         "two/max_knots=nu-1": (unit, ["x", "z"], 10, 59, 5),
+        # Unsampled: negative values and values of 10 or more collate in a
+        # different order from the numbers.
+        "two/unsampled": (wide, ["x", "z"], 12, 2000, 1),
+        "three/unsampled": (wide3, ["x", "z", "w"], 15, 2000, 1),
     }
 
 
 @pytest.mark.platform_sensitive
 @pytest.mark.skipif(not r_available(), reason="R+mgcv not available")
 def test_sampled_knots_match_pinned_smoothcon(r_bridge) -> None:
-    """Sampled knots, basis, penalty and PredictMat rows against pinned mgcv.
+    """GP knots, basis, penalty and PredictMat rows against pinned mgcv.
 
-    With more unique rows than ``max_knots``, smooth.construct.gp samples
-    ``uniquecombs(x, TRUE)`` under ``temp.seed(seed)``. The selected centered
+    smooth.construct.gp takes ``uniquecombs(x, TRUE)``'s ordered unique rows
+    and, with more of them than ``max_knots``, samples them under
+    ``temp.seed(seed)``. The selected centered
     knots are bitwise R's on every platform (a row selection and the shared
     ``colMeans`` shift); X, S and new-row predictions are bitwise against R
     linked to the pinned OpenBLAS 0.3.26 and STRICT against other-BLAS R.

@@ -1842,11 +1842,10 @@ byte order; the sample is the first `max_knots` draws of the ported
 compared with pinned `smoothCon` at STRICT
 (`test_sampled_knots_match_pinned_smoothcon`).
 
-Without sampling the dense knots are the exactly unique rows in NumPy's
-lexicographic order. For one covariate that is R's order. For several
-covariates whose labels do not sort like the numbers (for example negative
-values), R's order differs, which changes the Lanczos start and hence the
-basis; that unsampled ordering is not yet ported.
+Without sampling the knots are the same ordered unique rows. Their order
+matters even then: it sets the Lanczos start and hence the basis, and for
+several covariates R's label order differs from the numeric order whenever
+labels do not sort like the numbers (negative values, values of 10 or more).
 
 ---
 
