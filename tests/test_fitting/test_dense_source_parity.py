@@ -38,7 +38,12 @@ from jaxgam.penalties.structure import (
     PenaltyStructure,
     make_penalty_structure,
 )
-from tests.helpers import _AssertCollector, check_that, r_available
+from tests.helpers import (
+    _AssertCollector,
+    check_flat_ridge_endpoint,
+    check_that,
+    r_available,
+)
 from tests.tolerances import STRICT
 
 _LOG_SP_SWEEP = (0.0, 10.0, 20.0, 30.0, 40.0)
@@ -472,3 +477,77 @@ def test_public_ti_tp_fixed_at_r_reml_sp_matches_pinned_r(r_bridge) -> None:
         )
     _assert_hard_gates(fit, "ti tp at R's sp", collector)
     collector.raise_if_any("public ti(tp) at R's REML sp")
+
+
+def _ridge_fixed_fits(r_bridge, jax_formula: str, r_formula: str, data):
+    """Fixed-sp fit callables for ``check_flat_ridge_endpoint`` (Gaussian)."""
+
+    def jax_fixed(sp):
+        fit = GAM(jax_formula, sp=list(np.asarray(sp))).fit(data)
+        return {
+            "score": fit.score,
+            "fitted_values": fit.fitted_values,
+            "deviance": fit.deviance,
+        }
+
+    def r_fixed(sp):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return r_bridge.fit_fixed_sp(r_formula, data, "gaussian", np.asarray(sp))
+
+    return jax_fixed, r_fixed
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+@pytest.mark.parametrize(
+    ("case", "jax_formula", "r_formula"),
+    [
+        (
+            "public ti(tp) (root Q7)",
+            "y ~ ti(x, z, bs='tp', k=6)",
+            "y~ti(x,z,bs='tp',k=c(6,6))",
+        ),
+        (
+            "finding-3 low-noise linear (root Q3)",
+            "y ~ s(x, bs='cr', k=8)",
+            "y ~ s(x, bs='cr', k=8)",
+        ),
+    ],
+)
+def test_reml_on_a_flat_ridge_meets_the_flat_ridge_rule(
+    r_bridge, case: str, jax_formula: str, r_formula: str
+) -> None:
+    """REML whose infimum lies along a ridge toward sp -> inf.
+
+    Pinned R's default-control newton stops on the ridge ("full convergence";
+    its test is relative to |score|), so R's endpoint is not stationary for
+    R's own criterion and the Newton-completed-point rule does not apply
+    (root decision 1).  Measured: Q7 JaxGAM at sp (8.6e5, 1.8e5), score
+    1.16e-4 below R's at (2.0e3, 2.0e4); finding 3 JaxGAM at log sp 21.14,
+    2.7e-5 below R's at 17.39; criteria agree to ~1e-12 at both endpoints.
+    Before the series (bb76a71) the finding-3 fit failed ("step failed") and
+    the criteria disagreed by 3e-7..3e-5 at matched sp.
+    """
+    if case.startswith("public"):
+        data = _ti_tp_frame()
+    else:
+        rng = np.random.default_rng(2)
+        x = np.sort(rng.uniform(-1.0, 1.0, 150))
+        data = pd.DataFrame({"x": x, "y": 1.0 + 2.0 * x + rng.normal(0, 0.1, x.size)})
+    with contextlib.redirect_stdout(io.StringIO()):
+        reference = r_bridge.fit_gam(r_formula, data, "gaussian", "REML")
+    fit = GAM(jax_formula).fit(data)
+    jax_fixed, r_fixed = _ridge_fixed_fits(r_bridge, jax_formula, r_formula, data)
+    collector = _AssertCollector()
+    check_flat_ridge_endpoint(
+        collector,
+        case,
+        converged=bool(fit.converged),
+        jax_sp=np.asarray(fit.smoothing_params),
+        jax_score=float(fit.score),
+        r_sp=np.asarray(reference["smoothing_params"]),
+        r_score=float(reference["reml_score"]),
+        jax_fixed=jax_fixed,
+        r_fixed=r_fixed,
+    )
+    _assert_hard_gates(fit, case, collector)
+    collector.raise_if_any(f"flat-ridge REML endpoint: {case}")

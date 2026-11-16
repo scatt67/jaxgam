@@ -5,6 +5,7 @@ Public API (used directly by tests):
 - r_available() — import-time R check for @pytest.mark.skipif
 - r_tolerance() — tolerance tier by family
 - make_smooth_spec() — SmoothSpec factory with many call-site variants
+- check_flat_ridge_endpoint() — flat-ridge REML endpoint rule against pinned R
 
 Private API (used by conftest fixtures and complex test-local fixtures):
 - _generate_family_data() — single-predictor family data
@@ -21,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from jaxgam.formula.terms import SmoothSpec
-from tests.tolerances import LOOSE, MODERATE
+from tests.tolerances import LOOSE, MODERATE, STRICT
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -222,6 +223,91 @@ def check_that(condition: bool, message: str) -> None:
 # ---------------------------------------------------------------------------
 # SmoothSpec factory
 # ---------------------------------------------------------------------------
+
+
+def _strict_allowance(reference: float) -> float:
+    return STRICT.atol + STRICT.rtol * abs(float(reference))
+
+
+def check_flat_ridge_endpoint(
+    collector: _AssertCollector,
+    label: str,
+    *,
+    converged: bool,
+    jax_sp: np.ndarray,
+    jax_score: float,
+    r_sp: np.ndarray,
+    r_score: float,
+    jax_fixed: Callable[[np.ndarray], dict[str, Any]],
+    r_fixed: Callable[[np.ndarray], dict[str, Any]],
+) -> None:
+    """Root's flat-ridge endpoint rule (decision 1, 2026-11-16).
+
+    Where pinned R's REML endpoint is not stationary for R's own criterion
+    because the score keeps falling along a ridge, the Newton-completed-point
+    rule does not apply.  The endpoint is judged by:
+
+    (a) JaxGAM converged under its own contract;
+    (b) the two criteria agree at STRICT at both endpoints, each side through
+        its own fixed-sp fit (and each reported endpoint score equals its own
+        fixed-sp score there);
+    (c) JaxGAM's score is no higher than R's, to STRICT;
+    (d) the licence, asserted: R's own fixed-sp score at JaxGAM's endpoint is
+        lower than R's score at R's endpoint by more than STRICT;
+    (e) fitted values and deviance at both matched sp at STRICT.
+
+    ``jax_fixed`` / ``r_fixed`` map a smoothing-parameter vector to a dict
+    with ``score``, ``fitted_values`` and ``deviance``.  Hard-gate invariants
+    are the caller's (it owns the fit object).
+    """
+    jax_sp = np.asarray(jax_sp, dtype=np.float64)
+    r_sp = np.asarray(r_sp, dtype=np.float64)
+    fits = {
+        "JaxGAM endpoint": (jax_fixed(jax_sp), r_fixed(jax_sp)),
+        "R endpoint": (jax_fixed(r_sp), r_fixed(r_sp)),
+    }
+
+    def strict(actual, expected) -> None:
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+
+    collector.check(
+        f"{label}: (a) JaxGAM converged",
+        lambda: check_that(bool(converged), "JaxGAM endpoint not converged"),
+    )
+    for where, (jax_fit, r_fit) in fits.items():
+        collector.check(
+            f"{label}: (b) criteria agree at the {where}",
+            lambda j=jax_fit, r=r_fit: strict(j["score"], r["score"]),
+        )
+        for field in ("fitted_values", "deviance"):
+            collector.check(
+                f"{label}: (e) {field} at the {where}",
+                lambda j=jax_fit, r=r_fit, field=field: strict(j[field], r[field]),
+            )
+    collector.check(
+        f"{label}: (b) JaxGAM endpoint score is its fixed-sp score",
+        lambda: strict(jax_score, fits["JaxGAM endpoint"][0]["score"]),
+    )
+    collector.check(
+        f"{label}: (b) R endpoint score is its fixed-sp score",
+        lambda: strict(r_score, fits["R endpoint"][1]["score"]),
+    )
+    collector.check(
+        f"{label}: (c) JaxGAM score <= R score",
+        lambda: check_that(
+            jax_score <= r_score + _strict_allowance(r_score),
+            f"JaxGAM {jax_score!r} above R {r_score!r}",
+        ),
+    )
+    r_at_jax = float(fits["JaxGAM endpoint"][1]["score"])
+    r_at_r = float(fits["R endpoint"][1]["score"])
+    collector.check(
+        f"{label}: (d) licence: R's criterion is lower at JaxGAM's endpoint",
+        lambda: check_that(
+            r_at_jax < r_at_r - _strict_allowance(r_at_r),
+            f"R score at JaxGAM sp {r_at_jax!r} not below R endpoint {r_at_r!r}",
+        ),
+    )
 
 
 def make_smooth_spec(
