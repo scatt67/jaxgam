@@ -22,6 +22,7 @@ from jaxgam.smooths.gp_kernels import GPKernel, gp_kernel_registry
 from jaxgam.smooths.source_lapack import source_lanczos, source_r_matprod
 from jaxgam.smooths.utils import (
     DISTANCE_BATCH_ROWS,
+    radial_knot_options,
     source_column_means,
 )
 
@@ -229,9 +230,7 @@ class GaussianProcessSmooth(Smooth):
                     f"Variable '{v}' not found in data. Available: {list(data.keys())}"
                 )
 
-        xt = self.spec.extra_args.get("xt", {})
-        max_knots = xt.get("max_knots", xt.get("max.knots", 2000))
-        seed = xt.get("seed", 1)
+        max_knots, seed = radial_knot_options(self.spec)
 
         variables = self.spec.variables
         d = len(variables)

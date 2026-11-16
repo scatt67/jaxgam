@@ -27,8 +27,9 @@ from jaxgam.smooths.tprs import (
     _SourceColumnSquares,
     default_penalty_order,
     null_space_dimension,
+    source_supplied_knot_order,
 )
-from jaxgam.smooths.utils import _SourceMeanAccumulator
+from jaxgam.smooths.utils import _SourceMeanAccumulator, radial_knot_options
 
 if TYPE_CHECKING:
     from jaxgam.formula.operator_prepare import (
@@ -51,24 +52,20 @@ def radial_width(spec: SmoothSpec) -> int:
 
 def _radial_options(spec: SmoothSpec) -> tuple[int, int]:
     if spec.bs in {"tp", "ts"}:
-        allowed = {"m", "max_knots", "seed"}
-        unknown = set(spec.extra_args) - allowed
-        max_knots = spec.extra_args.get("max_knots", 2000)
-        seed = spec.extra_args.get("seed", 1)
+        allowed = {"m", "max_knots", "seed", "xt"}
     else:
         allowed = {"kernel", "rho", "power", "stationary", "xt"}
-        unknown = set(spec.extra_args) - allowed
-        xt = spec.extra_args.get("xt", {})
-        if not isinstance(xt, dict) or set(xt) - {"max_knots", "max.knots", "seed"}:
-            raise NotImplementedError(
-                "Operator GP xt supports only max_knots and seed."
-            )
-        max_knots = xt.get("max_knots", xt.get("max.knots", 2000))
-        seed = xt.get("seed", 1)
+    unknown = set(spec.extra_args) - allowed
+    xt = spec.extra_args.get("xt", {})
+    if not isinstance(xt, dict) or set(xt) - {"max_knots", "max.knots", "seed"}:
+        raise NotImplementedError(
+            f"Operator {spec.bs} xt supports only max_knots and seed."
+        )
     if unknown:
         raise NotImplementedError(
             f"Operator {spec.bs} options are unsupported: {sorted(unknown)}"
         )
+    max_knots, seed = radial_knot_options(spec)
     for name, value in (("max_knots", max_knots), ("seed", seed)):
         if isinstance(value, bool) or not isinstance(value, int):
             raise TypeError(f"{name} must be an integer")
@@ -243,8 +240,7 @@ def _collect_rows(
     if spec.bs in {"tp", "ts"}:
         # tprs.c passes supplied knots through Xd_strip, which sorts the
         # sampled locations before E/T and exposes that order as object$Xu.
-        order = np.lexsort(tuple(unique[:, j] for j in reversed(range(d))))
-        unique = unique[order].copy()
+        unique = source_supplied_knot_order(unique)
     source.reserved_bytes = base_reserved + int(unique.nbytes) + shift.nbytes
     return unique, shift, peak, sampled
 

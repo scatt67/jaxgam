@@ -18,6 +18,7 @@ from math import asin, ceil, comb, sqrt
 import numpy as np
 import numpy.typing as npt
 
+from jaxgam.data.source_tokens import r_sample_knot_rows, r_uniquecombs_ordered
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
@@ -39,12 +40,24 @@ from jaxgam.smooths.utils import (
     _compute_distance_matrix,
     _get_unique_rows,
     _SourceMeanAccumulator,
-    _subsample_knots,
+    radial_knot_options,
 )
 
 # ---------------------------------------------------------------------------
 # TPS semi-kernel helpers
 # ---------------------------------------------------------------------------
+
+
+def source_supplied_knot_order(knots: npt.NDArray[np.floating]) -> np.ndarray:
+    """Order supplied thin-plate knots as tprs.c's ``Xd_strip`` sorts them.
+
+    ``tprs_setup`` passes supplied knots through ``Xd_strip``, which sorts the
+    rows (first covariate first) before forming E and T and exposes that order
+    as ``object$Xu``.
+    """
+    knots = np.asarray(knots, dtype=np.float64)
+    order = np.lexsort(tuple(knots[:, j] for j in reversed(range(knots.shape[1]))))
+    return knots[order].copy()
 
 
 def default_penalty_order(d: int) -> int:
@@ -616,11 +629,18 @@ class TPRSSmooth(Smooth):
                 f"basis dimension k={k}. Reduce k or add more distinct data."
             )
 
-        # Subsample knots if too many unique values
-        max_knots = self.spec.extra_args.get("max_knots", 2000)
-        knots_from_data = n_unique <= max_knots
-        if not knots_from_data:
-            Xu = _subsample_knots(Xu, max_knots, seed=1)
+        # smooth.construct.tp: with more than max.knots data, sample
+        # max.knots of uniquecombs(x, TRUE)'s rows under temp.seed(seed);
+        # tprs_setup then receives them as knots.
+        max_knots, seed = radial_knot_options(self.spec)
+        knots_from_data = True
+        if n > max_knots:
+            r_unique = r_uniquecombs_ordered(X_centered)
+            if r_unique.shape[0] > max_knots:
+                knots_from_data = False
+                Xu = source_supplied_knot_order(
+                    r_sample_knot_rows(r_unique, max_knots, seed)
+                )
         self._Xu = Xu
 
         # Steps 6-10: shared tprs_setup knot construction.

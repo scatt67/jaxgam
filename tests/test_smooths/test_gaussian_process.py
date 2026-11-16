@@ -367,9 +367,9 @@ class TestKnotSubsampling:
             np.testing.assert_array_equal(s1._knt, s2._knt)
 
         def global_rng_untouched() -> None:
-            # _subsample_knots uses np.random.RandomState(seed) (legacy
-            # API for TPRS bit-exactness, see utils.py). Ensure it does
-            # not leak into the global legacy RNG state.
+            # The knot sample ports R's sampler on a private generator
+            # (source_tokens._RRandom). Ensure it does not leak into the
+            # global legacy RNG state.
             rng = np.random.RandomState(123)
             before_state = rng.get_state()
             np.random.set_state(before_state)  # noqa: NPY002

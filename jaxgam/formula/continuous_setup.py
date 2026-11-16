@@ -32,7 +32,12 @@ from jaxgam.formula.predict_matrix import PredictSpec, build_predict_spec
 from jaxgam.formula.terms import FormulaSpec, SmoothSpec
 from jaxgam.penalties.structure import PenaltyStructure
 from jaxgam.smooths.tprs import default_penalty_order, null_space_dimension
-from jaxgam.smooths.utils import get_factor_levels, is_factor, is_ordered_factor
+from jaxgam.smooths.utils import (
+    get_factor_levels,
+    is_factor,
+    is_ordered_factor,
+    radial_knot_options,
+)
 
 
 @dataclass(frozen=True)
@@ -198,7 +203,7 @@ def _prospective_basis_bytes(formula: FormulaSpec, frame: pd.DataFrame) -> int:
         base = _base_width(spec, frame)
         margin_work += q * base + base * base
         if spec.bs in {"tp", "ts", "gp"}:
-            knots = min(q, int(spec.extra_args.get("max_knots", 2000)))
+            knots = min(q, int(radial_knot_options(spec)[0]))
             margin_work += q * knots + knots * knots
     float_items = (
         8 * q * max(total, 1)  # block, constrained, assembled and ownership copies
