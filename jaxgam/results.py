@@ -367,6 +367,8 @@ class GAMPredictionResult:
     execution_route: str = field(default="dense", kw_only=True)
     execution_fallback_reason: str | None = field(default=None, kw_only=True)
     score_scale: float | None = field(default=None, kw_only=True)
+    # Admitted absolute error bound on the operator EFS ``score``; ``None``
+    # on every other route and when no calibrated bound was admitted.
     score_error_bound: float | None = field(default=None, kw_only=True)
     # Calibration that produced ``score_error_bound``; "unavailable" when an
     # operator EFS fit ended without an admitted bound.

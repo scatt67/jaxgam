@@ -210,9 +210,56 @@ The prediction result retains indexed geometry and coefficients, without the
 training source or a dense covariance. This fixed-sp route has `score=None`
 and `edf_total=None`; unknown-scale families also have `scale=None`. These
 quantities require additional trace and score providers. Standard errors,
-full/inference results, estimated theta and automatic smoothing selection are
-not available on this route. Dense and streamed direct routes retain their
-existing numeric results and uncertainty options.
+full/inference results and estimated theta are not available on this route;
+automatic smoothing selection is limited to the calibrated EFS regime below.
+Dense and streamed direct routes retain their existing numeric results and
+uncertainty options.
+
+### Calibrated operator EFS
+
+Omit `sp` and select `optimizer="efs"` to estimate the smoothing parameter of
+an operator fit:
+
+```python
+result = GAM(
+    'y ~ 0 + s(group, bs="re")',
+    family="poisson",
+    optimizer="efs",
+    control=FitControl(execution="operator", linear_solver="pcg", batch_rows=4096),
+).fit(source, result="prediction")
+```
+
+The controller follows pinned mgcv's `efsudr`, but each trial decision
+compares two operator REML scores that carry absolute error bounds. A trial
+is accepted or rejected only when both bounds are admitted and the score
+difference exceeds their sum. Otherwise the comparison is indeterminate and
+the fit stops with `converged=False` and
+`convergence_info="indeterminate_score"`, keeping the last accepted state.
+The other stop reasons are `score_window` and `deviance_change` (converged),
+and `iteration_limit`, `inner_failure` and `invalid_update` (not converged).
+
+The bounds are empirical: they were measured against an independent
+50-digit decimal REML reference over a fixed domain
+(`docs/scale_jaxgam/efs6_operator_calibration.md`). Only that domain is
+public: canonical Poisson with one indexed random effect, either alone or
+with at most 4 modest parametric coefficients (`y ~ x + s(group, bs="re")`),
+257 to 4096 levels, 1 to 16 rows per level and `batch_rows` from 64 to
+65536. Any other shape is rejected before EFS starts. Inside that domain a
+state's bound also needs unit prior weights, a zero offset, responses of at
+most 32, tight operator controls (`tolerance <= 1e-7`, `cg_rtol <= 1e-10`,
+`cg_atol <= 1e-12`) and the conditioning gates listed in the calibration
+note; a state that fails them has no admitted bound. The default
+`OperatorControl` meets those control limits, but its final gradients are
+larger than at the calibration's `tolerance=1e-11`, so more fits can end as
+indeterminate. Results report `lambda_strategy="efs_reml"`, the selected
+`smoothing_params`, `score`, `edf_total` and the score's error bound:
+`score_error_bound` and the calibration that produced it in
+`score_bound_method` (`indexed_poisson_empirical_v2` or
+`arrowhead_poisson_empirical_v2`). A bound of `None` with method
+`unavailable` means the accepted state was outside the admitted conditioning
+or control gates and no validated bound is claimed. These labels describe the
+score approximation; `converged` and `convergence_info` describe the
+optimizer, separately.
 
 ### Extended Fellner--Schall fitting
 
