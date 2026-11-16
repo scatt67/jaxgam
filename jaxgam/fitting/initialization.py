@@ -91,3 +91,21 @@ def initialize_beta(
 ) -> jax.Array:
     """Compute a CPU start and transfer it to JAX for standalone callers."""
     return jnp.asarray(initialize_beta_cpu(X, y, wt, family, offset))
+
+
+def r_null_coefficients(
+    X: np.ndarray, y: np.ndarray, family: ExponentialFamily
+) -> np.ndarray:
+    """Pinned ``get.null.coef`` (mgcv.r): the divergence/validity anchor.
+
+    ``qr.coef(qr(X), linkfun(mean(y)))`` with the *unweighted* response mean
+    and no offset adjustment; it is distinct from the PIRLS start.
+    """
+    response_mean = float(np.mean(np.asarray(y, dtype=np.float64)))
+    eta_mean = float(
+        np.asarray(family.link.initial_link_cpu(np.asarray([response_mean])))[0]
+    )
+    if not np.isfinite(eta_mean):
+        raise ValueError("The null coefficient anchor requires a finite link mean.")
+    X = np.asarray(X, dtype=np.float64)
+    return np.linalg.lstsq(X, np.full(X.shape[0], eta_mean), rcond=None)[0]

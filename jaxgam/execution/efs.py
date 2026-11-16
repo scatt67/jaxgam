@@ -47,6 +47,7 @@ from jaxgam.fitting.efs_regular_pirls import (
     EFS_REGULAR_STATUS_RANK_BOUNDARY_UNSUPPORTED,
     efs_regular_pirls_loop,
 )
+from jaxgam.fitting.initialization import r_null_coefficients
 from jaxgam.fitting.pirls import (
     _EFS_STATUS_DIVERGENCE_RECOVERY_FAILED,
     _EFS_STATUS_DOMAIN_RECOVERY_FAILED,
@@ -631,17 +632,13 @@ def _efs_regular_start(
     """
     family = fd.family
     y = np.asarray(fd.y, dtype=np.float64)
-    X = np.asarray(fd.X, dtype=np.float64)
-    response_mean = float(np.mean(y))
-    eta_mean = float(
-        np.asarray(family.link.initial_link_cpu(np.asarray([response_mean])))[0]
-    )
-    if not np.isfinite(eta_mean):
-        raise ValueError("EFS regular null coefficient requires a finite link mean")
-    null_beta = jnp.asarray(
-        np.linalg.lstsq(X, np.full(fd.n_obs, eta_mean), rcond=None)[0],
-        dtype=fd.X.dtype,
-    )
+    try:
+        null_coefficients = r_null_coefficients(np.asarray(fd.X), y, family)
+    except ValueError as error:
+        raise ValueError(
+            "EFS regular null coefficient requires a finite link mean"
+        ) from error
+    null_beta = jnp.asarray(null_coefficients, dtype=fd.X.dtype)
     offset = jnp.zeros_like(fd.y) if fd.offset is None else fd.offset
     null_eta = fd.X @ null_beta + offset
     if start_present:
