@@ -201,8 +201,13 @@ class CompositePenalty:
 
         # Compute weighted sum
         result = np.zeros_like(self.penalties[0].S)
+        # R forms smoothing parameters as exp(log sp) with the C library's exp.
+        # Imported here: jaxgam.smooths imports this module at package load.
+        from jaxgam.smooths.source_arithmetic import libm_exp
+
+        smoothing = libm_exp(np.asarray(log_lambda, dtype=np.float64))
         for j, penalty in enumerate(self.penalties):
-            lambda_j = np.exp(log_lambda[j])
+            lambda_j = smoothing[j]
             result = result + lambda_j * penalty.S
         return result
 

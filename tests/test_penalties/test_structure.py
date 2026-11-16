@@ -65,3 +65,29 @@ def test_zero_penalty_keeps_lambda_position_and_values_are_owned_readonly() -> N
     assert structure.n_penalties == 2
     assert structure.blocks[0].size == 0
     assert structure.blocks[0].sp_indices == (0,)
+
+
+def test_smoothing_weights_are_the_c_librarys_exp() -> None:
+    """R forms sp as exp(log sp) with C exp; NumPy's SIMD exp may differ."""
+    import math
+
+    from jaxgam.penalties.penalty import CompositePenalty, Penalty
+
+    rng = np.random.default_rng(29)
+    log_lambda = rng.uniform(-30.0, 30.0, 2)
+    structure = make_penalty_structure(
+        8,
+        [_term(1, 3, (0,)), _term(4, 4, (1,))],
+        [[np.diag([2.0, 3.0, 4.0])], [np.eye(4)]],
+    )
+    weights = [math.exp(value) for value in log_lambda]
+    materialized = structure.materialize(log_lambda)
+    np.testing.assert_array_equal(
+        materialized[1:4, 1:4], weights[0] * np.diag([2.0, 3.0, 4.0])
+    )
+    np.testing.assert_array_equal(materialized[4:, 4:], weights[1] * np.eye(4))
+    composite = CompositePenalty([Penalty(np.diag([2.0, 1.0])), Penalty(np.eye(2))])
+    np.testing.assert_array_equal(
+        composite.weighted_penalty(log_lambda),
+        np.zeros((2, 2)) + weights[0] * np.diag([2.0, 1.0]) + weights[1] * np.eye(2),
+    )

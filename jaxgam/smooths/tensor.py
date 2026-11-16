@@ -369,7 +369,9 @@ class TensorProductSmooth(Smooth):
         # Preserve that reduction order: NumPy's row/column sums can differ by
         # one ULP before the penalty scaling division.
         matrix_norm = linalg.get_lapack_funcs("lange", (X_tensor,))
-        max_x_sq = matrix_norm(b"I", X_tensor) ** 2
+        # R's norm(X, "I")^2 is R_pow with y == 2, i.e. x * x.
+        norm_x = matrix_norm(b"I", X_tensor)
+        max_x_sq = norm_x * norm_x
         if max_x_sq > 0:
             normalized = []
             for p in self._penalties:

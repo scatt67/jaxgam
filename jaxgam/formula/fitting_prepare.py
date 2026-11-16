@@ -26,7 +26,7 @@ from jaxgam.penalties.structure import (
     PenaltyBlock,
     PenaltyStructure,
 )
-from jaxgam.smooths.source_arithmetic import libm_exp
+from jaxgam.smooths.source_arithmetic import libm_exp, libm_log
 from jaxgam.smooths.source_penalty_coordinates import (
     scipy_uses_accelerate_lapack,
     source_symmetric_eigh,
@@ -554,7 +554,8 @@ def initial_log_sp_from_diagonal(
             break
         def_sp /= 10
         ldss_s /= 10
-    return np.log(np.maximum(def_sp, np.finfo(float).tiny))
+    # gam.outer takes R's log (the C library's) of initial.sp's values.
+    return libm_log(np.maximum(def_sp, np.finfo(float).tiny))
 
 
 def total_penalty_spaces(

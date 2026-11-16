@@ -184,10 +184,15 @@ class PenaltyStructure:
         if log_lambda is None:
             log_lambda = np.zeros(self.n_penalties)
         result = np.zeros((self.n_coef, self.n_coef))
+        # R forms smoothing parameters as exp(log sp) with the C library's exp.
+        # Imported here: jaxgam.smooths imports this module at package load.
+        from jaxgam.smooths.source_arithmetic import libm_exp
+
+        smoothing = libm_exp(np.asarray(log_lambda, dtype=np.float64))
         for block in self.blocks:
             local = np.zeros((block.size, block.size))
             for sp, S in zip(block.sp_indices, block.dense_penalties(), strict=True):
-                local += np.exp(log_lambda[sp]) * S
+                local += smoothing[sp] * S
             result[block.start : block.stop, block.start : block.stop] += local
         return result
 
