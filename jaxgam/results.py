@@ -42,6 +42,49 @@ if TYPE_CHECKING:
     from jaxgam.summary.summary import GAMSummary
 
 
+def _report_smoothing_params(
+    reported: npt.ArrayLike,
+    supplied: npt.ArrayLike | None,
+) -> np.ndarray:
+    """Return the smoothing parameters a result reports, supplied ones verbatim.
+
+    Every route fits with ``log(sp)`` and its optimizers carry log smoothing
+    parameters, so the fit's own natural-scale vector is ``exp(log(sp))``.
+    That round trip is not exact in floating point: it misses most decimal
+    inputs by one or more units in the last place, and by different amounts
+    on different CPUs and math libraries. A caller-supplied smoothing
+    parameter is an input, not an estimate, so every result builder reports
+    the supplied float64 values themselves. ``supplied=None`` (estimated
+    smoothing parameters) returns the fit's values unchanged.
+
+    This is reporting only: the fit has already used its own log values, and
+    nothing here feeds back into fitting.
+
+    Parameters
+    ----------
+    reported : array-like
+        The fit's natural-scale smoothing parameters, shape ``(m,)``.
+    supplied : array-like or None
+        The caller's ``sp`` (a scalar is accepted for one penalty), converted
+        with the same ``float64`` conversion the fitting routes log-transform.
+
+    Returns
+    -------
+    np.ndarray
+        A new float64 vector of shape ``(m,)``.
+    """
+    values = np.array(reported, dtype=np.float64, copy=True)
+    if supplied is None:
+        return values
+    given = np.array(np.atleast_1d(np.asarray(supplied, dtype=np.float64)), copy=True)
+    if given.shape != values.shape:
+        raise ValueError(
+            f"supplied smoothing parameters have shape {given.shape}, but the fit "
+            f"reports shape {values.shape}"
+        )
+    return given
+
+
 def _offset_was_nonzero(setup: ModelSetup) -> bool:
     """Whether fitting used an external offset that prediction cannot recover."""
     return setup.offset is not None and not np.allclose(setup.offset, 0.0)
@@ -432,12 +475,15 @@ class GAMPredictionResult:
         batches_scanned: int | None = None,
         known_workspace_bytes: int | None = None,
         exact_optimizer_diagnostics: StreamExactOptimizerDiagnostics | None = None,
+        supplied_smoothing_params: npt.ArrayLike | None = None,
     ) -> GAMPredictionResult:
         """Build compact prediction state directly from row-free stream state.
 
         ``selected_fit`` supplies outer-optimizer scalar provenance while the
         row-free ``stream_state`` continues to own coefficient/factor state.
         Omitting it preserves the established fixed-sp result byte semantics.
+        ``supplied_smoothing_params`` is the caller's ``sp``; it is reported
+        verbatim (see :func:`_report_smoothing_params`).
         """
         from jaxgam.fitting.reml import (
             reml_criterion,
@@ -622,7 +668,9 @@ class GAMPredictionResult:
             score=float(to_numpy(score)),
             scale=scale,
             theta=theta,
-            smoothing_params=smoothing_params,
+            smoothing_params=_report_smoothing_params(
+                smoothing_params, supplied_smoothing_params
+            ),
             edf_total=edf_total,
             converged=converged,
             n_iter=n_iter,
@@ -696,6 +744,7 @@ class GAMResults(_FitDiagnostics):
         control: FitControl | None = None,
         execution_route: str = "dense",
         execution_fallback_reason: str | None = None,
+        supplied_smoothing_params: npt.ArrayLike | None = None,
     ) -> GAMResults | GAMInferenceResult | GAMPredictionResult:
         """Construct the requested result materialization from raw fit output.
 
@@ -728,9 +777,15 @@ class GAMResults(_FitDiagnostics):
         result_mode : {"full", "inference"}
             Whether to retain full training-backed state or lean prediction
             state only.
+        supplied_smoothing_params : array-like, optional
+            The caller's ``sp``, reported verbatim (see
+            :func:`_report_smoothing_params`); ``None`` when estimated.
         """
         pr = fit_result.pirls_result
         control = FitControl() if control is None else control
+        smoothing_params = _report_smoothing_params(
+            to_numpy(fit_result.smoothing_params), supplied_smoothing_params
+        )
         optimizer_diagnostics = getattr(fit_result, "optimizer_diagnostics", None)
 
         # Snapshot after Newton has synchronized any fitted family parameters
@@ -797,7 +852,7 @@ class GAMResults(_FitDiagnostics):
                 score=float(to_numpy(fit_result.score)),
                 scale=scale,
                 theta=fit_result.theta,
-                smoothing_params=to_numpy(fit_result.smoothing_params),
+                smoothing_params=smoothing_params,
                 edf_total=float(to_numpy(fit_result.edf)),
                 converged=fit_result.converged,
                 n_iter=fit_result.n_iter,
@@ -852,7 +907,6 @@ class GAMResults(_FitDiagnostics):
         mu = to_numpy(pr.mu)
         eta = to_numpy(pr.eta)
         deviance = float(to_numpy(pr.deviance))
-        smoothing_params = to_numpy(fit_result.smoothing_params)
 
         diagnostics = {
             "edf": per_smooth_edf,

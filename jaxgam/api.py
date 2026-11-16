@@ -300,6 +300,9 @@ class GAM:
             method=self.method,
             result_mode=result,
             control=self.control,
+            supplied_smoothing_params=_fitted_supplied_sp(
+                self.sp, fit_result, fd.n_penalties
+            ),
         )
 
     def _fit_stream(
@@ -416,6 +419,7 @@ class GAM:
                 method=self.method,
                 control=self.control,
                 device=jax_device,
+                supplied_sp=self.sp,
             )
         if not _stream_legacy_fisher_eligible(family) or (
             self.control.linear_solver == "qr" and family.scale_known
@@ -429,6 +433,7 @@ class GAM:
                 method=self.method,
                 control=self.control,
                 device=jax_device,
+                supplied_sp=self.sp,
             )
         stream_state = fit_streamed_pirls(
             stream,
@@ -452,6 +457,7 @@ class GAM:
                 "stream_qr" if self.control.linear_solver == "qr" else "stream"
             ),
             known_workspace_bytes=known_workspace_bytes,
+            supplied_smoothing_params=self.sp,
         )
 
 
@@ -559,6 +565,7 @@ def _fit_stream_fixed_regular(
     method: str,
     control: FitControl,
     device: jax.Device | None,
+    supplied_sp: np.ndarray | list | float | None = None,
 ) -> GAMPredictionResult:
     from jaxgam.execution.regular_stream import fit_regular_streamed_pirls
     from jaxgam.execution.reml import optimize_regular_stream_reml
@@ -620,6 +627,7 @@ def _fit_stream_fixed_regular(
         source_scans=source_scans,
         batches_scanned=batches_scanned,
         known_workspace_bytes=known_workspace_bytes,
+        supplied_smoothing_params=supplied_sp,
     )
 
 
@@ -633,6 +641,7 @@ def _fit_stream_fixed_nb(
     method: str,
     control: FitControl,
     device: jax.Device | None,
+    supplied_sp: np.ndarray | list | float | None = None,
 ) -> GAMPredictionResult:
     from jaxgam.execution.nb_reml import optimize_nb_stream_reml
     from jaxgam.execution.nb_stream import fit_nb_streamed_pirls
@@ -705,6 +714,7 @@ def _fit_stream_fixed_nb(
         source_scans=source_scans,
         batches_scanned=batches_scanned,
         known_workspace_bytes=known_workspace_bytes,
+        supplied_smoothing_params=supplied_sp,
     )
 
 
@@ -1156,6 +1166,28 @@ def _fixed_log_smoothing_parameters(sp: np.ndarray | list, n_penalties: int):
             f"internally); got invalid value(s) {bad.tolist()}."
         )
     return jnp.log(jnp.array(sp_arr))
+
+
+def _fitted_supplied_sp(
+    sp: np.ndarray | list | float | None,
+    fit_result: NewtonResult,
+    n_penalties: int,
+) -> np.ndarray | list | float | None:
+    """The caller's ``sp`` for verbatim reporting, when the fit used it.
+
+    The known-scale fixed-sp route fits at ``log(sp)`` exactly. The pinned
+    Newton route (unknown scale or estimated theta) still passes its pinned
+    coordinates through the optimizer's ``|log sp| <= 40`` box, which leaves
+    in-box values unchanged but fits a supplied sp beyond the box at the
+    bound. Report the supplied values only when the fit's log smoothing
+    parameters are exactly ``log(sp)``; otherwise keep the fit's own values,
+    so the report never names smoothing parameters that were not fitted.
+    """
+    if sp is None:
+        return None
+    fitted = np.asarray(fit_result.log_lambda)
+    supplied = np.asarray(_fixed_log_smoothing_parameters(sp, n_penalties))
+    return sp if np.array_equal(fitted, supplied) else None
 
 
 def _fit_fixed_sp(
