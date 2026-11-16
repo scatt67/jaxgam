@@ -9,6 +9,7 @@ block's total penalty, the form in which pinned ``gam.fit3`` passes ``UrS`` to
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 from functools import cache, partial
 
@@ -24,7 +25,7 @@ from jaxgam.penalties.stable_reparam import (
 from jaxgam.smooths.cubic import CubicRegressionSmooth
 from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 from tests.helpers import _AssertCollector, check_that, make_smooth_spec
-from tests.tolerances import STRICT
+from tests.tolerances import MODERATE, STRICT, ToleranceClass
 
 # kind, margin basis, k, dimension
 _BLOCKS = {
@@ -143,28 +144,120 @@ def _fixed_root(size: int) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 
 
-def _det2_unresolved(name: str, rho: np.ndarray) -> bool:
-    """det2 points held out of the STRICT R gate pending the root decision.
+def _input_digest(roots, rho) -> str:
+    """SHA-256 of the generated gam.reparam inputs: each root, then log sp.
 
-    Two penalties grouped by d_tol (so not separated by the transform) whose
-    smoothing parameters differ by e^10, and one measured dominance point.
-    At these points the port and R are both ~1e-12..8e-11 (absolute) from a
-    110-digit reference; the remaining difference is LAPACK rounding in
-    DGEQP3/DORMQR.  See reports-20261116/get-stables.md.
+    Each array contributes its shape and its little-endian float64 bytes in C
+    order.
     """
-    spread = np.ptp(rho)
-    if len(rho) == 2:
-        grouped_gap = spread == 10.0
-    else:
-        ordered = np.sort(rho)
-        grouped_gap = bool(np.any(np.diff(ordered) == 10.0))
-    measured = name == "ti_tp_k6" and tuple(rho) == (0.0, 60.0)
-    return grouped_gap or measured
+    digest = hashlib.sha256()
+    for value in (*roots, rho):
+        array = np.asarray(value, dtype="<f8")
+        digest.update(repr(array.shape).encode())
+        digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+# Root decision 2026-11-16: det2 against pinned R is MODERATE at exactly these
+# 17 (block, log sp) points, on the exact generated roots and log sp reviewed,
+# and STRICT everywhere else; det and det1 stay STRICT everywhere.
+#
+# Measured (host: SciPy/Accelerate vs R 4.5.2 libRlapack 3.12.1 + Accelerate
+# BLAS; reports-20261116/stables-logs/holdout_measure.log): det2 misses STRICT
+# by 1.09x-97x and sits at <= 9.7e-5 of MODERATE.  Against a 110-digit Decimal
+# evaluation of the same float inputs, max |det2 error| is (port, R):
+#   te_tp_k5     (10,0) 2.5e-12, 3.5e-12   (0,10) 3.1e-12, 7.7e-13
+#                (-30,-40) 9.4e-13, 2.2e-12   (-40,-30) 2.1e-12, 5.4e-13
+#   ti_tp_k6     (0,60) 2.4e-13, 8.5e-13
+#   te_cr_k4_3d  (-10,0,10) 3.3e-11, 3.8e-11   (-10,10,0) 7.2e-11, 1.4e-11
+#                (0,-10,10) 5.9e-12, 2.9e-11   (0,10,-10) 4.8e-11, 5.6e-11
+#                (10,-10,0) 2.0e-11, 5.3e-11   (10,0,-10) 7.0e-11, 5.5e-11
+#                (-50,-50,-60) 9.4e-12, 6.9e-12
+#   ti_cr_k4_3d  (-10,0,10) 2.2e-11, 7.9e-11   (0,-10,10) 3.7e-11, 1.4e-11
+#                (0,10,-10) 1.4e-11, 1.2e-11   (10,-10,0) 1.1e-11, 2.2e-11
+#                (10,0,-10) 5.1e-11, 3.3e-11
+# so R and the port are equally far from the truth and a STRICT comparison
+# between them is ill-posed.  All but ti_tp_k6 (0,60) have two penalties that
+# d_tol groups (no separating transform) with log sp 10 apart; at (0,60) the
+# det2 diagonal (true value 2e-22) is det1_i - sp_i^2 tr(...) and inherits
+# det1's ~1e-12 absolute rounding.  In the grouped 2-D cases the transformed S
+# is bitwise equal to R's, leaving DGEQP3/DORMQR rounding.  Four correction
+# attempts (stables-logs/attempts-1-3.log, attempt-provider-*.log):
+#   1. mgcv's getXXt (DSYRK('L','N') + mirror) for S_i: kept; det2 unchanged.
+#   2. C loop order of trBtAB/trAB: 2.37x -> 2.24x, 0.92x -> 0.77x; reverted.
+#   3. pinned OpenBLAS DGEQP3 in qr_ldet_inv: misses move randomly 1.1x-3.7x.
+#   4. pinned OpenBLAS DSYEVR for both eigen calls: misses move randomly
+#      (54x-143x in 3-D); R's eigen gauge not reproduced.
+# The R-free finite-difference check of det1 against det2 does NOT hold at
+# STRICT at these points (58x-6400x; see the report): det1's own ~1e-11
+# absolute rounding divided by the difference step exceeds det2's envelope.
+# The digests are this host's bytes; other platforms' bytes get STRICT.
+_REVIEWED_DET2: dict[tuple[str, tuple[float, ...]], str] = {
+    ("te_tp_k5", (10.0, 0.0)): (
+        "8f56a7929e452d3ca1f02cfe1e69fe495b149276e70e03840323cdfcc2cf6215"
+    ),
+    ("te_tp_k5", (0.0, 10.0)): (
+        "561c9d4b4f92a7f459bd612036632712d5836560e508f0dcf7a97902fddc9e60"
+    ),
+    ("te_tp_k5", (-30.0, -40.0)): (
+        "a8c577a6d401ed81e75586a0704f3ed93318bbfd8e6b2b8c23226a2e27dc2618"
+    ),
+    ("te_tp_k5", (-40.0, -30.0)): (
+        "7a64ee721ad2b0ceeb917e83506e438dbc0c75255c2658d5b5919277a576c8af"
+    ),
+    ("ti_tp_k6", (0.0, 60.0)): (
+        "c4d89cf1a75fc56d012b0ac2f8a6af37876ae614538698ad36266d6cb7710553"
+    ),
+    ("te_cr_k4_3d", (-10.0, 0.0, 10.0)): (
+        "3fa58ba5e872eedddeed51f6205cd8fb6d21f569570924efa143994c32ded2ce"
+    ),
+    ("te_cr_k4_3d", (-10.0, 10.0, 0.0)): (
+        "33dbf9e49673c922b06d83880121411d85528f8b7b78178f72726e75b1319cd5"
+    ),
+    ("te_cr_k4_3d", (0.0, -10.0, 10.0)): (
+        "d177ffac5c4421b730878e59384a9bea97ae1b911b3b4a0ff461f5813274acab"
+    ),
+    ("te_cr_k4_3d", (0.0, 10.0, -10.0)): (
+        "5dcbcc88473a2a50f0d7cb7cfa50d9d486422d13159c02a62ce2844c388c1a59"
+    ),
+    ("te_cr_k4_3d", (10.0, -10.0, 0.0)): (
+        "e3d7f49b298cdb63352df05f541e0b92da7fc4d0759eec81b415dffba565ca7d"
+    ),
+    ("te_cr_k4_3d", (10.0, 0.0, -10.0)): (
+        "efe61e6a846e6ce5016273e95cb9d34eccb5e0f5c92626a3daded933b2fdd277"
+    ),
+    ("te_cr_k4_3d", (-50.0, -50.0, -60.0)): (
+        "de536b9fd5166c8deb900197fdf36555597edecb19ffbab747f67f5d30e9fb1d"
+    ),
+    ("ti_cr_k4_3d", (-10.0, 0.0, 10.0)): (
+        "9aca1bb8288afb16d52bf81730063ec4371676ed034df1e8b0a48e813fab299d"
+    ),
+    ("ti_cr_k4_3d", (0.0, -10.0, 10.0)): (
+        "b1573359a4c7fbe3f3767d6ccf63b251392db45bcd3e57795773610ac2a5f0fa"
+    ),
+    ("ti_cr_k4_3d", (0.0, 10.0, -10.0)): (
+        "2d90e42fd2dfba2dd2660b4479bfefd19693398e2e771dfbc6284dda828d8e04"
+    ),
+    ("ti_cr_k4_3d", (10.0, -10.0, 0.0)): (
+        "a73217206db086d2a76b1312e5d90489ba592e02592a6b17a220b82dfb7ec19b"
+    ),
+    ("ti_cr_k4_3d", (10.0, 0.0, -10.0)): (
+        "696ede68b51a57043be26a4806f87d293656841bb140bed59e1a45f56f655d49"
+    ),
+}
+
+
+def _det2_tolerance(name: str, roots, rho: np.ndarray) -> ToleranceClass:
+    """MODERATE for a reviewed det2 point on its exact input bytes only."""
+    reviewed = _REVIEWED_DET2.get((name, tuple(float(v) for v in rho)))
+    if reviewed is None or _input_digest(roots, rho) != reviewed:
+        return STRICT
+    return MODERATE
 
 
 @pytest.mark.parametrize("name", list(_BLOCKS))
 def test_determinant_and_derivatives_match_pinned_r(name: str, r_bridge) -> None:
-    """det and det1 at STRICT over the whole grid; det2 outside held-out points."""
+    """det and det1 at STRICT over the whole grid; det2 STRICT but 17 reviewed."""
     roots = _range_roots(name)
     collector = _AssertCollector()
     for rho in _grid(len(roots)):
@@ -175,15 +268,47 @@ def test_determinant_and_derivatives_match_pinned_r(name: str, r_bridge) -> None
         collector.check(
             f"{label} det1", partial(_close, ours.det1, theirs.det1, "det1")
         )
-        if not _det2_unresolved(name, rho):
-            collector.check(
-                f"{label} det2", partial(_close, ours.det2, theirs.det2, "det2")
-            )
+        tolerance = _det2_tolerance(name, roots, rho)
+        collector.check(
+            f"{label} det2 ({tolerance.label})",
+            partial(
+                np.testing.assert_allclose,
+                ours.det2,
+                theirs.det2,
+                rtol=tolerance.rtol,
+                atol=tolerance.atol,
+                err_msg="det2",
+            ),
+        )
         collector.check(
             f"{label} fixed flag",
             partial(check_that, not theirs.fixed_penalty, "unexpected fixed"),
         )
     collector.raise_if_any(f"{name} gam.reparam parity")
+
+
+def test_reviewed_det2_allowance_needs_exact_inputs(monkeypatch) -> None:
+    """Only the reviewed bytes keep MODERATE; any changed input is STRICT.
+
+    The reviewed record is rebound to this platform's bytes so the guard runs
+    on every platform.
+    """
+    assert len(_REVIEWED_DET2) == 17
+    key = ("te_cr_k4_3d", (10.0, 0.0, -10.0))
+    roots = _range_roots(key[0])
+    rho = np.array(key[1])
+    monkeypatch.setitem(_REVIEWED_DET2, key, _input_digest(roots, rho))
+    assert _det2_tolerance(key[0], roots, rho) is MODERATE
+    changed_root = [root.copy() for root in roots]
+    changed_root[1][3, 2] = np.nextafter(changed_root[1][3, 2], np.inf)
+    assert _det2_tolerance(key[0], changed_root, rho) is STRICT
+    swapped = [roots[1], roots[0], roots[2]]
+    assert _det2_tolerance(key[0], swapped, rho) is STRICT
+    changed_rho = rho.copy()
+    changed_rho[0] = np.nextafter(changed_rho[0], np.inf)
+    assert _det2_tolerance(key[0], roots, changed_rho) is STRICT
+    assert _det2_tolerance("ti_cr_k4_3d", roots, rho) is STRICT
+    assert _det2_tolerance(key[0], roots, np.array((20.0, 0.0, -20.0))) is STRICT
 
 
 def test_identity_transform_reproduces_r_gauge(r_bridge) -> None:
