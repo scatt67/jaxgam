@@ -114,6 +114,7 @@ def test_public_fixed_sp_operator_counts_short_source_partitions_and_probes():
         diagnostics.preparation_peak_bound_bytes
     )
     assert fitted.known_workspace_bytes is None
+    assert diagnostics.efs_indeterminate_comparisons is None
 
 
 def test_public_fixed_sp_operator_solves_active_correlated_large_factor(monkeypatch):

@@ -510,6 +510,8 @@ def test_public_operator_efs_without_admitted_bound_is_not_converged(monkeypatch
     assert fitted.score_bound_method == "unavailable"
     assert fitted.lambda_strategy == "efs_reml"
     assert np.isfinite(fitted.score)
+    # The one undecided comparison is reported to the public caller.
+    assert fitted.operator_diagnostics.efs_indeterminate_comparisons == 1
     # The last accepted state is the shifted start: no trial was accepted.
     np.testing.assert_allclose(
         np.log(fitted.smoothing_params),

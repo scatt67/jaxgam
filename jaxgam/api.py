@@ -559,6 +559,10 @@ class GAM:
             convergence_info=execution.stop_reason,
             lambda_strategy="efs_reml",
             execution_route="operator",
+            operator_diagnostics=replace(
+                selected.fit.diagnostics,
+                efs_indeterminate_comparisons=execution.indeterminate_comparisons,
+            ),
             # Fit work only (the EFS start reduction and every refit and
             # score replay), as on the streamed routes. Phase-1 preparation is
             # reported in operator_diagnostics.preparation_*.

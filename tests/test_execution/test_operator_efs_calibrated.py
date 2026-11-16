@@ -162,6 +162,7 @@ def test_calibrated_operator_complete_fit_matches_dense_efs(
     assert selected.score_bound_method == "indexed_poisson_empirical_v2"
     assert operator.stop_reason == "score_window"
     assert operator.outer_iterations == dense.n_iter
+    assert operator.indeterminate_comparisons == 0
     assert operator.attempted_fits == len(errors)
     assert all(bound is not None for bound in bounds)
     assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))
@@ -335,6 +336,7 @@ def test_calibrated_gaussian_scale_complete_fit_matches_dense_efs(
     assert bool(np.asarray(dense.pirls_result.converged))
     assert operator.accepted.score_bound_method == "indexed_gaussian_empirical_v2"
     assert operator.outer_iterations == dense.n_iter
+    assert operator.indeterminate_comparisons == 0
     assert operator.attempted_fits == len(errors)
     assert operator.stop_reason in {"score_window", "deviance_change"}
     assert all(bound is not None for bound in bounds)
@@ -655,6 +657,7 @@ def test_beyond_p512_complete_operator_efs_matches_dense_efs(beyond_p512_complet
     assert bool(np.asarray(dense.pirls_result.converged))
     assert selected.score_bound_method == _METHODS[case.regime]
     assert operator.outer_iterations == dense.n_iter
+    assert operator.indeterminate_comparisons == 0
     assert operator.attempted_fits == len(errors)
     assert all(bound is not None for bound in bounds)
     assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))

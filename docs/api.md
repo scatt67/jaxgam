@@ -237,6 +237,11 @@ the fit stops with `converged=False` and
 `convergence_info="indeterminate_score"`, keeping the last accepted state.
 The other stop reasons are `score_window` and `deviance_change` (converged),
 and `iteration_limit`, `inner_failure` and `invalid_update` (not converged).
+Two undecided comparisons do not stop the fit, because pinned efsudr's action
+does not depend on them: an undecided comparison never extends the step (the
+plain step is kept), and the step after the final contraction to multiplier 1
+is accepted. `operator_diagnostics.efs_indeterminate_comparisons` counts every
+undecided comparison, including these.
 
 On every operator result, fixed-sp or EFS, `source_scans` and
 `batches_scanned` count the fit's own source work (for EFS: the start

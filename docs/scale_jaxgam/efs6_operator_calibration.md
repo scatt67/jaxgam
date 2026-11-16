@@ -198,9 +198,21 @@ reference confirms both scores to about 1e-12:
 These are resolution limits of a per-state absolute bound, not bound
 failures: near convergence the score changes quadratically in the step while
 dense's deviance-change stop needs the step itself to be small.
-`_run_operator_efs` now accepts an undecided comparison after the final
-contraction to multiplier 1, where efsudr's action does not depend on it.
-It does not guess the other cases.
+`_run_operator_efs` resolves undecided comparisons by three explicit rules,
+and counts every one in `indeterminate_comparisons` (public results:
+`operator_diagnostics.efs_indeterminate_comparisons`):
+
+* an undecided comparison never extends the step. efsudr tries the doubled
+  step only near the optimum and keeps the plain step unless the extension
+  is strictly better; declining is that other branch. The two candidates
+  then differ by less than their certified bounds, and the score-window and
+  step-size convergence test is unaffected, so the fit continues and may
+  still converge;
+* after the final contraction to multiplier 1 the step is accepted, because
+  efsudr accepts it whatever the score;
+* any other undecided comparison (the main trial, or a contraction still
+  above multiplier 1) stops the fit as `indeterminate_score` with
+  `converged=False`.
 
 Held-out matched states (new seeds; 800-4096 levels; 1-16 rows per level;
 batch rows 64, 512, 777, 2048-65536; balanced and unbalanced; plus

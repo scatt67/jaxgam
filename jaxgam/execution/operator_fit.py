@@ -1102,6 +1102,9 @@ class OperatorFitDiagnostics:
     preparation_started_scans: int
     preparation_yielded_batches: int
     preparation_peak_bound_bytes: int
+    # Operator EFS only: trial comparisons the score bounds could not decide.
+    # An undecided extension is declined; any other stops the fit.
+    efs_indeterminate_comparisons: int | None = None
 
 
 @dataclass(frozen=True)

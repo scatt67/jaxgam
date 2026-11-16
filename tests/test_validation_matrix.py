@@ -100,6 +100,7 @@ def test_operator_efs_calibrated_indexed_poisson_full_fit_strict(
     assert reference["convergence"] == "full convergence"
     assert reference["inner_converged"]
     assert operator.outer_iterations == dense.n_iter == reference["outer_iterations"]
+    assert operator.indeterminate_comparisons == 0
     assert all(error <= bound for error, bound in zip(errors, bounds, strict=True))
     checks = _AssertCollector()
     for label, score, sp, deviance in (
@@ -181,6 +182,7 @@ def test_operator_efs_calibrated_coupled_poisson_full_fit_strict(
     assert reference["convergence"] == "full convergence"
     assert reference["inner_converged"]
     assert operator.outer_iterations == dense.n_iter == reference["outer_iterations"]
+    assert operator.indeterminate_comparisons == 0
     assert selected.score_bound_method == "arrowhead_poisson_empirical_v2"
     assert operator.attempted_fits == len(errors)
     assert all(bound is not None for bound in bounds)
@@ -247,6 +249,7 @@ def test_public_coupled_operator_efs_default_start_matches_pinned_r_strict(
     assert reference["convergence"] == "full convergence"
     assert reference["inner_converged"]
     assert fitted.n_iter == reference["outer_iterations"]
+    assert fitted.operator_diagnostics.efs_indeterminate_comparisons == 0
     assert fitted.score_error_bound is not None
     assert fitted.edf_total is not None
     assert fitted.lambda_strategy == "efs_reml"
@@ -402,6 +405,10 @@ def test_operator_efs_calibrated_indexed_gaussian_scale_full_fit_strict(
         lambda: np.testing.assert_equal(operator.outer_iterations, dense.n_iter),
     )
     checks.check(
+        "undecided comparisons",
+        lambda: np.testing.assert_equal(operator.indeterminate_comparisons, 0),
+    )
+    checks.check(
         "source outer iterations",
         lambda: np.testing.assert_equal(
             operator.outer_iterations, reference["outer_iterations"]
@@ -510,6 +517,12 @@ def test_public_indexed_operator_efs_poisson_default_start_matches_pinned_r(
     checks.check(
         "outer iterations",
         lambda: np.testing.assert_equal(result.n_iter, reference["outer_iterations"]),
+    )
+    checks.check(
+        "undecided comparisons",
+        lambda: np.testing.assert_equal(
+            result.operator_diagnostics.efs_indeterminate_comparisons, 0
+        ),
     )
     checks.check(
         "dense iterations",

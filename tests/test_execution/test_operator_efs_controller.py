@@ -392,6 +392,31 @@ def test_operator_efs_accepts_proven_equal_trial_but_not_equal_extension():
     assert result.multiplier == 1.0
 
 
+def test_operator_efs_declines_undecided_extension_and_counts_it():
+    """An extension the bounds cannot separate is declined, never taken.
+
+    efsudr extends only when the doubled step is strictly better; declining
+    is its other branch, so the decided trial is kept, the multiplier is not
+    doubled and the undecided comparison is counted without stopping the fit.
+    """
+    trial_rho = 2.5 + np.log(1.02)
+    extension_rho = 2.5 + 2 * np.log(1.02)
+
+    def score(rho):
+        if rho < 0.5 * (2.5 + trial_rho):
+            return 1.0
+        return -1e-3 if np.isclose(rho, extension_rho) else 0.0
+
+    provider = _ControlledProvider(direction=score, bound=0.01, ratio=1.02)
+    result = _run(provider)
+    assert result.attempted_fits == 3
+    np.testing.assert_allclose(provider.fit_calls[2][0], [extension_rho])
+    np.testing.assert_allclose(result.accepted.fit.log_lambda, [trial_rho])
+    assert result.multiplier == 1.0
+    assert result.indeterminate_comparisons == 1
+    assert result.stop_reason == "iteration_limit"
+
+
 def test_score_window_requires_uncertainty_to_fit_inside_tolerance():
     scores = (1.0, 1.0004, 1.0008, 1.0012)
     assert _score_window_certified(scores, (0.0,) * 4, 0.001)
