@@ -275,6 +275,32 @@ or control gates and no validated bound is claimed. These labels describe the
 score approximation; `converged` and `convergence_info` describe the
 optimizer, separately.
 
+### Operator bulk Fisher uncertainty
+
+A converged operator prediction result can build an approximate link-scale
+variance provider without forming a coefficient covariance:
+
+```python
+provider, calibration = result.bulk_link_variance(
+    source, selected_rows, probes=48, seed=7, memory_budget_bytes=256 << 20
+)
+for batch in provider.estimate_iter(prediction_source):
+    batch.variance, batch.monte_carlo_se, batch.link_se
+```
+
+Pass the original training source again; its fingerprint, prepared-row
+digest and coefficient count, and the family snapshot, must match the fit.
+Each probe solves the Fisher system once against streamed covariance noise.
+`selected_rows` (at least one and at most `min(256, batch_rows)` rows) are
+compared with exact Fisher solves, and the call raises when any estimate is
+more than
+`max_calibration_standard_errors` (default 5) Monte Carlo standard errors
+from its exact value. The Monte Carlo standard error describes sampling
+variation only. It does not bound iterative-solve bias, which is reported
+separately through the PCG residuals, and calibration on selected rows is
+not a guarantee for other rows. Unknown-scale families need an explicit
+`scale`. `predict(se_fit=True)` never uses this approximation.
+
 ### Extended Fellner--Schall fitting
 
 Select the dense extended Fellner--Schall controller explicitly with
