@@ -109,6 +109,42 @@ _GRAD_FILTER_THRESH = 0.001
 # significantly increasing compile and run time.
 
 
+def factorization_fallbacks(
+    fd: FittingData,
+    pirls_result: PIRLSResult,
+    log_lambda: jax.Array,
+    *,
+    include_ift: bool,
+) -> dict[str, float]:
+    """Fallback jitter level of every factorization in the reported fit.
+
+    ``cho_factor`` regularizes only when the plain factor fails; the PIRLS
+    factors record their level, while the criterion determinant (unit-diagonal
+    Cholesky) and the IFT factor of ``X'WX + S`` are re-evaluated here at the
+    reported state.
+    """
+    levels = {"PIRLS": float(np.max(np.asarray(pirls_result.factor_regularization)))}
+    if fd.n_penalties == 0:
+        return levels
+    H = pirls_result.XtWX + fd.S_lambda(jnp.asarray(log_lambda))
+    if fd.rank_deficit == 0:
+        d = jnp.sqrt(jnp.maximum(jnp.diag(H), jnp.finfo(H.dtype).tiny))
+        _, level = cho_factor(H / (d[:, None] * d[None, :]))
+        levels["criterion log|H|"] = float(level)
+    if include_ift:
+        _, level = cho_factor(H)
+        levels["IFT"] = float(level)
+    return levels
+
+
+def fallback_note(levels: dict[str, float]) -> str:
+    """``"; fallback jitter <level> in <factors>"``, or empty when none fired."""
+    fired = {name: level for name, level in levels.items() if level > 0.0}
+    if not fired:
+        return ""
+    return f"; fallback jitter {max(fired.values()):g} in " + ", ".join(fired)
+
+
 def _diff_score(
     # Dynamic args (JAX arrays, differentiated through)
     params: jax.Array,
@@ -747,6 +783,12 @@ class NewtonResult:
     theta : float or None
         Estimated theta for extended families (natural scale).
         ``None`` for standard families or fixed-theta extended families.
+    factor_regularization : float
+        Largest fallback jitter (``cho_factor``'s relative level) of every
+        factorization that enters the reported fit: the PIRLS factors, the
+        criterion log|H| and, for an optimized fit, the IFT factor.  ``0``
+        means no factor was regularized; a positive level is also named in
+        ``convergence_info``.
     """
 
     log_lambda: jax.Array
@@ -760,6 +802,7 @@ class NewtonResult:
     pirls_result: PIRLSResult
     convergence_info: str
     theta: float | None = None
+    factor_regularization: float = 0.0
 
 
 class _OuterScoreState(Protocol):
@@ -1618,6 +1661,19 @@ class NewtonOptimizer:
         n_lambda = self._fd.n_penalties
         log_lambda = params[:n_lambda]
         grad_lambda = gradient[:n_lambda]
+        # The compressed Gaussian QR score provider (PR9) factors by QR and
+        # never calls cho_factor; its state is not a PIRLSResult.
+        levels = (
+            {}
+            if self._score_provider is not None
+            else factorization_fallbacks(
+                self._fd,
+                pirls_result,
+                log_lambda,
+                include_ift=self._diff_grad_hess is not None,
+            )
+        )
+        info = info + fallback_note(levels)
 
         # Extract theta for extended families and sync family state
         # for Phase 3 post-estimation (predict, summary, plot).
@@ -1645,6 +1701,7 @@ class NewtonOptimizer:
             pirls_result=finalized,
             convergence_info=info,
             theta=theta,
+            factor_regularization=max(levels.values(), default=0.0),
         )
 
     def run(self) -> NewtonResult:

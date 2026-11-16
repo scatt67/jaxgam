@@ -26,7 +26,13 @@ from jaxgam.families.extended import ExtendedFamily
 from jaxgam.families.registry import get_family
 from jaxgam.fitting.data import FittingData, PreparedFittingMetadata
 from jaxgam.fitting.initialization import initialize_beta
-from jaxgam.fitting.newton import NewtonResult, OuterScoreProvider, newton_optimize
+from jaxgam.fitting.newton import (
+    NewtonResult,
+    OuterScoreProvider,
+    factorization_fallbacks,
+    fallback_note,
+    newton_optimize,
+)
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion
 from jaxgam.formula.design import ModelSetup
@@ -1761,8 +1767,13 @@ def _warn_factor_regularization(fit_result: NewtonResult) -> None:
     (non positive definite) Hessian, which the caller must be told about.
     """
     level = float(
-        np.max(
-            np.asarray(getattr(fit_result.pirls_result, "factor_regularization", 0.0))
+        max(
+            getattr(fit_result, "factor_regularization", 0.0),
+            np.max(
+                np.asarray(
+                    getattr(fit_result.pirls_result, "factor_regularization", 0.0)
+                )
+            ),
         )
     )
     if level > 0.0:
@@ -1887,6 +1898,7 @@ def _fit_fixed_sp(
     score = criterion.score(log_lambda)
     # A non-finite REML score is a failed evaluation, never a converged fit.
     finite_score = bool(jnp.isfinite(score))
+    levels = factorization_fallbacks(fd, pirls_result, log_lambda, include_ift=False)
 
     return NewtonResult(
         log_lambda=log_lambda,
@@ -1898,7 +1910,9 @@ def _fit_fixed_sp(
         edf=edf,
         scale=scale,
         pirls_result=pirls_result,
-        convergence_info="fixed sp"
-        if finite_score
-        else "fixed sp: non-finite REML score",
+        convergence_info=(
+            "fixed sp" if finite_score else "fixed sp: non-finite REML score"
+        )
+        + fallback_note(levels),
+        factor_regularization=max(levels.values()),
     )

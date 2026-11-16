@@ -551,3 +551,90 @@ def test_reml_on_a_flat_ridge_meets_the_flat_ridge_rule(
     )
     _assert_hard_gates(fit, case, collector)
     collector.raise_if_any(f"flat-ridge REML endpoint: {case}")
+
+
+def test_every_fallback_jitter_is_visible_in_the_result() -> None:
+    """No silent jitter (root decision 7): every factorization's fallback level.
+
+    PIRLS factors, the criterion determinant and the IFT factor each report
+    the cho_factor fallback they needed; the largest level and the names of
+    the factors reach NewtonResult.factor_regularization and the public
+    convergence_info, in addition to the RuntimeWarning.
+    """
+    from dataclasses import replace
+
+    from jaxgam.fitting.newton import (
+        NewtonResult,
+        factorization_fallbacks,
+        newton_optimize,
+    )
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
+
+    rng = np.random.default_rng(3)
+    z = np.sort(rng.uniform(-1.0, 1.0, 90))
+    data = pd.DataFrame({"z": z, "y": np.sin(2 * z) + rng.normal(0, 0.2, 90)})
+    collector = _AssertCollector()
+
+    # Aliased parametric term: the PIRLS factor needs the fallback.
+    with pytest.warns(RuntimeWarning, match="relative diagonal jitter"):
+        fixed = GAM("y ~ z + s(z, bs='cr', k=6)", sp=[0.5]).fit(data)
+    collector.check(
+        "fixed sp: info names the PIRLS fallback",
+        lambda: check_that(
+            "fallback jitter 1e-12 in PIRLS" in fixed.convergence_info,
+            fixed.convergence_info,
+        ),
+    )
+    aliased = FittingData.from_setup(
+        ModelSetup.build(parse_formula("y ~ z + s(z, bs='cr', k=6)"), data),
+        Gaussian(),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        optimized = newton_optimize(aliased)
+    collector.check(
+        "REML: NewtonResult carries the level and the info names it",
+        lambda: check_that(
+            isinstance(optimized, NewtonResult)
+            and optimized.factor_regularization > 0.0
+            and "fallback jitter" in optimized.convergence_info,
+            f"{optimized.factor_regularization} {optimized.convergence_info!r}",
+        ),
+    )
+
+    # A well-posed fit: no factor regularized, nothing in the info.
+    clean = GAM("y ~ s(z, bs='cr', k=6)").fit(data)
+    collector.check(
+        "well-posed fit has no fallback",
+        lambda: check_that(
+            "fallback" not in clean.convergence_info, clean.convergence_info
+        ),
+    )
+
+    # The criterion determinant and the IFT factor are checked on their own:
+    # a singular X'WX + S at the reported state trips both (Gamma/log keeps
+    # the Cholesky determinant), with a clean PIRLS factor.
+    gamma_fd = FittingData.from_setup(
+        ModelSetup.build(
+            parse_formula("y ~ s(z, bs='cr', k=6)"), data.assign(y=np.exp(data.y))
+        ),
+        Gamma(link="log"),
+    )
+    log_lambda = jnp.asarray([0.0])
+    fit = _fit_fixed_sp(gamma_fd, np.array([1.0])).pirls_result
+    singular = replace(
+        fit,
+        XtWX=-gamma_fd.S_lambda(log_lambda) + 1e-30 * jnp.eye(fit.XtWX.shape[0]),
+    )
+    levels = factorization_fallbacks(gamma_fd, singular, log_lambda, include_ift=True)
+    collector.check(
+        "criterion and IFT levels reported",
+        lambda: check_that(
+            levels["PIRLS"] == 0.0
+            and levels["criterion log|H|"] > 0.0
+            and levels["IFT"] > 0.0,
+            str(levels),
+        ),
+    )
+    collector.raise_if_any("fallback visibility")
