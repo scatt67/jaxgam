@@ -238,6 +238,15 @@ the fit stops with `converged=False` and
 The other stop reasons are `score_window` and `deviance_change` (converged),
 and `iteration_limit`, `inner_failure` and `invalid_update` (not converged).
 
+On every operator result, fixed-sp or EFS, `source_scans` and
+`batches_scanned` count the fit's own source work (for EFS: the start
+reduction, every refit and every score replay), as on the streamed routes.
+Phase-1 preparation is reported separately as
+`operator_diagnostics.preparation_started_scans`,
+`preparation_yielded_batches` and `preparation_peak_bound_bytes`. On operator
+EFS results `known_workspace_bytes` is the planned fit workspace, excluding
+preparation; fixed-sp operator results leave it `None`.
+
 The bounds are empirical: they were measured against an independent
 50-digit decimal REML reference over a fixed domain
 (`docs/scale_jaxgam/efs6_operator_calibration.md`). Only that domain is

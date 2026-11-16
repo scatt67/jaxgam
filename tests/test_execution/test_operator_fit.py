@@ -89,14 +89,31 @@ def test_public_fixed_sp_operator_counts_short_source_partitions_and_probes():
         ),
     ).fit(source, result="prediction")
     assert fitted.converged
-    assert fitted.source_scans == source.scans
-    assert fitted.batches_scanned == source.batches
+    diagnostics = fitted.operator_diagnostics
+    assert diagnostics is not None
+    # Reported work is the fit's own, as on the streamed routes; Phase-1
+    # preparation is carried separately and the two account for every pass.
+    preparation_scans = diagnostics.preparation_started_scans
+    preparation_batches = diagnostics.preparation_yielded_batches
+    assert fitted.source_scans == source.scans - preparation_scans
+    assert source.scans == preparation_scans + fitted.source_scans
+    assert fitted.batches_scanned == source.batches - preparation_batches
+    assert source.batches == preparation_batches + fitted.batches_scanned
+    assert fitted.source_scans == diagnostics.source.started_scans
     assert fitted.batches_scanned > fitted.source_scans * ((n + 7) // 8)
-    assert fitted.operator_diagnostics is not None
-    assert fitted.source_scans > (
-        fitted.operator_diagnostics.preparation_scans
-        + fitted.operator_diagnostics.source.started_scans
+    # An independent preparation of the same source makes exactly those passes.
+    preparation = PartitionedSource()
+    prepared = prepare_operator_model(
+        parse_formula("y~x+s(g,bs='re')"),
+        preparation,
+        control=OperatorPreparationControl(8, 32 << 20, 64),
     )
+    assert preparation.scans == preparation_scans > 0
+    assert preparation.batches == preparation_batches > 0
+    assert prepared.preparation_peak_bound_bytes == (
+        diagnostics.preparation_peak_bound_bytes
+    )
+    assert fitted.known_workspace_bytes is None
 
 
 def test_public_fixed_sp_operator_solves_active_correlated_large_factor(monkeypatch):

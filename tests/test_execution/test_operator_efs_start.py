@@ -221,9 +221,31 @@ def test_public_operator_efs_reports_actual_partitioned_source_batches():
         ),
     ).fit(source, result="prediction")
     assert fitted.converged
-    assert fitted.source_scans == source.actual_scans
-    assert fitted.batches_scanned == source.actual_batches
+    diagnostics = fitted.operator_diagnostics
+    assert diagnostics is not None
+    # Fit work (EFS start, refits and score replays) excludes Phase-1
+    # preparation, which is carried separately; together they are every pass.
+    preparation_scans = diagnostics.preparation_started_scans
+    preparation_batches = diagnostics.preparation_yielded_batches
+    assert fitted.source_scans == source.actual_scans - preparation_scans
+    assert source.actual_scans == preparation_scans + fitted.source_scans
+    assert fitted.batches_scanned == source.actual_batches - preparation_batches
+    assert source.actual_batches == preparation_batches + fitted.batches_scanned
     assert fitted.batches_scanned > fitted.source_scans * ((n + 63) // 64)
+    preparation = _PartitionedSource(frame)
+    prepared = prepare_operator_model(
+        parse_formula("y~0+s(g,bs='re')"),
+        preparation,
+        control=OperatorPreparationControl(64, (128 << 20) // 8, 64),
+    )
+    assert preparation.actual_scans == preparation_scans > 0
+    assert preparation.actual_batches == preparation_batches > 0
+    assert prepared.preparation_peak_bound_bytes == (
+        diagnostics.preparation_peak_bound_bytes
+    )
+    # The reported workspace is the fit's plan, not the preparation peak.
+    assert fitted.known_workspace_bytes is not None
+    assert fitted.known_workspace_bytes < 128 << 20
 
 
 def test_public_coupled_operator_efs_retains_score_and_prediction():

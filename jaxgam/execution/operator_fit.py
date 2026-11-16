@@ -1097,6 +1097,11 @@ class OperatorFitDiagnostics:
     inner_status: int | None
     final_gradient_norm: float
     initial_null_scale: float | None
+    # Phase-1 operator preparation, kept apart from the fit counts above and
+    # from the result's fit-only ``source_scans``/``batches_scanned``.
+    preparation_started_scans: int
+    preparation_yielded_batches: int
+    preparation_peak_bound_bytes: int
 
 
 @dataclass(frozen=True)
@@ -1539,6 +1544,9 @@ def fit_operator_fixed_sp(
         status,
         float(gradient_norm),
         None if family.scale_known else float(null_scale),
+        model.started_preparation_scans,
+        model.preparation_yielded_batches,
+        model.preparation_peak_bound_bytes,
     )
     return OperatorFitResult(
         beta,

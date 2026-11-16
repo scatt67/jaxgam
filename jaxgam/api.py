@@ -559,18 +559,12 @@ class GAM:
             convergence_info=execution.stop_reason,
             lambda_strategy="efs_reml",
             execution_route="operator",
-            source_scans=(
-                model.started_preparation_scans
-                + start.source_scans
-                + provider.completed_source_scans
-            ),
-            batches_scanned=(
-                model.preparation_yielded_batches
-                + start.source_batches
-                + provider.completed_source_batches
-            ),
+            # Fit work only (the EFS start reduction and every refit and
+            # score replay), as on the streamed routes. Phase-1 preparation is
+            # reported in operator_diagnostics.preparation_*.
+            source_scans=start.source_scans + provider.completed_source_scans,
+            batches_scanned=start.source_batches + provider.completed_source_batches,
             known_workspace_bytes=max(
-                model.preparation_peak_bound_bytes,
                 start.peak_bound_bytes,
                 result_reserve + provider.aggregate_peak_bound_bytes,
             ),

@@ -334,21 +334,24 @@ class GAMPredictionResult:
 
     ``source_scans`` and ``batches_scanned`` count the complete source scans
     and batches read by the fit itself, excluding Phase-1 setup scans, on the
-    streamed and discrete routes alike. ``known_workspace_bytes`` is the
+    streamed, discrete and operator routes alike (operator preparation is in
+    ``operator_diagnostics.preparation_*``). ``known_workspace_bytes`` is the
     route's conservative known fit-workspace bound, excluding retained
-    Phase-1 preparation; on the discrete route it covers the indexed design
-    (host tables, device actions) and the solver workspace. Discrete fits
+    Phase-1 preparation (``None`` on fixed-sp operator fits); on the discrete
+    route it covers the indexed design (host tables, device actions) and the
+    solver workspace. Discrete fits
     additionally report ``fit_peak_bytes``, which adds the retained compact
     setup tables and is the bound that route checks against
     ``fit_memory_budget_bytes`` (``FitControl.memory_budget_bytes``); the
     streamed routes have no counterpart because their prepared setup is
     budgeted separately during preparation.
 
-    Fixed-sp operator fits have ``score=None`` when no score provider exists
-    and ``scale=None`` for unknown-scale families; known-scale families
-    report their actual scale of one. Operator fits also report
-    ``edf_total=None`` until a trace provider computes it. Other routes
-    retain their existing numeric score, scale, and EDF.
+    Fixed-sp operator fits have ``score=None`` and ``edf_total=None``, since
+    no score or trace provider runs, and ``scale=None`` for unknown-scale
+    families; known-scale families report their actual scale of one.
+    Calibrated operator EFS fits report the selected score, its
+    ``score_error_bound`` and ``edf_total``. Other routes retain their
+    existing numeric score, scale, and EDF.
     """
 
     _predictor: GAMPredictor
@@ -647,14 +650,10 @@ class GAMPredictionResult:
             execution_path="jax",
             execution_route="operator",
             operator_diagnostics=fitted.diagnostics,
-            source_scans=(
-                model.started_preparation_scans
-                + fitted.diagnostics.source.started_scans
-            ),
-            batches_scanned=(
-                model.preparation_yielded_batches
-                + fitted.diagnostics.source.yielded_batches
-            ),
+            # Fit work only, as on the streamed routes; preparation is in
+            # operator_diagnostics.preparation_*.
+            source_scans=fitted.diagnostics.source.started_scans,
+            batches_scanned=fitted.diagnostics.source.yielded_batches,
             n=model.n_obs,
             _batch_rows=control.batch_rows,
         )
