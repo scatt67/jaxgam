@@ -139,7 +139,20 @@ class Smooth(ABC):
         s_scale : float
             The normalization scale factor.
         """
-        norm_X_inf = np.linalg.norm(X, ord=np.inf)
+        return Smooth._smoothcon_normalize_from_norm(
+            np.linalg.norm(X, ord=np.inf), S_list
+        )
+
+    @staticmethod
+    def _smoothcon_normalize_from_norm(
+        norm_X_inf: float,
+        S_list: list[npt.NDArray[np.floating]],
+    ) -> tuple[list[npt.NDArray[np.floating]], float]:
+        """Apply smoothCon's normalization given ``norm(X, "I")``.
+
+        Streamed setup supplies the maximum absolute row sum of ``X`` so that
+        it shares this normalization with dense setup.
+        """
         norm_S_1 = np.linalg.norm(S_list[0], ord=1)
         # R variable: maXX (mgcv smoothCon)
         max_x_sq = norm_X_inf**2

@@ -8,7 +8,8 @@ links: it serves the cubic shrinkage eigentransform, getFS's DPTSV, gdiPK's
 DGEQP3, the source penalty-coordinate DSYEVR, the working model's pivoted
 Cholesky (R ``chol(pivot=TRUE)``'s DPSTRF) and the ports of mgcv's
 ``Rlanczos`` (every source Lanczos call, Gaussian-process and thin-plate
-bases alike), ``predict_tprs`` and R's ``%*%``, so those calls reproduce R's.
+bases alike), ``predict_tprs``, R's ``%*%`` and the tensor-margin
+``qr``/``svd``/``eigen`` calls, so those calls reproduce R's.
 It never searches for R or a system BLAS/LAPACK and does not replace
 NumPy/SciPy's backend.
 
@@ -99,8 +100,8 @@ class _SourceLapack:
     """Validated LP64 function handles owned by the declared provider.
 
     OpenBLAS 0.3.26 is the BLAS/LAPACK linked by the pinned Linux R, so the
-    thin-plate Rlanczos and prediction ports call the same routines R calls
-    (``dsymv``/``ddot``/``daxpy``/``dstedc``/``dgemv``).
+    thin-plate Rlanczos, prediction and tensor-margin ports call the same
+    routines R calls (``dsymv``/``ddot``/``daxpy``/``dstedc``/``dgemv``/...).
     """
 
     module: _DeclaredProvider
@@ -723,6 +724,116 @@ def source_project_rows(
         )
         output[i] = target
     return output
+
+
+@dataclass(frozen=True)
+class SourceConstraintQR:
+    """LINPACK ``dqrdc2`` factor of one constraint column ``t(C)``.
+
+    ``vector`` is the stored Householder column with ``qraux`` restored in its
+    first entry, as ``dqrsl`` uses it; ``qraux == 0`` means ``Q = I``.
+    """
+
+    vector: npt.NDArray[np.float64]
+    qraux: float
+
+    @classmethod
+    def from_column(cls, column: npt.NDArray[np.float64]) -> SourceConstraintQR:
+        """Port ``qr(t(C))``: dqrdc2 with one column and R's default tolerance."""
+        provider = _source_lapack()
+        x = np.array(column, dtype=np.float64, copy=True)
+        if x.ndim != 1 or len(x) < 2:
+            raise ValueError("A source constraint column needs at least two rows.")
+        n = len(x)
+        norm = provider.dnrm2(n, _double_pointer(x), 1)
+        if norm == 0.0:
+            return cls(x, 0.0)
+        if x[0] != 0.0:
+            norm = float(np.copysign(norm, x[0]))
+        provider.dscal(n, 1.0 / norm, _double_pointer(x), 1)
+        x[0] = 1.0 + x[0]
+        return cls(x, float(x[0]))
+
+    def qty_rows(self, rows: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """Return ``t(qr.qty(qrc, t(rows)))``: ``Q'`` applied to every row."""
+        provider = _source_lapack()
+        out = np.array(rows, dtype=np.float64, order="C", copy=True)
+        if self.qraux == 0.0:
+            return out
+        n = len(self.vector)
+        if out.ndim != 2 or out.shape[1] != n:
+            raise ValueError("Constraint rows must match the constraint length.")
+        u = _double_pointer(self.vector)
+        for i in range(out.shape[0]):
+            y = _double_pointer(out[i])
+            t = -provider.ddot(n, u, 1, y, 1) / self.vector[0]
+            provider.daxpy(n, t, u, 1, y, 1)
+        return out
+
+    def absorb_rows(self, rows: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """smoothCon's ``t(qr.qty(qrc, t(X))[(j+1):k, ])``."""
+        return self.qty_rows(rows)[:, 1:].copy()
+
+    def basis(self) -> npt.NDArray[np.float64]:
+        """Explicit null-space basis ``Z = Q[, -1]`` (``Q`` is one reflector)."""
+        return self.qty_rows(np.eye(len(self.vector)))[:, 1:].copy()
+
+    def absorb_penalty(self, S: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """smoothCon's two-sided ``Z'SZ`` via ``qr.qty`` (not symmetrized)."""
+        left = self.qty_rows(np.asarray(S).T)[:, 1:].T
+        return self.qty_rows(left)[:, 1:].copy()
+
+
+def source_svd(
+    matrix: npt.NDArray[np.float64],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Port R's ``svd(x)``: La_svd's ``dgesdd`` with ``jobz='S'``.
+
+    Returns ``(u, d, vt)``; La_svd truncates the workspace query to ``int``.
+    """
+    provider = _source_lapack()
+    a = np.array(matrix, dtype=np.float64, order="F", copy=True)
+    m, n = a.shape
+    p = min(m, n)
+    d = np.empty(p, dtype=np.float64)
+    u = np.empty((m, p), dtype=np.float64, order="F")
+    vt = np.empty((p, n), dtype=np.float64, order="F")
+    iwork = np.empty(8 * p, dtype=np.int32)
+    int_pointer = ctypes.POINTER(ctypes.c_int)
+
+    def call(work, lwork) -> int:
+        return int(
+            provider.dgesdd_work(
+                _LAPACK_COL_MAJOR,
+                b"S",
+                m,
+                n,
+                _double_pointer(a),
+                m,
+                _double_pointer(d),
+                _double_pointer(u),
+                m,
+                _double_pointer(vt),
+                p,
+                _double_pointer(work),
+                lwork,
+                iwork.ctypes.data_as(int_pointer),
+            )
+        )
+
+    query = np.empty(1, dtype=np.float64)
+    if call(query, -1) != 0:
+        raise np.linalg.LinAlgError("DGESDD workspace query failed.")
+    # DGESDD's optimal query includes ILAENV block sizes; bound it generously.
+    lwork = _query_length(
+        float(int(query[0])),
+        name="lwork",
+        cap=4 * p * p + 7 * p + 64 * (m + n) + 4096,
+    )
+    status = call(np.empty(lwork, dtype=np.float64), lwork)
+    if status != 0:
+        raise np.linalg.LinAlgError(f"DGESDD failed with info={status}.")
+    return u, d, vt
 
 
 def source_matprod(

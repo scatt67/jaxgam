@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import scipy
 
-from jaxgam.smooths import source_lapack
+from jaxgam.smooths import source_lapack, source_penalty_coordinates
 from jaxgam.smooths.cubic import CubicRegressionSmooth
 from tests.helpers import _AssertCollector, r_links_pinned_openblas
 from tests.tolerances import MODERATE, STRICT
@@ -1157,3 +1157,110 @@ def test_source_pivoted_cholesky_matches_pinned_r_factors(r_bridge) -> None:
             ),
         )
     collector.raise_if_any("pinned provider DPSTRF against R chol(pivot=TRUE)")
+
+
+def test_source_constraint_qr_absorbs_one_centering_column() -> None:
+    rng = np.random.default_rng(31)
+    X = rng.standard_normal((40, 6))
+    C = X.mean(axis=0)
+    constraint = source_lapack.SourceConstraintQR.from_column(C)
+    Z = constraint.basis()
+    collector = _AssertCollector()
+    collector.check(
+        "orthonormal null basis",
+        lambda: np.testing.assert_allclose(
+            Z.T @ Z, np.eye(5), rtol=STRICT.rtol, atol=STRICT.atol
+        ),
+    )
+    collector.check(
+        "constraint annihilated",
+        lambda: np.testing.assert_allclose(C @ Z, 0.0, atol=STRICT.atol),
+    )
+    collector.check(
+        "rows equal X Z",
+        lambda: np.testing.assert_allclose(
+            constraint.absorb_rows(X), X @ Z, rtol=STRICT.rtol, atol=STRICT.atol
+        ),
+    )
+    S = X.T @ X
+    collector.check(
+        "penalty equals Z'SZ",
+        lambda: np.testing.assert_allclose(
+            constraint.absorb_penalty(S),
+            Z.T @ S @ Z,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.raise_if_any("source constraint QR")
+    zero = source_lapack.SourceConstraintQR.from_column(np.zeros(4))
+    assert zero.qraux == 0.0
+    np.testing.assert_array_equal(zero.qty_rows(np.eye(4)), np.eye(4))
+    with pytest.raises(ValueError, match="two rows"):
+        source_lapack.SourceConstraintQR.from_column(np.ones(1))
+    with pytest.raises(ValueError, match="constraint length"):
+        constraint.qty_rows(np.ones((2, 3)))
+
+
+def test_source_dense_kernels_match_numpy() -> None:
+    rng = np.random.default_rng(37)
+    A = rng.standard_normal((7, 5))
+    B = rng.standard_normal((5, 3))
+    collector = _AssertCollector()
+    collector.check(
+        "matprod",
+        lambda: np.testing.assert_allclose(
+            source_lapack.source_matprod(A, B),
+            A @ B,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    u, d, vt = source_lapack.source_svd(A)
+    collector.check(
+        "svd",
+        lambda: np.testing.assert_allclose(
+            (u * d) @ vt, A, rtol=STRICT.rtol, atol=STRICT.atol
+        ),
+    )
+    collector.check(
+        "singular values",
+        lambda: np.testing.assert_allclose(
+            d, np.linalg.svd(A, compute_uv=False), rtol=STRICT.rtol, atol=STRICT.atol
+        ),
+    )
+    S = A.T @ A
+    # Tensor margin scales use the shared value-only pinned DSYEVR.
+    collector.check(
+        "symmetric eigenvalues",
+        lambda: np.testing.assert_allclose(
+            source_penalty_coordinates._source_symmetric_eigen(S, vectors=False)[0],
+            np.linalg.eigvalsh(S),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.check(
+        "largest symmetric eigenvalue",
+        lambda: np.testing.assert_allclose(
+            source_penalty_coordinates.source_symmetric_max_eigenvalue(S),
+            np.linalg.eigvalsh(S)[-1],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    UZ = rng.standard_normal((5, 4))
+    collector.check(
+        "row projection",
+        lambda: np.testing.assert_allclose(
+            source_lapack.source_project_rows(A[:, :5], UZ),
+            A[:, :5] @ UZ,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        ),
+    )
+    collector.raise_if_any("source dense kernels")
+    with pytest.raises(ValueError, match="conform"):
+        source_lapack.source_matprod(A, A)
+    with pytest.raises(ValueError, match="UZ row dimension"):
+        source_lapack.source_project_rows(A.T, UZ)

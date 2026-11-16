@@ -22,10 +22,19 @@ from jaxgam.formula.prepare import (
 from jaxgam.formula.terms import FormulaSpec, SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.penalties.structure import make_penalty_structure
+from jaxgam.smooths.base import Smooth
 from jaxgam.smooths.by_variable import FactorBySmooth, NumericBySmooth
 from jaxgam.smooths.constraints import CoefficientMap, TermBlock
-from jaxgam.smooths.source_lapack import cubic_shrinkage_workspace_bound
-from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
+from jaxgam.smooths.source_lapack import (
+    SourceConstraintQR,
+    cubic_shrinkage_workspace_bound,
+)
+from jaxgam.smooths.tensor import (
+    SourceColumnMeans,
+    TensorInteractionSmooth,
+    TensorProductSmooth,
+    source_reparameterized_penalty,
+)
 from jaxgam.smooths.utils import is_factor, is_ordered_factor
 
 if TYPE_CHECKING:
@@ -131,14 +140,31 @@ def _make_tensor(term, source, control):
     ranks = [margin.rank for margin in margins]
     nulls = [margin.null_space_dim for margin in margins]
     if term.smooth_type == "ti":
-        sums = [np.zeros(margin.n_coefs) for margin in margins]
+        # ti margins are built by smoothCon: colMeans centering constraint and
+        # scale.penalty, exactly as the dense TensorInteractionSmooth does.
+        means = [SourceColumnMeans(margin.n_coefs) for margin in margins]
+        row_norms = [0.0 for _ in margins]
         for batch in source.scan(control.batch_rows):
             for i, margin in enumerate(margins):
-                sums[i] += margin.training_matrix(batch.columns).sum(axis=0)
-        tensor._Z_list = [
-            np.linalg.qr(C[:, None], mode="complete")[0][:, 1:] for C in sums
+                rows = margin.training_matrix(batch.columns)
+                means[i].add(rows)
+                row_norms[i] = max(
+                    row_norms[i], float(np.max(np.sum(np.abs(rows), axis=1)))
+                )
+                del rows
+            del batch
+        tensor._constraints = [
+            SourceConstraintQR.from_column(mean.result()) for mean in means
         ]
-        S_list = [Z.T @ S @ Z for Z, S in zip(tensor._Z_list, S_list, strict=True)]
+        tensor._Z_list = [constraint.basis() for constraint in tensor._constraints]
+        scaled = []
+        for S, norm in zip(S_list, row_norms, strict=True):
+            [S], _ = Smooth._smoothcon_normalize_from_norm(norm, [S])
+            scaled.append(S)
+        S_list = [
+            constraint.absorb_penalty(S)
+            for constraint, S in zip(tensor._constraints, scaled, strict=True)
+        ]
         dims = [dim - 1 for dim in dims]
         nulls = [max(null - 1, 0) for null in nulls]
         ranks = [dim - null for dim, null in zip(dims, nulls, strict=True)]
@@ -154,23 +180,17 @@ def _make_tensor(term, source, control):
         if margin._noterp or len(margin.spec.variables) != 1:
             tensor._XP_list.append(None)
             continue
-        points = np.linspace(ranges[i][0], ranges[i][1], dims[i])
         predictor_workspace = smooth_evaluator_workspace_bound(margin, dims[i])
         _check_budget(source.reserved_bytes + predictor_workspace, control)
         source.peak_bound_bytes = max(
             source.peak_bound_bytes, source.reserved_bytes + predictor_workspace
         )
-        Xp = margin.predict_matrix({margin.spec.variables[0]: points})
-        if term.smooth_type == "ti":
-            Xp = Xp @ tensor._Z_list[i]
-        U, values, Vt = np.linalg.svd(Xp, full_matrices=False)
-        if values[-1] / values[0] < np.finfo(float).eps ** (2.0 / 3.0):
-            tensor._XP_list.append(None)
-            continue
-        XP = Vt.T @ (U.T / values[:, np.newaxis])
-        S_list[i] = XP.T @ S_list[i] @ XP
-        S_list[i] = (S_list[i] + S_list[i].T) * 0.5
+        XP = tensor._reparameterize_margin(
+            i, margin, ranges[i][0], ranges[i][1], dims[i]
+        )
         tensor._XP_list.append(XP)
+        if XP is not None:
+            S_list[i] = source_reparameterized_penalty(S_list[i], XP)
     tensor.n_coefs = math.prod(dims)
     tensor.null_space_dim = math.prod(nulls)
     tensor.rank = tensor.n_coefs - tensor.null_space_dim

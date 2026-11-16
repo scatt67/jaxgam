@@ -766,11 +766,10 @@ def _make_tensor_block(
         )
         if failed is not None:
             return failed
-        table = marginal.predict_matrix({variable: indexed.values[0]})
-        if isinstance(smooth, TensorInteractionSmooth):
-            table = table @ smooth._Z_list[margin_number]
-        if xp is not None:
-            table = table @ xp
+        # The shared tensor margin transform (constraint, then XP).
+        table = smooth._transform_margin(
+            margin_number, marginal.predict_matrix({variable: indexed.values[0]})
+        )
         failed = ledger.add_table(
             int(table.nbytes),
             lineage,
