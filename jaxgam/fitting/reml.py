@@ -59,6 +59,7 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jsla
 
 from jaxgam.fitting import penalty_ops
+from jaxgam.fitting.qr import qr_log_det
 from jaxgam.jax_utils import cho_factor
 
 if TYPE_CHECKING:
@@ -121,6 +122,7 @@ def _criterion_core(
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     rank_deficit: int = 0,
+    hessian_qr: tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None = None,
 ) -> jax.Array:
     """Shared REML criterion computation. Pure JAX, differentiable.
 
@@ -178,6 +180,7 @@ def _criterion_core(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        hessian_qr,
     )
 
     return Dp / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
@@ -194,10 +197,22 @@ def _criterion_log_determinants(
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     rank_deficit: int,
+    hessian_qr: tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None = None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Return the two log determinants used by scalar REML scores."""
+    """Return the two log determinants used by scalar REML scores.
+
+    ``hessian_qr = (sqrt(W) X, penalty roots)`` for a nonnegative-weight,
+    structurally full-rank system takes ``log|H|`` from the pls_fit1/gdiPK
+    QR of ``[sqrt(W) X; E(rho)]`` (``qr_log_det``); its derivative is still
+    ``tr(H^-1 dH)`` through ``XtWX`` and ``S_lambda``, so the factor inputs
+    are constants (``stop_gradient``).
+    """
     H = XtWX + S_lambda
-    if rank_deficit == 0:
+    if hessian_qr is not None:
+        weighted_X, roots = hessian_qr
+        E = jax.lax.stop_gradient(penalty_ops.augmented_root(roots, log_lambda))
+        log_det_H = qr_log_det(H, jax.lax.stop_gradient(weighted_X), E)
+    elif rank_deficit == 0:
         # Diagonal preconditioning: scale H to unit diagonal before logdet.
         # This dramatically improves conditioning for binomial (where W
         # varies from ~0 to 0.25) and prevents AD noise when jax.hessian
@@ -341,6 +356,45 @@ def estimate_edf(
     return jnp.trace(H_inv_XtWX)
 
 
+def fisher_edf(pirls_result: PIRLSResult) -> jax.Array:
+    """Total Fisher EDF: from the QR when the inner fit recorded it.
+
+    A structurally full-rank dense fit stores ``tr(F) = |R1 R2^-1|_F^2`` of
+    its Fisher system (``qr.penalized_qr_hat``, gdi's ``P K'`` route);
+    otherwise the Cholesky normal-equation trace is used.
+    """
+    if pirls_result.fisher_edf is not None:
+        return pirls_result.fisher_edf
+    return estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
+
+
+def uses_qr_log_det(fd: FittingData) -> bool:
+    """Whether the criterion log|H| comes from the QR (nonnegative weights).
+
+    The QR route needs the structural penalty roots and a Hessian whose
+    weights are nonnegative: canonical regular links, where Newton equals
+    Fisher.  Signed Newton/observed systems (noncanonical links, NB) keep
+    the Cholesky determinant (pls_fit1's negative-weight branch is not
+    ported).
+    """
+    family = fd.family
+    return (
+        fd.penalty_roots is not None
+        and fd.rank_deficit == 0
+        and family.is_canonical
+        and family.n_theta == 0
+    )
+
+
+def hessian_qr_inputs(
+    fd: FittingData, weights: jax.Array
+) -> tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None:
+    """``(sqrt(W) X, roots)`` for ``qr_log_det``, or None for Cholesky."""
+    if not uses_qr_log_det(fd):
+        return None
+    return jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * fd.X, fd.penalty_roots
+
+
 def estimate_scale(
     y: jax.Array,
     mu: jax.Array,
@@ -399,6 +453,7 @@ def reml_criterion(
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     rank_deficit: int = 0,
+    hessian_qr: tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None = None,
 ) -> jax.Array:
     """REML criterion matching R's Laplace REML (gam.fit3.r line 616).
 
@@ -439,6 +494,7 @@ def reml_criterion(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        hessian_qr,
     )
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
@@ -585,6 +641,7 @@ def reml_criterion_joint(
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     max_y: int = 0,
     rank_deficit: int = 0,
+    hessian_qr: tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None = None,
 ) -> jax.Array:
     """REML criterion with joint ``(log_lambda, log_phi)`` optimization.
 
@@ -628,6 +685,7 @@ def reml_criterion_joint(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        hessian_qr,
     )
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
@@ -730,7 +788,7 @@ class _CriterionBase(ABC):
         # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
         # For standard families Fisher = Newton; for extended families
         # (NB) the Fisher XtWX/L are recomputed post-convergence.
-        self.edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
+        self.edf = fisher_edf(pirls_result)
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
         if fd.family.family_name == "nb" and fd.count_prefix_plan is not None:
@@ -748,6 +806,7 @@ class _CriterionBase(ABC):
             )
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
         self._XtWX = pirls_result.XtWX
+        self._hessian_qr = hessian_qr_inputs(fd, pirls_result.working_weights)
         self._beta = pirls_result.coefficients
         self._penalty_structure = fd.penalty_structure
         self._Mp = fd.total_penalty_null_dim
@@ -777,6 +836,7 @@ class _CriterionBase(ABC):
             "multi_block_sp_indices": self._multi_block_sp_indices,
             "multi_block_ranks": self._multi_block_ranks,
             "multi_block_proj_S": self._multi_block_proj_S,
+            "hessian_qr": self._hessian_qr,
         }
 
     @abstractmethod
@@ -867,12 +927,13 @@ class _JointCriterionBase(ABC):
 
     def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
         # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
-        self.edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
+        self.edf = fisher_edf(pirls_result)
         # Fletcher scale used only as initial log_phi estimate
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
         self._XtWX = pirls_result.XtWX
+        self._hessian_qr = hessian_qr_inputs(fd, pirls_result.working_weights)
         self._beta = pirls_result.coefficients
         self._penalty_structure = fd.penalty_structure
         self._y = fd.y
@@ -912,6 +973,7 @@ class _JointCriterionBase(ABC):
             "multi_block_ranks": self._multi_block_ranks,
             "multi_block_proj_S": self._multi_block_proj_S,
             "max_y": self._max_y,
+            "hessian_qr": self._hessian_qr,
         }
 
     @abstractmethod

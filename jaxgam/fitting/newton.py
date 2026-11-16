@@ -65,8 +65,9 @@ from jaxgam.fitting.reml import (
     _criterion_core,
     _CriterionBase,
     _JointCriterionBase,
-    estimate_edf,
+    fisher_edf,
     fletcher_scale,
+    uses_qr_log_det,
 )
 from jaxgam.jax_utils import cho_factor
 
@@ -109,6 +110,29 @@ _GRAD_FILTER_THRESH = 0.001
 # significantly increasing compile and run time.
 
 
+def _hessian_qr(
+    family: ExponentialFamily,
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None,
+    rank_deficit: int,
+    X: jax.Array,
+    weights: jax.Array,
+) -> tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None:
+    """QR log|H| inputs for a nonnegative-weight full-rank system, else None.
+
+    Mirrors ``reml.uses_qr_log_det`` with the traced arguments of the fused
+    and differentiable scores (``family``, the roots' presence and
+    ``rank_deficit`` are static there).
+    """
+    if (
+        penalty_roots is None
+        or rank_deficit != 0
+        or not family.is_canonical
+        or family.n_theta != 0
+    ):
+        return None
+    return jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * X, penalty_roots
+
+
 def factorization_fallbacks(
     fd: FittingData,
     pirls_result: PIRLSResult,
@@ -120,14 +144,14 @@ def factorization_fallbacks(
 
     ``cho_factor`` regularizes only when the plain factor fails; the PIRLS
     factors record their level, while the criterion determinant (unit-diagonal
-    Cholesky) and the IFT factor of ``X'WX + S`` are re-evaluated here at the
-    reported state.
+    Cholesky, unless the QR determinant is used) and the IFT factor of
+    ``X'WX + S`` are re-evaluated here at the reported state.
     """
     levels = {"PIRLS": float(np.max(np.asarray(pirls_result.factor_regularization)))}
     if fd.n_penalties == 0:
         return levels
     H = pirls_result.XtWX + fd.S_lambda(jnp.asarray(log_lambda))
-    if fd.rank_deficit == 0:
+    if fd.rank_deficit == 0 and not uses_qr_log_det(fd):
         d = jnp.sqrt(jnp.maximum(jnp.diag(H), jnp.finfo(H.dtype).tiny))
         _, level = cho_factor(H / (d[:, None] * d[None, :]))
         levels["criterion log|H|"] = float(level)
@@ -336,6 +360,7 @@ def _diff_score(
             return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
 
         beta, XtWX, dev = _pirls_out_ext(S_lambda, log_theta, beta_warm)
+        hessian_qr = None  # estimated-theta NB: signed observed system
 
     else:
         # --- Fixed-parameter family path: 2 primals ---
@@ -367,14 +392,21 @@ def _diff_score(
                 tol=pirls_tol,
                 penalty_root=root_inner,
             )
-            return result.coefficients, result.XtWX, result.deviance
+            return (
+                result.coefficients,
+                result.XtWX,
+                result.deviance,
+                result.working_weights,
+            )
 
         @_pirls_out.defjvp
         def _pirls_jvp(primals, tangents):
             S_lambda_inner, root_inner, beta_warm_inner = primals
             dS = tangents[0]
 
-            beta, XtWX, dev = _pirls_out(S_lambda_inner, root_inner, beta_warm_inner)
+            beta, XtWX, dev, weights = _pirls_out(
+                S_lambda_inner, root_inner, beta_warm_inner
+            )
 
             # IFT: dβ = -H⁻¹(dS @ β)
             H = XtWX + S_lambda_inner
@@ -426,9 +458,10 @@ def _diff_score(
 
             _, ddev = jax.jvp(_eta_to_dev, (eta,), (deta,))
 
-            return (beta, XtWX, dev), (dbeta, dXtWX, ddev)
+            return (beta, XtWX, dev, weights), (dbeta, dXtWX, ddev, dW)
 
-        beta, XtWX, dev = _pirls_out(S_lambda, penalty_root, beta_warm)
+        beta, XtWX, dev, weights = _pirls_out(S_lambda, penalty_root, beta_warm)
+        hessian_qr = _hessian_qr(family, penalty_roots, rank_deficit, X, weights)
 
     # ---- Criterion score ----
     core = _criterion_core(
@@ -446,6 +479,7 @@ def _diff_score(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        hessian_qr,
     )
 
     # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
@@ -631,6 +665,9 @@ def _fit_and_score_impl(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        _hessian_qr(
+            family, penalty_roots, rank_deficit, X, pirls_result.working_weights
+        ),
     )
 
     # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
@@ -1800,7 +1837,7 @@ class NewtonOptimizer:
                 penalty_root=fd.penalty_root(log_lambda),
             )
             # Fisher-weighted EDF (XtWX may be observed info for non-canonical).
-            edf_init = estimate_edf(pirls_init.XtWX_fisher, pirls_init.L_fisher)
+            edf_init = fisher_edf(pirls_init)
             phi_init = fletcher_scale(fd.y, pirls_init.mu, fd.wt, fd.family, edf_init)
             log_phi_init = jnp.log(phi_init)
             parts.append(log_phi_init[None])

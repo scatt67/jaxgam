@@ -45,7 +45,7 @@ from jaxgam.fitting.efs_theta import (
     _efs_nb_deviance,
     _efs_nb_log_deviance,
 )
-from jaxgam.fitting.qr import penalized_qr_solve
+from jaxgam.fitting.qr import penalized_qr_hat, penalized_qr_solve
 from jaxgam.jax_utils import penalized_cholesky, penalized_solve
 from jaxgam.links.links import IdentityLink, LogLink, SqrtLink
 
@@ -802,6 +802,11 @@ class PIRLSResult:
         penalized Hessian of this fit (proposals and final factors). ``0``
         means every factor was the plain Cholesky; a positive value is the
         explicit diagnostic that the fallback regularization fired.
+    fisher_hat, fisher_edf : jax.Array or None
+        For a structurally full-rank dense fit, the Fisher influence matrix
+        ``F = (X'W_fX + S)^-1 X'W_fX`` and ``tr(F)`` from the pls_fit1 QR
+        (``qr.penalized_qr_hat``), formed without normal equations; ``None``
+        where the factor is a Cholesky of ``X'W_fX + S``.
     """
 
     coefficients: jax.Array
@@ -818,6 +823,8 @@ class PIRLSResult:
     XtWX_fisher: jax.Array
     L_fisher: jax.Array
     factor_regularization: jax.Array | float = 0.0
+    fisher_hat: jax.Array | None = None
+    fisher_edf: jax.Array | None = None
 
 
 # Register as JAX pytree so PIRLSResult can be returned from jax.jit
@@ -1116,6 +1123,7 @@ def _pirls_loop_jit(
     # FISHER information (gdi.c:2262-2294). For canonical links observed ==
     # Fisher. The converged beta is identical under either weighting.
     eta_final = X @ final.beta + offset
+    fisher_hat = fisher_edf = None
 
     if use_extended_observed and log_theta is not None:
         # Extended families (NB): observed (signed) weights for the REML log|H|.
@@ -1141,6 +1149,8 @@ def _pirls_loop_jit(
         else:
             _, _, L_fisher = qr_solve(W_final, z_final)
             reg_fisher = jnp.zeros(())
+            # gdi1's P K' route: F and tr(F) from the QR, no normal equations.
+            fisher_hat, fisher_edf = penalized_qr_hat(WX_fisher, penalty_root)
         W_obs = _observed_weights(family, X, y, wt, final.beta, offset)  # signed
         XtWX_final = _signed_XtWX(W_obs, X)
         L_final, reg_final = penalized_cholesky(XtWX_final, S_lambda)
@@ -1155,6 +1165,7 @@ def _pirls_loop_jit(
         else:
             _, _, L_final = qr_solve(W_final, z_final)
             reg_final = jnp.zeros(())
+            fisher_hat, fisher_edf = penalized_qr_hat(WX_final, penalty_root)
         XtWX_fisher = XtWX_final
         L_fisher = L_final
         reg_fisher = reg_final
@@ -1183,6 +1194,8 @@ def _pirls_loop_jit(
         factor_regularization=jnp.maximum(
             final.regularization, jnp.maximum(reg_final, reg_fisher)
         ),
+        fisher_hat=fisher_hat,
+        fisher_edf=fisher_edf,
     )
 
 

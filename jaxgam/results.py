@@ -1244,8 +1244,10 @@ class GAMResults(_FitDiagnostics):
         H_inv = Z.T @ Z
 
         # Per-smooth EDF via hat matrix F = H^{-1} @ XtWX
-        # (invariant under repara -- cyclic trace with block-diagonal D)
-        F = H_inv @ XtWX
+        # (invariant under repara -- cyclic trace with block-diagonal D).
+        # A structurally full-rank dense fit carries F from the QR of its
+        # Fisher system (gdi's P K' route), formed without normal equations.
+        F = H_inv @ XtWX if pr.fisher_hat is None else to_numpy(pr.fisher_hat)
         per_smooth_edf = _compute_per_smooth_edf(F, setup.smooth_info)
         # edf1 = 2*edf - trace(F^2): alternative EDF for significance testing
         # (R's gam.fit3.post.proc, mgcv.r line 966)

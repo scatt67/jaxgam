@@ -833,3 +833,109 @@ def test_r_exact_design_at_r_reml_sp_matches_pinned_r(
         ),
     )
     collector.raise_if_any(f"R-exact dense at R's REML sp {layout} {term}")
+
+
+def test_qr_log_det_and_hat_compile_and_match_the_normal_equations() -> None:
+    """Stage 2 completion: log|H| and EDF from the pls_fit1/gdi QR, under jit.
+
+    On a well-conditioned system the QR determinant and influence matrix equal
+    the normal-equation ones at STRICT, and the custom JVP's first and second
+    derivatives (through H only, as the inner fit's IFT supplies dH) equal
+    automatic differentiation of the Cholesky determinant.
+    """
+    from jaxgam.fitting.qr import penalized_qr_hat, qr_log_det
+
+    rng = np.random.default_rng(8)
+    n, p = 80, 6
+    X = jnp.asarray(rng.standard_normal((n, p)))
+    w = jnp.asarray(rng.uniform(0.2, 2.0, n))
+    S1 = np.diag([0.0, 0.0, 1.0, 2.0, 0.0, 0.0])
+    S2 = np.diag([0.0, 0.0, 0.0, 0.0, 3.0, 1.0])
+    roots = (np.sqrt(S1)[2:4], np.sqrt(S2)[4:])
+    wX = jnp.sqrt(w)[:, None] * X
+    XtWX = wX.T @ wX
+
+    def parts(rho):
+        E = jnp.concatenate(
+            [jnp.exp(0.5 * rho[0]) * roots[0], jnp.exp(0.5 * rho[1]) * roots[1]]
+        )
+        S = jnp.exp(rho[0]) * S1 + jnp.exp(rho[1]) * S2
+        return E, S
+
+    def qr_score(rho):
+        E, S = parts(rho)
+        return qr_log_det(XtWX + S, jax.lax.stop_gradient(wX), jax.lax.stop_gradient(E))
+
+    def chol_score(rho):
+        _, S = parts(rho)
+        return 2.0 * jnp.sum(jnp.log(jnp.diag(jnp.linalg.cholesky(XtWX + S))))
+
+    rho = jnp.asarray([0.3, -0.7])
+    collector = _AssertCollector()
+    collector.check(
+        "log|H| value",
+        lambda: _assert_strict(jax.jit(qr_score)(rho), chol_score(rho)),
+    )
+    collector.check(
+        "gradient",
+        lambda: _assert_strict(
+            jax.jit(jax.grad(qr_score))(rho), jax.grad(chol_score)(rho)
+        ),
+    )
+    collector.check(
+        "Hessian",
+        lambda: _assert_strict(
+            jax.jit(jax.hessian(qr_score))(rho), jax.hessian(chol_score)(rho)
+        ),
+    )
+    E, S = parts(rho)
+    F, edf = jax.jit(penalized_qr_hat)(wX, E)
+    F_normal = np.linalg.solve(np.asarray(XtWX + S), np.asarray(XtWX))
+    collector.check("hat matrix", lambda: _assert_strict(F, F_normal))
+    collector.check("EDF", lambda: _assert_strict(edf, np.trace(F_normal)))
+    collector.raise_if_any("QR log|H| and EDF")
+
+
+@pytest.mark.skipif(not r_available(), reason="Pinned R/mgcv unavailable")
+def test_dense_fit_records_the_qr_fisher_influence_matrix(r_bridge) -> None:
+    """Full-rank dense fits carry F and tr(F) from the QR; EDF equals R's."""
+    data = _parity_frame("regular")
+    fit_fixed = GAM("y ~ s(x, bs='cr', k=8) + s(z, bs='cr', k=6)", sp=[0.7, 2.0])
+    fit = fit_fixed.fit(data)
+    with contextlib.redirect_stdout(io.StringIO()):
+        reference = r_bridge.public_fixed_sp_fit(
+            data[["x", "y"]],
+            np.ones(len(data)),
+            np.zeros(len(data)),
+            "gaussian",
+            "identity",
+            sp=0.7,
+        )
+    single = GAM('y ~ s(x, bs="cr", k=8)', sp=[0.7]).fit(data[["x", "y"]])
+    collector = _AssertCollector()
+    collector.check(
+        "EDF vs R", lambda: _assert_strict(single.edf_total, reference["edf"])
+    )
+    from jaxgam.formula.design import ModelSetup
+    from jaxgam.formula.parser import parse_formula
+
+    for family in (Gaussian(), Gamma(link="log")):
+        response = (
+            data.assign(y=np.exp(0.3 * data.y)) if isinstance(family, Gamma) else data
+        )
+        fd = FittingData.from_setup(
+            ModelSetup.build(parse_formula("y ~ s(x, bs='cr', k=8)"), response), family
+        )
+        pirls = _fit_fixed_sp(fd, np.array([0.7])).pirls_result
+
+        def _recorded(pirls=pirls, fd=fd) -> None:
+            check_that(fd.penalty_roots is not None, "not on the QR route")
+            check_that(pirls.fisher_hat is not None, "no QR influence matrix")
+            _assert_strict(np.trace(np.asarray(pirls.fisher_hat)), pirls.fisher_edf)
+
+        collector.check(f"{family.family_name}: QR F recorded", _recorded)
+    collector.check(
+        "per-smooth EDF sums to total",
+        lambda: _assert_strict(np.sum(fit.edf) + 1.0, fit.edf_total),
+    )
+    collector.raise_if_any("QR Fisher influence matrix")
