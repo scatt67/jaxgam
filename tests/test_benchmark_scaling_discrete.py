@@ -8,7 +8,6 @@ import pytest
 
 from scripts import benchmark_scaling
 from scripts.benchmark_scaling import ScalingCase
-from tests.test_benchmark_scaling import minimal_git_checkout  # noqa: F401
 
 
 def _case(n_rows: int = 19, **kwargs: object) -> ScalingCase:
@@ -182,7 +181,7 @@ def test_discrete_control_and_family_objects_follow_the_case() -> None:
 @pytest.mark.parametrize("execution", ["discrete", "discrete-wm"])
 def test_tiny_discrete_routes_record_setup_and_public_fit_accounting(
     execution: str,
-    minimal_git_checkout: Path,  # noqa: F811
+    minimal_git_checkout: Path,
 ) -> None:
     record = benchmark_scaling.run_isolated(
         _case(60, execution=execution, batch_rows=13, repeats=2, smooth_count=2),
@@ -230,17 +229,23 @@ def test_tiny_discrete_routes_record_setup_and_public_fit_accounting(
     assert fit["route"]["discretization_m"] is None
 
 
-def test_tiny_count_family_routes_record_family_and_theta() -> None:
-    root = Path.cwd()
-    poisson = benchmark_scaling.run_case(
-        _case(80, execution="discrete", family="poisson", batch_rows=29), root
-    )
-    nb = benchmark_scaling.run_case(
-        _case(80, execution="discrete-wm", family="nb", batch_rows=29), root
-    )
-    tensor_setup = benchmark_scaling.run_setup(
-        _case(60, execution="discrete-wm", model="tensor", discretization_m=12), root
-    )
+def test_tiny_count_family_routes_record_family_and_theta(
+    minimal_git_checkout: Path,
+) -> None:
+    # The test image has no .git; the harness fails closed without source
+    # provenance, so isolated children run from a committed minimal checkout.
+    poisson = benchmark_scaling.run_isolated(
+        _case(80, execution="discrete", family="poisson", batch_rows=29),
+        minimal_git_checkout,
+    )["fit"]
+    nb = benchmark_scaling.run_isolated(
+        _case(80, execution="discrete-wm", family="nb", batch_rows=29),
+        minimal_git_checkout,
+    )["fit"]
+    tensor_setup = benchmark_scaling.run_isolated(
+        _case(60, execution="discrete-wm", model="tensor", discretization_m=12),
+        minimal_git_checkout,
+    )["setup"]
 
     assert poisson["route"]["family"] == "poisson"
     assert poisson["input"]["generator"] == "poisson_sine"

@@ -2,7 +2,6 @@
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,44 +17,6 @@ from scripts import benchmark_scaling
 from scripts.benchmark_scaling import ScalingCase, isolated_cache_dir, source_identity
 from tests.helpers import _AssertCollector, check_that, r_available
 from tests.tolerances import MODERATE
-
-
-@pytest.fixture
-def minimal_git_checkout(tmp_path: Path) -> Path:
-    """Build the smallest real checkout needed by isolated harness children.
-
-    The Docker test image deliberately excludes the repository's ``.git``
-    directory. The harness must still fail closed when provenance cannot be
-    obtained, so real-child tests run against this copied, committed checkout
-    rather than mocking source identity or relaxing the production helper.
-    """
-    checkout = tmp_path / "checkout"
-    ignore_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
-    shutil.copytree(Path.cwd() / "jaxgam", checkout / "jaxgam", ignore=ignore_bytecode)
-    (checkout / "tests").mkdir()
-    for name in ("__init__.py", "tolerances.py"):
-        shutil.copy2(Path.cwd() / "tests" / name, checkout / "tests" / name)
-    (checkout / ".gitignore").write_text("__pycache__/\n*.pyc\n")
-    subprocess.run(["git", "init", "--quiet"], cwd=checkout, check=True)
-    subprocess.run(
-        ["git", "add", ".gitignore", "jaxgam", "tests"], cwd=checkout, check=True
-    )
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=benchmark-test",
-            "-c",
-            "user.email=benchmark-test@example.com",
-            "commit",
-            "--quiet",
-            "-m",
-            "minimal isolated harness checkout",
-        ],
-        cwd=checkout,
-        check=True,
-    )
-    return checkout
 
 
 @pytest.mark.parametrize(
