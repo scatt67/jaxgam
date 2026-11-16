@@ -352,6 +352,41 @@ class TestRBridgeEFS:
                 fixture.formula, data, fixture.family, controls={"outer_limit": 3}
             )
 
+    def test_known_scale_initial_smoothing_reaches_pinned_fit_and_trace(self) -> None:
+        x = np.linspace(-1.0, 1.0, 36)
+        data = pd.DataFrame({"x": x, "y": np.resize([0, 1, 2, 1], len(x))})
+        formula = "y~s(x,bs='cr',k=5)"
+        bridge = RBridge(mode="rpy2")
+        start = np.array([0.8])
+        traced = bridge.efs_diagnostics(
+            formula, data, "poisson", initial_smoothing=start
+        )
+        np.testing.assert_allclose(
+            traced["statistics"].iloc[0]["log_smoothing"],
+            np.log(start[0]) + 2.5,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        implicit = bridge.fit_efs(formula, data, "poisson", initial_smoothing=start)
+        explicit = bridge.fit_efs(
+            formula, data, "poisson", initial_smoothing=start, scale=1.0
+        )
+        np.testing.assert_allclose(
+            implicit["score_history"],
+            explicit["score_history"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_unknown_scale_initial_smoothing_requires_scale_context(self) -> None:
+        x = np.linspace(-1.0, 1.0, 20)
+        data = pd.DataFrame({"x": x, "y": 1.0 + x**2})
+        formula = "y~s(x,bs='cr',k=5)"
+        bridge = RBridge(mode="rpy2")
+        for oracle in (bridge.fit_efs, bridge.efs_diagnostics):
+            with pytest.raises(ValueError, match="initial_smoothing needs"):
+                oracle(formula, data, "gaussian", initial_smoothing=np.array([0.8]))
+
     def test_selected_efs_oracle_isolates_offset_null_deviance_failure(self) -> None:
         """The bounded-link source clone neither mutates nor masks public R."""
         x = np.linspace(-0.6, 0.7, 79)

@@ -5591,6 +5591,33 @@ class RBridge:
             "data_hash": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
         }
 
+    def _use_efs_initial_smoothing(
+        self,
+        r_family: Any,
+        scale: float,
+        initial: np.ndarray | None,
+        initial_scale: float | None,
+    ) -> bool:
+        """Follow mgcv's source scale decision before binding a supplied sp start."""
+        if initial is None:
+            return False
+        if scale > 0 or initial_scale is not None:
+            return True
+        family_name = str(r_family.rx2("family")[0])
+        if family_name in {"poisson", "binomial"}:
+            return True
+        if "extended.family" in tuple(r_family.rclass):
+            intrinsic_scale = r_family.rx2("scale")
+            if bool(self._base.is_null(intrinsic_scale)[0]):
+                return True
+            values = _r_array(intrinsic_scale, dtype=np.float64)
+            if values.size == 1 and np.isfinite(values[0]) and values[0] > 0:
+                return True
+        raise ValueError(
+            "Supplied EFS initial_smoothing needs a known family scale, "
+            "positive scale, or explicit initial_scale."
+        )
+
     def _fit_efs_rpy2(
         self,
         formula: str,
@@ -5666,7 +5693,7 @@ class RBridge:
             ),
             "scale": float(scale),
         }
-        if initial is not None and (scale > 0 or initial_scale is not None):
+        if self._use_efs_initial_smoothing(r_family, scale, initial, initial_scale):
             fit_args["in.out"] = self._ro.ListVector(
                 {
                     "sp": self._to_r_vector(initial),
@@ -5807,7 +5834,7 @@ class RBridge:
         ur_s = rinterface.ListSexpVector(
             [multiply(self._base.t(y_range), root) for root in roots]
         )
-        if initial is not None and (scale > 0 or initial_scale is not None):
+        if self._use_efs_initial_smoothing(r_family, scale, initial, initial_scale):
             initial_sp = self._to_r_vector(initial)
         else:
             initial_sp = self._call_internal(
