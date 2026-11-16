@@ -122,20 +122,46 @@ def test_dense_fixed_sp_reports_supplied_values(family, result_mode):
     _assert_verbatim(result, SUPPLIED)
 
 
+def test_dense_gaussian_qr_newton_reports_supplied_values():
+    frame, weights, offset = _frame("gaussian")
+    result = GAM(
+        FORMULA, sp=list(SUPPLIED), control=FitControl(gaussian_compression=True)
+    ).fit(frame, weights=weights, offset=offset)
+    assert result.execution_route == "gaussian_qr"
+    _assert_verbatim(result, SUPPLIED)
+
+
+def test_dense_gaussian_qr_lbfgs_reports_supplied_values():
+    """More than 50 pinned penalties select the pinned L-BFGS-B route."""
+    rng = np.random.default_rng(7)
+    columns = {f"v{i}": rng.uniform(0, 1, 300) for i in range(51)}
+    frame = pd.DataFrame(columns)
+    frame["y"] = sum(0.1 * np.sin(2 * np.pi * frame[c]) for c in columns)
+    frame["y"] += rng.normal(0, 0.3, 300)
+    formula = "y ~ " + " + ".join(f"s({c}, bs='cr', k=3)" for c in columns)
+    supplied = [SP_A] * 51
+    result = GAM(
+        formula, sp=supplied, control=FitControl(gaussian_compression=True)
+    ).fit(frame)
+    assert result.lambda_strategy == "fixed"
+    _assert_verbatim(result, supplied)
+
+
 @pytest.mark.parametrize(
-    ("family", "solver"),
+    ("family", "solver", "compression"),
     [
-        ("gaussian", "cholesky"),
-        ("poisson", "cholesky"),
-        ("binomial", "cholesky"),
-        ("gaussian", "qr"),
-        ("poisson", "qr"),
-        ("gamma", "qr"),
-        ("nb_fixed", "qr"),
-        ("nb_estimated", "qr"),
+        ("gaussian", "cholesky", False),
+        ("poisson", "cholesky", False),
+        ("binomial", "cholesky", False),
+        ("gaussian", "qr", False),
+        ("poisson", "qr", False),
+        ("gamma", "qr", False),
+        ("nb_fixed", "qr", False),
+        ("nb_estimated", "qr", False),
+        ("gaussian", "cholesky", True),
     ],
 )
-def test_streamed_fixed_sp_reports_supplied_values(family, solver):
+def test_streamed_fixed_sp_reports_supplied_values(family, solver, compression):
     frame, weights, offset = _frame(_data_family(family))
     source = DataFrameRowSource(frame, response="y", weights=weights, offset=offset)
     result = GAM(
@@ -147,8 +173,11 @@ def test_streamed_fixed_sp_reports_supplied_values(family, solver):
             linear_solver=solver,
             batch_rows=48,
             uncertainty="fisher",
+            gaussian_compression=compression,
         ),
     ).fit(source, result="prediction")
+    if compression:
+        assert result.execution_route == "stream_gaussian_qr"
     _assert_verbatim(result, SUPPLIED)
 
 

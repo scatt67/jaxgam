@@ -684,6 +684,7 @@ def _fit_stream_gaussian_qr(
         source_scans=provider.source_scans,
         batches_scanned=provider.batches_scanned,
         known_workspace_bytes=known_workspace_bytes,
+        supplied_smoothing_params=sp,
     )
 
 
