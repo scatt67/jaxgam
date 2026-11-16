@@ -510,3 +510,198 @@ def test_public_route_preserves_dense_solve_and_original_deviance_weights(
     np.testing.assert_allclose(fallback.deviance, dense.deviance, **strict)
     np.testing.assert_allclose(fallback.score, dense.score, **strict)
     np.testing.assert_allclose(fallback.scale, dense.scale, **strict)
+
+
+_RELATIVE_REDUCTION = "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
+
+
+def _stationary_reference():
+    """Newton's converged smoothing parameters and the closed-form log scale."""
+    fitting = _problem()
+    provider = build_dense_gaussian_qr_provider(fitting)
+    newton = NewtonOptimizer(
+        fitting, score_provider=build_dense_gaussian_qr_provider(fitting)
+    ).run()
+    assert newton.converged
+    reference = np.r_[np.asarray(newton.log_lambda), 0.0]
+    state, _ = provider.evaluate(jax.numpy.asarray(reference))
+    score_state = state.score_state
+    scale_df = (
+        float(score_state.n_positive_weights) - provider._kwargs["penalty_nullity"]
+    )
+    log_scale = np.log(float(score_state.penalized_residual_sum_squares) / scale_df)
+    return fitting, provider, newton, np.r_[reference[:-1], log_scale]
+
+
+def _forced_stop(stalled: np.ndarray, threshold: float, *, scale_only: bool):
+    """A deterministic L-BFGS-B relative-reduction (ftol=0) roundoff stop."""
+
+    def relative_reduction_stop(objective, _initial, **_kwargs):
+        _, gradient = objective(stalled)
+        exceeds = np.abs(gradient) > threshold
+        assert exceeds[-1] if scale_only else exceeds[:-1].any()
+        if scale_only:
+            assert not exceeds[:-1].any()
+        return OptimizeResult(
+            x=stalled, success=True, status=0, nit=34, message=_RELATIVE_REDUCTION
+        )
+
+    return relative_reduction_stop
+
+
+def test_lbfgs_relative_reduction_stop_completes_gaussian_log_scale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only log(phi) above gtol after a roundoff stop: completed on gradients."""
+    fitting, provider, newton, stationary = _stationary_reference()
+    threshold = 1e-10 * (1.0 + abs(float(newton.score)))
+    stalled = np.r_[stationary[:-1], stationary[-1] + 4e-10]
+    monkeypatch.setattr(
+        gaussian_optimizer_module,
+        "minimize",
+        _forced_stop(stalled, threshold, scale_only=True),
+    )
+    result = optimize_gaussian_qr_lbfgs(fitting, provider)
+    assert result.converged
+    assert result.convergence_info == "full convergence"
+    np.testing.assert_array_equal(result.log_lambda, stalled[:-1])
+    assert float(np.max(np.abs(result.gradient))) <= threshold
+    np.testing.assert_allclose(
+        result.score, newton.score, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert provider.finalize_calls == 1
+
+
+def test_lbfgs_fixed_smoothing_roundoff_stop_completes_log_scale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fitting, provider, newton, stationary = _stationary_reference()
+    threshold = 1e-10 * (1.0 + abs(float(newton.score)))
+    stalled = np.array([stationary[-1] + 4e-10])
+
+    def relative_reduction_stop(objective, _initial, **_kwargs):
+        _, gradient = objective(stalled)
+        assert abs(gradient[-1]) > threshold
+        return OptimizeResult(
+            x=stalled, success=True, status=0, nit=3, message=_RELATIVE_REDUCTION
+        )
+
+    monkeypatch.setattr(gaussian_optimizer_module, "minimize", relative_reduction_stop)
+    result = optimize_gaussian_qr_lbfgs(
+        fitting,
+        provider,
+        log_lambda_init=jax.numpy.asarray(stationary[:-1]),
+        pin_lambda=True,
+    )
+    assert result.converged
+    assert result.convergence_info == "full convergence"
+    np.testing.assert_array_equal(result.log_lambda, stationary[:-1])
+
+
+def test_lbfgs_roundoff_stop_names_the_smoothing_coordinate_left_unconverged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A smoothing coordinate above gtol stays truthfully not converged."""
+    fitting, provider, newton, stationary = _stationary_reference()
+    threshold = 1e-10 * (1.0 + abs(float(newton.score)))
+    stalled = stationary.copy()
+    stalled[1] += 1e-4
+    monkeypatch.setattr(
+        gaussian_optimizer_module,
+        "minimize",
+        _forced_stop(stalled, threshold, scale_only=False),
+    )
+    result = optimize_gaussian_qr_lbfgs(fitting, provider)
+    assert not result.converged
+    assert result.convergence_info.startswith(
+        "step failed: log smoothing parameter 1 projected gradient "
+    )
+    assert "after an L-BFGS-B roundoff stop" in result.convergence_info
+    assert "log-scale completion" not in result.convergence_info
+    np.testing.assert_array_equal(result.log_lambda, stalled[:-1])
+    assert provider.finalize_calls == 1
+
+
+def test_lbfgs_rejected_scale_completion_keeps_the_accepted_trial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fitting, provider, newton, stationary = _stationary_reference()
+    threshold = 1e-10 * (1.0 + abs(float(newton.score)))
+    stalled = np.r_[stationary[:-1], stationary[-1] + 4e-10]
+    monkeypatch.setattr(
+        gaussian_optimizer_module,
+        "minimize",
+        _forced_stop(stalled, threshold, scale_only=True),
+    )
+    monkeypatch.setattr(
+        gaussian_optimizer_module,
+        "_newton_model_rejection",
+        lambda *_args: "quadratic model error",
+    )
+    _, expected_score = provider.evaluate(jax.numpy.asarray(stalled))
+    result = optimize_gaussian_qr_lbfgs(fitting, provider)
+    assert not result.converged
+    assert result.convergence_info.startswith(
+        "step failed: log scale projected gradient "
+    )
+    assert result.convergence_info.endswith(
+        "log-scale completion: quadratic model error, 0 accepted step(s)"
+    )
+    assert float(result.score) == float(expected_score)
+
+
+def test_gaussian_scale_rejection_reasons_and_profile_validation() -> None:
+    """Each acceptance test of the scale completion rejects on its own."""
+    from dataclasses import replace
+
+    fitting, provider, _newton, stationary = _stationary_reference()
+    objective = gaussian_optimizer_module._GaussianLBFGSObjective(provider, None)
+    stalled = np.r_[stationary[:-1], stationary[-1] + 4e-10]
+    _, old_free = objective(stalled)
+    accepted = objective.trial
+    _, new_free = objective(stationary)
+    candidate = objective.trial
+    nullity = provider._kwargs["penalty_nullity"]
+    _, curvature = gaussian_optimizer_module._gaussian_scale_profile(
+        accepted.state, nullity
+    )
+    step = float(stationary[-1] - stalled[-1])
+
+    def reason(candidate=candidate, old=old_free, new=new_free):
+        return gaussian_optimizer_module._gaussian_scale_rejection(
+            accepted,
+            candidate,
+            stalled,
+            stationary,
+            old,
+            new,
+            step,
+            curvature,
+            n_bounded=fitting.n_penalties,
+            penalty_nullity=nullity,
+        )
+
+    assert reason() is None
+    assert reason(candidate=replace(candidate, score=jax.numpy.nan)) == (
+        "nonfinite trial"
+    )
+    assert reason(new=2.0 * old_free) == "no gradient reduction"
+    worse_smoothing = new_free.copy()
+    worse_smoothing[0] = 10.0 * abs(old_free[-1])
+    assert reason(new=worse_smoothing) == "no projected gradient reduction"
+
+    score_state = accepted.state.score_state
+    no_df = replace(
+        accepted.state,
+        score_state=replace(score_state, n_positive_weights=jax.numpy.asarray(nullity)),
+    )
+    with pytest.raises(FloatingPointError, match="degrees of freedom"):
+        gaussian_optimizer_module._gaussian_scale_profile(no_df, nullity)
+    no_rss = replace(
+        accepted.state,
+        score_state=replace(
+            score_state, penalized_residual_sum_squares=jax.numpy.asarray(0.0)
+        ),
+    )
+    with pytest.raises(FloatingPointError, match="not positive"):
+        gaussian_optimizer_module._gaussian_scale_profile(no_rss, nullity)

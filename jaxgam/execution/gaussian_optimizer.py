@@ -39,7 +39,13 @@ from .gaussian import (
     prepare_frozen_gaussian_qr,
     prepare_streamed_frozen_gaussian_qr,
 )
-from .reml import StreamREMLControl, _projected_gradient
+from .reml import (
+    StreamREMLControl,
+    _hermite_change,
+    _lbfgsb_roundoff_stop,
+    _newton_model_rejection,
+    _projected_gradient,
+)
 
 
 @dataclass(frozen=True)
@@ -443,6 +449,187 @@ class _GaussianLBFGSObjective:
         return float(np.asarray(self.trial.score)), gradient
 
 
+# The closed-form log-scale step is exact for fixed smoothing parameters, so
+# the second step only confirms that the stationary scale is unchanged.
+_GAUSSIAN_SCALE_COMPLETION_MAX_STEPS = 2
+
+
+@dataclass(frozen=True)
+class _GaussianScaleCompletion:
+    """Outcome of the closed-form log-scale completion after a roundoff stop."""
+
+    steps: int
+    stop: str
+
+
+def _gaussian_scale_profile(
+    state: GaussianQROuterState, penalty_nullity: int
+) -> tuple[float, float]:
+    """Return the stationary log scale and the exact log-scale curvature.
+
+    At fixed smoothing parameters the Gaussian QR score is
+    ``Dp/(2 phi) + (n+ - Mp)/2 log(2 pi phi) + const``, with ``Dp`` (the
+    penalized RSS) independent of ``phi``.  Its log-scale gradient is
+    ``(n+ - Mp)/2 - Dp/(2 phi)`` and its exact curvature is ``Dp/(2 phi)``
+    (pinned ``gam.fit3.r`` ``dlr.dlphi``/``d2lr.d2lphi`` with the Gaussian
+    ``ls``), so the stationary scale is ``Dp/(n+ - Mp)`` in closed form.
+    """
+    score_state = state.score_state
+    scale_df = float(np.asarray(score_state.n_positive_weights)) - penalty_nullity
+    penalized_rss = float(np.asarray(score_state.penalized_residual_sum_squares))
+    scale = float(np.asarray(score_state.scale))
+    if not np.isfinite(scale_df) or scale_df <= 0.0:
+        raise FloatingPointError(
+            "Gaussian scale profile has invalid degrees of freedom."
+        )
+    stationary = penalized_rss / scale_df
+    if not np.isfinite(stationary) or stationary <= 0.0:
+        raise FloatingPointError("Gaussian scale profile is not positive and finite.")
+    return float(np.log(stationary)), penalized_rss / (2.0 * scale)
+
+
+def _gaussian_score_roundoff(trial: _GaussianLBFGSTrial, penalty_nullity: int) -> float:
+    """First-order float64 envelope of one Gaussian QR score value."""
+    score_state = trial.state.score_state
+    scale = float(np.asarray(score_state.scale))
+    n_positive = float(np.asarray(score_state.n_positive_weights))
+    magnitude = (
+        abs(float(np.asarray(trial.score)))
+        + float(np.asarray(score_state.penalized_residual_sum_squares)) / (2.0 * scale)
+        + abs((n_positive - penalty_nullity) * np.log(2.0 * np.pi * scale)) / 2.0
+        + abs(float(np.asarray(score_state.log_det_hessian))) / 2.0
+        + abs(float(np.asarray(score_state.log_det_penalty))) / 2.0
+    )
+    return 8.0 * float(np.finfo(np.float64).eps) * magnitude
+
+
+def _free_projected(
+    free_params: np.ndarray,
+    free_gradient: np.ndarray,
+    n_bounded: int,
+) -> np.ndarray:
+    """Projected free gradient: smoothing coordinates bounded on [-40, 40]."""
+    projected = np.asarray(free_gradient, dtype=np.float64).copy()
+    if n_bounded:
+        projected[:n_bounded] = _projected_gradient(
+            free_params[:n_bounded],
+            projected[:n_bounded],
+            lower=-40.0,
+            upper=40.0,
+        )
+    return projected
+
+
+def _complete_gaussian_log_scale(
+    objective: _GaussianLBFGSObjective,
+    free_params: np.ndarray,
+    *,
+    n_bounded: int,
+    penalty_nullity: int,
+) -> tuple[_GaussianScaleCompletion, np.ndarray]:
+    """Complete the log-scale coordinate after an L-BFGS-B roundoff stop.
+
+    Only the final (log-scale) coordinate moves; smoothing parameters are
+    never changed.  Each step goes to the closed-form stationary scale of
+    :func:`_gaussian_scale_profile`.  A candidate is accepted on the exact
+    gradient, not the raw score: its exact curvature must be positive, both
+    the log-scale gradient and the full projected gradient must decrease, and
+    pinned ``newton()``'s descent and quadratic-model tests must hold for the
+    change integrated from exact endpoint gradients and curvatures, with no
+    raw-score increase beyond the float64 envelope of both scores.  A
+    rejected candidate is discarded and the accepted trial restored.  The
+    completion holds the accepted and one candidate trial only.
+    """
+    steps = 0
+    accepted = objective.trial
+    if accepted is None:  # pragma: no cover - the caller evaluated the stop.
+        raise RuntimeError("Gaussian scale completion has no accepted trial.")
+    params = np.asarray(free_params, dtype=np.float64).copy()
+    for _ in range(_GAUSSIAN_SCALE_COMPLETION_MAX_STEPS):
+        target, curvature_old = _gaussian_scale_profile(accepted.state, penalty_nullity)
+        step = target - params[-1]
+        candidate_params = params.copy()
+        candidate_params[-1] = target
+        if candidate_params[-1] == params[-1]:
+            return _GaussianScaleCompletion(steps, "resolved"), params
+        _, old_free = objective(params)
+        _, new_free = objective(candidate_params)
+        candidate = objective.trial
+        if candidate is None:  # pragma: no cover - the objective just ran.
+            raise RuntimeError("Gaussian scale completion produced no trial.")
+        reason = _gaussian_scale_rejection(
+            accepted,
+            candidate,
+            params,
+            candidate_params,
+            old_free,
+            new_free,
+            step,
+            curvature_old,
+            n_bounded=n_bounded,
+            penalty_nullity=penalty_nullity,
+        )
+        if reason is not None:
+            objective.trial = accepted
+            return _GaussianScaleCompletion(steps, reason), params
+        accepted, params = candidate, candidate_params
+        steps += 1
+    # Dp does not depend on phi, so the second iteration recomputes the same
+    # stationary scale and stops "resolved"; this bound only guarantees exit.
+    return _GaussianScaleCompletion(steps, "step limit"), params  # pragma: no cover
+
+
+def _gaussian_scale_rejection(
+    accepted: _GaussianLBFGSTrial,
+    candidate: _GaussianLBFGSTrial,
+    params: np.ndarray,
+    candidate_params: np.ndarray,
+    old_free: np.ndarray,
+    new_free: np.ndarray,
+    step: float,
+    curvature_old: float,
+    *,
+    n_bounded: int,
+    penalty_nullity: int,
+) -> str | None:
+    """Return why a closed-form log-scale candidate is not acceptable."""
+    score_old = float(np.asarray(accepted.score))
+    score_new = float(np.asarray(candidate.score))
+    gradient_old = float(old_free[-1])
+    gradient_new = float(new_free[-1])
+    # The profile raises unless Dp > 0, so the exact curvature Dp/(2 phi) is
+    # positive whenever it is returned.
+    _, curvature_new = _gaussian_scale_profile(candidate.state, penalty_nullity)
+    if not np.all(
+        np.isfinite((score_old, score_new, gradient_old, gradient_new, curvature_new))
+    ):
+        return "nonfinite trial"
+    if not abs(gradient_new) < abs(gradient_old):
+        return "no gradient reduction"
+    old_norm = np.max(np.abs(_free_projected(params, old_free, n_bounded)))
+    new_norm = np.max(np.abs(_free_projected(candidate_params, new_free, n_bounded)))
+    if not new_norm < old_norm:
+        return "no projected gradient reduction"
+    predicted = gradient_old * step + 0.5 * curvature_old * step * step
+    change = _hermite_change(
+        step, gradient_old, gradient_new, curvature_old, curvature_new
+    )
+    return _newton_model_rejection(
+        predicted,
+        change,
+        score_old,
+        score_new,
+        _gaussian_score_roundoff(accepted, penalty_nullity)
+        + _gaussian_score_roundoff(candidate, penalty_nullity),
+    )
+
+
+def _coordinate_name(index: int, n_free: int, n_bounded: int, pinned: bool) -> str:
+    if index == n_free - 1 and (pinned or index >= n_bounded):
+        return "log scale"
+    return f"log smoothing parameter {index}"
+
+
 def use_gaussian_qr_lbfgs(n_penalties: int) -> bool:
     """Choose limited-memory optimization above the reviewed m threshold."""
     return n_penalties > GAUSSIAN_LBFGS_PENALTY_THRESHOLD
@@ -554,20 +741,40 @@ def optimize_gaussian_qr_lbfgs(
                 raise FloatingPointError(
                     "Gaussian scale profile increased the criterion."
                 )
-        projected = np.asarray(free_gradient, dtype=np.float64).copy()
-        if not pin_lambda:
-            projected[: fitting.n_penalties] = _projected_gradient(
-                terminal_params[: fitting.n_penalties],
-                projected[: fitting.n_penalties],
-                lower=-40.0,
-                upper=40.0,
-            )
+        n_bounded = 0 if pin_lambda else fitting.n_penalties
+        projected = _free_projected(terminal_params, free_gradient, n_bounded)
         projected_gradient_inf = float(np.max(np.abs(projected)))
         terminal_trial = objective.trial
         if terminal_trial is None:  # pragma: no cover - objective just ran.
             raise RuntimeError("Gaussian L-BFGS produced no terminal trial.")
         score_scale = 1.0 + abs(float(np.asarray(terminal_trial.score)))
-        gradient_converged = projected_gradient_inf <= reml_control.gtol * score_scale
+        threshold = reml_control.gtol * score_scale
+        gradient_converged = projected_gradient_inf <= threshold
+        completion: _GaussianScaleCompletion | None = None
+        roundoff_stop = _lbfgsb_roundoff_stop(result)
+        if (
+            not gradient_converged
+            and roundoff_stop
+            and not fitting.family.scale_known
+            and np.all(np.abs(projected[:-1]) <= threshold)
+        ):
+            # Only the log scale exceeds gtol after a raw-score roundoff stop:
+            # complete it on exact gradients, then recheck every coordinate.
+            completion, terminal_params = _complete_gaussian_log_scale(
+                objective,
+                terminal_params,
+                n_bounded=n_bounded,
+                penalty_nullity=provider._kwargs["penalty_nullity"],
+            )
+            score, free_gradient = objective(terminal_params)
+            projected = _free_projected(terminal_params, free_gradient, n_bounded)
+            projected_gradient_inf = float(np.max(np.abs(projected)))
+            terminal_trial = objective.trial
+            if terminal_trial is None:  # pragma: no cover - objective just ran.
+                raise RuntimeError("Gaussian L-BFGS produced no terminal trial.")
+            score_scale = 1.0 + abs(float(np.asarray(terminal_trial.score)))
+            threshold = reml_control.gtol * score_scale
+            gradient_converged = projected_gradient_inf <= threshold
         # SciPy can report an abnormal line-search termination after reaching
         # a flat Gaussian optimum. Match NewtonOptimizer's established rule:
         # a failed step at a gradient-converged point is full convergence.
@@ -579,6 +786,19 @@ def optimize_gaussian_qr_lbfgs(
             convergence_info = "full convergence"
         elif int(result.status) == 1:
             convergence_info = "iteration limit"
+        elif roundoff_stop:
+            worst = int(np.argmax(np.abs(projected)))
+            name = _coordinate_name(worst, len(projected), n_bounded, pin_lambda)
+            convergence_info = (
+                f"step failed: {name} projected gradient "
+                f"{abs(projected[worst]):.3e} > {threshold:.3e} after an "
+                f"L-BFGS-B roundoff stop"
+            )
+            if completion is not None:
+                convergence_info += (
+                    f"; log-scale completion: {completion.stop}, "
+                    f"{completion.steps} accepted step(s)"
+                )
         else:
             convergence_info = "step failed"
     else:
