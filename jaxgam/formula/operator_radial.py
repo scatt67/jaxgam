@@ -92,7 +92,11 @@ def _row_key(row: tuple[float, ...], mode: Literal["exact", "r_token"]):
 
 
 def _setup_bytes(q: int, d: int, k: int, batch_rows: int) -> int:
-    """Conservative simultaneous discovery/eigen/predictor array bound."""
+    """Conservative simultaneous eigen/predictor array bound for ``q`` knots.
+
+    ``q`` is the number of knots tprs_setup/gpE receive, i.e. the distinct
+    rows after the knot sample, never more than ``max_knots``.
+    """
     # E, distance, Lanczos Q/work, roots/products and ownership copies.
     square = 10 * q * q
     rectangular = 8 * q * (k + d + 4)
@@ -106,6 +110,20 @@ def _setup_bytes(q: int, d: int, k: int, batch_rows: int) -> int:
         + 8 * d
         + source_lanczos_workspace_bound(max(q, k), k),
     )
+
+
+def _ordering_bytes(q: int, d: int, max_knots: int, key_bytes: int) -> int:
+    """Materialize, order and sample ``q`` distinct rows (linear in ``q``).
+
+    The row list, the ordered (key, row) items and sorted()'s key list, the
+    encoded C-collation keys (``key_bytes``), timsort's merge buffer, the
+    float array and its conversion, and the sample's draws, pool and rows.
+    """
+    knots = min(q, max_knots)
+    lists = 3 * (8 * q + 64) + 64 * q + 8 * (q // 2 + 1)
+    arrays = 2 * 8 * q * d
+    sample = knots * (8 + 128) + 2 * 8 * knots * d
+    return lists + key_bytes + arrays + sample + 4096
 
 
 def _collect_rows(
@@ -131,6 +149,12 @@ def _collect_rows(
         {} if spec.bs == "gp" or source.n_rows > max_knots else None
     )
     retained = sys.getsizeof(exact) + (sys.getsizeof(token) if token is not None else 0)
+    # The scan holds only the distinct-row maps and one batch's labels. The
+    # knot setup starts after the maps are released and works on at most
+    # max_knots sampled rows, so it is charged once the distinct rows are
+    # known; a rejection during the scan is only a lower bound.
+    scanning = "distinct covariate rows are still being counted"
+    token_key_bytes = 0
     source_mean = _SourceMeanAccumulator(d)
     peak = base_reserved + retained
     for batch in source.scan(control.batch_rows):
@@ -187,7 +211,11 @@ def _collect_rows(
             # Format each covariate's distinct batch values once; the labels
             # equal _row_key's per-row r_row_token text exactly.
             label_bytes = ROW_LABEL_BYTES_PER_VALUE * (d + 1) * len(columns[0])
-            _check_budget(base_reserved + retained + label_bytes, control)
+            _check_budget(
+                base_reserved + retained + label_bytes,
+                control,
+                lower_bound_reason=scanning,
+            )
             peak = max(peak, base_reserved + retained + label_bytes)
             labels = r_row_tokens(
                 [values - shift[j] for j, values in enumerate(columns)]
@@ -211,19 +239,14 @@ def _collect_rows(
                 )
                 if key in mapping:
                     continue
-                q = len(mapping) + 1
                 old_size = sys.getsizeof(mapping)
                 payload = sys.getsizeof(key) + sys.getsizeof(row) + 64 * (d + 2)
                 resize_overlap = 4 * old_size + 1024
-                required = (
-                    base_reserved
-                    + retained
-                    + payload
-                    + resize_overlap
-                    + _setup_bytes(q, d, k, control.batch_rows)
-                )
-                _check_budget(required, control)
+                required = base_reserved + retained + payload + resize_overlap
+                _check_budget(required, control, lower_bound_reason=scanning)
                 mapping[key] = row
+                if mode == "r_token":
+                    token_key_bytes += sys.getsizeof(key)
                 retained += payload + max(0, sys.getsizeof(mapping) - old_size)
                 source.reserved_bytes = base_reserved + retained
                 peak = max(peak, required)
@@ -245,15 +268,22 @@ def _collect_rows(
         rows = [value for _, value in ordered]
     else:
         rows = sorted(selected.values())
-    materialize = retained + 2 * len(rows) * d * 8 + len(rows) * 16
-    required = (
-        base_reserved + materialize + _setup_bytes(len(rows), d, k, control.batch_rows)
+    # The full requirement is now known: the scan's peak, ordering and
+    # sampling while the maps are still live, and the knot setup on at most
+    # max_knots rows once they are released.
+    q = len(rows)
+    knots = min(q, max_knots)
+    ordering = (
+        base_reserved + retained + _ordering_bytes(q, d, max_knots, token_key_bytes)
     )
-    _check_budget(required, control)
-    peak = max(
-        peak,
-        base_reserved + materialize + _setup_bytes(len(rows), d, k, control.batch_rows),
+    setup = (
+        base_reserved
+        + 8 * knots * d
+        + 8 * d
+        + _setup_bytes(knots, d, k, control.batch_rows)
     )
+    peak = max(peak, ordering, setup)
+    _check_budget(peak, control)
     unique = np.asarray(rows, dtype=np.float64)
     sampled = source.n_rows > max_knots and len(unique) > max_knots
     if sampled:

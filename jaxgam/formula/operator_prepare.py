@@ -188,8 +188,25 @@ def _level_bound(value: Any) -> int:
     return 512 + (4 * len(value) if isinstance(value, (str, bytes)) else 64)
 
 
-def _check_budget(required: int, control: OperatorPreparationControl) -> None:
+def _check_budget(
+    required: int,
+    control: OperatorPreparationControl,
+    *,
+    lower_bound_reason: str | None = None,
+) -> None:
+    """Reject ``required`` bytes above the budget.
+
+    ``required`` is normally the whole requirement of the stage being
+    checked. When it is only known to be a lower bound, because the data
+    that sets it has not been seen in full, ``lower_bound_reason`` says why
+    and the message reports "at least".
+    """
     if required > control.memory_budget_bytes:
+        if lower_bound_reason is not None:
+            raise MemoryError(
+                f"Operator preparation needs at least {required} bytes "
+                f"({lower_bound_reason}); budget is {control.memory_budget_bytes}."
+            )
         raise MemoryError(
             f"Operator preparation needs at most {required} bytes; "
             f"budget is {control.memory_budget_bytes}."
