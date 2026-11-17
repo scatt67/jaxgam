@@ -53,7 +53,7 @@ from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import canonical_working_quantities, pirls_loop
 from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import _AssertCollector, check_that
+from tests.helpers import _AssertCollector, check_replay_bound, check_that
 from tests.test_fitting.test_working_model import (
     check_newton_step,
     ldet_tolerance,
@@ -318,28 +318,53 @@ def _follow(run, reference: list[tuple[int, int]]) -> _Followed:
 # (the larger of the macOS host and pinned Linux arm64 counts). Every other
 # case must need none, so replay cannot silently cover a systematic
 # difference.
+# Per platform class (tests.helpers.PLATFORM_CLASSES, decided from the CPU's
+# own flags): {class: (reviewed bound, measured count)}. The macOS arm64 and
+# Linux aarch64 bounds are the 2026-10-24 review's (the larger of the two
+# measured counts); x86_64 and x86_64-avx512 entries are added from the
+# eight-runner job's measured counts. A listed case on a class without an entry
+# fails and prints its measured count; an unlisted case must need no replay on
+# any platform.
 _REVIEWED_TIE_REPLAYS = {
-    ("explicit", "gamma-inverse-separate_re"): 2,  # host 2, Linux 1
-    ("explicit", "gamma-inverse-tensor_by"): 1,  # host 1, Linux 1
-    ("fixed", "gamma-inverse-separate_re"): 3,  # host 3, Linux 0
-    ("fixed", "gamma-inverse-tensor_by"): 4,  # host 4, Linux 1
-    ("selected", "gamma-inverse-separate_re"): 1,  # host 1, Linux 0
-    ("boundary-fixed", "gamma-near-zero-y"): 67,  # host 67, Linux 38
+    ("explicit", "gamma-inverse-separate_re"): {
+        "macos-arm64": (2, 2),
+        "linux-aarch64": (2, 1),
+    },
+    ("explicit", "gamma-inverse-tensor_by"): {
+        "macos-arm64": (1, 1),
+        "linux-aarch64": (1, 1),
+    },
+    ("fixed", "gamma-inverse-separate_re"): {
+        "macos-arm64": (3, 3),
+        "linux-aarch64": (3, 0),
+    },
+    ("fixed", "gamma-inverse-tensor_by"): {
+        "macos-arm64": (4, 4),
+        "linux-aarch64": (4, 1),
+    },
+    ("selected", "gamma-inverse-separate_re"): {
+        "macos-arm64": (1, 1),
+        "linux-aarch64": (1, 0),
+    },
+    ("boundary-fixed", "gamma-near-zero-y"): {
+        "macos-arm64": (67, 67),
+        "linux-aarch64": (67, 38),
+    },
 }
 
 
 def _check_replays(collector, key, followed: _Followed) -> None:
-    bound = _REVIEWED_TIE_REPLAYS.get(key, 0)
     collector.check(
         "decisions",
         lambda: check_that(not followed.problems, "; ".join(followed.problems)),
     )
     collector.check(
         "replay bound",
-        lambda: check_that(
-            len(followed.replayed) <= bound,
-            f"{len(followed.replayed)} replayed decisions for {key}; reviewed "
-            f"bound {bound}",
+        lambda: check_replay_bound(
+            "_REVIEWED_TIE_REPLAYS",
+            _REVIEWED_TIE_REPLAYS,
+            key,
+            len(followed.replayed),
         ),
     )
 
@@ -870,11 +895,10 @@ def _advance_following(parts, state, source_halvings, collector, label, replayed
     return advance
 
 
-# Replayed matched-state decisions per case: the larger of the macOS host and
-# pinned Linux arm64 counts; every other case must need none.
+# Replayed matched-state decisions per case and platform class, as above.
 _REVIEWED_MATCHED_REPLAYS = {
-    "gamma-inverse-fixed": 2,  # host 1, Linux 2
-    "gamma-near-zero-fixed": 50,  # host 50, Linux 37
+    "gamma-inverse-fixed": {"macos-arm64": (2, 1), "linux-aarch64": (2, 2)},
+    "gamma-near-zero-fixed": {"macos-arm64": (50, 50), "linux-aarch64": (50, 37)},
 }
 
 
@@ -919,12 +943,10 @@ def test_matched_state_statistics_proposals_and_controller(r_bridge, case):
         replayed = check_matched_state(
             r_bridge, collector, trace, parts, fam=fam, selected=selected
         )
-    bound = _REVIEWED_MATCHED_REPLAYS.get(case, 0)
     collector.check(
         "replay bound",
-        lambda: check_that(
-            len(replayed) <= bound,
-            f"{len(replayed)} replayed matched-state decisions; reviewed bound {bound}",
+        lambda: check_replay_bound(
+            "_REVIEWED_MATCHED_REPLAYS", _REVIEWED_MATCHED_REPLAYS, case, len(replayed)
         ),
     )
     collector.raise_if_any(f"{case} matched bgam.fitd state")

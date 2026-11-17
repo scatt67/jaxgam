@@ -325,6 +325,25 @@ def pytest_report_header(config):
     ]
 
 
+def pytest_terminal_summary(terminalreporter):
+    """Print every replay-bound check of the run with its measured count.
+
+    Reviewed replay bounds are per platform class, and x86_64 entries are
+    filled from CI's measured counts, so a run reports them even when every
+    check passed.
+    """
+    from tests.helpers import REPLAY_COUNT_RECORDS, cpu_platform_class
+
+    if not REPLAY_COUNT_RECORDS:
+        return
+    terminalreporter.section(f"replay counts (platform class {cpu_platform_class()})")
+    for table, key, platform_class, measured, bound in REPLAY_COUNT_RECORDS:
+        reviewed = "no reviewed entry" if bound is None else f"bound {bound}"
+        terminalreporter.write_line(
+            f"{table} {key} [{platform_class}]: measured {measured}, {reviewed}"
+        )
+
+
 @pytest.fixture
 def minimal_git_checkout(tmp_path: Path) -> Path:
     """Build the smallest real checkout needed by isolated harness children.

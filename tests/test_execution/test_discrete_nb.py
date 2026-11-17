@@ -41,7 +41,7 @@ from jaxgam.families.negative_binomial import NegativeBinomial
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import _AssertCollector, check_that
+from tests.helpers import _AssertCollector, check_replay_bound, check_that
 from tests.test_execution.test_discrete_regular import (
     _SEPARATE,
     _TENSOR_BY,
@@ -307,12 +307,11 @@ def test_fixed_sp_nb_matches_the_identical_explicit_design(link, formula, mode):
     )
     collector.check(
         "replay bound",
-        lambda: check_that(
-            len(followed.replayed)
-            <= _REVIEWED_NB_TIE_REPLAYS.get(
-                ("explicit", f"{link}-{_label(formula)}-{mode}"), 0
-            ),
-            f"{len(followed.replayed)} replayed decisions",
+        lambda: check_replay_bound(
+            "_REVIEWED_NB_TIE_REPLAYS",
+            _REVIEWED_NB_TIE_REPLAYS,
+            ("explicit", f"{link}-{_label(formula)}-{mode}"),
+            len(followed.replayed),
         ),
     )
 
@@ -375,12 +374,28 @@ def test_fixed_sp_nb_matches_the_identical_explicit_design(link, formula, mode):
 # Gate 2: end to end against pinned bam(discrete=TRUE, family=nb()).
 # --------------------------------------------------------------------------
 
-# Replayed step-control decisions per fit, as in test_discrete_regular.py:
-# reviewed per-case maxima (larger of the macOS host and Linux arm64 counts).
+# Replayed step-control decisions per fit and platform class, as in
+# test_discrete_regular.py.
+# Per platform class (tests.helpers.PLATFORM_CLASSES, decided from the CPU's
+# own flags): {class: (reviewed bound, measured count)}. The macOS arm64 and
+# Linux aarch64 bounds are the 2026-10-24 review's (the larger of the two
+# measured counts); x86_64 and x86_64-avx512 entries are added from the
+# eight-runner job's measured counts. A listed case on a class without an entry
+# fails and prints its measured count; an unlisted case must need no replay on
+# any platform.
 _REVIEWED_NB_TIE_REPLAYS = {
-    ("explicit", "log-separate_re-estimated"): 1,  # host 1, Linux 0
-    ("fixed", "log-separate_re-estimated"): 1,  # host 1, Linux 0
-    ("fixed", "identity-separate_re-estimated"): 2,  # host 2, Linux 0
+    ("explicit", "log-separate_re-estimated"): {
+        "macos-arm64": (1, 1),
+        "linux-aarch64": (1, 0),
+    },
+    ("fixed", "log-separate_re-estimated"): {
+        "macos-arm64": (1, 1),
+        "linux-aarch64": (1, 0),
+    },
+    ("fixed", "identity-separate_re-estimated"): {
+        "macos-arm64": (2, 2),
+        "linux-aarch64": (2, 0),
+    },
 }
 
 
@@ -410,16 +425,17 @@ def test_nb_matches_pinned_bam(r_bridge, link, formula, mode, selected):
     expected = trace.fit
     collector = _AssertCollector()
     key = ("selected" if selected else "fixed", f"{link}-{_label(formula)}-{mode}")
-    bound = _REVIEWED_NB_TIE_REPLAYS.get(key, 0)
     collector.check(
         "decisions",
         lambda: check_that(not followed.problems, "; ".join(followed.problems)),
     )
     collector.check(
         "replay bound",
-        lambda: check_that(
-            len(followed.replayed) <= bound,
-            f"{len(followed.replayed)} replayed decisions for {key}; bound {bound}",
+        lambda: check_replay_bound(
+            "_REVIEWED_NB_TIE_REPLAYS",
+            _REVIEWED_NB_TIE_REPLAYS,
+            key,
+            len(followed.replayed),
         ),
     )
     collector.check(
@@ -471,8 +487,9 @@ _MATCHED = {
     "sqrt-separate-estimated-fixed": ("sqrt", _SEPARATE, "estimated", False),
     "log-tensor-estimated-selected": ("log", _TENSOR_BY, "estimated", True),
 }
-# No matched-state NB iteration needed a replay on the macOS host or Linux.
-_REVIEWED_NB_MATCHED_REPLAYS: dict[str, int] = {}
+# No matched-state NB iteration needed a replay on the macOS host or Linux;
+# per platform class as in _REVIEWED_NB_TIE_REPLAYS.
+_REVIEWED_NB_MATCHED_REPLAYS: dict[str, dict[str, tuple[int, int]]] = {}
 
 
 @pytest.mark.parametrize("case", list(_MATCHED))
@@ -511,12 +528,13 @@ def test_nb_matched_state_theta_statistics_proposals_and_controller(r_bridge, ca
         replayed = check_matched_state(
             r_bridge, collector, trace, parts, fam=fam, selected=selected
         )
-    bound = _REVIEWED_NB_MATCHED_REPLAYS.get(case, 0)
     collector.check(
         "replay bound",
-        lambda: check_that(
-            len(replayed) <= bound,
-            f"{len(replayed)} replayed matched-state decisions; bound {bound}",
+        lambda: check_replay_bound(
+            "_REVIEWED_NB_MATCHED_REPLAYS",
+            _REVIEWED_NB_MATCHED_REPLAYS,
+            case,
+            len(replayed),
         ),
     )
     collector.raise_if_any(f"{case} matched NB bgam.fitd state")

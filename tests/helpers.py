@@ -475,3 +475,106 @@ def _inference_r_cases() -> dict[
             "gamma_log",
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-platform reviewed replay bounds
+# ---------------------------------------------------------------------------
+
+# Platform classes for reviewed replay counts. On x86_64 the class is decided
+# from the CPU's own flags (AVX-512F), never assumed from the OS or runner.
+PLATFORM_CLASSES = ("macos-arm64", "linux-aarch64", "x86_64", "x86_64-avx512")
+
+
+def _x86_cpu_flags() -> frozenset[str] | None:
+    """Lower-case CPU feature flags on x86_64, or ``None`` when unreadable."""
+    import subprocess
+    import sys
+
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("flags"):
+                        return frozenset(line.partition(":")[2].split())
+        except OSError:
+            return None
+        return None
+    if sys.platform == "darwin":
+        try:
+            text = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.features", "machdep.cpu.leaf7_features"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        return frozenset(token.lower().replace(".", "_") for token in text.split())
+    return None
+
+
+def cpu_platform_class() -> str:
+    """Return the running platform's replay class from the CPU's own flags.
+
+    ``macos-arm64`` / ``linux-aarch64`` for 64-bit Arm; on x86_64,
+    ``x86_64-avx512`` when the CPU reports AVX-512F (``avx512f`` in
+    ``/proc/cpuinfo`` flags, ``AVX512F`` in macOS ``machdep.cpu`` features)
+    and ``x86_64`` otherwise. Anything else, or unreadable x86 flags, returns
+    a descriptive class that has no reviewed entry.
+    """
+    import platform
+    import sys
+
+    machine = platform.machine().lower()
+    if machine in ("arm64", "aarch64"):
+        if sys.platform == "darwin":
+            return "macos-arm64"
+        if sys.platform.startswith("linux"):
+            return "linux-aarch64"
+        return f"{sys.platform}-{machine}"
+    if machine in ("x86_64", "amd64"):
+        flags = _x86_cpu_flags()
+        if flags is None:
+            return "x86_64-unreadable-flags"
+        return "x86_64-avx512" if "avx512f" in flags else "x86_64"
+    return f"{sys.platform}-{machine}"
+
+
+# Every replay-bound check of the session, printed by tests/conftest.py's
+# terminal summary so a run reports its measured counts even when it passes.
+REPLAY_COUNT_RECORDS: list[tuple[str, str, str, int, int | None]] = []
+
+
+def check_replay_bound(
+    table_name: str,
+    table: dict[Any, dict[str, tuple[int, int]]],
+    key: Any,
+    measured: int,
+) -> None:
+    """Assert a measured replay count against the running platform's entry.
+
+    ``table`` maps a case to ``{platform class: (bound, measured count)}``.
+    A case absent from the table must need no replay on any platform (bound
+    0). A listed case on a platform class without a reviewed entry fails and
+    reports the measured count, so the entry can be reviewed from it.
+    """
+    platform_class = cpu_platform_class()
+    if key not in table:
+        bound: int | None = 0
+    else:
+        entry = table[key].get(platform_class)
+        bound = None if entry is None else entry[0]
+    REPLAY_COUNT_RECORDS.append(
+        (table_name, repr(key), platform_class, measured, bound)
+    )
+    if bound is None:
+        raise AssertionError(
+            f"{table_name}: no reviewed replay bound for {key!r} on platform class "
+            f"{platform_class}; measured {measured} replayed decisions"
+        )
+    if measured > bound:
+        raise AssertionError(
+            f"{table_name}: {measured} replayed decisions for {key!r} on "
+            f"{platform_class}; reviewed bound {bound}"
+        )
