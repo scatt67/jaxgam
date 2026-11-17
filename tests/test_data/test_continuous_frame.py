@@ -148,6 +148,15 @@ def test_identical_joint_requests_share_index_selector_and_source_work(
         def n_rows(self):
             return self.delegate.n_rows
 
+        # It stands for the delegate, so it forwards what the delegate supplies.
+        @property
+        def has_explicit_weights(self):
+            return self.delegate.has_explicit_weights
+
+        @property
+        def has_explicit_offset(self):
+            return self.delegate.has_explicit_offset
+
         def fingerprint(self):
             return self.delegate.fingerprint()
 

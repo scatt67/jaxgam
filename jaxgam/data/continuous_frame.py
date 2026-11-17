@@ -28,7 +28,7 @@ from jaxgam.data.discretize import (
     _deep_size,
     _key,
 )
-from jaxgam.data.source import RowBatch, RowSource
+from jaxgam.data.source import RowBatch, RowSource, declared_row_vectors
 from jaxgam.formula.terms import FormulaSpec, SmoothSpec
 
 
@@ -106,6 +106,7 @@ class CompactSetupFrame:
     selector_peak_bytes: int
     retained_selector_bytes: int
     max_batch_bytes: int
+    replay_only_rows: tuple[tuple[str, int], ...] = ()
 
     def __post_init__(self) -> None:
         mapping = dict(self.name_group_indices)
@@ -124,7 +125,17 @@ class CompactSetupFrame:
             group.index.n_rows != self.groups[0].index.n_rows for group in self.groups
         ):
             raise ValueError("compact groups do not share an observation count")
-        if len(self.frame) != max(group.index.n_unique for group in self.groups):
+        replay_names = [name for name, _ in self.replay_only_rows]
+        if len(replay_names) != len(set(replay_names)) or set(replay_names) & set(
+            mapping
+        ):
+            raise ValueError("replay-only columns must be distinct non-frame names")
+        if len(self.frame) != max(
+            (
+                *(group.index.n_unique for group in self.groups),
+                *(rows for _, rows in self.replay_only_rows),
+            )
+        ):
             raise ValueError("compact frame length does not match its largest group")
         if self.construction_peak_bytes < self.retained_table_bytes:
             raise ValueError("compact construction peak is below retained storage")
@@ -214,12 +225,31 @@ class _GroupRequest:
     m: int | None
 
 
+# Pinned ``discrete.mf`` compresses every ``pmf`` column, and ``bam``'s ``pmf`` is
+# ``model.frame(gp$pf, weights=, offset=)``: the response and parametric
+# variables in formula order (a formula ``offset(o)`` term would be the variable
+# ``offset(o)`` here; JaxGAM's parser rejects ``offset()``), then ``(weights)``
+# and ``(offset)`` when those arguments are supplied. E.g. pinned R's
+# ``pmf.names`` is ``y, g, offset(o), (weights), (offset)``. These two never
+# enter a basis but consume the seeded stream and count toward ``maxr``.
+_REPLAY_ONLY_WEIGHTS = "(weights)"
+_REPLAY_ONLY_OFFSET = "(offset)"
+
+
 class _FormulaRowSource:
-    """Expose a RowSource response as its formula-named column."""
+    """Expose a RowSource response, weights and offset as named columns.
+
+    ``(weights)``/``(offset)`` are added only for a source that supplies them
+    (:func:`~jaxgam.data.source.declared_row_vectors`), whose declarations
+    this wrapper forwards.
+    """
 
     def __init__(self, source: RowSource, response: str) -> None:
         self.source = source
         self.response = response
+        weights, offset = declared_row_vectors(source)
+        self.has_explicit_weights = weights
+        self.has_explicit_offset = offset
 
     @property
     def n_rows(self) -> int:
@@ -240,6 +270,10 @@ class _FormulaRowSource:
                         f"Response '{self.response}' is absent from RowSource"
                     )
                 columns[self.response] = batch.y
+            if self.has_explicit_weights:
+                columns[_REPLAY_ONLY_WEIGHTS] = batch.weight
+            if self.has_explicit_offset:
+                columns[_REPLAY_ONLY_OFFSET] = batch.offset
             yield RowBatch(
                 MappingProxyType(columns),
                 batch.y,
@@ -316,6 +350,19 @@ def _discover_requests(
         requests.append(_GroupRequest((name,), "parametric", parametric_m))
         name_groups[name] = group_index
     return tuple(requests), tuple(name_groups.items())
+
+
+def _replay_only_requests(
+    formula: FormulaSpec,
+    m: int | tuple[int, ...] | None,
+    *,
+    weights: bool,
+    offset: bool,
+) -> tuple[_GroupRequest, ...]:
+    """``discrete.mf``'s ``(weights)``/``(offset)`` groups, after ``pmf``'s others."""
+    _, parametric_m = _smooth_m_values(m, len(formula.smooth_terms))
+    names = (_REPLAY_ONLY_WEIGHTS,) * weights + (_REPLAY_ONLY_OFFSET,) * offset
+    return tuple(_GroupRequest((name,), "parametric", parametric_m) for name in names)
 
 
 def _metadata_bytes(index: RangeGridIndex) -> int:
@@ -414,6 +461,11 @@ def build_compact_setup_frame(
         raise ValueError("seed must be a signed 32-bit integer")
     requests, name_groups = _discover_requests(formula, m)
     all_names = {name for request in requests for name in request.names}
+    weights_supplied, offset_supplied = declared_row_vectors(source)
+    replay_requests = _replay_only_requests(
+        formula, m, weights=weights_supplied, offset=offset_supplied
+    )
+    n_frame_groups = len(requests)
     if (
         len(factor_names) != len(set(factor_names))
         or not set(factor_names) <= all_names
@@ -429,12 +481,13 @@ def build_compact_setup_frame(
     random = _RRandom(seed)
     groups: list[CompactGroup] = []
     paths: list[Path] = []
+    replay_paths: list[Path | None] = []
     retained_table_bytes = 0
     retained_selector_bytes = 0
     construction_peak = 0
     selector_peak = 0
     try:
-        for group_number, request in enumerate(requests):
+        for group_number, request in enumerate((*requests, *replay_requests)):
             remaining_table = budget.max_table_bytes - retained_table_bytes
             remaining_selector = budget.max_selector_bytes - retained_selector_bytes
             if remaining_table <= 0:
@@ -510,6 +563,8 @@ def build_compact_setup_frame(
                 )
             if path is not None:
                 paths.append(path)
+            if group_number >= n_frame_groups:
+                replay_paths.append(path)
             group_bytes = _metadata_bytes(result)
             construction_peak = max(
                 construction_peak,
@@ -587,6 +642,23 @@ def build_compact_setup_frame(
                     factor_levels=levels.get(name),
                     ordered=name in group.index.ordered_factors,
                 )
+        # The replay-only groups have consumed their draws and set maxr; nothing
+        # downstream reads them, so release their storage and selectors.
+        replay_groups = groups[n_frame_groups:]
+        groups = groups[:n_frame_groups]
+        replay_only_rows = tuple(
+            (group.names[0], group.index.n_unique) for group in replay_groups
+        )
+        for group in replay_groups:
+            retained_table_bytes -= _metadata_bytes(group.index)
+            if group.index.index.storage == "memory":
+                retained_selector_bytes -= group.index.index.selector_bytes
+            padded.pop(group.names[0])
+        del replay_groups
+        for path in replay_paths:
+            if path is not None:
+                paths.remove(path)
+                _cleanup([path])
         frame_names = tuple(
             dict.fromkeys(
                 (
@@ -630,6 +702,7 @@ def build_compact_setup_frame(
             selector_peak_bytes=selector_peak,
             retained_selector_bytes=retained_selector_bytes,
             max_batch_bytes=budget.max_batch_bytes,
+            replay_only_rows=replay_only_rows,
         )
     except BaseException:
         _cleanup(paths)

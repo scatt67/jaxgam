@@ -29,7 +29,7 @@ from jaxgam.data.discretize import (
     _deep_size,
     _key,
 )
-from jaxgam.data.source import RowBatch, RowSource
+from jaxgam.data.source import RowBatch, RowSource, declared_row_vectors
 
 
 @dataclass(frozen=True)
@@ -324,7 +324,11 @@ def snap_to_range_grid(
 
 
 class _RangeGridSource:
-    """Replay a source with metric columns replaced by frozen range-grid values."""
+    """Replay a source with metric columns replaced by frozen range-grid values.
+
+    It stands for ``source``, so it forwards the source's weight and offset
+    declarations.
+    """
 
     def __init__(
         self,
@@ -335,6 +339,9 @@ class _RangeGridSource:
         self.source = source
         self.metric_names = metric_names
         self.grids = grids
+        weights, offset = declared_row_vectors(source)
+        self.has_explicit_weights = weights
+        self.has_explicit_offset = offset
 
     @property
     def n_rows(self) -> int:

@@ -617,6 +617,12 @@ class GAM:
         (``extended_performance_iteration``) uses its ``dDeta`` Newton
         working model with fixed or ``estimate.theta``-updated theta.
 
+        Prior weights and the offset come from the ``RowSource``. Its
+        ``has_explicit_weights``/``has_explicit_offset`` say whether the
+        caller supplied them; an undeclared attribute counts as supplied, as
+        pinned ``bam`` treats supplied ``weights=``/``offset=`` arguments
+        (they enter ``discrete.mf``'s seeded padding whatever their values).
+
         The route is taken only on an explicit ``execution='discrete'``
         request and owns its solves: ``linear_solver='qr'`` is rejected, and a
         ``gaussian_compression`` request is reported unmet in

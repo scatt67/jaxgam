@@ -303,6 +303,18 @@ deviance change. An estimated negative-binomial theta is updated once per
 iteration conditionally on the current mean (it is not jointly optimized with
 the smoothing parameters); the result reports the final `theta`.
 
+Prior weights and the offset are owned by the `RowSource`. Pinned `bam`'s
+discretization treats a supplied `weights=` or `offset=` argument as one more
+model-frame column, whatever its values (all-ones weights included), and that
+column changes the seeded draws that pad short covariate grids, and so the
+smooths' centering constraints. A source states what it supplies through
+`has_explicit_weights` and `has_explicit_offset`. The built-in sources
+(`ArrayRowSource`, `DataFrameRowSource`, `MemmapRowSource`) return `False`
+when constructed with `weights=None` or `offset=None`. A source that does not
+declare an attribute is treated as supplying it, exactly as `bam` treats a
+supplied `weights=` or `offset=`; a caller-written source may declare `False`
+for either.
+
 As on the streamed routes, `source_scans` and `batches_scanned` count the
 source scans and batches read by the fit itself (Phase-1 setup scans are
 excluded) and `known_workspace_bytes` is the conservative known
