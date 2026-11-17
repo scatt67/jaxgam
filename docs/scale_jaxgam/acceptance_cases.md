@@ -201,7 +201,7 @@ Gap status (G7 onward filled in the second round, one commit each):
 |---|---|---|
 | G2 | compiler memory estimates (`compiler_memory_bytes` is always `None`) | per-route hook that lowers the route's main jitted kernel at the case shape and records `memory_analysis()`; ten kernel tests already do this and are the current evidence |
 | G3 | temporary disk other than the compilation cache: discrete selector memmaps, the SQLite knot scope | run each child with `TMPDIR` and `selector_memmap_directory` in task-owned directories and sample their peak size from a thread |
-| G4 | operator routes are outside the isolated harness: no setup child, no task-owned cache, no compile split, single process | `--execution operator` and `operator-efs` with an `re` model (needs G8) |
+| G4 | **filled.** `--execution operator` (fixed sp, PCG; every model, Gaussian or Poisson) and `--execution operator-efs` (calibrated Poisson EFS; model `re-only` = `y ~ s(g, bs='re')`) run in the isolated harness: a setup child that runs `prepare_operator_model` with the fit's own preparation budget (one eighth of it for EFS) and records scans, bytes, preparation peak bound and coefficient layout without expanding penalties to p x p; a fit child with a task-owned cache, compile events, `operator_diagnostics` (scans by kind, Krylov actions and iterations, peak bound, executable temporaries, inner status, gradient norm) and Krylov iterations as the inner count. Fixed-sp results have no score, EDF or Gaussian scale by design, so those fields are recorded as not provided; `predict(se_fit=True)` is not offered on these routes. NB is rejected because the operator fits NB only at fixed theta | – |
 | G5 | no script for `bulk_link_variance` | a script recording probe solves, scans, PCG residuals, calibration maxima and the seed distribution (Appendix A, F6) |
 | G6 | `--memory-pair-n` accepts only streamed routes | allow discrete pairs (the comparison already reads `known_workspace_bytes`) |
 | G7 | **filled.** An unconverged, non-finite or rejected fit, a rejected setup and a crashed child each write a `valid=false` record: outcome (`unconverged`, `nonfinite`, `fit_raised`, `setup_raised`, `child_failed`), status, stop reason and its source, projected gradient (exact streamed REML), the operator inner status and final gradient norm, smoothing parameters, theta, score, iterations, the error type and message, and no timing fields. Comparisons over an invalid record are marked unavailable. The record is written first; then the command exits 3 and prints each invalid child on stderr | – |
@@ -220,23 +220,23 @@ Coverage by quantity and route:
 
 | Quantity | dense, dense-reml | stream, stream-qr | stream-exact | stream-gaussian-qr | discrete, discrete-wm | operator fixed sp | operator EFS | bulk variance |
 |---|---|---|---|---|---|---|---|---|
-| Setup time, separate process | H | H | H | H | H | – (G4) | – (G4) | – (G5) |
-| Cold compilation | H | H | H | H | H | – (cold fit only) | – | – |
-| Warm fit | H | H | H | H | H | O `benchmark_operator.py` | O `benchmark_operator_efs_calibration.py --complete` | – |
-| Source scans and bytes | n/a | H | H | H | H | O scans (reconciled), no bytes | O scans | – |
-| Inner / outer iterations | outer H; inner – (G14) | public count | H both | H outer | H both | O `n_iter`, Krylov actions | O | – |
-| Derivative time | – (G13) | n/a | H | – (G13) | – (G13) | n/a | – | n/a |
-| Prediction / SE time | H | H | H | H | H | prediction O; SE not offered | – | – (G5) |
-| Host peak RSS | H | H | H | H | H | O high water | O | – |
-| RSS minus baseline | – | H pair | H pair | H pair | – (G6) | – | – | – |
+| Setup time, separate process | H | H | H | H | H | H | H | – (G5) |
+| Cold compilation | H | H | H | H | H | H | H | – |
+| Warm fit | H | H | H | H | H | H | H | – |
+| Source scans and bytes | n/a | H | H | H | H | H | H | – |
+| Inner / outer iterations | outer H; inner – (G14) | public count | H both | H outer | H both | H (PIRLS / Krylov) | H (EFS / Krylov) | – |
+| Derivative time | – (G13) | n/a | H | – (G13) | – (G13) | n/a | – (G13) | n/a |
+| Prediction / SE time | H | H | H | H | H | prediction H; SE not offered | prediction H; SE not offered | – (G5) |
+| Host peak RSS | H | H | H | H | H | H | H | – |
+| RSS minus baseline | – | H pair | H pair | H pair | – (G6) | – (G6) | – (G6) | – |
 | Device peak | – (G12) | – | – | – | – | – | – | – |
 | Compiler memory | – (G2) | – | – | – | – | – | – | – |
-| Temporary disk | cache only (G3) | cache only | cache only | cache only | cache only; memmaps unmeasured | – | – | – |
-| Synchronized timing | H | H | H | H | H | host PCG (NumPy results) | same | – |
-| Isolated child processes | H | H | H | H | H | – (G4) | – | – |
-| Isolated compilation cache | H | H | H | H | H | – (G4) | – | – |
-| Host suspension flag | H | H | H | H | H | – | – | – |
-| Invalid or rejected fit recorded (G7) | H | H | H | H | H | – | – | – |
+| Temporary disk | cache only (G3) | cache only | cache only | cache only | cache only; memmaps unmeasured | cache only | cache only | – |
+| Synchronized timing | H | H | H | H | H | H (host PCG returns NumPy) | H | – |
+| Isolated child processes | H | H | H | H | H | H | H | – |
+| Isolated compilation cache | H | H | H | H | H | H | H | – |
+| Host suspension flag | H | H | H | H | H | H | H | – |
+| Invalid or rejected fit recorded (G7) | H | H | H | H | H | H | H | – |
 
 H = `scripts/benchmark_scaling.py`; O = the named other script; – = gap.
 

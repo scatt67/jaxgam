@@ -42,14 +42,21 @@ _STREAM_EXECUTIONS = frozenset(
 )
 _MAX_CHILD_DIAGNOSTIC_CHARS = 4_096
 _DISCRETE_EXECUTIONS = frozenset({"discrete", "discrete-wm"})
+# Matrix-free PCG at fixed sp, and calibrated Poisson operator EFS.
+_OPERATOR_EXECUTIONS = frozenset({"operator", "operator-efs"})
 _EXECUTIONS = (
     frozenset({"dense", "dense-reml", "efs"})
     | _STREAM_EXECUTIONS
     | _DISCRETE_EXECUTIONS
+    | _OPERATOR_EXECUTIONS
 )
+# Fixed-sp operator results carry no score, EDF or (unknown-scale) scale.
+_OPERATOR_OMITTED_FIELDS = frozenset({"score", "scale", "edf_total"})
 _FAMILIES = frozenset({"gaussian", "poisson", "nb"})
 _FAMILY_EXECUTIONS = (
-    frozenset({"dense-reml", "stream-qr", "stream-exact"}) | _DISCRETE_EXECUTIONS
+    frozenset({"dense-reml", "stream-qr", "stream-exact"})
+    | _DISCRETE_EXECUTIONS
+    | _OPERATOR_EXECUTIONS
 )
 # Negative binomial data are drawn at this theta; fits estimate theta from
 # the same start on every route.
@@ -61,8 +68,9 @@ _NB_START_THETA = 1.0
 # covariate); ``ti`` two main effects plus their ti() interaction. The streamed
 # routes prepare only univariate cr/cs smooths, so these run on the dense and
 # discrete routes. ``re`` is s(x0) plus a random effect s(g, bs='re') over
-# ``levels`` declared factor levels (dense, discrete and operator routes).
-_MODELS = ("additive", "tensor", "tp", "gp", "shared", "ti", "re")
+# ``levels`` declared factor levels (dense, discrete and operator routes);
+# ``re-only`` is y ~ s(g, bs='re'), the calibrated operator-EFS shape.
+_MODELS = ("additive", "tensor", "tp", "gp", "shared", "ti", "re", "re-only")
 _COVARIATE_PAIR_MODELS = frozenset({"tensor", "tp", "shared", "ti"})
 # jax.monitoring duration events counted as compilation work.
 _COMPILATION_EVENT_PREFIXES = ("/jax/core/compile/", "/jax/compilation_cache/")
@@ -121,8 +129,8 @@ class ScalingCase:
         if self.execution not in _EXECUTIONS:
             raise ValueError(
                 "execution must be 'dense', 'dense-reml', 'stream', 'stream-qr', "
-                "'stream-exact', 'stream-gaussian-qr', 'efs', 'discrete', or "
-                "'discrete-wm'."
+                "'stream-exact', 'stream-gaussian-qr', 'efs', 'discrete', "
+                "'discrete-wm', 'operator', or 'operator-efs'."
             )
         if self.result_mode not in {"full", "inference", "prediction"}:
             raise ValueError(
@@ -140,8 +148,16 @@ class ScalingCase:
         if self.family != "gaussian" and self.execution not in _FAMILY_EXECUTIONS:
             raise ValueError(
                 f"family={self.family!r} requires execution 'dense-reml', "
-                "'stream-qr', 'stream-exact', 'discrete', or 'discrete-wm'."
+                "'stream-qr', 'stream-exact', 'discrete', 'discrete-wm', "
+                "'operator', or 'operator-efs'."
             )
+        if self.execution in _OPERATOR_EXECUTIONS and self.family == "nb":
+            raise ValueError(
+                "The operator routes fit NB only with fixed theta; the harness "
+                "estimates theta, so family='nb' requires another execution."
+            )
+        if self.execution == "operator-efs" and self.family != "poisson":
+            raise ValueError("operator-efs is public for family='poisson' only.")
         if self.model not in _MODELS:
             raise ValueError(f"model must be one of {', '.join(_MODELS)}.")
         if self.model != "additive" and (
@@ -175,7 +191,7 @@ class ScalingCase:
                 "discrete_table_mib must be a positive integer and applies only "
                 "to the discrete executions."
             )
-        if (self.model == "re") != (self.levels is not None) or (
+        if (self.model in {"re", "re-only"}) != (self.levels is not None) or (
             self.levels is not None
             and (
                 isinstance(self.levels, bool)
@@ -184,18 +200,19 @@ class ScalingCase:
             )
         ):
             raise ValueError(
-                "levels is required by, and only applies to, model='re'; it "
-                "must be an integer of at least 2."
+                "levels is required by, and only applies to, model='re' and "
+                "'re-only'; it must be an integer of at least 2."
             )
         if self.memory_budget_mib is not None and (
-            self.execution not in _STREAM_EXECUTIONS | _DISCRETE_EXECUTIONS
+            self.execution
+            not in _STREAM_EXECUTIONS | _DISCRETE_EXECUTIONS | _OPERATOR_EXECUTIONS
             or isinstance(self.memory_budget_mib, bool)
             or not isinstance(self.memory_budget_mib, int)
             or self.memory_budget_mib < 1
         ):
             raise ValueError(
                 "memory_budget_mib must be a positive integer and applies only "
-                "to the streamed and discrete executions."
+                "to the streamed, discrete and operator executions."
             )
 
 
@@ -337,6 +354,8 @@ def _smooth_variables(case: ScalingCase) -> tuple[str, ...]:
         return ("x0",)
     if case.model == "re":
         return ("x0", "g")
+    if case.model == "re-only":
+        return ("g",)
     if case.smooth_count == 1:
         return ("x",)
     return tuple(f"x{index}" for index in range(case.smooth_count))
@@ -353,6 +372,8 @@ def _formula(case: ScalingCase) -> str:
         return f"y ~ s(x0, k={k}, bs='gp')"
     if case.model == "re":
         return f"y ~ s(x0, k={k}, bs='cr') + s(g, bs='re')"
+    if case.model == "re-only":
+        return "y ~ s(g, bs='re')"
     if case.model == "shared":
         return f"y ~ s(x0, k={k}, bs='cr') + te(x0, x1, k={k}, bs='cr')"
     if case.model == "ti":
@@ -378,6 +399,8 @@ def _smoothing_parameter_order(case: ScalingCase) -> list[str]:
         return ["s(x0)"]
     if case.model == "re":
         return ["s(x0)", "s(g)"]
+    if case.model == "re-only":
+        return ["s(g)"]
     if case.model == "shared":
         return ["s(x0)", *tensor_margins]
     if case.model == "ti":
@@ -407,15 +430,16 @@ def _family_object(case: ScalingCase) -> Any:
 def _make_data(case: ScalingCase) -> pd.DataFrame:
     rng = np.random.default_rng(case.seed)
     variables = _smooth_variables(case)
-    if case.model == "re":
+    if case.model in {"re", "re-only"}:
         assert case.levels is not None
         codes = rng.integers(0, case.levels, case.n_rows)
         columns: dict[str, Any] = {
-            "x0": rng.uniform(0.0, 1.0, case.n_rows),
             "g": pd.Categorical.from_codes(
                 codes, categories=[f"g{level}" for level in range(case.levels)]
             ),
         }
+        if case.model == "re":
+            columns = {"x0": rng.uniform(0.0, 1.0, case.n_rows), **columns}
         effects = rng.normal(0.0, 0.5, case.levels)
     else:
         columns = {
@@ -423,6 +447,8 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
         }
     if case.model == "re":
         signal = np.sin(2.0 * np.pi * columns["x0"]) + effects[codes]
+    elif case.model == "re-only":
+        signal = effects[codes]
     elif case.model == "tensor":
         signal = (
             0.8 * np.sin(2.0 * np.pi * columns["x0"]) * np.cos(np.pi * columns["x1"])
@@ -685,8 +711,12 @@ def _backend_compile_seconds(delta: dict[str, dict[str, float | int]]) -> float:
     return 0.0 if entry is None else float(entry["seconds"])
 
 
-def _fit_validity(result: Any) -> dict[str, Any]:
-    """Check a completed timed fit before using its latency as evidence."""
+def _fit_validity(result: Any, omitted: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """Check a completed timed fit before using its latency as evidence.
+
+    A field in ``omitted`` that the route documents as absent (``None``) is
+    recorded as not provided rather than as non-finite.
+    """
     values = {
         "coefficients": result.coefficients,
         "smoothing_params": result.smoothing_params,
@@ -697,21 +727,49 @@ def _fit_validity(result: Any) -> dict[str, Any]:
     }
     if getattr(result, "score_scale", None) is not None:
         values["score_scale"] = result.score_scale
-    finite_fields = {
-        name: bool(np.all(np.isfinite(np.asarray(value))))
+    finite_fields: dict[str, bool | None] = {
+        name: (
+            None
+            if value is None and name in omitted
+            else bool(np.all(np.isfinite(np.asarray(value, dtype=float))))
+        )
         for name, value in values.items()
     }
     converged = bool(result.converged)
     return {
-        "valid": converged and all(finite_fields.values()),
+        "valid": converged
+        and all(flag for flag in finite_fields.values() if flag is not None),
         "converged": converged,
         "finite_fields": finite_fields,
         "status": str(result.convergence_info),
     }
 
 
-def _require_valid_timed_fit(result: Any, *, label: str) -> dict[str, Any]:
-    validity = _fit_validity(result)
+def _omitted_fields(case: ScalingCase) -> frozenset[str]:
+    return _OPERATOR_OMITTED_FIELDS if case.execution == "operator" else frozenset()
+
+
+def _operator_diagnostics(result: Any) -> dict[str, Any] | None:
+    """The operator route's own accounting: scans, actions, bounds, status."""
+    diagnostics = getattr(result, "operator_diagnostics", None)
+    if diagnostics is None:
+        return None
+    record = asdict(diagnostics)
+    record["accepted_objectives"] = [
+        _json_float(value) for value in record.get("accepted_objectives", ())
+    ]
+    record["final_gradient_norm"] = _json_float(record["final_gradient_norm"])
+    return record
+
+
+def _optional_float(value: Any) -> float | None:
+    return None if value is None else float(value)
+
+
+def _require_valid_timed_fit(
+    result: Any, *, label: str, omitted: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    validity = _fit_validity(result, omitted)
     if not validity["valid"]:
         raise RuntimeError(f"{label} returned an invalid fit: {validity}")
     return validity
@@ -803,6 +861,24 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
 
         return _FitPlan(fit, formula, source)
 
+    if case.execution in _OPERATOR_EXECUTIONS:
+        operator_control = _operator_control(case)
+        if case.execution == "operator":
+
+            def fit() -> Any:
+                return GAM(
+                    formula, family=family, sp=fixed_sp, control=operator_control
+                ).fit(source, result="prediction")
+
+        else:
+
+            def fit() -> Any:
+                return GAM(
+                    formula, family=family, optimizer="efs", control=operator_control
+                ).fit(source, result="prediction")
+
+        return _FitPlan(fit, formula, source)
+
     control = FitControl(
         execution="stream",
         batch_rows=case.batch_rows,
@@ -867,6 +943,18 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
         )
 
     return _FitPlan(fit, formula, source)
+
+
+def _operator_control(case: ScalingCase) -> Any:
+    """The public operator control (PCG, no covariance) for fit and setup."""
+    from jaxgam.control import FitControl
+
+    return FitControl(
+        execution="operator",
+        linear_solver="pcg",
+        batch_rows=case.batch_rows,
+        **_memory_budget(case),
+    )
 
 
 def _memory_budget(case: ScalingCase) -> dict[str, int]:
@@ -962,6 +1050,19 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
             ),
             "result_mode": "prediction",
         },
+        "operator": {
+            "adapter": "public",
+            "strategy": "fixed-sp matrix-free operator PIRLS with PCG solves",
+            "result_mode": "prediction",
+        },
+        "operator-efs": {
+            "adapter": "public",
+            "strategy": (
+                "calibrated operator EFS (efsudr with bounded REML score "
+                "comparisons) with estimated smoothing"
+            ),
+            "result_mode": "prediction",
+        },
     }
     if case.execution in _FAMILY_EXECUTIONS and case.family != "gaussian":
         family_label = (
@@ -988,6 +1089,7 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
                 "stream-exact",
                 "stream-gaussian-qr",
                 "discrete-wm",
+                "operator-efs",
             }
             else None
         ),
@@ -1325,6 +1427,7 @@ def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         get_family(family_object) if isinstance(family_object, str) else family_object
     )
     discrete_ledger: dict[str, Any] | None = None
+    operator_ledger: dict[str, Any] | None = None
     rss_high_water_before_setup = peak_rss_bytes()
     rss_current_before_setup = current_rss_bytes()
     started = time.perf_counter()
@@ -1352,15 +1455,16 @@ def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         # Public streamed and discrete fits thread FitControl.batch_rows and
         # memory_budget_bytes into Phase-1 setup; measure setup under the
         # same controls the case's public fit uses.
-        setup_control = (
-            _discrete_control(case)
-            if case.execution in _DISCRETE_EXECUTIONS
-            else FitControl(
+        if case.execution in _DISCRETE_EXECUTIONS:
+            setup_control = _discrete_control(case)
+        elif case.execution in _OPERATOR_EXECUTIONS:
+            setup_control = _operator_control(case)
+        else:
+            setup_control = FitControl(
                 execution="stream",
                 batch_rows=case.batch_rows,
                 **_memory_budget(case),
             )
-        )
         source_scans_before = source.scan_calls
         source_bytes_before = source.batch_bytes
         if case.execution in _DISCRETE_EXECUTIONS:
@@ -1396,6 +1500,74 @@ def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
                 }
             fingerprint_kind = "discrete_compact_basis_fingerprint"
             rank_deficit = None
+        elif case.execution in _OPERATOR_EXECUTIONS:
+            from jaxgam.formula.operator_prepare import (
+                OperatorPreparationControl,
+                prepare_operator_model,
+            )
+
+            # The public operator fit prepares with the whole budget; operator
+            # EFS reserves one eighth of it for preparation (GAM._fit_operator_efs).
+            preparation_budget = setup_control.memory_budget_bytes // (
+                8 if case.execution == "operator-efs" else 1
+            )
+            operator_model = prepare_operator_model(
+                spec,
+                source,
+                control=OperatorPreparationControl(
+                    setup_control.batch_rows,
+                    preparation_budget,
+                    setup_control.operator.max_modest_coefficients,
+                ),
+            )
+            source_scans_after = source.scan_calls
+            source_bytes_after = source.batch_bytes
+            setup_s = time.perf_counter() - started
+            rss_high_water_after_setup = peak_rss_bytes()
+            rss_current_after_setup = current_rss_bytes()
+            n_coef = int(operator_model.n_coef)
+            n_penalties = int(operator_model.penalties.n_penalties)
+            basis_fingerprint = hashlib.sha256(
+                json.dumps(
+                    {
+                        "replay_digest": operator_model.source_replay_digest,
+                        "n_coef": n_coef,
+                        "modest_raw_width": operator_model.modest_raw_width,
+                        "modest_columns": list(operator_model.modest_columns),
+                        "random_effects": [
+                            int(effect.n_coef)
+                            for effect in operator_model.random_effects
+                        ],
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            fingerprint_kind = "operator_prepared_model_digest"
+            # Operator penalties are local and indexed; expanding them to p x p
+            # for the canonical contract is exactly what this route must avoid.
+            public_penalties = None
+            rank_deficit = None
+            operator_ledger = {
+                "preparation_budget_bytes": preparation_budget,
+                "preparation_peak_bound_bytes": (
+                    operator_model.preparation_peak_bound_bytes
+                ),
+                "metadata_bound_bytes": operator_model.metadata_bound_bytes,
+                "completed_preparation_scans": (
+                    operator_model.completed_preparation_scans
+                ),
+                "started_preparation_scans": operator_model.started_preparation_scans,
+                "preparation_yielded_batches": (
+                    operator_model.preparation_yielded_batches
+                ),
+                "random_effect_coefficients": [
+                    int(effect.n_coef) for effect in operator_model.random_effects
+                ],
+                "modest_coefficients": len(operator_model.modest_columns),
+                "penalty_contract_status": (
+                    "not expanded: operator penalties are never formed p x p"
+                ),
+            }
         else:
             prepared = prepare_model(
                 spec,
@@ -1417,7 +1589,7 @@ def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
             )
         setup_batch_rows_requested = setup_control.batch_rows
         setup_memory_budget_bytes = setup_control.memory_budget_bytes
-        if case.execution not in _DISCRETE_EXECUTIONS:
+        if case.execution in _STREAM_EXECUTIONS:
             basis_fingerprint = prepared.basis_fingerprint
             n_coef = prepared.n_coef
             assert prepared.fitting is not None
@@ -1494,6 +1666,12 @@ def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
             **harness_identity(),
         },
     }
+    if operator_ledger is not None:
+        record["operator_setup"] = operator_ledger
+        record["source_scans"]["status"] = (
+            "measured RowSource.scan invocations during operator preparation "
+            "(started scan iterations)"
+        )
     if discrete_ledger is not None:
         record["discrete_setup"] = discrete_ledger
         record["memory"]["rss_scope"] = (
@@ -1576,7 +1754,7 @@ def _run_case_with_compilation(
     cold_compilation = _CompilationEvents.delta(
         cold_compile_before, compilation.snapshot()
     )
-    cold_validity = _fit_validity(cold_result)
+    cold_validity = _fit_validity(cold_result, _omitted_fields(case))
     if not cold_validity["valid"]:
         return _invalid_child_record(
             case,
@@ -1603,8 +1781,13 @@ def _run_case_with_compilation(
         fit_plan.source, prediction_bytes_before
     )
     prediction_se_s: float | None = None
-    prediction_se_status = "not requested for the EFS prediction-only route"
-    if case.execution != "efs":
+    prediction_se_status = (
+        "not offered: predict(se_fit=True) is unavailable on the operator "
+        "routes (bulk Fisher variance is benchmarked separately)"
+        if case.execution in _OPERATOR_EXECUTIONS
+        else "not requested for the EFS prediction-only route"
+    )
+    if case.execution != "efs" and case.execution not in _OPERATOR_EXECUTIONS:
         started = time.perf_counter()
         _, standard_error = cold_result.predict(data.iloc[:128], se_fit=True)
         prediction_se_s = time.perf_counter() - started
@@ -1649,6 +1832,15 @@ def _run_case_with_compilation(
             None if efs_diagnostics is None else efs_diagnostics.inner_iterations
         )
         outer_iterations = public_iterations
+    elif case.execution in _OPERATOR_EXECUTIONS:
+        iteration_semantics = (
+            "operator EFS outer iterations; inner = PCG (Krylov) iterations"
+            if case.execution == "operator-efs"
+            else "fixed-sp operator PIRLS iterations; inner = PCG (Krylov) "
+            "iterations over all solves"
+        )
+        inner_iterations = cold_result.operator_diagnostics.krylov_iterations
+        outer_iterations = public_iterations
     elif case.execution in _DISCRETE_EXECUTIONS:
         iteration_semantics = (
             "discrete-route outer iterations: bgam.fitd performance-iteration "
@@ -1689,15 +1881,16 @@ def _run_case_with_compilation(
         "outer_iterations": outer_iterations,
         "n_coef": int(coefficients.size),
         "n_penalties": int(np.asarray(cold_result.smoothing_params).size),
-        "score": float(cold_result.score),
+        "score": _optional_float(cold_result.score),
         "deviance": float(cold_result.deviance),
-        "scale": float(cold_result.scale),
+        "scale": _optional_float(cold_result.scale),
         "score_scale": (
             None
             if getattr(cold_result, "score_scale", None) is None
             else float(cold_result.score_scale)
         ),
-        "edf_total": float(cold_result.edf_total),
+        "edf_total": _optional_float(cold_result.edf_total),
+        "operator_diagnostics": _operator_diagnostics(cold_result),
         "smoothing_params": np.asarray(cold_result.smoothing_params).tolist(),
         "known_workspace_bytes": getattr(cold_result, "known_workspace_bytes", None),
         "public_fit_accounting": {
@@ -1824,7 +2017,11 @@ def _run_case_with_compilation(
             _CompilationEvents.delta(warm_compile_before, compilation.snapshot())
         )
         warm_validity.append(
-            _require_valid_timed_fit(warm_result, label=f"warm fit {repeat + 1}")
+            _require_valid_timed_fit(
+                warm_result,
+                label=f"warm fit {repeat + 1}",
+                omitted=_omitted_fields(case),
+            )
         )
         warm_times.append(elapsed)
         warm_scan_deltas.append(_source_scan_delta(fit_plan.source, warm_scan_before))
@@ -2361,6 +2558,8 @@ def main() -> None:
             "dense-reml",
             "discrete",
             "discrete-wm",
+            "operator",
+            "operator-efs",
         ),
         default="dense",
     )

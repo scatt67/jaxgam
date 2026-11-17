@@ -615,3 +615,125 @@ def test_cli_threads_random_effect_levels(
 
     assert seen[-1].levels == 1000
     assert "recorded" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"execution": "operator", "family": "nb"}, "fixed theta"),
+        ({"execution": "operator-efs", "model": "re-only", "levels": 300}, "poisson"),
+        ({"execution": "operator", "result_mode": "full"}, "result_mode"),
+        ({"execution": "operator", "discrete_table_mib": 8}, "discrete_table_mib"),
+        ({"execution": "operator", "model": "re-only"}, "levels"),
+    ],
+)
+def test_operator_cases_validate(kwargs: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _case(**kwargs)
+
+
+def test_operator_routes_use_public_pcg_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import jaxgam
+
+    seen: list[dict[str, object]] = []
+
+    class _FakeGAM:
+        def __init__(self, formula: str, **kwargs: object):
+            seen.append({"formula": formula, **kwargs})
+
+        def fit(self, *_args: object, **_kwargs: object) -> str:
+            return "fitted"
+
+    monkeypatch.setattr(jaxgam, "GAM", _FakeGAM)
+    fixed = _case(execution="operator", model="re", levels=20, memory_budget_mib=64)
+    efs = _case(execution="operator-efs", model="re-only", levels=300, family="poisson")
+    for case in (fixed, efs):
+        plan = benchmark_scaling._build_fit(case, benchmark_scaling._make_data(case))
+        assert plan.run() == "fitted"
+        assert plan.source is not None
+
+    fixed_call, efs_call = seen
+    assert fixed_call["sp"] == [1.0, 1.0]
+    assert fixed_call["control"].execution == "operator"
+    assert fixed_call["control"].linear_solver == "pcg"
+    assert fixed_call["control"].uncertainty == "none"
+    assert fixed_call["control"].memory_budget_bytes == 64 << 20
+    assert efs_call["formula"] == "y ~ s(g, bs='re')"
+    assert efs_call["optimizer"] == "efs"
+    assert "sp" not in efs_call
+    assert (
+        benchmark_scaling._route_contract(efs)["fixed_smoothing_parameter_values"]
+        is None
+    )
+
+
+def test_validity_accepts_only_the_route_documented_missing_fields() -> None:
+    from types import SimpleNamespace
+
+    result = SimpleNamespace(
+        coefficients=np.ones(3),
+        smoothing_params=np.ones(1),
+        score=None,
+        deviance=1.0,
+        scale=None,
+        edf_total=None,
+        converged=True,
+        convergence_info="converged",
+    )
+    omitted = benchmark_scaling._omitted_fields(_case(execution="operator"))
+
+    accepted = benchmark_scaling._fit_validity(result, omitted)
+    assert accepted["valid"]
+    assert accepted["finite_fields"]["score"] is None
+    rejected = benchmark_scaling._fit_validity(result)
+    assert not rejected["valid"]
+    assert rejected["finite_fields"]["score"] is False
+    efs = _case(execution="operator-efs", family="poisson", model="re-only", levels=300)
+    assert benchmark_scaling._omitted_fields(efs) == frozenset()
+
+
+def test_operator_fixed_sp_setup_and_fit_records() -> None:
+    case = _case(240, execution="operator", model="re", levels=60, batch_rows=64)
+    setup = benchmark_scaling.run_setup(case, Path.cwd())
+    fit = benchmark_scaling.run_case(case, Path.cwd())
+
+    assert setup["valid"]
+    assert fit["valid"]
+    assert setup["model"]["n_coef"] == fit["result"]["n_coef"] == 1 + 4 + 60
+    assert setup["model"]["basis_fingerprint_kind"] == "operator_prepared_model_digest"
+    ledger = setup["operator_setup"]
+    assert ledger["random_effect_coefficients"] == [60]
+    assert ledger["preparation_budget_bytes"] == 512 << 20
+    assert "never formed p x p" in ledger["penalty_contract_status"]
+    assert setup["source_scans"]["setup_delta"] > 0
+    assert setup["source_scans"]["setup_max_batch_rows"] <= 64
+    result = fit["result"]
+    assert result["score"] is None
+    assert result["edf_total"] is None
+    assert result["cold_fit_validity"]["finite_fields"]["score"] is None
+    assert (
+        result["inner_iterations"]
+        == (result["operator_diagnostics"]["krylov_iterations"])
+    )
+    assert result["operator_diagnostics"]["peak_bound_bytes"] > 0
+    assert fit["timings"]["prediction_se_s"] is None
+    assert "operator" in fit["timings"]["prediction_se_status"]
+    assert result["source_scans"]["cold_fit_delta"] > 0
+
+
+def test_operator_efs_setup_reserves_an_eighth_of_the_budget() -> None:
+    case = _case(
+        514,
+        execution="operator-efs",
+        model="re-only",
+        levels=257,
+        family="poisson",
+        memory_budget_mib=256,
+    )
+    setup = benchmark_scaling.run_setup(case, Path.cwd())
+
+    assert setup["valid"]
+    assert setup["operator_setup"]["preparation_budget_bytes"] == (256 << 20) // 8
+    assert setup["model"]["n_coef"] == 1 + 257
