@@ -737,3 +737,128 @@ def test_operator_efs_setup_reserves_an_eighth_of_the_budget() -> None:
     assert setup["valid"]
     assert setup["operator_setup"]["preparation_budget_bytes"] == (256 << 20) // 8
     assert setup["model"]["n_coef"] == 1 + 257
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"execution": "dense-reml", "stress": "tails"}, "stress must be"),
+        ({"execution": "dense-reml", "stress": "concurvity"}, "two smooths"),
+        (
+            {"execution": "dense-reml", "model": "tensor", "stress": "concurvity"},
+            "additive",
+        ),
+        (
+            {"execution": "dense-reml", "family": "poisson", "stress": "near-perfect"},
+            "Gaussian",
+        ),
+        ({"execution": "efs", "stress": "near-perfect"}, "Gaussian"),
+    ],
+)
+def test_stress_cases_validate(kwargs: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _case(**kwargs)
+
+
+def test_stress_generators_change_only_their_own_part_of_the_input() -> None:
+    base_case = _case(400, execution="dense-reml", smooth_count=2)
+    base = benchmark_scaling._make_data(base_case)
+
+    def stressed(stress: str, **kwargs: object):
+        case = _case(
+            400, execution="dense-reml", smooth_count=2, stress=stress, **kwargs
+        )
+        return case, benchmark_scaling._make_data(case)
+
+    case, concurvity = stressed("concurvity")
+    np.testing.assert_array_equal(concurvity.x0, base.x0)
+    assert np.max(np.abs(concurvity.x1 - concurvity.x0)) < 0.1
+    assert benchmark_scaling._input_provenance(concurvity, case)["generator"] == (
+        "gaussian_additive_sine_concurvity"
+    )
+
+    _, zero = stressed("zero-weights")
+    np.testing.assert_array_equal(zero.y, base.y)
+    assert 0.05 < np.mean(zero.w == 0.0) < 0.15
+    assert set(np.unique(zero.w)) == {0.0, 1.0}
+
+    _, extreme = stressed("extreme-weights")
+    assert extreme.w.min() < 1e-3
+    assert extreme.w.max() > 1e3
+    heavy = extreme.w > 100
+    assert np.std((extreme.y - base.y)[heavy]) < np.std(base.y)
+
+    _, offset = stressed("offset")
+    np.testing.assert_allclose(offset.y - offset.off, base.y)
+    assert np.all((offset.off >= np.log(0.5)) & (offset.off <= np.log(2.0)))
+
+    _, poisson_offset = stressed("offset", family="poisson")
+    assert np.all(poisson_offset.y >= 0)
+    assert "off" in poisson_offset
+    _, nb_offset = stressed("offset", family="nb")
+    assert np.all(nb_offset.y >= 0)
+    assert not np.array_equal(nb_offset.y, poisson_offset.y)
+    plain_counts = benchmark_scaling._make_data(
+        _case(400, execution="dense-reml", smooth_count=2, family="poisson")
+    )
+    _, weighted_counts = stressed("extreme-weights", family="poisson")
+    np.testing.assert_array_equal(weighted_counts.y, plain_counts.y)
+    assert weighted_counts.w.max() > 1e3
+
+    _, perfect = stressed("near-perfect")
+    signal = 0.4 * np.sin(2 * np.pi * perfect.x0) + 0.4 * np.sin(4 * np.pi * perfect.x1)
+    assert np.max(np.abs(perfect.y - signal)) < 1e-5
+    assert np.std(base.y - signal) > 0.1
+    assert list(perfect.columns) == ["x0", "x1", "y"]
+
+
+def test_weights_and_offsets_reach_sources_and_dense_fits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import jaxgam
+
+    calls: list[dict[str, object]] = []
+
+    class _FakeGAM:
+        def __init__(self, *_args: object, **_kwargs: object):
+            pass
+
+        def fit(self, _data: object, **kwargs: object) -> str:
+            calls.append(kwargs)
+            return "fitted"
+
+    monkeypatch.setattr(jaxgam, "GAM", _FakeGAM)
+    for execution in ("dense", "dense-reml", "efs"):
+        case = _case(
+            50,
+            execution=execution,
+            smooth_count=2,
+            stress="offset",
+            result_mode="prediction",
+        )
+        data = benchmark_scaling._make_data(case)
+        assert benchmark_scaling._build_fit(case, data).run() == "fitted"
+        np.testing.assert_array_equal(calls[-1]["offset"], data.off.to_numpy())
+        assert "weights" not in calls[-1]
+
+    case = _case(60, execution="stream-qr", smooth_count=2, stress="zero-weights")
+    data = benchmark_scaling._make_data(case)
+    source = benchmark_scaling._row_source(data, case)
+    batch = next(iter(source.scan(64)))
+    np.testing.assert_array_equal(batch.weight, data.w.to_numpy())
+    assert set(batch.columns) == {"x0", "x1"}
+    assert benchmark_scaling._route_contract(case)["stress"] == "zero-weights"
+
+
+@pytest.mark.parametrize(
+    ("execution", "stress"),
+    [("dense-reml", "offset"), ("stream-qr", "zero-weights")],
+)
+def test_stress_cases_fit_through_the_public_routes(
+    execution: str, stress: str
+) -> None:
+    case = _case(300, execution=execution, smooth_count=2, stress=stress)
+    record = benchmark_scaling.run_case(case, Path.cwd())
+
+    assert record["valid"]
+    assert record["route"]["stress"] == stress

@@ -72,6 +72,15 @@ _NB_START_THETA = 1.0
 # ``re-only`` is y ~ s(g, bs='re'), the calibrated operator-EFS shape.
 _MODELS = ("additive", "tensor", "tp", "gp", "shared", "ti", "re", "re-only")
 _COVARIATE_PAIR_MODELS = frozenset({"tensor", "tp", "shared", "ti"})
+# Numerical-stress generators (G11). Their draws come from a separate stream,
+# so every case without stress keeps its input byte for byte.
+_STRESSES = (
+    "concurvity",
+    "zero-weights",
+    "extreme-weights",
+    "offset",
+    "near-perfect",
+)
 # jax.monitoring duration events counted as compilation work.
 _COMPILATION_EVENT_PREFIXES = ("/jax/core/compile/", "/jax/compilation_cache/")
 
@@ -114,6 +123,7 @@ class ScalingCase:
     discrete_table_mib: int | None = None
     memory_budget_mib: int | None = None
     levels: int | None = None
+    stress: str | None = None
 
     def __post_init__(self) -> None:
         if self.n_rows <= 0:
@@ -203,6 +213,19 @@ class ScalingCase:
                 "levels is required by, and only applies to, model='re' and "
                 "'re-only'; it must be an integer of at least 2."
             )
+        if self.stress is not None and self.stress not in _STRESSES:
+            raise ValueError(f"stress must be one of {', '.join(_STRESSES)}.")
+        if self.stress == "concurvity" and (
+            self.model != "additive" or self.smooth_count < 2
+        ):
+            raise ValueError(
+                "stress='concurvity' makes x1 nearly equal to x0 and needs the "
+                "additive model with at least two smooths."
+            )
+        if self.stress == "near-perfect" and (
+            self.family != "gaussian" or self.execution == "efs"
+        ):
+            raise ValueError("stress='near-perfect' is a Gaussian response.")
         if self.memory_budget_mib is not None and (
             self.execution
             not in _STREAM_EXECUTIONS | _DISCRETE_EXECUTIONS | _OPERATOR_EXECUTIONS
@@ -445,6 +468,9 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
         columns = {
             variable: rng.uniform(0.0, 1.0, case.n_rows) for variable in variables
         }
+    stress_rng = np.random.default_rng([case.seed, 20261117])
+    if case.stress == "concurvity":
+        columns["x1"] = columns["x0"] + stress_rng.normal(0.0, 0.01, case.n_rows)
     if case.model == "re":
         signal = np.sin(2.0 * np.pi * columns["x0"]) + effects[codes]
     elif case.model == "re-only":
@@ -470,6 +496,7 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
             for index, variable in enumerate(variables)
         )
     family = _effective_family(case)
+    count_signal = None
     if family in {"poisson", "nb"}:
         # The EFS Poisson generator, shared by every Poisson route.
         count_signal = (
@@ -486,7 +513,47 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
             )
     else:
         y = signal + rng.normal(0.0, 0.3, case.n_rows)
-    return pd.DataFrame({**columns, "y": y})
+    y, extra = _apply_stress(case, stress_rng, signal, count_signal, y)
+    return pd.DataFrame({**columns, "y": y, **extra})
+
+
+def _count_draw(family: str, mu: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    if family == "poisson":
+        return rng.poisson(mu)
+    return rng.negative_binomial(_NB_DATA_THETA, _NB_DATA_THETA / (_NB_DATA_THETA + mu))
+
+
+def _apply_stress(
+    case: ScalingCase,
+    rng: np.random.Generator,
+    signal: np.ndarray,
+    count_signal: np.ndarray | None,
+    y: np.ndarray,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Response and weight/offset columns of a numerical-stress case.
+
+    ``w`` holds prior weights and ``off`` an offset; both reach every route
+    (dense ``fit`` arguments, or the row source that owns them).
+    """
+    n = case.n_rows
+    family = _effective_family(case)
+    if case.stress == "near-perfect":
+        return signal + rng.normal(0.0, 1e-6, n), {}
+    if case.stress == "zero-weights":
+        return y, {"w": (rng.uniform(size=n) >= 0.1).astype(float)}
+    if case.stress == "extreme-weights":
+        weights = 10.0 ** rng.uniform(-4.0, 4.0, n)
+        if count_signal is None:
+            # Gaussian prior weights scale the noise variance by 1 / w.
+            y = signal + (y - signal) / np.sqrt(weights)
+        return y, {"w": weights}
+    if case.stress == "offset":
+        offset = np.log(rng.uniform(0.5, 2.0, n))
+        if count_signal is None:
+            return y + offset, {"off": offset}
+        mu = np.exp(0.2 + count_signal + offset)
+        return _count_draw(family, mu, rng), {"off": offset}
+    return y, {}
 
 
 def _row_source(data: pd.DataFrame, case: ScalingCase) -> Any:
@@ -505,7 +572,17 @@ def _row_source(data: pd.DataFrame, case: ScalingCase) -> Any:
         )
         for name in _smooth_variables(case)
     }
-    return ArrayRowSource(columns, y=data.y.to_numpy())
+    return ArrayRowSource(columns, y=data.y.to_numpy(), **_prior_terms(data))
+
+
+def _prior_terms(data: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Prior weights and offset of a stress case, as fit or source arguments."""
+    terms = {}
+    if "w" in data:
+        terms["weights"] = data["w"].to_numpy()
+    if "off" in data:
+        terms["offset"] = data["off"].to_numpy()
+    return terms
 
 
 def _input_provenance(data: pd.DataFrame, case: ScalingCase) -> dict[str, Any]:
@@ -525,6 +602,8 @@ def _input_provenance(data: pd.DataFrame, case: ScalingCase) -> dict[str, Any]:
         shape = f"{case.model}_sine"
     else:
         shape = "sine" if case.smooth_count == 1 else "additive_sine"
+    if case.stress is not None:
+        shape = f"{shape}_{case.stress}"
     return {
         "generator": f"{family}_{shape}",
         "seed": case.seed,
@@ -823,7 +902,7 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
 
         def fit() -> Any:
             return GAM(formula, family="gaussian", sp=fixed_sp).fit(
-                data, result=case.result_mode
+                data, result=case.result_mode, **_prior_terms(data)
             )
 
         return _FitPlan(fit, formula, None)
@@ -832,7 +911,7 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
 
         def fit() -> Any:
             return GAM(formula, family="poisson", optimizer="efs").fit(
-                data, result="prediction"
+                data, result="prediction", **_prior_terms(data)
             )
 
         return _FitPlan(fit, formula, None)
@@ -843,7 +922,7 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
         def fit() -> Any:
             return GAM(
                 formula, family=reml_family, control=FitControl(uncertainty="fisher")
-            ).fit(data, result=case.result_mode)
+            ).fit(data, result=case.result_mode, **_prior_terms(data))
 
         return _FitPlan(fit, formula, None)
 
@@ -1117,6 +1196,8 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
         contract["memory_budget_mib"] = case.memory_budget_mib
     if case.levels is not None:
         contract["levels"] = case.levels
+    if case.stress is not None:
+        contract["stress"] = case.stress
     return contract
 
 
@@ -2594,6 +2675,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--stress",
+        choices=_STRESSES,
+        help="numerical-stress generator (weights and offsets reach every route)",
+    )
+    parser.add_argument(
         "--levels",
         type=int,
         help="model re: number of declared random-effect levels",
@@ -2675,6 +2761,7 @@ def main() -> None:
         discrete_table_mib=args.discrete_table_mib,
         memory_budget_mib=args.memory_budget_mib,
         levels=args.levels,
+        stress=args.stress,
     )
     if args.memory_pair_n is not None:
         if args.r_parity or args.baseline_checkout is not None:
