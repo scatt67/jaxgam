@@ -49,9 +49,13 @@ compared as one quantity.
   univariate `cr`/`cs` smooths and parametric terms, so tp, gp, tensor, `ti`
   and `re` cases run on the dense, discrete or operator routes. The discrete
   route needs `factor_names` in `ContinuousDiscretizationControl` for a factor
-  `re` term, which the harness cannot pass (gap G8). Operator EFS is public
-  only for canonical Poisson with one indexed random effect, 257 to 4096
-  levels.
+  `re` term, which the harness passes for model `re` (G8). Operator EFS is
+  public only for canonical Poisson with one indexed random effect, 257 to
+  4096 levels. Operator tp and gp smooths are capped near 2,500 distinct rows
+  at the default budget by F3.
+- **Other scripts.** `make benchmark-bulk-variance` runs
+  `scripts/benchmark_bulk_variance.py` (H6, T6) and `make benchmark-manifest`
+  writes the run manifest (G15); both use the checkout they live in.
 
 ## Case matrix
 
@@ -114,8 +118,8 @@ batching is also a structural test (P4).
 | K2 | gp(30) | Gaussian/identity | 100k | 30 / 1 | dense-reml | as K1 | `make benchmark-scaling ARGS="--execution dense-reml --model gp --k 30 --n 100000 P"` |
 | K3 | tp(30) | Gaussian/identity | 1m | 30 / 1 | discrete-wm, 512 MiB table | setup construction peak against compact rows (F8) | `make benchmark-scaling ARGS="--execution discrete-wm --model tp --k 30 --batch-rows 65536 --discrete-table-mib 512 --n 1000000 P"` |
 | K4 | gp(30) | Gaussian/identity | 1m | 30 / 1 | discrete-wm, 128 MiB table | as K3 | `make benchmark-scaling ARGS="--execution discrete-wm --model gp --k 30 --batch-rows 65536 --discrete-table-mib 128 --n 1000000 P"` |
-| K5 | tp(10) and gp(10) | Gaussian/identity | 100k and 1m pair | 10 / 1 | operator, fixed sp | preparation peak bound and workspace bound at both n (F3); Krylov iterations | `make benchmark-scaling ARGS="--execution operator --model tp --k 10 --batch-rows 65536 --memory-pair-n 100000 1000000 P"`; repeat with `--model gp` |
-| K6 | tp(30) | Gaussian/identity | 20k | 30 / 1 | operator, fixed sp, 1 GiB budget | preparation bound (537 MB at k=30, over the 512 MiB default: F3 note) | `make benchmark-scaling ARGS="--execution operator --model tp --k 30 --batch-rows 4096 --memory-budget-mib 1024 --n 20000 P"` |
+| K5 | tp(10) and gp(10) | Gaussian/identity | 1,024 and 2,048 distinct rows (pair) | 10 / 1 | operator, fixed sp | preparation peak bound against distinct rows (F3: about 82 bytes x rows squared); Krylov iterations | `make benchmark-scaling ARGS="--execution operator --model tp --k 10 --batch-rows 1024 --memory-pair-n 1024 2048 P"`; repeat with `--model gp`. At 100k or 1m rows the same command is rejected by F3 |
+| K6 | tp(30) | Gaussian/identity | 2,500 | 30 / 1 | operator, fixed sp, 1 GiB budget | preparation bound at k=30 (F3 caps the default 512 MiB budget near 2,500 distinct rows) | `make benchmark-scaling ARGS="--execution operator --model tp --k 30 --batch-rows 1024 --memory-budget-mib 1024 --n 2500 P"` |
 | K7 | tp3(20) | Gaussian/identity | 100k | 20 / 1 | dense-reml | as K1 in d=3 | `make benchmark-scaling ARGS="--execution dense-reml --model tp3 --k 20 --n 100000 P"` |
 | K8 | tp3(20) | Gaussian/identity | 1m | 20 / 1 | discrete-wm, 512 MiB table | as K3 in d=3 | `make benchmark-scaling ARGS="--execution discrete-wm --model tp3 --k 20 --batch-rows 65536 --discrete-table-mib 512 --n 1000000 P"` |
 
@@ -198,8 +202,8 @@ findings table.
 
 ## Harness gaps
 
-Filled in the harness (with tests; `scripts/benchmark_scaling.py` at 93%
-statement and branch coverage, every new line covered):
+Filled in the first round (with tests; `scripts/benchmark_scaling.py` is at
+96% statement and branch coverage after both rounds, no new line missed):
 
 - **Compilation** (`4e94406`): a `jax.monitoring` listener records the count
   and seconds of tracing, lowering, backend compilation and persistent-cache
@@ -314,7 +318,7 @@ operator scripts at 300 levels; the lgamma benchmark at 1,000 rows.
 | L6 | (same command as L1 at 10m) | covered by L1 |
 | L7 / F1 | 20,000, 100 smooths | B=16384: preflight rejects (F1 reproduces). With 1 GiB: runs, `iteration limit`. B=4096: `iteration limit` |
 | M1 | 5,000 | default table budget rejects (147 MB > 64 MiB); with 256 MiB valid, cold 723 s of which 664 s backend compilation, warm 32 s (F11) |
-| M2 | 2,000 at 450 smooths | m=500 does not parse (F9). m=450 needs 1.37 GB of setup at n=2,000 (over 1 GiB); blocked |
+| M2 | 2,000 at 450 smooths | first round: m=500 did not parse (F9, since fixed); m=450 needed 1.37 GB of setup at n=2,000 (over 1 GiB). Now blocked by F11 |
 | M3 | 2,000 | not converged: `STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT; 4 source step window(s)` (F10); no record (G7) |
 | M4 | 2,000 | valid; p=901, 17 Newton iterations; cold 263 s, warm 232 s |
 | M5 | 5,000 | default table budget rejects (390 MB); 512 MiB table then fit budget rejects (561 MB > 512 MiB); with 1 GiB valid, cold 845 s of which 757 s compilation, warm 60 s, workspace 1.0 GB (F11) |
@@ -336,40 +340,74 @@ Two dry runs (L2, L5) spanned host sleeps: 962 s and 915 s of wall time
 against 5.4 s and 7.2 s of `perf_counter` time. The harness now flags this
 (G1).
 
+In that first round the high-cardinality rows were run with
+`benchmark_operator.py` (300 levels, valid), the EFS calibration script (300
+levels, valid) and the preconditioner script (valid); they are now H1-H3 on the
+harness and H4-H5 on the scripts.
+
+**Second round (after the harness gaps), every new or changed row.** All at
+n <= 2,500, under one run manifest (start and end written, `same_checkout`
+true on a clean tree); no record was flagged for host suspension.
+
+| ID | Dry-run size | Result |
+|---|---|---|
+| K5 | pair 1,024 / 2,048, tp and gp | valid; operator peak bound 173 then 333 MB (no plateau: F3). At 2,048 / 4,096 the larger child is rejected by F3 and recorded `valid=false` (exit 3) |
+| K6 | 2,500, 1 GiB | valid; peak bound 342 MB |
+| K7, K8 | 2,000 | valid (tp3, p = 20) |
+| H1 | 300 levels, 600 rows | valid; p = 306; 13 Krylov iterations; preconditioner 2,784 bytes |
+| H2 | 300 levels, pair 600 / 1,200 | valid; `workspace_bound_plateau` true (1.44 MB) |
+| H3 | 300 levels, 600 rows | `valid=false`, `indeterminate_score` (public default operator controls), written and exit 3 |
+| H6 | 50 levels, 3 seeds, 8 probes | valid after `ea2df90` (the first attempt imported another editable jaxgam); max PCG relative residual 3.8e-16 |
+| H7, H8 | 100 levels, 2,000 rows | valid (discrete with `factor_names`, and dense) |
+| N6-N9 | 2,000 | valid (outliers and theta 1e4, dense and exact streamed) |
+| T6 | test model, 3 seeds, 8 probes | valid after `ea2df90` |
+| T8 | 2,000, 10 smooths | dense valid; exact streamed `valid=false`, `STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT; 2 source step window(s)` |
+| T9-T12 | 2,000 | valid; T9 on streamed QR recorded 16,912 bytes of temporary disk |
+| T13 | 400 | `valid=false`, `step failed` (F12) |
+| M2 | not run | blocked by F11 |
+
 ## Run plan for the real measurements
 
 **Order.**
-1. Validity sweep, short cases: K1-K4, S1-S5, N1-N3, N5, K5, T4, T5.
-2. Large n with the machine to itself: L1, L2, L3, L4, L5.
+0. `make benchmark-manifest ARGS="--phase start --output $RUN/manifest.json"`.
+1. Validity sweep, short cases: K1-K4, K7, S1-S5, N1-N3, N5, N6, N8, H7, T4,
+   T5, T9, T12, T13.
+2. Large n with the machine to itself: L1-L5.
 3. Many terms with the machine to itself: M1, M5, M4, M3, L7.
-4. High cardinality: H1 (10k, 100k, then 1m levels), H2, H3.
-5. NB exact: N4 at 100k, then 1m.
-6. L6 (10m rows) last, with the machine to itself.
-7. F6 false-alarm measurement (Appendix A).
-8. T0 and every R-parity gate in the pinned environment (`make test`, root).
-M2 and H4 are not scheduled until F9/F11 and G5 are decided.
+4. Kernels and high cardinality: K5, K6, K8, H1 (10k, 100k, then 1m levels),
+   H2, H3, H4, H5, H8.
+5. Exact streamed REML under stress: N4 (100k, then 1m), N7, N9, T8, T10, T11.
+6. Bulk variance: H6, T6.
+7. L6 (10m rows) last, with the machine to itself.
+8. `make benchmark-manifest ARGS="--phase end --output $RUN/manifest.json"`.
+9. T0 and every R-parity gate in the pinned environment (`make test`, root).
+
+M2 is not scheduled: it is blocked by F11 (compile time). A command that ends
+with exit status 3 has still written its record (`valid=false`, G7); the run
+continues with the next case.
 
 **Expected durations on a quiet machine.** These are estimates, not
 measurements. They are extrapolated from the PR11 runtime study (loaded host)
 and PR9's n=1m Gaussian QR runs, and from the cost structure the dry runs
-exposed (for example the 11 to 13 minutes of compilation for 100 discrete
-smooths). Each harness case is one setup child plus one cold and one warm fit.
+exposed (for example 11 to 13 minutes of compilation for 100 discrete
+smooths, and about 0.7 s per bulk-variance seed on the 47-row test model).
+Each harness case is one setup child plus one cold and one warm fit.
 
 | Group | Cases | Estimate |
 |---|---|---|
-| 1 | K1-K4, S1-S5, N1-N3, N5, K5, T4, T5 | 35 min |
+| 1 | K1-K4, K7, S1-S5, N1-N3, N5, N6, N8, H7, T4, T5, T9, T12, T13 | 50 min |
 | 2 | L1 14, L2 12, L3 6, L4 7, L5 2 | 41 min |
 | 3 | M1 25, M5 30, M4 30, M3 20, L7 30 | 135 min |
-| 4 | H1 40, H2 10, H3 5 | 55 min |
-| 5 | N4 | 25 min |
-| 6 | L6 | 30 min |
-| 7 | F6, 1,000 seeds per shape, 3 shapes | 60 min |
-| Total | | about 6.5 hours, excluding M2, H4 and the pinned suite |
+| 4 | K5 5, K6 3, K8 3, H1 40, H2 5, H3 5, H4 10, H5 5, H8 10 | 86 min |
+| 5 | N4 25, N7 10, N9 10, T8 18, T10 12, T11 15 | 90 min |
+| 6 | H6 45, T6 25 (Gaussian and Poisson, 1,000 seeds each) | 70 min |
+| 7 | L6 | 30 min |
+| Total | | about 8.5 hours, excluding M2 and the pinned suite |
 
-**Machine to itself.** Every memory pair (L1-L3), L4, L6, L7, M1, M3-M5, H1 at
-1m levels and N4 at 1m: their RSS and wall times are recorded as results. The
-short cases in group 1 may share the machine only if their timings are not
-reported.
+**Machine to itself.** Every memory pair (L1-L3, K5, H2), L4, L6, L7, M1,
+M3-M5, H1 at 1m levels, H6, and N4 at 1m: their RSS and wall times are
+recorded as results. The short cases in group 1 may share the machine only if
+their timings are not reported.
 
 **Host settings.**
 - On macOS hold `caffeinate -s -i` (on AC power) for the whole session. Reject
@@ -394,9 +432,11 @@ reported.
   run whose manifest reports `same_checkout=false` (commit changed or tree
   dirty) is not evidence. R and mgcv versions for parity runs come from
   `RBridge.check_versions()` in the parity records.
-- The other scripts record less: `benchmark_operator.py` records commit,
-  dirty flag and versions but uses the caller's cache. Run them with
-  `JAX_COMPILATION_CACHE_DIR` pointing at a new empty directory per run.
+- The other scripts record less: `benchmark_operator_efs_calibration.py` and
+  `benchmark_operator_preconditioner.py` record commit and versions but use
+  the caller's cache; run them with `JAX_COMPILATION_CACHE_DIR` pointing at a
+  new empty directory. `benchmark_bulk_variance.py` uses a task-owned cache
+  and records the package it loaded.
 
 **Where results go.** Raw records go to `$RUN/` outside the checkout. The
 results document `docs/scale_jaxgam/acceptance_results.md` reports each row
@@ -413,31 +453,23 @@ this size**; **needs the full size**. Sizes stayed at n <= 20,000.
 | ID | Finding | Smallest reproduction | Classification and observation |
 |---|---|---|---|
 | F1 | Gaussian QR, p = 1001, 100 smooths | `make benchmark-scaling ARGS="--execution stream-gaussian-qr --smooth-count 100 --k 11 --batch-rows 16384 --n 20000 P"`; then `--batch-rows 4096`; then `--batch-rows 16384 --memory-budget-mib 1024` | **Reproduces at n = 20,000.** B=16384: "Known streamed Gaussian QR workspace requires 558529632 bytes, exceeding FitControl.memory_budget_bytes=536870912". B=4096: `converged=False`, status `iteration limit`. With 1 GiB at B=16384 the preflight passes and the stop is the same `iteration limit`, so the non-convergence does not depend on the batch size. The status is L-BFGS-B's iteration limit, not the relative-reduction stop that the Gaussian QR route showed elsewhere; the harness keeps no projected gradient for an invalid fit (G7) |
-| F2 | Exact streamed REML, NB with estimated theta, `additive(2, 10)` | N4 at `--n 20000` | **Does not reproduce at n = 20,000** (or 2,000): converged, `CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL; 1 source step window(s)`, projected gradient 4.7e-11, theta 2.947. **Needs the full size** (100k, 1m). The relative-reduction stop message was not seen at this size |
-| F3 | Operator setup accounting against distinct covariate rows | Appendix A, F3 | **Does not reproduce at <= 20,000 distinct uniform rows**: the preparation bound did not change with n (2-D tp and 1-D gp: 3.78 MiB at k=10 for n = 1,000-16,000; about 537 MB at k=30 for n = 2,500-20,000). **Needs the full size** (about 30,000 distinct 2-D rows). Related observation: at k=30 the bound (536,968,xxx bytes tp; 537,136,760 gp) just exceeds the default 512 MiB budget, so tp/gp k=30 operator fits are rejected at every n tried |
+| F2 | Exact streamed REML, NB with estimated theta, `additive(2, 10)` | N4 at `--n 20000` | **Does not reproduce at n = 20,000** (or 2,000): converged, `CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL; 1 source step window(s)`, projected gradient 4.7e-11, theta 2.947. **Needs the full size** (100k, 1m). The relative-reduction stop was not seen for NB at this size; it was seen on exact streamed Gaussian REML with 40 smooths at n = 4,000 (`CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH; 2 source step window(s)`, projected gradient 1.6e-5 against gtol 1e-6, deterministic in three repeats) |
+| F3 | Operator setup accounting against distinct covariate rows | K5, K6; Appendix A, F3 | **Reproduces at 3,072 distinct rows.** The operator preparation peak bound grows as about 82 bytes x (distinct rows)^2, identically for 2-D tp and 1-D gp at k=10: 96, 359, 789, 1,386 and 3,085 MB at 1,024, 2,048, 3,072, 4,096 and 6,144 rows. The default 512 MiB budget rejects between 2,048 and 3,072 rows, and 4 GiB between 6,144 and 8,192. The rejection message ("needs at most 537 MB") reports roughly the budget, not the requirement. The first round's "does not reproduce" was wrong: its 1 MiB budget tripped an earlier, n-independent check (3.78 MiB) |
 | F4 | Dense `te()` REML with log smoothing parameters >= 20 apart | Appendix A, F4 | **Reproduces at n = 1,000** (`te(x0,x1,bs='cr',k=6)`, y = sin(4 pi x0) + N(0, 0.02^2)). R: log sp (-6.02, 14.55), spread 20.6, full convergence. JaxGAM: (-6.02, 23.78), stop `step failed`; score differs by 8.2e-3 and fitted values by up to 1.0e-3. At spread 15.6 (noise 0.05, n = 600) both converge, with score difference 2.2e-5 and fitted 6.2e-5 |
 | F5 | `y ~ x + s(x, bs='gp')` reports converged while its inner loop hits the limit | Appendix A, F5 | **Does not reproduce through public results at n = 200**: `converged=True`, `full convergence`, 5 outer iterations; a fixed-sp refit at the selected sp converges in 2 PIRLS iterations. The inner PIRLS state inside Newton trials is not exposed (G14), so the case needs internal instrumentation (being addressed elsewhere) |
-| F6 | `bulk_link_variance` raises above 5 Monte Carlo standard errors | Appendix A, F6 | **Reproduces** on the test model (Gaussian `s(x,bs='cr',k=6)+s(g,bs='re')`, 47 rows, 5 calibration rows, 48 probes). Over 240 fresh seeds the per-call maximum standardized error exceeded 5 twice (0.83%; Clopper-Pearson 95% interval 0.10%-2.98%), with maxima 7.60 and 4.48 in the two batches, median 1.5, 95th percentile 3.6-3.7, and 19 calls above 3. The earlier 3.76-3.78 came from four seeds |
+| F6 | `bulk_link_variance` raises above 5 Monte Carlo standard errors | T6, H6 (`scripts/benchmark_bulk_variance.py`) | **Reproduces** on the test model (Gaussian `s(x,bs='cr',k=6)+s(g,bs='re')`, 47 rows, 5 calibration rows, 48 probes). Over 240 fresh seeds the per-call maximum standardized error exceeded 5 twice (0.83%; Clopper-Pearson 95% interval 0.10%-2.98%), with maxima 7.60 and 4.48 in the two batches, median 1.5, 95th percentile 3.6-3.7, and 19 calls above 3. The 5-SE rule is being replaced; the script now records per seed and row both the old standardized error and the ratio estimate/exact, whose exact reference for Gaussian probes and exact solves is chi-square(probes)/probes |
 | F7 | Discrete route with a factor `re` term | Appendix A, F7 | **Reproduces; usage, not numerics.** Without `factor_names` it fails with "Metric column 'g' must be real numeric data"; with `ContinuousDiscretizationControl(factor_names=("g",))` it fits and converges. The message does not name the missing declaration |
 | F8 | Discrete 2-D tp construction bytes against compact rows | `--execution discrete-wm --model tp --k 30` at n = 500-2,000 with a 1 MiB table budget | **Reproduces**: required 16.9, 64.1 and 250.0 MiB at 500, 1,000 and 2,000 rows (x4 per doubling, up to the 2000-knot cap). The default 64 MiB budget rejects 2-D tp k=30 above about 1,000 compact rows. 1-D gp stays near 64 MiB because the grid caps its unique values |
-| F9 | Formula parser recursion | `parse_formula` with 500 additive `s()` terms | **Reproduces**: `RecursionError` (`formula/parser.py` `_visit_binop`, two frames per term); 450 terms parse. The plan's m=500 case cannot be expressed |
+| F9 | Formula parser recursion | `parse_formula` with 500 additive `s()` terms | **Fixed in `62db460`.** The +/- chain walk and its error rendering are iterative; 500 and 5,000 terms parse, and the old and new parsers agree on 141 formulas. CPython's own `ast.parse` still fails somewhere between 5,000 and 20,000 terms |
 | F10 | Exact streamed Poisson REML with 10 smooths | M3 at n = 2,000 | **Reproduces at n = 2,000**: `converged=False`, `STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT; 4 source step window(s)`. Whether it persists at 100k is unknown |
-| F11 | Compilation time of discrete working-model REML with many smooths | M1, M5 at n = 5,000 | **Reproduces at n = 5,000**: 664 s (100 smooths, k=10) and 757 s (k=20) of XLA backend compilation in the cold fit; warm fits 32 s and 60 s; no host suspension |
+| F11 | Compilation time of discrete working-model REML with many smooths | M1, M5 at n = 5,000 | **Reproduces at n = 5,000**: 664 s (100 smooths, k=10) and 757 s (k=20) of XLA backend compilation in the cold fit; warm fits 32 s and 60 s; no host suspension. Being diagnosed separately; M2 (500 smooths) is blocked with these times as its reason |
+| F12 | Dense REML Poisson with large count outliers at small n | T13 | **Reproduces at n = 400**: additive(2, 5) with 2% of counts replaced by 1000 + Poisson(1000) stops `converged=False`, `step failed`; the same data at n = 2,000 converge, as does NB with the same outliers (theta 0.27 and 0.13) |
 
-**F6: proposed false-alarm measurement.**
-- Shapes: the test model (Gaussian), its Poisson variant, and an operator
-  random effect with 10k levels plus one cubic smooth.
-- Settings: probes 16, 48 and 128; calibration rows 1, 5 and 64.
-- Per setting: 1,000 seeds from a stream disjoint from the tests' seeds.
-- Record per seed: the maximum standardized error and the per-row
-  standardized errors.
-- Report: the exceedance rate of 5 with a Clopper-Pearson interval, and
-  quantiles of the per-row errors against Student t with probes-1 degrees of
-  freedom (the Monte Carlo SE is estimated from the same probes, which makes
-  the ratio heavier-tailed than normal).
-- Cost on the test model: about 0.7 s per seed in the dry runs.
-- Choosing the limit (for example the measured 1-alpha quantile of the
-  maximum over rows, or a t/Bonferroni limit) is a root decision.
+**F6 measurement.** `scripts/benchmark_bulk_variance.py` (T6, H6) records,
+per seed and calibration row, the old standardized error and the ratio
+estimate/exact, so one run gives both the old rule's exceedance rate (with a
+Clopper-Pearson interval) and the Kolmogorov-Smirnov check of probes x ratio
+against chi-square(probes). The replacement rule is not designed here.
 
 ## Appendix A: reproductions without a harness mode
 
@@ -445,23 +477,25 @@ These snippets use only the public API and runtime-generated data; run them
 from the checkout with `PYTHONPATH=$PWD uv run python`.
 
 ```python
-# F3: operator preparation bound against distinct rows (budget 1 MiB so every
-# fit reports its bound instead of running).
-import re, numpy as np, pandas as pd
+# F3: operator preparation bound against distinct rows, at two budgets.
+import numpy as np, pandas as pd
 from jaxgam import GAM, FitControl
 from jaxgam.data.source import DataFrameRowSource
 for formula in ("y~s(x0,x1,bs='tp',k=10)", "y~s(x0,bs='gp',k=10)"):
-    for n in (1000, 2000, 4000, 8000, 16000):
-        rng = np.random.default_rng(3)
-        df = pd.DataFrame({"x0": rng.uniform(0, 1, n), "x1": rng.uniform(0, 1, n)})
-        df["y"] = np.sin(2 * np.pi * df.x0) + rng.normal(0, 0.3, n)
-        control = FitControl(execution="operator", linear_solver="pcg",
-                             batch_rows=4096, memory_budget_bytes=1 << 20)
-        try:
-            GAM(formula, sp=[1.0], control=control).fit(
-                DataFrameRowSource(df, response="y"), result="prediction")
-        except MemoryError as error:
-            print(formula, n, re.search(r"needs at most (\d+)", str(error)).group(1))
+    for budget_mib in (512, 4096):
+        for n in (1024, 2048, 3072, 4096, 6144, 8192):
+            rng = np.random.default_rng(3)
+            df = pd.DataFrame({"x0": rng.uniform(0, 1, n), "x1": rng.uniform(0, 1, n)})
+            df["y"] = np.sin(2 * np.pi * df.x0) + rng.normal(0, 0.3, n)
+            control = FitControl(execution="operator", linear_solver="pcg",
+                                 batch_rows=1024, memory_budget_bytes=budget_mib << 20)
+            try:
+                fit = GAM(formula, sp=[1.0], control=control).fit(
+                    DataFrameRowSource(df, response="y"), result="prediction")
+                print(formula, budget_mib, n,
+                      fit.operator_diagnostics.preparation_peak_bound_bytes)
+            except MemoryError as error:
+                print(formula, budget_mib, n, "rejected:", error)
 ```
 
 ```python
@@ -491,26 +525,7 @@ refit = GAM("y ~ x + s(x, bs='gp')", family="gaussian", sp=fit.smoothing_params)
 print(fit.converged, fit.convergence_info, fit.n_iter, refit.convergence_info, refit.n_iter)
 ```
 
-```python
-# F6: distribution of the bulk calibration maximum over seeds (test model).
-import numpy as np, pandas as pd
-from jaxgam.execution.operator import PCGControl
-from jaxgam.execution.operator_bulk_variance import BulkOperatorVariance
-from jaxgam.families.standard import Gaussian
-from tests.test_execution.test_operator_bulk_variance import _fisher_provider
-row = np.arange(47); x = np.linspace(0.1, 1.4, 47)
-frame = pd.DataFrame({"y": 1.3 + np.sin(2 * x) + 0.1 * np.cos(row), "x": x,
-                      "g": pd.Categorical(np.resize(["a", "b", "c", "d"], 47))})
-_, _, base = _fisher_provider(frame, "y~s(x,bs='cr',k=6)+s(g,bs='re')", Gaussian(),
-                              np.array([0.7, 1.1]), scale=1.0, probes=48)
-selected = frame.iloc[[0, 2, 13, 32, 46]]
-maxima = [BulkOperatorVariance(base.system, scale=1.0, memory_budget_bytes=16 << 20,
-                               probes=48, seed=seed,
-                               control=PCGControl(rtol=1e-11, max_iterations=200))
-          .build().calibrate(selected).maximum_standardized_error
-          for seed in range(2000, 3000)]
-print(np.mean(np.asarray(maxima) > 5), np.quantile(maxima, [0.5, 0.95, 0.99]))
-```
+F6 now runs as `make benchmark-bulk-variance` (rows T6 and H6).
 
 ```python
 # F7: discrete route with a factor random effect.
