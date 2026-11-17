@@ -125,6 +125,64 @@ class JaxPenaltyRoots:
         return sum(root.shape[0] for root in self.roots)
 
 
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class JaxCoefficientRotation:
+    """Block-local orthogonal maps ``b = T b_s`` into gam.reparam coordinates.
+
+    ``gam.fit3`` fits in ``T``'s coordinates (gam.fit3.r 161-179) and maps the
+    coefficients back (812-813). Placement is static; each ``T`` is a device
+    leaf computed on the host at every evaluation of the smoothing parameters.
+    """
+
+    starts: tuple[int, ...]
+    stops: tuple[int, ...]
+    transforms: tuple[jax.Array, ...]
+
+    def tree_flatten(self):
+        return self.transforms, (self.starts, self.stops)
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        starts, stops = aux
+        return cls(starts, stops, tuple(children))
+
+    def _blocks(self):
+        return zip(self.starts, self.stops, self.transforms, strict=True)
+
+    def design(self, X: jax.Array) -> jax.Array:
+        """``X T`` (gam.fit3.r 169)."""
+        for start, stop, T in self._blocks():
+            X = X.at[:, start:stop].set(X[:, start:stop] @ T)
+        return X
+
+    def to_stable(self, beta: jax.Array) -> jax.Array:
+        """``T' b`` (gam.fit3.r 164-166)."""
+        for start, stop, T in self._blocks():
+            beta = beta.at[start:stop].set(T.T @ beta[start:stop])
+        return beta
+
+    def from_stable(self, beta: jax.Array) -> jax.Array:
+        """``T b_s`` (gam.fit3.r 812)."""
+        for start, stop, T in self._blocks():
+            beta = beta.at[start:stop].set(T @ beta[start:stop])
+        return beta
+
+    def from_stable_matrix(self, M: jax.Array) -> jax.Array:
+        """``T M T'`` on both sides, keeping cross-blocks."""
+        for start, stop, T in self._blocks():
+            M = M.at[start:stop, :].set(T @ M[start:stop, :])
+            M = M.at[:, start:stop].set(M[:, start:stop] @ T.T)
+        return M
+
+    def to_stable_matrix(self, M: jax.Array) -> jax.Array:
+        """``T' M T`` on both sides, keeping cross-blocks."""
+        for start, stop, T in self._blocks():
+            M = M.at[start:stop, :].set(T.T @ M[start:stop, :])
+            M = M.at[:, start:stop].set(M[:, start:stop] @ T)
+        return M
+
+
 def augmented_root(roots: JaxPenaltyRoots, rho: jax.Array) -> jax.Array:
     """Return ``E(rho)`` with ``E' E = S_lambda``, stacking scaled local roots.
 

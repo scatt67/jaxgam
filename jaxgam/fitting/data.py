@@ -487,16 +487,7 @@ def _build_block_metadata(
             # it contributes neither a range direction nor a determinant
             # factor.  mgcv's norm-based combined range construction likewise
             # cannot normalize a zero matrix.
-            normalized = [
-                S / norm for S in penalties if (norm := np.linalg.norm(S, "fro")) > 0
-            ]
-            total = (
-                np.add.reduce(normalized)
-                if normalized
-                else np.zeros((block.size, block.size))
-            )
-            eigs, U = np.linalg.eigh(total)
-            rank = int(np.sum(eigs > np.max(eigs) * _EPS_TWO_THIRDS))
+            rank, U = multi_block_eigenbasis(penalties, block.size)
             range_basis = U[:, -rank:] if rank else U[:, :0]
             multis.append(
                 (
@@ -521,6 +512,22 @@ def _build_block_metadata(
             tuple(to_jax(S, device=device) for S in x[3]) for x in multis
         ),
     }
+
+
+def multi_block_eigenbasis(
+    penalties: list[np.ndarray], size: int
+) -> tuple[int, np.ndarray]:
+    """Rank and eigenvectors of a multi-penalty block's norm-scaled total.
+
+    ``U[:, -rank:]`` spans the total penalty's range (the coordinates of
+    ``multi_block_proj_S``) and ``U[:, :-rank]`` its null space, mgcv's
+    ``totalPenaltySpace`` split.
+    """
+    normalized = [S / norm for S in penalties if (norm := np.linalg.norm(S, "fro")) > 0]
+    total = np.add.reduce(normalized) if normalized else np.zeros((size, size))
+    eigs, U = np.linalg.eigh(total)
+    rank = int(np.sum(eigs > np.max(eigs) * _EPS_TWO_THIRDS))
+    return rank, U
 
 
 def _append_singleton(
