@@ -388,3 +388,72 @@ def test_kernel_and_shared_model_penalties_match_their_sp_order(model: str) -> N
     assert record["model"]["n_penalties"] == len(
         benchmark_scaling._smoothing_parameter_order(case)
     )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"execution": "stream-qr", "discrete_table_mib": 256},
+        {"execution": "dense-reml", "discrete_table_mib": 256},
+        {"execution": "discrete", "discrete_table_mib": 0},
+        {"execution": "discrete", "discrete_table_mib": True},
+        {"execution": "discrete-wm", "discrete_table_mib": 2.5},
+    ],
+)
+def test_discrete_table_budget_is_validated(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="discrete_table_mib"):
+        _case(**kwargs)
+
+
+def test_discrete_table_budget_reaches_the_control_and_contract() -> None:
+    from jaxgam.data.discretize import DiscretizationBudget
+
+    default = _case(execution="discrete-wm")
+    raised = _case(execution="discrete-wm", discrete_table_mib=256)
+
+    assert (
+        benchmark_scaling._discrete_control(default).discretization.budget
+        == DiscretizationBudget()
+    )
+    budget = benchmark_scaling._discrete_control(raised).discretization.budget
+    assert budget.max_table_bytes == budget.max_batch_bytes == 256 << 20
+    assert budget.max_selector_bytes == DiscretizationBudget().max_selector_bytes
+    assert "discrete_table_and_batch_budget_mib" not in (
+        benchmark_scaling._route_contract(default)
+    )
+    assert (
+        benchmark_scaling._route_contract(raised)["discrete_table_and_batch_budget_mib"]
+        == 256
+    )
+
+
+def test_cli_threads_the_discrete_table_budget(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[ScalingCase] = []
+
+    def run(case: ScalingCase, _root: Path) -> dict:
+        seen.append(case)
+        return {"case": "recorded"}
+
+    monkeypatch.setattr(benchmark_scaling, "run_isolated", run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_scaling.py",
+            "--execution",
+            "discrete-wm",
+            "--model",
+            "tp",
+            "--discrete-table-mib",
+            "512",
+            "--result-mode",
+            "prediction",
+        ],
+    )
+    benchmark_scaling.main()
+
+    assert seen[-1].discrete_table_mib == 512
+    assert seen[-1].model == "tp"
+    assert "recorded" in capsys.readouterr().out

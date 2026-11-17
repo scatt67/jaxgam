@@ -1146,6 +1146,41 @@ def test_run_case_attributes_compilation_to_the_cold_fit_only(
         for warm in timings["warm_fit_compilation"]
     )
     assert "jax.monitoring" in timings["compilation_status"]
+    assert timings["cold_fit_wall_clock_s"] >= 0
+    assert len(timings["warm_fit_wall_clock_s"]) == 2
+    assert timings["host_suspension_suspected"] is False
+
+
+@pytest.mark.parametrize(
+    ("pairs", "suspected"),
+    [
+        ([], False),
+        ([(5.0, 5.0)], False),
+        ([(5.0, 5.9)], False),
+        ([(100.0, 104.9)], False),
+        ([(5.0, 6.5)], True),
+        ([(100.0, 106.0)], True),
+        ([(1.0, 1.0), (7.2, 915.0)], True),
+    ],
+)
+def test_host_suspension_flags_wall_clock_beyond_monotonic(
+    pairs: list[tuple[float, float]], suspected: bool
+) -> None:
+    assert benchmark_scaling._host_suspension_suspected(pairs) is suspected
+
+
+def test_timed_fit_with_wall_clock_reports_both_durations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([100.0, 1000.0])
+    monkeypatch.setattr(benchmark_scaling.time, "time", lambda: next(clock))
+    result, elapsed, wall = benchmark_scaling._timed_fit_with_wall_clock(
+        lambda: _Result()
+    )
+
+    assert isinstance(result, _Result)
+    assert 0 <= elapsed < wall
+    assert wall == 900.0
 
 
 @pytest.mark.parametrize(

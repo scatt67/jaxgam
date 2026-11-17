@@ -102,6 +102,7 @@ class ScalingCase:
     family: str = "gaussian"
     model: str = "additive"
     discretization_m: int | None = None
+    discrete_table_mib: int | None = None
 
     def __post_init__(self) -> None:
         if self.n_rows <= 0:
@@ -160,6 +161,16 @@ class ScalingCase:
             raise ValueError(
                 "discretization_m must be an integer of at least 2 and applies "
                 "only to the discrete executions."
+            )
+        if self.discrete_table_mib is not None and (
+            self.execution not in _DISCRETE_EXECUTIONS
+            or isinstance(self.discrete_table_mib, bool)
+            or not isinstance(self.discrete_table_mib, int)
+            or self.discrete_table_mib < 1
+        ):
+            raise ValueError(
+                "discrete_table_mib must be a positive integer and applies only "
+                "to the discrete executions."
             )
 
 
@@ -528,6 +539,25 @@ def _timed(function: Callable[[], Any]) -> tuple[Any, float]:
     return value, time.perf_counter() - started
 
 
+def _timed_fit_with_wall_clock(
+    fit: Callable[[], Any],
+) -> tuple[Any, float, float]:
+    """Time a synchronized fit by ``perf_counter`` and by the wall clock.
+
+    On macOS and Linux ``perf_counter`` stops while the host is suspended and
+    ``time.time`` does not, so a gap between them exposes a fit that spanned
+    a host sleep (JAX's own compile events use the wall clock).
+    """
+    wall_started = time.time()
+    result, elapsed = _timed_fit(fit)
+    return result, elapsed, time.time() - wall_started
+
+
+def _host_suspension_suspected(pairs: list[tuple[float, float]]) -> bool:
+    """True when any wall-clock duration exceeds its monotonic one by >1 s."""
+    return any(wall - elapsed > max(1.0, 0.05 * elapsed) for elapsed, wall in pairs)
+
+
 def _timed_fit(fit: Callable[[], Any]) -> tuple[Any, float]:
     """Time a fit through device completion, never merely launch latency."""
     import jax
@@ -768,7 +798,16 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
 def _discrete_control(case: ScalingCase) -> Any:
     """The public discrete-route control the case's fit and setup both use."""
     from jaxgam.control import ContinuousDiscretizationControl, FitControl
+    from jaxgam.data.discretize import DiscretizationBudget
 
+    budget = (
+        DiscretizationBudget()
+        if case.discrete_table_mib is None
+        else DiscretizationBudget(
+            max_table_bytes=case.discrete_table_mib << 20,
+            max_batch_bytes=case.discrete_table_mib << 20,
+        )
+    )
     return FitControl(
         execution="discrete",
         batch_rows=case.batch_rows,
@@ -776,7 +815,9 @@ def _discrete_control(case: ScalingCase) -> Any:
         smoothing_strategy=(
             "working_model_reml" if case.execution == "discrete-wm" else "exact_reml"
         ),
-        discretization=ContinuousDiscretizationControl(m=case.discretization_m),
+        discretization=ContinuousDiscretizationControl(
+            m=case.discretization_m, budget=budget
+        ),
     )
 
 
@@ -884,6 +925,8 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
             if case.discretization_m is None
             else "per-margin range-grid points"
         )
+        if case.discrete_table_mib is not None:
+            contract["discrete_table_and_batch_budget_mib"] = case.discrete_table_mib
     return contract
 
 
@@ -1323,7 +1366,7 @@ def _run_case_with_compilation(
     cold_scan_before = _source_scan_count(fit_plan.source)
     cold_bytes_before = _source_batch_bytes(fit_plan.source)
     cold_compile_before = compilation.snapshot()
-    cold_result, cold_fit_s = _timed_fit(fit)
+    cold_result, cold_fit_s, cold_fit_wall_s = _timed_fit_with_wall_clock(fit)
     cold_compilation = _CompilationEvents.delta(
         cold_compile_before, compilation.snapshot()
     )
@@ -1552,6 +1595,7 @@ def _run_case_with_compilation(
     del cold_result
 
     warm_times: list[float] = []
+    warm_wall_times: list[float] = []
     warm_compilation: list[dict[str, dict[str, float | int]]] = []
     warm_validity: list[dict[str, Any]] = []
     warm_scan_deltas: list[int | None] = []
@@ -1560,7 +1604,8 @@ def _run_case_with_compilation(
         warm_scan_before = _source_scan_count(fit_plan.source)
         warm_bytes_before = _source_batch_bytes(fit_plan.source)
         warm_compile_before = compilation.snapshot()
-        warm_result, elapsed = _timed_fit(fit)
+        warm_result, elapsed, wall_elapsed = _timed_fit_with_wall_clock(fit)
+        warm_wall_times.append(wall_elapsed)
         warm_compilation.append(
             _CompilationEvents.delta(warm_compile_before, compilation.snapshot())
         )
@@ -1600,6 +1645,19 @@ def _run_case_with_compilation(
                 "not addable to this fit timing"
             ),
             "cold_compile_and_fit_s": cold_fit_s,
+            "cold_fit_wall_clock_s": cold_fit_wall_s,
+            "warm_fit_wall_clock_s": warm_wall_times,
+            "host_suspension_suspected": _host_suspension_suspected(
+                [
+                    (cold_fit_s, cold_fit_wall_s),
+                    *zip(warm_times, warm_wall_times, strict=True),
+                ]
+            ),
+            "host_suspension_status": (
+                "wall-clock (time.time) minus perf_counter fit duration above "
+                "max(1 s, 5%); perf_counter stops during host sleep, so a "
+                "suspected record's compile events and wall time are not evidence"
+            ),
             "cold_fit_compilation": cold_compilation,
             "cold_fit_backend_compile_s": _backend_compile_seconds(cold_compilation),
             "warm_fit_compilation": warm_compilation,
@@ -2021,6 +2079,14 @@ def main() -> None:
         type=int,
         help="per-margin discrete grid points (default: bam's default grid)",
     )
+    parser.add_argument(
+        "--discrete-table-mib",
+        type=int,
+        help=(
+            "discrete routes: DiscretizationBudget table and batch limit in MiB "
+            "(default: the library's 64 MiB)"
+        ),
+    )
     parser.add_argument("--batch-rows", type=int, default=1_024)
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument(
@@ -2087,6 +2153,7 @@ def main() -> None:
         family=args.family,
         model=args.model,
         discretization_m=args.discretization_m,
+        discrete_table_mib=args.discrete_table_mib,
     )
     if args.memory_pair_n is not None:
         if args.r_parity or args.baseline_checkout is not None:
