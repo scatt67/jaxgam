@@ -8,8 +8,6 @@ from typing import Any
 
 import numpy as np
 
-from jaxgam.smooths.source_arithmetic import libm_log10
-
 
 class _RRandom:
     """R 4.5's default Mersenne Twister plus rejection index sampler."""
@@ -94,6 +92,18 @@ def _r_sample_int(size: int, count: int, seed: int) -> np.ndarray:
     return result
 
 
+def _libm_log10(values: np.ndarray) -> np.ndarray:
+    """The C library's log10 (:func:`jaxgam.smooths.source_arithmetic.libm_log10`).
+
+    Imported on use: ``jaxgam.data`` re-exports these helpers while the
+    package loads, and importing ``jaxgam.smooths`` there would load the
+    smooth constructors, which import this module.
+    """
+    from jaxgam.smooths.source_arithmetic import libm_log10
+
+    return libm_log10(values)
+
+
 def _r_number_text(value: Any) -> str:
     """Format a finite scalar as R's numeric ``paste0`` representation."""
     if isinstance(value, (bool, np.bool_, int, np.integer)):
@@ -119,7 +129,7 @@ def _r_number_text(value: Any) -> str:
     # scientific(): kp = (int) floor(log10(r)) - R + 1, with the C library's
     # log10. A vectorized NumPy log10 can differ by an ulp next to a power of
     # ten and move kp; libm_log10 is the same symbol R calls.
-    k_pos = math.floor(float(libm_log10(np.array([magnitude]))[0])) - digits + 1
+    k_pos = math.floor(float(_libm_log10(np.array([magnitude]))[0])) - digits + 1
     has_extended_precision = np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
     if has_extended_precision:
         magnitude_precise: float | np.longdouble = np.longdouble(magnitude)
@@ -229,7 +239,7 @@ def _r_number_texts(values: np.ndarray) -> list[str]:
     magnitude = np.abs(numeric)
     # kp from the C library's log10, as scientific() computes it; NumPy's
     # log10 ufunc can dispatch to SIMD maths that differ by an ulp.
-    k_pos = np.floor(libm_log10(magnitude)).astype(np.int64) - digits + 1
+    k_pos = np.floor(_libm_log10(magnitude)).astype(np.int64) - digits + 1
     has_extended_precision = np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
     if has_extended_precision:
         precise = magnitude.astype(np.longdouble)
