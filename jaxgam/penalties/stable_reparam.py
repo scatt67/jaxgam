@@ -41,6 +41,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.linalg import blas, lapack
 
+from jaxgam.smooths.source_arithmetic import libm_exp
 from jaxgam.smooths.source_lapack import source_frobenius_norm
 from jaxgam.smooths.source_penalty_coordinates import (
     _source_symmetric_eigen,
@@ -254,7 +255,8 @@ def stable_reparam(
     size = roots[0].shape[0]
     n_sp = len(rho)
     n_terms = len(roots)
-    sp = np.exp(rho)
+    # gam.reparam passes R's exp(lsp): the C library exp, not NumPy's SIMD exp.
+    sp = libm_exp(rho)
     # gdi.c:603-609 -- the fixed term carries weight one.
     spf = np.concatenate([sp, [1.0]]) if fixed_penalty else sp
 
