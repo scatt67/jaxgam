@@ -50,6 +50,7 @@ from jaxgam.formula.operator_prepare import (
     _CheckedSource,
 )
 from jaxgam.penalties.structure import IdentityPenalty
+from jaxgam.smooths.source_arithmetic import libm_exp, libm_log
 
 _MAX_SIGNED_DOWNDATE_RANK = 8
 
@@ -335,10 +336,11 @@ class FrozenScanSystem:
             )
         )
         if not np.all(np.isfinite(log_sp)) or np.any(
-            log_sp > np.log(np.finfo(float).max)
+            log_sp > libm_log(np.finfo(float).max)
         ):
             raise ValueError("Frozen penalties must have finite positive weights.")
-        sp = np.exp(log_sp)
+        # R weights penalties by exp(sp) with the C library (gdi.c get_stableS).
+        sp = libm_exp(log_sp)
         if not np.all(np.isfinite(sp)) or np.any(sp <= 0):
             raise ValueError("Frozen penalties must have finite positive weights.")
         if self.source.fingerprint() != model.source_fingerprint:

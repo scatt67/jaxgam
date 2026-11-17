@@ -41,6 +41,7 @@ from jaxgam.formula.operator_prepare import (
     PreparedOperatorModel,
     _CheckedSource,
 )
+from jaxgam.smooths.source_arithmetic import libm_exp, libm_log
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,7 @@ class FrozenOperatorWorkingState:
             raise MemoryError("Frozen working-state ownership exceeds its budget.")
         theta_values = np.asarray(snapshot.log_theta, dtype=np.float64)
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-            theta = np.exp(theta_values)
+            theta = libm_exp(theta_values)
         if not np.all(np.isfinite(theta_values)) or np.any(
             ~np.isfinite(theta) | (theta <= 0)
         ):
@@ -1019,7 +1020,8 @@ def _reduce_null_scale(
 ) -> float:
     """Source get.null.coef scale: deviance at initialized mean divided by n."""
     snapshot = family.execution_parameter_snapshot()
-    theta = np.exp(np.asarray(snapshot.log_theta, dtype=np.float64))
+    # nb()'s getTheta(TRUE) is the C library's exp of the stored log theta.
+    theta = libm_exp(np.asarray(snapshot.log_theta, dtype=np.float64))
     checked = _checked_fit_source(model, source, reserved, budget)
     deviance = 0.0
     correction = 0.0
@@ -1292,7 +1294,8 @@ def fit_operator_fixed_sp(
             budget=memory_budget_bytes,
         )
         initialization_scans += 1
-    rho = np.log(sp)
+    # Supplied sp enter R's fit as lsp0 = log(sp) (mgcv.r gam.setup), C log.
+    rho = libm_log(sp)
 
     def state(values):
         return FrozenOperatorWorkingState(

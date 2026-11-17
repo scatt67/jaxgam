@@ -25,6 +25,7 @@ from jaxgam.fitting.state import EFSOptimizerDiagnostics
 from jaxgam.inference._core import finish_prediction, predict_core
 from jaxgam.inference.predictor import GAMPredictor
 from jaxgam.jax_utils import to_numpy
+from jaxgam.smooths.source_arithmetic import libm_exp
 
 if TYPE_CHECKING:
     import matplotlib.figure
@@ -618,7 +619,12 @@ class GAMPredictionResult:
             _memory_budget_bytes=control.memory_budget_bytes,
         )
         snapshot = fitted.family.execution_parameter_snapshot()
-        theta = float(np.exp(snapshot.log_theta[0])) if snapshot.log_theta else None
+        # Pinned nb() reports getTheta(TRUE), the C library's exp of its log.
+        theta = (
+            float(libm_exp(np.asarray(snapshot.log_theta[:1]))[0])
+            if snapshot.log_theta
+            else None
+        )
         return cls(
             _predictor=predictor,
             deviance=fitted.deviance,
