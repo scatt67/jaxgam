@@ -6,6 +6,9 @@ Importing this package has global side effects:
 * A persistent compilation cache directory is configured (unless
   ``JAXGAM_NO_COMPILATION_CACHE=1`` or ``JAX_COMPILATION_CACHE_DIR`` is
   already set).
+* On Apple silicon, a ``RuntimeWarning`` when NumPy or SciPy use Apple
+  Accelerate (see ``jaxgam.platform_guard``; silence with
+  ``JAXGAM_ALLOW_ACCELERATE=1``).
 
 These calls are idempotent and follow standard JAX project conventions.
 """
@@ -47,6 +50,12 @@ if not os.environ.get("JAXGAM_NO_COMPILATION_CACHE"):
     # Cache everything, including fast compiles — the small XLA programs
     # (element-wise ops) are cheap to store and add up.
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+
+# Apple silicon: warn once when JAX's CPU LAPACK kernels run on Accelerate
+# (see jaxgam.platform_guard). Silence with JAXGAM_ALLOW_ACCELERATE=1.
+from jaxgam.platform_guard import warn_if_accelerate_lapack  # noqa: E402
+
+warn_if_accelerate_lapack()
 
 from jaxgam.api import GAM  # noqa: E402
 from jaxgam.control import (  # noqa: E402

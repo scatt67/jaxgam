@@ -40,6 +40,7 @@ from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
+from numpy import __config__ as numpy_config
 from scipy import __config__ as scipy_config
 from scipy import linalg
 
@@ -60,14 +61,33 @@ _CBLAS_UPPER = 121
 _LAPACK_INT_MAX = np.iinfo(np.int32).max
 
 
+def _build_uses_accelerate(config: object) -> bool:
+    """Whether a NumPy/SciPy ``__config__`` module was built on Accelerate."""
+    lapack = (
+        getattr(config, "CONFIG", {}).get("Build Dependencies", {}).get("lapack", {})
+    )
+    return str(lapack.get("name", "")).lower() == "accelerate"
+
+
 def scipy_uses_accelerate_lapack() -> bool:
     """Inspect the installed SciPy LAPACK provider, independent of the OS."""
-    lapack = (
-        getattr(scipy_config, "CONFIG", {})
-        .get("Build Dependencies", {})
-        .get("lapack", {})
-    )
-    return lapack.get("name") == "Accelerate"
+    return _build_uses_accelerate(scipy_config)
+
+
+def numpy_uses_accelerate_lapack() -> bool:
+    """Inspect the installed NumPy LAPACK provider, independent of the OS."""
+    return _build_uses_accelerate(numpy_config)
+
+
+def accelerate_lapack_in_process() -> bool:
+    """Whether NumPy or SciPy brings Apple Accelerate's LAPACK into the process.
+
+    JAX's CPU LAPACK kernels take their function pointers from SciPy, and
+    NumPy's linear algebra runs in the same process, so either build exposes
+    the process to Accelerate.  Routing decisions that depend on SciPy's own
+    LAPACK keep using :func:`scipy_uses_accelerate_lapack`.
+    """
+    return scipy_uses_accelerate_lapack() or numpy_uses_accelerate_lapack()
 
 
 @dataclass(frozen=True)
