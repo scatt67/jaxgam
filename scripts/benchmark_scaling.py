@@ -69,8 +69,19 @@ _NB_START_THETA = 1.0
 # routes prepare only univariate cr/cs smooths, so these run on the dense and
 # discrete routes. ``re`` is s(x0) plus a random effect s(g, bs='re') over
 # ``levels`` declared factor levels (dense, discrete and operator routes);
-# ``re-only`` is y ~ s(g, bs='re'), the calibrated operator-EFS shape.
-_MODELS = ("additive", "tensor", "tp", "gp", "shared", "ti", "re", "re-only")
+# ``re-only`` is y ~ s(g, bs='re'), the calibrated operator-EFS shape;
+# ``tp3`` is a three-dimensional thin-plate smooth s(x0, x1, x2).
+_MODELS = (
+    "additive",
+    "tensor",
+    "tp",
+    "tp3",
+    "gp",
+    "shared",
+    "ti",
+    "re",
+    "re-only",
+)
 _COVARIATE_PAIR_MODELS = frozenset({"tensor", "tp", "shared", "ti"})
 # Numerical-stress generators (G11). Their draws come from a separate stream,
 # so every case without stress keeps its input byte for byte.
@@ -397,6 +408,8 @@ def _smooth_variables(case: ScalingCase) -> tuple[str, ...]:
         return ("x0", "x1")
     if case.model == "gp":
         return ("x0",)
+    if case.model == "tp3":
+        return ("x0", "x1", "x2")
     if case.model == "re":
         return ("x0", "g")
     if case.model == "re-only":
@@ -413,6 +426,8 @@ def _formula(case: ScalingCase) -> str:
         return f"y ~ te(x0, x1, k={k}, bs='cr')"
     if case.model == "tp":
         return f"y ~ s(x0, x1, k={k}, bs='tp')"
+    if case.model == "tp3":
+        return f"y ~ s(x0, x1, x2, k={k}, bs='tp')"
     if case.model == "gp":
         return f"y ~ s(x0, k={k}, bs='gp')"
     if case.model == "re":
@@ -440,6 +455,8 @@ def _smoothing_parameter_order(case: ScalingCase) -> list[str]:
         return tensor_margins
     if case.model == "tp":
         return ["s(x0,x1)"]
+    if case.model == "tp3":
+        return ["s(x0,x1,x2)"]
     if case.model == "gp":
         return ["s(x0)"]
     if case.model == "re":
@@ -506,6 +523,10 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
         signal = 0.8 * np.sin(2.0 * np.pi * columns["x0"]) * np.cos(
             np.pi * columns["x1"]
         ) + 0.4 * np.sin(2.0 * np.pi * columns["x0"])
+    elif case.model == "tp3":
+        signal = 0.8 * np.sin(2.0 * np.pi * columns["x0"]) * np.cos(
+            np.pi * columns["x1"]
+        ) + 0.4 * np.sin(2.0 * np.pi * columns["x2"])
     elif case.model == "gp":
         signal = np.sin(2.0 * np.pi * columns["x0"])
     elif case.smooth_count == 1:
@@ -2747,7 +2768,8 @@ def main() -> None:
         default="additive",
         help=(
             "additive cubic smooths, te(x0, x1) cubic tensor, 2-D thin-plate "
-            "(tp), 1-D Gaussian process (gp), s(x0)+te(x0, x1) (shared) or "
+            "(tp), 3-D thin-plate (tp3), 1-D Gaussian process (gp), "
+            "s(x0)+te(x0, x1) (shared) or "
             "s(x0)+s(x1)+ti(x0, x1) (ti); non-additive models use dense or "
             "discrete routes"
         ),

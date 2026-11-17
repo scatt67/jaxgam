@@ -956,3 +956,24 @@ def test_count_tail_cases_fit_and_reach_the_cli(
     assert seen[-1].nb_theta == 500.0
     assert seen[-1].outlier_fraction == 0.001
     capsys.readouterr()
+
+
+def test_three_dimensional_thin_plate_model() -> None:
+    case = _case(60, execution="dense-reml", model="tp3")
+    data = benchmark_scaling._make_data(case)
+
+    assert benchmark_scaling._formula(case) == "y ~ s(x0, x1, x2, k=5, bs='tp')"
+    assert benchmark_scaling._smoothing_parameter_order(case) == ["s(x0,x1,x2)"]
+    assert list(data.columns) == ["x0", "x1", "x2", "y"]
+    assert benchmark_scaling._input_provenance(data, case)["generator"] == (
+        "gaussian_tp3_sine"
+    )
+    with pytest.raises(ValueError, match="model='tp3'"):
+        _case(execution="stream-qr", model="tp3")
+    record = benchmark_scaling.run_setup(case, Path.cwd())
+    assert record["valid"]
+    assert record["model"]["n_penalties"] == 1
+    # mgcv's default order for d=3 is m=3 (2m > d+1); its null space has
+    # C(5, 3) = 10 columns, so k=5 is raised to 11 (10 after centring, plus
+    # the intercept).
+    assert record["model"]["n_coef"] == 11
