@@ -42,6 +42,19 @@ class _RRandom:
                 return value
 
 
+# scientific() (R 4.5.2 format.c) scales by ``tbl``: ``static const long
+# double tbl[] = {1e00, ..., 1e27}`` (KP_MAX 27) where long double is wider
+# than double, else a double table (KP_MAX 22). The literals are unsuffixed C
+# double constants, so tbl[23..27] hold the doubles nearest those powers,
+# widened, not the powers themselves.
+_R_POWERS_OF_TEN = tuple(float(f"1e{power}") for power in range(28))
+_R_LONG_DOUBLE_POWERS_OF_TEN = tuple(np.longdouble(power) for power in _R_POWERS_OF_TEN)
+# machine.c: R_dec_min_exponent = (int) floor(log10(xmin)), DBL_MIN's decimal
+# exponent (-308); at or below it the double branch shifts by 1e303 before
+# dividing by pow(10, kp + 303). It is not DBL_MIN_10_EXP (-307).
+_R_DEC_MIN_EXPONENT = math.floor(math.log10(sys.float_info.min))
+
+
 def _r_sample_without_replacement(
     size: int, seed: int, generator: _RRandom | None = None
 ) -> np.ndarray:
@@ -131,10 +144,11 @@ def _r_number_text(value: Any) -> str:
     # ten and move kp; libm_log10 is the same symbol R calls.
     k_pos = math.floor(float(_libm_log10(np.array([magnitude]))[0])) - digits + 1
     has_extended_precision = np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
+    kp_max = 27 if has_extended_precision else 22
     if has_extended_precision:
         magnitude_precise: float | np.longdouble = np.longdouble(magnitude)
-        if abs(k_pos) <= 27:
-            scale = np.longdouble(f"1e{abs(k_pos)}")
+        if abs(k_pos) <= kp_max:
+            scale = _R_LONG_DOUBLE_POWERS_OF_TEN[abs(k_pos)]
             if k_pos > 0:
                 magnitude_precise /= scale
             elif k_pos < 0:
@@ -146,13 +160,13 @@ def _r_number_text(value: Any) -> str:
         # power-of-ten division.  Directly evaluating 10**k_pos underflows on
         # platforms where longdouble is the same width as double (macOS).
         magnitude_precise = magnitude
-        if abs(k_pos) <= 22:
-            scale = float(f"1e{abs(k_pos)}")
+        if abs(k_pos) <= kp_max:
+            scale = _R_POWERS_OF_TEN[abs(k_pos)]
             if k_pos > 0:
                 magnitude_precise /= scale
             elif k_pos < 0:
                 magnitude_precise *= scale
-        elif k_pos <= sys.float_info.min_10_exp:
+        elif k_pos <= _R_DEC_MIN_EXPONENT:
             magnitude_precise = (magnitude_precise * 1e303) / math.pow(
                 10.0, k_pos + 303
             )
@@ -176,11 +190,19 @@ def _r_number_text(value: Any) -> str:
         k_pos += 1
     k_power = k_pos + digits - 1
 
-    right_cut = min(max(digits - k_power, 0), 27)
-    fuzz = 0.5 / float(np.longdouble(f"1e{right_cut}"))
-    rounding_widens = (
-        0 < k_power <= 27 and magnitude < float(np.longdouble(f"1e{k_power}")) - fuzz
-    )
+    # rgt is bounded by KP_MAX, fuzz = 0.5/(double)tbl[rgt], and
+    # r < tbl[kpower] - fuzz is evaluated in tbl's type.
+    right_cut = min(max(digits - k_power, 0), kp_max)
+    fuzz = 0.5 / _R_POWERS_OF_TEN[right_cut]
+    if has_extended_precision:
+        rounding_widens = 0 < k_power <= kp_max and bool(
+            np.longdouble(magnitude)
+            < _R_LONG_DOUBLE_POWERS_OF_TEN[k_power] - np.longdouble(fuzz)
+        )
+    else:
+        rounding_widens = 0 < k_power <= kp_max and bool(
+            magnitude < _R_POWERS_OF_TEN[k_power] - fuzz
+        )
 
     negative = int(numeric < 0.0)
     left = k_power + 1 - int(rounding_widens)
