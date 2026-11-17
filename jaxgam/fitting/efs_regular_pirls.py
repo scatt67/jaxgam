@@ -79,6 +79,7 @@ class _State:
     status: jax.Array
     used_fisher_fallback: jax.Array
     n_fisher_fallbacks: jax.Array
+    gradient_ratio: jax.Array
 
 
 _STATE_FIELDS = [field.name for field in fields(_State)]
@@ -337,6 +338,7 @@ def _efs_regular_pirls_loop_jit(
         ),
         used_fisher_fallback=jnp.array(False),
         n_fisher_fallbacks=jnp.array(0, dtype=jnp.int32),
+        gradient_ratio=jnp.array(jnp.nan, dtype=X.dtype),
     )
 
     def condition(current: _State) -> jax.Array:
@@ -564,6 +566,10 @@ def _efs_regular_pirls_loop_jit(
             used_fisher_fallback=current.used_fisher_fallback | retry_fisher,
             n_fisher_fallbacks=current.n_fisher_fallbacks
             + retry_fisher.astype(jnp.int32),
+            # max|grad| over gam.fit3's threshold at this iteration (its
+            # convergence test passes at <= 1): the margin by which the test
+            # clears the gradient's rounding floor.
+            gradient_ratio=jnp.max(jnp.abs(gradient)) / gradient_scale,
         )
 
     final = jax.lax.while_loop(condition, body, state)
@@ -645,6 +651,7 @@ def _efs_regular_pirls_loop_jit(
         L_fisher=L_fisher,
         fisher_hat=fisher_hat,
         fisher_edf=fisher_edf,
+        inner_gradient_ratio=final.gradient_ratio,
     )
     return EFSRegularPIRLSResult(
         pirls_result=pirls_result,

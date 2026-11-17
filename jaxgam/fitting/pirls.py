@@ -816,6 +816,10 @@ class PIRLSResult:
         ``F = (X'W_fX + S)^-1 X'W_fX`` and ``tr(F)`` from the pls_fit1 QR
         (``qr.penalized_qr_hat``), formed without normal equations; ``None``
         where the factor is a Cholesky of ``X'W_fX + S``.
+    inner_gradient_ratio : jax.Array or float
+        The pinned ``gam.fit3`` loop's final ``max|grad|`` over its threshold
+        ``epsilon (|pdev| + |scale|)`` (gam.fit3.r 451-453); NaN for loops
+        without that test.
     """
 
     coefficients: jax.Array
@@ -835,6 +839,7 @@ class PIRLSResult:
     inner_status: jax.Array | int = 0
     fisher_hat: jax.Array | None = None
     fisher_edf: jax.Array | None = None
+    inner_gradient_ratio: jax.Array | float = float("nan")
 
 
 # Register as JAX pytree so PIRLSResult can be returned from jax.jit
