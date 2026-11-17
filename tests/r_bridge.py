@@ -338,6 +338,49 @@ class SourceStableReparam:
 
 
 @dataclass(frozen=True)
+class SourceFit3InnerCall:
+    """One pinned ``gam.fit3`` call: its PIRLS iterations and gradient tests.
+
+    ``gradient_ratios`` holds ``max|grad| / (epsilon (|pdev| + |scale|))`` at
+    every gradient test the loop ran (gam.fit3.r 451-453; the test passes at
+    ``<= 1``), in order; the last is the final ratio of a converged call.
+    """
+
+    n_iter: int
+    converged: bool
+    gradient_ratios: np.ndarray
+
+    @property
+    def final_ratio(self) -> float:
+        return float(self.gradient_ratios[-1]) if self.gradient_ratios.size else np.nan
+
+
+@dataclass(frozen=True)
+class SourceFit3Inner:
+    """Every ``gam.fit3`` call of one pinned public ``gam`` fit, in order."""
+
+    calls: tuple[SourceFit3InnerCall, ...]
+    smoothing_params: np.ndarray
+    converged: bool
+
+
+@dataclass(frozen=True)
+class SourceFit3RemlDerivatives:
+    """Pinned ``gam.fit3(deriv=2)`` at ``sp = c(log_sp, <log_scale>)``.
+
+    ``gradient``/``hessian`` are ``REML1``/``REML2`` with respect to every
+    entry of that vector (gam.fit3.r 616-629); ``n_iter``/``converged`` are
+    the evaluation's inner loop.
+    """
+
+    score: float
+    gradient: np.ndarray
+    hessian: np.ndarray
+    n_iter: int
+    converged: bool
+
+
+@dataclass(frozen=True)
 class SourceWorkingModelState:
     """Pinned ``Sl.fitChol`` inputs after ``Sl.initial.repara``."""
 
@@ -2446,6 +2489,198 @@ class RBridge:
             "hessian": float(hessian[-1, -1]),
             "inner_converged": bool(evaluated.rx2("converged")[0]),
         }
+
+    def _record_public_fit3(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        sp: np.ndarray | None,
+        epsilon: float,
+        fit3_wrapper: Any,
+    ) -> Any:
+        """Fit pinned public ``gam`` (REML) with a private ``gam.fit3``.
+
+        ``fit3_wrapper(fit3)`` returns the Python callable installed as
+        ``gam.fit3`` in private clones of ``gam`` -> ``estimate.gam`` ->
+        ``gam.outer`` -> ``newton``; the mgcv namespace is not touched.
+        """
+        from tests.r_ast import clone_function, make_r_callback
+
+        ro = self._ro
+        fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        namespace = ro.r["getNamespace"]("mgcv")
+        private = ro.r["new.env"](parent=namespace)
+        callback = make_r_callback(fit3_wrapper(fit3))
+        names = ("newton", "gam.outer", "estimate.gam")
+        arguments: dict[str, Any] = {
+            "data": self._to_r_dataframe(data),
+            "family": self._get_efs_family_rpy2(family, None),
+            "method": "REML",
+            "drop.unused.levels": False,
+            "control": self._mgcv.gam_control(epsilon=epsilon, maxit=200),
+        }
+        if sp is not None:
+            arguments["sp"] = self._to_r_vector(np.asarray(sp, dtype=np.float64))
+        try:
+            private["gam.fit3"] = callback
+            for name in names:
+                private[name] = clone_function(
+                    self._utils.getFromNamespace(name, "mgcv"), environment=private
+                )
+            r_gam = clone_function(
+                self._utils.getFromNamespace("gam", "mgcv"), environment=private
+            )
+            return r_gam(ro.Formula(formula), **arguments)
+        finally:
+            for name in ("gam.fit3", *names):
+                private[name] = ro.NULL
+
+    def source_gam_fit3_inner_trace(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        *,
+        sp: np.ndarray | None = None,
+        epsilon: float = 1e-11,
+    ) -> SourceFit3Inner:
+        """Iteration counts and gradient-test ratios of every pinned gam.fit3 call.
+
+        A private clone of ``gam.fit3`` reports, just before its convergence
+        gradient test (gam.fit3.r 453), ``max|grad|`` and the threshold
+        ``epsilon (|pdev| + |scale|)``; the test itself runs unchanged.
+        ``sp=None`` estimates the smoothing parameters.
+        """
+        self._require_rpy2()
+        from tests.r_ast import call, find_call_paths, instrument_function, symbol
+
+        ro = self._ro
+        fit3 = self._utils.getFromNamespace("gam.fit3", "mgcv")
+        body = ro.r["body"](fit3)
+
+        def condition_names(path: tuple[int, ...]) -> set[str]:
+            node = body
+            for index in path:
+                node = node[index]
+            holder = ro.r["new.env"](parent=ro.r["baseenv"]())
+            holder[".jaxgam_condition"] = node[1]
+            names = ro.r["eval"](
+                call("quote", call("all.names", symbol(".jaxgam_condition"))),
+                envir=holder,
+            )
+            return set(names)
+
+        # The `if` whose condition is the max|grad| threshold test.
+        paths = [
+            path
+            for path in find_call_paths(
+                fit3, "if", required_symbols=("grad", "pdev", "scale")
+            )
+            if {"grad", "pdev", "scale"} <= condition_names(path)
+        ]
+        if len(paths) != 1:
+            raise RBridgeError("gam.fit3's gradient convergence test was not found")
+        calls: list[dict[str, Any]] = []
+
+        def field(value: Any, name: str) -> Any:
+            return value[list(value.names).index(name)]
+
+        def on_test(grad_value: Any, pdev: Any, scale: Any, control: Any) -> None:
+            gradient = _r_array(grad_value, dtype=np.float64)
+            threshold = float(field(control, "epsilon")[0]) * (
+                abs(float(pdev[0])) + abs(float(scale[0]))
+            )
+            calls[-1]["ratios"].append(float(np.max(np.abs(gradient))) / threshold)
+
+        traced = instrument_function(
+            fit3,
+            path=paths[0],
+            expected_head="if",
+            capture_symbols=("grad", "pdev", "scale", "control"),
+            callback=on_test,
+        )
+
+        def wrapper(_original: Any):
+            def run(**fit_arguments: Any) -> Any:
+                calls.append({"ratios": []})
+                result = traced(**fit_arguments)
+                calls[-1]["iter"] = int(field(result, "iter")[0])
+                calls[-1]["converged"] = bool(field(result, "converged")[0])
+                return result
+
+            return run
+
+        fit = self._record_public_fit3(formula, data, family, sp, epsilon, wrapper)
+        return SourceFit3Inner(
+            calls=tuple(
+                SourceFit3InnerCall(
+                    n_iter=call["iter"],
+                    converged=call["converged"],
+                    gradient_ratios=np.asarray(call["ratios"], dtype=np.float64),
+                )
+                for call in calls
+                if "iter" in call
+            ),
+            smoothing_params=_r_array(fit.rx2("sp"), dtype=np.float64),
+            converged=bool(fit.rx2("converged")[0]),
+        )
+
+    def source_gam_fit3_reml_derivatives(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        family: str,
+        log_sp: np.ndarray,
+        *,
+        log_scale: float | None = None,
+        epsilon: float = 1e-11,
+    ) -> SourceFit3RemlDerivatives:
+        """``gam.fit3``'s own REML value, gradient and Hessian at fixed log sp.
+
+        Newton's first ``gam.fit3`` call of a pinned fixed-sp public fit is
+        recorded (its prepared model matrix, penalty roots, null coefficients,
+        family and control); one fresh call with ``deriv=2`` then evaluates
+        at ``sp = c(log_sp, log_scale)`` (``log_scale`` only for an
+        unknown-scale family, whose newton appends it).
+        """
+        self._require_rpy2()
+        log_sp = np.asarray(log_sp, dtype=np.float64)
+        recorded: list[dict[str, Any]] = []
+        holder: dict[str, Any] = {}
+
+        def wrapper(fit3: Any):
+            holder["fit3"] = fit3
+
+            def run(**fit_arguments: Any) -> Any:
+                if not recorded:
+                    recorded.append(dict(fit_arguments))
+                return fit3(**fit_arguments)
+
+            return run
+
+        self._record_public_fit3(
+            formula, data, family, np.exp(log_sp), epsilon, wrapper
+        )
+        if not recorded:
+            raise RBridgeError("Pinned public fit did not call gam.fit3")
+        first = recorded[0]
+        recorded_sp = _r_array(first["sp"], dtype=np.float64).ravel()
+        point = log_sp if log_scale is None else np.r_[log_sp, log_scale]
+        if recorded_sp.shape != point.shape:
+            raise RBridgeError(
+                f"gam.fit3's sp has {recorded_sp.size} entries, not {point.size}"
+            )
+        evaluated = holder["fit3"](
+            **{**first, "sp": self._to_r_vector(point), "deriv": 2}
+        )
+        return SourceFit3RemlDerivatives(
+            score=float(evaluated.rx2("REML")[0]),
+            gradient=_r_array(evaluated.rx2("REML1"), dtype=np.float64).ravel(),
+            hessian=_r_array(evaluated.rx2("REML2"), dtype=np.float64),
+            n_iter=int(evaluated.rx2("iter")[0]),
+            converged=bool(evaluated.rx2("converged")[0]),
+        )
 
     def public_fixed_sp_fit(
         self,
