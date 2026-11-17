@@ -499,8 +499,12 @@ class GAMPredictionResult:
         sources through ``estimate_iter`` and reports approximate link-scale
         variances with Monte Carlo errors and solver/source diagnostics.
         Unknown-scale families require an externally established scale.
-        Selected calibration checks those rows only; its Monte Carlo error
-        does not bound unselected rows or iterative-solve bias.
+        Selected calibration checks those rows only and does not bound
+        unselected rows or iterative-solve bias. Each selected row's
+        ``probes * estimate / exact`` is chi-square with ``probes`` degrees of
+        freedom; the call raises when its equivalent standard normal deviate
+        exceeds ``max_calibration_standard_errors`` in absolute value (the
+        default 5 is a two-sided level of 5.7e-7 per row).
         """
         from jaxgam.data.source import RowSource
         from jaxgam.execution.operator import FrozenScanSystem, PCGControl
@@ -604,10 +608,12 @@ class GAMPredictionResult:
             control=control,
         ).build()
         calibration = provider.calibrate(calibration_data)
-        if calibration.maximum_standardized_error > max_calibration_standard_errors:
+        if calibration.maximum_absolute_deviate > max_calibration_standard_errors:
             raise RuntimeError(
                 "Bulk Fisher approximation failed selected exact calibration: "
-                f"{calibration.maximum_standardized_error:.3g} standard errors."
+                "chi-square pivot at "
+                f"{calibration.maximum_absolute_deviate:.3g} equivalent standard "
+                "normal deviates."
             )
         return provider, calibration
 

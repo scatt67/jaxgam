@@ -6,6 +6,13 @@ blocks are factored; no global coefficient-square array is formed. Prediction
 rows are evaluated in bounded batches against the retained p-by-probe sketch.
 The reported Monte Carlo error excludes iterative-solve bias, which is
 reported separately and must be controlled independently.
+
+Calibration. Each probe term (x'u)^2 is x'H^-1 x times an independent
+chi-square(1) draw, so with exact solves probes * estimate / exact is
+chi-square with ``probes`` degrees of freedom. A selected row is judged by that
+pivot, mapped to the standard normal deviate with the same tail probability;
+the sample Monte Carlo standard error is not used for the decision, since it
+is small exactly when the estimate is low.
 """
 
 from __future__ import annotations
@@ -17,6 +24,8 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.linalg.lapack import dsyevr, dsyevr_lwork
+from scipy.special import ndtri_exp
+from scipy.stats import chi2
 
 from jaxgam.data.source import RowSource
 from jaxgam.execution.operator import FrozenScanSystem, PCGControl
@@ -72,18 +81,66 @@ class BulkVarianceBatch:
         return value
 
 
+def equivalent_normal_deviates(
+    estimated: np.ndarray, exact: np.ndarray, probes: int
+) -> np.ndarray:
+    """Standard normal deviates of the chi-square calibration pivot.
+
+    ``probes * estimated / exact`` is chi-square with ``probes`` degrees of
+    freedom when the estimate averages ``probes`` independent squared Gaussian
+    projections with variance ``exact``. Each pivot is mapped to the normal
+    deviate with the same tail probability: through the log distribution
+    function below the median and the log survival function above it, so
+    neither tail underflows before the double-precision limit: a tail
+    probability below about 1e-308 (a deviate beyond about 37.5) is reported
+    as an infinite deviate. A zero exact variance gives 0 for a zero estimate
+    and infinity otherwise.
+    """
+    estimated = np.asarray(estimated, dtype=np.float64)
+    exact = np.asarray(exact, dtype=np.float64)
+    if estimated.shape != exact.shape:
+        raise ValueError("Estimated and exact variances must have one shape.")
+    if (
+        isinstance(probes, bool)
+        or not isinstance(probes, numbers.Integral)
+        or probes < 1
+    ):
+        raise ValueError("The calibration pivot needs a positive probe count.")
+    if (
+        not np.all(np.isfinite(estimated))
+        or not np.all(np.isfinite(exact))
+        or np.any(estimated < 0)
+        or np.any(exact < 0)
+    ):
+        raise FloatingPointError("Calibration variances must be finite, nonnegative.")
+    deviates = np.where(estimated == 0, 0.0, np.inf)
+    positive = exact > 0
+    pivot = probes * estimated[positive] / exact[positive]
+    lower = chi2.logcdf(pivot, probes)
+    upper = chi2.logsf(pivot, probes)
+    deviates[positive] = np.where(lower < upper, ndtri_exp(lower), -ndtri_exp(upper))
+    return deviates
+
+
 @dataclass(frozen=True)
 class BulkVarianceCalibration:
-    """Selected exact Fisher checks; these do not bound unselected rows."""
+    """Selected exact Fisher checks; these do not bound unselected rows.
+
+    ``equivalent_deviates`` are each row's chi-square calibration pivot as a
+    standard normal deviate (:func:`equivalent_normal_deviates`), and
+    ``maximum_absolute_deviate`` their largest absolute value; the sample
+    ``monte_carlo_se`` is reported as a diagnostic only.
+    """
 
     exact: np.ndarray
     estimated: np.ndarray
     monte_carlo_se: np.ndarray
-    maximum_standardized_error: float
+    equivalent_deviates: np.ndarray
+    maximum_absolute_deviate: float
     selected_source_scans: int
 
     def __post_init__(self) -> None:
-        for name in ("exact", "estimated", "monte_carlo_se"):
+        for name in ("exact", "estimated", "monte_carlo_se", "equivalent_deviates"):
             value = np.array(getattr(self, name), copy=True)
             value.setflags(write=False)
             object.__setattr__(self, name, value)
@@ -431,18 +488,13 @@ class BulkOperatorVariance:
             control=self.control,
         ).variance(selected)
         estimated, error = self._batch_estimate(selected)
-        residual = np.abs(estimated - exact.variance)
-        standardized = np.divide(
-            residual,
-            error,
-            out=np.where(residual == 0, 0.0, np.inf),
-            where=error > 0,
-        )
+        deviates = equivalent_normal_deviates(estimated, exact.variance, self.probes)
         calibration = BulkVarianceCalibration(
             exact.variance,
             estimated,
             error,
-            float(np.max(standardized, initial=0.0)),
+            deviates,
+            float(np.max(np.abs(deviates), initial=0.0)),
             exact.diagnostics.source_scans,
         )
         self._diagnostics = replace(

@@ -5,6 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import binom, chi2, norm
 
 from jaxgam import GAM, FitControl
 from jaxgam.control import OperatorControl
@@ -14,6 +15,7 @@ from jaxgam.execution.operator_bulk_variance import (
     BulkOperatorVariance,
     BulkVarianceSolveError,
     _penalty_noise,
+    equivalent_normal_deviates,
 )
 from jaxgam.execution.operator_fit import (
     FrozenOperatorWorkingState,
@@ -39,8 +41,8 @@ from jaxgam.penalties.structure import (
 from jaxgam.results import BULK_CALIBRATION_MAX_STANDARD_ERRORS
 from tests.tolerances import STRICT
 
-# Monte Carlo estimates are gated in units of their own standard error, at the
-# public bulk_link_variance default.
+# Monte Carlo estimates are gated by their chi-square pivot as an equivalent
+# standard normal deviate, at the public bulk_link_variance default.
 _MAX_SE = BULK_CALIBRATION_MAX_STANDARD_ERRORS
 # Requested PCG relative tolerance; bitwise 1e-11 (STRICT.rtol / 10 rounds to
 # 1.0000000000000001e-11, so the bitwise-equal STRICT composition is used).
@@ -120,11 +122,16 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
-    assert np.all(
-        np.abs(calibration.estimated - calibration.exact)
-        <= _MAX_SE * calibration.monte_carlo_se
+    np.testing.assert_array_equal(
+        calibration.equivalent_deviates,
+        equivalent_normal_deviates(
+            calibration.estimated, calibration.exact, provider.probes
+        ),
     )
-    assert calibration.maximum_standardized_error <= _MAX_SE
+    assert np.all(np.abs(calibration.equivalent_deviates) <= _MAX_SE)
+    assert calibration.maximum_absolute_deviate == np.max(
+        np.abs(calibration.equivalent_deviates)
+    )
     assert provider.diagnostics.calibration_rows == len(selected)
     assert provider.diagnostics.calibration_source_scans == (
         calibration.selected_source_scans
@@ -151,7 +158,7 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
                 rtol=STRICT.rtol,
                 atol=STRICT.atol,
             )
-            assert held_out_calibration.maximum_standardized_error <= _MAX_SE
+            assert held_out_calibration.maximum_absolute_deviate <= _MAX_SE
             assert not np.array_equal(
                 held_out_calibration.estimated, calibration.estimated
             )
@@ -160,9 +167,14 @@ def test_bulk_fisher_approximation_has_exact_and_pinned_r_calibration(r_bridge, 
     assert sum(len(batch.positions) for batch in batches) == len(frame)
     bulk_variance = np.concatenate([batch.variance for batch in batches])
     bulk_monte_carlo_se = np.concatenate([batch.monte_carlo_se for batch in batches])
+    assert np.all(bulk_monte_carlo_se > 0)
     assert np.all(
-        np.abs(bulk_variance - reference["link_se"] ** 2)
-        <= _MAX_SE * bulk_monte_carlo_se + STRICT.atol
+        np.abs(
+            equivalent_normal_deviates(
+                bulk_variance, reference["link_se"] ** 2, provider.probes
+            )
+        )
+        <= _MAX_SE
     )
     np.testing.assert_allclose(
         np.concatenate([batch.link_se**2 for batch in batches]),
@@ -318,7 +330,7 @@ def test_public_operator_bulk_result_replays_fit_and_reports_approximation(monke
         + provider.diagnostics.training_source_scans
         + provider.diagnostics.calibration_source_scans
     )
-    assert calibration.maximum_standardized_error <= _MAX_SE
+    assert calibration.maximum_absolute_deviate <= _MAX_SE
     with pytest.raises(ValueError, match="at least one row"):
         result.bulk_link_variance(
             source,
@@ -576,3 +588,141 @@ def test_public_tensor_tprs_bulk_variance_uses_source_matched_basis(r_bridge):
         <= _MAX_SE * error + STRICT.atol
     )
     np.testing.assert_array_equal(variance[[0, 2]], variance[0])
+
+
+def _calibration_model():
+    row = np.arange(47)
+    x = np.linspace(0.1, 1.4, len(row))
+    frame = pd.DataFrame(
+        {
+            "y": 1.3 + np.sin(2 * x) + 0.1 * np.cos(row),
+            "x": x,
+            "g": pd.Categorical(np.resize(["a", "b", "c", "d"], len(row))),
+        }
+    )
+    return frame, "y~s(x,bs='cr',k=6)+s(g,bs='re')", np.array([0.7, 1.1])
+
+
+def test_equivalent_normal_deviates_follow_the_chi_square_pivot():
+    """Both tails to the double-precision limit; saturation beyond it; zero
+    exact variance; invalid inputs."""
+    probes = 32
+    lower = np.array([1e-300, 1e-12, 0.5])
+    upper = np.array([1e-12, 1e-300])
+    pivot = np.concatenate([chi2.ppf(lower, probes), chi2.isf(upper, probes)])
+    exact = np.full(len(pivot), 2.0)
+    deviates = equivalent_normal_deviates(pivot * exact / probes, exact, probes)
+    np.testing.assert_allclose(
+        deviates,
+        np.concatenate([norm.ppf(lower), norm.isf(upper)]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    saturated = equivalent_normal_deviates(
+        np.array([0.0, 1e4 * 2.0 / probes]), np.full(2, 2.0), probes
+    )
+    np.testing.assert_array_equal(saturated, [-np.inf, np.inf])
+    np.testing.assert_array_equal(
+        equivalent_normal_deviates(np.array([0.0, 1.0]), np.zeros(2), probes),
+        [0.0, np.inf],
+    )
+    for estimated, reference, count in (
+        (np.ones(2), np.ones(3), probes),
+        (np.ones(2), np.ones(2), 0),
+        (np.array([np.nan, 1.0]), np.ones(2), probes),
+        (np.array([-1.0, 1.0]), np.ones(2), probes),
+    ):
+        with pytest.raises((ValueError, FloatingPointError)):
+            equivalent_normal_deviates(estimated, reference, count)
+
+
+# Seeds for the pivot's sampling test, fixed so the test is deterministic.
+_PIVOT_SEEDS = tuple(range(1000, 1240))
+_PIVOT_PROBES = 8
+_PIVOT_LEVELS = (0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99)
+
+
+@pytest.mark.slow
+def test_calibration_pivot_is_standard_normal_over_seeds():
+    """Over 240 fixed seeds (8 probes each, so the pivot is chi-square with 8
+    degrees of freedom) each level's equivalent deviate has normal
+    quantiles: the count below each normal quantile lies in its two-sided
+    binomial band at a Bonferroni-corrected level of 1e-4 over the rows and
+    levels tested. No call exceeds the default limit."""
+    # The smallest operator model here (three random-effect levels), so the
+    # real probe and solve pipeline runs a few thousand solves quickly.
+    row = np.arange(37)
+    frame = pd.DataFrame(
+        {
+            "y": 1.0 + 0.3 * np.cos(row) + np.resize([-0.4, 0.1, 0.5], len(row)),
+            "g": pd.Categorical(np.resize(["a", "b", "c"], len(row))),
+        }
+    )
+    _source, _fitted, provider = _fisher_provider(
+        frame, "y~s(g,bs='re')", Gaussian(), np.array([1.1]), probes=_PIVOT_PROBES
+    )
+    selected = frame.iloc[[0, 1, 2]].copy()  # one row per level
+    exact = provider.build().calibrate(selected).exact
+    deviates = []
+    for seed in _PIVOT_SEEDS:
+        estimated, _ = (
+            BulkOperatorVariance(
+                provider.system,
+                scale=1.0,
+                memory_budget_bytes=16 * 1024 * 1024,
+                probes=_PIVOT_PROBES,
+                seed=seed,
+                control=provider.control,
+            )
+            .build()
+            ._batch_estimate(selected)
+        )
+        deviates.append(equivalent_normal_deviates(estimated, exact, _PIVOT_PROBES))
+    deviates = np.array(deviates)
+    assert np.max(np.abs(deviates)) <= _MAX_SE
+    seeds = len(_PIVOT_SEEDS)
+    alpha = 1e-4 / (len(_PIVOT_LEVELS) * len(selected))
+    for row in range(len(selected)):
+        for level in _PIVOT_LEVELS:
+            below = int(np.sum(deviates[:, row] < norm.ppf(level)))
+            low = binom.ppf(alpha / 2, seeds, level)
+            high = binom.isf(alpha / 2, seeds, level)
+            assert low <= below <= high, (row, level, below, low, high)
+
+
+def test_biased_bulk_sketch_fails_public_calibration(monkeypatch):
+    """A sketch whose variance is scaled by four is rejected."""
+    frame, formula, sp = _calibration_model()
+    source = DataFrameRowSource(frame, response="y")
+    result = GAM(
+        formula,
+        sp=sp,
+        control=FitControl(
+            execution="operator",
+            linear_solver="pcg",
+            batch_rows=11,
+            operator=OperatorControl(cg_rtol=_PCG_RTOL),
+        ),
+    ).fit(source, result="prediction")
+    selected = frame.iloc[[0, 2, 13, 32, 46]].copy()
+    arguments = {
+        "probes": 32,
+        "seed": 29,
+        "memory_budget_bytes": 16 * 1024 * 1024,
+        "control": PCGControl(rtol=_PCG_RTOL, max_iterations=200),
+        "scale": 1.0,
+    }
+    _provider, honest = result.bulk_link_variance(source, selected, **arguments)
+    assert honest.maximum_absolute_deviate <= _MAX_SE
+    build = BulkOperatorVariance.build
+
+    def biased(self):
+        built = build(self)
+        scaled = 2.0 * built._samples
+        scaled.setflags(write=False)
+        built._samples = scaled
+        return built
+
+    monkeypatch.setattr(BulkOperatorVariance, "build", biased)
+    with pytest.raises(RuntimeError, match="equivalent standard normal deviates"):
+        result.bulk_link_variance(source, selected, **arguments)

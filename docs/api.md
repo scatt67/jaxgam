@@ -292,11 +292,16 @@ Pass the original training source again; its fingerprint, prepared-row
 digest and coefficient count, and the family snapshot, must match the fit.
 Each probe solves the Fisher system once against streamed covariance noise.
 `selected_rows` (at least one and at most `min(256, batch_rows)` rows) are
-compared with exact Fisher solves, and the call raises when any estimate is
-more than
-`max_calibration_standard_errors` (default 5) Monte Carlo standard errors
-from its exact value. The Monte Carlo standard error describes sampling
-variation only. It does not bound iterative-solve bias, which is reported
+compared with exact Fisher solves. Each probe's squared projection is the
+exact variance times an independent chi-square(1) draw, so with exact solves
+`probes * estimate / exact` is chi-square with `probes` degrees of freedom.
+The call converts that pivot to the standard normal deviate with the same tail
+probability (`calibration.equivalent_deviates`) and raises when any absolute
+deviate exceeds `max_calibration_standard_errors` (default 5, a two-sided
+level of 5.7e-7 per row). The sample Monte Carlo standard error
+(`calibration.monte_carlo_se`, and `batch.monte_carlo_se` for predictions) is
+a diagnostic; it is not used for the decision, because it is small exactly when
+the estimate is low. It describes sampling variation only. It does not bound iterative-solve bias, which is reported
 separately through the PCG residuals, and calibration on selected rows is
 not a guarantee for other rows. Unknown-scale families need an explicit
 `scale`. `predict(se_fit=True)` never uses this approximation.
