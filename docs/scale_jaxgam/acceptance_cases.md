@@ -88,14 +88,15 @@ by memory pairs at 1m and 3m.
 Plan question: are penalty storage, compilation and smoothing derivatives
 controlled?
 
-Replacement for m=500: the formula parser overflows Python's recursion limit
-between 450 and 500 additive terms (finding F9). M2 is written at m=450 and is
-blocked until F9 and F11 (discrete compilation time) are decided.
+m=500 parses since `62db460` (F9 fixed). On the discrete working-model route
+M2 stays blocked until F11 is diagnosed: 100 smooths already spent 664 s
+(k=10) and 757 s (k=20) in XLA compilation at n=5000, so 500 smooths would
+compile for hours; those times are its recorded reason.
 
 | ID | model | family/link | n | p / pen. | route, smoothing | record | command |
 |---|---|---|---|---|---|---|---|
 | M1 | additive(100, 10) | Gaussian/identity | 100k | 901 / 100 | discrete-wm, 512 MiB table, 1 GiB fit budget | backend compile s and count (F11); setup construction peak; proposal evaluations. If setup is still rejected, record the required bytes and rerun with a larger table budget | `make benchmark-scaling ARGS="--execution discrete-wm --smooth-count 100 --k 10 --batch-rows 65536 --discrete-table-mib 512 --memory-budget-mib 1024 --n 100000 P"` |
-| M2 | additive(450, 10) | Gaussian/identity | 100k | 4051 / 450 | discrete-wm, 2 GiB table and budget | as M1 (blocked: F9, F11) | `make benchmark-scaling ARGS="--execution discrete-wm --smooth-count 450 --k 10 --batch-rows 65536 --discrete-table-mib 2048 --memory-budget-mib 2048 --n 100000 P"` |
+| M2 | additive(500, 10) | Gaussian/identity | 100k | 4501 / 500 | discrete-wm, 2 GiB table and budget | as M1. **Blocked by F11** (compile time) | `make benchmark-scaling ARGS="--execution discrete-wm --smooth-count 500 --k 10 --batch-rows 65536 --discrete-table-mib 2048 --memory-budget-mib 2048 --n 100000 P"` |
 | M3 | additive(10, 10) | Poisson/log | 100k | 91 / 10 | stream-exact, REML | derivative s; outer iterations; cumulative PIRLS passes; stop status (F10) | `make benchmark-scaling ARGS="--execution stream-exact --family poisson --smooth-count 10 --k 10 --batch-rows 65536 --n 100000 P"` |
 | M4 | additive(100, 10) | Gaussian/identity | 20k | 901 / 100 | dense-reml | Newton iterations; compile; RSS (dense m-penalty reference) | `make benchmark-scaling ARGS="--execution dense-reml --smooth-count 100 --k 10 --n 20000 P"` |
 | M5 | additive(100, 20) | Gaussian/identity | 100k | 1901 / 100 | discrete-wm, 512 MiB table, 1 GiB budget | as M1 at k=20 | `make benchmark-scaling ARGS="--execution discrete-wm --smooth-count 100 --k 20 --batch-rows 65536 --discrete-table-mib 512 --memory-budget-mib 1024 --n 100000 P"` |
@@ -104,7 +105,8 @@ blocked until F9 and F11 (discrete compilation time) are decided.
 
 Plan question: are all distance and kernel intermediates batch bounded?
 The default knot cap (mgcv `max.knots` 2000) applies above 2000 unique rows.
-Input dimension is d=1 (gp) and d=2 (tp); d>=3 is not in the harness (gap G9).
+Input dimension d = 1 (gp), 2 (tp) and 3 (tp3). The training-time row
+batching is also a structural test (P4).
 
 | ID | model | family/link | n | p / pen. | route, smoothing | record | command |
 |---|---|---|---|---|---|---|---|
@@ -112,7 +114,10 @@ Input dimension is d=1 (gp) and d=2 (tp); d>=3 is not in the harness (gap G9).
 | K2 | gp(30) | Gaussian/identity | 100k | 30 / 1 | dense-reml | as K1 | `make benchmark-scaling ARGS="--execution dense-reml --model gp --k 30 --n 100000 P"` |
 | K3 | tp(30) | Gaussian/identity | 1m | 30 / 1 | discrete-wm, 512 MiB table | setup construction peak against compact rows (F8) | `make benchmark-scaling ARGS="--execution discrete-wm --model tp --k 30 --batch-rows 65536 --discrete-table-mib 512 --n 1000000 P"` |
 | K4 | gp(30) | Gaussian/identity | 1m | 30 / 1 | discrete-wm, 128 MiB table | as K3 | `make benchmark-scaling ARGS="--execution discrete-wm --model gp --k 30 --batch-rows 65536 --discrete-table-mib 128 --n 1000000 P"` |
-| K5 | tp(k), gp(k), k = 10 and 30 | Gaussian/identity | 1k to 20k distinct rows | k / 1 | operator, fixed sp | preparation peak bound against distinct rows (F3) | Appendix A, F3 |
+| K5 | tp(10) and gp(10) | Gaussian/identity | 100k and 1m pair | 10 / 1 | operator, fixed sp | preparation peak bound and workspace bound at both n (F3); Krylov iterations | `make benchmark-scaling ARGS="--execution operator --model tp --k 10 --batch-rows 65536 --memory-pair-n 100000 1000000 P"`; repeat with `--model gp` |
+| K6 | tp(30) | Gaussian/identity | 20k | 30 / 1 | operator, fixed sp, 1 GiB budget | preparation bound (537 MB at k=30, over the 512 MiB default: F3 note) | `make benchmark-scaling ARGS="--execution operator --model tp --k 30 --batch-rows 4096 --memory-budget-mib 1024 --n 20000 P"` |
+| K7 | tp3(20) | Gaussian/identity | 100k | 20 / 1 | dense-reml | as K1 in d=3 | `make benchmark-scaling ARGS="--execution dense-reml --model tp3 --k 20 --n 100000 P"` |
+| K8 | tp3(20) | Gaussian/identity | 1m | 20 / 1 | discrete-wm, 512 MiB table | as K3 in d=3 | `make benchmark-scaling ARGS="--execution discrete-wm --model tp3 --k 20 --batch-rows 65536 --discrete-table-mib 512 --n 1000000 P"` |
 
 ### 4. Shared variables and tensors
 
@@ -130,22 +135,28 @@ n-squared and n-by-p allocations?
 ### 5. High-cardinality effects
 
 Plan question: is storage proportional to indices and nonzeros rather than
-one-hot dense arrays? Dense and discrete routes are not used: a dense 1m-level
-system is 8 TB, and the harness has no `re` model (gap G8).
+one-hot dense arrays? The operator routes carry the large cases; dense and
+discrete `re` fits are references at 1,000 levels only (a dense 1m-level
+system is 8 TB). Model `re` is `s(x0, bs='cr', k=6) + s(g, bs='re')`; model
+`re-only` is `s(g, bs='re')`, the calibrated operator-EFS shape.
 
 | ID | model | family/link | n | p / pen. | route, smoothing | record | command |
 |---|---|---|---|---|---|---|---|
-| H1 | `y~s(g,bs='re')`, 2 rows per level | Gaussian/identity | 20k, 200k, 2m | 10k, 100k, 1m / 1 | operator, fixed sp, PCG | peak bound against budget; scans reconciled; Krylov actions; RSS high water | `make benchmark-operator LEVELS=10000 OUTPUT=$RUN/H1`; repeat with `LEVELS=100000` and `LEVELS=1000000` |
-| H2 | `y~0+s(g,bs='re')` | Poisson/log | 8192 (2 per level) | 4096 / 1 | operator EFS | score bound, stop reason, iterations, scans, fit against dense EFS | `make benchmark-operator-efs-calibration ARGS="--regime indexed_poisson --levels 4096 --complete" OUTPUT=$RUN/H2` |
-| H3 | `y~s(x,bs='cr',k=6)+s(g,bs='re')` | Gaussian/identity | 4 rows per level | 1k and 10k levels | operator, fixed sp, paired PCG | actions and verified residuals with and without the coarse preconditioner | `uv run python scripts/benchmark_operator_preconditioner.py --levels 1000 10000 --output-dir $RUN/H3` |
-| H4 | H1 fit at 10k levels | Gaussian/identity | 20k | 10k / 1 | `bulk_link_variance`, 48 probes | probe scans; calibration maximum; false-alarm rate (F6) | no script (gap G5); Appendix A, F6 for the procedure |
+| H1 | re, 2 rows per level | Gaussian/identity | 20k, 200k, 2m | 10k, 100k, 1m / 2 | operator, fixed sp, PCG | peak bound against budget; scans by kind; Krylov iterations; preconditioner bytes; RSS | `make benchmark-scaling ARGS="--execution operator --model re --k 6 --levels 10000 --n 20000 --batch-rows 4096 P"`; repeat with `--levels 100000 --n 200000` and `--levels 1000000 --n 2000000` |
+| H2 | re, 10k levels | Gaussian/identity | 20k and 200k pair | 10k / 2 | operator, fixed sp | workspace-bound plateau and RSS above baseline at fixed p | `make benchmark-scaling ARGS="--execution operator --model re --k 6 --levels 10000 --batch-rows 4096 --memory-pair-n 20000 200000 P"` |
+| H3 | re-only | Poisson/log | 8192 (2 per level) | 4097 / 1 | operator EFS (public default controls) | score bound and method, stop reason, iterations, scans; an `indeterminate_score` stop is recorded as `valid=false` | `make benchmark-scaling ARGS="--execution operator-efs --model re-only --family poisson --levels 4096 --n 8192 --batch-rows 4096 P"` |
+| H4 | `y~0+s(g,bs='re')` | Poisson/log | 8192 (2 per level) | 4096 / 1 | operator EFS at the calibration's tight controls | score bound, stop reason, iterations, scans, fit against dense EFS | `make benchmark-operator-efs-calibration ARGS="--regime indexed_poisson --levels 4096 --complete" OUTPUT=$RUN/H4` |
+| H5 | `y~s(x,bs='cr',k=6)+s(g,bs='re')` | Gaussian/identity | 4 rows per level | 1k and 10k levels | operator, fixed sp, paired PCG | actions and verified residuals with and without the coarse preconditioner | `uv run python scripts/benchmark_operator_preconditioner.py --levels 1000 10000 --output-dir $RUN/H5` |
+| H6 | re (bulk-variance script), 10k levels | Gaussian/identity | 20k | 10k / 2 | `bulk_link_variance`, 48 probes, 100 seeds | per seed: probe solves, scans, PCG residual, calibration ratio and standardized error (F6) | `make benchmark-bulk-variance ARGS="--model re --levels 10000 --rows-per-level 2 --seeds 100 --probes 48 --output $RUN/H6.json"` |
+| H7 | re, 1000 levels | Gaussian/identity | 100k | 1005 / 2 | discrete-wm (`factor_names=("g",)`) | setup construction peak; compact rows; fit scans | `make benchmark-scaling ARGS="--execution discrete-wm --model re --k 6 --levels 1000 --n 100000 --batch-rows 65536 P"` |
+| H8 | re, 1000 levels | Gaussian/identity | 100k | 1005 / 2 | dense-reml (reference: holds n x p) | RSS; Newton iterations | `make benchmark-scaling ARGS="--execution dense-reml --model re --k 6 --levels 1000 --n 100000 P"` |
 
 ### 6. NB count tails
 
 Plan question: is derivative work bounded without losing first and second
-derivative accuracy? The harness's NB generator draws at theta 3 with no
-outliers; outliers and theta near the Poisson limit are covered only by the
-lgamma derivative benchmark (gap G10).
+derivative accuracy? `--outlier-fraction` replaces a fraction of rows by
+counts 1000 + Poisson(1000); `--nb-theta` draws the data near the Poisson
+limit while every fit still estimates theta from 1.0.
 
 | ID | model | family/link | n | p / pen. | route, smoothing | record | command |
 |---|---|---|---|---|---|---|---|
@@ -154,23 +165,36 @@ lgamma derivative benchmark (gap G10).
 | N3 | additive(2, 10) | NB/log, theta estimated | 100k | 19 / 2 | stream-qr, fixed sp | fit scans; workspace | `make benchmark-scaling ARGS="--execution stream-qr --family nb --smooth-count 2 --k 10 --batch-rows 65536 --n 100000 P"` |
 | N4 | additive(2, 10) | NB/log, theta estimated | 100k, then 1m | 19 / 2 | stream-exact, REML | stop status and projected gradient (F2); derivative s | `make benchmark-scaling ARGS="--execution stream-exact --family nb --smooth-count 2 --k 10 --batch-rows 65536 --n 100000 P"`, then `--n 1000000` |
 | N5 | NB lgamma theta derivative kernel | NB | 1k and 1m rows; max count 16 and 4096; one outlier | – | prefix kernel and legacy recurrence | cold and warm s; compiler temp bytes; prefix table bytes | `env -u JAX_COMPILATION_CACHE_DIR uv run python scripts/benchmark_nb_lgamma_derivatives.py --rows 1000 1000000 --max-counts 16 4096 --repeats 5 --outlier` |
+| N6 | additive(2, 10), 1% outliers | NB/log, theta estimated | 100k | 19 / 2 | dense-reml | theta; iterations; derivative accuracy is the dense gates' | `make benchmark-scaling ARGS="--execution dense-reml --family nb --smooth-count 2 --k 10 --outlier-fraction 0.01 --n 100000 P"` |
+| N7 | additive(2, 10), 0.1% outliers | NB/log, theta estimated | 100k | 19 / 2 | stream-exact, REML | derivative s; stop status; theta | `make benchmark-scaling ARGS="--execution stream-exact --family nb --smooth-count 2 --k 10 --outlier-fraction 0.001 --batch-rows 65536 --n 100000 P"` |
+| N8 | additive(2, 10), data theta 1e4 | NB/log, theta estimated | 100k | 19 / 2 | dense-reml | theta estimate near the Poisson limit | `make benchmark-scaling ARGS="--execution dense-reml --family nb --nb-theta 10000 --smooth-count 2 --k 10 --n 100000 P"` |
+| N9 | additive(2, 10), data theta 1e4 | NB/log, theta estimated | 100k | 19 / 2 | stream-exact, REML | stop status and projected gradient; theta | `make benchmark-scaling ARGS="--execution stream-exact --family nb --nb-theta 10000 --smooth-count 2 --k 10 --batch-rows 65536 --n 100000 P"` |
 
 ### 7. Numerical stress
 
 Plan question: do solvers, derivatives, rank decisions and uncertainty remain
-valid? Concurvity has no case or generator yet (gap G11). The open findings
-are rows here; their classification is in the findings table.
+valid? `--stress` (G11) generates concurvity, zero and extreme weights,
+offsets and near-perfect Gaussian fits; weights and offsets on the discrete
+route meet a known parity gap being fixed in PR11, which does not stop the
+case. The open findings are rows here; their classification is in the
+findings table.
 
 | ID | case | route | record | command |
 |---|---|---|---|---|
 | T0 | existing zero/extreme-weight, offset, near-perfect and zero-residual gates | all | pass/fail; pinned R parity only counts in the pinned environment | `make test-local PYTEST_ADDOPTS="tests -k 'zero_weight or offset or near_perfect or nearperfect or exact_fit or zero_residual or nearly_exact' -q"` (acceptance: `make test`) |
-| T1 | F1: Gaussian QR p=1001, 100 smooths | stream-gaussian-qr | preflight bytes; stop status | L7 and Appendix A |
-| T2 | F2: exact streamed NB with estimated theta | stream-exact | stop status; projected gradient | N4 |
-| T3 | F3: operator setup accounting against distinct rows | operator | preparation bound | K5, Appendix A |
+| T1 | F1: Gaussian QR p=1001, 100 smooths | stream-gaussian-qr | preflight bytes; stop status | L7 |
+| T2 | F2: exact streamed NB with estimated theta | stream-exact | stop status; projected gradient | N4, N9 |
+| T3 | F3: operator setup accounting against distinct rows | operator | preparation bound | K5, K6; Appendix A |
 | T4 | F4: dense `te` REML with log-sp spread >= 20 | dense-reml vs pinned R | score and fitted differences; stop status | Appendix A |
 | T5 | F5: `y ~ x + s(x, bs='gp')` converged flag | dense-reml | converged, inner PIRLS status | Appendix A |
-| T6 | F6: bulk calibration false-alarm rate | operator bulk variance | standardized-error distribution over seeds | Appendix A |
+| T6 | F6: bulk calibration ratio and old-rule rate | operator bulk variance | per seed and row: ratio, standardized error; old-rule exceedances | `make benchmark-bulk-variance ARGS="--model test --seeds 1000 --probes 48 --output $RUN/T6.json"`; Appendix A |
 | T7 | F10: exact streamed Poisson, 10 smooths | stream-exact | stop status | M3 |
+| T8 | concurvity, additive(10, 10) | dense-reml; stream-exact | EDF, smoothing parameters, stop status | `make benchmark-scaling ARGS="--execution dense-reml --stress concurvity --smooth-count 10 --k 10 --n 100000 P"`; repeat with `--execution stream-exact --batch-rows 65536` |
+| T9 | zero weights, additive(10, 11) | stream-qr; discrete-wm | scans, workspace, EDF | `make benchmark-scaling ARGS="--execution stream-qr --stress zero-weights --smooth-count 10 --k 11 --batch-rows 65536 --n 100000 P"`; repeat with `--execution discrete-wm` |
+| T10 | extreme weights 1e-4 to 1e4, additive(2, 10) | dense-reml; stream-exact | stop status, EDF, score | `make benchmark-scaling ARGS="--execution dense-reml --stress extreme-weights --smooth-count 2 --k 10 --n 100000 P"`; repeat with `--execution stream-exact --batch-rows 65536` |
+| T11 | offset, additive(2, 10) | Poisson: dense-reml, stream-exact, operator | stop status, EDF | `make benchmark-scaling ARGS="--execution dense-reml --family poisson --stress offset --smooth-count 2 --k 10 --n 100000 P"`; repeat with `--execution stream-exact --batch-rows 65536` and `--execution operator --batch-rows 65536` |
+| T12 | near-perfect Gaussian (noise 1e-6), additive(10, 11) | dense-reml; stream-gaussian-qr | scale, score, stop status | `make benchmark-scaling ARGS="--execution dense-reml --stress near-perfect --smooth-count 10 --k 11 --n 100000 P"`; repeat with `--execution stream-gaussian-qr --batch-rows 65536` |
+| T13 | F12: Poisson with 2% count outliers at n = 400 | dense-reml | stop status (`step failed` at n = 400) | `make benchmark-scaling ARGS="--execution dense-reml --family poisson --outlier-fraction 0.02 --smooth-count 2 --k 5 --n 400 P"` |
 
 ## Harness gaps
 
@@ -195,11 +219,11 @@ statement and branch coverage, every new line covered):
   (`FitControl.memory_budget_bytes` on streamed and discrete fits and setup).
   The defaults rejected M1, M5, K3, K4, M2 and F1 before any fit.
 
-Gap status (G7 onward filled in the second round, one commit each):
+Gap status. The second round filled G3-G11, G15, P4 and P5, one commit each; G2, G12, G13 and G14 are deliberately not filled:
 
 | Gap | What is missing | Proposal |
 |---|---|---|
-| G2 | compiler memory estimates (`compiler_memory_bytes` is always `None`) | per-route hook that lowers the route's main jitted kernel at the case shape and records `memory_analysis()`; ten kernel tests already do this and are the current evidence |
+| G2 | **not filled (decision).** The harness records no compiler memory estimate (`compiler_memory_bytes` is `None`). The evidence remains the kernel tests that compile at bounded shapes and read `memory_analysis()`, in eight files: `tests/test_nb_lgamma_derivatives.py`, `tests/test_execution/test_working_model.py` and `tests/test_fitting/` `test_efs_factor.py`, `test_iterative.py`, `test_nb_stream_reml.py`, `test_nb_theta_stream.py`, `test_operator_family.py`, `test_preconditioners.py` | – |
 | G3 | **filled.** Each child runs with `TMPDIR`, `TMP`, `TEMP` and `SQLITE_TMPDIR` pointing at its own task-owned directory, and a thread polls that directory every 50 ms during setup or fitting; every record (valid or not) carries `temporary_disk` with the peak and final bytes and the sample count. Polling makes the peak a lower bound for very short-lived files. Discrete selector memmaps are covered when they use the default temporary location; an explicit `selector_memmap_directory` is not set by the harness | – |
 | G4 | **filled.** `--execution operator` (fixed sp, PCG; every model, Gaussian or Poisson) and `--execution operator-efs` (calibrated Poisson EFS; model `re-only` = `y ~ s(g, bs='re')`) run in the isolated harness: a setup child that runs `prepare_operator_model` with the fit's own preparation budget (one eighth of it for EFS) and records scans, bytes, preparation peak bound and coefficient layout without expanding penalties to p x p; a fit child with a task-owned cache, compile events, `operator_diagnostics` (scans by kind, Krylov actions and iterations, peak bound, executable temporaries, inner status, gradient norm) and Krylov iterations as the inner count. Fixed-sp results have no score, EDF or Gaussian scale by design, so those fields are recorded as not provided; `predict(se_fit=True)` is not offered on these routes. NB is rejected because the operator fits NB only at fixed theta | – |
 | G5 | **filled.** `scripts/benchmark_bulk_variance.py` (`make benchmark-bulk-variance`) fits one operator model (the bulk-variance test model, or `s(x,bs='cr',k=6)+s(g,bs='re')` with L levels) and calls the public `bulk_link_variance` once per seed with its raise limit out of reach. Per seed and calibration row it records exact variance, estimate, Monte Carlo SE, the current standardized error and the ratio estimate/exact, plus whether the default 5-SE rule would raise, and the provider diagnostics (probe and normal solves, Krylov iterations, every scan count, maximum PCG relative residual, peak bound). The summary gives the old rule's exceedance rate with a Clopper-Pearson interval and Kolmogorov-Smirnov tests of probes x ratio against chi-square(probes), per row over seeds. One bulk pass over the training rows is timed. Task-owned compilation cache | – |
@@ -209,9 +233,9 @@ Gap status (G7 onward filled in the second round, one commit each):
 | G9 | **filled.** `--model tp3`: `y ~ s(x0, x1, x2, k=k, bs='tp')` on three uniform covariates (dense, discrete and operator routes), so kernel cases cover d = 1 (gp), 2 (tp) and 3 (tp3) | – |
 | G10 | **filled.** `--nb-theta` sets the theta NB data are drawn at (default 3; fits still estimate theta from 1.0), so theta near the Poisson limit (for example 1e4) is a case; `--outlier-fraction f` (Poisson or NB) replaces a fraction f of rows, on their own random stream, by counts 1000 + Poisson(1000). Generator name and route contract record both | – |
 | G11 | **filled.** `--stress concurvity` (x1 = x0 + N(0, 0.01^2); additive, two or more smooths), `zero-weights` (10% of rows at weight 0), `extreme-weights` (weights 10^U(-4,4); Gaussian noise scaled by 1/sqrt(w)), `offset` (log exposure, U(0.5, 2)) and `near-perfect` (Gaussian noise s.d. 1e-6). Stress draws use a separate random stream, so unstressed inputs are unchanged; weights and offsets reach dense fits as `fit` arguments and every other route through the row source. On the discrete route weights and offsets meet a known parity gap being fixed in PR11 (the discretization's random stream ignores them); the cases run regardless | – |
-| G12 | device peak memory: the CPU backend exposes no allocator statistics | none on CPU; record as unavailable |
-| G13 | derivative time only on stream-exact | route diagnostics for dense Newton, Gaussian QR and discrete working-model derivative stages |
-| G14 | dense routes expose no inner PIRLS count (see F5) | public inner-iteration diagnostics |
+| G12 | **unavailable on CPU.** The CPU backend exposes no allocator statistics; records say so in `device_peak_memory_status` | – |
+| G13 | **not filled (decision).** Derivative time is recorded only on stream-exact; dense Newton, Gaussian QR and discrete working-model derivative stages need product diagnostics that belong to the dense series | – |
+| G14 | **not filled (decision).** Dense routes expose no inner PIRLS count (see F5); public inner-iteration diagnostics belong to the dense series | – |
 | G15 | **filled.** `scripts/benchmark_manifest.py` (`make benchmark-manifest`) writes one JSON manifest per run directory: `--phase start` before the first case records OS, CPU model and feature flags, logical CPUs, RAM, Python and every installed package version, dtype and JAX x64/backend/devices, NumPy and SciPy BLAS/LAPACK builds, the source-LAPACK provider (scipy-openblas32 version and OpenBLAS config), the thread and cache environment, the checkout commit and whether its tree is clean, load averages and (macOS) sleep assertions; `--phase end` adds the end checkout state, end load and `same_checkout` | – |
 | P4 | **filled for three of the four shapes** (`tests/test_scaling_allocation_guards.py`, 14 cases). n x n Q: the full-Q request is forbidden on dense, discrete working-model, exact streamed REML, frozen Gaussian QR and operator fits at n = 3000. n x p X: the design builder never sees the training rows on exact streamed REML, Gaussian QR and operator fits (n = 5000); the discrete route builds only on its compact frame (about 1000 rows at n = 5000 and 20,000). n x r x d: training-time kernel distances stay at a patched 64-row limit on dense tp and gp, discrete tp, and operator tp and gp (n = 2500), the only larger call being gpE on the 2000-knot table (r x r x d, capped by max.knots, as in mgcv). **m x p x p is not guarded**: host `tracemalloc` peaks at m = 40, p = 361, n = 4000 were 16.9 MB (streamed QR), 15.7 MB (Gaussian QR) and 33.5 MB (exact REML) against 41.7 MB for a stack and 11.6 MB for n x p, so a host-peak bound cannot separate a stack from ordinary working memory, and device buffers are invisible to it. It needs a jaxpr or compiled-memory inspection of the exact-REML adjoint (deferred with G2) | – |
 | P5 | **filled.** `PreparedPreconditioner` reports the coarse correction's retained device bytes and construction bound; `operator_diagnostics` (and so every operator record) carries `preconditioner_retained_bytes` (largest over the fit's frozen systems), `coarse_preconditioner_retained_bytes` and `coarse_preconditioner_construction_bound_bytes`, zero without `use_coarse`. They are reported apart from `peak_bound_bytes`, which already includes them | – |
@@ -267,9 +291,10 @@ corroboration only.
 | Coarse preconditioner accounted separately | operator | `test_preconditioners.py::test_large_diagonal_budget_is_checked_before_transfer_or_factor`, `test_coarse_share_of_storage_is_reported_separately`; `test_operator_fit.py::test_fit_diagnostics_report_the_coarse_preconditioner_separately` | budget preflight; exact byte count of the coarse share; fit diagnostics with and without `use_coarse` | – (P5 filled) |
 
 Across all routes the harness records no compiler memory estimate
-(`compiler_memory_bytes` is always `None`; gap G2). Ten kernel tests already
-read `jax.jit(...).lower(...).compile().memory_analysis()`; the acceptance
-step should cite those, not the harness.
+(`compiler_memory_bytes` is always `None`; gap G2, not filled by decision).
+Kernel tests in eight files read
+`jax.jit(...).lower(...).compile().memory_analysis()` (listed under G2); the
+acceptance step cites those, not the harness.
 
 ## Dry runs (preparation host, not evidence)
 
