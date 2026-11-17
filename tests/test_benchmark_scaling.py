@@ -1076,6 +1076,78 @@ def test_run_case_records_completed_timing_and_honest_diagnostics(
     assert not record["result"]["source_scans"]["available"]
 
 
+def test_compilation_events_count_only_compile_and_cache_durations() -> None:
+    events = benchmark_scaling._CompilationEvents()
+    before = events.snapshot()
+    events("/jax/core/compile/backend_compile_duration", 0.25)
+    events("/jax/core/compile/backend_compile_duration", 0.5)
+    events("/jax/compilation_cache/cache_retrieval_time_sec", 0.125)
+    events("/jax/other/duration", 9.0)
+    middle = events.snapshot()
+    events("/jax/core/compile/jaxpr_trace_duration", 1.0)
+
+    delta = benchmark_scaling._CompilationEvents.delta(before, middle)
+    assert delta == {
+        "/jax/compilation_cache/cache_retrieval_time_sec": {
+            "count": 1,
+            "seconds": 0.125,
+        },
+        "/jax/core/compile/backend_compile_duration": {"count": 2, "seconds": 0.75},
+    }
+    assert benchmark_scaling._backend_compile_seconds(delta) == 0.75
+    later = benchmark_scaling._CompilationEvents.delta(middle, events.snapshot())
+    assert later == {
+        "/jax/core/compile/jaxpr_trace_duration": {"count": 1, "seconds": 1.0}
+    }
+    assert benchmark_scaling._backend_compile_seconds(later) == 0.0
+
+
+def test_run_case_attributes_compilation_to_the_cold_fit_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import jax
+    import jax.numpy as jnp
+
+    data = pd.DataFrame({"x": [0.1, 0.2], "y": [0.0, 1.0]})
+    kernel = jax.jit(lambda values: jnp.cumsum(jnp.sin(values) * 3.0) + 1.0)
+
+    def fit() -> _Result:
+        values = np.asarray(kernel(jnp.arange(7.0)))
+        return _Result(coefficients=values)
+
+    monkeypatch.setattr(benchmark_scaling, "_make_data", lambda _case: data)
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "_build_fit",
+        lambda _case, _data: benchmark_scaling._FitPlan(
+            fit, "y ~ s(x, k=3, bs='cr')", None
+        ),
+    )
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "loaded_source_identity",
+        lambda _module, _root: {
+            "loaded_package": "jaxgam",
+            "loaded_source_sha256": "c" * 64,
+        },
+    )
+    record = benchmark_scaling.run_case(
+        ScalingCase(2, 3, execution="stream", result_mode="prediction", repeats=2),
+        Path.cwd(),
+    )
+
+    timings = record["timings"]
+    cold = timings["cold_fit_compilation"]
+    assert cold["/jax/core/compile/backend_compile_duration"]["count"] >= 1
+    assert timings["cold_fit_backend_compile_s"] > 0
+    assert timings["warm_fit_backend_compile_s"] == [0.0, 0.0]
+    assert all(
+        "/jax/core/compile/backend_compile_duration" not in warm
+        for warm in timings["warm_fit_compilation"]
+    )
+    assert "jax.monitoring" in timings["compilation_status"]
+
+
 @pytest.mark.parametrize(
     "invalid",
     [

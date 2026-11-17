@@ -55,6 +55,16 @@ _FAMILY_EXECUTIONS = (
 # the same start on every route.
 _NB_DATA_THETA = 3.0
 _NB_START_THETA = 1.0
+# Non-additive models fix their covariates. ``tensor`` is te(x0, x1) on cubic
+# margins; ``tp`` a two-dimensional thin-plate smooth; ``gp`` a one-dimensional
+# Gaussian-process smooth; ``shared`` s(x0) beside te(x0, x1) (a shared
+# covariate); ``ti`` two main effects plus their ti() interaction. The streamed
+# routes prepare only univariate cr/cs smooths, so these run on the dense and
+# discrete routes.
+_MODELS = ("additive", "tensor", "tp", "gp", "shared", "ti")
+_COVARIATE_PAIR_MODELS = frozenset({"tensor", "tp", "shared", "ti"})
+# jax.monitoring duration events counted as compilation work.
+_COMPILATION_EVENT_PREFIXES = ("/jax/core/compile/", "/jax/compilation_cache/")
 
 
 def _tolerance_record(tolerance: Any) -> dict[str, float]:
@@ -128,17 +138,18 @@ class ScalingCase:
                 f"family={self.family!r} requires execution 'dense-reml', "
                 "'stream-qr', 'stream-exact', 'discrete', or 'discrete-wm'."
             )
-        if self.model not in {"additive", "tensor"}:
-            raise ValueError("model must be 'additive' or 'tensor'.")
-        if self.model == "tensor" and (
+        if self.model not in _MODELS:
+            raise ValueError(f"model must be one of {', '.join(_MODELS)}.")
+        if self.model != "additive" and (
             self.execution == "efs"
             or self.execution in _STREAM_EXECUTIONS
             or self.smooth_count != 1
         ):
             raise ValueError(
-                "model='tensor' fixes its two covariates and excludes EFS and the "
-                "streamed routes, whose prepared setup has no tensor smooths; "
-                "leave smooth_count at 1."
+                f"model={self.model!r} fixes its covariates and excludes EFS and "
+                "the streamed routes, whose prepared setup supports only "
+                "univariate cr/cs smooths (no tensor or kernel smooths); leave "
+                "smooth_count at 1."
             )
         if self.discretization_m is not None and (
             self.execution not in _DISCRETE_EXECUTIONS
@@ -280,17 +291,31 @@ def _directory_bytes(path: Path | None) -> int | None:
 
 def _smooth_variables(case: ScalingCase) -> tuple[str, ...]:
     """Return stable additive term names, preserving the one-smooth fixture."""
-    if case.model == "tensor":
+    if case.model in _COVARIATE_PAIR_MODELS:
         return ("x0", "x1")
+    if case.model == "gp":
+        return ("x0",)
     if case.smooth_count == 1:
         return ("x",)
     return tuple(f"x{index}" for index in range(case.smooth_count))
 
 
 def _formula(case: ScalingCase) -> str:
-    """Build one ordered additive-CR or tensor formula for every route and child."""
+    """Build one ordered formula of the case's model for every route and child."""
+    k = case.basis_dimension
     if case.model == "tensor":
-        return f"y ~ te(x0, x1, k={case.basis_dimension}, bs='cr')"
+        return f"y ~ te(x0, x1, k={k}, bs='cr')"
+    if case.model == "tp":
+        return f"y ~ s(x0, x1, k={k}, bs='tp')"
+    if case.model == "gp":
+        return f"y ~ s(x0, k={k}, bs='gp')"
+    if case.model == "shared":
+        return f"y ~ s(x0, k={k}, bs='cr') + te(x0, x1, k={k}, bs='cr')"
+    if case.model == "ti":
+        return (
+            f"y ~ s(x0, k={k}, bs='cr') + s(x1, k={k}, bs='cr') "
+            f"+ ti(x0, x1, k={k}, bs='cr')"
+        )
     terms = " + ".join(
         f"s({variable}, k={case.basis_dimension}, bs='cr')"
         for variable in _smooth_variables(case)
@@ -300,8 +325,17 @@ def _formula(case: ScalingCase) -> str:
 
 def _smoothing_parameter_order(case: ScalingCase) -> list[str]:
     """Name the fixed-sp vector order derived from the formula term order."""
+    tensor_margins = ["te(x0,x1):margin x0", "te(x0,x1):margin x1"]
     if case.model == "tensor":
-        return ["te(x0,x1):margin x0", "te(x0,x1):margin x1"]
+        return tensor_margins
+    if case.model == "tp":
+        return ["s(x0,x1)"]
+    if case.model == "gp":
+        return ["s(x0)"]
+    if case.model == "shared":
+        return ["s(x0)", *tensor_margins]
+    if case.model == "ti":
+        return ["s(x0)", "s(x1)", "ti(x0,x1):margin x0", "ti(x0,x1):margin x1"]
     return [f"s({variable})" for variable in _smooth_variables(case)]
 
 
@@ -332,6 +366,13 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
         signal = (
             0.8 * np.sin(2.0 * np.pi * columns["x0"]) * np.cos(np.pi * columns["x1"])
         )
+    elif case.model in {"tp", "shared", "ti"}:
+        # The tensor surface plus a main effect of the shared covariate.
+        signal = 0.8 * np.sin(2.0 * np.pi * columns["x0"]) * np.cos(
+            np.pi * columns["x1"]
+        ) + 0.4 * np.sin(2.0 * np.pi * columns["x0"])
+    elif case.model == "gp":
+        signal = np.sin(2.0 * np.pi * columns["x0"])
     elif case.smooth_count == 1:
         # Preserve the original one-smooth generator byte-for-byte so the
         # c1a3134 dense adapter remains a valid paired baseline.
@@ -368,8 +409,8 @@ def _input_provenance(data: pd.DataFrame, case: ScalingCase) -> dict[str, Any]:
         digest.update(b"\0")
         digest.update(_array_sha256(data[name].to_numpy()).encode())
     family = _effective_family(case)
-    if case.model == "tensor":
-        shape = "tensor_sine"
+    if case.model != "additive":
+        shape = f"{case.model}_sine"
     else:
         shape = "sine" if case.smooth_count == 1 else "additive_sine"
     return {
@@ -495,6 +536,48 @@ def _timed_fit(fit: Callable[[], Any]) -> tuple[Any, float]:
     result = fit()
     jax.block_until_ready(result.coefficients)
     return result, time.perf_counter() - started
+
+
+class _CompilationEvents:
+    """Accumulate jax.monitoring compile and compilation-cache durations.
+
+    The listener sees tracing, MLIR lowering and XLA backend compilation of
+    every jitted computation in this process, plus persistent-cache events.
+    A run with a fresh task-owned cache therefore attributes its cold
+    compilation; host NumPy/SciPy work is never counted here.
+    """
+
+    def __init__(self) -> None:
+        self.events: dict[str, list[float]] = {}
+
+    def __call__(self, event: str, duration_secs: float, **_kwargs: Any) -> None:
+        if event.startswith(_COMPILATION_EVENT_PREFIXES):
+            totals = self.events.setdefault(event, [0, 0.0])
+            totals[0] += 1
+            totals[1] += float(duration_secs)
+
+    def snapshot(self) -> dict[str, tuple[int, float]]:
+        return {name: (int(n), float(s)) for name, (n, s) in self.events.items()}
+
+    @staticmethod
+    def delta(
+        before: dict[str, tuple[int, float]], after: dict[str, tuple[int, float]]
+    ) -> dict[str, dict[str, float | int]]:
+        """Per-event count and seconds recorded between two snapshots."""
+        result: dict[str, dict[str, float | int]] = {}
+        for name, (count, seconds) in sorted(after.items()):
+            base_count, base_seconds = before.get(name, (0, 0.0))
+            if count > base_count:
+                result[name] = {
+                    "count": count - base_count,
+                    "seconds": seconds - base_seconds,
+                }
+        return result
+
+
+def _backend_compile_seconds(delta: dict[str, dict[str, float | int]]) -> float:
+    entry = delta.get("/jax/core/compile/backend_compile_duration")
+    return 0.0 if entry is None else float(entry["seconds"])
 
 
 def _fit_validity(result: Any) -> dict[str, Any]:
@@ -1197,15 +1280,53 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
     loaded_runtime = loaded_source_identity(jaxgam, root)
     data = _make_data(case)
     fit_plan = _build_fit(case, data)
-    fit = fit_plan.run
-    formula = fit_plan.formula
     route = _route_contract(case)
     rss_high_water_before = peak_rss_bytes()
     rss_current_before = current_rss_bytes()
+    compilation = _CompilationEvents()
+    jax.monitoring.register_event_duration_secs_listener(compilation)
+    try:
+        return _run_case_with_compilation(
+            case,
+            root,
+            data=data,
+            fit_plan=fit_plan,
+            route=route,
+            compilation=compilation,
+            loaded_runtime=loaded_runtime,
+            rss_high_water_before=rss_high_water_before,
+            rss_current_before=rss_current_before,
+        )
+    finally:
+        jax.monitoring.unregister_event_duration_listener(compilation)
 
+
+def _run_case_with_compilation(
+    case: ScalingCase,
+    root: Path,
+    *,
+    data: pd.DataFrame,
+    fit_plan: _FitPlan,
+    route: dict[str, Any],
+    compilation: _CompilationEvents,
+    loaded_runtime: dict[str, str],
+    rss_high_water_before: int,
+    rss_current_before: int | None,
+) -> dict[str, Any]:
+    """Body of ``run_case`` with the compilation listener registered."""
+    import jax
+
+    import jaxgam
+
+    fit = fit_plan.run
+    formula = fit_plan.formula
     cold_scan_before = _source_scan_count(fit_plan.source)
     cold_bytes_before = _source_batch_bytes(fit_plan.source)
+    cold_compile_before = compilation.snapshot()
     cold_result, cold_fit_s = _timed_fit(fit)
+    cold_compilation = _CompilationEvents.delta(
+        cold_compile_before, compilation.snapshot()
+    )
     cold_validity = _require_valid_timed_fit(cold_result, label="cold fit")
     cold_scan_delta = _source_scan_delta(fit_plan.source, cold_scan_before)
     cold_bytes_delta = _source_batch_bytes_delta(fit_plan.source, cold_bytes_before)
@@ -1431,13 +1552,18 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
     del cold_result
 
     warm_times: list[float] = []
+    warm_compilation: list[dict[str, dict[str, float | int]]] = []
     warm_validity: list[dict[str, Any]] = []
     warm_scan_deltas: list[int | None] = []
     warm_batch_bytes: list[int | None] = []
     for repeat in range(case.repeats):
         warm_scan_before = _source_scan_count(fit_plan.source)
         warm_bytes_before = _source_batch_bytes(fit_plan.source)
+        warm_compile_before = compilation.snapshot()
         warm_result, elapsed = _timed_fit(fit)
+        warm_compilation.append(
+            _CompilationEvents.delta(warm_compile_before, compilation.snapshot())
+        )
         warm_validity.append(
             _require_valid_timed_fit(warm_result, label=f"warm fit {repeat + 1}")
         )
@@ -1474,6 +1600,18 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
                 "not addable to this fit timing"
             ),
             "cold_compile_and_fit_s": cold_fit_s,
+            "cold_fit_compilation": cold_compilation,
+            "cold_fit_backend_compile_s": _backend_compile_seconds(cold_compilation),
+            "warm_fit_compilation": warm_compilation,
+            "warm_fit_backend_compile_s": [
+                _backend_compile_seconds(delta) for delta in warm_compilation
+            ],
+            "compilation_status": (
+                "jax.monitoring durations inside each synchronized fit call: "
+                "tracing, MLIR lowering, XLA backend compilation and "
+                "persistent-cache events, per event name; overlapping stages "
+                "are not addable and host NumPy/SciPy work is excluded"
+            ),
             "warm_fit_median_s": float(np.median(warm_times)),
             "coefficient_access_s": result_materialization_s,
             "result_finish_s": None,
@@ -1869,9 +2007,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        choices=("additive", "tensor"),
+        choices=_MODELS,
         default="additive",
-        help="additive cubic smooths or one te(x0, x1) cubic tensor",
+        help=(
+            "additive cubic smooths, te(x0, x1) cubic tensor, 2-D thin-plate "
+            "(tp), 1-D Gaussian process (gp), s(x0)+te(x0, x1) (shared) or "
+            "s(x0)+s(x1)+ti(x0, x1) (ti); non-additive models use dense or "
+            "discrete routes"
+        ),
     )
     parser.add_argument(
         "--discretization-m",

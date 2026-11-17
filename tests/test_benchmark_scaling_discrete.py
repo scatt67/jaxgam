@@ -317,3 +317,74 @@ def test_cli_threads_family_model_and_grid_into_the_case(
     benchmark_scaling.main()
     assert seen[-1].model == "tensor"
     assert seen[-1].execution == "dense-reml"
+
+
+_KERNEL_MODELS = ("tp", "gp", "shared", "ti")
+
+
+@pytest.mark.parametrize("model", _KERNEL_MODELS)
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"execution": "stream-qr"},
+        {"execution": "stream-exact"},
+        {"execution": "stream-gaussian-qr"},
+        {"execution": "efs"},
+        {"execution": "discrete", "smooth_count": 2},
+    ],
+)
+def test_kernel_and_shared_models_reject_streamed_efs_and_counts(
+    model: str, kwargs: dict[str, object]
+) -> None:
+    with pytest.raises(ValueError, match=f"model='{model}'"):
+        _case(model=model, **kwargs)
+
+
+def test_kernel_and_shared_models_fix_formula_order_and_inputs() -> None:
+    expected = {
+        "tp": ("y ~ s(x0, x1, k=5, bs='tp')", ["s(x0,x1)"], ["x0", "x1", "y"]),
+        "gp": ("y ~ s(x0, k=5, bs='gp')", ["s(x0)"], ["x0", "y"]),
+        "shared": (
+            "y ~ s(x0, k=5, bs='cr') + te(x0, x1, k=5, bs='cr')",
+            ["s(x0)", "te(x0,x1):margin x0", "te(x0,x1):margin x1"],
+            ["x0", "x1", "y"],
+        ),
+        "ti": (
+            "y ~ s(x0, k=5, bs='cr') + s(x1, k=5, bs='cr') + ti(x0, x1, k=5, bs='cr')",
+            ["s(x0)", "s(x1)", "ti(x0,x1):margin x0", "ti(x0,x1):margin x1"],
+            ["x0", "x1", "y"],
+        ),
+    }
+    for model, (formula, order, columns) in expected.items():
+        dense = _case(execution="dense-reml", model=model)
+        discrete = _case(execution="discrete", model=model)
+        data = benchmark_scaling._make_data(dense)
+        assert benchmark_scaling._formula(dense) == formula
+        assert benchmark_scaling._smoothing_parameter_order(dense) == order
+        assert benchmark_scaling._fixed_smoothing_parameters(discrete) == (
+            [1.0] * len(order)
+        )
+        assert list(data.columns) == columns
+        assert np.all(np.isfinite(data.y))
+        assert benchmark_scaling._input_provenance(data, dense)["generator"] == (
+            f"gaussian_{model}_sine"
+        )
+        # Every route that supports the model fits the same frame.
+        np.testing.assert_array_equal(
+            benchmark_scaling._make_data(discrete).to_numpy(), data.to_numpy()
+        )
+        assert benchmark_scaling._route_contract(discrete)["model"] == model
+    poisson = _case(execution="discrete", model="gp", family="poisson")
+    assert np.all(benchmark_scaling._make_data(poisson).y >= 0)
+
+
+@pytest.mark.parametrize("model", _KERNEL_MODELS)
+def test_kernel_and_shared_model_penalties_match_their_sp_order(model: str) -> None:
+    """The dense setup has one penalty per named fixed smoothing parameter."""
+    case = _case(60, execution="dense-reml", model=model)
+    record = benchmark_scaling.run_setup(case, Path.cwd())
+
+    assert record["formula"] == benchmark_scaling._formula(case)
+    assert record["model"]["n_penalties"] == len(
+        benchmark_scaling._smoothing_parameter_order(case)
+    )
