@@ -70,7 +70,11 @@ from jaxgam.fitting.reml import (
     uses_qr_log_det,
 )
 from jaxgam.fitting.source_pirls import source_pirls, status_message
-from jaxgam.jax_utils import cho_factor
+from jaxgam.fitting.stable_log_det import (
+    criterion_multi_block_inputs,
+    stable_block_roots,
+)
+from jaxgam.jax_utils import StableLogDetTerms, cho_factor
 
 # R's default Newton convergence tolerance (gam.control()$newton$conv.tol).
 # This is ~67x looser than sqrt(eps) ≈ 1.5e-8, matching R's deliberate
@@ -835,6 +839,10 @@ def _gaussian_score_change(
     for indices, projections in zip(
         multi_block_sp_indices, multi_block_proj_S, strict=True
     ):
+        if isinstance(projections, StableLogDetTerms):
+            # Host get_stableS: det(rho_trial) - det(rho_base), each accurate.
+            delta_log_S = delta_log_S + projections.det_change
+            continue
         if projections[0].shape[0] == 0:
             continue
         local_rho = jnp.stack([rho_base[index] for index in indices])
@@ -1161,6 +1169,9 @@ class NewtonOptimizer:
         # and _jit_diff_grad_hess (gradient/Hessian for non-Gaussian).
         # Dynamic args are JAX arrays; static args are Python values that
         # key the JIT cache.
+        # Host get_stableS roots of the multi-penalty blocks (gam.reparam is
+        # called at every evaluation, gam.fit3.r:144), built once here.
+        self._stable_blocks = ()
         if score_provider is not None:
             self._jit_kwargs = {}
         else:
@@ -1200,6 +1211,10 @@ class NewtonOptimizer:
                     else True
                 ),
             }
+            if fd.multi_block_sp_indices:
+                self._stable_blocks = stable_block_roots(
+                    fd.multi_block_sp_indices, fd.multi_block_proj_S
+                )
 
         # Build custom_jvp-based differentiable score for all families.
         # For non-Gaussian: captures d(beta*)/d(rho), d(XtWX)/d(rho),
@@ -1225,11 +1240,38 @@ class NewtonOptimizer:
             kw = self._jit_kwargs
 
             def _grad_hess_fn(params, beta_warm):
-                return _jit_diff_grad_hess(params, beta_warm, **kw)
+                return _jit_diff_grad_hess(
+                    params, beta_warm, **self._with_stable_terms(kw, params, deriv=2)
+                )
 
             self._diff_grad_hess = _grad_hess_fn
         else:
             self._diff_grad_hess = None
+
+    def _stable_terms(
+        self, params: jax.Array, *, deriv: int, base_params: jax.Array | None = None
+    ) -> tuple:
+        """Multi-block log|S|+ inputs at exactly ``params``' smoothing parameters."""
+        fd = self._fd
+        n_lambda = fd.n_penalties
+        base = None if base_params is None else np.asarray(base_params)[:n_lambda]
+        return criterion_multi_block_inputs(
+            fd.multi_block_sp_indices,
+            fd.multi_block_proj_S,
+            np.asarray(params)[:n_lambda],
+            deriv=deriv,
+            blocks=self._stable_blocks,
+            base_log_lambda=base,
+        )
+
+    def _with_stable_terms(self, kwargs: dict, params: jax.Array, *, deriv: int):
+        """``kwargs`` with the host get_stableS terms at ``params``."""
+        if not self._stable_blocks:
+            return kwargs
+        return {
+            **kwargs,
+            "multi_block_proj_S": self._stable_terms(params, deriv=deriv),
+        }
 
     def _source_kwargs(self) -> dict:
         """Source inner-loop arguments shared by eager PIRLS calls."""
@@ -1285,7 +1327,9 @@ class NewtonOptimizer:
         )
 
     def _make_criterion(
-        self, pirls_result: PIRLSResult | _OuterScoreState
+        self,
+        pirls_result: PIRLSResult | _OuterScoreState,
+        params: jax.Array | None = None,
     ) -> _CriterionBase | _JointCriterionBase | _ProviderCriterion:
         """Create the REML criterion object from converged PIRLS.
 
@@ -1294,9 +1338,16 @@ class NewtonOptimizer:
         """
         if self._score_provider is not None:
             return _ProviderCriterion(pirls_result.edf, pirls_result.scale)
+        projections = (
+            self._stable_terms(params, deriv=2)
+            if self._stable_blocks and params is not None
+            else None
+        )
         if self._joint_scale:
-            return JointREMLCriterion(self._fd, pirls_result)
-        return REMLCriterion(self._fd, pirls_result)
+            return JointREMLCriterion(
+                self._fd, pirls_result, multi_block_proj_S=projections
+            )
+        return REMLCriterion(self._fd, pirls_result, multi_block_proj_S=projections)
 
     def _fit_and_score(
         self,
@@ -1322,7 +1373,7 @@ class NewtonOptimizer:
         score, pirls_result = _jit_fit_and_score(
             params,
             beta_init,
-            **self._jit_kwargs,
+            **self._with_stable_terms(self._jit_kwargs, params, deriv=0),
         )
         return pirls_result, score
 
@@ -1394,7 +1445,11 @@ class NewtonOptimizer:
                 self._jit_kwargs["offset"],
                 trial.XtWX,
                 fd.penalty_structure,
-                fd.multi_block_proj_S,
+                (
+                    self._stable_terms(params_trial, deriv=0, base_params=params)
+                    if self._stable_blocks
+                    else fd.multi_block_proj_S
+                ),
                 n_lambda=fd.n_penalties,
                 Mp=fd.total_penalty_null_dim,
                 singleton_sp_indices=fd.singleton_sp_indices,
@@ -1951,7 +2006,7 @@ class NewtonOptimizer:
             else self._initial_beta()
         )
         pirls_result, score = self._fit_and_score(params, beta_start)
-        criterion = self._make_criterion(pirls_result)
+        criterion = self._make_criterion(pirls_result, params)
         grad, hess, score_scale, _ = self._check_convergence(
             criterion,
             params,
@@ -2063,7 +2118,7 @@ class NewtonOptimizer:
             pirls_result = pirls_new
             score = score_new
 
-            criterion = self._make_criterion(pirls_result)
+            criterion = self._make_criterion(pirls_result, params)
 
             grad, hess, score_scale, converged = self._check_convergence(
                 criterion,

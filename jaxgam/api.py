@@ -36,6 +36,7 @@ from jaxgam.fitting.newton import (
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion
 from jaxgam.fitting.source_pirls import source_pirls, status_message
+from jaxgam.fitting.stable_log_det import criterion_multi_block_inputs
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
@@ -1915,7 +1916,16 @@ def _fit_fixed_sp(
     # stubbing score=0.0 — so GAMResults.score is the real REML criterion (R's
     # gcv.ubre). REMLCriterion recomputes EDF/scale internally with the Fisher
     # weighting, identical to the values below.
-    criterion = REMLCriterion(fd, pirls_result)
+    criterion = REMLCriterion(
+        fd,
+        pirls_result,
+        multi_block_proj_S=criterion_multi_block_inputs(
+            fd.multi_block_sp_indices,
+            fd.multi_block_proj_S,
+            np.asarray(log_lambda),
+            deriv=0,
+        ),
+    )
     edf = criterion.edf
     scale = criterion.scale
     score = criterion.score(log_lambda)

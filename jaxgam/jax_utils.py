@@ -18,6 +18,7 @@ from ``jax.scipy.linalg`` / ``jax.numpy.linalg``.
 from __future__ import annotations
 
 import types
+from dataclasses import dataclass
 from typing import overload
 
 import jax
@@ -202,6 +203,45 @@ def build_S_lambda(
     return S_lambda
 
 
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class StableLogDetTerms:
+    """Host ``gam.reparam`` log|S|+ terms of one multi-penalty block at ``rho0``.
+
+    ``det``, ``det1`` and ``det2`` are ``get_stableS``'s log|S|+ and its
+    gradient and Hessian in the block's log smoothing parameters, computed on
+    the host at ``rho0`` (pinned gam.fit3.r:144 calls gam.reparam at every
+    evaluation; REML uses rp$det, rp$det1, rp$det2 at 616-621).  In the
+    criterion they enter as ``det + det1.d + d'det2 d / 2`` with
+    ``d = rho - rho0``: at ``rho0`` its value, ``jax.grad`` and
+    ``jax.hessian`` are exactly det, det1 and det2.  Evaluated at any other
+    rho the term is NaN, so no code can silently use it away from the host's
+    point.  ``det_change`` carries ``det(rho_trial) - det(rho0)`` for the
+    Gaussian score-change comparison (zero otherwise).
+    """
+
+    rho0: jax.Array
+    det: jax.Array
+    det1: jax.Array
+    det2: jax.Array
+    det_change: jax.Array
+
+    def tree_flatten(self):
+        return (self.rho0, self.det, self.det1, self.det2, self.det_change), None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        del aux
+        return cls(*children)
+
+    def log_det(self, rho_block: jax.Array) -> jax.Array:
+        """The quadratic expansion at ``rho_block``; NaN unless it is ``rho0``."""
+        delta = rho_block - self.rho0
+        value = self.det + self.det1 @ delta + 0.5 * delta @ self.det2 @ delta
+        at_point = jnp.all(jax.lax.stop_gradient(delta) == 0.0)
+        return jnp.where(at_point, value, jnp.nan)
+
+
 def block_log_det_S(
     log_lambda: jax.Array,
     singleton_sp_indices: tuple[int, ...],
@@ -238,8 +278,9 @@ def block_log_det_S(
         ``log_lambda`` indices for each multi-penalty block.
     multi_block_ranks : tuple[int, ...]
         Combined penalty rank for each multi-penalty block.
-    multi_block_proj_S : tuple[tuple[jax.Array, ...], ...]
-        Range-space-projected penalty matrices for each multi-penalty block.
+    multi_block_proj_S : tuple[tuple[jax.Array, ...] | StableLogDetTerms, ...]
+        Range-space-projected penalty matrices for each multi-penalty block,
+        or that block's host :class:`StableLogDetTerms` at the current rho.
 
     Returns
     -------
@@ -256,9 +297,13 @@ def block_log_det_S(
             + singleton_eig_constants[i]
         )
 
-    # Multi-penalty blocks: scaled slogdet for well-conditioned derivatives
+    # Multi-penalty blocks: host get_stableS terms when supplied, otherwise
+    # the scaled slogdet in the fixed range basis.
     for i, sp_indices in enumerate(multi_block_sp_indices):
         rho_block = jnp.stack([log_lambda[j] for j in sp_indices])
+        if isinstance(multi_block_proj_S[i], StableLogDetTerms):
+            log_det = log_det + multi_block_proj_S[i].log_det(rho_block)
+            continue
         rho_max = jnp.max(rho_block)
         S_adj = jnp.zeros_like(multi_block_proj_S[i][0])
         for j, S_j_proj in enumerate(multi_block_proj_S[i]):

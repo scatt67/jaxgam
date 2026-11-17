@@ -784,7 +784,13 @@ class _CriterionBase(ABC):
         and working weights.
     """
 
-    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
+    def __init__(
+        self,
+        fd: FittingData,
+        pirls_result: PIRLSResult,
+        *,
+        multi_block_proj_S: tuple | None = None,
+    ) -> None:
         # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
         # For standard families Fisher = Newton; for extended families
         # (NB) the Fisher XtWX/L are recomputed post-convergence.
@@ -817,7 +823,11 @@ class _CriterionBase(ABC):
         self._singleton_eig_constants = fd.singleton_eig_constants
         self._multi_block_sp_indices = fd.multi_block_sp_indices
         self._multi_block_ranks = fd.multi_block_ranks
-        self._multi_block_proj_S = fd.multi_block_proj_S
+        # Host get_stableS terms at the evaluation point when supplied (see
+        # jaxgam.fitting.stable_log_det); otherwise the fixed-basis projections.
+        self._multi_block_proj_S = (
+            fd.multi_block_proj_S if multi_block_proj_S is None else multi_block_proj_S
+        )
 
     def _kwargs(self) -> dict[str, Any]:
         """Build keyword arguments for the JIT'd criterion function."""
@@ -925,7 +935,13 @@ class _JointCriterionBase(ABC):
         Converged PIRLS output.
     """
 
-    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
+    def __init__(
+        self,
+        fd: FittingData,
+        pirls_result: PIRLSResult,
+        *,
+        multi_block_proj_S: tuple | None = None,
+    ) -> None:
         # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
         self.edf = fisher_edf(pirls_result)
         # Fletcher scale used only as initial log_phi estimate
@@ -950,7 +966,11 @@ class _JointCriterionBase(ABC):
         self._singleton_eig_constants = fd.singleton_eig_constants
         self._multi_block_sp_indices = fd.multi_block_sp_indices
         self._multi_block_ranks = fd.multi_block_ranks
-        self._multi_block_proj_S = fd.multi_block_proj_S
+        # Host get_stableS terms at the evaluation point when supplied (see
+        # jaxgam.fitting.stable_log_det); otherwise the fixed-basis projections.
+        self._multi_block_proj_S = (
+            fd.multi_block_proj_S if multi_block_proj_S is None else multi_block_proj_S
+        )
         self._max_y = fd.max_y
 
     def _kwargs(self) -> dict[str, Any]:
