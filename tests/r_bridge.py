@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from jaxgam.formula.terms import SmoothSpec
+from tests.tolerances import STRICT
 
 _REQUIRED_R_VERSION = "4.5.2"
 _REQUIRED_MGCV_VERSION = "1.9.3"
@@ -794,12 +795,57 @@ class RBridge:
         )
         public_factor = fit.rx2("rV")
         covariance = matrix_product(public_factor, self._base.t(public_factor))
+        # gam.fit3's fitting coordinates: rp <- gam.reparam(UrS, sp),
+        # T <- U1 %*% blockdiag(Qs, I), rS[[i]] <- rbind(rp$rS[[i]], 0) and
+        # Eb <- Eb %*% T, each formed with R's own operations.
+        reparam = self._call_internal(
+            "gam.reparam",
+            projected_roots,
+            self._base.log(self._to_r_vector(smoothing)),
+            0,
+        )
+        qs = _r_array(reparam.rx2("Qs"), dtype=np.float64)
+        block = np.eye(width)
+        block[: qs.shape[0], : qs.shape[1]] = qs
+        fitting_transform = matrix_product(transform, self._to_r_matrix(block))
+        roots_in_fit = [
+            np.vstack(
+                (
+                    _r_array(root, dtype=np.float64),
+                    np.zeros((null_width, int(self._base.ncol(root)[0]))),
+                )
+            )
+            for root in reparam.rx2("rS")
+        ]
+        balanced = matrix_product(penalty_space.rx2("E"), fitting_transform)
+        # gdi1 zeroes the rows of rV for the coordinates it drops; gam.fit3
+        # returns T %*% rV, so t(T) %*% rV recovers them to rounding.
+        fitting_factor = _r_array(
+            matrix_product(self._base.t(fitting_transform), public_factor),
+            dtype=np.float64,
+        )
+        # Dropped rows are rounding-level against the largest row; STRICT's
+        # relative precision separates them from every retained row.
+        row_norms = np.sqrt(np.sum(fitting_factor**2, axis=1))
+        drop = np.flatnonzero(row_norms <= STRICT.rtol * float(np.max(row_norms)))
         return {
             "X": _r_array(design, dtype=np.float64),
             "S": [_r_array(penalty, dtype=np.float64) for penalty in setup.rx2("S")],
             "coefficients": _r_array(fit.rx2("coefficients"), dtype=np.float64),
             "covariance": _r_array(covariance, dtype=np.float64),
             "score": float(fit.rx2("REML")[0]),
+            "fitted_values": _r_array(fit.rx2("fitted.values"), dtype=np.float64),
+            "deviance": float(_r_array(fit.rx2("deviance"), dtype=np.float64)[0]),
+            # trA is gdi1's influence trace (the EDF); with the default
+            # Fletcher estimator and Gaussian dvar = 0, scale.est is
+            # Pearson / (n - trA).
+            "edf": float(_r_array(fit.rx2("trA"), dtype=np.float64)[0]),
+            "scale": float(_r_array(fit.rx2("scale.est"), dtype=np.float64)[0]),
+            "transform": _r_array(fitting_transform, dtype=np.float64),
+            "penalty_space": _r_array(transform, dtype=np.float64),
+            "balanced_root": _r_array(balanced, dtype=np.float64),
+            "fitting_roots": roots_in_fit,
+            "drop": drop.astype(np.int64),
         }
 
     def source_gaussian_fixed_sp_fit(
