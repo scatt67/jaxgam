@@ -14,6 +14,7 @@ from jaxgam.data.source_tokens import (
     r_sample_knot_rows,
     r_uniquecombs_ordered,
 )
+from tests.test_data.test_r_number_format import _label_stress_values, _model_labels
 
 # Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
 pytestmark = pytest.mark.platform_sensitive
@@ -157,6 +158,12 @@ def test_number_labels_match_pinned_r_paste0(r_bridge):
     expected = r_bridge.paste0_number_labels(values)
     assert _r_number_texts(values) == expected
     assert [_r_number_text(float(value)) for value in values] == expected
+
+
+def test_vectorized_labels_equal_the_exact_model_on_this_platform():
+    """Same exact-model check as the scalar port's, at this long-double width."""
+    values = _label_stress_values()
+    assert _r_number_texts(values) == _model_labels(values)
 
 
 def test_batched_row_labels_equal_the_per_row_labels():

@@ -238,9 +238,6 @@ def _r_number_text(value: Any) -> str:
     return f"{mantissa}e{exponent_value:+0{exponent_width + 1}d}"
 
 
-_FUZZ_POWERS = tuple(float(np.longdouble(f"1e{power}")) for power in range(28))
-
-
 def _r_number_texts(values: np.ndarray) -> list[str]:
     """Vectorized :func:`_r_number_text` for a float64 array.
 
@@ -263,13 +260,13 @@ def _r_number_texts(values: np.ndarray) -> list[str]:
     # log10 ufunc can dispatch to SIMD maths that differ by an ulp.
     k_pos = np.floor(_libm_log10(magnitude)).astype(np.int64) - digits + 1
     has_extended_precision = np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
+    kp_max = 27 if has_extended_precision else 22
     if has_extended_precision:
         precise = magnitude.astype(np.longdouble)
-        scales = np.array(
-            [np.longdouble(f"1e{power}") for power in range(28)], dtype=np.longdouble
-        )
-        small = np.abs(k_pos) <= 27
-        scale = scales[np.minimum(np.abs(k_pos), 27)]
+        # R's tbl: the double constants 1e0..1e27 widened (not exact powers).
+        scales = np.array(_R_LONG_DOUBLE_POWERS_OF_TEN, dtype=np.longdouble)
+        small = np.abs(k_pos) <= kp_max
+        scale = scales[np.minimum(np.abs(k_pos), kp_max)]
         down, up = small & (k_pos > 0), small & (k_pos < 0)
         precise[down] = precise[down] / scale[down]
         precise[up] = precise[up] * scale[up]
@@ -282,9 +279,9 @@ def _r_number_texts(values: np.ndarray) -> list[str]:
         digit_floor = np.longdouble("1e14")
     else:
         precise = magnitude.copy()
-        scales_double = np.array([float(f"1e{power}") for power in range(23)])
-        small = np.abs(k_pos) <= 22
-        scale_double = scales_double[np.minimum(np.abs(k_pos), 22)]
+        scales_double = np.array(_R_POWERS_OF_TEN[: kp_max + 1])
+        small = np.abs(k_pos) <= kp_max
+        scale_double = scales_double[np.minimum(np.abs(k_pos), kp_max)]
         down, up = small & (k_pos > 0), small & (k_pos < 0)
         precise[down] = precise[down] / scale_double[down]
         precise[up] = precise[up] * scale_double[up]
@@ -292,7 +289,7 @@ def _r_number_texts(values: np.ndarray) -> list[str]:
         # per distinct exponent, so no SIMD power loop is involved.
         for power in np.unique(k_pos[~small]).tolist():
             rows = k_pos == power
-            if power <= sys.float_info.min_10_exp:
+            if power <= _R_DEC_MIN_EXPONENT:
                 precise[rows] = (precise[rows] * 1e303) / math.pow(10.0, power + 303)
             else:
                 precise[rows] = precise[rows] / math.pow(10.0, power)
@@ -311,14 +308,20 @@ def _r_number_texts(values: np.ndarray) -> list[str]:
     n_significant[no_digits] = 1
     k_pos = k_pos + no_digits
     k_power = k_pos + digits - 1
-    fuzz_powers = np.array(_FUZZ_POWERS)
-    right_cut = np.clip(digits - k_power, 0, 27)
-    fuzz = 0.5 / fuzz_powers[right_cut]
-    rounding_widens = (
-        (k_power > 0)
-        & (k_power <= 27)
-        & (magnitude < fuzz_powers[np.clip(k_power, 0, 27)] - fuzz)
-    )
+    # fuzz = 0.5/(double)tbl[rgt] with rgt bounded by KP_MAX, and
+    # r < tbl[kpower] - fuzz in tbl's type, as the scalar port does.
+    powers = np.array(_R_POWERS_OF_TEN)
+    right_cut = np.clip(digits - k_power, 0, kp_max)
+    fuzz = 0.5 / powers[right_cut]
+    table_power = np.clip(k_power, 0, kp_max)
+    if has_extended_precision:
+        below = magnitude.astype(np.longdouble) < (
+            np.array(_R_LONG_DOUBLE_POWERS_OF_TEN, dtype=np.longdouble)[table_power]
+            - fuzz.astype(np.longdouble)
+        )
+    else:
+        below = magnitude < powers[table_power] - fuzz
+    rounding_widens = (k_power > 0) & (k_power <= kp_max) & below
     negative = (numeric < 0.0).astype(np.int64)
     left = k_power + 1 - rounding_widens
     signed_left = np.where(left < 0, 1 + negative, negative + np.maximum(left, 1))
