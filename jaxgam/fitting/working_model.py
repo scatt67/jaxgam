@@ -166,6 +166,15 @@ class WorkingModelCriterionMetadata:
     multi_block_ranks: tuple[int, ...]
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...]
     multi_block_roots: tuple[tuple[jax.Array, ...], ...]
+    # ``penalties`` stacked by block shape; kernels loop over these stacks.
+    # Built from ``penalties`` when not supplied.
+    stacked: penalty_ops.StackedPenaltyStructure | None = None
+
+    def __post_init__(self):
+        if self.stacked is None:
+            object.__setattr__(
+                self, "stacked", penalty_ops.stack_penalty_structure(self.penalties)
+            )
 
     @classmethod
     def from_structure(
@@ -239,8 +248,9 @@ class WorkingModelCriterionMetadata:
                         for root in determinant_block.roots
                     )
                 )
+        penalties = penalty_ops.JaxPenaltyStructure(structure.n_coef, tuple(blocks))
         return cls(
-            penalty_ops.JaxPenaltyStructure(structure.n_coef, tuple(blocks)),
+            penalties,
             n_obs,
             null_dimension,
             tuple(singleton_indices),
@@ -250,6 +260,7 @@ class WorkingModelCriterionMetadata:
             tuple(multi_ranks),
             tuple(multi_projected),
             tuple(multi_roots),
+            jax.device_put(penalty_ops.stack_penalty_structure(penalties), device),
         )
 
     def tree_flatten(self):
@@ -258,6 +269,7 @@ class WorkingModelCriterionMetadata:
             self.singleton_eig_constants,
             self.multi_block_proj_S,
             self.multi_block_roots,
+            self.stacked,
         ), (
             self.n_obs,
             self.null_dimension,
@@ -277,7 +289,7 @@ class WorkingModelCriterionMetadata:
             multi_indices,
             multi_ranks,
         ) = aux
-        penalties, singleton_constants, multi_penalties, roots = children
+        penalties, singleton_constants, multi_penalties, roots, stacked = children
         return cls(
             penalties,
             n_obs,
@@ -289,6 +301,7 @@ class WorkingModelCriterionMetadata:
             multi_ranks,
             multi_penalties,
             roots,
+            stacked,
         )
 
 
@@ -366,31 +379,91 @@ def _sl_newton_step(
     )
 
 
+def _transform_block_rows(matrix, penalties):
+    """Replace each block's row slab by ``C.T @ rows``; blocks are disjoint."""
+    width = matrix.shape[1]
+    for group in penalties.groups:
+
+        def body(result, item, size=group.size):
+            C, start = item
+            rows = jax.lax.dynamic_slice(result, (start, 0), (size, width))
+            return jax.lax.dynamic_update_slice(result, C.T @ rows, (start, 0)), None
+
+        matrix, _ = jax.lax.scan(
+            body, matrix, (group.transforms, group.member_starts())
+        )
+    return matrix
+
+
+def _transform_block_columns(matrix, penalties):
+    """Replace each block's column slab by ``columns @ C``; blocks are disjoint."""
+    height = matrix.shape[0]
+    for group in penalties.groups:
+
+        def body(result, item, size=group.size):
+            C, start = item
+            columns = jax.lax.dynamic_slice(result, (0, start), (height, size))
+            return (
+                jax.lax.dynamic_update_slice(result, columns @ C, (0, start)),
+                None,
+            )
+
+        matrix, _ = jax.lax.scan(
+            body, matrix, (group.transforms, group.member_starts())
+        )
+    return matrix
+
+
 def _initial_working_gram(gram, penalties):
-    """Sl.initial.repara's initial row/column block transformation of X'WX."""
-    transformed = gram
-    for block in penalties.blocks:
-        C = block.transform.values
-        transformed = transformed.at[block.start : block.stop, :].set(
-            C.T @ transformed[block.start : block.stop, :]
-        )
-        transformed = transformed.at[:, block.start : block.stop].set(
-            transformed[:, block.start : block.stop] @ C
-        )
-    return transformed
+    """Sl.initial.repara's initial row/column block transformation of X'WX.
+
+    The source transforms block by block, rows then columns, so the block
+    pair (I, J) is formed as ``(C_I' G_IJ) C_J`` when I comes first (or
+    I = J) and as ``C_I' (G_IJ C_J)`` when J comes first. Both orders are
+    formed here with one stacked pass per group and the source's order is
+    selected per pair; each slab product is the source's own product.
+    """
+    penalties = penalty_ops.as_stacked(penalties)
+    rows_first = _transform_block_columns(
+        _transform_block_rows(gram, penalties), penalties
+    )
+    columns_first = _transform_block_rows(
+        _transform_block_columns(gram, penalties), penalties
+    )
+    owner = jnp.asarray(penalties.block_owner())
+    later_row = (owner[:, None] > owner[None, :]) & (owner[None, :] >= 0)
+    return jnp.where(later_row, columns_first, rows_first)
 
 
 def _initial_working_rhs(rhs, penalties):
-    """Sl.initial.repara's initial block transformation of X'Wz."""
+    """Sl.initial.repara's initial block transformation of X'Wz.
+
+    Blocks are disjoint and each reads only its own slab, so one traced
+    loop per block shape replaces the per-block loop.
+    """
+    penalties = penalty_ops.as_stacked(penalties)
     adjusted = rhs
-    for block in penalties.blocks:
-        adjusted = adjusted.at[block.start : block.stop].set(
-            block.transform.values.T @ adjusted[block.start : block.stop]
+    for group in penalties.groups:
+
+        def body(adjusted, item, size=group.size):
+            C, start = item
+            local = jax.lax.dynamic_slice(rhs, (start,), (size,))
+            return jax.lax.dynamic_update_slice(adjusted, C.T @ local, (start,)), None
+
+        adjusted, _ = jax.lax.scan(
+            body, adjusted, (group.transforms, group.member_starts())
         )
     return adjusted
 
 
 def _original_working_coefficients(beta, penalties):
+    """Map working coefficients back to public coordinates, block by block.
+
+    This linear loop stays unrolled over per-block transforms: XLA rounds a
+    small matrix-vector product differently inside a traced loop body, and
+    the back-transformed coefficients feed bgam.fitd's halving decisions,
+    whose reviewed tie-replay counts were measured on this arithmetic.
+    """
     result = beta
     for block in penalties.blocks:
         result = result.at[block.start : block.stop].set(
@@ -440,6 +513,8 @@ def _source_ift_chol(
     coefficient penalties never acquire a smoothing-parameter stack of
     global square matrices. The expanded source contractions deliberately
     preserve its operation order rather than differentiating yy-beta'f.
+    Its loops are linear in the smooth count and stay unrolled, for the
+    rounding reason given in :func:`_original_working_coefficients`.
     """
     count = penalties.n_penalties
     D = jnp.zeros((penalties.n_coef, count), dtype=beta.dtype)
@@ -464,7 +539,7 @@ def _source_ift_chol(
 
 def _source_hessian_determinant_derivatives(
     inverse: jax.Array,
-    penalties: penalty_ops.JaxPenaltyStructure,
+    penalties: penalty_ops.JaxPenaltyStructure | penalty_ops.StackedPenaltyStructure,
     rho: jax.Array,
     smoothing: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array]:
@@ -472,34 +547,57 @@ def _source_hessian_determinant_derivatives(
 
     Each SPP owns only local rows of the inverse. Pair products select the
     other term's columns; there is no global square array per sp pair.
+    Terms are stacked by block shape: one ``lax.scan`` per shape group over
+    left terms nests one per group over right terms, so the graph does not
+    grow with the number of smooths. Every pair is formed by the same
+    operations as before and writes its own Hessian entry once.
     """
+    penalties = penalty_ops.as_stacked(penalties)
+    width = inverse.shape[1]
     first = jnp.zeros_like(rho)
     second = jnp.zeros((rho.size, rho.size), dtype=inverse.dtype)
-    for left in penalties.blocks:
-        left_rows = inverse[left.start : left.stop, :]
-        for left_sp, left_component in zip(
-            left.sp_indices, left.penalties, strict=True
-        ):
-            left_S = penalty_ops._smoothing(
-                rho, smoothing, left_sp
-            ) * penalty_ops._dense_local(left_component)
+    groups = [group for group in penalties.groups if group.count]
+    for left in groups:
+
+        def left_term(carry, item, left_size=left.size):
+            first, second = carry
+            left_component, left_start, left_sp = item
+            left_rows = jax.lax.dynamic_slice(
+                inverse, (left_start, 0), (left_size, width)
+            )
+            left_S = penalty_ops._smoothing(rho, smoothing, left_sp) * left_component
             left_product = left_S @ left_rows
             first = first.at[left_sp].add(
-                jnp.trace(left_product[:, left.start : left.stop])
+                jnp.trace(
+                    jax.lax.dynamic_slice(
+                        left_product, (0, left_start), (left_size, left_size)
+                    )
+                )
             )
-            for right in penalties.blocks:
-                right_rows = inverse[right.start : right.stop, left.start : left.stop]
-                for right_sp, right_component in zip(
-                    right.sp_indices, right.penalties, strict=True
-                ):
-                    right_S = penalty_ops._smoothing(
-                        rho, smoothing, right_sp
-                    ) * penalty_ops._dense_local(right_component)
+            for right in groups:
+
+                def right_term(second, item, right_size=right.size):
+                    right_component, right_start, right_sp = item
+                    right_rows = jax.lax.dynamic_slice(
+                        inverse, (right_start, left_start), (right_size, left_size)
+                    )
+                    right_S = (
+                        penalty_ops._smoothing(rho, smoothing, right_sp)
+                        * right_component
+                    )
                     right_product = right_S @ right_rows
                     value = -jnp.sum(
-                        left_product[:, right.start : right.stop].T * right_product
+                        jax.lax.dynamic_slice(
+                            left_product, (0, right_start), (left_size, right_size)
+                        ).T
+                        * right_product
                     )
-                    second = second.at[left_sp, right_sp].add(value)
+                    return second.at[left_sp, right_sp].add(value), None
+
+                second, _ = jax.lax.scan(right_term, second, right.terms())
+            return (first, second), None
+
+        (first, second), _ = jax.lax.scan(left_term, (first, second), left.terms())
     second = second + jnp.diag(first)
     return first, second
 
@@ -587,19 +685,28 @@ def _source_add_penalties(penalties, gram, rho, smoothing=None):
 
     mgcv_madi updates ``A[ind, ind]`` component by component; summing the
     components first rounds differently once one smoothing parameter is
-    very large.
+    very large. Blocks are disjoint; one traced loop runs per block shape.
     """
+    penalties = penalty_ops.as_stacked(penalties)
     result = gram
-    for block in penalties.blocks:
-        for sp, component in zip(block.sp_indices, block.penalties, strict=True):
-            local = result[block.start : block.stop, block.start : block.stop]
-            product = _source_rounded(
-                penalty_ops._smoothing(rho, smoothing, sp)
-                * penalty_ops._dense_local(component)
-            )
-            result = result.at[block.start : block.stop, block.start : block.stop].set(
-                _source_rounded(local + product)
-            )
+    for group in penalties.groups:
+
+        def block(result, item, size=group.size, count=group.count):
+            components, start, sp_indices = item
+            local = jax.lax.dynamic_slice(result, (start, start), (size, size))
+            for component in range(count):
+                product = _source_rounded(
+                    penalty_ops._smoothing(rho, smoothing, sp_indices[component])
+                    * components[component]
+                )
+                local = _source_rounded(local + product)
+            return jax.lax.dynamic_update_slice(result, local, (start, start)), None
+
+        result, _ = jax.lax.scan(
+            block,
+            result,
+            (group.penalties, group.member_starts(), group.member_sp_indices()),
+        )
     return result
 
 
@@ -632,8 +739,8 @@ def working_model_factor_inputs(
     if gram.shape != (metadata.penalties.n_coef, metadata.penalties.n_coef):
         raise ValueError("gram must match the coefficient dimension.")
     H = _source_add_penalties(
-        metadata.penalties,
-        _initial_working_gram(gram, metadata.penalties),
+        metadata.stacked,
+        _initial_working_gram(gram, metadata.stacked),
         None,
         smoothing,
     )
@@ -687,7 +794,7 @@ def _source_gaussian_state(
     scales = jnp.where(used, diagonal[factor.pivots], 1.0)
     H_value = 2.0 * jnp.sum(jnp.log(upper_diagonal) + jnp.log(scales))
     H_first, H_second = _source_hessian_determinant_derivatives(
-        inverse, metadata.penalties, rho, smoothing
+        inverse, metadata.stacked, rho, smoothing
     )
     S_value, S_first, S_second = _source_penalty_determinant(
         rho, metadata, factors.penalties, smoothing
@@ -784,8 +891,8 @@ def gaussian_working_model_proposal(
         raise ValueError("response_square_sum must be scalar.")
     if len(factors.penalties) != len(metadata.multi_block_sp_indices):
         raise ValueError("factors must hold one factor per coupled penalty block.")
-    gram = _initial_working_gram(gram, metadata.penalties)
-    rhs = _initial_working_rhs(rhs, metadata.penalties)
+    gram = _initial_working_gram(gram, metadata.stacked)
+    rhs = _initial_working_rhs(rhs, metadata.stacked)
 
     value, beta, gradient, hessian, factor, diagonal, H_value, S_value = (
         _source_gaussian_state(

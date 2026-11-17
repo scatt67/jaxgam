@@ -18,7 +18,15 @@ from jaxgam.formula.discrete_design import (
     LookupBlock,
     TensorLookupBlock,
 )
-from jaxgam.formula.kernel_groups import PairReductionPlan, pair_reduction_plan
+from jaxgam.formula.kernel_groups import (
+    BlockKey,
+    LookupKey,
+    PairReductionPlan,
+    TensorKey,
+    discrete_pair_schedule,
+    pair_reduction_plan,
+    shape_groups,
+)
 
 __all__ = [
     "DeviceDiscreteDesign",
@@ -600,71 +608,157 @@ def discrete_xwyd(
     return discrete_xb_transpose(design, selectors, weights * response)
 
 
+def _block_key(number: int, block: DeviceBlock, selectors) -> BlockKey:
+    if isinstance(block, DeviceLookupBlock):
+        rows, columns = block.table.shape
+        return LookupKey(rows, columns, str(selectors[0].dtype))
+    return TensorKey(number)
+
+
+def _lookup_stacks(
+    design: DeviceDiscreteDesign,
+    selectors: tuple[tuple[jax.Array, ...], ...],
+    keys: tuple[BlockKey, ...],
+) -> tuple[dict[BlockKey, tuple[jax.Array, jax.Array]], dict[int, int]]:
+    """Stack equal-shape lookup tables and selectors; map block to stack row.
+
+    One concatenation per shape group, not one operation per block, keeps the
+    stacking itself out of the graph's growth with the smooth count.
+    """
+    stacks = {}
+    positions = {}
+    for key, members in shape_groups(keys):
+        if isinstance(key, TensorKey):
+            continue
+        tables = jnp.concatenate(
+            [design.blocks[int(member)].table for member in members]
+        ).reshape(len(members), key.rows, key.columns)
+        chosen = jnp.concatenate(
+            [selectors[int(member)][0] for member in members]
+        ).reshape(len(members), -1)
+        stacks[key] = (tables, chosen)
+        positions.update({int(member): index for index, member in enumerate(members)})
+    return stacks, positions
+
+
+def _pair_part(
+    kind: str,
+    design: DeviceDiscreteDesign,
+    left: DeviceBlock,
+    right: DeviceBlock,
+    left_selectors: tuple[jax.Array, ...],
+    right_selectors: tuple[jax.Array, ...],
+    weights: jax.Array,
+) -> jax.Array:
+    """One block pair's ``X_l' W X_r`` by the reduction the schedule chose."""
+    if kind == "lookup_diagonal":
+        reduced = (
+            jnp.zeros(left.table.shape[0], dtype=weights.dtype)
+            .at[left_selectors[0]]
+            .add(weights)
+        )
+        return left.table.T @ (reduced[:, None] * left.table)
+    if kind == "tensor":
+        return _subblock_pair_crossproduct(
+            design, left, right, left_selectors, right_selectors, weights
+        )
+    if kind == "lookup_histogram":
+        return lookup_pair_histogram_crossproduct(
+            left.table, right.table, left_selectors[0], right_selectors[0], weights
+        )
+    left_rows = _block_rows(left, left_selectors)
+    right_rows = _block_rows(right, right_selectors)
+    return left_rows.T @ (weights[:, None] * right_rows)
+
+
 @jax.jit
 def discrete_xwxd(
     design: DeviceDiscreteDesign,
     selectors: tuple[tuple[jax.Array, ...], ...],
     weights: jax.Array,
 ) -> jax.Array:
-    """Bounded direct indexed ``X.T @ diag(w) @ X`` cross-product."""
+    """Bounded direct indexed ``X.T @ diag(w) @ X`` cross-product.
+
+    Block pairs are grouped on the host by reduction and block shapes
+    (:func:`~jaxgam.formula.kernel_groups.discrete_pair_schedule`). Each
+    group runs one ``lax.scan`` over its pairs, each pair reduced exactly as
+    a lone pair is and written to its own disjoint Gram blocks, so the graph
+    grows with the number of distinct block shapes, not with the number of
+    smooth pairs.
+    """
     n_rows = _validate_device_batch(design, selectors)
     if weights.shape != (n_rows,):
         raise ValueError("weights do not match selector batch length")
+    keys = tuple(
+        _block_key(number, block, block_selectors)
+        for number, (block, block_selectors) in enumerate(
+            zip(design.blocks, selectors, strict=True)
+        )
+    )
+    stacks, positions = _lookup_stacks(design, selectors, keys)
+    schedule = discrete_pair_schedule(
+        keys,
+        pair_policy=design.pair_policy,
+        max_pair_histogram_bytes=design.max_pair_histogram_bytes,
+        n_rows=n_rows,
+    )
+    starts = np.asarray([block.col_start for block in design.blocks], dtype=np.int64)
+
+    def side(key: BlockKey, index: jax.Array):
+        if isinstance(key, TensorKey):
+            return design.blocks[key.block], selectors[key.block]
+        tables, chosen = stacks[key]
+        return DeviceLookupBlock(tables[index], 0), (chosen[index],)
+
+    def stack_rows(key: BlockKey, numbers: np.ndarray) -> np.ndarray:
+        if isinstance(key, TensorKey):
+            return np.zeros(len(numbers), dtype=np.int64)
+        return np.asarray([positions[int(number)] for number in numbers])
+
     result = jnp.zeros((design.n_coef, design.n_coef), dtype=weights.dtype)
-    for left_number, (left, left_selectors) in enumerate(
-        zip(design.blocks, selectors, strict=True)
-    ):
-        left_slice = slice(left.col_start, _block_stop(left))
-        for right_number in range(left_number, len(design.blocks)):
-            right = design.blocks[right_number]
-            right_selectors = selectors[right_number]
-            right_slice = slice(right.col_start, _block_stop(right))
-            if left_number == right_number and isinstance(left, DeviceLookupBlock):
-                reduced = (
-                    jnp.zeros(left.table.shape[0], dtype=weights.dtype)
-                    .at[left_selectors[0]]
-                    .add(weights)
+    for group in schedule:
+        # A block with itself: a lookup's own histogram, or a tensor group
+        # whose two keys name the same tensor block.
+        diagonal = group.kind == "lookup_diagonal" or (
+            group.kind == "tensor" and group.left_key == group.right_key
+        )
+
+        def pair(result, item, group=group, diagonal=diagonal):
+            left_index, right_index, left_start, right_start = item
+            left, left_selectors = side(group.left_key, left_index)
+            right, right_selectors = (
+                (left, left_selectors)
+                if diagonal
+                else side(group.right_key, right_index)
+            )
+            part = _pair_part(
+                group.kind,
+                design,
+                left,
+                right,
+                left_selectors,
+                right_selectors,
+                weights,
+            )
+            result = jax.lax.dynamic_update_slice(
+                result, part, (left_start, right_start)
+            )
+            if not diagonal:
+                result = jax.lax.dynamic_update_slice(
+                    result, part.T, (right_start, left_start)
                 )
-                part = left.table.T @ (reduced[:, None] * left.table)
-            elif isinstance(left, DeviceTensorLookupBlock) or isinstance(
-                right, DeviceTensorLookupBlock
-            ):
-                part = _subblock_pair_crossproduct(
-                    design,
-                    left,
-                    right,
-                    left_selectors,
-                    right_selectors,
-                    weights,
-                )
-            elif (
-                design.pair_policy == "histogram_or_direct"
-                and isinstance(left, DeviceLookupBlock)
-                and isinstance(right, DeviceLookupBlock)
-                and pair_reduction_plan(
-                    left.table.shape[0],
-                    right.table.shape[0],
-                    design.max_pair_histogram_bytes,
-                    n_rows=n_rows,
-                    k_left=left.table.shape[1],
-                    k_right=right.table.shape[1],
-                ).method
-                == "histogram"
-            ):
-                part = lookup_pair_histogram_crossproduct(
-                    left.table,
-                    right.table,
-                    left_selectors[0],
-                    right_selectors[0],
-                    weights,
-                )
-            else:
-                left_rows = _block_rows(left, left_selectors)
-                right_rows = _block_rows(right, right_selectors)
-                part = left_rows.T @ (weights[:, None] * right_rows)
-            result = result.at[left_slice, right_slice].set(part)
-            if right_number != left_number:
-                result = result.at[right_slice, left_slice].set(part.T)
+            return result, None
+
+        result, _ = jax.lax.scan(
+            pair,
+            result,
+            (
+                jnp.asarray(stack_rows(group.left_key, group.left)),
+                jnp.asarray(stack_rows(group.right_key, group.right)),
+                jnp.asarray(starts[group.left]),
+                jnp.asarray(starts[group.right]),
+            ),
+        )
     return result
 
 

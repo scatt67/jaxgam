@@ -11,6 +11,9 @@ from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+
+from jaxgam.formula.kernel_groups import shape_groups
 
 
 @jax.tree_util.register_pytree_node_class
@@ -202,6 +205,149 @@ def augmented_root(roots: JaxPenaltyRoots, rho: jax.Array) -> jax.Array:
     if not blocks:
         return jnp.zeros((0, roots.n_coef), dtype=rho.dtype)
     return jnp.concatenate(blocks, axis=0)
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class StackedPenaltyGroup:
+    """Equal-size local penalty blocks with equal component counts, stacked.
+
+    ``penalties[g, c]`` is member ``g``'s ``c``-th dense local penalty and
+    ``transforms[g]`` its dense local transform. Placement (``ordinals`` in
+    the source block order, ``starts`` and ``sp_indices``) is static, so a
+    kernel traces one loop body per group rather than one per block.
+    """
+
+    size: int
+    ordinals: tuple[int, ...]
+    starts: tuple[int, ...]
+    sp_indices: tuple[tuple[int, ...], ...]
+    penalties: jax.Array
+    transforms: jax.Array
+
+    def tree_flatten(self):
+        return (self.penalties, self.transforms), (
+            self.size,
+            self.ordinals,
+            self.starts,
+            self.sp_indices,
+        )
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*aux, *children)
+
+    @property
+    def count(self) -> int:
+        """Penalty components per member block."""
+        return self.penalties.shape[1]
+
+    def member_starts(self) -> jax.Array:
+        """Each member's first coefficient, as a static index array."""
+        return jnp.asarray(np.asarray(self.starts, dtype=np.int64))
+
+    def member_sp_indices(self) -> jax.Array:
+        """Each member's smoothing-parameter indices, ``(members, count)``."""
+        return jnp.asarray(
+            np.asarray(self.sp_indices, dtype=np.int64).reshape(
+                len(self.starts), self.count
+            )
+        )
+
+    def terms(self) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """Stacked ``(penalty, start, sp)`` per component, block-major."""
+        starts = np.repeat(np.asarray(self.starts, dtype=np.int64), self.count)
+        return (
+            self.penalties.reshape(-1, self.size, self.size),
+            jnp.asarray(starts),
+            jnp.asarray(
+                np.asarray(self.sp_indices, dtype=np.int64).reshape(len(starts))
+            ),
+        )
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class StackedPenaltyStructure:
+    """A :class:`JaxPenaltyStructure` with its blocks stacked by shape."""
+
+    n_coef: int
+    groups: tuple[StackedPenaltyGroup, ...]
+
+    def tree_flatten(self):
+        return self.groups, self.n_coef
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(aux, tuple(children))
+
+    @property
+    def n_penalties(self) -> int:
+        return 1 + max(
+            (sp for group in self.groups for row in group.sp_indices for sp in row),
+            default=-1,
+        )
+
+    def block_owner(self) -> np.ndarray:
+        """Each coefficient's owning block ordinal; ``-1`` where unpenalized."""
+        owner = np.full(self.n_coef, -1, dtype=np.int64)
+        for group in self.groups:
+            for ordinal, start in zip(group.ordinals, group.starts, strict=True):
+                owner[start : start + group.size] = ordinal
+        return owner
+
+
+def _dense_transform(transform: JaxTransform) -> jax.Array:
+    if transform.kind == "dense":
+        return transform.values
+    if transform.kind == "diagonal":
+        return jnp.diag(transform.values)
+    return jnp.eye(transform.size, dtype=transform.values.dtype)
+
+
+def stack_penalty_structure(
+    structure: JaxPenaltyStructure,
+) -> StackedPenaltyStructure:
+    """Group blocks by (size, component count) and stack each group.
+
+    Grouping is host metadata over static sizes; only the stacking touches
+    device arrays. Called eagerly it returns concrete stacks for a kernel
+    argument; called under tracing it adds one stack per group member.
+    """
+    groups = []
+    keys = [
+        (block.stop - block.start, len(block.penalties)) for block in structure.blocks
+    ]
+    for (size, count), members in shape_groups(keys):
+        blocks = [structure.blocks[int(member)] for member in members]
+        penalties = jnp.stack(
+            [
+                jnp.stack([_dense_local(penalty) for penalty in block.penalties])
+                if count
+                else jnp.zeros((0, size, size))
+                for block in blocks
+            ]
+        )
+        groups.append(
+            StackedPenaltyGroup(
+                size,
+                tuple(int(member) for member in members),
+                tuple(block.start for block in blocks),
+                tuple(tuple(block.sp_indices) for block in blocks),
+                penalties,
+                jnp.stack([_dense_transform(block.transform) for block in blocks]),
+            )
+        )
+    return StackedPenaltyStructure(structure.n_coef, tuple(groups))
+
+
+def as_stacked(
+    structure: JaxPenaltyStructure | StackedPenaltyStructure,
+) -> StackedPenaltyStructure:
+    """Accept either representation; stack a per-block structure on demand."""
+    if isinstance(structure, StackedPenaltyStructure):
+        return structure
+    return stack_penalty_structure(structure)
 
 
 def _apply_local(penalty: JaxLocalPenalty, vector: jax.Array) -> jax.Array:

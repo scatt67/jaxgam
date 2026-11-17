@@ -316,7 +316,9 @@ def _prospective_memory(
         # Host scratch covers symmetric eigensolver and one DPSTRF root at
         # a time; original caller-owned penalty storage is in shared setup.
         host += 8 * (2 * count + 7) * block.size**2 + 48 * block.size
-        device += 8 * (count + 1) * block.size**2
+        # Per-block device penalties and transform, and their shape-stacked
+        # copy that the proposal kernels loop over.
+        device += 2 * 8 * (count + 1) * block.size**2
         if count > 1:
             device += 8 * 2 * count * block.size**2
     if determinant_structure is not None:
