@@ -132,3 +132,36 @@ def test_y_only_dataframe_source_supports_intercept_models() -> None:
     batch = next(source.scan(4))
     assert dict(batch.columns) == {}
     np.testing.assert_array_equal(batch.y, [2.0, 3.0])
+
+
+def test_array_sources_declare_supplied_weights_and_offset(tmp_path) -> None:
+    columns = {"x": np.arange(4.0)}
+    plain = ArrayRowSource(columns, y=np.ones(4))
+    assert (plain.has_explicit_weights, plain.has_explicit_offset) == (False, False)
+    # Explicit default values are still supplied by the caller.
+    supplied = ArrayRowSource(
+        columns, y=np.ones(4), weights=np.ones(4), offset=np.zeros(4)
+    )
+    assert (supplied.has_explicit_weights, supplied.has_explicit_offset) == (
+        True,
+        True,
+    )
+    selected = ArrayRowSource(
+        columns, y=np.ones(4), weights=np.ones(4), row_selection=[0, 2]
+    )
+    assert (selected.has_explicit_weights, selected.has_explicit_offset) == (
+        True,
+        False,
+    )
+    frame = DataFrameRowSource(
+        pd.DataFrame({"x": np.arange(4.0), "y": np.ones(4)}),
+        response="y",
+        offset=np.zeros(4),
+    )
+    assert (frame.has_explicit_weights, frame.has_explicit_offset) == (False, True)
+    np.save(tmp_path / "x.npy", np.arange(4.0))
+    np.save(tmp_path / "w.npy", np.ones(4))
+    memmap = MemmapRowSource.from_npy_files(
+        {"x": tmp_path / "x.npy"}, weights=tmp_path / "w.npy"
+    )
+    assert (memmap.has_explicit_weights, memmap.has_explicit_offset) == (True, False)

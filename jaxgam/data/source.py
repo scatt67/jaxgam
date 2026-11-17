@@ -49,7 +49,15 @@ class RowBatch:
 
 @runtime_checkable
 class RowSource(Protocol):
-    """A source that can replay batches in stable positional order."""
+    """A source that can replay batches in stable positional order.
+
+    Every batch carries prior weights and an offset. A source may also declare
+    ``has_explicit_weights`` and ``has_explicit_offset``: ``False`` says the
+    caller supplied none, so the batches hold the defaults (ones, zeros). A
+    source that does not declare them is treated as supplying both, as pinned
+    ``bam`` treats supplied ``weights=`` and ``offset=`` arguments whatever
+    their values; see :func:`declared_row_vectors`.
+    """
 
     @property
     def n_rows(self) -> int: ...
@@ -130,6 +138,25 @@ def _validated_vector(
     return result
 
 
+def declared_row_vectors(source: object) -> tuple[bool, bool]:
+    """Whether ``source`` supplies prior weights and an offset.
+
+    Reads ``has_explicit_weights`` and ``has_explicit_offset``; an attribute
+    the source does not declare counts as supplied. A caller-written source
+    hands the fit a weight and an offset in every batch, which is what calling
+    pinned ``bam(weights=, offset=)`` does, and ``bam`` then carries both
+    columns whatever their values. Built-in sources declare ``False`` when the
+    caller passed ``None``.
+    """
+    weights = getattr(source, "has_explicit_weights", True)
+    offset = getattr(source, "has_explicit_offset", True)
+    if not isinstance(weights, bool) or not isinstance(offset, bool):
+        raise TypeError(
+            "has_explicit_weights and has_explicit_offset must be booleans."
+        )
+    return weights, offset
+
+
 class ArrayRowSource:
     """Replayable source backed by aligned arrays, Series, or memmaps.
 
@@ -204,6 +231,11 @@ class ArrayRowSource:
     @property
     def column_names(self) -> tuple[str, ...]:
         return tuple(self._columns)
+
+    @property
+    def has_explicit_weights(self) -> bool:
+        """Whether scan weights came from caller data rather than defaults."""
+        return self._weights is not None
 
     @property
     def has_explicit_offset(self) -> bool:
