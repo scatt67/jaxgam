@@ -25,6 +25,7 @@ from jaxgam.formula.discrete_design import (
     DiscreteDesignUnavailable,
 )
 from jaxgam.formula.parser import parse_formula
+from tests.helpers import _AssertCollector
 from tests.tolerances import STRICT
 
 
@@ -532,3 +533,77 @@ def test_non_finite_metric_data_keeps_its_own_error():
         GAM("y ~ s(x) + s(z)", sp=[1.0, 1.0], control=_control(8)).fit(
             source, result="prediction"
         )
+
+
+@pytest.mark.parametrize(
+    "formula", ["y ~ s(x) + s(g, bs='re')", "y ~ g + s(x)"], ids=["re", "parametric"]
+)
+def test_undeclared_categorical_is_never_metric_on_its_codes(formula):
+    """A categorical column is a factor whatever its categories' dtype."""
+    grouping = pd.Categorical(np.resize(np.array([1, 2, 10]), 60))
+    source = DataFrameRowSource(_grouped_frame(grouping), response="y")
+    sp = [1.0, 1.0] if "re" in formula else [1.0]
+    with pytest.raises(TypeError) as raised:
+        GAM(formula, sp=sp, control=_control(8)).fit(source, result="prediction")
+    message = str(raised.value)
+    assert message.startswith(
+        "Metric column 'g' must be real numeric data, got dtype category."
+    )
+    assert "ContinuousDiscretizationControl(factor_names=('g',))" in message
+
+
+def _level_frame(categories, n_rows: int = 120) -> pd.DataFrame:
+    """Integer levels whose effects are tied to the level values, not codes."""
+    position = np.arange(n_rows, dtype=float)
+    x = (position + 0.3 * np.sin(position)) / n_rows
+    values = np.resize(np.array([1, 2, 10]), n_rows)
+    effect = np.select([values == 1, values == 2], [-0.3, 0.2], 0.6)
+    y = 0.5 + np.sin(4.0 * x) + effect + 0.05 * np.cos(3.0 * position)
+    return pd.DataFrame(
+        {"x": x, "g": pd.Categorical(values, categories=categories), "y": y}
+    )
+
+
+_LEVEL_ORDERS = {"numeric 1,2,10": [1, 2, 10], "declared 2,10,1": [2, 10, 1]}
+_LEVEL_FORMULAS = {
+    "parametric": ("y ~ g + s(x,bs='cr',k=6)", [0.5]),
+    "re": ("y ~ s(x,bs='cr',k=6) + s(g,bs='re')", [0.5, 2.0]),
+}
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("order", sorted(_LEVEL_ORDERS))
+@pytest.mark.parametrize("term", sorted(_LEVEL_FORMULAS))
+def test_declared_integer_categories_follow_level_order_like_pinned_bam(
+    r_bridge, term, order
+):
+    """Integer categories keep their categorical order (1, 2, 10 is numeric,
+    not the string order 1, 10, 2; a declared order is kept as declared), as
+    R's factor with those levels does, for a parametric factor and an re term."""
+    formula, sp = _LEVEL_FORMULAS[term]
+    frame = _level_frame(_LEVEL_ORDERS[order])
+    control = FitControl(
+        execution="discrete",
+        batch_rows=17,
+        discretization=ContinuousDiscretizationControl(m=30, factor_names=("g",)),
+    )
+    result = GAM(formula, sp=sp, control=control).fit(
+        DataFrameRowSource(frame, response="y"), result="prediction"
+    )
+    expected = r_bridge.fit_bam_discrete_gaussian(
+        formula, frame, sp=np.array(sp), factor_names=("g",), m=30, newdata=frame
+    )
+    collector = _AssertCollector()
+    for name, observed, target in (
+        ("coefficients", result.coefficients, expected.coefficients),
+        ("predictions", result.predict(frame, pred_type="link"), expected.prediction),
+        ("deviance", result.deviance, expected.deviance),
+        ("edf", result.edf_total, expected.edf_total),
+    ):
+        collector.check(
+            name,
+            lambda o=observed, t=target: np.testing.assert_allclose(
+                o, t, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+    collector.raise_if_any(f"{term} {order} vs pinned bam")

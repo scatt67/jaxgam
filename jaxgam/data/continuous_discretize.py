@@ -229,13 +229,15 @@ def _analyze_columns(
                                 peak_bytes,
                                 budget.max_table_bytes,
                             )
-                        levels = tuple(categories.tolist())
+                        # The scalar type of np.asarray(column), which the
+                        # level keys must share (np.int64 for integer levels).
+                        levels = tuple(np.asarray(categories))
                         declared_levels[name] = levels
                         factor_bytes += level_bytes
                         if source_column.cat.ordered:
                             ordered_factors.add(name)
                     else:
-                        categories = source_column.cat.categories
+                        categories = np.asarray(source_column.cat.categories)
                         if len(previous) != len(categories) or any(
                             _key((old,)) != _key((new,))
                             for old, new in zip(previous, categories, strict=True)
@@ -269,7 +271,11 @@ def _analyze_columns(
                         0, sys.getsizeof(mapping) - old_size
                     )
                 continue
-            if column.dtype.kind not in "biuf":
+            # A categorical column is a factor by declaration, never metric on
+            # its codes, whatever the dtype of its categories.
+            if column.dtype.kind not in "biuf" or isinstance(
+                getattr(source_column, "dtype", None), pd.CategoricalDtype
+            ):
                 raise TypeError(_non_numeric_metric_message(name, source_column))
             numeric = np.asarray(column, dtype=np.float64)
             if not np.all(np.isfinite(numeric)):
