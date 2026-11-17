@@ -34,7 +34,8 @@ from __future__ import annotations
 
 import hashlib
 import warnings
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -53,7 +54,12 @@ from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.pirls import canonical_working_quantities, pirls_loop
 from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import _AssertCollector, check_replay_bound, check_that
+from tests.helpers import (
+    _AssertCollector,
+    check_replay_bound,
+    check_that,
+    cpu_platform_class,
+)
 from tests.test_fitting.test_working_model import (
     check_newton_step,
     ldet_tolerance,
@@ -699,13 +705,20 @@ def _input_digest(frame: pd.DataFrame, weights, offset) -> str:
 
 @dataclass(frozen=True)
 class _ReviewedFlatSp:
-    """One reviewed MODERATE smoothing-parameter vector and its exact case."""
+    """One reviewed MODERATE smoothing-parameter vector and its exact case.
 
-    digest: str
+    ``digest`` binds platform-independent inputs (the same bytes everywhere).
+    ``class_digests`` binds platform-dependent inputs per platform class
+    (``tests.helpers.cpu_platform_class``, read from the CPU's flags), with
+    only entries measured on that class. Exactly one of the two is set.
+    """
+
+    digest: str | None
     formula: str
     family_class: type
     link: str
     control: FitControl
+    class_digests: Mapping[str, str] = field(default_factory=dict)
 
 
 # Root decision 2026-10-24: the selected smoothing-parameter vector of these
@@ -723,8 +736,14 @@ class _ReviewedFlatSp:
 # The regenerated case keeps the flat regime: log sp (18.49, 4.08, 14.82),
 # sp vector 1.68x STRICT from pinned R, every physical field <= 2e-4x STRICT
 # (coefficients 1.8e-4, fitted 3.6e-5, deviance 3.0e-6, edf 1.5e-5, scale 0,
-# score 1.8e-6). Its one digest holds on every platform. The Poisson
-# low-count bytes are the macOS arm64 host's.
+# score 1.8e-6). Its one digest holds on every platform.
+#
+# Poisson low counts (root decision 2026-11-17): its np.sin/np.exp and
+# Generator.poisson inputs stay, so their bytes differ by platform and its
+# digest is recorded per platform class. The recorded digest cd4b75b8... is
+# the macOS arm64 host's (this host recomputes it exactly). A class without
+# an entry fails with the digest it computed and the measured sp distance to
+# pinned R; entries are added only from measurements on that class.
 _REVIEWED_FLAT_SP = {
     "binomial-log-separate_re": _ReviewedFlatSp(
         "19e17fd49337277e81b57edaa7b99acf3ef1d2660cb5e7a0c20ed27c6fb6a90b",
@@ -734,23 +753,69 @@ _REVIEWED_FLAT_SP = {
         _control(True),
     ),
     "poisson-low-counts": _ReviewedFlatSp(
-        "cd4b75b8f0e40cc7663b11db3a05ae278b93cdf0ee55eb838bd5d64500d1318e",
+        None,
         _BOUNDARY_FORMULA,
         Poisson,
         "log",
         _control(True),
+        class_digests={
+            "macos-arm64": (
+                "cd4b75b8f0e40cc7663b11db3a05ae278b93cdf0ee55eb838bd5d64500d1318e"
+            ),
+        },
     ),
 }
 
 
-def _flat_sp_tolerance(case, frame, weights, offset, formula, family, control, sp):
+def _sp_distance(observed, expected) -> str:
+    observed = np.asarray(observed, dtype=float)
+    expected = np.asarray(expected, dtype=float)
+    multiple = np.max(
+        np.abs(observed - expected) / (STRICT.atol + STRICT.rtol * np.abs(expected))
+    )
+    relative = np.max(np.abs(observed / expected - 1.0))
+    return f"{multiple:.3g}x STRICT (max relative {relative:.3e})"
+
+
+def _flat_sp_tolerance(
+    case,
+    frame,
+    weights,
+    offset,
+    formula,
+    family,
+    control,
+    sp,
+    observed_sp=None,
+    expected_sp=None,
+):
     """MODERATE for a reviewed sp vector on its exact bytes and controls only.
 
     Other bytes keep STRICT; reviewed bytes with any changed model or control
-    fail instead of inheriting the allowance.
+    fail instead of inheriting the allowance. A per-class record on a platform
+    class without an entry fails with the computed digest and, when given, the
+    measured smoothing-parameter distance to pinned R.
     """
     reviewed = _REVIEWED_FLAT_SP.get(case)
-    if reviewed is None or _input_digest(frame, weights, offset) != reviewed.digest:
+    if reviewed is None:
+        return STRICT
+    computed = _input_digest(frame, weights, offset)
+    expected_digest = reviewed.digest
+    if expected_digest is None:
+        platform_class = cpu_platform_class()
+        expected_digest = reviewed.class_digests.get(platform_class)
+        if expected_digest is None:
+            distance = (
+                "not measured"
+                if observed_sp is None
+                else _sp_distance(observed_sp, expected_sp)
+            )
+            raise AssertionError(
+                f"_REVIEWED_FLAT_SP[{case!r}] has no reviewed digest for platform "
+                f"class {platform_class}: computed digest {computed}; "
+                f"smoothing-parameter distance to pinned R {distance}"
+            )
+    if computed != expected_digest:
         return STRICT
     assert formula == reviewed.formula
     assert type(family) is reviewed.family_class
@@ -825,12 +890,24 @@ def _gate_against_bam(r_bridge, family, link, formula, *, selected):
     for name, observed, target in fields(fit):
         collector.check(name, _close(observed, target, STRICT))
     if selected:
-        tolerance = _flat_sp_tolerance(
-            case, frame, weights, offset, formula, fam, _control(selected), sp
-        )
         collector.check(
             "smoothing parameters",
-            _close(fit.smoothing_params, expected.smoothing_params, tolerance),
+            lambda: _close(
+                fit.smoothing_params,
+                expected.smoothing_params,
+                _flat_sp_tolerance(
+                    case,
+                    frame,
+                    weights,
+                    offset,
+                    formula,
+                    fam,
+                    _control(selected),
+                    sp,
+                    fit.smoothing_params,
+                    expected.smoothing_params,
+                ),
+            )(),
         )
     _check_public_fit(collector, followed, fields)
     collector.raise_if_any(
@@ -1341,18 +1418,24 @@ def test_family_boundary_matches_pinned_bam(r_bridge, case, family, link, select
     for name, observed, target in fields(fit):
         collector.check(name, _close(observed, target, STRICT))
     if selected:
-        tolerance = _flat_sp_tolerance(
-            case_id,
-            frame,
-            weights,
-            offset,
-            _BOUNDARY_FORMULA,
-            fam,
-            _control(selected),
-            sp,
-        )
         collector.check(
-            "sp", _close(fit.smoothing_params, expected.smoothing_params, tolerance)
+            "sp",
+            lambda: _close(
+                fit.smoothing_params,
+                expected.smoothing_params,
+                _flat_sp_tolerance(
+                    case_id,
+                    frame,
+                    weights,
+                    offset,
+                    _BOUNDARY_FORMULA,
+                    fam,
+                    _control(selected),
+                    sp,
+                    fit.smoothing_params,
+                    expected.smoothing_params,
+                ),
+            )(),
         )
     _check_public_fit(collector, followed, fields)
     collector.raise_if_any(f"{case} {'selected' if selected else 'fixed'}")
@@ -1416,20 +1499,48 @@ def _flat_sp_case_inputs(case: str):
     return _frame("binomial", "log")
 
 
+def test_flat_sp_class_without_entry_fails_with_digest_and_distance(monkeypatch):
+    """A per-class record fails on an unreviewed class, printing what to review."""
+    frame, weights, offset = _flat_sp_case_inputs("poisson-low-counts")
+    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: "x86_64-avx512")
+    with pytest.raises(AssertionError) as raised:
+        _flat_sp_tolerance(
+            "poisson-low-counts",
+            frame,
+            weights,
+            offset,
+            _BOUNDARY_FORMULA,
+            Poisson(),
+            _control(True),
+            None,
+            np.array([1.0, 2.0 + 1e-9]),
+            np.array([1.0, 2.0]),
+        )
+    message = str(raised.value)
+    assert "x86_64-avx512" in message
+    assert _input_digest(frame, weights, offset) in message
+    assert "x STRICT (max relative 5.000e-10)" in message
+
+
 @pytest.mark.parametrize("case", list(_REVIEWED_FLAT_SP))
 def test_flat_sp_allowance_needs_reviewed_bytes_model_and_controls(monkeypatch, case):
     """A changed row loses the MODERATE vector; a changed model/control fails.
 
-    The reviewed record is rebound to this platform's bytes so the guard runs
-    on every platform.
+    A platform-independent record must reproduce its digest here; a per-class
+    record is rebound to this platform class's bytes so the guard runs on
+    every platform.
     """
     reviewed = _REVIEWED_FLAT_SP[case]
     frame, weights, offset = _flat_sp_case_inputs(case)
-    monkeypatch.setitem(
-        _REVIEWED_FLAT_SP,
-        case,
-        replace(reviewed, digest=_input_digest(frame, weights, offset)),
-    )
+    computed = _input_digest(frame, weights, offset)
+    if reviewed.digest is not None:
+        assert computed == reviewed.digest
+    else:
+        monkeypatch.setitem(
+            _REVIEWED_FLAT_SP,
+            case,
+            replace(reviewed, class_digests={cpu_platform_class(): computed}),
+        )
     family = reviewed.family_class(link=reviewed.link)
     control = _control(True)
 
