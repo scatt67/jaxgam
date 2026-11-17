@@ -50,6 +50,14 @@ would take without the request and reports the reason in
 `execution_fallback_reason`; estimated smoothing then uses exact streamed REML,
 which requires `linear_solver="qr"`.
 
+Known limit above 50 penalties: the QR route then optimizes with L-BFGS-B,
+which can make slow progress when many smoothing parameters and the log
+scale are badly scaled against each other. It may stop at its iteration
+limit short of the REML optimum. It then reports `converged=False` and the
+stop in `convergence_info` (for example `iteration limit`). For models with
+many smooths, use the discrete route (`execution="discrete"`), whose
+working-model smoothing selection runs Newton steps.
+
 ### Streamed QR coefficient solves
 
 Fixed-sp streamed fits can request the positive-weight QR/TSQR solver
@@ -161,6 +169,16 @@ quadratic-model test. Descent is judged by the integrated exact gradient
 within a float64 score envelope. At most one such continuation runs per fit.
 Fixed smoothing parameters never move, and `converged` is restated on the
 returned trial.
+
+The public routes cap each L-BFGS-B proposal with source step windows of
+plus or minus 5 in every log parameter (mgcv's `maxNstep`). A run that stops
+at a window edge, with descent beyond it, reopens a fresh L-BFGS-B window from
+the accepted trial. Each window is a fresh L-BFGS-B run with its own
+iteration and evaluation budget (100 iterations, 500 evaluations), and at
+most 20 windows are opened. Twenty windows of 5 cross the whole [-40, 40]
+smoothing-parameter range. A fit that still descends past the last window
+reports `converged=False` and "Window limit 20 reached" in
+`convergence_info`. `n_iter` counts iterations over all windows.
 
 Successful fits report `execution_route="stream_exact_reml_qr"` and
 `lambda_strategy="exact_reml"`. `converged` requires the projected gradient

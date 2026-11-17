@@ -110,6 +110,11 @@ class StreamREMLControl:
     most two coefficient-space trials (the current accepted and candidate
     trial) and a bounded sequence of accepted scalar scores; it deliberately
     does not retain an outer Hessian or an array of trial ``rho`` vectors.
+
+    ``max_iter`` and ``maxfun`` bound one L-BFGS-B run.  When the driver caps
+    each step with source step windows, every window is a fresh L-BFGS-B run
+    with its own ``max_iter``/``maxfun`` budget, and at most
+    ``MAX_SOURCE_STEP_WINDOWS`` windows are opened.
     """
 
     max_iter: int = 100
@@ -1297,6 +1302,13 @@ def _validate_max_step(max_step: float | None) -> None:
 # where L-BFGS-B stops one step normally reaches gtol; the iteration bound
 # only guarantees termination. The free-parameter cap bounds the probes.
 _CURVATURE_COMPLETION_MAX_FREE = 4
+
+# Each source step window moves every log parameter by at most ``max_step``
+# (5.0 on the public routes), so 16 windows cross the whole [-40, 40]
+# smoothing-parameter box; the extra windows leave room for unbounded scale
+# or theta coordinates. Each window is a fresh L-BFGS-B run with its own
+# ``max_iter``/``maxfun`` budget, so this cap bounds the total work.
+MAX_SOURCE_STEP_WINDOWS = 20
 _CURVATURE_COMPLETION_MAX_STEPS = 3
 _CURVATURE_COMPLETION_MAX_HALVINGS = 3
 _CURVATURE_COMPLETION_PROBE_WIDTH = 1e-4
@@ -1835,8 +1847,10 @@ def _run_parameterized_stream_reml(
 
     total_iterations = 0
     windows = 0
+    window_limit_reached = False
     while True:
         center = np.asarray(objective.accepted.params, dtype=np.float64)
+        window_start_evaluations = objective.n_evaluations
         if max_step is None:
             local_bounds = bounds
         else:
@@ -1866,8 +1880,9 @@ def _run_parameterized_stream_reml(
             bounds=local_bounds,
             callback=objective.callback,
             options={
-                "maxiter": max(1, control.max_iter - total_iterations),
-                "maxfun": max(1, control.maxfun - objective.n_evaluations + 1),
+                # Each window is a fresh L-BFGS-B run with its own budget.
+                "maxiter": control.max_iter,
+                "maxfun": control.maxfun,
                 "maxcor": control.maxcor,
                 "maxls": control.maxls,
                 "gtol": control.gtol,
@@ -1875,7 +1890,8 @@ def _run_parameterized_stream_reml(
             },
         )
         windows += 1
-        total_iterations += int(result.nit)
+        window_iterations = int(result.nit)
+        total_iterations += window_iterations
         result_params = np.asarray(result.x, dtype=np.float64)
         if not _same_rho(result_params, objective.accepted.params):
             raise RuntimeError(
@@ -1917,9 +1933,10 @@ def _run_parameterized_stream_reml(
             and (local_gradient_inf <= control.gtol or artificial_edge_descent)
             and projected_gradient_inf > control.gtol
             and not _same_rho(result_params, center)
-            and total_iterations < control.max_iter
-            and objective.n_evaluations < control.maxfun
         ):
+            break
+        if windows >= MAX_SOURCE_STEP_WINDOWS:
+            window_limit_reached = True
             break
     result_params = np.asarray(result.x, dtype=np.float64)
     if not _same_rho(result_params, objective.accepted.params):
@@ -1935,6 +1952,11 @@ def _run_parameterized_stream_reml(
     message = str(result.message)
     if max_step is not None:
         message = f"{message}; {windows} source step window(s)."
+        if window_limit_reached:
+            message = (
+                f"{message} Window limit {MAX_SOURCE_STEP_WINDOWS} reached with "
+                "descent beyond the last window."
+            )
     if (
         roundoff_stationary_completion
         and bool(result.success)
@@ -2058,22 +2080,27 @@ def _run_parameterized_stream_reml(
             completion = _CurvatureCompletion(
                 0, "not run: free parameter count outside the completion range"
             )
-        elif total_iterations >= control.max_iter:
+        elif window_iterations >= control.max_iter:
             completion = _CurvatureCompletion(0, "not run: iteration limit")
         elif not _valid_exact_trial(accepted, completion_inner_tolerance):
             completion = _CurvatureCompletion(0, "not run: accepted trial is invalid")
         else:
-            completion, total_iterations = _complete_free_curvature_newton(
+            # The completion continues the last window within that window's
+            # iteration and evaluation budget.
+            completion, completed_iterations = _complete_free_curvature_newton(
                 objective,
                 bounds,
-                control,
-                iterations=total_iterations,
+                # The window's first evaluation is its cached start point,
+                # so a single-window run keeps exactly the previous limits.
+                replace(control, maxfun=window_start_evaluations - 1 + control.maxfun),
+                iterations=window_iterations,
                 max_step=max_step,
                 trial_valid=lambda trial: _valid_exact_trial(
                     trial, completion_inner_tolerance
                 ),
                 score_roundoff=completion_score_roundoff,
             )
+            total_iterations += completed_iterations - window_iterations
         objective._check_source_unchanged()
         projected_gradient_inf = _free_projected_norm(
             np.asarray(objective.accepted.params, dtype=np.float64),

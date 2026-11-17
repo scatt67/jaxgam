@@ -815,6 +815,104 @@ def test_regular_stream_reml_reopens_artificial_edge_with_other_free_gradient(
     assert result.projected_gradient_inf == 0.0
 
 
+def _quadratic_window_case(monkeypatch, optimum: float):
+    """Exact-trial stub with optimum ``optimum`` and an edge-walking minimizer.
+
+    The stub ``minimize`` spends its full per-window iteration budget, moves
+    to the nearer of its window edge and the optimum, and records the
+    options it was given, so the test sees each window's budget.
+    """
+    evaluated: list[float] = []
+    windows: list[dict[str, object]] = []
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        rho = float(np.asarray(params)[0])
+        evaluated.append(rho)
+        return SimpleNamespace(
+            params=np.asarray(params).copy(),
+            score=jnp.array((rho - optimum) ** 2),
+            gradient=jnp.array([2.0 * (rho - optimum)]),
+            source_scans=2,
+            batches_scanned=4,
+            source_fingerprint="source",
+            workspace=SimpleNamespace(required_bytes=128),
+        )
+
+    def minimize_call(objective, _center, *, bounds, callback, options, **_kwargs):
+        windows.append(dict(options))
+        point = np.array([min(float(bounds[0][1]), optimum)])
+        objective(point)
+        callback(SimpleNamespace(x=point))
+        return SimpleNamespace(
+            x=point,
+            success=True,
+            message="CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
+            status=0,
+            nit=options["maxiter"],
+        )
+
+    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", minimize_call)
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(
+            fitting=SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=1)),
+            n_coef=2,
+        ),
+    )
+    return stream, evaluated, windows
+
+
+def test_regular_stream_reml_each_step_window_has_its_own_budget(
+    monkeypatch,
+) -> None:
+    """Every window gets the full max_iter/maxfun; none is starved."""
+    stream, evaluated, windows = _quadratic_window_case(monkeypatch, 37.0)
+    control = StreamREMLControl(max_iter=3, maxfun=7)
+    result = optimize_regular_stream_reml(
+        stream,
+        SimpleNamespace(scale_known=True),
+        np.array([0.0]),
+        maximum_bytes=1_000_000,
+        control=control,
+        max_step=5.0,
+    )
+    # 37 is reached in the eighth window; each spends its whole 3-iteration
+    # budget, which a single shared budget of 3 would have exhausted at once.
+    assert len(windows) == 8
+    assert all(w["maxiter"] == 3 and w["maxfun"] == 7 for w in windows)
+    assert result.converged
+    assert result.message.endswith("8 source step window(s).")
+    assert result.n_iter == 8 * 3
+    np.testing.assert_array_equal(result.trial.params, [37.0])
+    assert result.n_evaluations == len(evaluated)
+    assert result.cumulative_source_scans == 2 * len(evaluated)
+    assert result.cumulative_batches_scanned == 4 * len(evaluated)
+
+
+def test_regular_stream_reml_window_cap_stops_truthfully(monkeypatch) -> None:
+    """Descent past the last allowed window is reported, never converged."""
+    stream, evaluated, windows = _quadratic_window_case(monkeypatch, 30.0)
+    result = optimize_regular_stream_reml(
+        stream,
+        SimpleNamespace(scale_known=True),
+        np.array([0.0]),
+        maximum_bytes=1_000_000,
+        max_step=1.0,
+    )
+    cap = reml_execution.MAX_SOURCE_STEP_WINDOWS
+    assert len(windows) == cap
+    assert not result.converged
+    assert result.status == 0
+    assert f"{cap} source step window(s). Window limit {cap} reached" in (
+        result.message
+    )
+    assert "exceeds gtol" in result.message
+    np.testing.assert_array_equal(result.trial.params, [float(cap)])
+    assert result.projected_gradient_inf == 2.0 * (30.0 - cap)
+    assert result.cumulative_source_scans == 2 * len(evaluated)
+
+
 def test_regular_stream_reml_roundoff_window_stalls_truthfully(monkeypatch) -> None:
     calls = 0
 
@@ -1670,3 +1768,65 @@ def test_mgcv_relative_test_forms_score_scale_as_newton_does() -> None:
     ).met
     with pytest.raises(ValueError, match="finite and positive"):
         mgcv_relative_convergence(1.0, 0.0, scale_estimate=0.0, score_change=0.0)
+
+
+def test_public_exact_stream_poisson_ten_smooths_converges_across_windows() -> None:
+    """Scaling case M3 at n = 2,000: ten Poisson smooths, two of them
+    unresolvable at k = 10 so their log sp climb +5 per source step window.
+
+    With one shared 100-iteration budget this stopped at the iteration limit
+    after four windows; with a budget per window it converges.
+    """
+    import pandas as pd
+
+    from jaxgam import GAM
+    from jaxgam.control import FitControl
+    from jaxgam.data.source import ArrayRowSource
+
+    rng = np.random.default_rng(42)
+    names = [f"x{index}" for index in range(10)]
+    columns = {name: rng.uniform(0.0, 1.0, 2000) for name in names}
+    signal = sum(
+        0.4 * np.sin(2.0 * np.pi * (index + 1) * columns[name])
+        for index, name in enumerate(names)
+    )
+    y = rng.poisson(np.exp(0.2 + signal))
+    data = pd.DataFrame({**columns, "y": y})
+    formula = "y ~ " + " + ".join(f"s({name}, k=10, bs='cr')" for name in names)
+    inner = ArrayRowSource({name: data[name].to_numpy() for name in names}, y=y)
+    scans_started = []
+
+    class _CountingSource:
+        n_rows = inner.n_rows
+
+        def fingerprint(self):
+            return inner.fingerprint()
+
+        def scan(self, batch_rows):
+            scans_started.append(batch_rows)
+            return inner.scan(batch_rows)
+
+    source = _CountingSource()
+    control = FitControl(
+        execution="stream", linear_solver="qr", batch_rows=65536, uncertainty="fisher"
+    )
+    fit = GAM(formula, family="poisson", control=control).fit(
+        source, result="prediction"
+    )
+    diagnostics = fit.exact_optimizer_diagnostics
+    assert fit.converged, fit.convergence_info
+    assert fit.convergence_info.startswith(
+        "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL"
+    )
+    assert "source step window(s)" in fit.convergence_info
+    windows = int(fit.convergence_info.split("; ")[1].split(" ")[0])
+    assert windows > 1
+    assert fit.n_iter > StreamREMLControl().max_iter
+    assert diagnostics.projected_gradient_inf <= StreamREMLControl().gtol
+    # Every exact trial scans the source at least once (its adjoint pass), and
+    # the reported fit scans are a subset of the scans the source served
+    # (the remainder are setup scans).
+    assert (
+        fit.source_scans >= diagnostics.startup_source_scans + diagnostics.n_evaluations
+    )
+    assert len(scans_started) >= fit.source_scans
