@@ -1,0 +1,137 @@
+"""Operator bulk Fisher variance benchmark (scripts/benchmark_bulk_variance.py)."""
+
+import json
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from jaxgam.results import BULK_CALIBRATION_MAX_STANDARD_ERRORS
+from scripts import benchmark_bulk_variance
+
+
+def test_clopper_pearson_matches_its_binomial_tail_definition() -> None:
+    from scipy.stats import binom
+
+    lower, upper = benchmark_bulk_variance.clopper_pearson(2, 240)
+    assert binom.sf(1, 240, lower) == pytest.approx(0.025, rel=1e-9)
+    assert binom.cdf(2, 240, upper) == pytest.approx(0.025, rel=1e-9)
+    none_lower, none_upper = benchmark_bulk_variance.clopper_pearson(0, 40)
+    assert none_lower == 0.0
+    assert binom.cdf(0, 40, none_upper) == pytest.approx(0.025, rel=1e-9)
+    assert benchmark_bulk_variance.clopper_pearson(5, 5)[1] == 1.0
+
+
+def test_summary_counts_the_old_rule_and_checks_the_chi_square_ratio() -> None:
+    from scipy.stats import chi2
+
+    probes = 48
+    # Exact chi-square quantiles: an ideal sample, with no random draw.
+    quantiles = chi2.ppf((np.arange(400) + 0.5) / 400, probes) / probes
+    ratios = np.column_stack([quantiles, quantiles[::-1], np.roll(quantiles, 7)])
+    maxima = np.r_[np.full(398, 1.0), 6.0, 5.5]
+    seeds = [
+        {"maximum_standardized_error": maximum, "ratio": ratio.tolist()}
+        for maximum, ratio in zip(maxima, ratios, strict=True)
+    ]
+    summary = benchmark_bulk_variance.summarize(seeds, probes, 5.0)
+
+    assert summary["default_rule_exceedances"] == 2
+    assert summary["default_rule_rate"] == 2 / 400
+    assert summary["maximum_standardized_error_quantiles"]["1.0"] == 6.0
+    assert summary["ratio_mean"] == pytest.approx(1.0, rel=1e-3)
+    assert summary["ratio_variance"] == pytest.approx(2 / probes, rel=0.05)
+    assert all(row["p_value"] > 0.99 for row in summary["ratio_ks_per_row"])
+    shifted = [{**seed, "ratio": [2 * r for r in seed["ratio"]]} for seed in seeds]
+    assert (
+        benchmark_bulk_variance.summarize(shifted, probes, 5.0)["ratio_ks_pooled_rows"][
+            "p_value"
+        ]
+        < 1e-6
+    )
+
+
+def test_task_owned_cache_restores_the_caller_setting(monkeypatch) -> None:
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", "/caller/cache")
+    with benchmark_bulk_variance.task_owned_cache() as cache:
+        assert os.environ["JAX_COMPILATION_CACHE_DIR"] == cache
+        assert Path(cache).is_dir()
+    assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "/caller/cache"
+    assert not Path(cache).exists()
+    monkeypatch.delenv("JAX_COMPILATION_CACHE_DIR")
+    with benchmark_bulk_variance.task_owned_cache():
+        pass
+    assert "JAX_COMPILATION_CACHE_DIR" not in os.environ
+
+
+@pytest.mark.parametrize(
+    ("arguments", "model_fields"),
+    [
+        (
+            ["--family", "gaussian"],
+            {"levels": None, "fisher_scale_source": "supplied (--scale)"},
+        ),
+        (
+            [
+                "--model",
+                "re",
+                "--levels",
+                "15",
+                "--rows-per-level",
+                "3",
+                "--family",
+                "poisson",
+            ],
+            {"levels": 15, "fisher_scale_source": "fitted", "n_rows": 45},
+        ),
+    ],
+)
+def test_cli_records_every_seed_row_and_diagnostic(
+    tmp_path: Path, arguments: list[str], model_fields: dict
+) -> None:
+    output = tmp_path / "bulk.json"
+    benchmark_bulk_variance.main(
+        [*arguments, "--seeds", "3", "--probes", "8", "--output", str(output)]
+    )
+    record = json.loads(output.read_text())
+
+    for key, value in model_fields.items():
+        assert record["case"][key] == value
+    assert len(record["seeds"]) == 3
+    assert [seed["seed"] for seed in record["seeds"]] == [20000, 20001, 20002]
+    for seed in record["seeds"]:
+        exact = np.asarray(seed["exact"])
+        estimated = np.asarray(seed["estimated"])
+        error = np.asarray(seed["monte_carlo_se"])
+        np.testing.assert_allclose(seed["ratio"], estimated / exact)
+        np.testing.assert_allclose(
+            seed["standardized_error"], np.abs(estimated - exact) / error
+        )
+        assert seed["maximum_standardized_error"] == pytest.approx(
+            max(seed["standardized_error"])
+        )
+        assert seed["default_rule_would_raise"] == (
+            seed["maximum_standardized_error"] > BULK_CALIBRATION_MAX_STANDARD_ERRORS
+        )
+        diagnostics = seed["diagnostics"]
+        assert diagnostics["probes"] == 8
+        assert diagnostics["completed_solves"] >= 8
+        assert diagnostics["training_source_scans"] > 0
+        assert diagnostics["maximum_relative_residual"] < 1e-8
+    summary = record["summary"]
+    assert summary["seeds"] == 3
+    assert summary["default_rule_exceedances"] == sum(
+        seed["default_rule_would_raise"] for seed in record["seeds"]
+    )
+    assert record["bulk_pass"]["rows"] == record["case"]["n_rows"]
+    assert record["bulk_pass"]["finite"]
+    assert record["runtime"]["compilation_cache"]
+
+
+def test_cli_rejects_degenerate_controls(tmp_path: Path) -> None:
+    for arguments in (["--probes", "1"], ["--seeds", "0"], ["--levels", "0"]):
+        with pytest.raises(SystemExit):
+            benchmark_bulk_variance.main(
+                [*arguments, "--output", str(tmp_path / "x.json")]
+            )

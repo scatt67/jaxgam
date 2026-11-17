@@ -202,7 +202,7 @@ Gap status (G7 onward filled in the second round, one commit each):
 | G2 | compiler memory estimates (`compiler_memory_bytes` is always `None`) | per-route hook that lowers the route's main jitted kernel at the case shape and records `memory_analysis()`; ten kernel tests already do this and are the current evidence |
 | G3 | temporary disk other than the compilation cache: discrete selector memmaps, the SQLite knot scope | run each child with `TMPDIR` and `selector_memmap_directory` in task-owned directories and sample their peak size from a thread |
 | G4 | **filled.** `--execution operator` (fixed sp, PCG; every model, Gaussian or Poisson) and `--execution operator-efs` (calibrated Poisson EFS; model `re-only` = `y ~ s(g, bs='re')`) run in the isolated harness: a setup child that runs `prepare_operator_model` with the fit's own preparation budget (one eighth of it for EFS) and records scans, bytes, preparation peak bound and coefficient layout without expanding penalties to p x p; a fit child with a task-owned cache, compile events, `operator_diagnostics` (scans by kind, Krylov actions and iterations, peak bound, executable temporaries, inner status, gradient norm) and Krylov iterations as the inner count. Fixed-sp results have no score, EDF or Gaussian scale by design, so those fields are recorded as not provided; `predict(se_fit=True)` is not offered on these routes. NB is rejected because the operator fits NB only at fixed theta | – |
-| G5 | no script for `bulk_link_variance` | a script recording probe solves, scans, PCG residuals, calibration maxima and the seed distribution (Appendix A, F6) |
+| G5 | **filled.** `scripts/benchmark_bulk_variance.py` (`make benchmark-bulk-variance`) fits one operator model (the bulk-variance test model, or `s(x,bs='cr',k=6)+s(g,bs='re')` with L levels) and calls the public `bulk_link_variance` once per seed with its raise limit out of reach. Per seed and calibration row it records exact variance, estimate, Monte Carlo SE, the current standardized error and the ratio estimate/exact, plus whether the default 5-SE rule would raise, and the provider diagnostics (probe and normal solves, Krylov iterations, every scan count, maximum PCG relative residual, peak bound). The summary gives the old rule's exceedance rate with a Clopper-Pearson interval and Kolmogorov-Smirnov tests of probes x ratio against chi-square(probes), per row over seeds. One bulk pass over the training rows is timed. Task-owned compilation cache | – |
 | G6 | `--memory-pair-n` accepts only streamed routes | allow discrete pairs (the comparison already reads `known_workspace_bytes`) |
 | G7 | **filled.** An unconverged, non-finite or rejected fit, a rejected setup and a crashed child each write a `valid=false` record: outcome (`unconverged`, `nonfinite`, `fit_raised`, `setup_raised`, `child_failed`), status, stop reason and its source, projected gradient (exact streamed REML), the operator inner status and final gradient norm, smoothing parameters, theta, score, iterations, the error type and message, and no timing fields. Comparisons over an invalid record are marked unavailable. The record is written first; then the command exits 3 and prints each invalid child on stderr | – |
 | G8 | **filled.** `--model re --levels L`: `y ~ s(x0, k=k, bs='cr') + s(g, bs='re')` with L declared levels (unobserved levels stay declared) and a normal group effect; the factor reaches every source as a categorical Series, the discrete routes receive `factor_names=("g",)`, and the input hash covers codes and level labels. Dense, discrete and (G4) operator routes | – |
@@ -220,25 +220,25 @@ Coverage by quantity and route:
 
 | Quantity | dense, dense-reml | stream, stream-qr | stream-exact | stream-gaussian-qr | discrete, discrete-wm | operator fixed sp | operator EFS | bulk variance |
 |---|---|---|---|---|---|---|---|---|
-| Setup time, separate process | H | H | H | H | H | H | H | – (G5) |
+| Setup time, separate process | H | H | H | H | H | H | H | fit time B |
 | Cold compilation | H | H | H | H | H | H | H | – |
-| Warm fit | H | H | H | H | H | H | H | – |
-| Source scans and bytes | n/a | H | H | H | H | H | H | – |
+| Warm fit | H | H | H | H | H | H | H | per-seed sketch and calibration B |
+| Source scans and bytes | n/a | H | H | H | H | H | H | scans by kind B |
 | Inner / outer iterations | outer H; inner – (G14) | public count | H both | H outer | H both | H (PIRLS / Krylov) | H (EFS / Krylov) | – |
 | Derivative time | – (G13) | n/a | H | – (G13) | – (G13) | n/a | – (G13) | n/a |
-| Prediction / SE time | H | H | H | H | H | prediction H; SE not offered | prediction H; SE not offered | – (G5) |
-| Host peak RSS | H | H | H | H | H | H | H | – |
+| Prediction / SE time | H | H | H | H | H | prediction H; SE not offered | prediction H; SE not offered | bulk pass B |
+| Host peak RSS | H | H | H | H | H | H | H | B |
 | RSS minus baseline | – | H pair | H pair | H pair | – (G6) | – (G6) | – (G6) | – |
 | Device peak | – (G12) | – | – | – | – | – | – | – |
 | Compiler memory | – (G2) | – | – | – | – | – | – | – |
 | Temporary disk | cache only (G3) | cache only | cache only | cache only | cache only; memmaps unmeasured | cache only | cache only | – |
 | Synchronized timing | H | H | H | H | H | H (host PCG returns NumPy) | H | – |
 | Isolated child processes | H | H | H | H | H | H | H | – |
-| Isolated compilation cache | H | H | H | H | H | H | H | – |
+| Isolated compilation cache | H | H | H | H | H | H | H | B |
 | Host suspension flag | H | H | H | H | H | H | H | – |
 | Invalid or rejected fit recorded (G7) | H | H | H | H | H | H | H | – |
 
-H = `scripts/benchmark_scaling.py`; O = the named other script; – = gap.
+H = `scripts/benchmark_scaling.py`; B = `scripts/benchmark_bulk_variance.py`; O = the named other script; – = gap.
 
 ## Allocation-shape claims: method per route
 
