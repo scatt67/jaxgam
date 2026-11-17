@@ -200,6 +200,23 @@ class DiscreteModelFrame:
 
 
 @dataclass(frozen=True)
+class BamDiscretePrefit:
+    """Pinned ``bam(fit=FALSE)`` made with a fit's ``weights=``/``offset=``.
+
+    ``frame`` is ``discrete.mf``'s padded compact frame (it includes the
+    ``(weights)``/``(offset)`` columns when supplied), ``row_indices`` its
+    zero-based index matrix ``k``, ``n_unique`` its ``nr`` and
+    ``parametric_names`` bam's ``pmf.names``.
+    """
+
+    expanded_design: np.ndarray
+    frame: pd.DataFrame
+    row_indices: np.ndarray
+    n_unique: dict[str, int]
+    parametric_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class BamDiscreteSetup:
     """Pinned ``bam(fit=FALSE, discrete=...)`` metadata and expanded design."""
 
@@ -259,6 +276,7 @@ class BamDiscreteFit:
     prediction: np.ndarray | None = None
     prediction_se: np.ndarray | None = None
     log_theta: float | None = None
+    coefficient_edf: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -7608,6 +7626,96 @@ if (!is.null(s$sp.criterion)) {{
             discrete_prediction=discrete_prediction,
         )
 
+    def bam_discrete_prefit(
+        self,
+        formula: str,
+        data: pd.DataFrame,
+        *,
+        family: str = "gaussian",
+        link: str | None = None,
+        factor_names: tuple[str, ...] = (),
+        m: int | tuple[int, ...] | None = 30,
+        weights: np.ndarray | None = None,
+        offset: np.ndarray | None = None,
+    ) -> BamDiscretePrefit:
+        """Pinned ``bam(fit=FALSE)`` with a fit's own ``weights=``/``offset=``.
+
+        Unlike :meth:`bam_discrete_setup`, which passes neither, the setup is
+        made with the arguments :meth:`fit_bam_discrete` passes (``None``
+        omits an argument; an array, all ones included, supplies it), so
+        ``pmf`` carries ``(weights)``/``(offset)`` exactly as in the fit.
+        ``discrete.mf`` is then replayed on the setup's retained ``gp``,
+        ``mf`` and ``dinfo$pmf.names`` (it seeds its own private stream) and
+        checked against bam's own ``kd``, to expose the padded frame.
+        """
+        _, arguments = self._bam_discrete_arguments(
+            data,
+            family=family,
+            link=link,
+            sp=None,
+            initial_sp=None,
+            initial_scale=None,
+            scale=None,
+            factor_names=factor_names,
+            m=m,
+            weights=weights,
+            offset=offset,
+            max_iterations=200,
+            epsilon=1e-7,
+        )
+        with self._preserved_r_seed(1907):
+            expected_after = self._stats.runif(8)
+            self._ro.baseenv["set.seed"](1907)
+            setup = self._mgcv.bam(self._ro.Formula(formula), fit=False, **arguments)
+            replay = self._call_internal(
+                "discrete.mf",
+                setup.rx2("gp"),
+                setup.rx2("mf"),
+                setup.rx2("dinfo").rx2("pmf.names"),
+                m=self._ro.NULL
+                if m is None
+                else self._r_discrete_grid(m, default=True),
+                full=True,
+            )
+            observed_after = self._stats.runif(8)
+            if not bool(
+                self._ro.baseenv["identical"](expected_after, observed_after)[0]
+            ):
+                raise RBridgeError("bam prefit RNG state not restored")
+        bam_index = _r_array(setup.rx2("kd"), dtype=np.int64)
+        replay_index = _r_array(replay.rx2("k"), dtype=np.int64)
+        if bam_index.ndim == 1:
+            bam_index = bam_index[:, None]
+        if not np.array_equal(replay_index[:, : bam_index.shape[1]], bam_index):
+            raise RBridgeError("replayed discrete.mf differs from bam's own index")
+        expanded = self._call_internal(
+            "Xbd",
+            setup.rx2("Xd"),
+            self._base.diag(self._base.ncol(setup.rx2("X"))),
+            setup.rx2("kd"),
+            setup.rx2("ks"),
+            setup.rx2("ts"),
+            setup.rx2("dt"),
+            setup.rx2("v"),
+            setup.rx2("qc"),
+            drop=setup.rx2("drop"),
+        )
+        padded = replay.rx2("mf")
+        columns = {}
+        for name in padded.names:
+            values = padded.rx2(name)
+            if bool(self._ro.baseenv["is.factor"](values)[0]):
+                values = self._base.as_character(values)
+            columns[str(name)] = _r_array(values)
+        unique = replay.rx2("nr")
+        return BamDiscretePrefit(
+            _r_array(expanded, dtype=np.float64),
+            pd.DataFrame(columns),
+            replay_index.astype(np.int32) - 1,
+            dict(zip(map(str, unique.names), map(int, unique), strict=True)),
+            tuple(map(str, setup.rx2("dinfo").rx2("pmf.names"))),
+        )
+
     def fit_bam_discrete_gaussian(
         self, formula: str, data: pd.DataFrame, **kwargs: Any
     ) -> BamDiscreteFit:
@@ -8054,6 +8162,7 @@ if (!is.null(s$sp.criterion)) {{
             prediction=prediction,
             prediction_se=prediction_se,
             log_theta=log_theta,
+            coefficient_edf=_r_array(fit.rx2("edf"), dtype=np.float64),
         )
 
     def _traced_bam_fit_chol(self, trials: list[np.ndarray]) -> Any:
