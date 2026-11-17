@@ -27,8 +27,10 @@ from jaxgam.smooths.source_arithmetic import (
     householder_left_transpose,
     householder_right,
     knot_squared_distances,
+    libm_log,
     matmult_tn,
     qt_factor,
+    r_pow,
     squared_distances,
 )
 from jaxgam.smooths.source_lapack import source_lanczos, source_project_rows
@@ -130,13 +132,20 @@ def eta_const(m: int, d: int) -> float:
 def _source_fast_eta(
     squared: npt.NDArray[np.float64], constant: float, m: int, d: int
 ) -> npt.NDArray[np.float64]:
-    """Apply src/tprs.c::fast_eta to squared distances, in its operation order."""
+    """Apply src/tprs.c::fast_eta to squared distances, in its operation order.
+
+    ``fast_eta`` evaluates ``f *= log(r) * .5`` with the C library's ``log``
+    for even ``d`` and then multiplies by ``r`` ``m - d/2`` times; for odd
+    ``d`` it multiplies ``m - d/2 - 1`` times and by ``sqrt(r)``. The log goes
+    through :func:`libm_log`, so no vectorized NumPy ``log`` can differ from
+    pinned R by an ulp; ``sqrt`` is correctly rounded everywhere.
+    """
     values = np.zeros(squared.shape, dtype=np.float64)
     positive = squared > 0.0
     distances = squared[positive]
     transformed = np.full(len(distances), constant, dtype=np.float64)
     if d % 2 == 0:
-        transformed *= np.log(distances) * 0.5
+        transformed *= libm_log(distances) * 0.5
         for _ in range(m - d // 2):
             transformed *= distances
     else:
@@ -346,6 +355,13 @@ def tps_semi_kernel(
 ) -> npt.NDArray[np.floating]:
     """Evaluate the TPS semi-kernel eta_{m,d}(r).
 
+    This is the textbook form ``c r^alpha log(r)`` on distances, not pinned
+    ``tprs.c::fast_eta`` (which takes squared distances, ``log(r2) * .5`` and
+    repeated multiplication); no fitting route uses it, and the source routes
+    call ``_source_fast_eta``. Its power and log go through R's ``R_pow``
+    (:func:`r_pow`) and the C library's ``log`` (:func:`libm_log`), so its
+    values do not depend on NumPy's vectorized maths.
+
     Parameters
     ----------
     r : np.ndarray
@@ -367,10 +383,10 @@ def tps_semi_kernel(
         # eta = c * r^alpha * log(r), with 0*log(0) = 0
         result = np.zeros_like(r, dtype=float)
         mask = r > 0
-        result[mask] = c * r[mask] ** alpha * np.log(r[mask])
+        result[mask] = c * r_pow(r[mask], alpha) * libm_log(r[mask])
     else:
         # eta = c * r^alpha
-        result = c * r**alpha
+        result = c * r_pow(r, alpha)
 
     return result
 
