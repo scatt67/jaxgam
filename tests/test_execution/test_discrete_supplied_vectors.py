@@ -10,7 +10,8 @@ takes each smooth's centering constraint over that padded frame. A source
 declares what it supplies with ``has_explicit_weights``/``has_explicit_offset``;
 an undeclared attribute counts as supplied.
 
-Gates (STRICT, no allowance), on exactly representable inputs:
+Gates on exactly representable inputs, STRICT except the selected smoothing
+parameters (MODERATE; see ``_SELECTED_SP_TOLERANCE``):
 
 * the compact frame, its padding, index and design against pinned
   ``bam(fit=FALSE)`` called with the fit's own arguments, in five settings;
@@ -47,7 +48,7 @@ from tests.test_execution.test_discrete_regular import (
     _sinlike,
     _source_decisions,
 )
-from tests.tolerances import STRICT
+from tests.tolerances import MODERATE, STRICT
 
 _FORMULA = _BOUNDARY_FORMULA
 _M = 30
@@ -395,6 +396,18 @@ def test_supplied_column_alone_raising_maxr_matches_bam_prefit(r_bridge) -> None
 # --------------------------------------------------------------------------
 
 
+# Selected smoothing parameters are the end point of two independent optimizer
+# runs on a criterion that is flat where a smooth is nearly linear, so they are
+# compared at MODERATE; every physical field of the same fit (coefficients,
+# fitted values, deviance, EDF, scale, score, covariance) stays at STRICT, and
+# fixed-sp fits have no such field. Measured against pinned bam on seed 6/16:
+# one parameter of order 1.8e7 differs by 1.5e-10 relative (1.51 x STRICT) on
+# x86_64 without AVX-512 (run 44085978878); 0.25-0.50 x STRICT on macOS arm64,
+# and within STRICT on x86_64 with AVX-512.
+_SELECTED_SP_FIELD = "smoothing parameters"
+_SELECTED_SP_TOLERANCE = MODERATE
+
+
 def _fit_fields(r_bridge, frame, source, *, sp, selected, r_weights, r_offset, offset):
     """Fit ``source`` following pinned R's decisions; return named field pairs."""
     trace = r_bridge.trace_bam_regular_working_model(
@@ -447,7 +460,7 @@ def _fit_fields(r_bridge, frame, source, *, sp, selected, r_weights, r_offset, o
     ]
     if selected:
         fields.append(
-            ("smoothing parameters", fit.smoothing_params, expected.smoothing_params)
+            (_SELECTED_SP_FIELD, fit.smoothing_params, expected.smoothing_params)
         )
     return followed, fit, expected, fields
 
@@ -470,7 +483,8 @@ def _gate_fit(collector, label, followed, fit, expected, fields):
         ),
     )
     for name, observed, target in fields:
-        collector.check(f"{label} {name}", _close(observed, target, STRICT))
+        tolerance = _SELECTED_SP_TOLERANCE if name == _SELECTED_SP_FIELD else STRICT
+        collector.check(f"{label} {name}", _close(observed, target, tolerance))
 
 
 # Seed 7 (16 trials) is deliberately absent: factor level "a" has no counts,
