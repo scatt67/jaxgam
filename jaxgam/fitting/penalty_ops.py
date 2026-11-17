@@ -288,14 +288,6 @@ class StackedPenaltyStructure:
             default=-1,
         )
 
-    def block_owner(self) -> np.ndarray:
-        """Each coefficient's owning block ordinal; ``-1`` where unpenalized."""
-        owner = np.full(self.n_coef, -1, dtype=np.int64)
-        for group in self.groups:
-            for ordinal, start in zip(group.ordinals, group.starts, strict=True):
-                owner[start : start + group.size] = ordinal
-        return owner
-
 
 def _dense_transform(transform: JaxTransform) -> jax.Array:
     if transform.kind == "dense":

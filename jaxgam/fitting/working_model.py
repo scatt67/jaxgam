@@ -379,60 +379,47 @@ def _sl_newton_step(
     )
 
 
-def _transform_block_rows(matrix, penalties):
-    """Replace each block's row slab by ``C.T @ rows``; blocks are disjoint."""
-    width = matrix.shape[1]
-    for group in penalties.groups:
-
-        def body(result, item, size=group.size):
-            C, start = item
-            rows = jax.lax.dynamic_slice(result, (start, 0), (size, width))
-            return jax.lax.dynamic_update_slice(result, C.T @ rows, (start, 0)), None
-
-        matrix, _ = jax.lax.scan(
-            body, matrix, (group.transforms, group.member_starts())
-        )
-    return matrix
-
-
-def _transform_block_columns(matrix, penalties):
-    """Replace each block's column slab by ``columns @ C``; blocks are disjoint."""
-    height = matrix.shape[0]
-    for group in penalties.groups:
-
-        def body(result, item, size=group.size):
-            C, start = item
-            columns = jax.lax.dynamic_slice(result, (0, start), (height, size))
-            return (
-                jax.lax.dynamic_update_slice(result, columns @ C, (0, start)),
-                None,
-            )
-
-        matrix, _ = jax.lax.scan(
-            body, matrix, (group.transforms, group.member_starts())
-        )
-    return matrix
-
-
 def _initial_working_gram(gram, penalties):
     """Sl.initial.repara's initial row/column block transformation of X'WX.
 
-    The source transforms block by block, rows then columns, so the block
-    pair (I, J) is formed as ``(C_I' G_IJ) C_J`` when I comes first (or
-    I = J) and as ``C_I' (G_IJ C_J)`` when J comes first. Both orders are
-    formed here with one stacked pass per group and the source's order is
-    selected per pair; each slab product is the source's own product.
+    The source transforms block by block in block order, rows then columns,
+    in one matrix, so a block pair is formed as ``(C_I' G_IJ) C_J`` or
+    ``C_I' (G_IJ C_J)`` depending on which block comes first. One
+    ``lax.scan`` walks the blocks in that order with the same slab
+    products, choosing the member's shape group by ``lax.switch`` when the
+    blocks do not all share one shape, so the graph holds one body per
+    shape and the matrix is updated in place as before.
     """
     penalties = penalty_ops.as_stacked(penalties)
-    rows_first = _transform_block_columns(
-        _transform_block_rows(gram, penalties), penalties
+    if not penalties.groups:
+        return gram
+    n_rows, n_columns = gram.shape
+    order = sorted(
+        (ordinal, group_number, member)
+        for group_number, group in enumerate(penalties.groups)
+        for member, ordinal in enumerate(group.ordinals)
     )
-    columns_first = _transform_block_rows(
-        _transform_block_columns(gram, penalties), penalties
-    )
-    owner = jnp.asarray(penalties.block_owner())
-    later_row = (owner[:, None] > owner[None, :]) & (owner[None, :] >= 0)
-    return jnp.where(later_row, columns_first, rows_first)
+    group_numbers = jnp.asarray(np.asarray([item[1] for item in order], np.int32))
+    members = jnp.asarray(np.asarray([item[2] for item in order], np.int64))
+
+    def transform(group, member, matrix):
+        C = group.transforms[member]
+        start = group.member_starts()[member]
+        rows = jax.lax.dynamic_slice(matrix, (start, 0), (group.size, n_columns))
+        matrix = jax.lax.dynamic_update_slice(matrix, C.T @ rows, (start, 0))
+        columns = jax.lax.dynamic_slice(matrix, (0, start), (n_rows, group.size))
+        return jax.lax.dynamic_update_slice(matrix, columns @ C, (0, start))
+
+    branches = [partial(transform, group) for group in penalties.groups]
+
+    def block(matrix, item):
+        group_number, member = item
+        if len(branches) == 1:
+            return branches[0](member, matrix), None
+        return jax.lax.switch(group_number, branches, member, matrix), None
+
+    transformed, _ = jax.lax.scan(block, gram, (group_numbers, members))
+    return transformed
 
 
 def _initial_working_rhs(rhs, penalties):
