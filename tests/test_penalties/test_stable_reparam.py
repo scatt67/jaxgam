@@ -9,10 +9,8 @@ block's total penalty, the form in which pinned ``gam.fit3`` passes ``UrS`` to
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import math
-from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from fractions import Fraction
 from functools import cache, partial
@@ -27,6 +25,7 @@ from jaxgam.penalties.stable_reparam import (
     stable_reparam,
 )
 from jaxgam.smooths.cubic import CubicRegressionSmooth
+from jaxgam.smooths.source_arithmetic import libm_exp
 from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 from tests.helpers import _AssertCollector, check_that, make_smooth_spec
 from tests.tolerances import MODERATE, STRICT, ToleranceClass
@@ -148,55 +147,22 @@ def _fixed_root(size: int) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 
 
-def _input_digest(roots, rho) -> str:
-    """SHA-256 of the generated gam.reparam inputs: each root, then log sp.
-
-    Each array contributes its shape and its little-endian float64 bytes in C
-    order.
-    """
-    digest = hashlib.sha256()
-    for value in (*roots, rho):
-        array = np.asarray(value, dtype="<f8")
-        digest.update(repr(array.shape).encode())
-        digest.update(array.tobytes(order="C"))
-    return digest.hexdigest()
-
-
-# Smooth-constructor blocks: their bytes (constructor eigendecompositions,
-# eigen roots) are platform dependent, so no digest-bound allowance is sound
-# here.  At these 17 points det2 is not asserted against R: all but
-# ti_tp_k6 (0,60) have two penalties that d_tol groups (no separating
-# transform) with log sp 10 apart, where the port and R are both ~1e-12 to
-# 8e-11 from a 110-digit reference and differ by DGEQP3/DORMQR rounding; at
-# ti_tp_k6 (0,60) the det2 diagonal (true value 2e-22) is det1_i - sp_i^2
-# tr(...) and inherits det1's ~1e-12 absolute rounding.  That regime is
-# covered with exact inputs and an exact rational oracle by the
-# "exactly representable family" tests below.  det and det1 are asserted at
-# STRICT here at every point.
-_DET2_NOT_ASSERTED_AGAINST_R = {
-    ("te_tp_k5", (10.0, 0.0)),
-    ("te_tp_k5", (0.0, 10.0)),
-    ("te_tp_k5", (-30.0, -40.0)),
-    ("te_tp_k5", (-40.0, -30.0)),
-    ("ti_tp_k6", (0.0, 60.0)),
-    ("te_cr_k4_3d", (-10.0, 0.0, 10.0)),
-    ("te_cr_k4_3d", (-10.0, 10.0, 0.0)),
-    ("te_cr_k4_3d", (0.0, -10.0, 10.0)),
-    ("te_cr_k4_3d", (0.0, 10.0, -10.0)),
-    ("te_cr_k4_3d", (10.0, -10.0, 0.0)),
-    ("te_cr_k4_3d", (10.0, 0.0, -10.0)),
-    ("te_cr_k4_3d", (-50.0, -50.0, -60.0)),
-    ("ti_cr_k4_3d", (-10.0, 0.0, 10.0)),
-    ("ti_cr_k4_3d", (0.0, -10.0, 10.0)),
-    ("ti_cr_k4_3d", (0.0, 10.0, -10.0)),
-    ("ti_cr_k4_3d", (10.0, -10.0, 0.0)),
-    ("ti_cr_k4_3d", (10.0, 0.0, -10.0)),
-}
+# Tolerance policy (rules addendum 2026-11-17): det2, and det1 where penalties
+# are grouped, sit at get_stableS's rounding floor. det2_ii = det1_i -
+# sp_i^2 tr(...) inherits det1's absolute rounding, and penalties that d_tol
+# groups with unequal sp are not separated by the transform. Measured: against
+# exact rationals the port is up to 4.7e-9 and pinned R up to 2.0e-9 off in
+# det2 (x_te_d2, sp ratio 2^14), and det1 is 4.7x (port) / 3.3x (R) STRICT;
+# port vs host R det2 differs by up to 6.8e-11 absolute (macOS arm64,
+# OpenBLAS SciPy, venv-ob2). So det2 is compared at MODERATE; det stays STRICT
+# everywhere. This replaces the former digest-bound allowance table and the
+# lists of points where det2 was not asserted: every point is now asserted.
+_DET2 = MODERATE
 
 
 @pytest.mark.parametrize("name", list(_BLOCKS))
 def test_determinant_and_derivatives_match_pinned_r(name: str, r_bridge) -> None:
-    """det and det1 at STRICT over the whole grid; det2 except 17 points."""
+    """det and det1 at STRICT over the whole grid; det2 at the floor class."""
     roots = _range_roots(name)
     collector = _AssertCollector()
     for rho in _grid(len(roots)):
@@ -207,10 +173,10 @@ def test_determinant_and_derivatives_match_pinned_r(name: str, r_bridge) -> None
         collector.check(
             f"{label} det1", partial(_close, ours.det1, theirs.det1, "det1")
         )
-        if (name, tuple(float(v) for v in rho)) not in _DET2_NOT_ASSERTED_AGAINST_R:
-            collector.check(
-                f"{label} det2", partial(_close, ours.det2, theirs.det2, "det2")
-            )
+        collector.check(
+            f"{label} det2",
+            partial(_close_at, ours.det2, theirs.det2, _DET2, "det2"),
+        )
         collector.check(
             f"{label} fixed flag",
             partial(check_that, not theirs.fixed_penalty, "unexpected fixed"),
@@ -383,27 +349,10 @@ _MODELS = {
 }
 
 
-# Root decision 2026-11-16: no det2 assertion against R's global call at these
-# four points (det and det1 stay STRICT); the exact-input multi-block test
-# below compares the per-block sum and the port's global call with exact
-# rational values instead.  The per-block sum misses R's global det2 at
-# STRICT here in one entry,
-# det2[1,1] (ti tp k6, first penalty), whose value det1_i - sp_i^2 tr(...)
-# inherits det1's absolute rounding.  Against a 110-digit evaluation of the
-# global problem (stables-logs/perblock_truth.log), max |det2 error| is
-# (per-block, R global, port global):
-#   (60,0,5,-20,0,20)    3.4e-15, 5.3e-10, 4.5e-10
-#   (-60,40,0,0,0,0)     3.2e-11, 1.1e-10, 1.0e-10
-#   (0,-30,10,60,40,20)  1.0e-12, 1.1e-11, 2.9e-12
-#   (-40,60,0,30,-10,10) 5.7e-11, 4.2e-11, 3.4e-11
-# so the global call is the less accurate side at three of the four, which is
-# why the dense route calls the reparameterization per block.
-_PER_BLOCK_DET2_HELD_OUT = {
-    ("s+ti+te3", (60.0, 0.0, 5.0, -20.0, 0.0, 20.0)),
-    ("s+ti+te3", (-60.0, 40.0, 0.0, 0.0, 0.0, 0.0)),
-    ("s+ti+te3", (0.0, -30.0, 10.0, 60.0, 40.0, 20.0)),
-    ("s+ti+te3", (-40.0, 60.0, 0.0, 30.0, -10.0, 10.0)),
-}
+# Per-block sum against R's single global call: det1 at MODERATE, measured
+# 1.46x STRICT at (60,0,5,-20,0,20) on this host, where a 110-digit evaluation
+# of the global problem puts R's global det1 5.3e-10 off and the per-block sum
+# 3.4e-15 off (stables-logs/perblock_truth.log); det2 at the floor class.
 
 
 def _model_block_roots(model: str) -> list[tuple[np.ndarray, ...]]:
@@ -457,8 +406,8 @@ def test_per_block_determinants_sum_to_pinned_global_reparam(
     """Justify the per-block call: it reproduces R's single global call.
 
     Pinned gam.fit3 calls gam.reparam once on all UrS; the sum of per-block
-    det/det1/det2 (singletons exact) equals it at STRICT, except det2 at the
-    four held-out points above.
+    det/det1/det2 (singletons exact) equals it: det at STRICT, det1 and det2 at
+    the classes stated above.
     """
     blocks = _model_block_roots(model)
     roots = _global_roots(blocks)
@@ -469,9 +418,12 @@ def test_per_block_determinants_sum_to_pinned_global_reparam(
         theirs = r_bridge.source_gam_reparam(roots, rho, 2)
         label = f"{model} rho={values}"
         collector.check(f"{label} det", partial(_close, det, theirs.det, "det"))
-        collector.check(f"{label} det1", partial(_close, det1, theirs.det1, "det1"))
-        if (model, values) not in _PER_BLOCK_DET2_HELD_OUT:
-            collector.check(f"{label} det2", partial(_close, det2, theirs.det2, "det2"))
+        collector.check(
+            f"{label} det1", partial(_close_at, det1, theirs.det1, MODERATE, "det1")
+        )
+        collector.check(
+            f"{label} det2", partial(_close_at, det2, theirs.det2, _DET2, "det2")
+        )
     collector.raise_if_any(f"{model} per-block vs global")
 
 
@@ -909,7 +861,7 @@ def _exact_oracle(roots_key: tuple, exponents: tuple[int, ...]):
     ``A^-1 C_j = X_j / d``.  Only the final quotients are rationals.
     """
     roots = [np.array(root).astype(np.int64) for root in roots_key]
-    sp = [Fraction(float(value)) for value in np.exp(_exact_rho(exponents))]
+    sp = [Fraction(float(value)) for value in libm_exp(_exact_rho(exponents))]
     denominator = math.lcm(*(value.denominator for value in sp))
     weights = [int(value * denominator) for value in sp]
     components = [
@@ -960,330 +912,6 @@ def _roots_key(roots) -> tuple:
     return tuple(tuple(map(tuple, np.asarray(root).tolist())) for root in roots)
 
 
-@dataclass(frozen=True)
-class _ExactAllowance:
-    """One reviewed MODERATE comparison with the exact value: (case, point, field).
-
-    ``port_*``/``r_*`` are the measured max absolute distances from the exact
-    value and their multiples of STRICT on the reviewing host; ``digest`` binds
-    the row to the platform-independent input bytes (roots and log sp).
-    """
-
-    case: str
-    exponents: tuple[int, ...]
-    field: str
-    port_distance: float
-    port_strict_ratio: float
-    r_distance: float
-    r_strict_ratio: float
-    digest: str
-
-
-# Root decision 2026-11-16 (reviewed allowance table for the exact family).
-#
-# Reason: where get_stableS groups penalties whose smoothing parameters differ
-# (d_tol grouping at sp ratios 2^7 and 2^14 here), the attainable accuracy of
-# mgcv's algorithm for det1/det2 is about STRICT.  The port and pinned R are
-# each within a small multiple of STRICT of the exact value, and which side of
-# STRICT a point lands on is decided by LAPACK rounding.  Both sides are
-# asserted within MODERATE of the exact value at every row
-# (test_exact_allowance_rows_are_within_moderate_for_port_and_r).
-#
-# Rows: every exact-family (case, point, field) whose measured port ratio on
-# the reviewing host (macOS arm64, SciPy Accelerate) is at or above 0.5x
-# STRICT, so every comparison that stays STRICT has at least a factor of two
-# in hand.  This includes x_te_d2 (14,0) det1 at 0.70x (by that rule, beyond
-# the two det1 points named in the decision) and the multi-block point, whose
-# row covers both the per-block sum and the port's global call.  det has no
-# row.  Four correction attempts on this mechanism are documented in
-# reports-20261116/get-stables.md (getXXt; C trace loop order; pinned OpenBLAS
-# DGEQP3; pinned OpenBLAS DSYEVR).  The input bytes are the same on every
-# platform; another LAPACK may need further rows, which are added here with
-# their measured values.
-_EXACT_ALLOWANCES: tuple[_ExactAllowance, ...] = (
-    _ExactAllowance(
-        "x_te_d2",
-        (0, 7),
-        "det2",
-        7.4e-12,
-        0.83,
-        4.1e-12,
-        0.46,
-        "b17705dc02978f67e3594410a425fc677208e3a9075c8c3d743371188b13ecf0",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (-43, -50),
-        "det2",
-        7.3e-12,
-        0.55,
-        6.0e-12,
-        0.45,
-        "199ff31fb2c0d6b5d4c1fa7d603b2292e7f3404ea9a860f86533baabcd596f8a",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (-50, -43),
-        "det2",
-        1.9e-11,
-        2.15,
-        1.9e-11,
-        2.11,
-        "f3644745b240917a9fc99eed73481f586db05cfc15625d98e1d09eef7b318ce0",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (14, 0),
-        "det1",
-        4.3e-10,
-        0.70,
-        5.7e-10,
-        0.61,
-        "0389953d7c65c7554b64c24ab640f1f309a91b9c73349f4e6b022ed887e5564f",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (14, 0),
-        "det2",
-        4.3e-10,
-        391.60,
-        7.3e-10,
-        658.58,
-        "0389953d7c65c7554b64c24ab640f1f309a91b9c73349f4e6b022ed887e5564f",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (0, 14),
-        "det1",
-        4.7e-09,
-        4.72,
-        1.7e-09,
-        2.85,
-        "ee84a91ea7e486e5f69c741b412ca0dd08ee369fb66a0424ddf22a46fc060d95",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (0, 14),
-        "det2",
-        4.7e-09,
-        4429.98,
-        1.7e-09,
-        1604.98,
-        "ee84a91ea7e486e5f69c741b412ca0dd08ee369fb66a0424ddf22a46fc060d95",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (-43, -57),
-        "det2",
-        5.8e-10,
-        519.79,
-        1.9e-10,
-        171.59,
-        "1f0eefc8d790ff44e410c8f1dbab1356a7b9bc5fa8e1a1caf48b50a1e4ba97a1",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (-57, -43),
-        "det1",
-        1.1e-09,
-        1.40,
-        2.0e-09,
-        3.33,
-        "9b4db193a554a775edf2dfe6f8aa7dcd67eb2d4ca3c51e3a6d7af28fa8b0178a",
-    ),
-    _ExactAllowance(
-        "x_te_d2",
-        (-57, -43),
-        "det2",
-        1.1e-09,
-        1078.65,
-        2.0e-09,
-        1880.13,
-        "9b4db193a554a775edf2dfe6f8aa7dcd67eb2d4ca3c51e3a6d7af28fa8b0178a",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (0, -7, 7),
-        "det2",
-        4.2e-12,
-        0.82,
-        3.5e-12,
-        0.69,
-        "8853ea16dab17f19be5594939b7d94ad21f290e58d01ad44eff6a2c8ca89cff2",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (0, 7, -7),
-        "det2",
-        3.9e-12,
-        0.75,
-        2.9e-12,
-        0.57,
-        "370734cfbb4e6539112033223d99e80fc32f8d5695c026ef3b62bb129519543e",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (7, -7, 0),
-        "det2",
-        4.8e-12,
-        0.94,
-        1.7e-12,
-        0.13,
-        "0522cb2b324f06a32ed9cdd37cac91cd5cb5e75103223079f5c598422e692619",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (-14, 0, 14),
-        "det2",
-        9.7e-12,
-        8.59,
-        7.0e-12,
-        6.21,
-        "70143e0a1abf9ea22f5762ea6fa528c191b4ea660a6dc71ded170e84578f6ff2",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (-14, 14, 0),
-        "det2",
-        2.5e-12,
-        2.23,
-        2.5e-12,
-        2.24,
-        "5d08915e38522ca7a97ab93f7ff389fe4fc5dd9527e6005fc0703964b485c358",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (0, -14, 14),
-        "det2",
-        1.3e-10,
-        113.40,
-        1.3e-10,
-        115.15,
-        "39d3037c415ca2aca861716feee797d7be15bc13b3d80d7552ea796fdddac8b8",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (0, 14, -14),
-        "det2",
-        2.1e-12,
-        1.88,
-        2.1e-12,
-        1.88,
-        "b02bb73ceac24718a0ba88d3ac83ec7be6b6a7541fcce87bdcff5f429c6b9353",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (14, -14, 0),
-        "det2",
-        1.5e-11,
-        13.30,
-        3.2e-11,
-        28.48,
-        "064bc774310e818f1d93c17f4bb4d540a13c68fb5c49049b1016ee709f41825f",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (14, 0, -14),
-        "det2",
-        1.0e-11,
-        8.82,
-        9.9e-12,
-        8.72,
-        "697f07d6916415726664e95a4ef4f105443691ed0c816a5a3dda9631c30d0434",
-    ),
-    _ExactAllowance(
-        "x_te3_d1",
-        (-72, -72, -86),
-        "det2",
-        5.9e-12,
-        5.42,
-        6.0e-12,
-        5.51,
-        "c9fdc4b0ee556746230b7803ca4c1fbcb2a04f2fbb0ef8e29c1352608a7f333e",
-    ),
-    _ExactAllowance(
-        "x_sep2",
-        (14, 0),
-        "det2",
-        1.3e-12,
-        1.35,
-        9.0e-13,
-        0.90,
-        "b38c05f4d572b89f63f0c3b09217d6bb1904d3ff4df226501ac6934896ed448b",
-    ),
-    _ExactAllowance(
-        "x_sep2",
-        (0, 14),
-        "det2",
-        2.2e-11,
-        21.98,
-        1.5e-11,
-        14.90,
-        "b7667eb731e5cd97b1bbcb6e17520966cacba413e67eadf53f6026dd9027e830",
-    ),
-    _ExactAllowance(
-        "x_sep2",
-        (-57, -43),
-        "det2",
-        9.5e-12,
-        9.52,
-        1.6e-11,
-        15.59,
-        "552cce56a69485b8ca4e447cf7859bd46fc8fa99654e881d81ba45a31e064776",
-    ),
-    _ExactAllowance(
-        "x_sep3",
-        (-7, 7, 0),
-        "det2",
-        1.7e-12,
-        1.61,
-        1.6e-12,
-        1.53,
-        "8cc160e362a56955e9d75e213d731888d79fcc7769677e2885ebae56c1524671",
-    ),
-    _ExactAllowance(
-        "x_sep3",
-        (-14, 0, 14),
-        "det2",
-        1.6e-12,
-        1.62,
-        5.8e-13,
-        0.58,
-        "5fe1164237e596a500a68bdfe9fc9e854151bdf6010b5d5022e0d7b9089b1def",
-    ),
-    _ExactAllowance(
-        "x_sep3",
-        (0, 14, -14),
-        "det2",
-        5.5e-12,
-        5.48,
-        3.3e-12,
-        3.30,
-        "85b1a9e87f544d980409507977e4924cbb8087f11bd5e490a6bc88646c0ca8e9",
-    ),
-    _ExactAllowance(
-        "multi",
-        (0, -43, -72, 87, 58, 29),
-        "det2",
-        7.4e-13,
-        0.74,
-        7.5e-13,
-        0.75,
-        "3209a4bf11ce95e33b1b8f6d8a7f561146b93d874cf9314d3f7e1f677c7c66a7",
-    ),
-)
-
-
-def _exact_tolerance(case: str, roots, exponents, field: str) -> ToleranceClass:
-    """MODERATE for a reviewed (case, point, field) on its exact bytes only."""
-    for row in _EXACT_ALLOWANCES:
-        if (row.case, row.exponents, row.field) == (case, tuple(exponents), field):
-            if _input_digest(roots, _exact_rho(exponents)) == row.digest:
-                return MODERATE
-            return STRICT
-    return STRICT
-
-
 def _close_at(actual, expected, tolerance: ToleranceClass, label: str) -> None:
     np.testing.assert_allclose(
         actual, expected, rtol=tolerance.rtol, atol=tolerance.atol, err_msg=label
@@ -1292,7 +920,11 @@ def _close_at(actual, expected, tolerance: ToleranceClass, label: str) -> None:
 
 @pytest.mark.parametrize("name", _EXACT_BLOCKS)
 def test_exact_family_matches_rational_oracle(name: str) -> None:
-    """det, det1, det2 against exact values (R-free), over gaps 2^7..2^87."""
+    """det at STRICT, det1/det2 at the floor class, against exact values.
+
+    det1 is also at MODERATE here: at the grouped points (sp ratio 2^14) it is
+    4.7x STRICT from the exact value for the port and 3.3x for pinned R.
+    """
     roots = _exact_block(name)
     key = _roots_key(roots)
     collector = _AssertCollector()
@@ -1305,7 +937,7 @@ def test_exact_family_matches_rational_oracle(name: str) -> None:
             exact,
             strict=True,
         ):
-            tolerance = _exact_tolerance(name, roots, exponents, field)
+            tolerance = STRICT if field == "det" else MODERATE
             collector.check(
                 f"{name} e={exponents} {field} ({tolerance.label})",
                 partial(_close_at, actual, expected, tolerance, field),
@@ -1313,53 +945,23 @@ def test_exact_family_matches_rational_oracle(name: str) -> None:
     collector.raise_if_any(f"{name} exact oracle")
 
 
-def _allowance_roots(case: str):
-    if case == "multi":
-        return _global_roots([_exact_block(name) for name in _EXACT_MULTI_BLOCK])
-    return _exact_block(case)
-
-
-def test_exact_allowance_rows_are_within_moderate_for_port_and_r(r_bridge) -> None:
-    """The allowance's reason: both implementations sit near the exact value."""
+def test_exact_family_pinned_r_is_within_the_floor_class(r_bridge) -> None:
+    """Pinned R itself sits within the floor class of the exact value."""
     collector = _AssertCollector()
-    for row in _EXACT_ALLOWANCES:
-        roots = _allowance_roots(row.case)
-        rho = _exact_rho(row.exponents)
-        exact = _exact_oracle(_roots_key(roots), row.exponents)
-        index = ("det", "det1", "det2").index(row.field)
-        ours = stable_reparam(roots, rho, deriv=2)
-        theirs = r_bridge.source_gam_reparam(roots, rho, 2)
-        for label, value in (
-            ("port", getattr(ours, row.field)),
-            ("R", getattr(theirs, row.field)),
-        ):
+    for name in _EXACT_BLOCKS:
+        roots = _exact_block(name)
+        key = _roots_key(roots)
+        for exponents in _exact_grid(len(roots)):
+            _, det1, det2 = _exact_oracle(key, exponents)
+            theirs = r_bridge.source_gam_reparam(roots, _exact_rho(exponents), 2)
+            label = f"{name} e={exponents}"
             collector.check(
-                f"{row.case} e={row.exponents} {row.field} {label}",
-                partial(_close_at, value, exact[index], MODERATE, row.field),
+                f"{label} det1", partial(_close_at, theirs.det1, det1, MODERATE, "det1")
             )
-    collector.raise_if_any("allowance rows within MODERATE of exact")
-
-
-def test_exact_allowance_table_needs_exact_inputs() -> None:
-    """Rows match the platform-independent bytes; any change returns STRICT."""
-    keys = {(row.case, row.exponents, row.field) for row in _EXACT_ALLOWANCES}
-    assert len(keys) == len(_EXACT_ALLOWANCES) == 27
-    for row in _EXACT_ALLOWANCES:
-        roots = _allowance_roots(row.case)
-        assert _input_digest(roots, _exact_rho(row.exponents)) == row.digest
-        assert _exact_tolerance(row.case, roots, row.exponents, row.field) is MODERATE
-        assert row.field in ("det1", "det2")
-    name, exponents = "x_te3_d1", (0, -14, 14)
-    roots = _exact_block(name)
-    changed = [root.copy() for root in roots]
-    changed[1][2, 3] = np.nextafter(changed[1][2, 3], np.inf)
-    assert _exact_tolerance(name, changed, exponents, "det2") is STRICT
-    swapped = [roots[1], roots[0], roots[2]]
-    assert _exact_tolerance(name, swapped, exponents, "det2") is STRICT
-    assert _exact_tolerance(name, roots, (0, -14, 15), "det2") is STRICT
-    assert _exact_tolerance(name, roots, exponents, "det1") is STRICT
-    assert _exact_tolerance(name, roots, exponents, "det") is STRICT
-    assert _exact_tolerance("x_sep3", roots, exponents, "det2") is STRICT
+            collector.check(
+                f"{label} det2", partial(_close_at, theirs.det2, det2, _DET2, "det2")
+            )
+    collector.raise_if_any("pinned R against exact values")
 
 
 _EXACT_MULTI_BLOCK = ("x_single", "x_te_d2", "x_sep3")
@@ -1376,10 +978,9 @@ _EXACT_MULTI_POINTS = (
 def test_exact_multi_block_per_block_and_global_match_exact_values() -> None:
     """Per-block sum and the port's global call both equal exact rationals.
 
-    Covers the regime where the per-block det2 was not asserted against R's
-    global call: there the per-block sum was the more accurate side at three
-    of four points against a 110-digit reference (see the comment on
-    _PER_BLOCK_DET2_HELD_OUT).
+    Against a 110-digit reference the per-block sum was the more accurate side
+    at three of four smooth-constructor points (comment above
+    test_per_block_determinants_sum_to_pinned_global_reparam).
     """
     blocks = [_exact_block(name) for name in _EXACT_MULTI_BLOCK]
     roots = _global_roots(blocks)
@@ -1397,7 +998,7 @@ def test_exact_multi_block_per_block_and_global_match_exact_values() -> None:
             for field, actual, expected in zip(
                 ("det", "det1", "det2"), values, exact, strict=True
             ):
-                tolerance = _exact_tolerance("multi", roots, exponents, field)
+                tolerance = _DET2 if field == "det2" else STRICT
                 collector.check(
                     f"e={exponents} {label} {field} ({tolerance.label})",
                     partial(_close_at, actual, expected, tolerance, field),
