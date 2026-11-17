@@ -92,15 +92,15 @@ by memory pairs at 1m and 3m.
 Plan question: are penalty storage, compilation and smoothing derivatives
 controlled?
 
-m=500 parses since `62db460` (F9 fixed). On the discrete working-model route
-M2 stays blocked until F11 is diagnosed: 100 smooths already spent 664 s
-(k=10) and 757 s (k=20) in XLA compilation at n=5000, so 500 smooths would
-compile for hours; those times are its recorded reason.
+m=500 parses since the parser fix (F9). On the discrete working-model route
+M2 runs only once the F11 fix lands: 100 smooths already spent 664 s (k=10)
+and 757 s (k=20) in XLA compilation at n=5000, so 500 smooths would compile
+for hours; those times are its recorded reason until then.
 
 | ID | model | family/link | n | p / pen. | route, smoothing | record | command |
 |---|---|---|---|---|---|---|---|
 | M1 | additive(100, 10) | Gaussian/identity | 100k | 901 / 100 | discrete-wm, 512 MiB table, 1 GiB fit budget | backend compile s and count (F11); setup construction peak; proposal evaluations. If setup is still rejected, record the required bytes and rerun with a larger table budget | `make benchmark-scaling ARGS="--execution discrete-wm --smooth-count 100 --k 10 --batch-rows 65536 --discrete-table-mib 512 --memory-budget-mib 1024 --n 100000 P"` |
-| M2 | additive(500, 10) | Gaussian/identity | 100k | 4501 / 500 | discrete-wm, 2 GiB table and budget | as M1. **Blocked by F11** (compile time) | `make benchmark-scaling ARGS="--execution discrete-wm --smooth-count 500 --k 10 --batch-rows 65536 --discrete-table-mib 2048 --memory-budget-mib 2048 --n 100000 P"` |
+| M2 | additive(500, 10) | Gaussian/identity | 100k | 4501 / 500 | discrete-wm, 2 GiB table and budget | as M1. **Runs only once the F11 fix lands** (compile time) | `make benchmark-scaling ARGS="--execution discrete-wm --smooth-count 500 --k 10 --batch-rows 65536 --discrete-table-mib 2048 --memory-budget-mib 2048 --n 100000 P"` |
 | M3 | additive(10, 10) | Poisson/log | 100k | 91 / 10 | stream-exact, REML | derivative s; outer iterations; cumulative PIRLS passes; stop status (F10) | `make benchmark-scaling ARGS="--execution stream-exact --family poisson --smooth-count 10 --k 10 --batch-rows 65536 --n 100000 P"` |
 | M4 | additive(100, 10) | Gaussian/identity | 20k | 901 / 100 | dense-reml | Newton iterations; compile; RSS (dense m-penalty reference) | `make benchmark-scaling ARGS="--execution dense-reml --smooth-count 100 --k 10 --n 20000 P"` |
 | M5 | additive(100, 20) | Gaussian/identity | 100k | 1901 / 100 | discrete-wm, 512 MiB table, 1 GiB budget | as M1 at k=20 | `make benchmark-scaling ARGS="--execution discrete-wm --smooth-count 100 --k 20 --batch-rows 65536 --discrete-table-mib 512 --memory-budget-mib 1024 --n 100000 P"` |
@@ -205,20 +205,20 @@ findings table.
 Filled in the first round (with tests; `scripts/benchmark_scaling.py` is at
 96% statement and branch coverage after both rounds, no new line missed):
 
-- **Compilation** (`4e94406`): a `jax.monitoring` listener records the count
+- **Compilation** (`375a64b`): a `jax.monitoring` listener records the count
   and seconds of tracing, lowering, backend compilation and persistent-cache
   events for every cold and warm fit (`cold_fit_compilation`,
   `cold_fit_backend_compile_s`, `warm_fit_*`). Before, compilation was folded
   into `cold_compile_and_fit_s`.
-- **Models** (`4e94406`): `--model tp | gp | shared | ti` for the dense and
+- **Models** (`375a64b`): `--model tp | gp | shared | ti` for the dense and
   discrete routes.
-- **G1 host suspension** (`94f0e61`): each fit is also timed by the wall clock;
+- **G1 host suspension** (`11394a2`): each fit is also timed by the wall clock;
   `host_suspension_suspected` flags a record whose wall duration exceeds its
   `perf_counter` duration by more than max(1 s, 5%). On the preparation host,
   two dry runs took 962 s and 915 s of wall time against 5.4 s and 7.2 s of
   `perf_counter` time because the laptop slept between maintenance wakes; JAX's
   compile events use `time.time()` and counted the sleep as compilation.
-- **Budgets** (`94f0e61`, `50081b7`): `--discrete-table-mib` (discrete
+- **Budgets** (`11394a2`, `258d958`): `--discrete-table-mib` (discrete
   `DiscretizationBudget` table and batch limits) and `--memory-budget-mib`
   (`FitControl.memory_budget_bytes` on streamed and discrete fits and setup).
   The defaults rejected M1, M5, K3, K4, M2 and F1 before any fit.
@@ -357,10 +357,10 @@ true on a clean tree); no record was flagged for host suspension.
 | H1 | 300 levels, 600 rows | valid; p = 306; 13 Krylov iterations; preconditioner 2,784 bytes |
 | H2 | 300 levels, pair 600 / 1,200 | valid; `workspace_bound_plateau` true (1.44 MB) |
 | H3 | 300 levels, 600 rows | `valid=false`, `indeterminate_score` (public default operator controls), written and exit 3 |
-| H6 | 50 levels, 3 seeds, 8 probes | valid after `ea2df90` (the first attempt imported another editable jaxgam); max PCG relative residual 3.8e-16 |
+| H6 | 50 levels, 3 seeds, 8 probes | valid after `7c45fe8` (the first attempt imported another editable jaxgam); max PCG relative residual 3.8e-16 |
 | H7, H8 | 100 levels, 2,000 rows | valid (discrete with `factor_names`, and dense) |
 | N6-N9 | 2,000 | valid (outliers and theta 1e4, dense and exact streamed) |
-| T6 | test model, 3 seeds, 8 probes | valid after `ea2df90` |
+| T6 | test model, 3 seeds, 8 probes | valid after `7c45fe8` |
 | T8 | 2,000, 10 smooths | dense valid; exact streamed `valid=false`, `STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT; 2 source step window(s)` |
 | T9-T12 | 2,000 | valid; T9 on streamed QR recorded 16,912 bytes of temporary disk |
 | T13 | 400 | `valid=false`, `step failed` (F12) |
@@ -382,7 +382,7 @@ true on a clean tree); no record was flagged for host suspension.
 8. `make benchmark-manifest ARGS="--phase end --output $RUN/manifest.json"`.
 9. T0 and every R-parity gate in the pinned environment (`make test`, root).
 
-M2 is not scheduled: it is blocked by F11 (compile time). A command that ends
+M2 is not scheduled until the F11 fix lands (compile time). A command that ends
 with exit status 3 has still written its record (`valid=false`, G7); the run
 continues with the next case.
 
@@ -452,18 +452,53 @@ this size**; **needs the full size**. Sizes stayed at n <= 20,000.
 
 | ID | Finding | Smallest reproduction | Classification and observation |
 |---|---|---|---|
-| F1 | Gaussian QR, p = 1001, 100 smooths | `make benchmark-scaling ARGS="--execution stream-gaussian-qr --smooth-count 100 --k 11 --batch-rows 16384 --n 20000 P"`; then `--batch-rows 4096`; then `--batch-rows 16384 --memory-budget-mib 1024` | **Reproduces at n = 20,000.** B=16384: "Known streamed Gaussian QR workspace requires 558529632 bytes, exceeding FitControl.memory_budget_bytes=536870912". B=4096: `converged=False`, status `iteration limit`. With 1 GiB at B=16384 the preflight passes and the stop is the same `iteration limit`, so the non-convergence does not depend on the batch size. The status is L-BFGS-B's iteration limit, not the relative-reduction stop that the Gaussian QR route showed elsewhere; the harness keeps no projected gradient for an invalid fit (G7) |
-| F2 | Exact streamed REML, NB with estimated theta, `additive(2, 10)` | N4 at `--n 20000` | **Does not reproduce at n = 20,000** (or 2,000): converged, `CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL; 1 source step window(s)`, projected gradient 4.7e-11, theta 2.947. **Needs the full size** (100k, 1m). The relative-reduction stop was not seen for NB at this size; it was seen on exact streamed Gaussian REML with 40 smooths at n = 4,000 (`CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH; 2 source step window(s)`, projected gradient 1.6e-5 against gtol 1e-6, deterministic in three repeats) |
-| F3 | Operator setup accounting against distinct covariate rows | K5, K6; Appendix A, F3 | **Reproduces at 3,072 distinct rows.** The operator preparation peak bound grows as about 82 bytes x (distinct rows)^2, identically for 2-D tp and 1-D gp at k=10: 96, 359, 789, 1,386 and 3,085 MB at 1,024, 2,048, 3,072, 4,096 and 6,144 rows. The default 512 MiB budget rejects between 2,048 and 3,072 rows, and 4 GiB between 6,144 and 8,192. The rejection message ("needs at most 537 MB") reports roughly the budget, not the requirement. The first round's "does not reproduce" was wrong: its 1 MiB budget tripped an earlier, n-independent check (3.78 MiB) |
+| F1 | Gaussian QR, p = 1001, 100 smooths | `make benchmark-scaling ARGS="--execution stream-gaussian-qr --smooth-count 100 --k 11 --batch-rows 16384 --n 20000 P"`; then `--batch-rows 4096`; then `--batch-rows 16384 --memory-budget-mib 1024` | **Documented limit (user decision, 2026-11-17): the streamed Gaussian QR route does not converge above about 50 penalties; not fixed in this effort.** Reproduces at n = 20,000. B=16384: "Known streamed Gaussian QR workspace requires 558529632 bytes, exceeding FitControl.memory_budget_bytes=536870912". B=4096: `converged=False`, status `iteration limit`. With 1 GiB at B=16384 the preflight passes and the stop is the same `iteration limit`, so the non-convergence does not depend on the batch size. The status is L-BFGS-B's iteration limit, not the relative-reduction stop that the Gaussian QR route showed elsewhere; the harness keeps no projected gradient for an invalid fit (G7) |
+| F2 | Exact streamed REML, NB with estimated theta, `additive(2, 10)` | N4 at `--n 20000` | **Does not reproduce at n = 20,000** (or 2,000): converged, `CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL; 1 source step window(s)`, projected gradient 4.7e-11, theta 2.947. **Needs the full size** (100k, 1m). The relative-reduction stop was not seen for NB at this size; see F13 for the same stop on Gaussian REML |
+| F3 | Operator setup accounting against distinct covariate rows | K5, K6; Appendix A, F3 | **Reproduces on the knot-series head (`299b6d6`), unchanged by it.** The preparation peak bound (`operator_diagnostics.preparation_peak_bound_bytes`, budget 16 GiB so the full requirement is reported) is quadratic in distinct rows, not bounded by the 2000-knot cap: 2-D tp k=10 96.1, 358.7, 1,386.1 and 5,454.4 MB at 1,024, 2,048, 4,096 and 8,192 distinct rows (81-92 bytes per row squared); 1-D gp 96.3, 358.1, 1,385.1 and 5,452.4 MB. Cause, by reading `formula/operator_radial.py`: `_setup_bytes(q, ...)` charges about 80 q^2 bytes for q = every distinct row discovered, before the rows are sampled to `max_knots`. The fit's own peak bound plateaus (333 MB from 2,048 rows on) and the 8,192-row fits completed in under 7 s, so the actual work is knot-bounded and only the preparation accounting grows. Rejection message at the default 512 MiB: "Operator preparation needs at most 537089966 bytes; budget is 536870912." (tp; 537,089,880 at 8,192 rows; gp 536,881,464 at both). The check runs once per newly discovered row and raises at the first row count whose requirement crosses the budget, so the message reports that crossing point, about the budget, not the requirement (1.39 GB at 4,096 rows, 5.45 GB at 8,192). The first round's "does not reproduce" was wrong: its 1 MiB budget tripped an earlier, n-independent check |
 | F4 | Dense `te()` REML with log smoothing parameters >= 20 apart | Appendix A, F4 | **Reproduces at n = 1,000** (`te(x0,x1,bs='cr',k=6)`, y = sin(4 pi x0) + N(0, 0.02^2)). R: log sp (-6.02, 14.55), spread 20.6, full convergence. JaxGAM: (-6.02, 23.78), stop `step failed`; score differs by 8.2e-3 and fitted values by up to 1.0e-3. At spread 15.6 (noise 0.05, n = 600) both converge, with score difference 2.2e-5 and fitted 6.2e-5 |
 | F5 | `y ~ x + s(x, bs='gp')` reports converged while its inner loop hits the limit | Appendix A, F5 | **Does not reproduce through public results at n = 200**: `converged=True`, `full convergence`, 5 outer iterations; a fixed-sp refit at the selected sp converges in 2 PIRLS iterations. The inner PIRLS state inside Newton trials is not exposed (G14), so the case needs internal instrumentation (being addressed elsewhere) |
 | F6 | `bulk_link_variance` raises above 5 Monte Carlo standard errors | T6, H6 (`scripts/benchmark_bulk_variance.py`) | **Reproduces** on the test model (Gaussian `s(x,bs='cr',k=6)+s(g,bs='re')`, 47 rows, 5 calibration rows, 48 probes). Over 240 fresh seeds the per-call maximum standardized error exceeded 5 twice (0.83%; Clopper-Pearson 95% interval 0.10%-2.98%), with maxima 7.60 and 4.48 in the two batches, median 1.5, 95th percentile 3.6-3.7, and 19 calls above 3. The 5-SE rule is being replaced; the script now records per seed and row both the old standardized error and the ratio estimate/exact, whose exact reference for Gaussian probes and exact solves is chi-square(probes)/probes |
 | F7 | Discrete route with a factor `re` term | Appendix A, F7 | **Reproduces; usage, not numerics.** Without `factor_names` it fails with "Metric column 'g' must be real numeric data"; with `ContinuousDiscretizationControl(factor_names=("g",))` it fits and converges. The message does not name the missing declaration |
 | F8 | Discrete 2-D tp construction bytes against compact rows | `--execution discrete-wm --model tp --k 30` at n = 500-2,000 with a 1 MiB table budget | **Reproduces**: required 16.9, 64.1 and 250.0 MiB at 500, 1,000 and 2,000 rows (x4 per doubling, up to the 2000-knot cap). The default 64 MiB budget rejects 2-D tp k=30 above about 1,000 compact rows. 1-D gp stays near 64 MiB because the grid caps its unique values |
-| F9 | Formula parser recursion | `parse_formula` with 500 additive `s()` terms | **Fixed in `62db460`.** The +/- chain walk and its error rendering are iterative; 500 and 5,000 terms parse, and the old and new parsers agree on 141 formulas. CPython's own `ast.parse` still fails somewhere between 5,000 and 20,000 terms |
-| F10 | Exact streamed Poisson REML with 10 smooths | M3 at n = 2,000 | **Reproduces at n = 2,000**: `converged=False`, `STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT; 4 source step window(s)`. Whether it persists at 100k is unknown |
-| F11 | Compilation time of discrete working-model REML with many smooths | M1, M5 at n = 5,000 | **Reproduces at n = 5,000**: 664 s (100 smooths, k=10) and 757 s (k=20) of XLA backend compilation in the cold fit; warm fits 32 s and 60 s; no host suspension. Being diagnosed separately; M2 (500 smooths) is blocked with these times as its reason |
+| F9 | Formula parser recursion | `parse_formula` with 500 additive `s()` terms | **Fixed in `a892c63`.** The +/- chain walk and its error rendering are iterative; 500 and 5,000 terms parse, and the old and new parsers agree on 141 formulas. CPython's own `ast.parse` still fails somewhere between 5,000 and 20,000 terms |
+| F10 | Exact streamed Poisson REML with 10 smooths | M3 at n = 2,000 | **Reproduces at n = 2,000**: `converged=False`, `STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT; 4 source step window(s)`. Whether it persists at 100k is unknown  **Being fixed (streamed iteration budget) by another implementer.** |
+| F11 | Compilation time of discrete working-model REML with many smooths | M1, M5 at n = 5,000 | **Reproduces at n = 5,000**: 664 s (100 smooths, k=10) and 757 s (k=20) of XLA backend compilation in the cold fit; warm fits 32 s and 60 s; no host suspension. **Being fixed by another implementer.** M2 (500 smooths) runs only once that fix lands |
 | F12 | Dense REML Poisson with large count outliers at small n | T13 | **Reproduces at n = 400**: additive(2, 5) with 2% of counts replaced by 1000 + Poisson(1000) stops `converged=False`, `step failed`; the same data at n = 2,000 converge, as does NB with the same outliers (theta 0.27 and 0.13) |
+| F13 | Exact streamed Gaussian REML with 40 smooths | `GAM` with `FitControl(execution="stream", linear_solver="qr", batch_rows=256)` on additive(40, 10), n = 4,000, seed 5 | **Reproduces, deterministically (three repeats)**: `converged=False`, `CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH; 2 source step window(s).; projected gradient 1.623e-05 exceeds gtol 1.000e-06`, score 4428.4033376774205 each time. The stop is L-BFGS-B's relative-reduction test, the mechanism found on the Gaussian QR route |
+
+**Unexplained events (for the heap-corruption investigation on this host).**
+Both happened on 2026-11-17 in the same scratch script, run three times in a
+row on the worktree at `3ea2d1d` (clean; the P5 commit before the rebase onto the knot series, now `4748465`), Apple M4, macOS
+15.6, Python 3.13.10, JAX 0.9.0.1, under `caffeinate -s -i` with
+`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1`, `PYTHONPATH` set to
+the worktree and the shared persistent JAX cache `$OUT/jax-cache-s8`.
+
+- What was running: one process that imported only `tracemalloc`,
+  `warnings`, `numpy` and `jaxgam` (from `jaxgam` it used `GAM`, `FitControl`
+  and `ArrayRowSource`). It built additive(40, 10) Gaussian data (n = 4,000,
+  seed 5) and, for three routes in turn (streamed pivoted-QR at fixed sp,
+  frozen Gaussian QR REML, exact streamed REML; `batch_rows=256`), ran one
+  untraced fit and then one fit between `tracemalloc.start()` and
+  `tracemalloc.stop()`.
+- R was not loaded: nothing in the process imported `rpy2` or
+  `tests.r_bridge`, and `jaxgam` itself imports neither.
+- **E1, first run:** the process aborted with `libc++abi: terminating due to
+  uncaught exception of type std::__1::system_error: mutex lock failed:
+  Invalid argument`, printed twice and interleaved (two threads aborting at
+  once). Standard output was block-buffered and lost, so the stage (which
+  route, traced or untraced fit, or interpreter exit) is unknown; whether
+  `tracemalloc` was active at that moment is therefore unknown, though it was
+  started in that process at least once if the first route had begun its
+  traced fit.
+- **E2, second run (`python -u`):** a `ValueError: array must not contain
+  infs or NaNs` from `numpy.asarray_chkfinite` inside `scipy.linalg.qr`
+  (`scipy/linalg/_decomp_qr.py`, line 142, through
+  `scipy/_lib/_util.py` line 1181). Only the last eight output lines were
+  kept, so the calling `jaxgam` frame and route are unknown, and so is
+  whether the fit was the traced one.
+- The third run of the same script completed all six fits; three further
+  untraced repeats of the exact streamed fit were bitwise-consistent (F13);
+  the P4 guards, which wrap `scipy.linalg.qr`, never saw a non-finite input.
 
 **F6 measurement.** `scripts/benchmark_bulk_variance.py` (T6, H6) records,
 per seed and calibration row, the old standardized error and the ratio
