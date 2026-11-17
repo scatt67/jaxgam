@@ -30,6 +30,9 @@ from jaxgam.smooths.tprs import TPRSSmooth
 from tests.helpers import _AssertCollector, check_that, r_links_pinned_openblas
 from tests.tolerances import MODERATE, STRICT
 
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
+
 _LAYOUTS = ("regular", "irregular", "clustered", "shifted")
 _RANKS = (4, 6, 8)
 _CASES = [
@@ -275,3 +278,33 @@ def test_tprs_bivariate_knot_rows_and_training_guards(r_bridge) -> None:
     prediction = model.modest.predict_spec.coef_map.terms[-1].smooth
     with pytest.raises(RuntimeError, match="copy_for_training"):
         prediction.training_matrix(columns)
+
+
+@pytest.mark.parametrize(("m", "d"), [(2, 1), (2, 2), (3, 2), (3, 3), (4, 2), (4, 4)])
+def test_source_fast_eta_is_tprs_c_with_the_c_library_log(m, d):
+    """Each element equals a scalar transcription of tprs.c::fast_eta."""
+    import math
+
+    from jaxgam.smooths.tprs import _source_fast_eta, eta_const
+
+    rng = np.random.default_rng(1116 + 10 * m + d)
+    squared = np.concatenate(
+        [[0.0, 1.0, 5e-324], np.exp(rng.uniform(-30.0, 30.0, 400))]
+    )
+    constant = eta_const(m, d)
+    expected = np.empty_like(squared)
+    for index, r in enumerate(squared):
+        f = constant
+        if r <= 0.0:
+            f = 0.0
+        elif d % 2 == 0:
+            f *= math.log(r) * 0.5
+            for _ in range(m - d // 2):
+                f *= r
+        else:
+            for _ in range(m - d // 2 - 1):
+                f *= r
+            f *= math.sqrt(r)
+        expected[index] = f
+    actual = _source_fast_eta(squared, constant, m, d)
+    np.testing.assert_array_equal(actual.view(np.int64), expected.view(np.int64))

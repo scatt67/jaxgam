@@ -201,6 +201,7 @@ class TestStructuralInvariants:
 # ===========================================================================
 
 
+@pytest.mark.platform_sensitive
 @pytest.mark.skipif(not r_available(), reason="R with mgcv not available")
 class TestRComparison:
     """Compare TPRS construction against R's smoothCon().

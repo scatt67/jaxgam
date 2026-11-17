@@ -33,6 +33,9 @@ from tests.tolerances import (
     normalize_symmetric_signs,
 )
 
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _frame(n: int = 61) -> pd.DataFrame:
     x = np.linspace(-1.3, 1.7, n)

@@ -1,12 +1,16 @@
 """Pinned R token and sampler helpers shared by radial and grid setup."""
 
 import numpy as np
+import pytest
 
 from jaxgam.data.source_tokens import (
     _r_number_text,
     _r_sample_without_replacement,
     _RRandom,
 )
+
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
 
 
 def test_source_number_tokens_cover_r_boundary_values():
@@ -29,3 +33,20 @@ def test_sampler_matches_pinned_r_seed_and_keeps_caller_state(r_bridge):
         _r_sample_without_replacement(13, 7, rng) + 1, expected
     )
     assert sorted(_r_sample_without_replacement(13, 7).tolist()) == list(range(13))
+
+
+def _powers_of_ten_and_neighbours() -> np.ndarray:
+    """Powers of ten and their one-ulp neighbours, where log10 decides kp."""
+    values = []
+    for exponent in range(-30, 31):
+        power = float(f"1e{exponent}")
+        values += [np.nextafter(power, 0.0), power, np.nextafter(power, np.inf)]
+    return np.asarray(values)
+
+
+def test_tokens_next_to_powers_of_ten_match_pinned_r(r_bridge):
+    """scientific()'s kp comes from C log10; ulp neighbours of 10^k decide it."""
+    values = _powers_of_ten_and_neighbours()
+    expected = r_bridge.source_numeric_tokens(values)
+    actual = np.asarray([_r_number_text(value) for value in values])
+    np.testing.assert_array_equal(actual, expected)
