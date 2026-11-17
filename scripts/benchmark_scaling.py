@@ -60,8 +60,9 @@ _NB_START_THETA = 1.0
 # Gaussian-process smooth; ``shared`` s(x0) beside te(x0, x1) (a shared
 # covariate); ``ti`` two main effects plus their ti() interaction. The streamed
 # routes prepare only univariate cr/cs smooths, so these run on the dense and
-# discrete routes.
-_MODELS = ("additive", "tensor", "tp", "gp", "shared", "ti")
+# discrete routes. ``re`` is s(x0) plus a random effect s(g, bs='re') over
+# ``levels`` declared factor levels (dense, discrete and operator routes).
+_MODELS = ("additive", "tensor", "tp", "gp", "shared", "ti", "re")
 _COVARIATE_PAIR_MODELS = frozenset({"tensor", "tp", "shared", "ti"})
 # jax.monitoring duration events counted as compilation work.
 _COMPILATION_EVENT_PREFIXES = ("/jax/core/compile/", "/jax/compilation_cache/")
@@ -104,6 +105,7 @@ class ScalingCase:
     discretization_m: int | None = None
     discrete_table_mib: int | None = None
     memory_budget_mib: int | None = None
+    levels: int | None = None
 
     def __post_init__(self) -> None:
         if self.n_rows <= 0:
@@ -172,6 +174,18 @@ class ScalingCase:
             raise ValueError(
                 "discrete_table_mib must be a positive integer and applies only "
                 "to the discrete executions."
+            )
+        if (self.model == "re") != (self.levels is not None) or (
+            self.levels is not None
+            and (
+                isinstance(self.levels, bool)
+                or not isinstance(self.levels, int)
+                or self.levels < 2
+            )
+        ):
+            raise ValueError(
+                "levels is required by, and only applies to, model='re'; it "
+                "must be an integer of at least 2."
             )
         if self.memory_budget_mib is not None and (
             self.execution not in _STREAM_EXECUTIONS | _DISCRETE_EXECUTIONS
@@ -321,6 +335,8 @@ def _smooth_variables(case: ScalingCase) -> tuple[str, ...]:
         return ("x0", "x1")
     if case.model == "gp":
         return ("x0",)
+    if case.model == "re":
+        return ("x0", "g")
     if case.smooth_count == 1:
         return ("x",)
     return tuple(f"x{index}" for index in range(case.smooth_count))
@@ -335,6 +351,8 @@ def _formula(case: ScalingCase) -> str:
         return f"y ~ s(x0, x1, k={k}, bs='tp')"
     if case.model == "gp":
         return f"y ~ s(x0, k={k}, bs='gp')"
+    if case.model == "re":
+        return f"y ~ s(x0, k={k}, bs='cr') + s(g, bs='re')"
     if case.model == "shared":
         return f"y ~ s(x0, k={k}, bs='cr') + te(x0, x1, k={k}, bs='cr')"
     if case.model == "ti":
@@ -358,6 +376,8 @@ def _smoothing_parameter_order(case: ScalingCase) -> list[str]:
         return ["s(x0,x1)"]
     if case.model == "gp":
         return ["s(x0)"]
+    if case.model == "re":
+        return ["s(x0)", "s(g)"]
     if case.model == "shared":
         return ["s(x0)", *tensor_margins]
     if case.model == "ti":
@@ -387,8 +407,23 @@ def _family_object(case: ScalingCase) -> Any:
 def _make_data(case: ScalingCase) -> pd.DataFrame:
     rng = np.random.default_rng(case.seed)
     variables = _smooth_variables(case)
-    columns = {variable: rng.uniform(0.0, 1.0, case.n_rows) for variable in variables}
-    if case.model == "tensor":
+    if case.model == "re":
+        assert case.levels is not None
+        codes = rng.integers(0, case.levels, case.n_rows)
+        columns: dict[str, Any] = {
+            "x0": rng.uniform(0.0, 1.0, case.n_rows),
+            "g": pd.Categorical.from_codes(
+                codes, categories=[f"g{level}" for level in range(case.levels)]
+            ),
+        }
+        effects = rng.normal(0.0, 0.5, case.levels)
+    else:
+        columns = {
+            variable: rng.uniform(0.0, 1.0, case.n_rows) for variable in variables
+        }
+    if case.model == "re":
+        signal = np.sin(2.0 * np.pi * columns["x0"]) + effects[codes]
+    elif case.model == "tensor":
         signal = (
             0.8 * np.sin(2.0 * np.pi * columns["x0"]) * np.cos(np.pi * columns["x1"])
         )
@@ -428,12 +463,37 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
     return pd.DataFrame({**columns, "y": y})
 
 
+def _row_source(data: pd.DataFrame, case: ScalingCase) -> Any:
+    """The replayable source every streamed, discrete and operator route reads.
+
+    Factor columns are passed as categorical Series so their declared levels
+    survive; numeric columns as arrays.
+    """
+    from jaxgam.data.source import ArrayRowSource
+
+    columns = {
+        name: (
+            data[name]
+            if isinstance(data[name].dtype, pd.CategoricalDtype)
+            else data[name].to_numpy()
+        )
+        for name in _smooth_variables(case)
+    }
+    return ArrayRowSource(columns, y=data.y.to_numpy())
+
+
 def _input_provenance(data: pd.DataFrame, case: ScalingCase) -> dict[str, Any]:
     digest = hashlib.sha256()
     for name in data.columns:
         digest.update(name.encode())
         digest.update(b"\0")
-        digest.update(_array_sha256(data[name].to_numpy()).encode())
+        column = data[name]
+        if isinstance(column.dtype, pd.CategoricalDtype):
+            # Object arrays hash as pointers; hash codes and level labels.
+            digest.update(_array_sha256(column.cat.codes.to_numpy()).encode())
+            digest.update("\0".join(map(str, column.cat.categories)).encode())
+        else:
+            digest.update(_array_sha256(column.to_numpy()).encode())
     family = _effective_family(case)
     if case.model != "additive":
         shape = f"{case.model}_sine"
@@ -729,14 +789,7 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
 
         return _FitPlan(fit, formula, None)
 
-    from jaxgam.data.source import ArrayRowSource
-
-    source = _CountingArrayRowSource(
-        ArrayRowSource(
-            {name: data[name].to_numpy() for name in _smooth_variables(case)},
-            y=data.y.to_numpy(),
-        )
-    )
+    source = _CountingArrayRowSource(_row_source(data, case))
     family = _family_object(case)
 
     if case.execution in _DISCRETE_EXECUTIONS:
@@ -845,7 +898,9 @@ def _discrete_control(case: ScalingCase) -> Any:
             "working_model_reml" if case.execution == "discrete-wm" else "exact_reml"
         ),
         discretization=ContinuousDiscretizationControl(
-            m=case.discretization_m, budget=budget
+            m=case.discretization_m,
+            budget=budget,
+            factor_names=("g",) if case.model == "re" else (),
         ),
     )
 
@@ -958,6 +1013,8 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
             contract["discrete_table_and_batch_budget_mib"] = case.discrete_table_mib
     if case.memory_budget_mib is not None:
         contract["memory_budget_mib"] = case.memory_budget_mib
+    if case.levels is not None:
+        contract["levels"] = case.levels
     return contract
 
 
@@ -1289,15 +1346,9 @@ def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         rank_deficit = fitting_data.rank_deficit
     else:
         from jaxgam.control import FitControl
-        from jaxgam.data.source import ArrayRowSource
         from jaxgam.formula.prepare import prepare_model
 
-        source = _CountingArrayRowSource(
-            ArrayRowSource(
-                {name: data[name].to_numpy() for name in _smooth_variables(case)},
-                y=data.y.to_numpy(),
-            )
-        )
+        source = _CountingArrayRowSource(_row_source(data, case))
         # Public streamed and discrete fits thread FitControl.batch_rows and
         # memory_budget_bytes into Phase-1 setup; measure setup under the
         # same controls the case's public fit uses.
@@ -2344,6 +2395,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--levels",
+        type=int,
+        help="model re: number of declared random-effect levels",
+    )
+    parser.add_argument(
         "--memory-budget-mib",
         type=int,
         help=(
@@ -2419,6 +2475,7 @@ def main() -> None:
         discretization_m=args.discretization_m,
         discrete_table_mib=args.discrete_table_mib,
         memory_budget_mib=args.memory_budget_mib,
+        levels=args.levels,
     )
     if args.memory_pair_n is not None:
         if args.r_parity or args.baseline_checkout is not None:

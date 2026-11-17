@@ -513,3 +513,105 @@ def test_streamed_setup_uses_the_case_memory_budget() -> None:
     )
 
     assert record["source_scans"]["setup_memory_budget_bytes"] == 640 << 20
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"execution": "discrete", "model": "re"},
+        {"execution": "discrete", "levels": 10},
+        {"execution": "discrete", "model": "re", "levels": 1},
+        {"execution": "discrete", "model": "re", "levels": True},
+    ],
+)
+def test_random_effect_levels_are_validated(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="levels"):
+        _case(**kwargs)
+
+
+@pytest.mark.parametrize("execution", ["stream-qr", "stream-exact", "efs"])
+def test_random_effect_model_rejects_streamed_and_efs_routes(execution: str) -> None:
+    with pytest.raises(ValueError, match="model='re'"):
+        _case(execution=execution, model="re", levels=10)
+
+
+def test_random_effect_model_declares_every_level_and_hashes_codes() -> None:
+    import pandas as pd
+
+    case = _case(30, execution="discrete-wm", model="re", levels=50)
+    data = benchmark_scaling._make_data(case)
+
+    assert benchmark_scaling._formula(case) == (
+        "y ~ s(x0, k=5, bs='cr') + s(g, bs='re')"
+    )
+    assert benchmark_scaling._smoothing_parameter_order(case) == ["s(x0)", "s(g)"]
+    assert list(data.columns) == ["x0", "g", "y"]
+    assert isinstance(data.g.dtype, pd.CategoricalDtype)
+    assert list(data.g.cat.categories) == [f"g{level}" for level in range(50)]
+    assert data.g.nunique() < 50  # unobserved levels stay declared
+    provenance = benchmark_scaling._input_provenance(data, case)
+    assert provenance == benchmark_scaling._input_provenance(
+        benchmark_scaling._make_data(case), case
+    )
+    relabelled = data.assign(g=data.g.cat.rename_categories(lambda c: c + "x"))
+    assert (
+        benchmark_scaling._input_provenance(relabelled, case)["frame_sha256"]
+        != provenance["frame_sha256"]
+    )
+    source = benchmark_scaling._row_source(data, case)
+    batch = next(iter(source.scan(64)))
+    assert isinstance(batch.columns["g"].dtype, pd.CategoricalDtype)
+    assert benchmark_scaling._route_contract(case)["levels"] == 50
+    assert benchmark_scaling._discrete_control(case).discretization.factor_names == (
+        "g",
+    )
+    assert (
+        benchmark_scaling._discrete_control(
+            _case(execution="discrete-wm")
+        ).discretization.factor_names
+        == ()
+    )
+
+
+@pytest.mark.parametrize("execution", ["dense-reml", "discrete-wm"])
+def test_random_effect_model_fits_on_dense_and_discrete_routes(execution: str) -> None:
+    case = _case(400, execution=execution, model="re", levels=40)
+    setup = benchmark_scaling.run_setup(case, Path.cwd())
+    fit = benchmark_scaling.run_case(case, Path.cwd())
+
+    assert setup["valid"]
+    assert fit["valid"]
+    assert setup["model"]["n_coef"] == fit["result"]["n_coef"] == 1 + 4 + 40
+    assert setup["model"]["n_penalties"] == 2
+    assert setup["input"] == fit["input"]
+
+
+def test_cli_threads_random_effect_levels(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[ScalingCase] = []
+
+    def run(case: ScalingCase, _root: Path) -> dict:
+        seen.append(case)
+        return {"case": "recorded"}
+
+    monkeypatch.setattr(benchmark_scaling, "run_isolated", run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_scaling.py",
+            "--execution",
+            "discrete-wm",
+            "--model",
+            "re",
+            "--levels",
+            "1000",
+            "--result-mode",
+            "prediction",
+        ],
+    )
+    benchmark_scaling.main()
+
+    assert seen[-1].levels == 1000
+    assert "recorded" in capsys.readouterr().out
