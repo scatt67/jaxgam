@@ -18,6 +18,22 @@ from jaxgam.formula.discrete_design import (
     LookupBlock,
     TensorLookupBlock,
 )
+from jaxgam.formula.kernel_groups import PairReductionPlan, pair_reduction_plan
+
+__all__ = [
+    "DeviceDiscreteDesign",
+    "DeviceLookupBlock",
+    "DeviceTensorLookupBlock",
+    "PairReductionPlan",
+    "discrete_diag_xvxd",
+    "discrete_xb_transpose",
+    "discrete_xbd",
+    "discrete_xwxd",
+    "discrete_xwyd",
+    "lookup_pair_histogram_crossproduct",
+    "pair_reduction_plan",
+    "to_device_discrete_design",
+]
 
 
 @jax.tree_util.register_pytree_node_class
@@ -123,40 +139,6 @@ class DeviceDiscreteDesign:
         return cls(
             tuple(children), n_coef, pair_policy, max_pair_histogram_bytes, batch_rows
         )
-
-
-@dataclass(frozen=True)
-class PairReductionPlan:
-    """A bounded choice for one lookup-block cross-product."""
-
-    method: str
-    required_bytes: int
-    budget_bytes: int
-
-
-def pair_reduction_plan(
-    q_left: int,
-    q_right: int,
-    max_bytes: int,
-    *,
-    n_rows: int | None = None,
-    k_left: int = 1,
-    k_right: int = 1,
-) -> PairReductionPlan:
-    """Choose mgcv-style pair accumulation only when bounded and worthwhile."""
-    required = q_left * q_right * np.dtype(np.float64).itemsize
-    direct_bytes = (
-        None
-        if n_rows is None
-        else n_rows * (k_left + k_right) * np.dtype(np.float64).itemsize
-    )
-    return PairReductionPlan(
-        "histogram"
-        if required <= max_bytes and (direct_bytes is None or required <= direct_bytes)
-        else "direct",
-        required,
-        max_bytes,
-    )
 
 
 def to_device_discrete_design(
