@@ -212,7 +212,7 @@ Gap status (G7 onward filled in the second round, one commit each):
 | G12 | device peak memory: the CPU backend exposes no allocator statistics | none on CPU; record as unavailable |
 | G13 | derivative time only on stream-exact | route diagnostics for dense Newton, Gaussian QR and discrete working-model derivative stages |
 | G14 | dense routes expose no inner PIRLS count (see F5) | public inner-iteration diagnostics |
-| G15 | records lack CPU model, RAM, BLAS provider configuration and host load | the run manifest below |
+| G15 | **filled.** `scripts/benchmark_manifest.py` (`make benchmark-manifest`) writes one JSON manifest per run directory: `--phase start` before the first case records OS, CPU model and feature flags, logical CPUs, RAM, Python and every installed package version, dtype and JAX x64/backend/devices, NumPy and SciPy BLAS/LAPACK builds, the source-LAPACK provider (scipy-openblas32 version and OpenBLAS config), the thread and cache environment, the checkout commit and whether its tree is clean, load averages and (macOS) sleep assertions; `--phase end` adds the end checkout state, end load and `same_checkout` | – |
 | P4 | structural guards missing on some routes (allocation table) | forbidden-call or jaxpr guards as listed there |
 | P5 | the coarse preconditioner's bytes are not split out in operator records | report it in `operator_diagnostics` |
 
@@ -363,13 +363,12 @@ reported.
   dtype float64, cold-cache policy; seed, n, k, smooth count, batch rows,
   memory and discretization budgets, family, theta policy, strategy; the
   input generator and frame hash.
-- Missing from the records (G15): put them in a run manifest,
-  `$RUN/manifest.txt`, written at the start and end of the session. It holds
-  `date`; `uname -a`; the CPU model, RAM and core count (`sysctl -n
-  machdep.cpu.brand_string hw.memsize hw.ncpu`, or `lscpu` and `free -b`);
-  `uv pip freeze`; `python -c "import numpy, scipy; numpy.show_config();
-  scipy.show_config()"`; R and mgcv versions for parity runs; `pmset -g
-  assertions`; `uptime`.
+- The run manifest (G15) holds what the records lack. Write it before the
+  first case with `make benchmark-manifest ARGS="--phase start --output
+  $RUN/manifest.json"` and finish it after the last with `--phase end`. A
+  run whose manifest reports `same_checkout=false` (commit changed or tree
+  dirty) is not evidence. R and mgcv versions for parity runs come from
+  `RBridge.check_versions()` in the parity records.
 - The other scripts record less: `benchmark_operator.py` records commit,
   dirty flag and versions but uses the caller's cache. Run them with
   `JAX_COMPILATION_CACHE_DIR` pointing at a new empty directory per run.

@@ -261,6 +261,10 @@ benchmark-efs-smoke: ## run the small end-to-end dense EFS benchmark gate
 benchmark-scaling: ## emit one isolated scaling evidence record (ARGS="--n 2000 --k 10 --execution stream-exact --result-mode prediction")
 	$(UV) run python scripts/benchmark_scaling.py $(ARGS)
 
+.PHONY: benchmark-manifest
+benchmark-manifest: ## write or finish one run's environment manifest (ARGS="--phase start --output $$RUN/manifest.json")
+	$(UV) run python scripts/benchmark_manifest.py $(ARGS)
+
 .PHONY: benchmark-discrete-approximation
 benchmark-discrete-approximation: ## PR11 discretization approximation study (OUTPUT=/path/outside/checkout.json ARGS=...)
 	@test -n "$(OUTPUT)" || (echo "Usage: make benchmark-discrete-approximation OUTPUT=/tmp/approximation.json [ARGS='--families gaussian --n 2000']" && exit 1)
