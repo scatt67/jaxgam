@@ -27,6 +27,7 @@ import resource
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
@@ -311,6 +312,79 @@ class _FitPlan:
     run: Callable[[], Any]
     formula: str
     source: _CountingArrayRowSource | None
+
+
+_TASK_TMPDIR = "JAXGAM_BENCHMARK_TASK_TMPDIR"
+
+
+class _TemporaryDiskSampler:
+    """Sample the bytes under a child's task-owned temporary directory.
+
+    A background thread polls the directory; very short-lived files between
+    samples can be missed, so the peak is a lower bound. Outside an isolated
+    child (no task-owned directory) nothing is sampled.
+    """
+
+    def __init__(self, directory: Path | None, interval_s: float = 0.05) -> None:
+        self.directory = directory
+        self.interval_s = interval_s
+        self.peak_bytes = 0
+        self.samples = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @classmethod
+    def for_child(cls) -> _TemporaryDiskSampler:
+        directory = os.environ.get(_TASK_TMPDIR)
+        return cls(None if directory is None else Path(directory))
+
+    def _sample(self) -> None:
+        if self.directory is None:
+            return
+        try:
+            size = _directory_bytes(self.directory) or 0
+        except OSError:  # a file vanished between listing and stat
+            return
+        self.peak_bytes = max(self.peak_bytes, size)
+        self.samples += 1
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_s):
+            self._sample()
+
+    def __enter__(self) -> _TemporaryDiskSampler:
+        if self.directory is not None:
+            self._sample()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self._thread is not None:
+            self._stop.set()
+            self._thread.join()
+            self._sample()
+
+    def record(self) -> dict[str, Any]:
+        if self.directory is None:
+            return {
+                "sampled": False,
+                "status": "not sampled: no task-owned temporary directory "
+                "(not an isolated child)",
+            }
+        return {
+            "sampled": True,
+            "directory": str(self.directory),
+            "peak_bytes": self.peak_bytes,
+            "final_bytes": _directory_bytes(self.directory),
+            "samples": self.samples,
+            "sample_interval_s": self.interval_s,
+            "status": (
+                "files under the child's task-owned TMPDIR (Python tempfile, "
+                "SQLite temp stores); polled, so the peak is a lower bound; the "
+                "compilation cache is reported separately"
+            ),
+        }
 
 
 def isolated_cache_dir() -> tempfile.TemporaryDirectory[str]:
@@ -1548,13 +1622,16 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
     import jaxgam
 
     loaded_source_identity(jaxgam, root)
-    try:
-        record = _measured_setup(case, root)
-    except HarnessContractError:
-        raise
-    except Exception as error:  # recorded as the case's outcome
-        return _invalid_child_record(case, root, "setup_raised", error=error)
-    return {"valid": True, "outcome": "valid", **record}
+    with _TemporaryDiskSampler.for_child() as disk:
+        try:
+            record = _measured_setup(case, root)
+        except HarnessContractError:
+            raise
+        except Exception as error:  # recorded as the case's outcome
+            record = _invalid_child_record(case, root, "setup_raised", error=error)
+        else:
+            record = {"valid": True, "outcome": "valid", **record}
+    return {**record, "temporary_disk": disk.record()}
 
 
 def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
@@ -1852,19 +1929,21 @@ def run_case(case: ScalingCase, root: Path) -> dict[str, Any]:
     compilation = _CompilationEvents()
     jax.monitoring.register_event_duration_secs_listener(compilation)
     try:
-        return _run_case_with_compilation(
-            case,
-            root,
-            data=data,
-            fit_plan=fit_plan,
-            route=route,
-            compilation=compilation,
-            loaded_runtime=loaded_runtime,
-            rss_high_water_before=rss_high_water_before,
-            rss_current_before=rss_current_before,
-        )
+        with _TemporaryDiskSampler.for_child() as disk:
+            record = _run_case_with_compilation(
+                case,
+                root,
+                data=data,
+                fit_plan=fit_plan,
+                route=route,
+                compilation=compilation,
+                loaded_runtime=loaded_runtime,
+                rss_high_water_before=rss_high_water_before,
+                rss_current_before=rss_current_before,
+            )
     finally:
         jax.monitoring.unregister_event_duration_listener(compilation)
+    return {**record, "temporary_disk": disk.record()}
 
 
 def _run_case_with_compilation(
@@ -2324,11 +2403,24 @@ def _recorded_child(case: ScalingCase, root: Path, child_mode: str) -> dict[str,
 
 
 def _run_child(case: ScalingCase, root: Path, child_mode: str) -> dict[str, Any]:
-    """Execute one child operation with a never-shared cold cache."""
-    with isolated_cache_dir() as cache:
+    """Execute one child with a never-shared cold cache and temporary directory.
+
+    The child's temporary files (Python ``tempfile``, SQLite temp stores and
+    anything that honours ``TMPDIR``) go to a task-owned directory whose size
+    the child samples.
+    """
+    with (
+        isolated_cache_dir() as cache,
+        tempfile.TemporaryDirectory(prefix="jaxgam-benchmark-tmp-") as scratch,
+    ):
         environment = os.environ | {
             "JAX_COMPILATION_CACHE_DIR": cache,
             "PYTHONPATH": str(root),
+            "TMPDIR": scratch,
+            "TMP": scratch,
+            "TEMP": scratch,
+            "SQLITE_TMPDIR": scratch,
+            _TASK_TMPDIR: scratch,
         }
         completed = subprocess.run(
             [

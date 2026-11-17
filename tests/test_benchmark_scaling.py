@@ -1961,3 +1961,77 @@ def test_cli_rejects_a_dense_memory_pair_before_running(
     )
     with pytest.raises(ValueError, match="source-reading routes"):
         benchmark_scaling.main()
+
+
+def test_temporary_disk_sampler_sees_a_short_lived_file(tmp_path: Path) -> None:
+    import time as time_module
+
+    sampler = benchmark_scaling._TemporaryDiskSampler(tmp_path, interval_s=0.005)
+    with sampler:
+        scratch = tmp_path / "selector.bin"
+        scratch.write_bytes(b"x" * 20_000)
+        time_module.sleep(0.1)
+        scratch.unlink()
+    record = sampler.record()
+
+    assert record["sampled"] is True
+    assert record["peak_bytes"] >= 20_000
+    assert record["final_bytes"] == 0
+    assert record["samples"] > 2
+
+
+def test_temporary_disk_is_not_sampled_outside_an_isolated_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(benchmark_scaling._TASK_TMPDIR, raising=False)
+    with benchmark_scaling._TemporaryDiskSampler.for_child() as sampler:
+        pass
+    assert sampler.record()["sampled"] is False
+
+
+def test_children_get_a_task_owned_temporary_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, str] = {}
+
+    def fake_run(*_args: object, env: dict[str, str], **_kwargs: object):
+        seen.update(env)
+        assert Path(env["TMPDIR"]).is_dir()
+        return SimpleNamespace(returncode=0, stdout='{"child": true}', stderr="")
+
+    monkeypatch.setattr(benchmark_scaling.subprocess, "run", fake_run)
+    benchmark_scaling._run_child(ScalingCase(4, 3), Path.cwd(), "fit")
+
+    scratch = seen["TMPDIR"]
+    assert seen["TMP"] == seen["TEMP"] == seen["SQLITE_TMPDIR"] == scratch
+    assert seen[benchmark_scaling._TASK_TMPDIR] == scratch
+    assert scratch != seen["JAX_COMPILATION_CACHE_DIR"]
+    assert not Path(scratch).exists()
+
+
+def test_run_case_and_setup_record_the_child_temporary_disk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import time as time_module
+
+    monkeypatch.setenv(benchmark_scaling._TASK_TMPDIR, str(tmp_path))
+
+    def fit_with_scratch() -> _Result:
+        path = tmp_path / "knots.sqlite"
+        path.write_bytes(b"k" * 50_000)
+        time_module.sleep(0.12)
+        path.unlink()
+        return _Result()
+
+    _stub_run_case(monkeypatch, fit_with_scratch)
+    record = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+    assert record["temporary_disk"]["peak_bytes"] >= 50_000
+    assert record["temporary_disk"]["final_bytes"] == 0
+
+    def rejected(_case: ScalingCase, _root: Path) -> dict:
+        raise MemoryError("setup budget")
+
+    monkeypatch.setattr(benchmark_scaling, "_measured_setup", rejected)
+    setup = benchmark_scaling.run_setup(_STREAM_CASE, Path.cwd())
+    assert setup["outcome"] == "setup_raised"
+    assert setup["temporary_disk"]["sampled"] is True
