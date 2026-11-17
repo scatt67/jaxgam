@@ -124,6 +124,8 @@ class ScalingCase:
     memory_budget_mib: int | None = None
     levels: int | None = None
     stress: str | None = None
+    nb_theta: float | None = None
+    outlier_fraction: float | None = None
 
     def __post_init__(self) -> None:
         if self.n_rows <= 0:
@@ -212,6 +214,26 @@ class ScalingCase:
             raise ValueError(
                 "levels is required by, and only applies to, model='re' and "
                 "'re-only'; it must be an integer of at least 2."
+            )
+        if self.nb_theta is not None and (
+            self.family != "nb"
+            or isinstance(self.nb_theta, bool)
+            or not np.isfinite(self.nb_theta)
+            or self.nb_theta <= 0
+        ):
+            raise ValueError(
+                "nb_theta is the positive finite theta NB data are drawn at; it "
+                "applies only to family='nb'."
+            )
+        if self.outlier_fraction is not None and (
+            self.family not in {"poisson", "nb"}
+            or self.execution == "efs"
+            or isinstance(self.outlier_fraction, bool)
+            or not 0.0 < self.outlier_fraction <= 0.5
+        ):
+            raise ValueError(
+                "outlier_fraction is in (0, 0.5] and applies only to the "
+                "poisson and nb families."
             )
         if self.stress is not None and self.stress not in _STRESSES:
             raise ValueError(f"stress must be one of {', '.join(_STRESSES)}.")
@@ -508,19 +530,31 @@ def _make_data(case: ScalingCase) -> pd.DataFrame:
         if family == "poisson":
             y = rng.poisson(mu)
         else:
-            y = rng.negative_binomial(
-                _NB_DATA_THETA, _NB_DATA_THETA / (_NB_DATA_THETA + mu)
-            )
+            theta = _data_theta(case)
+            y = rng.negative_binomial(theta, theta / (theta + mu))
     else:
         y = signal + rng.normal(0.0, 0.3, case.n_rows)
     y, extra = _apply_stress(case, stress_rng, signal, count_signal, y)
+    if case.outlier_fraction is not None:
+        # Large count outliers on their own stream: modest counts elsewhere.
+        outlier_rng = np.random.default_rng([case.seed, 31])
+        rows = outlier_rng.uniform(size=case.n_rows) < case.outlier_fraction
+        y = np.array(y, copy=True)
+        y[rows] = 1000 + outlier_rng.poisson(1000.0, int(rows.sum()))
     return pd.DataFrame({**columns, "y": y, **extra})
 
 
-def _count_draw(family: str, mu: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+def _data_theta(case: ScalingCase) -> float:
+    """The theta NB responses are drawn at (fits always estimate theta)."""
+    return _NB_DATA_THETA if case.nb_theta is None else float(case.nb_theta)
+
+
+def _count_draw(
+    family: str, mu: np.ndarray, rng: np.random.Generator, theta: float
+) -> np.ndarray:
     if family == "poisson":
         return rng.poisson(mu)
-    return rng.negative_binomial(_NB_DATA_THETA, _NB_DATA_THETA / (_NB_DATA_THETA + mu))
+    return rng.negative_binomial(theta, theta / (theta + mu))
 
 
 def _apply_stress(
@@ -552,7 +586,7 @@ def _apply_stress(
         if count_signal is None:
             return y + offset, {"off": offset}
         mu = np.exp(0.2 + count_signal + offset)
-        return _count_draw(family, mu, rng), {"off": offset}
+        return _count_draw(family, mu, rng, _data_theta(case)), {"off": offset}
     return y, {}
 
 
@@ -604,6 +638,10 @@ def _input_provenance(data: pd.DataFrame, case: ScalingCase) -> dict[str, Any]:
         shape = "sine" if case.smooth_count == 1 else "additive_sine"
     if case.stress is not None:
         shape = f"{shape}_{case.stress}"
+    if case.nb_theta is not None:
+        shape = f"{shape}_theta{case.nb_theta:g}"
+    if case.outlier_fraction is not None:
+        shape = f"{shape}_outliers{case.outlier_fraction:g}"
     return {
         "generator": f"{family}_{shape}",
         "seed": case.seed,
@@ -1181,7 +1219,8 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
         contract["model"] = case.model
     if case.family == "nb":
         contract["theta"] = (
-            f"estimated from start {_NB_START_THETA} (data drawn at {_NB_DATA_THETA})"
+            f"estimated from start {_NB_START_THETA} (data drawn at "
+            f"{_data_theta(case)})"
         )
     if case.execution in _DISCRETE_EXECUTIONS:
         contract["discretization_m"] = case.discretization_m
@@ -1198,6 +1237,9 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
         contract["levels"] = case.levels
     if case.stress is not None:
         contract["stress"] = case.stress
+    if case.outlier_fraction is not None:
+        contract["outlier_fraction"] = case.outlier_fraction
+        contract["outliers"] = "y = 1000 + Poisson(1000) on the selected rows"
     return contract
 
 
@@ -2675,6 +2717,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--nb-theta",
+        type=float,
+        help="family nb: theta the data are drawn at (default 3; fits estimate it)",
+    )
+    parser.add_argument(
+        "--outlier-fraction",
+        type=float,
+        help="count families: fraction of rows replaced by counts near 2,000",
+    )
+    parser.add_argument(
         "--stress",
         choices=_STRESSES,
         help="numerical-stress generator (weights and offsets reach every route)",
@@ -2762,6 +2814,8 @@ def main() -> None:
         memory_budget_mib=args.memory_budget_mib,
         levels=args.levels,
         stress=args.stress,
+        nb_theta=args.nb_theta,
+        outlier_fraction=args.outlier_fraction,
     )
     if args.memory_pair_n is not None:
         if args.r_parity or args.baseline_checkout is not None:

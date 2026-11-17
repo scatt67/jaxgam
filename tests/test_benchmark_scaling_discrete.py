@@ -862,3 +862,97 @@ def test_stress_cases_fit_through_the_public_routes(
 
     assert record["valid"]
     assert record["route"]["stress"] == stress
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"execution": "dense-reml", "nb_theta": 5.0}, "nb_theta"),
+        ({"execution": "dense-reml", "family": "nb", "nb_theta": 0.0}, "nb_theta"),
+        ({"execution": "dense-reml", "family": "nb", "nb_theta": True}, "nb_theta"),
+        ({"execution": "dense-reml", "outlier_fraction": 0.01}, "outlier_fraction"),
+        (
+            {"execution": "dense-reml", "family": "poisson", "outlier_fraction": 0.6},
+            "outlier_fraction",
+        ),
+        ({"execution": "efs", "outlier_fraction": 0.01}, "outlier_fraction"),
+    ],
+)
+def test_count_tail_options_validate(kwargs: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _case(**kwargs)
+
+
+def test_count_tail_generators_keep_the_default_draw() -> None:
+    base_case = _case(2000, execution="dense-reml", family="nb", smooth_count=2)
+    base = benchmark_scaling._make_data(base_case)
+    explicit = benchmark_scaling._make_data(
+        _case(2000, execution="dense-reml", family="nb", smooth_count=2, nb_theta=3.0)
+    )
+    np.testing.assert_array_equal(explicit.y, base.y)
+
+    near_poisson_case = _case(
+        2000, execution="dense-reml", family="nb", smooth_count=2, nb_theta=1e4
+    )
+    near_poisson = benchmark_scaling._make_data(near_poisson_case)
+    assert np.var(near_poisson.y) < np.var(base.y)
+    contract = benchmark_scaling._route_contract(near_poisson_case)
+    assert contract["theta"] == "estimated from start 1.0 (data drawn at 10000.0)"
+    assert (
+        benchmark_scaling._input_provenance(near_poisson, near_poisson_case)[
+            "generator"
+        ]
+        == "nb_additive_sine_theta10000"
+    )
+
+    outlier_case = _case(
+        2000, execution="dense-reml", family="nb", smooth_count=2, outlier_fraction=0.01
+    )
+    outliers = benchmark_scaling._make_data(outlier_case)
+    changed = outliers.y.to_numpy() != base.y.to_numpy()
+    assert 5 <= changed.sum() <= 40
+    assert np.all(outliers.y[changed] >= 1000)
+    assert base.y.max() < 1000
+    assert benchmark_scaling._route_contract(outlier_case)["outlier_fraction"] == 0.01
+
+
+def test_count_tail_cases_fit_and_reach_the_cli(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record = benchmark_scaling.run_case(
+        _case(
+            400,
+            execution="dense-reml",
+            family="nb",
+            smooth_count=2,
+            outlier_fraction=0.02,
+        ),
+        Path.cwd(),
+    )
+    assert record["valid"]
+
+    seen: list[ScalingCase] = []
+    monkeypatch.setattr(
+        benchmark_scaling, "run_isolated", lambda case, _root: seen.append(case) or {}
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_scaling.py",
+            "--execution",
+            "stream-exact",
+            "--family",
+            "nb",
+            "--nb-theta",
+            "500",
+            "--outlier-fraction",
+            "0.001",
+            "--result-mode",
+            "prediction",
+        ],
+    )
+    benchmark_scaling.main()
+    assert seen[-1].nb_theta == 500.0
+    assert seen[-1].outlier_fraction == 0.001
+    capsys.readouterr()
