@@ -238,6 +238,7 @@ def test_lbfgs_matches_newton_meaningful_fit_and_shared_gradient_strict() -> Non
     assert newton_provider.finalize_calls == lbfgs_provider.finalize_calls == 1
 
 
+@pytest.mark.platform_sensitive
 def test_real_large_m_provider_uses_no_outer_hessian_or_square_m_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

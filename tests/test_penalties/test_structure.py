@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from jaxgam.penalties.structure import (
     DenseLocalPenalty,
@@ -67,6 +68,7 @@ def test_zero_penalty_keeps_lambda_position_and_values_are_owned_readonly() -> N
     assert structure.blocks[0].sp_indices == (0,)
 
 
+@pytest.mark.platform_sensitive
 def test_smoothing_weights_are_the_c_librarys_exp() -> None:
     """R forms sp as exp(log sp) with C exp; NumPy's SIMD exp may differ."""
     import math

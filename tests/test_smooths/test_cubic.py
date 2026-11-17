@@ -771,6 +771,7 @@ def _crspl_rows_without_contraction(x, knots, F):
     return X
 
 
+@pytest.mark.platform_sensitive
 def test_non_contracting_crspl_rounds_both_products(monkeypatch) -> None:
     """On x86_64 the basis rounds cjm*Fp and cjp*Fp1 separately, as R does.
 

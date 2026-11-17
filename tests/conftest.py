@@ -306,3 +306,15 @@ def family_data(request):
     else:
         family_name, n = param, None
     return family_name, _generate_family_data(family_name, n=n)
+
+
+def pytest_report_header(config):
+    """Print the runner's CPU and kernel identity for platform-sensitive runs."""
+    if "platform_sensitive" not in (config.option.markexpr or ""):
+        return None
+    from tests.helpers import platform_report_lines
+
+    return [
+        "platform-sensitive run:",
+        *(f"  {line}" for line in platform_report_lines()),
+    ]

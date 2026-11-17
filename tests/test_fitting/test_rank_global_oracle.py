@@ -22,6 +22,9 @@ from tests.r_bridge import RBridge
 from tests.test_validation_matrix import SMOOTH_CONFIGS, _get_data
 from tests.tolerances import MODERATE, STRICT
 
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _pinned_public_gaussian_rank_fit(
     bridge: RBridge,

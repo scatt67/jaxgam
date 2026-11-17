@@ -119,6 +119,11 @@ test-gaussian-ci: ## run focused Gaussian CI diagnostics using a built image
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \
 		uv run pytest tests/test_validation_matrix.py -k gp_2d-gaussian -s -x --tb=short
 
+.PHONY: test-platform-sensitive-ci
+test-platform-sensitive-ci: ## run CPU-sensitive tests in a built image, reporting CPU and OpenBLAS cores first
+	docker run --rm -e OPENBLAS_NUM_THREADS=1 -e OMP_NUM_THREADS=1 $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		uv run pytest -p no:cacheprovider -m platform_sensitive --tb=short -rfE
+
 .PHONY: test-efs-recovery-ci
 test-efs-recovery-ci: ## run focused EFS retained-start recovery using a built image
 	docker run --rm $(DOCKER_IMAGE):$(DOCKER_TAG) \

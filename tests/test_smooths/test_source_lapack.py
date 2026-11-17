@@ -17,6 +17,9 @@ from jaxgam.smooths.cubic import CubicRegressionSmooth
 from tests.helpers import _AssertCollector, r_links_pinned_openblas
 from tests.tolerances import MODERATE, STRICT
 
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
+
 _ACCELERATE_CUBIC_MODERATE_DIGESTS = {
     (1, 32): "33611ede66607446ae8787994bcffa8138bf0e0e07b749bd4ce9bc0d865accbc",
     (3, 64): "ccab68ff65ffb3defb8290b275f8f958a3ea926359fb59a13572eac518276344",

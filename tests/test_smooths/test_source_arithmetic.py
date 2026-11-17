@@ -11,6 +11,9 @@ import pytest
 from jaxgam.smooths import source_arithmetic as sa
 from tests.helpers import _AssertCollector
 
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _exact_fma(a: float, b: float, c: float) -> float:
     """Correctly rounded ``a*b + c`` (``float(Fraction)`` rounds to nearest)."""

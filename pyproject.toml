@@ -75,6 +75,7 @@ min_confidence = 80
 testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "platform_sensitive: outcome can depend on the CPU's SIMD maths or BLAS kernel family (run across runner types by make test-platform-sensitive-ci)",
 ]
 
 [tool.coverage.run]

@@ -748,6 +748,7 @@ def _source_basis_cases() -> dict[str, tuple[pd.DataFrame, list[str], int, dict]
     }
 
 
+@pytest.mark.platform_sensitive
 @pytest.mark.skipif(not r_available(), reason="R+mgcv not available")
 def test_raw_basis_penalty_and_prediction_match_pinned_smoothcon(r_bridge) -> None:
     """Unconstrained X, scaled S and PredictMat rows against pinned mgcv.

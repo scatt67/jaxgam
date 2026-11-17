@@ -103,6 +103,74 @@ def r_links_pinned_openblas(r_bridge) -> bool:
     return (config() or b"").decode().startswith("OpenBLAS 0.3.26 ")
 
 
+def _openblas_identity(library: ctypes.CDLL, prefix: str) -> str:
+    """``openblas_get_config`` and core name of one loaded OpenBLAS."""
+    fields = []
+    for name in ("openblas_get_config", "openblas_get_corename"):
+        try:
+            function = getattr(library, prefix + name)
+        except AttributeError:
+            fields.append(f"{name}: not exported")
+            continue
+        function.argtypes = []
+        function.restype = ctypes.c_char_p
+        fields.append((function() or b"").decode())
+    return " | ".join(fields)
+
+
+def platform_report_lines() -> list[str]:
+    """CPU, SIMD and OpenBLAS kernel identity for platform-sensitive runs.
+
+    Reports the CPU model and its AVX-512 flags, NumPy's enabled AVX-512
+    dispatch, and the OpenBLAS configuration and selected core of the
+    provider wheel and of R's linked LAPACK, so a platform-sensitive run
+    records which runner type it sampled.
+    """
+    import platform
+
+    lines = [f"machine: {platform.machine()}"]
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as handle:
+            first = handle.read().split("\n\n")[0]
+        info = {
+            key.strip(): value.strip()
+            for key, _, value in (line.partition(":") for line in first.splitlines())
+        }
+        flags = sorted(
+            flag for flag in info.get("flags", "").split() if "avx512" in flag
+        )
+        lines.append(f"cpu: {info.get('model name', '?')}")
+        lines.append(f"avx512 flags: {' '.join(flags) or 'none'}")
+    except OSError:
+        lines.append("cpu: /proc/cpuinfo unavailable")
+    try:
+        from numpy._core._multiarray_umath import __cpu_features__ as features
+    except ImportError:  # pragma: no cover - NumPy 1.x layout
+        from numpy.core._multiarray_umath import __cpu_features__ as features
+    enabled = [name for name, on in features.items() if on and "AVX512" in name]
+    lines.append(f"numpy avx512 dispatch: {' '.join(enabled) or 'none'}")
+    try:
+        from jaxgam.smooths import source_lapack
+
+        provider = source_lapack._source_lapack()
+        identity = _openblas_identity(provider.library, "scipy_")
+        lines.append(f"provider wheel OpenBLAS: {identity}")
+    except Exception as error:
+        lines.append(f"provider wheel OpenBLAS: unavailable ({error})")
+    if r_available():
+        try:
+            from tests.r_bridge import RBridge
+
+            path = RBridge().linked_lapack()
+            library = ctypes.CDLL(path, mode=ctypes.RTLD_LOCAL)
+            lines.append(f"R LAPACK OpenBLAS: {_openblas_identity(library, '')}")
+        except Exception as error:
+            lines.append(f"R LAPACK OpenBLAS: unavailable ({error})")
+    else:
+        lines.append("R LAPACK OpenBLAS: R unavailable")
+    return lines
+
+
 def r_tolerance(family_name: str):
     """Return tolerance tier for R comparison by family.
 

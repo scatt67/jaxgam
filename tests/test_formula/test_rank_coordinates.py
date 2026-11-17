@@ -11,6 +11,9 @@ import pytest
 
 from jaxgam.formula.rank_coordinates import IdentifiableCoordinateMap
 
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
+
 
 def test_identifiable_coordinate_map_reconstructs_cpu_outputs() -> None:
     """The Phase-1 map owns the public coefficient/covariance reconstruction."""

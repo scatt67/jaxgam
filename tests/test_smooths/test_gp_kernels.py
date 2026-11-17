@@ -19,6 +19,9 @@ from jaxgam.smooths.gp_kernels import (
 from tests.helpers import _AssertCollector
 from tests.tolerances import STRICT
 
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _closed_form(
     kernel_cls: type[GPKernel],

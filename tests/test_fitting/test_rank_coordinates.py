@@ -33,6 +33,9 @@ from jaxgam.penalties.structure import (
 from tests.r_bridge import RBridge
 from tests.tolerances import STRICT
 
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
+
 
 def test_global_penalty_scale_matches_live_pinned_r_sum() -> None:
     """A last-bit scale difference can rotate tied global penalty vectors."""
