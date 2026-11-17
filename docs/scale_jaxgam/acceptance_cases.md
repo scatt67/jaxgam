@@ -195,7 +195,7 @@ statement and branch coverage, every new line covered):
   (`FitControl.memory_budget_bytes` on streamed and discrete fits and setup).
   The defaults rejected M1, M5, K3, K4, M2 and F1 before any fit.
 
-Open gaps (proposed, not implemented):
+Gap status (G7 onward filled in the second round, one commit each):
 
 | Gap | What is missing | Proposal |
 |---|---|---|
@@ -204,7 +204,7 @@ Open gaps (proposed, not implemented):
 | G4 | operator routes are outside the isolated harness: no setup child, no task-owned cache, no compile split, single process | `--execution operator` and `operator-efs` with an `re` model (needs G8) |
 | G5 | no script for `bulk_link_variance` | a script recording probe solves, scans, PCG residuals, calibration maxima and the seed distribution (Appendix A, F6) |
 | G6 | `--memory-pair-n` accepts only streamed routes | allow discrete pairs (the comparison already reads `known_workspace_bytes`) |
-| G7 | an unconverged fit writes no record; its status survives only in the stderr tail | `--record-invalid`: write the record with `valid=false`, status, projected gradient and smoothing parameters, and no timing fields |
+| G7 | **filled.** An unconverged, non-finite or rejected fit, a rejected setup and a crashed child each write a `valid=false` record: outcome (`unconverged`, `nonfinite`, `fit_raised`, `setup_raised`, `child_failed`), status, stop reason and its source, projected gradient (exact streamed REML), the operator inner status and final gradient norm, smoothing parameters, theta, score, iterations, the error type and message, and no timing fields. Comparisons over an invalid record are marked unavailable. The record is written first; then the command exits 3 and prints each invalid child on stderr | – |
 | G8 | no `re`/factor model; the discrete route also needs `factor_names` | `--model re --levels L` passing `factor_names` |
 | G9 | kernels only in d=1 (gp) and d=2 (tp) | `--model tp3` (`s(x0,x1,x2)`) |
 | G10 | NB generator fixed at theta 3 without outliers | `--nb-theta` and `--outlier-fraction` |
@@ -236,6 +236,7 @@ Coverage by quantity and route:
 | Isolated child processes | H | H | H | H | H | – (G4) | – | – |
 | Isolated compilation cache | H | H | H | H | H | – (G4) | – | – |
 | Host suspension flag | H | H | H | H | H | – | – | – |
+| Invalid or rejected fit recorded (G7) | H | H | H | H | H | – | – | – |
 
 H = `scripts/benchmark_scaling.py`; O = the named other script; – = gap.
 

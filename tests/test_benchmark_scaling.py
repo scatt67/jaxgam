@@ -1595,3 +1595,268 @@ def test_main_r_parity_attaches_only_explicit_typed_reference(
     payload = json.loads(capsys.readouterr().out)
     assert payload["pinned_r_parity"]["reference"] == "typed pinned RBridge"
     assert seen_cases[0].execution == "stream-exact"
+
+
+def _stub_run_case(monkeypatch: pytest.MonkeyPatch, fit) -> None:
+    data = pd.DataFrame({"x": [0.1, 0.2], "y": [0.0, 1.0]})
+    monkeypatch.setattr(benchmark_scaling, "_make_data", lambda _case: data)
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "_build_fit",
+        lambda _case, _data: benchmark_scaling._FitPlan(
+            fit, "y ~ s(x, k=3, bs='cr')", None
+        ),
+    )
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "loaded_source_identity",
+        lambda _module, _root: {
+            "loaded_package": "jaxgam",
+            "loaded_source_sha256": "c" * 64,
+        },
+    )
+
+
+_STREAM_CASE = ScalingCase(2, 3, execution="stream", result_mode="prediction")
+
+
+def test_unconverged_fit_is_recorded_without_timings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unconverged = _Result(
+        converged=False,
+        convergence_info="iteration limit",
+        smoothing_params=np.array([2.0, np.inf]),
+    )
+    _stub_run_case(monkeypatch, lambda: unconverged)
+
+    record = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+
+    assert record["valid"] is False
+    assert record["outcome"] == "unconverged"
+    assert record["timings"] is None
+    assert "not timing evidence" in record["timings_status"]
+    result = record["result"]
+    assert result["status"] == result["stop_reason"] == "iteration limit"
+    assert result["stop_reason_source"].startswith("convergence_info")
+    assert result["projected_gradient_inf"] is None
+    assert result["smoothing_params"] == [2.0, None]
+    assert result["validity"]["converged"] is False
+    assert record["route"]["requested_execution"] == "stream"
+    assert record["input"]["seed"] == _STREAM_CASE.seed
+
+
+def test_exact_route_records_stop_code_and_projected_gradient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = SimpleNamespace(status=1, projected_gradient_inf=1.56e-4)
+    result = SimpleNamespace(
+        **{
+            **_Result(converged=False, convergence_info="ABNORMAL").__dict__,
+            "exact_optimizer_diagnostics": exact,
+            "theta": 2.5,
+        }
+    )
+    _stub_run_case(monkeypatch, lambda: result)
+
+    fields = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())["result"]
+
+    assert fields["stop_reason"] == 1
+    assert "L-BFGS-B" in fields["stop_reason_source"]
+    assert fields["projected_gradient_inf"] == 1.56e-4
+    assert fields["theta"] == 2.5
+
+
+def test_efs_and_nonfinite_fits_record_their_own_stop_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    efs = SimpleNamespace(
+        **{
+            **_Result(score=float("nan")).__dict__,
+            "optimizer_diagnostics": SimpleNamespace(stop_reason="score_window"),
+        }
+    )
+    _stub_run_case(monkeypatch, lambda: efs)
+
+    record = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+
+    assert record["outcome"] == "nonfinite"
+    assert record["result"]["stop_reason"] == "score_window"
+    assert record["result"]["score"] is None
+
+
+def test_rejected_fit_records_the_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def rejected():
+        raise MemoryError("workspace requires 558529632 bytes")
+
+    _stub_run_case(monkeypatch, rejected)
+
+    record = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+
+    assert record["valid"] is False
+    assert record["outcome"] == "fit_raised"
+    assert record["error"] == {
+        "type": "MemoryError",
+        "message": "workspace requires 558529632 bytes",
+    }
+    assert "result" not in record
+
+
+def test_harness_contract_errors_are_never_recorded_as_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken():
+        raise benchmark_scaling.HarnessContractError("fallback route")
+
+    _stub_run_case(monkeypatch, broken)
+    with pytest.raises(benchmark_scaling.HarnessContractError):
+        benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+
+    def contract_setup(_case, _root):
+        raise benchmark_scaling.HarnessContractError("batch bound")
+
+    monkeypatch.setattr(benchmark_scaling, "_measured_setup", contract_setup)
+    with pytest.raises(benchmark_scaling.HarnessContractError):
+        benchmark_scaling.run_setup(_STREAM_CASE, Path.cwd())
+
+
+def test_real_rejected_discrete_setup_and_fit_leave_records() -> None:
+    """A budget preflight rejection is recorded by both children."""
+    case = ScalingCase(
+        600,
+        30,
+        execution="discrete-wm",
+        model="tp",
+        result_mode="prediction",
+        discrete_table_mib=1,
+    )
+
+    setup = benchmark_scaling.run_setup(case, Path.cwd())
+    fit = benchmark_scaling.run_case(case, Path.cwd())
+
+    for record, outcome in ((setup, "setup_raised"), (fit, "fit_raised")):
+        assert record["valid"] is False
+        assert record["outcome"] == outcome
+        assert record["error"]["type"] == "MemoryError"
+        assert "budget" in record["error"]["message"]
+        assert record["formula"] == "y ~ s(x0, x1, k=30, bs='tp')"
+
+
+def test_crashed_child_becomes_an_invalid_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = _paired_record()["setup"]
+
+    def run_child(_case: ScalingCase, root: Path, mode: str) -> dict:
+        if mode == "setup":
+            return setup
+        raise benchmark_scaling.ChildRunError(mode, root, -9, "out", "Killed")
+
+    monkeypatch.setattr(benchmark_scaling, "_run_child", run_child)
+    record = benchmark_scaling.run_isolated(ScalingCase(4, 3), Path.cwd())
+
+    assert record["valid"] is False
+    assert record["within_run_consistency"]["valid"] is False
+    fit = record["fit"]
+    assert fit["outcome"] == "child_failed"
+    assert fit["returncode"] == -9
+    assert fit["child_stderr"] == "Killed"
+    assert "fit child failed" in fit["message"]
+
+    def unreadable(_case: ScalingCase, _root: Path, _mode: str) -> dict:
+        raise json.JSONDecodeError("Expecting value", "", 0)
+
+    monkeypatch.setattr(benchmark_scaling, "_run_child", unreadable)
+    record = benchmark_scaling.run_isolated(ScalingCase(4, 3), Path.cwd())
+    assert record["setup"]["outcome"] == "child_output_unreadable"
+
+
+def test_cli_writes_invalid_records_then_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    invalid = {
+        "valid": False,
+        "setup": {"valid": True},
+        "fit": {
+            "valid": False,
+            "outcome": "unconverged",
+            "result": {"status": "iteration limit"},
+        },
+    }
+    compared: list[str] = []
+    monkeypatch.setattr(benchmark_scaling, "run_isolated", lambda _c, _r: invalid)
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "compare_memory_growth",
+        lambda *_a: compared.append("memory") or {},
+    )
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "compare_pinned_r_exact",
+        lambda *_a: compared.append("r") or {},
+    )
+    monkeypatch.setattr(
+        benchmark_scaling,
+        "compare_checkouts",
+        lambda *_a: compared.append("parity") or {},
+    )
+    for extra in (
+        ["--memory-pair-n", "8", "16"],
+        ["--r-parity"],
+        ["--baseline-checkout", str(tmp_path)],
+    ):
+        output = tmp_path / "record.json"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "benchmark_scaling.py",
+                "--execution",
+                "stream-exact",
+                "--result-mode",
+                "prediction",
+                "--output",
+                str(output),
+                *extra,
+            ],
+        )
+        with pytest.raises(SystemExit) as stopped:
+            benchmark_scaling.main()
+        assert stopped.value.code == 3
+        written = json.loads(output.read_text())
+        assert "unavailable" in json.dumps(written)
+        assert "fit unconverged: iteration limit" in capsys.readouterr().err
+    assert compared == []
+
+
+def test_operator_fit_records_inner_status_and_gradient_norm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operator = SimpleNamespace(inner_status=2, final_gradient_norm=3.5e-6)
+    result = SimpleNamespace(
+        **{
+            **_Result(converged=False, convergence_info="inner_failure").__dict__,
+            "operator_diagnostics": operator,
+        }
+    )
+    _stub_run_case(monkeypatch, lambda: result)
+
+    fields = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())["result"]
+
+    assert fields["stop_reason"] == 2
+    assert fields["stop_reason_source"].startswith("operator_diagnostics.inner_status")
+    assert fields["operator_final_gradient_norm"] == 3.5e-6
+    assert fields["projected_gradient_inf"] is None
+
+    no_status = SimpleNamespace(
+        **{
+            **result.__dict__,
+            "operator_diagnostics": SimpleNamespace(
+                inner_status=None, final_gradient_norm=float("nan")
+            ),
+        }
+    )
+    _stub_run_case(monkeypatch, lambda: no_status)
+    fields = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())["result"]
+    assert fields["stop_reason"] == "inner_failure"
+    assert fields["operator_final_gradient_norm"] is None

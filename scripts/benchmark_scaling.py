@@ -185,6 +185,10 @@ class ScalingCase:
             )
 
 
+class HarnessContractError(RuntimeError):
+    """The harness itself broke a case contract; never recorded as a fit outcome."""
+
+
 class ChildRunError(RuntimeError):
     """A failed isolated child with bounded, visible diagnostic streams."""
 
@@ -1135,7 +1139,122 @@ def run_public_smoke(root: Path) -> dict[str, Any]:
     }
 
 
+def _json_float(value: Any) -> float | None:
+    """A JSON-safe float: non-finite values become ``None``."""
+    number = float(value)
+    return number if np.isfinite(number) else None
+
+
+def _invalid_result_fields(
+    result: Any, validity: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Stop reason, gradient and parameters of a completed but invalid fit."""
+    exact = getattr(result, "exact_optimizer_diagnostics", None)
+    efs = getattr(result, "optimizer_diagnostics", None)
+    operator = getattr(result, "operator_diagnostics", None)
+    if exact is not None:
+        stop_reason: Any = int(exact.status)
+        stop_reason_source = "exact_optimizer_diagnostics.status (L-BFGS-B task code)"
+    elif efs is not None:
+        stop_reason = str(efs.stop_reason)
+        stop_reason_source = "optimizer_diagnostics.stop_reason"
+    elif operator is not None and operator.inner_status is not None:
+        stop_reason = int(operator.inner_status)
+        stop_reason_source = "operator_diagnostics.inner_status (PCG/inner solve code)"
+    else:
+        stop_reason = str(result.convergence_info)
+        stop_reason_source = "convergence_info (route exposes no separate stop code)"
+    theta = getattr(result, "theta", None)
+    return {
+        "converged": bool(result.converged),
+        "status": str(result.convergence_info),
+        "stop_reason": stop_reason,
+        "stop_reason_source": stop_reason_source,
+        "projected_gradient_inf": (
+            None if exact is None else _json_float(exact.projected_gradient_inf)
+        ),
+        "projected_gradient_status": (
+            "exact streamed REML projected gradient"
+            if exact is not None
+            else "this route exposes no projected gradient"
+        ),
+        "operator_final_gradient_norm": (
+            None if operator is None else _json_float(operator.final_gradient_norm)
+        ),
+        "smoothing_params": [
+            _json_float(value)
+            for value in np.atleast_1d(np.asarray(result.smoothing_params))
+        ],
+        "theta": None if theta is None else _json_float(theta),
+        "score": (
+            None
+            if getattr(result, "score", None) is None
+            else _json_float(result.score)
+        ),
+        "n_iter": int(result.n_iter),
+        "execution_route": getattr(result, "execution_route", None),
+        "validity": validity,
+    }
+
+
+def _invalid_child_record(
+    case: ScalingCase,
+    root: Path,
+    outcome: str,
+    *,
+    error: BaseException | None = None,
+    result: Any = None,
+    validity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A ``valid=false`` record: what was attempted and why it stopped.
+
+    It carries no timing fields: an invalid or rejected fit is never timing
+    evidence. It still names the case, formula, route, input and source, so
+    a run directory records every case it was asked to run.
+    """
+    record: dict[str, Any] = {
+        "valid": False,
+        "outcome": outcome,
+        "case": asdict(case),
+        "formula": _formula(case),
+        "route": _route_contract(case),
+        "input": _input_provenance(_make_data(case), case),
+        "timings": None,
+        "timings_status": "omitted: an invalid or rejected fit is not timing evidence",
+        "runtime": {**source_identity(root), **harness_identity()},
+    }
+    if error is not None:
+        record["error"] = {
+            "type": type(error).__name__,
+            "message": _bounded_child_diagnostic(str(error)),
+        }
+    if result is not None:
+        record["result"] = _invalid_result_fields(result, validity)
+    return record
+
+
 def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
+    """Measure Phase 1 separately, recording a rejected setup instead of failing.
+
+    A setup that raises (for example a memory-budget preflight) returns a
+    record with ``valid=false`` and the error, so a run directory never loses
+    the case. Harness contract violations and a broken environment (the
+    package cannot be imported, or is not the requested checkout) still
+    raise; the parent then records the crashed child.
+    """
+    import jaxgam
+
+    loaded_source_identity(jaxgam, root)
+    try:
+        record = _measured_setup(case, root)
+    except HarnessContractError:
+        raise
+    except Exception as error:  # recorded as the case's outcome
+        return _invalid_child_record(case, root, "setup_raised", error=error)
+    return {"valid": True, "outcome": "valid", **record}
+
+
+def _measured_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
     """Measure Phase 1 separately in an isolated process for one route."""
     import jaxgam
     from jaxgam.families.registry import get_family
@@ -1241,7 +1360,7 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
             rss_current_after_setup = current_rss_bytes()
         setup_max_batch_rows = source.max_batch_rows
         if setup_max_batch_rows > case.batch_rows:
-            raise RuntimeError(
+            raise HarnessContractError(
                 f"Streamed setup yielded a {setup_max_batch_rows}-row batch, "
                 f"exceeding the case's batch_rows={case.batch_rows}."
             )
@@ -1397,11 +1516,24 @@ def _run_case_with_compilation(
     cold_scan_before = _source_scan_count(fit_plan.source)
     cold_bytes_before = _source_batch_bytes(fit_plan.source)
     cold_compile_before = compilation.snapshot()
-    cold_result, cold_fit_s, cold_fit_wall_s = _timed_fit_with_wall_clock(fit)
+    try:
+        cold_result, cold_fit_s, cold_fit_wall_s = _timed_fit_with_wall_clock(fit)
+    except HarnessContractError:
+        raise
+    except Exception as error:  # a rejected fit is recorded, never dropped
+        return _invalid_child_record(case, root, "fit_raised", error=error)
     cold_compilation = _CompilationEvents.delta(
         cold_compile_before, compilation.snapshot()
     )
-    cold_validity = _require_valid_timed_fit(cold_result, label="cold fit")
+    cold_validity = _fit_validity(cold_result)
+    if not cold_validity["valid"]:
+        return _invalid_child_record(
+            case,
+            root,
+            "unconverged" if not cold_validity["converged"] else "nonfinite",
+            result=cold_result,
+            validity=cold_validity,
+        )
     cold_scan_delta = _source_scan_delta(fit_plan.source, cold_scan_before)
     cold_bytes_delta = _source_batch_bytes_delta(fit_plan.source, cold_bytes_before)
     rss_high_water_after_cold = peak_rss_bytes()
@@ -1445,7 +1577,7 @@ def _run_case_with_compilation(
     elif case.execution == "stream-gaussian-qr":
         route_name = getattr(cold_result, "execution_route", None)
         if route_name != "stream_gaussian_qr":
-            raise RuntimeError(
+            raise HarnessContractError(
                 "stream-gaussian-qr fit took route "
                 f"{route_name!r} ("
                 f"{getattr(cold_result, 'execution_fallback_reason', None)!r}); "
@@ -1659,6 +1791,8 @@ def _run_case_with_compilation(
     cache_path = Path(cache_setting) if cache_setting is not None else None
     device_peak_bytes, device_peak_status = _device_peak_memory(jax)
     return {
+        "valid": True,
+        "outcome": "valid",
         "case": asdict(case),
         "formula": formula,
         "route": route,
@@ -1751,13 +1885,50 @@ def _run_case_with_compilation(
 
 
 def run_isolated(case: ScalingCase, root: Path) -> dict[str, Any]:
-    """Run separately measured setup plus cold/warm fitting in child processes."""
-    record = {
-        "setup": _run_child(case, root, "setup"),
-        "fit": _run_child(case, root, "fit"),
+    """Run separately measured setup plus cold/warm fitting in child processes.
+
+    Every child leaves a record: a crashed child becomes a ``valid=false``
+    record with its exit code and bounded output streams.
+    """
+    record: dict[str, Any] = {
+        "setup": _recorded_child(case, root, "setup"),
+        "fit": _recorded_child(case, root, "fit"),
     }
-    record["within_run_consistency"] = _within_run_consistency(record)
+    record["valid"] = all(record[mode].get("valid", True) for mode in ("setup", "fit"))
+    if record["valid"]:
+        record["within_run_consistency"] = _within_run_consistency(record)
+    else:
+        record["within_run_consistency"] = {
+            "valid": False,
+            "checks": {},
+            "reason": "setup or fit record is invalid; no consistency claim",
+        }
     return record
+
+
+def _recorded_child(case: ScalingCase, root: Path, child_mode: str) -> dict[str, Any]:
+    """Run one child, turning a crashed or unreadable child into a record."""
+    try:
+        return _run_child(case, root, child_mode)
+    except ChildRunError as error:
+        return {
+            "valid": False,
+            "outcome": "child_failed",
+            "case": asdict(case),
+            "child_mode": child_mode,
+            "returncode": error.returncode,
+            "message": str(error),
+            "child_stdout": error.stdout,
+            "child_stderr": error.stderr,
+        }
+    except json.JSONDecodeError as error:
+        return {
+            "valid": False,
+            "outcome": "child_output_unreadable",
+            "case": asdict(case),
+            "child_mode": child_mode,
+            "message": f"{child_mode} child wrote no JSON record: {error}",
+        }
 
 
 def _run_child(case: ScalingCase, root: Path, child_mode: str) -> dict[str, Any]:
@@ -2069,6 +2240,60 @@ def compare_memory_growth(
     }
 
 
+_UNAVAILABLE_FOR_INVALID = {
+    "available": False,
+    "status": "unavailable",
+    "reason": "a compared record is invalid (valid=false); see its outcome",
+}
+
+
+def _record_valid(record: dict[str, Any]) -> bool:
+    """Records written before G7 carry no ``valid`` key and count as valid."""
+    return record.get("valid", True) is not False
+
+
+def _invalid_messages(payload: dict[str, Any]) -> list[str]:
+    """One line per invalid child record anywhere in the payload."""
+    labelled: list[tuple[str, Any]] = [
+        ("current", payload.get("current")),
+        ("baseline", payload.get("baseline")),
+    ]
+    pair = payload.get("memory_pair")
+    if isinstance(pair, dict):
+        labelled += [("smaller", pair.get("smaller")), ("larger", pair.get("larger"))]
+    messages = []
+    for label, record in labelled:
+        if not isinstance(record, dict):
+            continue
+        for mode in ("setup", "fit"):
+            child = record.get(mode)
+            if isinstance(child, dict) and not _record_valid(child):
+                detail = (
+                    child.get("message")
+                    or (child.get("error") or {}).get("message")
+                    or (child.get("result") or {}).get("status")
+                    or ""
+                )
+                messages.append(f"{label} {mode} {child.get('outcome')}: {detail}")
+    return messages
+
+
+def _emit(payload_value: dict[str, Any], output: Path | None) -> None:
+    """Write and print the payload; then fail the process if any record is invalid.
+
+    The record is always written first, so a run directory never misses a
+    case, and the non-zero exit (3) still stops an unattended run plan.
+    """
+    payload = json.dumps(payload_value, sort_keys=True)
+    if output is not None:
+        output.write_text(f"{payload}\n")
+    print(payload)
+    messages = _invalid_messages(payload_value)
+    if messages:
+        print("\n".join(messages), file=sys.stderr)
+        raise SystemExit(3)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, default=2_000)
@@ -2205,24 +2430,27 @@ def main() -> None:
             raise ValueError("Memory pair needs SMALL < LARGE.")
         small = run_isolated(replace(case, n_rows=small_n), current_root)
         large = run_isolated(replace(case, n_rows=large_n), current_root)
-        payload = json.dumps(
-            {
-                "memory_pair": {
-                    "smaller": small,
-                    "larger": large,
-                    "comparison": compare_memory_growth(small, large),
-                }
-            },
-            sort_keys=True,
-        )
-        if args.output is not None:
-            args.output.write_text(f"{payload}\n")
-        print(payload)
+        pair_value = {
+            "memory_pair": {
+                "smaller": small,
+                "larger": large,
+                "comparison": (
+                    compare_memory_growth(small, large)
+                    if _record_valid(small) and _record_valid(large)
+                    else _UNAVAILABLE_FOR_INVALID
+                ),
+            }
+        }
+        _emit(pair_value, args.output)
         return
     current = run_isolated(case, current_root)
     payload_value: dict[str, Any] = {"current": current}
     if args.r_parity:
-        payload_value["pinned_r_parity"] = compare_pinned_r_exact(case, current)
+        payload_value["pinned_r_parity"] = (
+            compare_pinned_r_exact(case, current)
+            if _record_valid(current)
+            else _UNAVAILABLE_FOR_INVALID
+        )
     if args.baseline_checkout is not None:
         try:
             baseline = run_isolated(case, args.baseline_checkout)
@@ -2245,11 +2473,12 @@ def main() -> None:
             }
         else:
             payload_value["baseline"] = baseline
-            payload_value["parity"] = compare_checkouts(baseline, current)
-    payload = json.dumps(payload_value, sort_keys=True)
-    if args.output is not None:
-        args.output.write_text(f"{payload}\n")
-    print(payload)
+            payload_value["parity"] = (
+                compare_checkouts(baseline, current)
+                if _record_valid(baseline) and _record_valid(current)
+                else _UNAVAILABLE_FOR_INVALID
+            )
+    _emit(payload_value, args.output)
 
 
 if __name__ == "__main__":
