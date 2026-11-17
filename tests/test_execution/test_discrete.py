@@ -434,3 +434,101 @@ def test_factor_tensor_fixed_sp_fit_matches_pinned_bam(r_bridge) -> None:
         rtol=STRICT.rtol,
         atol=STRICT.atol,
     )
+
+
+def _grouped_frame(grouping) -> pd.DataFrame:
+    frame = _frame(60)
+    frame["g"] = grouping
+    return frame
+
+
+_STRING_GROUPS = np.resize(np.array(["a", "b", "c"]), 60)
+
+
+@pytest.mark.parametrize(
+    "grouping",
+    [
+        _STRING_GROUPS.astype(object),
+        _STRING_GROUPS,
+        pd.Categorical(_STRING_GROUPS),
+    ],
+    ids=["object", "numpy-str", "categorical"],
+)
+def test_undeclared_string_grouping_names_column_and_factor_control(grouping):
+    """A random-effect grouping column must be declared in factor_names."""
+    source = DataFrameRowSource(_grouped_frame(grouping), response="y")
+    with pytest.raises(TypeError) as raised:
+        GAM("y ~ s(x) + s(g, bs='re')", sp=[1.0, 1.0], control=_control(8)).fit(
+            source, result="prediction"
+        )
+    message = str(raised.value)
+    assert message.startswith("Metric column 'g' must be real numeric data, got dtype")
+    assert "If 'g' is a factor" in message
+    assert "ContinuousDiscretizationControl(factor_names=('g',))" in message
+    # Declaring it fits the factor random effect (one coefficient per level).
+    declared = FitControl(
+        execution="discrete",
+        batch_rows=8,
+        discretization=ContinuousDiscretizationControl(m=12, factor_names=("g",)),
+    )
+    result = GAM("y ~ s(x) + s(g, bs='re')", sp=[1.0, 1.0], control=declared).fit(
+        source, result="prediction"
+    )
+    assert len(result.coefficients) == 1 + 9 + 3
+
+
+def test_integer_coded_grouping_is_a_numeric_covariate_unless_declared():
+    """Numeric codes are not guessed to be a factor, as mgcv treats a numeric
+    ``s(g, bs='re')`` covariate: one coefficient, no error. Declared, they
+    are a factor with one coefficient per level."""
+    source = DataFrameRowSource(
+        _grouped_frame(np.resize(np.array([1, 2, 3]), 60)), response="y"
+    )
+    numeric = GAM("y ~ s(x) + s(g, bs='re')", sp=[1.0, 1.0], control=_control(8)).fit(
+        source, result="prediction"
+    )
+    assert len(numeric.coefficients) == 1 + 9 + 1
+    declared = FitControl(
+        execution="discrete",
+        batch_rows=8,
+        discretization=ContinuousDiscretizationControl(m=12, factor_names=("g",)),
+    )
+    factor = GAM("y ~ s(x) + s(g, bs='re')", sp=[1.0, 1.0], control=declared).fit(
+        source, result="prediction"
+    )
+    assert len(factor.coefficients) == 1 + 9 + 3
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        np.array([f"{value:.3f}" for value in np.linspace(0, 1, 60)]),
+        pd.date_range("2026-01-01", periods=60).to_numpy(),
+    ],
+    ids=["numeric-strings", "datetime"],
+)
+def test_non_numeric_metric_data_reports_the_metric_column(values):
+    """A smooth's metric covariate with non-numeric data is reported as such."""
+    frame = _frame(60)
+    frame["x"] = values
+    dtype = frame["x"].dtype
+    source = DataFrameRowSource(frame, response="y")
+    with pytest.raises(TypeError) as raised:
+        GAM("y ~ s(x) + s(z)", sp=[1.0, 1.0], control=_control(8)).fit(
+            source, result="prediction"
+        )
+    message = str(raised.value)
+    assert message.startswith(
+        f"Metric column 'x' must be real numeric data, got dtype {dtype}."
+    )
+    assert "otherwise supply it as real numbers" in message
+
+
+def test_non_finite_metric_data_keeps_its_own_error():
+    frame = _frame(60)
+    frame.loc[3, "x"] = np.nan
+    source = DataFrameRowSource(frame, response="y")
+    with pytest.raises(ValueError, match="Metric column 'x' contains non-finite"):
+        GAM("y ~ s(x) + s(z)", sp=[1.0, 1.0], control=_control(8)).fit(
+            source, result="prediction"
+        )

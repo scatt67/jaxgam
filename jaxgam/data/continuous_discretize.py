@@ -147,6 +147,23 @@ def _validate_batch_positions(
     return scan_stop
 
 
+def _non_numeric_metric_message(name: str, column: Any) -> str:
+    """Name the column and dtype, and how a factor is declared on this route.
+
+    The column is not assumed to be a factor: it may equally be numeric data
+    stored with a non-numeric dtype.
+    """
+    dtype = getattr(column, "dtype", None)
+    return (
+        f"Metric column '{name}' must be real numeric data, got dtype {dtype}. "
+        "Variables not listed in factor_names are discretized as metric. If "
+        f"'{name}' is a factor (for example the grouping variable of "
+        f"s({name}, bs='re')), declare it with "
+        f"ContinuousDiscretizationControl(factor_names=('{name}',)); otherwise "
+        "supply it as real numbers."
+    )
+
+
 def _analyze_columns(
     source: RowSource,
     names: tuple[str, ...],
@@ -253,7 +270,7 @@ def _analyze_columns(
                     )
                 continue
             if column.dtype.kind not in "biuf":
-                raise TypeError(f"Metric column '{name}' must be real numeric data")
+                raise TypeError(_non_numeric_metric_message(name, source_column))
             numeric = np.asarray(column, dtype=np.float64)
             if not np.all(np.isfinite(numeric)):
                 raise ValueError(f"Metric column '{name}' contains non-finite values")
