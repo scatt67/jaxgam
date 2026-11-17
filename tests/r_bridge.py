@@ -1461,6 +1461,18 @@ class RBridge:
         with self._preserved_r_seed(seed):
             return _r_array(self._base.sample_int(size, size), dtype=np.int64)
 
+    def sample_int_draws(self, size: int, count: int, seed: int) -> np.ndarray:
+        """Pinned R ``sample.int(size, count)`` (one-based) after ``set.seed``.
+
+        R chooses its own algorithm: the hash sampler when ``size > 1e7`` and
+        ``count <= size / 2``, otherwise the partial Fisher-Yates draw.
+        """
+        self._require_rpy2()
+        if size < 1 or not 0 <= count <= size or seed < 0:
+            raise ValueError("R sample sizes must be valid and seed nonnegative")
+        with self._preserved_r_seed(seed):
+            return _r_array(self._base.sample_int(size, count), dtype=np.int64)
+
     def fit_fixed_sp(
         self,
         formula: str,

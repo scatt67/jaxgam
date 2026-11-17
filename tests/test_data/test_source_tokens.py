@@ -5,6 +5,8 @@ import pytest
 
 from jaxgam.data.source_tokens import (
     _r_number_text,
+    _r_number_texts,
+    _r_sample_int,
     _r_sample_without_replacement,
     _RRandom,
     r_row_token,
@@ -81,3 +83,34 @@ def test_knot_sample_is_the_pinned_r_draw_prefix(r_bridge):
     rows = np.arange(26.0).reshape(13, 2)
     expected = r_bridge.sample_int_permutation(13, 5)[:4] - 1
     np.testing.assert_array_equal(r_sample_knot_rows(rows, 4, 5), rows[expected])
+
+
+def test_vectorized_number_labels_equal_the_scalar_port():
+    rng = np.random.default_rng(123)
+    powers = 10.0 ** np.arange(-320, 309, dtype=float)
+    powers = powers[np.isfinite(powers) & (powers > 0)]
+    values = np.concatenate(
+        [
+            rng.normal(0, 8, 4000),
+            rng.uniform(-1, 1, 4000) * 10.0 ** rng.integers(-30, 30, 4000),
+            np.round(rng.normal(0, 100, 2000), 3),
+            powers,
+            np.nextafter(powers, 0),
+            np.nextafter(powers, np.inf),
+            np.arange(1, 2000) / 1000.0,
+            [5e-324, 8956883870379507.0, 999999999999999.9, 0.0, -0.0],
+            [np.nan, np.inf, -np.inf, 1 / 3, 99999.99999999999],
+        ]
+    )
+    values = np.concatenate([values, -values])
+    assert _r_number_texts(values) == [_r_number_text(float(v)) for v in values]
+    assert _r_number_texts(np.array([])) == []
+
+
+@pytest.mark.parametrize(("size", "count"), [(13, 13), (13, 4), (10_000_001, 5)])
+def test_sample_int_matches_pinned_r_draws(r_bridge, size, count):
+    """Partial Fisher-Yates, and R's hash sampler beyond 1e7 at size/2."""
+    expected = r_bridge.sample_int_draws(size, count, 11) - 1
+    np.testing.assert_array_equal(_r_sample_int(size, count, 11), expected)
+    with pytest.raises(ValueError, match="count"):
+        _r_sample_int(3, 4, 1)

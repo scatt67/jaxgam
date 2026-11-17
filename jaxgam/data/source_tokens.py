@@ -61,6 +61,39 @@ def _r_sample_without_replacement(
     return result
 
 
+def _r_sample_int(size: int, count: int, seed: int) -> np.ndarray:
+    """Port ``set.seed(seed); sample.int(size, count)`` (zero-based draws).
+
+    R 4.5's ``sample.int`` uses its hash sampler (``sample2``: draw an index
+    and keep it unless already drawn) when ``size > 1e7`` and
+    ``count <= size / 2``, and otherwise the partial Fisher-Yates draw, whose
+    ``count`` draws are the first ``count`` of ``sample.int(size, size)``.
+    Only ``count`` draws are made either way.
+    """
+    if size < 0 or not 0 <= count <= size:
+        raise ValueError("sample.int needs 0 <= count <= size.")
+    generator = _RRandom(seed)
+    result = np.empty(count, dtype=np.int64)
+    if size > 10_000_000 and count <= size / 2:
+        drawn: set[int] = set()
+        output = 0
+        while output < count:
+            value = generator.index(size)
+            if value not in drawn:
+                drawn.add(value)
+                result[output] = value
+                output += 1
+        return result
+    pool: dict[int, int] = {}
+    remaining = size
+    for output in range(count):
+        chosen = generator.index(remaining)
+        result[output] = pool.get(chosen, chosen)
+        remaining -= 1
+        pool[chosen] = pool.get(remaining, remaining)
+    return result
+
+
 def _r_number_text(value: Any) -> str:
     """Format a finite scalar as R's numeric ``paste0`` representation."""
     if isinstance(value, (bool, np.bool_, int, np.integer)):
@@ -173,6 +206,121 @@ def _r_number_text(value: Any) -> str:
     return f"{mantissa}e{exponent_value:+0{exponent_width + 1}d}"
 
 
+_FUZZ_POWERS = tuple(float(np.longdouble(f"1e{power}")) for power in range(28))
+
+
+def _r_number_texts(values: np.ndarray) -> list[str]:
+    """Vectorized :func:`_r_number_text` for a float64 array.
+
+    Every arithmetic step of the scalar port (its long-double or double
+    rescaling, ``rint``, significant-digit count and width choice) runs
+    elementwise in the same precision, so each label is identical to the
+    scalar port's; only the final string formatting is per value.
+    """
+    values = np.asarray(values, dtype=np.float64).ravel()
+    texts = [""] * len(values)
+    for index in np.flatnonzero(~np.isfinite(values) | (values == 0.0)):
+        texts[index] = _r_number_text(float(values[index]))
+    regular = np.flatnonzero(np.isfinite(values) & (values != 0.0))
+    if not len(regular):
+        return texts
+    numeric = values[regular]
+    digits = 15
+    magnitude = np.abs(numeric)
+    # kp from the C library's log10, as scientific() computes it; NumPy's
+    # log10 ufunc can dispatch to SIMD maths that differ by an ulp.
+    k_pos = np.floor(libm_log10(magnitude)).astype(np.int64) - digits + 1
+    has_extended_precision = np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
+    if has_extended_precision:
+        precise = magnitude.astype(np.longdouble)
+        scales = np.array(
+            [np.longdouble(f"1e{power}") for power in range(28)], dtype=np.longdouble
+        )
+        small = np.abs(k_pos) <= 27
+        scale = scales[np.minimum(np.abs(k_pos), 27)]
+        down, up = small & (k_pos > 0), small & (k_pos < 0)
+        precise[down] = precise[down] / scale[down]
+        precise[up] = precise[up] * scale[up]
+        # powl(10, kp) once per distinct exponent, the scalar port's operation.
+        for power in np.unique(k_pos[~small]).tolist():
+            rows = k_pos == power
+            precise[rows] = precise[rows] / (
+                np.longdouble(10.0) ** np.longdouble(power)
+            )
+        digit_floor = np.longdouble("1e14")
+    else:
+        precise = magnitude.copy()
+        scales_double = np.array([float(f"1e{power}") for power in range(23)])
+        small = np.abs(k_pos) <= 22
+        scale_double = scales_double[np.minimum(np.abs(k_pos), 22)]
+        down, up = small & (k_pos > 0), small & (k_pos < 0)
+        precise[down] = precise[down] / scale_double[down]
+        precise[up] = precise[up] * scale_double[up]
+        # Rexp10(x) is C pow(10.0, x) (Defn.h); math.pow is that call, once
+        # per distinct exponent, so no SIMD power loop is involved.
+        for power in np.unique(k_pos[~small]).tolist():
+            rows = k_pos == power
+            if power <= sys.float_info.min_10_exp:
+                precise[rows] = (precise[rows] * 1e303) / math.pow(10.0, power + 303)
+            else:
+                precise[rows] = precise[rows] / math.pow(10.0, power)
+        digit_floor = 1e14
+    low = precise < digit_floor
+    precise[low] = precise[low] * np.longdouble(10.0)
+    k_pos = k_pos - low
+    alpha = np.rint(precise).astype(np.float64)
+    n_significant = np.full(len(numeric), digits, dtype=np.int64)
+    trailing = np.ones(len(numeric), dtype=bool)
+    for _ in range(digits):
+        alpha = alpha / 10.0
+        trailing &= alpha == np.floor(alpha)
+        n_significant -= trailing
+    no_digits = n_significant == 0
+    n_significant[no_digits] = 1
+    k_pos = k_pos + no_digits
+    k_power = k_pos + digits - 1
+    fuzz_powers = np.array(_FUZZ_POWERS)
+    right_cut = np.clip(digits - k_power, 0, 27)
+    fuzz = 0.5 / fuzz_powers[right_cut]
+    rounding_widens = (
+        (k_power > 0)
+        & (k_power <= 27)
+        & (magnitude < fuzz_powers[np.clip(k_power, 0, 27)] - fuzz)
+    )
+    negative = (numeric < 0.0).astype(np.int64)
+    left = k_power + 1 - rounding_widens
+    signed_left = np.where(left < 0, 1 + negative, negative + np.maximum(left, 1))
+    fixed_digits = np.maximum(n_significant - left, 0)
+    fixed_width = signed_left + fixed_digits + (fixed_digits != 0)
+    exponent_digits_minus_one = np.where((left > 100) | (left <= -99), 2, 1)
+    scientific_digits = n_significant - 1
+    scientific_width = (
+        negative
+        + (scientific_digits > 0)
+        + scientific_digits
+        + 4
+        + exponent_digits_minus_one
+    )
+    use_fixed = fixed_width <= scientific_width
+    for position, index in enumerate(regular.tolist()):
+        number = float(numeric[position])
+        if use_fixed[position]:
+            places = int(fixed_digits[position])
+            texts[index] = (
+                format(number, f".{places}f").rstrip("0").rstrip(".")
+                if places
+                else format(number, ".0f")
+            )
+            continue
+        encoded = format(number, f"#.{int(scientific_digits[position])}e")
+        mantissa, exponent = encoded.split("e")
+        if "." in mantissa:
+            mantissa = mantissa.rstrip("0").rstrip(".")
+        width = int(exponent_digits_minus_one[position]) + 1
+        texts[index] = f"{mantissa}e{int(exponent):+0{width + 1}d}"
+    return texts
+
+
 def r_row_token(row: Any) -> str:
     """Return mgcv ``uniquecombs``'s label of one multi-column row.
 
@@ -197,13 +345,19 @@ def r_uniquecombs_ordered(x: np.ndarray) -> np.ndarray:
     if x.shape[1] == 1:
         return np.unique(x[:, 0])[:, np.newaxis]
     exact, first_index = np.unique(x, axis=0, return_index=True)
-    first: dict[str, int] = {}
-    for row, index in zip(exact, first_index, strict=True):
-        token = r_row_token(row)
-        if token not in first or index < first[token]:
-            first[token] = int(index)
-    order = sorted(first, key=lambda token: token.encode())
-    return x[[first[token] for token in order]].copy()
+    labels = None
+    for number, column in enumerate(exact.T):
+        distinct, inverse = np.unique(column, return_inverse=True)
+        texts = np.array(_r_number_texts(distinct), dtype=np.bytes_)[inverse]
+        labels = texts if number == 0 else np.char.add(np.char.add(labels, b"*"), texts)
+    # C collation is byte order; labels contain no NUL bytes, so NumPy's
+    # byte-string order is it. Among exactly unique rows sharing a label,
+    # uniquecombs keeps the first in data order.
+    order = np.lexsort((first_index, labels))
+    labels, first_index = labels[order], first_index[order]
+    keep = np.ones(len(labels), dtype=bool)
+    keep[1:] = labels[1:] != labels[:-1]
+    return x[first_index[keep]].copy()
 
 
 def r_sample_knot_rows(
@@ -212,8 +366,8 @@ def r_sample_knot_rows(
     """Port smooth.construct.{gp,tp}'s large-data knot sample.
 
     ``temp.seed(seed)`` (R's default RNG kinds), then
-    ``xu[sample(1:nu, max.knots, replace=FALSE), ]``: the first ``max_knots``
-    draws of ``sample.int(nu, nu)``, in draw order.
+    ``xu[sample(1:nu, max.knots, replace=FALSE), ]``, i.e. the draws of
+    ``sample.int(nu, max.knots)`` (:func:`_r_sample_int`) in draw order.
     """
-    permutation = _r_sample_without_replacement(len(unique_rows), seed)
-    return np.asarray(unique_rows)[permutation[:max_knots]].copy()
+    draws = _r_sample_int(len(unique_rows), max_knots, seed)
+    return np.asarray(unique_rows)[draws].copy()
