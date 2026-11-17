@@ -2554,25 +2554,68 @@ def compare_pinned_r_exact(case: ScalingCase, record: dict[str, Any]) -> dict[st
     }
 
 
+# Routes that read a row source in bounded batches, and every case control
+# that must be equal across a memory pair (only n_rows may differ).
+_MEMORY_PAIR_EXECUTIONS = (
+    _STREAM_EXECUTIONS | _DISCRETE_EXECUTIONS | _OPERATOR_EXECUTIONS
+)
+_MEMORY_PAIR_CONTROLS = (
+    "execution",
+    "basis_dimension",
+    "smooth_count",
+    "batch_rows",
+    "family",
+    "model",
+    "levels",
+    "stress",
+    "nb_theta",
+    "outlier_fraction",
+    "discretization_m",
+    "discrete_table_mib",
+    "memory_budget_mib",
+)
+
+
+def _workspace_bound(result: dict[str, Any]) -> dict[str, Any]:
+    """The route's prospective fit workspace and where it comes from."""
+    if result.get("known_workspace_bytes") is not None:
+        return {
+            "workspace_bound_bytes": result["known_workspace_bytes"],
+            "workspace_bound_source": "known_workspace_bytes",
+        }
+    operator = result.get("operator_diagnostics")
+    if operator is not None:
+        return {
+            "workspace_bound_bytes": operator["peak_bound_bytes"],
+            "workspace_bound_source": "operator_diagnostics.peak_bound_bytes",
+        }
+    return {"workspace_bound_bytes": None, "workspace_bound_source": None}
+
+
 def compare_memory_growth(
     smaller: dict[str, Any], larger: dict[str, Any]
 ) -> dict[str, Any]:
-    """Compare isolated streamed runs at fixed batch and coefficient shape."""
+    """Compare isolated source-reading runs at fixed batch and coefficient shape.
+
+    Streamed, discrete and operator routes qualify: each reads a row source in
+    bounded batches, so its fit workspace should not grow with n at fixed
+    batch size and p. Every control except ``n_rows`` must match.
+    """
     small_fit, large_fit = smaller["fit"], larger["fit"]
     small_case, large_case = small_fit["case"], large_fit["case"]
     same_shape_controls = all(
-        small_case[field] == large_case[field]
-        for field in ("execution", "basis_dimension", "smooth_count", "batch_rows")
+        small_case.get(field) == large_case.get(field)
+        for field in _MEMORY_PAIR_CONTROLS
     )
     if (
         not same_shape_controls
-        or small_case["execution"] not in _STREAM_EXECUTIONS
+        or small_case["execution"] not in _MEMORY_PAIR_EXECUTIONS
         or small_case["n_rows"] >= large_case["n_rows"]
         or not smaller["within_run_consistency"]["valid"]
         or not larger["within_run_consistency"]["valid"]
         or small_fit["result"]["n_coef"] != large_fit["result"]["n_coef"]
     ):
-        raise ValueError("Memory pair requires valid streamed runs at fixed B/p.")
+        raise ValueError("Memory pair requires valid source-reading runs at fixed B/p.")
 
     def observation(record: dict[str, Any]) -> dict[str, Any]:
         fit = record["fit"]
@@ -2588,6 +2631,7 @@ def compare_memory_growth(
                 None if before is None or after is None else max(0, after - before)
             ),
             "known_workspace_bytes": fit["result"]["known_workspace_bytes"],
+            **_workspace_bound(fit["result"]),
             "cold_fit_scan_calls": fit["result"]["source_scans"]["cold_fit_delta"],
             "cold_fit_batch_bytes": fit["result"]["source_scans"][
                 "cold_fit_batch_bytes"
@@ -2602,6 +2646,11 @@ def compare_memory_growth(
         "known_workspace_plateau": (
             small["known_workspace_bytes"] is not None
             and small["known_workspace_bytes"] == large["known_workspace_bytes"]
+        ),
+        "workspace_bound_plateau": (
+            small["workspace_bound_bytes"] is not None
+            and small["workspace_bound_source"] == large["workspace_bound_source"]
+            and small["workspace_bound_bytes"] == large["workspace_bound_bytes"]
         ),
         "rss_scope": (
             "each isolated worker's cold peak minus its measured current RSS "
@@ -2825,6 +2874,11 @@ def main() -> None:
         small_n, large_n = args.memory_pair_n
         if small_n >= large_n:
             raise ValueError("Memory pair needs SMALL < LARGE.")
+        if case.execution not in _MEMORY_PAIR_EXECUTIONS:
+            raise ValueError(
+                "Memory pairs compare source-reading routes (streamed, discrete "
+                "or operator); dense routes hold the n x p design by design."
+            )
         small = run_isolated(replace(case, n_rows=small_n), current_root)
         large = run_isolated(replace(case, n_rows=large_n), current_root)
         pair_value = {

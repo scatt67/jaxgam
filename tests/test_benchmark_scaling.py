@@ -1860,3 +1860,104 @@ def test_operator_fit_records_inner_status_and_gradient_norm(
     fields = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())["result"]
     assert fields["stop_reason"] == "inner_failure"
     assert fields["operator_final_gradient_norm"] is None
+
+
+def _pair_record(
+    execution: str, n_rows: int, *, workspace: int | None, peak_bound: int | None
+) -> dict:
+    result: dict = {
+        "n_coef": 46,
+        "known_workspace_bytes": workspace,
+        "source_scans": {"cold_fit_delta": 5, "cold_fit_batch_bytes": 100 * n_rows},
+    }
+    if peak_bound is not None:
+        result["operator_diagnostics"] = {"peak_bound_bytes": peak_bound}
+    return {
+        "within_run_consistency": {"valid": True},
+        "fit": {
+            "case": {
+                "execution": execution,
+                "basis_dimension": 6,
+                "smooth_count": 1,
+                "batch_rows": 64,
+                "model": "re",
+                "levels": 40,
+                "family": "gaussian",
+                "n_rows": n_rows,
+            },
+            "memory": {
+                "input_bytes": 16 * n_rows,
+                "rss_current_before_bytes": 1000,
+                "rss_high_water_after_cold_bytes": 1500,
+            },
+            "result": result,
+        },
+    }
+
+
+def test_memory_pairs_cover_discrete_and_operator_routes() -> None:
+    operator = benchmark_scaling.compare_memory_growth(
+        _pair_record("operator", 400, workspace=None, peak_bound=7_000),
+        _pair_record("operator", 800, workspace=None, peak_bound=7_000),
+    )
+    assert not operator["known_workspace_plateau"]
+    assert operator["workspace_bound_plateau"]
+    assert operator["larger"]["workspace_bound_source"] == (
+        "operator_diagnostics.peak_bound_bytes"
+    )
+
+    discrete = benchmark_scaling.compare_memory_growth(
+        _pair_record("discrete-wm", 400, workspace=9_000, peak_bound=None),
+        _pair_record("discrete-wm", 800, workspace=9_500, peak_bound=None),
+    )
+    assert not discrete["known_workspace_plateau"]
+    assert not discrete["workspace_bound_plateau"]
+    assert discrete["smaller"]["workspace_bound_source"] == "known_workspace_bytes"
+
+    unbounded = benchmark_scaling.compare_memory_growth(
+        _pair_record("stream-qr", 400, workspace=None, peak_bound=None),
+        _pair_record("stream-qr", 800, workspace=None, peak_bound=None),
+    )
+    assert not unbounded["workspace_bound_plateau"]
+
+
+@pytest.mark.parametrize(
+    ("execution", "change"),
+    [
+        ("dense-reml", {}),
+        ("operator", {"levels": 80}),
+        ("operator", {"family": "poisson"}),
+        ("discrete-wm", {"memory_budget_mib": 1024}),
+    ],
+)
+def test_memory_pairs_reject_dense_routes_and_changed_controls(
+    execution: str, change: dict
+) -> None:
+    small = _pair_record(execution, 400, workspace=1, peak_bound=None)
+    large = _pair_record(execution, 800, workspace=1, peak_bound=None)
+    large["fit"]["case"].update(change)
+    with pytest.raises(ValueError, match="fixed B/p"):
+        benchmark_scaling.compare_memory_growth(small, large)
+
+
+def test_cli_rejects_a_dense_memory_pair_before_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def never(*_args: object) -> dict:
+        raise AssertionError("no child may run")
+
+    monkeypatch.setattr(benchmark_scaling, "run_isolated", never)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_scaling.py",
+            "--execution",
+            "dense-reml",
+            "--memory-pair-n",
+            "8",
+            "16",
+        ],
+    )
+    with pytest.raises(ValueError, match="source-reading routes"):
+        benchmark_scaling.main()
