@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import pickle
+from collections.abc import Mapping
 from dataclasses import fields, replace
 
 import numpy as np
@@ -524,6 +525,21 @@ def test_constant_gamma_response_has_no_scale_start():
         )
 
 
+def _is_halving_schedule(value) -> bool:
+    """A nonempty mapping of int outer iterations to int halving counts."""
+    return (
+        isinstance(value, Mapping)
+        and bool(value)
+        and all(
+            isinstance(key, int)
+            and not isinstance(key, bool)
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            for key, count in value.items()
+        )
+    )
+
+
 def test_oracle_replay_hook_is_unreachable_from_the_public_api(monkeypatch):
     """``_oracle_replay_halvings`` is a test/oracle hook only.
 
@@ -550,5 +566,9 @@ def test_oracle_replay_hook_is_unreachable_from_the_public_api(monkeypatch):
         "_oracle_replay_halvings" not in kwargs and "replay" not in str(kwargs)
         for kwargs in calls
     )
-    assert not any("replay" in name for name in vars(result))
+    # The hook by its own name, then by its shape: a halving schedule maps
+    # outer iterations to coefficient-halving counts, so no public result
+    # attribute may hold one under any name.
+    assert "_oracle_replay_halvings" not in vars(result)
+    assert not any(_is_halving_schedule(value) for value in vars(result).values())
     assert "replay" not in result.convergence_info
