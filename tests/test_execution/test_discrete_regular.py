@@ -387,34 +387,50 @@ def _follow(run, reference: list[tuple[int, int]]) -> _Followed:
 # Per platform class (tests.helpers.PLATFORM_CLASSES, decided from the CPU's
 # own flags): {class: (reviewed bound, measured count)}. The macOS arm64 and
 # Linux aarch64 bounds are the 2026-10-24 review's (the larger of the two
-# measured counts); x86_64 and x86_64-avx512 entries are added from the
-# eight-runner job's measured counts. A listed case on a class without an entry
-# fails and prints its measured count; an unlisted case must need no replay on
-# any platform.
+# measured counts). The x86_64 and x86_64-avx512 bounds are the counts measured
+# by the eight-runner platform-sensitive job, run 44051330720 on 10b4b14 (root
+# decision 2026-11-17): every replay there passed its STRICT-margin decision
+# check with every field STRICT under replay, and the counts were identical
+# within each class across replicas and CPU models (x86_64-avx512: EPYC 9V45,
+# Xeon Platinum 8573C; x86_64: EPYC 7763). A listed case on a class without an
+# entry fails and prints its measured count; an unlisted case must need no
+# replay on any platform.
 _REVIEWED_TIE_REPLAYS = {
     ("explicit", "gamma-inverse-separate_re"): {
         "macos-arm64": (2, 2),
         "linux-aarch64": (2, 1),
+        "x86_64": (0, 0),  # run 44051330720
+        "x86_64-avx512": (3, 3),  # run 44051330720
     },
     ("explicit", "gamma-inverse-tensor_by"): {
         "macos-arm64": (1, 1),
         "linux-aarch64": (1, 1),
+        "x86_64": (2, 2),  # run 44051330720
+        "x86_64-avx512": (2, 2),  # run 44051330720
     },
     ("fixed", "gamma-inverse-separate_re"): {
         "macos-arm64": (3, 3),
         "linux-aarch64": (3, 0),
+        "x86_64": (3, 3),  # run 44051330720
+        "x86_64-avx512": (2, 2),  # run 44051330720
     },
     ("fixed", "gamma-inverse-tensor_by"): {
         "macos-arm64": (4, 4),
         "linux-aarch64": (4, 1),
+        "x86_64": (0, 0),  # run 44051330720
+        "x86_64-avx512": (3, 3),  # run 44051330720
     },
     ("selected", "gamma-inverse-separate_re"): {
         "macos-arm64": (1, 1),
         "linux-aarch64": (1, 0),
+        "x86_64": (0, 0),  # run 44051330720
+        "x86_64-avx512": (0, 0),  # run 44051330720
     },
     ("boundary-fixed", "gamma-near-zero-y"): {
         "macos-arm64": (67, 67),
         "linux-aarch64": (67, 38),
+        "x86_64": (50, 50),  # run 44051330720
+        "x86_64-avx512": (41, 41),  # run 44051330720
     },
 }
 
@@ -711,6 +727,9 @@ class _ReviewedFlatSp:
     ``class_digests`` binds platform-dependent inputs per platform class
     (``tests.helpers.cpu_platform_class``, read from the CPU's flags), with
     only entries measured on that class. Exactly one of the two is set.
+    ``strict_classes`` maps a platform class to the digest of the bytes
+    reviewed there and found within STRICT: such a class is reviewed and
+    asserts STRICT (no allowance), which is distinct from having no entry.
     """
 
     digest: str | None
@@ -719,6 +738,7 @@ class _ReviewedFlatSp:
     link: str
     control: FitControl
     class_digests: Mapping[str, str] = field(default_factory=dict)
+    strict_classes: Mapping[str, str] = field(default_factory=dict)
 
 
 # Root decision 2026-10-24: the selected smoothing-parameter vector of these
@@ -743,7 +763,11 @@ class _ReviewedFlatSp:
 # digest is recorded per platform class. The recorded digest cd4b75b8... is
 # the macOS arm64 host's (this host recomputes it exactly). A class without
 # an entry fails with the digest it computed and the measured sp distance to
-# pinned R; entries are added only from measurements on that class.
+# pinned R; entries are added only from measurements on that class. Both x86
+# classes compute digest c8354644... (run 44051330720 on 10b4b14, every
+# replica): on x86_64 the sp vector is 1.89x STRICT from pinned R, so the
+# allowance applies there; on x86_64-avx512 it is 0.368x STRICT, so that class
+# is reviewed with no allowance and asserts STRICT.
 _REVIEWED_FLAT_SP = {
     "binomial-log-separate_re": _ReviewedFlatSp(
         "19e17fd49337277e81b57edaa7b99acf3ef1d2660cb5e7a0c20ed27c6fb6a90b",
@@ -761,6 +785,16 @@ _REVIEWED_FLAT_SP = {
         class_digests={
             "macos-arm64": (
                 "cd4b75b8f0e40cc7663b11db3a05ae278b93cdf0ee55eb838bd5d64500d1318e"
+            ),
+            # run 44051330720: sp 1.89x STRICT (max relative 1.887e-10).
+            "x86_64": (
+                "c835464407eeea1e737b90fefa3ad95e3182eeb151ea46fb2077f246a876aa42"
+            ),
+        },
+        strict_classes={
+            # run 44051330720: sp 0.368x STRICT (max relative 3.681e-11).
+            "x86_64-avx512": (
+                "c835464407eeea1e737b90fefa3ad95e3182eeb151ea46fb2077f246a876aa42"
             ),
         },
     ),
@@ -803,6 +837,8 @@ def _flat_sp_tolerance(
     expected_digest = reviewed.digest
     if expected_digest is None:
         platform_class = cpu_platform_class()
+        if platform_class in reviewed.strict_classes:
+            return STRICT
         expected_digest = reviewed.class_digests.get(platform_class)
         if expected_digest is None:
             distance = (
@@ -1042,8 +1078,18 @@ def _advance_following(parts, state, source_halvings, collector, label, replayed
 
 # Replayed matched-state decisions per case and platform class, as above.
 _REVIEWED_MATCHED_REPLAYS = {
-    "gamma-inverse-fixed": {"macos-arm64": (2, 1), "linux-aarch64": (2, 2)},
-    "gamma-near-zero-fixed": {"macos-arm64": (50, 50), "linux-aarch64": (50, 37)},
+    "gamma-inverse-fixed": {
+        "macos-arm64": (2, 1),
+        "linux-aarch64": (2, 2),
+        "x86_64": (1, 1),  # run 44051330720
+        "x86_64-avx512": (4, 4),  # run 44051330720
+    },
+    "gamma-near-zero-fixed": {
+        "macos-arm64": (50, 50),
+        "linux-aarch64": (50, 37),
+        "x86_64": (39, 39),  # run 44051330720
+        "x86_64-avx512": (53, 53),  # run 44051330720
+    },
 }
 
 
@@ -1502,7 +1548,7 @@ def _flat_sp_case_inputs(case: str):
 def test_flat_sp_class_without_entry_fails_with_digest_and_distance(monkeypatch):
     """A per-class record fails on an unreviewed class, printing what to review."""
     frame, weights, offset = _flat_sp_case_inputs("poisson-low-counts")
-    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: "x86_64-avx512")
+    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: "linux-aarch64")
     with pytest.raises(AssertionError) as raised:
         _flat_sp_tolerance(
             "poisson-low-counts",
@@ -1517,9 +1563,32 @@ def test_flat_sp_class_without_entry_fails_with_digest_and_distance(monkeypatch)
             np.array([1.0, 2.0]),
         )
     message = str(raised.value)
-    assert "x86_64-avx512" in message
+    assert "linux-aarch64" in message
     assert _input_digest(frame, weights, offset) in message
     assert "x STRICT (max relative 5.000e-10)" in message
+
+
+def test_flat_sp_reviewed_strict_class_asserts_strict_without_failing(monkeypatch):
+    """A class reviewed as STRICT is distinct from a class without an entry."""
+    frame, weights, offset = _flat_sp_case_inputs("poisson-low-counts")
+    reviewed = _REVIEWED_FLAT_SP["poisson-low-counts"]
+    assert "x86_64-avx512" in reviewed.strict_classes
+    assert "x86_64-avx512" not in reviewed.class_digests
+    arguments = (
+        "poisson-low-counts",
+        frame,
+        weights,
+        offset,
+        _BOUNDARY_FORMULA,
+        Poisson(),
+        _control(True),
+        None,
+    )
+    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: "x86_64-avx512")
+    assert _flat_sp_tolerance(*arguments) is STRICT
+    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: "linux-aarch64")
+    with pytest.raises(AssertionError, match="no reviewed digest"):
+        _flat_sp_tolerance(*arguments)
 
 
 @pytest.mark.parametrize("case", list(_REVIEWED_FLAT_SP))
@@ -1539,7 +1608,11 @@ def test_flat_sp_allowance_needs_reviewed_bytes_model_and_controls(monkeypatch, 
         monkeypatch.setitem(
             _REVIEWED_FLAT_SP,
             case,
-            replace(reviewed, class_digests={cpu_platform_class(): computed}),
+            replace(
+                reviewed,
+                class_digests={cpu_platform_class(): computed},
+                strict_classes={},
+            ),
         )
     family = reviewed.family_class(link=reviewed.link)
     control = _control(True)

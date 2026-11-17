@@ -75,3 +75,18 @@ def test_listed_case_without_a_platform_entry_fails_with_its_count(
     ):
         check_replay_bound("T", table, "case", 0)
     assert helpers.REPLAY_COUNT_RECORDS == [("T", "'case'", "x86_64", 0, None)]
+
+
+def test_other_classes_marker_bounds_unlisted_classes_at_zero(monkeypatch) -> None:
+    table = {"case": {"x86_64": (1, 1), helpers.OTHER_CLASSES_NEED_NONE: (0, 0)}}
+    monkeypatch.setattr(helpers, "REPLAY_COUNT_RECORDS", [])
+    monkeypatch.setattr(helpers, "cpu_platform_class", lambda: "x86_64")
+    check_replay_bound("T", table, "case", 1)
+    monkeypatch.setattr(helpers, "cpu_platform_class", lambda: "linux-aarch64")
+    check_replay_bound("T", table, "case", 0)
+    with pytest.raises(AssertionError, match=r"1 replayed decisions .* bound 0"):
+        check_replay_bound("T", table, "case", 1)
+    with pytest.raises(ValueError, match="must be 0"):
+        check_replay_bound(
+            "T", {"case": {helpers.OTHER_CLASSES_NEED_NONE: (2, 2)}}, "case", 0
+        )

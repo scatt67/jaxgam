@@ -541,6 +541,11 @@ def cpu_platform_class() -> str:
     return f"{sys.platform}-{machine}"
 
 
+# Key of a per-case entry: every platform class without its own entry must
+# need no replay (bound 0), exactly as if the case were unlisted for it. Used
+# when a case needs a reviewed bound on some classes only.
+OTHER_CLASSES_NEED_NONE = "other classes need none"
+
 # Every replay-bound check of the session, printed by tests/conftest.py's
 # terminal summary so a run reports its measured counts even when it passes.
 REPLAY_COUNT_RECORDS: list[tuple[str, str, str, int, int | None]] = []
@@ -557,13 +562,17 @@ def check_replay_bound(
     ``table`` maps a case to ``{platform class: (bound, measured count)}``.
     A case absent from the table must need no replay on any platform (bound
     0). A listed case on a platform class without a reviewed entry fails and
-    reports the measured count, so the entry can be reviewed from it.
+    reports the measured count, so the entry can be reviewed from it, unless
+    the case lists :data:`OTHER_CLASSES_NEED_NONE`, whose bound must be 0.
     """
     platform_class = cpu_platform_class()
     if key not in table:
         bound: int | None = 0
     else:
-        entry = table[key].get(platform_class)
+        entries = table[key]
+        if entries.get(OTHER_CLASSES_NEED_NONE, (0, 0))[0] != 0:
+            raise ValueError(f"{table_name}: {OTHER_CLASSES_NEED_NONE} must be 0")
+        entry = entries.get(platform_class, entries.get(OTHER_CLASSES_NEED_NONE))
         bound = None if entry is None else entry[0]
     REPLAY_COUNT_RECORDS.append(
         (table_name, repr(key), platform_class, measured, bound)
