@@ -729,3 +729,63 @@ class TestParameterized:
 
         S = smooth.build_penalty_matrices()[0].S
         assert S.shape == (expected_coefs, expected_coefs)
+
+
+def _crspl_rows_without_contraction(x, knots, F):
+    """Scalar transcription of mgcv crspl with separately rounded products.
+
+    Python floats never fuse, so this is the audited x86_64 binary's
+    ``cjm * Fp + cjp * Fp1`` (MULSD, MULSD, ADDSD).
+    """
+    k = len(knots)
+    X = np.zeros((len(x), k))
+    for i, xi in enumerate(map(float, x)):
+        if xi < knots[0]:
+            h = float(knots[1] - knots[0])
+            xik = xi - float(knots[0])
+            cjm, cjp = -xik * h / 3.0, -xik * h / 6.0
+            for c in range(k):
+                X[i, c] = cjm * float(F[0, c]) + cjp * float(F[1, c])
+            X[i, 0] += 1.0 - xik / h
+            X[i, 1] += xik / h
+        elif xi > knots[-1]:
+            h = float(knots[-1] - knots[-2])
+            xik = xi - float(knots[-1])
+            cjm, cjp = xik * h / 6.0, xik * h / 3.0
+            for c in range(k):
+                X[i, c] = cjm * float(F[-2, c]) + cjp * float(F[-1, c])
+            X[i, -2] += -xik / h
+            X[i, -1] += 1.0 + xik / h
+        else:
+            j = int(min(np.searchsorted(knots, xi, side="right") - 1, k - 2))
+            j = max(j, 0)
+            xj, xj1 = float(knots[j]), float(knots[j + 1])
+            h = xj1 - xj
+            ajm, ajp = xj1 - xi, xi - xj
+            cjm = (ajm * (ajm * ajm / h - h)) / 6.0
+            cjp = (ajp * (ajp * ajp / h - h)) / 6.0
+            for c in range(k):
+                X[i, c] = cjm * float(F[j, c]) + cjp * float(F[j + 1, c])
+            X[i, j] += ajm / h
+            X[i, j + 1] += ajp / h
+    return X
+
+
+def test_non_contracting_crspl_rounds_both_products(monkeypatch) -> None:
+    """On x86_64 the basis rounds cjm*Fp and cjp*Fp1 separately, as R does.
+
+    The audited x86_64 mgcv binary has no fused instructions, whereas x86_64
+    BLAS kernels fuse; the non-contracting path must not route through BLAS.
+    """
+    from jaxgam.smooths import cubic as cubic_module
+
+    rng = np.random.default_rng(71)
+    x = np.sort(rng.uniform(0.0, 1.0, 400))
+    smooth = CubicRegressionSmooth(make_smooth_spec(["x"], bs="cr", k=8))
+    smooth.setup({"x": x})
+    new = np.concatenate([[-0.2, -0.05], rng.uniform(0.0, 1.0, 300), [1.07, 1.3]])
+    monkeypatch.setattr(cubic_module, "SOURCE_FMA_CONTRACTION", False)
+    np.testing.assert_array_equal(
+        smooth._build_basis_matrix(new, smooth._knots, smooth._F),
+        _crspl_rows_without_contraction(new, smooth._knots, smooth._F),
+    )

@@ -31,6 +31,7 @@ from scipy.linalg import blas
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
+from jaxgam.smooths.source_arithmetic import SOURCE_FMA_CONTRACTION
 from jaxgam.smooths.source_lapack import (
     cubic_shrinkage_penalty,
     natural_cubic_system_solve,
@@ -427,18 +428,28 @@ class CubicRegressionSmooth(Smooth):
         if not self._cyclic:
             j = self._find_knot_intervals(x, knots)
             X = np.zeros((len(x), n_basis))
-            if sys.platform != "darwin":
-                # Keep the pinned source BLAS path on Linux. Accelerate's
-                # two-column GEMM rounds differently from mgcv's crspl FMA.
+            if sys.platform != "darwin" or not SOURCE_FMA_CONTRACTION:
+                # crspl evaluates cjm * Fp + cjp * Fp1. The audited aarch64
+                # binary contracts it to fma(cjm, Fp, cjp * Fp1), which the
+                # two-column DGEMM reproduces (Accelerate's rounds otherwise,
+                # so macOS arm64 uses the compiled fused loop below). The
+                # audited x86_64 binary uses separate MULSD/ADDSD, while BLAS
+                # kernels on x86_64 fuse, so there both products are rounded
+                # and added explicitly.
+                def combine(cjm, cjp, Fp, Fp1):
+                    if SOURCE_FMA_CONTRACTION:
+                        return blas.dgemm(
+                            1.0, np.column_stack((cjp, cjm)), np.vstack((Fp1, Fp))
+                        )
+                    return cjm[:, np.newaxis] * Fp + cjp[:, np.newaxis] * Fp1
+
                 left_rows = np.flatnonzero(x < knots[0])
                 if left_rows.size:
                     h = knots[1] - knots[0]
                     xik = x[left_rows] - knots[0]
                     cjm = -xik * h / 3.0
                     cjp = -xik * h / 6.0
-                    X[left_rows] = blas.dgemm(
-                        1.0, np.column_stack((cjp, cjm)), np.vstack((F[1], F[0]))
-                    )
+                    X[left_rows] = combine(cjm, cjp, F[0], F[1])
                     X[left_rows, 0] += 1.0 - xik / h
                     X[left_rows, 1] += xik / h
                 right_rows = np.flatnonzero(x > knots[-1])
@@ -447,9 +458,7 @@ class CubicRegressionSmooth(Smooth):
                     xik = x[right_rows] - knots[-1]
                     cjm = xik * h / 6.0
                     cjp = xik * h / 3.0
-                    X[right_rows] = blas.dgemm(
-                        1.0, np.column_stack((cjp, cjm)), np.vstack((F[-1], F[-2]))
-                    )
+                    X[right_rows] = combine(cjm, cjp, F[-2], F[-1])
                     X[right_rows, -2] += -xik / h
                     X[right_rows, -1] += 1.0 + xik / h
                 interior = (x >= knots[0]) & (x <= knots[-1])
@@ -464,9 +473,7 @@ class CubicRegressionSmooth(Smooth):
                     ajp = x[rows] - xj
                     cjm = (ajm * (ajm * ajm / h - h)) / 6.0
                     cjp = (ajp * (ajp * ajp / h - h)) / 6.0
-                    coefficients = np.column_stack((cjp, cjm))
-                    factors = np.vstack((F[interval + 1], F[interval]))
-                    X[rows] = blas.dgemm(1.0, coefficients, factors)
+                    X[rows] = combine(cjm, cjp, F[interval], F[interval + 1])
                     X[rows, interval] += ajm / h
                     X[rows, interval + 1] += ajp / h
                 return X
