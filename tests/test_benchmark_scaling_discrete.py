@@ -457,3 +457,59 @@ def test_cli_threads_the_discrete_table_budget(
     assert seen[-1].discrete_table_mib == 512
     assert seen[-1].model == "tp"
     assert "recorded" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"execution": "dense-reml", "memory_budget_mib": 1024},
+        {"execution": "efs", "memory_budget_mib": 1024},
+        {"execution": "stream-qr", "memory_budget_mib": 0},
+        {"execution": "discrete", "memory_budget_mib": False},
+        {"execution": "stream-exact", "memory_budget_mib": 1.5},
+    ],
+)
+def test_memory_budget_is_validated(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="memory_budget_mib"):
+        _case(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "execution",
+    ["stream", "stream-qr", "stream-exact", "stream-gaussian-qr", "discrete-wm"],
+)
+def test_memory_budget_reaches_every_streamed_and_discrete_fit_control(
+    monkeypatch: pytest.MonkeyPatch, execution: str
+) -> None:
+    import jaxgam
+
+    seen: list[object] = []
+
+    class _FakeGAM:
+        def __init__(self, *_args: object, control: object, **_kwargs: object):
+            seen.append(control)
+
+        def fit(self, *_args: object, **_kwargs: object) -> str:
+            return "fitted"
+
+    monkeypatch.setattr(jaxgam, "GAM", _FakeGAM)
+    default = _case(execution=execution)
+    raised = _case(execution=execution, memory_budget_mib=1536)
+    data = benchmark_scaling._make_data(default)
+
+    assert benchmark_scaling._build_fit(default, data).run() == "fitted"
+    assert benchmark_scaling._build_fit(raised, data).run() == "fitted"
+    library_default = jaxgam.FitControl().memory_budget_bytes
+    assert seen[0].memory_budget_bytes == library_default
+    assert seen[1].memory_budget_bytes == 1536 << 20
+    assert "memory_budget_mib" not in benchmark_scaling._route_contract(default)
+    assert benchmark_scaling._route_contract(raised)["memory_budget_mib"] == 1536
+
+
+def test_streamed_setup_uses_the_case_memory_budget() -> None:
+    record = benchmark_scaling.run_setup(
+        _case(40, execution="stream-qr", batch_rows=16, memory_budget_mib=640),
+        Path.cwd(),
+    )
+
+    assert record["source_scans"]["setup_memory_budget_bytes"] == 640 << 20

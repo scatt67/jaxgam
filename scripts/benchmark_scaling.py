@@ -103,6 +103,7 @@ class ScalingCase:
     model: str = "additive"
     discretization_m: int | None = None
     discrete_table_mib: int | None = None
+    memory_budget_mib: int | None = None
 
     def __post_init__(self) -> None:
         if self.n_rows <= 0:
@@ -171,6 +172,16 @@ class ScalingCase:
             raise ValueError(
                 "discrete_table_mib must be a positive integer and applies only "
                 "to the discrete executions."
+            )
+        if self.memory_budget_mib is not None and (
+            self.execution not in _STREAM_EXECUTIONS | _DISCRETE_EXECUTIONS
+            or isinstance(self.memory_budget_mib, bool)
+            or not isinstance(self.memory_budget_mib, int)
+            or self.memory_budget_mib < 1
+        ):
+            raise ValueError(
+                "memory_budget_mib must be a positive integer and applies only "
+                "to the streamed and discrete executions."
             )
 
 
@@ -736,7 +747,10 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
         return _FitPlan(fit, formula, source)
 
     control = FitControl(
-        execution="stream", batch_rows=case.batch_rows, uncertainty="fisher"
+        execution="stream",
+        batch_rows=case.batch_rows,
+        uncertainty="fisher",
+        **_memory_budget(case),
     )
 
     if case.execution == "stream":
@@ -757,6 +771,7 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
             gaussian_compression=True,
             batch_rows=case.batch_rows,
             uncertainty="fisher",
+            **_memory_budget(case),
         )
 
         def fit() -> Any:
@@ -772,6 +787,7 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
             linear_solver="qr",
             batch_rows=case.batch_rows,
             uncertainty="fisher",
+            **_memory_budget(case),
         )
 
         def fit() -> Any:
@@ -787,12 +803,20 @@ def _build_fit(case: ScalingCase, data: pd.DataFrame) -> _FitPlan:
             linear_solver="qr",
             batch_rows=case.batch_rows,
             uncertainty="fisher",
+            **_memory_budget(case),
         )
         return GAM(formula, family=family, sp=fixed_sp, control=qr_control).fit(
             source, result="prediction"
         )
 
     return _FitPlan(fit, formula, source)
+
+
+def _memory_budget(case: ScalingCase) -> dict[str, int]:
+    """FitControl memory-budget keyword for the case (empty: library default)."""
+    if case.memory_budget_mib is None:
+        return {}
+    return {"memory_budget_bytes": case.memory_budget_mib << 20}
 
 
 def _discrete_control(case: ScalingCase) -> Any:
@@ -811,6 +835,7 @@ def _discrete_control(case: ScalingCase) -> Any:
     return FitControl(
         execution="discrete",
         batch_rows=case.batch_rows,
+        **_memory_budget(case),
         uncertainty="fisher",
         smoothing_strategy=(
             "working_model_reml" if case.execution == "discrete-wm" else "exact_reml"
@@ -927,6 +952,8 @@ def _route_contract(case: ScalingCase) -> dict[str, Any]:
         )
         if case.discrete_table_mib is not None:
             contract["discrete_table_and_batch_budget_mib"] = case.discrete_table_mib
+    if case.memory_budget_mib is not None:
+        contract["memory_budget_mib"] = case.memory_budget_mib
     return contract
 
 
@@ -1158,7 +1185,11 @@ def run_setup(case: ScalingCase, root: Path) -> dict[str, Any]:
         setup_control = (
             _discrete_control(case)
             if case.execution in _DISCRETE_EXECUTIONS
-            else FitControl(execution="stream", batch_rows=case.batch_rows)
+            else FitControl(
+                execution="stream",
+                batch_rows=case.batch_rows,
+                **_memory_budget(case),
+            )
         )
         source_scans_before = source.scan_calls
         source_bytes_before = source.batch_bytes
@@ -2087,6 +2118,14 @@ def main() -> None:
             "(default: the library's 64 MiB)"
         ),
     )
+    parser.add_argument(
+        "--memory-budget-mib",
+        type=int,
+        help=(
+            "streamed and discrete routes: FitControl.memory_budget_bytes in MiB "
+            "(default: the library's 512 MiB)"
+        ),
+    )
     parser.add_argument("--batch-rows", type=int, default=1_024)
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument(
@@ -2154,6 +2193,7 @@ def main() -> None:
         model=args.model,
         discretization_m=args.discretization_m,
         discrete_table_mib=args.discrete_table_mib,
+        memory_budget_mib=args.memory_budget_mib,
     )
     if args.memory_pair_n is not None:
         if args.r_parity or args.baseline_checkout is not None:
