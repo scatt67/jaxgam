@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import pickle
 
 import numpy as np
@@ -11,6 +12,13 @@ import pytest
 
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
+from jaxgam.formula.continuous_design import build_continuous_discrete_design
+from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
+from jaxgam.formula.discrete_design import (
+    DiscreteDesignControl,
+    DiscreteDesignUnavailable,
+)
+from jaxgam.formula.parser import parse_formula
 from tests.helpers import _AssertCollector, check_that
 from tests.tolerances import STRICT
 
@@ -82,6 +90,33 @@ def _close(observed, expected):
     )
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
+def _design_gap_to_pinned_bam(r_bridge, formula: str, frame: pd.DataFrame) -> float:
+    """Max |X - X_R| of the discretized training design, or inf if shapes differ.
+
+    The design is the basis gauge: equal designs at STRICT give the same
+    coefficient coordinates as pinned ``bam``.
+    """
+    source = DataFrameRowSource(frame, response="y")
+    setup = build_continuous_discrete_setup(parse_formula(formula), source, m=30)
+    try:
+        descriptor = build_continuous_discrete_design(
+            setup, source, control=DiscreteDesignControl(batch_rows=len(frame))
+        )
+        assert not isinstance(descriptor, DiscreteDesignUnavailable)
+        ours = descriptor.evaluate_batch(np.arange(len(frame)))
+    finally:
+        setup.cleanup()
+    theirs = r_bridge.bam_discrete_setup(formula, frame, m=30).expanded_design
+    if ours.shape != theirs.shape:
+        return float("inf")
+    if np.allclose(ours, theirs, rtol=STRICT.rtol, atol=STRICT.atol):
+        return 0.0
+    return float(np.max(np.abs(ours - theirs)))
+
+
 _CASES = {
     "smooth+parametric": "y ~ z + s(x,bs='cr',k=6)",
     "tensor margins": "y ~ te(x,z,bs='cr',k=3)",
@@ -112,6 +147,22 @@ def test_working_model_prediction_matches_pinned_predict_bam(r_bridge, case) -> 
         for policy in ("continuous_frozen_basis", "mgcv_predict_bamd")
     }
     collector = _AssertCollector()
+    compare_coefficients = True
+    if case == "joint tp":
+        # The thin-plate basis is not yet source-exact at this point in the
+        # stack (PR12 makes it so): its Ritz vectors can rotate within a
+        # nearly degenerate pair, a gauge change that leaves fitted values,
+        # standard errors and predictions unchanged. Compare raw coefficients
+        # only when the design (the gauge) equals pinned bam's at STRICT.
+        gap = _design_gap_to_pinned_bam(r_bridge, formula, frame)
+        compare_coefficients = gap == 0.0
+        if not compare_coefficients:
+            _LOGGER.warning(
+                "joint tp: discretized design differs from pinned bam's by %.3e "
+                "(basis gauge); raw coefficients not compared, only fitted "
+                "values, standard errors and batched predictions",
+                gap,
+            )
     for request_label, request in (("held-out", held_out), ("large", large)):
         exact = r_bridge.fit_bam_discrete_gaussian(
             formula, frame, m=30, newdata=request
@@ -126,10 +177,11 @@ def test_working_model_prediction_matches_pinned_predict_bam(r_bridge, case) -> 
             result = results[policy]
             fit, se = result.predict(request, pred_type="link", se_fit=True)
             label = f"{case}/{request_label}/{policy}"
-            collector.check(
-                f"{label}/coefficients",
-                _close(result.coefficients, expected.coefficients),
-            )
+            if compare_coefficients:
+                collector.check(
+                    f"{label}/coefficients",
+                    _close(result.coefficients, expected.coefficients),
+                )
             collector.check(f"{label}/fit", _close(fit, expected.prediction))
             collector.check(f"{label}/se", _close(se, expected.prediction_se))
             # Bounded batches of the same request reproduce R exactly.
