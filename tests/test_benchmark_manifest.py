@@ -144,3 +144,19 @@ def test_end_requires_a_started_manifest(tmp_path: Path) -> None:
     output.write_text("{}")
     with pytest.raises(ValueError, match="--phase start"):
         benchmark_manifest.main(["--phase", "end", "--output", str(output)])
+
+
+def test_manifest_reads_the_provider_without_importing_its_module() -> None:
+    """The pinned provider is loaded by path; the manifest must not import it."""
+    import sys
+
+    imported_before = "scipy_openblas32" in sys.modules
+    numeric = benchmark_manifest.numeric_configuration()
+
+    assert ("scipy_openblas32" in sys.modules) == imported_before
+    if not imported_before:
+        assert "scipy_openblas32" not in sys.modules
+    provider = numeric["source_lapack_provider"]
+    assert provider["package"] == "scipy-openblas32"
+    assert provider["config"].startswith("OpenBLAS ")
+    assert "module not imported" in provider["loaded_by"]

@@ -151,12 +151,22 @@ def numeric_configuration() -> dict[str, Any]:
 
 
 def _openblas_provider() -> dict[str, str]:
-    import scipy_openblas32
+    """The pinned provider as jaxgam loads it: by path, never as a module.
 
+    Importing ``scipy_openblas32`` would run its eager global loader and leave
+    it in ``sys.modules``, which the product rule forbids; the product's own
+    loader reads the version from package metadata and the configuration
+    from the library it opens with ``RTLD_LOCAL``.
+    """
+    from jaxgam.smooths import source_lapack
+
+    provider = source_lapack._source_lapack().module
     return {
-        "package": "scipy-openblas32",
-        "version": scipy_openblas32.__version__,
-        "config": scipy_openblas32.get_openblas_config(),
+        "package": provider.package,
+        "version": provider.__version__,
+        "config": provider.get_openblas_config(),
+        "library": str(provider.library_path),
+        "loaded_by": "jaxgam.smooths.source_lapack (by path; module not imported)",
     }
 
 
