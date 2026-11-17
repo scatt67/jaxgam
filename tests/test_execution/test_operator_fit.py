@@ -1571,3 +1571,52 @@ def test_strictly_additive_solve_is_refined_to_the_exact_solution():
             ),
         )
     collector.raise_if_any("refined strictly additive operator solve")
+
+
+def test_fit_diagnostics_report_the_coarse_preconditioner_separately():
+    """The plan accounts a small coarse preconditioner apart from the bound."""
+    import pandas as pd
+
+    from jaxgam import GAM, FitControl
+    from jaxgam.control import OperatorControl
+    from jaxgam.data.source import DataFrameRowSource
+
+    rng = np.random.default_rng(11717)
+    levels = 30
+    groups = np.tile(np.arange(levels), 4)
+    x = rng.uniform(0.0, 1.0, len(groups))
+    frame = pd.DataFrame(
+        {
+            "y": np.sin(2 * np.pi * x)
+            + 0.3 * np.cos(groups)
+            + rng.normal(0, 0.2, len(x)),
+            "x": x,
+            "g": pd.Categorical.from_codes(groups, [f"g{i}" for i in range(levels)]),
+        }
+    )
+    diagnostics = {}
+    for use_coarse in (False, True):
+        result = GAM(
+            "y~s(x,bs='cr',k=6)+s(g,bs='re')",
+            sp=[0.5, 1.0],
+            control=FitControl(
+                execution="operator",
+                linear_solver="pcg",
+                batch_rows=32,
+                operator=OperatorControl(use_coarse=use_coarse),
+            ),
+        ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
+        assert result.converged
+        diagnostics[use_coarse] = result.operator_diagnostics
+
+    plain, coarse = diagnostics[False], diagnostics[True]
+    assert plain.coarse_preconditioner_retained_bytes == 0
+    assert plain.coarse_preconditioner_construction_bound_bytes == 0
+    assert coarse.coarse_preconditioner_retained_bytes > 0
+    assert coarse.coarse_preconditioner_construction_bound_bytes > 0
+    assert coarse.preconditioner_retained_bytes == (
+        plain.preconditioner_retained_bytes
+        + coarse.coarse_preconditioner_retained_bytes
+    )
+    for value in (plain, coarse):
+        assert 0 < value.preconditioner_retained_bytes < value.peak_bound_bytes

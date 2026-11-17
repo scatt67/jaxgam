@@ -74,6 +74,10 @@ class PreparedPreconditioner:
     inverse: InversePreconditioner
     retained_device_bytes: int
     construction_peak_bound_bytes: int
+    # The optional coarse correction's share, reported separately because
+    # the plan accounts a permitted small coarse preconditioner on its own.
+    coarse_retained_device_bytes: int = 0
+    coarse_construction_bound_bytes: int = 0
 
 
 def _owned_device(array: np.ndarray, device: jax.Device | None) -> jax.Array:
@@ -144,6 +148,7 @@ def prepare_preconditioner(
         required += 48 * q**2 + 24 * q
     if modest_width > max_modest_coefficients:
         raise MemoryError("Small preconditioner blocks exceed the hard modest cap.")
+    coarse_required = 0
     if coarse is not None:
         columns, directions, matrix = coarse
         q = len(columns)
@@ -158,7 +163,8 @@ def prepare_preconditioner(
             or q > max_modest_coefficients
         ):
             raise MemoryError("Coarse preconditioner dimensions exceed their hard cap.")
-        required += 16 * q * r + 48 * r**2 + 24 * q
+        coarse_required = 16 * q * r + 48 * r**2 + 24 * q
+        required += coarse_required
     if required > memory_budget_bytes:
         raise MemoryError(f"Preconditioner construction requires {required} bytes.")
     if p == 0 or not np.all(np.isfinite(diagonal)) or np.any(diagonal <= 0):
@@ -193,7 +199,14 @@ def prepare_preconditioner(
         _owned_device(diagonal, device), tuple(inverse_blocks), inverse_coarse
     )
     retained = sum(leaf.nbytes for leaf in jax.tree_util.tree_leaves(inverse))
-    return PreparedPreconditioner(inverse, retained, required)
+    coarse_retained = (
+        0
+        if inverse_coarse is None
+        else sum(leaf.nbytes for leaf in jax.tree_util.tree_leaves(inverse_coarse))
+    )
+    return PreparedPreconditioner(
+        inverse, retained, required, coarse_retained, coarse_required
+    )
 
 
 @jax.jit

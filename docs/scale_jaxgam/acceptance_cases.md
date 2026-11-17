@@ -214,7 +214,7 @@ Gap status (G7 onward filled in the second round, one commit each):
 | G14 | dense routes expose no inner PIRLS count (see F5) | public inner-iteration diagnostics |
 | G15 | **filled.** `scripts/benchmark_manifest.py` (`make benchmark-manifest`) writes one JSON manifest per run directory: `--phase start` before the first case records OS, CPU model and feature flags, logical CPUs, RAM, Python and every installed package version, dtype and JAX x64/backend/devices, NumPy and SciPy BLAS/LAPACK builds, the source-LAPACK provider (scipy-openblas32 version and OpenBLAS config), the thread and cache environment, the checkout commit and whether its tree is clean, load averages and (macOS) sleep assertions; `--phase end` adds the end checkout state, end load and `same_checkout` | – |
 | P4 | structural guards missing on some routes (allocation table) | forbidden-call or jaxpr guards as listed there |
-| P5 | the coarse preconditioner's bytes are not split out in operator records | report it in `operator_diagnostics` |
+| P5 | **filled.** `PreparedPreconditioner` reports the coarse correction's retained device bytes and construction bound; `operator_diagnostics` (and so every operator record) carries `preconditioner_retained_bytes` (largest over the fit's frozen systems), `coarse_preconditioner_retained_bytes` and `coarse_preconditioner_construction_bound_bytes`, zero without `use_coarse`. They are reported apart from `peak_bound_bytes`, which already includes them | – |
 
 Coverage by quantity and route:
 
@@ -264,7 +264,7 @@ corroboration only.
 | No n x r x d distance differences | operator | `formula/operator_workspace.py` chunks by `DISTANCE_BATCH_ROWS`; covered indirectly by `test_operator_radial.py` | – | a patched-batch test as for tp/gp (P4) |
 | No p x p G/H | operator | `test_operator.py::test_symbolic_product_storage_and_runtime_without_global_square`; `test_operator_fit.py::test_crossed_numeric_large_levels_fit_without_global_coefficient_square`, `test_mixed_numeric_large_levels_fit_without_global_coefficient_square`; `test_operator_logdet.py::test_large_symbolic_logdet_stays_below_global_square` | symbolic sizes far above RAM run inside a small budget | – |
 | No full covariance | operator | `test_operator_variance.py::test_selected_large_symbolic_variance_has_no_coefficient_square`; `test_operator_bulk_variance.py::test_bulk_symbolic_large_p_preflights_and_never_materializes_covariance`; `test_prediction_result.py::test_point_only_result_retains_no_rows_or_dense_covariance` | symbolic large p; forbidden materialization | – |
-| Coarse preconditioner accounted separately | operator | `test_preconditioners.py::test_large_diagonal_budget_is_checked_before_transfer_or_factor` | budget preflight | the harness/benchmark records do not split the preconditioner bytes out (P5) |
+| Coarse preconditioner accounted separately | operator | `test_preconditioners.py::test_large_diagonal_budget_is_checked_before_transfer_or_factor`, `test_coarse_share_of_storage_is_reported_separately`; `test_operator_fit.py::test_fit_diagnostics_report_the_coarse_preconditioner_separately` | budget preflight; exact byte count of the coarse share; fit diagnostics with and without `use_coarse` | – (P5 filled) |
 
 Across all routes the harness records no compiler memory estimate
 (`compiler_memory_bytes` is always `None`; gap G2). Ten kernel tests already

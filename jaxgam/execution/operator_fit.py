@@ -1105,6 +1105,12 @@ class OperatorFitDiagnostics:
     # Operator EFS only: trial comparisons the score bounds could not decide.
     # An undecided extension is declined; any other stops the fit.
     efs_indeterminate_comparisons: int | None = None
+    # Largest retained preconditioner over the fit's frozen systems, and the
+    # optional coarse correction's share of it (zero without ``use_coarse``),
+    # reported apart from the peak bound that already includes them.
+    preconditioner_retained_bytes: int = 0
+    coarse_preconditioner_retained_bytes: int = 0
+    coarse_preconditioner_construction_bound_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -1365,6 +1371,7 @@ def fit_operator_fixed_sp(
     certificate_actions = 0
     actions = iterations = solves = 0
     peak = extra
+    preconditioner_bytes = coarse_bytes = coarse_construction_bytes = 0
     status = None
     converged = False
     gradient_norm = math.inf
@@ -1384,6 +1391,13 @@ def fit_operator_fixed_sp(
         certificate_actions += system.certification_actions
         diagnostics.normal_actions += system.certification_actions
         peak = max(peak, extra + system.construction_peak_bound_bytes)
+        prepared = system.preconditioner
+        preconditioner_bytes = max(preconditioner_bytes, prepared.retained_device_bytes)
+        coarse_bytes = max(coarse_bytes, prepared.coarse_retained_device_bytes)
+        coarse_construction_bytes = max(
+            coarse_construction_bytes, prepared.coarse_construction_bound_bytes
+        )
+        del prepared
         reserve = extra + system.retained_bound_bytes
         _remaining_memory(memory_budget_bytes, reserve)
         if old_objective is None:
@@ -1550,6 +1564,9 @@ def fit_operator_fixed_sp(
         model.started_preparation_scans,
         model.preparation_yielded_batches,
         model.preparation_peak_bound_bytes,
+        preconditioner_retained_bytes=preconditioner_bytes,
+        coarse_preconditioner_retained_bytes=coarse_bytes,
+        coarse_preconditioner_construction_bound_bytes=coarse_construction_bytes,
     )
     return OperatorFitResult(
         beta,

@@ -156,3 +156,34 @@ def test_diagonal_storage_does_not_create_global_matrix():
     )
     sizes = compiled.memory_analysis()
     assert sizes.temp_size_in_bytes < 32 * p
+
+
+def test_coarse_share_of_storage_is_reported_separately():
+    diagonal = np.arange(1, 33, dtype=float)
+    coarse_cols = np.array([0, 3, 7, 10], dtype=np.int64)
+    Q = np.array([[1.0, 0.0], [1.0, 1.0], [1.0, 2.0], [1.0, 3.0]])
+    coarse_matrix = Q.T @ np.diag(diagonal[coarse_cols]) @ Q
+    with_coarse = prepare_preconditioner(
+        diagonal,
+        coarse=(coarse_cols, Q, coarse_matrix),
+        memory_budget_bytes=100000,
+    )
+    without = prepare_preconditioner(diagonal.copy(), memory_budget_bytes=100000)
+
+    # columns (4 int64) + directions (4 x 2) + Cholesky factor (2 x 2).
+    assert with_coarse.coarse_retained_device_bytes == 8 * (4 + 8 + 4)
+    # 16 q r + 48 r^2 + 24 q with q=4 coarse coordinates and r=2 directions.
+    assert with_coarse.coarse_construction_bound_bytes == 16 * 8 + 48 * 4 + 24 * 4
+    assert with_coarse.retained_device_bytes == (
+        without.retained_device_bytes + with_coarse.coarse_retained_device_bytes
+    )
+    assert with_coarse.construction_peak_bound_bytes == (
+        without.construction_peak_bound_bytes
+        + with_coarse.coarse_construction_bound_bytes
+    )
+    assert without.coarse_retained_device_bytes == 0
+    assert without.coarse_construction_bound_bytes == 0
+    v = jnp.asarray(np.sin(np.arange(32)))
+    applied = jax.jit(apply_preconditioner)(with_coarse.inverse, v)
+    assert applied.shape == (32,)
+    assert bool(jnp.all(jnp.isfinite(applied)))
