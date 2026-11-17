@@ -35,6 +35,7 @@ from jaxgam.smooths.tensor import (
     TensorProductSmooth,
     source_reparameterized_penalty,
 )
+from jaxgam.smooths.tprs import TPRSSmooth
 from jaxgam.smooths.utils import is_factor, is_ordered_factor
 
 if TYPE_CHECKING:
@@ -98,6 +99,22 @@ def _cubic_with_budget(spec, knots, source, control):
     )
 
 
+def _source_scaled(smooth: Smooth) -> bool:
+    """Thin-plate penalties take smoothCon's scale in dlange's order.
+
+    The dense TPRS constructor scales with ``dlange``'s sequential sums, so
+    the bounded route uses the same arithmetic for tp/ts bases and margins.
+    """
+    return isinstance(smooth, TPRSSmooth)
+
+
+def _max_abs_row_sum(smooth: Smooth, rows: np.ndarray) -> float:
+    """One row block's contribution to smoothCon's ``norm(X, "I")``."""
+    if _source_scaled(smooth):
+        return Smooth._source_max_abs_row_sum(rows)
+    return float(np.max(np.sum(np.abs(rows), axis=1)))
+
+
 def _make_tensor(term, source, control):
     """Construct capped margin metadata and tensor transforms without rows."""
     tensor_class = (
@@ -148,9 +165,7 @@ def _make_tensor(term, source, control):
             for i, margin in enumerate(margins):
                 rows = margin.training_matrix(batch.columns)
                 means[i].add(rows)
-                row_norms[i] = max(
-                    row_norms[i], float(np.max(np.sum(np.abs(rows), axis=1)))
-                )
+                row_norms[i] = max(row_norms[i], _max_abs_row_sum(margin, rows))
                 del rows
             del batch
         tensor._constraints = [
@@ -158,8 +173,13 @@ def _make_tensor(term, source, control):
         ]
         tensor._Z_list = [constraint.basis() for constraint in tensor._constraints]
         scaled = []
-        for S, norm in zip(S_list, row_norms, strict=True):
-            [S], _ = Smooth._smoothcon_normalize_from_norm(norm, [S])
+        for margin, S, norm in zip(margins, S_list, row_norms, strict=True):
+            normalize = (
+                Smooth._source_smoothcon_normalize_from_norm
+                if _source_scaled(margin)
+                else Smooth._smoothcon_normalize_from_norm
+            )
+            [S], _ = normalize(norm, [S])
             scaled.append(S)
         S_list = [
             constraint.absorb_penalty(S)
@@ -352,7 +372,7 @@ def prepare_modest_cubic_by(
         for i, base in enumerate(bases):
             X = base.training_matrix(batch.columns)
             sums[i] += np.sum(X, axis=0)
-            norms[i] = max(norms[i], float(np.max(np.sum(np.abs(X), axis=1))))
+            norms[i] = max(norms[i], _max_abs_row_sum(base, X))
             if terms[i].by is not None and i not in levels:
                 by = np.asarray(batch.columns[terms[i].by], dtype=np.float64)
                 if not np.all(np.isfinite(by)):
@@ -377,7 +397,12 @@ def prepare_modest_cubic_by(
     widths = []
     for i, (base, term) in enumerate(zip(bases, terms, strict=True)):
         raw_penalties = [penalty.S for penalty in base.build_penalty_matrices()]
-        if norms[i] > 0:
+        if _source_scaled(base):
+            raw_penalties, first_scale = Smooth._source_smoothcon_normalize_from_norm(
+                norms[i], raw_penalties
+            )
+            scales = [first_scale]
+        elif norms[i] > 0:
             scales = [np.linalg.norm(S, ord=1) / norms[i] ** 2 for S in raw_penalties]
             raw_penalties = [
                 S / scale for S, scale in zip(raw_penalties, scales, strict=True)

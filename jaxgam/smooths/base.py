@@ -175,11 +175,33 @@ class Smooth(ABC):
         the returned scale is the first penalty's, as in
         :meth:`_smoothcon_normalize`.
         """
+        return Smooth._source_smoothcon_normalize_from_norm(
+            Smooth._source_max_abs_row_sum(X), S_list
+        )
+
+    @staticmethod
+    def _source_max_abs_row_sum(X: npt.NDArray[np.floating]) -> float:
+        """``dlange("I")``: each row's absolute sum taken column by column.
+
+        Rows are independent, so the maximum over streamed row blocks equals
+        the whole matrix's value.
+        """
         X = np.asarray(X, dtype=np.float64)
         row_sums = np.zeros(X.shape[0], dtype=np.float64)
         for column in range(X.shape[1]):
             row_sums += np.abs(X[:, column])
-        norm_x = float(row_sums.max(initial=0.0))
+        return float(row_sums.max(initial=0.0))
+
+    @staticmethod
+    def _source_smoothcon_normalize_from_norm(
+        norm_x: float,
+        S_list: list[npt.NDArray[np.floating]],
+    ) -> tuple[list[npt.NDArray[np.floating]], float]:
+        """Scale penalties given ``dlange("I")`` of X, in dlange's order.
+
+        ``maXX`` is ``R_pow(norm, 2)``, i.e. ``x * x``, and each ``maS`` takes
+        ``dlange("O")``: every column's absolute sum down its rows.
+        """
         max_x_sq = norm_x * norm_x
         if not max_x_sq > 0.0:
             return list(S_list), 1.0

@@ -663,8 +663,8 @@ class TPRSSmooth(Smooth):
         # smooth.construct modifies S, then smoothCon normalizes)
         S = self._apply_shrinkage(self._S)
 
-        # Step 13: smoothCon penalty normalization
-        [S], self._s_scale = self._smoothcon_normalize(X_design, [S])
+        # Step 13: smoothCon penalty normalization, in dlange's summation order
+        [S], self._s_scale = self._source_smoothcon_normalize(X_design, [S])
 
         # Step 14: Store results
         self._X = X_design
