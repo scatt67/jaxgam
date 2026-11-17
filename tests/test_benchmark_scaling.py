@@ -1104,6 +1104,7 @@ def test_compilation_events_count_only_compile_and_cache_durations() -> None:
 
 def test_run_case_attributes_compilation_to_the_cold_fit_only(
     monkeypatch: pytest.MonkeyPatch,
+    minimal_git_checkout: Path,
 ) -> None:
     import jax
     import jax.numpy as jnp
@@ -1133,7 +1134,7 @@ def test_run_case_attributes_compilation_to_the_cold_fit_only(
     )
     record = benchmark_scaling.run_case(
         ScalingCase(2, 3, execution="stream", result_mode="prediction", repeats=2),
-        Path.cwd(),
+        minimal_git_checkout,
     )
 
     timings = record["timings"]
@@ -1622,6 +1623,7 @@ _STREAM_CASE = ScalingCase(2, 3, execution="stream", result_mode="prediction")
 
 def test_unconverged_fit_is_recorded_without_timings(
     monkeypatch: pytest.MonkeyPatch,
+    minimal_git_checkout: Path,
 ) -> None:
     unconverged = _Result(
         converged=False,
@@ -1630,7 +1632,7 @@ def test_unconverged_fit_is_recorded_without_timings(
     )
     _stub_run_case(monkeypatch, lambda: unconverged)
 
-    record = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+    record = benchmark_scaling.run_case(_STREAM_CASE, minimal_git_checkout)
 
     assert record["valid"] is False
     assert record["outcome"] == "unconverged"
@@ -1648,6 +1650,7 @@ def test_unconverged_fit_is_recorded_without_timings(
 
 def test_exact_route_records_stop_code_and_projected_gradient(
     monkeypatch: pytest.MonkeyPatch,
+    minimal_git_checkout: Path,
 ) -> None:
     exact = SimpleNamespace(status=1, projected_gradient_inf=1.56e-4)
     result = SimpleNamespace(
@@ -1659,7 +1662,7 @@ def test_exact_route_records_stop_code_and_projected_gradient(
     )
     _stub_run_case(monkeypatch, lambda: result)
 
-    fields = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())["result"]
+    fields = benchmark_scaling.run_case(_STREAM_CASE, minimal_git_checkout)["result"]
 
     assert fields["stop_reason"] == 1
     assert "L-BFGS-B" in fields["stop_reason_source"]
@@ -1669,6 +1672,7 @@ def test_exact_route_records_stop_code_and_projected_gradient(
 
 def test_efs_and_nonfinite_fits_record_their_own_stop_reason(
     monkeypatch: pytest.MonkeyPatch,
+    minimal_git_checkout: Path,
 ) -> None:
     efs = SimpleNamespace(
         **{
@@ -1678,20 +1682,22 @@ def test_efs_and_nonfinite_fits_record_their_own_stop_reason(
     )
     _stub_run_case(monkeypatch, lambda: efs)
 
-    record = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+    record = benchmark_scaling.run_case(_STREAM_CASE, minimal_git_checkout)
 
     assert record["outcome"] == "nonfinite"
     assert record["result"]["stop_reason"] == "score_window"
     assert record["result"]["score"] is None
 
 
-def test_rejected_fit_records_the_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rejected_fit_records_the_error(
+    monkeypatch: pytest.MonkeyPatch, minimal_git_checkout: Path
+) -> None:
     def rejected():
         raise MemoryError("workspace requires 558529632 bytes")
 
     _stub_run_case(monkeypatch, rejected)
 
-    record = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+    record = benchmark_scaling.run_case(_STREAM_CASE, minimal_git_checkout)
 
     assert record["valid"] is False
     assert record["outcome"] == "fit_raised"
@@ -1720,8 +1726,10 @@ def test_harness_contract_errors_are_never_recorded_as_outcomes(
         benchmark_scaling.run_setup(_STREAM_CASE, Path.cwd())
 
 
-def test_real_rejected_discrete_setup_and_fit_leave_records() -> None:
-    """A budget preflight rejection is recorded by both children."""
+def test_real_rejected_discrete_setup_and_fit_leave_records(
+    minimal_git_checkout: Path,
+) -> None:
+    """A budget preflight rejection is recorded by both isolated children."""
     case = ScalingCase(
         600,
         30,
@@ -1731,15 +1739,17 @@ def test_real_rejected_discrete_setup_and_fit_leave_records() -> None:
         discrete_table_mib=1,
     )
 
-    setup = benchmark_scaling.run_setup(case, Path.cwd())
-    fit = benchmark_scaling.run_case(case, Path.cwd())
+    record = benchmark_scaling.run_isolated(case, minimal_git_checkout)
 
-    for record, outcome in ((setup, "setup_raised"), (fit, "fit_raised")):
-        assert record["valid"] is False
-        assert record["outcome"] == outcome
-        assert record["error"]["type"] == "MemoryError"
-        assert "budget" in record["error"]["message"]
-        assert record["formula"] == "y ~ s(x0, x1, k=30, bs='tp')"
+    assert record["valid"] is False
+    for mode, outcome in (("setup", "setup_raised"), ("fit", "fit_raised")):
+        child = record[mode]
+        assert child["valid"] is False
+        assert child["outcome"] == outcome
+        assert child["error"]["type"] == "MemoryError"
+        assert "budget" in child["error"]["message"]
+        assert child["formula"] == "y ~ s(x0, x1, k=30, bs='tp')"
+        assert child["runtime"]["commit"]
 
 
 def test_crashed_child_becomes_an_invalid_record(
@@ -1831,6 +1841,7 @@ def test_cli_writes_invalid_records_then_exits_nonzero(
 
 def test_operator_fit_records_inner_status_and_gradient_norm(
     monkeypatch: pytest.MonkeyPatch,
+    minimal_git_checkout: Path,
 ) -> None:
     operator = SimpleNamespace(inner_status=2, final_gradient_norm=3.5e-6)
     result = SimpleNamespace(
@@ -1841,7 +1852,7 @@ def test_operator_fit_records_inner_status_and_gradient_norm(
     )
     _stub_run_case(monkeypatch, lambda: result)
 
-    fields = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())["result"]
+    fields = benchmark_scaling.run_case(_STREAM_CASE, minimal_git_checkout)["result"]
 
     assert fields["stop_reason"] == 2
     assert fields["stop_reason_source"].startswith("operator_diagnostics.inner_status")
@@ -1857,7 +1868,7 @@ def test_operator_fit_records_inner_status_and_gradient_norm(
         }
     )
     _stub_run_case(monkeypatch, lambda: no_status)
-    fields = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())["result"]
+    fields = benchmark_scaling.run_case(_STREAM_CASE, minimal_git_checkout)["result"]
     assert fields["stop_reason"] == "inner_failure"
     assert fields["operator_final_gradient_norm"] is None
 
@@ -2010,21 +2021,24 @@ def test_children_get_a_task_owned_temporary_directory(
 
 
 def test_run_case_and_setup_record_the_child_temporary_disk(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_git_checkout: Path
 ) -> None:
     import time as time_module
 
-    monkeypatch.setenv(benchmark_scaling._TASK_TMPDIR, str(tmp_path))
+    # A directory of its own: the checkout fixture also lives under tmp_path.
+    scratch = tmp_path / "task-tmp"
+    scratch.mkdir()
+    monkeypatch.setenv(benchmark_scaling._TASK_TMPDIR, str(scratch))
 
     def fit_with_scratch() -> _Result:
-        path = tmp_path / "knots.sqlite"
+        path = scratch / "knots.sqlite"
         path.write_bytes(b"k" * 50_000)
         time_module.sleep(0.12)
         path.unlink()
         return _Result()
 
     _stub_run_case(monkeypatch, fit_with_scratch)
-    record = benchmark_scaling.run_case(_STREAM_CASE, Path.cwd())
+    record = benchmark_scaling.run_case(_STREAM_CASE, minimal_git_checkout)
     assert record["temporary_disk"]["peak_bytes"] >= 50_000
     assert record["temporary_disk"]["final_bytes"] == 0
 
@@ -2032,6 +2046,20 @@ def test_run_case_and_setup_record_the_child_temporary_disk(
         raise MemoryError("setup budget")
 
     monkeypatch.setattr(benchmark_scaling, "_measured_setup", rejected)
-    setup = benchmark_scaling.run_setup(_STREAM_CASE, Path.cwd())
+    setup = benchmark_scaling.run_setup(_STREAM_CASE, minimal_git_checkout)
     assert setup["outcome"] == "setup_raised"
     assert setup["temporary_disk"]["sampled"] is True
+
+
+def test_provenance_outside_a_git_checkout_fails_closed_with_a_clear_message(
+    tmp_path: Path,
+) -> None:
+    """A source tree without .git (the CI image) yields no unattributed record."""
+    (tmp_path / "jaxgam").mkdir()
+    with pytest.raises(
+        benchmark_scaling.ProvenanceUnavailableError,
+        match="not a git checkout with a commit",
+    ) as caught:
+        benchmark_scaling.source_identity(tmp_path)
+    assert str(tmp_path) in str(caught.value)
+    assert isinstance(caught.value, RuntimeError)

@@ -15,6 +15,16 @@ def _case(n_rows: int = 19, **kwargs: object) -> ScalingCase:
     return ScalingCase(n_rows, 5, **kwargs)  # type: ignore[arg-type]
 
 
+def _child(case: ScalingCase, checkout: Path, mode: str) -> dict:
+    """Run one isolated setup or fit child against a committed checkout.
+
+    The test image has no ``.git`` and the harness's provenance is
+    fail-closed, so real-route children run from the committed minimal
+    checkout fixture, as the other isolated harness tests do.
+    """
+    return benchmark_scaling._run_child(case, checkout, mode)
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
@@ -379,10 +389,12 @@ def test_kernel_and_shared_models_fix_formula_order_and_inputs() -> None:
 
 
 @pytest.mark.parametrize("model", _KERNEL_MODELS)
-def test_kernel_and_shared_model_penalties_match_their_sp_order(model: str) -> None:
+def test_kernel_and_shared_model_penalties_match_their_sp_order(
+    model: str, minimal_git_checkout: Path
+) -> None:
     """The dense setup has one penalty per named fixed smoothing parameter."""
     case = _case(60, execution="dense-reml", model=model)
-    record = benchmark_scaling.run_setup(case, Path.cwd())
+    record = _child(case, minimal_git_checkout, "setup")
 
     assert record["formula"] == benchmark_scaling._formula(case)
     assert record["model"]["n_penalties"] == len(
@@ -506,10 +518,11 @@ def test_memory_budget_reaches_every_streamed_and_discrete_fit_control(
     assert benchmark_scaling._route_contract(raised)["memory_budget_mib"] == 1536
 
 
-def test_streamed_setup_uses_the_case_memory_budget() -> None:
-    record = benchmark_scaling.run_setup(
+def test_streamed_setup_uses_the_case_memory_budget(minimal_git_checkout: Path) -> None:
+    record = _child(
         _case(40, execution="stream-qr", batch_rows=16, memory_budget_mib=640),
-        Path.cwd(),
+        minimal_git_checkout,
+        "setup",
     )
 
     assert record["source_scans"]["setup_memory_budget_bytes"] == 640 << 20
@@ -574,10 +587,12 @@ def test_random_effect_model_declares_every_level_and_hashes_codes() -> None:
 
 
 @pytest.mark.parametrize("execution", ["dense-reml", "discrete-wm"])
-def test_random_effect_model_fits_on_dense_and_discrete_routes(execution: str) -> None:
+def test_random_effect_model_fits_on_dense_and_discrete_routes(
+    execution: str, minimal_git_checkout: Path
+) -> None:
     case = _case(400, execution=execution, model="re", levels=40)
-    setup = benchmark_scaling.run_setup(case, Path.cwd())
-    fit = benchmark_scaling.run_case(case, Path.cwd())
+    setup = _child(case, minimal_git_checkout, "setup")
+    fit = _child(case, minimal_git_checkout, "fit")
 
     assert setup["valid"]
     assert fit["valid"]
@@ -694,10 +709,10 @@ def test_validity_accepts_only_the_route_documented_missing_fields() -> None:
     assert benchmark_scaling._omitted_fields(efs) == frozenset()
 
 
-def test_operator_fixed_sp_setup_and_fit_records() -> None:
+def test_operator_fixed_sp_setup_and_fit_records(minimal_git_checkout: Path) -> None:
     case = _case(240, execution="operator", model="re", levels=60, batch_rows=64)
-    setup = benchmark_scaling.run_setup(case, Path.cwd())
-    fit = benchmark_scaling.run_case(case, Path.cwd())
+    setup = _child(case, minimal_git_checkout, "setup")
+    fit = _child(case, minimal_git_checkout, "fit")
 
     assert setup["valid"]
     assert fit["valid"]
@@ -723,7 +738,9 @@ def test_operator_fixed_sp_setup_and_fit_records() -> None:
     assert result["source_scans"]["cold_fit_delta"] > 0
 
 
-def test_operator_efs_setup_reserves_an_eighth_of_the_budget() -> None:
+def test_operator_efs_setup_reserves_an_eighth_of_the_budget(
+    minimal_git_checkout: Path,
+) -> None:
     case = _case(
         514,
         execution="operator-efs",
@@ -732,7 +749,7 @@ def test_operator_efs_setup_reserves_an_eighth_of_the_budget() -> None:
         family="poisson",
         memory_budget_mib=256,
     )
-    setup = benchmark_scaling.run_setup(case, Path.cwd())
+    setup = _child(case, minimal_git_checkout, "setup")
 
     assert setup["valid"]
     assert setup["operator_setup"]["preparation_budget_bytes"] == (256 << 20) // 8
@@ -855,10 +872,10 @@ def test_weights_and_offsets_reach_sources_and_dense_fits(
     [("dense-reml", "offset"), ("stream-qr", "zero-weights")],
 )
 def test_stress_cases_fit_through_the_public_routes(
-    execution: str, stress: str
+    execution: str, stress: str, minimal_git_checkout: Path
 ) -> None:
     case = _case(300, execution=execution, smooth_count=2, stress=stress)
-    record = benchmark_scaling.run_case(case, Path.cwd())
+    record = _child(case, minimal_git_checkout, "fit")
 
     assert record["valid"]
     assert record["route"]["stress"] == stress
@@ -917,9 +934,11 @@ def test_count_tail_generators_keep_the_default_draw() -> None:
 
 
 def test_count_tail_cases_fit_and_reach_the_cli(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    minimal_git_checkout: Path,
 ) -> None:
-    record = benchmark_scaling.run_case(
+    record = _child(
         _case(
             400,
             execution="dense-reml",
@@ -927,7 +946,8 @@ def test_count_tail_cases_fit_and_reach_the_cli(
             smooth_count=2,
             outlier_fraction=0.02,
         ),
-        Path.cwd(),
+        minimal_git_checkout,
+        "fit",
     )
     assert record["valid"]
 
@@ -958,7 +978,7 @@ def test_count_tail_cases_fit_and_reach_the_cli(
     capsys.readouterr()
 
 
-def test_three_dimensional_thin_plate_model() -> None:
+def test_three_dimensional_thin_plate_model(minimal_git_checkout: Path) -> None:
     case = _case(60, execution="dense-reml", model="tp3")
     data = benchmark_scaling._make_data(case)
 
@@ -970,7 +990,7 @@ def test_three_dimensional_thin_plate_model() -> None:
     )
     with pytest.raises(ValueError, match="model='tp3'"):
         _case(execution="stream-qr", model="tp3")
-    record = benchmark_scaling.run_setup(case, Path.cwd())
+    record = _child(case, minimal_git_checkout, "setup")
     assert record["valid"]
     assert record["model"]["n_penalties"] == 1
     # mgcv's default order for d=3 is m=3 (2m > d+1); its null space has

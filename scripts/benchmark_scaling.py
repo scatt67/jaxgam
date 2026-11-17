@@ -392,11 +392,31 @@ def isolated_cache_dir() -> tempfile.TemporaryDirectory[str]:
     return tempfile.TemporaryDirectory(prefix="jaxgam-benchmark-jax-")
 
 
+class ProvenanceUnavailableError(RuntimeError):
+    """The measured source is not a git checkout, so no record can name it."""
+
+
 def source_identity(root: Path) -> dict[str, str]:
-    """Return the exact checkout and a hash of all uncommitted tracked edits."""
-    commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
+    """Return the exact checkout and a hash of all uncommitted tracked edits.
+
+    Provenance is fail-closed: outside a git checkout (for example a source
+    tree copied without ``.git``) this raises ProvenanceUnavailableError
+    instead of writing an unattributed record. An isolated child that raises
+    it becomes a ``child_failed`` record carrying this message (G7).
+    """
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ProvenanceUnavailableError(
+            f"Source provenance is unavailable: {root} is not a git checkout "
+            "with a commit (git rev-parse HEAD failed). Measurement records "
+            "must name the commit they measured; run from a committed checkout."
+        ) from error
     dirty = bytearray(
         subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=root)
     )
