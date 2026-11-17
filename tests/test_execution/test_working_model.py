@@ -60,6 +60,7 @@ def _control(batch_rows=13, **kwargs):
         "numeric_by",
     ],
 )
+@pytest.mark.platform_sensitive
 def test_gaussian_performance_fit_matches_pinned_bam(r_bridge, case):
     frame = _frame()
     formula = "y ~ z + s(x,bs='cr',k=6)"
@@ -660,6 +661,7 @@ def _trace_extreme_start(r_bridge, fixed, zero_weights, start):
 
 @pytest.mark.parametrize("fixed", [False, True], ids=["free", "fixed"])
 @pytest.mark.parametrize(("zero_weights", "start"), _EXTREME_START_CASES)
+@pytest.mark.platform_sensitive
 def test_extreme_start_trials_match_pinned_sl_fitchol_at_matched_state(
     r_bridge, fixed, zero_weights, start
 ):
@@ -725,6 +727,7 @@ def test_extreme_start_trials_match_pinned_sl_fitchol_at_matched_state(
 
 
 @pytest.mark.parametrize(("zero_weights", "start"), _EXTREME_START_CASES)
+@pytest.mark.platform_sensitive
 def test_extreme_start_controller_replays_pinned_bgam_fitd(
     r_bridge, zero_weights, start
 ):
@@ -860,6 +863,7 @@ def test_extreme_start_controller_replays_pinned_bgam_fitd(
 
 
 @pytest.mark.parametrize(("zero_weights", "start"), _EXTREME_START_CASES)
+@pytest.mark.platform_sensitive
 def test_extreme_start_working_model_matches_pinned_bam(r_bridge, zero_weights, start):
     """JAX's own controller run from bgam.fitd's in.out extreme start."""
     frame, weights, offset = _extreme_start_inputs(zero_weights)

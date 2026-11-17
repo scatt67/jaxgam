@@ -312,10 +312,12 @@ def check_newton_step(collector, label, observed, expected, tolerance):
     return backward, lhs / rhs if rhs > 0 else 0.0
 
 
+@pytest.mark.platform_sensitive
 def test_proposal_matches_pinned_sl_fitchol(r_bridge, compact_working_model):
     _assert_proposal_matches_pinned_sl_fitchol(r_bridge, compact_working_model)
 
 
+@pytest.mark.platform_sensitive
 def test_extreme_proposal_matches_pinned_sl_fitchol(r_bridge, extreme_working_model):
     _assert_proposal_matches_pinned_sl_fitchol(
         r_bridge, extreme_working_model, extreme=True
@@ -374,6 +376,7 @@ def _assert_proposal_matches_pinned_sl_fitchol(
     collector.raise_if_any(formula)
 
 
+@pytest.mark.platform_sensitive
 def test_extreme_proposal_matches_pinned_r_at_matched_state(
     r_bridge, extreme_working_model
 ):
@@ -540,6 +543,7 @@ def test_extreme_proposal_physical_fields_are_batch_invariant(extreme_working_mo
     collector.raise_if_any("extreme working statistics batch invariance")
 
 
+@pytest.mark.platform_sensitive
 def test_extreme_penalty_determinant_matches_pinned_r(r_bridge, extreme_working_model):
     frame, formula, smoothing, _, metadata, _, _ = extreme_working_model
     rho = np.log(smoothing)
@@ -566,6 +570,7 @@ def test_extreme_penalty_determinant_matches_pinned_r(r_bridge, extreme_working_
     collector.raise_if_any("extreme source penalty determinant")
 
 
+@pytest.mark.platform_sensitive
 def test_source_newton_active_filter_indefinite_floor_and_step_cap():
     gradient = jnp.array([3.0, -1.0, 1e-8])
     hessian = jnp.array([[2.0, 0.0, 10.0], [0.0, -0.5, 10.0], [10.0, 10.0, 1e-10]])
@@ -700,6 +705,7 @@ def test_trial_exponentials_and_factors_are_one_consistent_input(simple_metadata
         factor_working_model(nonfinite)
 
 
+@pytest.mark.platform_sensitive
 def test_source_scaled_triangular_solve_and_ift_contractions_are_jittable():
     import scipy.linalg as sla
 
@@ -786,6 +792,7 @@ def test_source_scaled_triangular_solve_and_ift_contractions_are_jittable():
     collector.raise_if_any("source triangular solve and IFT")
 
 
+@pytest.mark.platform_sensitive
 def test_source_penalty_trace_contractions_match_range_algebra(compact_working_model):
     _, _, smoothing, _, metadata, _, _ = compact_working_model
     rho = np.log(smoothing)
@@ -851,6 +858,7 @@ def test_source_penalty_trace_contractions_match_range_algebra(compact_working_m
     collector.raise_if_any("source penalty trace algebra")
 
 
+@pytest.mark.platform_sensitive
 def test_source_scaled_solve_rank_padding_preserves_dropped_coordinates():
     from jaxgam.fitting.working_model import _source_cholesky_solve
 
@@ -864,6 +872,7 @@ def test_source_scaled_solve_rank_padding_preserves_dropped_coordinates():
     np.testing.assert_array_equal(result, np.array([1.0, 0.0, 1.0]))
 
 
+@pytest.mark.platform_sensitive
 def test_source_penalty_addition_follows_sl_adds_order():
     from jaxgam.fitting.data import _to_jax_structure
     from jaxgam.fitting.working_model import _source_add_penalties
@@ -901,6 +910,7 @@ def test_source_penalty_addition_follows_sl_adds_order():
     np.testing.assert_array_equal(actual, expected)
 
 
+@pytest.mark.platform_sensitive
 def test_source_newton_symmetric_eigen_uses_lower_triangle():
     gradient = np.array([0.4, -0.2])
     hessian = np.array([[4.0, 9.0], [1.0, 2.0]])
@@ -914,6 +924,7 @@ def test_source_newton_symmetric_eigen_uses_lower_triangle():
     )
 
 
+@pytest.mark.platform_sensitive
 def test_source_root_crossproducts_match_pinned_reference_dsyrk(r_bridge):
     assert r_bridge.check_versions()[0]
     frame = _frame()
@@ -934,6 +945,7 @@ def test_source_root_crossproducts_match_pinned_reference_dsyrk(r_bridge):
         np.testing.assert_allclose(dynamic, product, rtol=STRICT.rtol, atol=STRICT.atol)
 
 
+@pytest.mark.platform_sensitive
 def test_coupled_source_setup_root_products_match_pinned_sl_setup(r_bridge):
     assert r_bridge.check_versions()[0]
     frame = _frame()
@@ -1042,6 +1054,7 @@ def test_fixed_smoothing_proposal_keeps_only_the_scale_coordinate(
     collector.raise_if_any(f"fixed-smoothing proposal {scale_is_fixed=}")
 
 
+@pytest.mark.platform_sensitive
 def test_source_sum_is_rs_long_double_sum_and_compiles():
     """R's sum: element order, C long double accumulator, one rounding.
 

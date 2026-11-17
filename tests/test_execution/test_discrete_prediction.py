@@ -91,6 +91,7 @@ _CASES = {
 
 
 @pytest.mark.parametrize("case", sorted(_CASES))
+@pytest.mark.platform_sensitive
 def test_working_model_prediction_matches_pinned_predict_bam(r_bridge, case) -> None:
     formula = _CASES[case]
     frame = _frame(150 if case == "joint tp" else 97)

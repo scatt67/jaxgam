@@ -444,6 +444,7 @@ _EXPLICIT = [
 
 
 @pytest.mark.parametrize(("family", "link", "formula"), _EXPLICIT)
+@pytest.mark.platform_sensitive
 def test_fixed_sp_matches_the_identical_explicit_design(family, link, formula):
     """The discrete fit is the explicit-design Fisher fit, field by field.
 
@@ -745,11 +746,13 @@ def _gate_against_bam(r_bridge, family, link, formula, *, selected):
 
 
 @pytest.mark.parametrize(("family", "link", "formula"), _cases(selected=False))
+@pytest.mark.platform_sensitive
 def test_fixed_sp_matches_pinned_bam(r_bridge, family, link, formula):
     _gate_against_bam(r_bridge, family, link, formula, selected=False)
 
 
 @pytest.mark.parametrize(("family", "link", "formula"), _cases(selected=True))
+@pytest.mark.platform_sensitive
 def test_working_model_reml_matches_pinned_bam(r_bridge, family, link, formula):
     _gate_against_bam(r_bridge, family, link, formula, selected=True)
 
@@ -876,6 +879,7 @@ _REVIEWED_MATCHED_REPLAYS = {
 
 
 @pytest.mark.parametrize("case", list(_MATCHED))
+@pytest.mark.platform_sensitive
 def test_matched_state_statistics_proposals_and_controller(r_bridge, case):
     """Every pinned bgam.fitd iteration and Sl.fitChol trial, from R's state.
 
@@ -1164,6 +1168,7 @@ _BOUNDARY_IDS = {param.values[0]: param.id for param in _BOUNDARIES}
 
 @pytest.mark.parametrize(("case", "family", "link"), _BOUNDARIES)
 @pytest.mark.parametrize("selected", [False, True], ids=["fixed", "selected"])
+@pytest.mark.platform_sensitive
 def test_family_boundary_matches_pinned_bam(r_bridge, case, family, link, selected):
     """Poisson mostly-zero counts, Binomial probabilities near 0 and 1 with
     zero-weight rows (whose response binomial()$initialize sets to 0), and

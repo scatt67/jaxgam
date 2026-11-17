@@ -223,6 +223,7 @@ class _ExplicitTheta:
 
 @pytest.mark.parametrize("mode", _MODES)
 @pytest.mark.parametrize(("link", "formula"), _CASES)
+@pytest.mark.platform_sensitive
 def test_fixed_sp_nb_matches_the_identical_explicit_design(link, formula, mode):
     """The discrete NB fit is the explicit-design ``bgam.fitd`` NB fit.
 
@@ -386,6 +387,7 @@ _REVIEWED_NB_TIE_REPLAYS = {
 @pytest.mark.parametrize("selected", [False, True], ids=["fixed_sp", "selected_sp"])
 @pytest.mark.parametrize("mode", _MODES)
 @pytest.mark.parametrize(("link", "formula"), _CASES)
+@pytest.mark.platform_sensitive
 def test_nb_matches_pinned_bam(r_bridge, link, formula, mode, selected):
     frame, weights, offset = _nb_frame(link)
     sp = None if selected else _fixed_sp(link, formula)
@@ -474,6 +476,7 @@ _REVIEWED_NB_MATCHED_REPLAYS: dict[str, int] = {}
 
 
 @pytest.mark.parametrize("case", list(_MATCHED))
+@pytest.mark.platform_sensitive
 def test_nb_matched_state_theta_statistics_proposals_and_controller(r_bridge, case):
     """Every pinned NB iteration from R's exact state.
 

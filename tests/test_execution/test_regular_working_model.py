@@ -283,6 +283,7 @@ def test_iteration_limit_reports_truthfully_and_scans_final_deviance():
         )
 
 
+@pytest.mark.platform_sensitive
 def test_source_sum_is_left_to_right_in_long_double():
     values = np.array([1.0, 1e-16, 1e-16, -1.0])
     expected = np.longdouble(0)
