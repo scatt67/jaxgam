@@ -146,7 +146,13 @@ _PR83_NB_MODERATE_FIELDS = {
     (True, False, "identity"): frozenset(
         ["coefficients", "deviance", "edf", "fitted_values", "link_se", "smoothing"]
     ),
-    (True, False, "sqrt"): frozenset(["edf", "fitted_values", "link_se", "smoothing"]),
+    # Coefficients joined this entry on 2026-11-17: at the selected smoothing
+    # parameter they differ from pinned R by 1.45e-10 relative (1.45 x STRICT)
+    # on some native x86_64 runners (run 44097517198) and are within STRICT on
+    # others, as the other fields of this endpoint already were.
+    (True, False, "sqrt"): frozenset(
+        ["coefficients", "edf", "fitted_values", "link_se", "smoothing"]
+    ),
     (True, True, "log"): frozenset(
         ["theta", "coefficients", "edf", "fitted_values", "link_se", "smoothing"]
     ),
