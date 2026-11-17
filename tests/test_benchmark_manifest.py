@@ -118,6 +118,9 @@ def test_start_and_end_record_one_run_and_detect_a_changed_tree(
     assert started["schema"] == "jaxgam-benchmark-manifest-v1"
     assert started["checkout_start"]["clean"] is True
     assert started["numeric"]["jax"]["dtype"] == "float64"
+    assert Path(started["numeric"]["jax"]["jaxgam_package"]) == (
+        Path(benchmark_manifest.__file__).resolve().parents[1] / "jaxgam"
+    )
     assert "numpy" in {name.lower() for name in started["software"]["packages"]}
     assert "OPENBLAS_NUM_THREADS" in started["thread_environment"]
     assert "load_average_1_5_15" in started["host_start"]

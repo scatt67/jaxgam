@@ -41,6 +41,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+# ``uv run python scripts/...`` may resolve jaxgam to another editable
+# install; this checkout's package goes first, and the record names it.
+_CHECKOUT = Path(__file__).resolve().parents[1]
+if str(_CHECKOUT) not in sys.path:
+    sys.path.insert(0, str(_CHECKOUT))
+
 _OUT_OF_REACH = 1e300
 
 
@@ -179,6 +185,7 @@ def run(options: argparse.Namespace, cache: str) -> dict[str, Any]:
     """Fit once, then build and calibrate one bulk sketch per seed."""
     import jax
 
+    import jaxgam
     from jaxgam import GAM, FitControl
     from jaxgam.data.source import DataFrameRowSource
     from jaxgam.results import BULK_CALIBRATION_MAX_STANDARD_ERRORS
@@ -291,7 +298,8 @@ def run(options: argparse.Namespace, cache: str) -> dict[str, Any]:
             seeds, options.probes, BULK_CALIBRATION_MAX_STANDARD_ERRORS
         ),
         "runtime": {
-            **_git_state(Path(__file__).resolve().parents[1]),
+            **_git_state(_CHECKOUT),
+            "loaded_package": str(Path(jaxgam.__file__).resolve().parent),
             "python": platform.python_version(),
             "platform": platform.platform(),
             "jax": jax.__version__,

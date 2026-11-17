@@ -38,6 +38,11 @@ _THREAD_VARIABLES = (
     "JAX_ENABLE_X64",
 )
 _SCHEMA = "jaxgam-benchmark-manifest-v1"
+# This checkout's package goes first, so the dtype probe imports the jaxgam
+# the run measures rather than another editable install.
+_CHECKOUT = Path(__file__).resolve().parents[1]
+if str(_CHECKOUT) not in sys.path:
+    sys.path.insert(0, str(_CHECKOUT))
 
 
 def _run(command: list[str], cwd: Path | None = None) -> str:
@@ -158,9 +163,10 @@ def _openblas_provider() -> dict[str, str]:
 def _jax_configuration() -> dict[str, Any]:
     import jax
 
-    import jaxgam  # noqa: F401  # enables float64 as every fit does
+    import jaxgam  # enables float64 as every fit does
 
     return {
+        "jaxgam_package": str(Path(jaxgam.__file__).resolve().parent),
         "x64_enabled": bool(jax.config.jax_enable_x64),
         "dtype": "float64" if jax.config.jax_enable_x64 else "float32",
         "backend": jax.default_backend(),

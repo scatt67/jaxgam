@@ -135,3 +135,33 @@ def test_cli_rejects_degenerate_controls(tmp_path: Path) -> None:
             benchmark_bulk_variance.main(
                 [*arguments, "--output", str(tmp_path / "x.json")]
             )
+
+
+def test_script_imports_its_own_checkout(tmp_path: Path) -> None:
+    """Run as a script, the record names this checkout's package."""
+    import subprocess
+    import sys
+
+    root = Path(benchmark_bulk_variance.__file__).resolve().parents[1]
+    environment = {
+        key: value for key, value in os.environ.items() if key != "PYTHONPATH"
+    }
+    output = tmp_path / "bulk.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "benchmark_bulk_variance.py"),
+            "--seeds",
+            "1",
+            "--probes",
+            "2",
+            "--output",
+            str(output),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    loaded = json.loads(output.read_text())["runtime"]["loaded_package"]
+    assert Path(loaded) == root / "jaxgam"
