@@ -61,6 +61,8 @@ from jaxgam.execution.regular_working_model import (
 from jaxgam.execution.working_model import (
     CompiledWorkingModelProposal,
     compile_working_model_proposal,
+    source_exp,
+    source_log,
     source_penalty_quadratic,
 )
 from jaxgam.execution.working_theta import (
@@ -484,8 +486,8 @@ class RegularWorkingComponents:
         n_coef = problem.descriptor.n_coef
         working_model = self.smoothing is None
         log_smoothing = self.compiled.log_smoothing(fit.parameters)
-        smoothing = np.exp(log_smoothing) if working_model else self.smoothing
-        scale = float(np.exp(fit.log_scale))
+        smoothing = source_exp(log_smoothing) if working_model else self.smoothing
+        scale = float(source_exp(fit.log_scale))
         factor = fit.factor
         kept = factor.pivots[: factor.rank]
         qr_factor = PivotedQRFisherFactor(
@@ -517,7 +519,7 @@ class RegularWorkingComponents:
                 fit.penalized_deviance / scale
                 - factor.logdet_penalty
                 + factor.logdet_hessian
-                + (self.n_obs - criterion_null) * np.log(2.0 * np.pi * scale)
+                + (self.n_obs - criterion_null) * source_log(2.0 * np.pi * scale)
             )
             / 2.0
         )
@@ -662,7 +664,7 @@ def regular_working_components(
                     raise FloatingPointError(
                         "Scale initialization log(var(y)*0.05) is not finite."
                     )
-                parameters.append(float(np.log(variance * 0.05)))
+                parameters.append(float(source_log(variance * 0.05)))
             return np.asarray(parameters, dtype=np.float64)
 
         try:

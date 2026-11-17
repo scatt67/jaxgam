@@ -33,6 +33,7 @@ from jaxgam.execution.working_model import (
     AcceptedWorkingModelFactor,
     AcceptedWorkingModelProposal,
     accept_working_model_proposal,
+    source_exp,
 )
 from jaxgam.fitting.working_model import GaussianWorkingModelProposal
 
@@ -367,7 +368,7 @@ def advance_regular_working_model(
     accepted_log_scale = float(accepted.parameters[-1]) if scale_estimated else 0.0
     # crit <- (dev/(exp(log.phi)*gamma) - ldetS + ldetXXS)/2, gamma = 1.
     next_criterion = (
-        penalized / float(np.exp(accepted_log_scale))
+        penalized / float(source_exp(accepted_log_scale))
         - accepted.factor.logdet_penalty
         + accepted.factor.logdet_hessian
     ) / 2.0

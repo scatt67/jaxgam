@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 import jax
 import numpy as np
+import numpy.typing as npt
 
 from jaxgam.control import FitControl
 from jaxgam.fitting import penalty_ops
@@ -33,6 +34,7 @@ from jaxgam.fitting.working_model import (
 )
 from jaxgam.formula.fitting_prepare import initial_log_sp_from_diagonal
 from jaxgam.penalties.structure import PenaltyStructure
+from jaxgam.smooths.source_arithmetic import libm_exp, libm_log
 from jaxgam.smooths.source_lapack import (
     source_pivoted_cholesky,
     source_pivoted_cholesky_workspace_bound,
@@ -166,13 +168,44 @@ def source_penalty_quadratic(
         )
         for sp, penalty in zip(block.sp_indices, block.penalties, strict=True):
             values = np.asarray(penalty_ops._dense_local(penalty))
-            total += float(np.exp(log_smoothing[sp])) * float(local @ values @ local)
+            total += source_exp(float(log_smoothing[sp])) * float(
+                local @ values @ local
+            )
     return total
 
 
 def source_exponentials(log_smoothing: np.ndarray) -> np.ndarray:
     """``exp(log sp)`` from the C library ``exp`` that pinned R calls."""
     return np.array([math.exp(float(value)) for value in log_smoothing])
+
+
+def source_exp(values: npt.ArrayLike) -> float | np.ndarray:
+    """C-library ``exp``, as pinned R evaluates ``exp`` in bgam.fitd/Sl.fitChol.
+
+    NumPy's SIMD ``exp`` can differ from libm by one ulp on some CPUs (for
+    example AVX-512 x86_64); these values feed halving ties against pinned
+    R. A scalar input returns a Python float.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    result = libm_exp(array).reshape(array.shape)
+    return float(result) if array.ndim == 0 else result
+
+
+def source_log(values: npt.ArrayLike) -> float | np.ndarray:
+    """C-library ``log`` (R's ``R_log``) for positive finite entries.
+
+    Other entries keep NumPy's IEEE results (``-inf``, ``nan``, ``inf``),
+    which libm shares, so non-finite scores fail where they failed before.
+    A scalar input returns a Python float.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    valid = (array > 0.0) & np.isfinite(array)
+    if np.all(valid):
+        result = libm_log(array).reshape(array.shape)
+    else:
+        result = np.log(array)
+        result[valid] = libm_log(array[valid])
+    return float(result) if array.ndim == 0 else result
 
 
 def _host_factor(matrix: jax.Array, diagonal: jax.Array) -> WorkingModelFactor:
@@ -441,9 +474,9 @@ def advance_gaussian_working_model(
         state.parameters, state.step, state.criterion, deviance, propose
     )
     trial = accepted.parameters
-    phi = float(np.exp(trial[-1]))
+    phi = source_exp(float(trial[-1]))
     penalized = response_square_sum - float(accepted.coefficients @ rhs)
-    normalization = (n_obs - null_dimension) * np.log(2 * np.pi * phi) / 2
+    normalization = (n_obs - null_dimension) * source_log(2 * np.pi * phi) / 2
     # bgam.fitd's control criterion uses deviance BEFORE this proposal.
     criterion_control = (
         accepted.criterion + (deviance - penalized) / (2 * phi) - normalization
@@ -689,7 +722,7 @@ def fit_gaussian_working_model_statistics(
     if initial_parameters is None:
         initial_parameters = np.r_[
             initial_log_sp_from_diagonal(np.diag(gram), penalties),
-            np.log(response_variance * 0.05),
+            source_log(response_variance * 0.05),
         ]
     state = WorkingModelState.initial(initial_parameters, p)
     if state.parameters.shape != (penalties.n_penalties + 1,):
@@ -744,7 +777,7 @@ def fit_gaussian_working_model_statistics(
     return GaussianWorkingModelFit(
         beta,
         log_smoothing,
-        float(np.exp(state.parameters[-1])),
+        source_exp(float(state.parameters[-1])),
         converged,
         state.completed + converged,
         evaluations,

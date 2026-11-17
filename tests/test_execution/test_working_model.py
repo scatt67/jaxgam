@@ -989,3 +989,36 @@ def test_compiled_fixed_smoothing_proposal_maps_free_parameters(statistics):
         proposal = compiled(trial, 0.0, compiled.transfer(gram, rhs, yy))
         assert np.asarray(proposal.step).shape == trial.shape
         assert np.all(np.isfinite(np.asarray(proposal.coefficients)))
+
+
+def test_source_exp_and_log_are_the_c_library_functions() -> None:
+    """bgam.fitd's exp/log of sp, scale and determinants use C libm, as R does."""
+    import math
+
+    from jaxgam.execution.working_model import source_exp, source_log
+
+    rng = np.random.default_rng(3)
+    exponents = np.concatenate(
+        [rng.uniform(-40.0, 40.0, 200), np.array([-745.0, -1e-300, 0.0, 709.7])]
+    )
+    positives = np.concatenate(
+        [np.exp(rng.uniform(-700.0, 700.0, 200)), np.array([5e-324, 1.0, 2.0])]
+    )
+    exp_values = source_exp(exponents)
+    log_values = source_log(positives)
+    assert exp_values.shape == exponents.shape
+    assert log_values.shape == positives.shape
+    assert [float(v) for v in exp_values] == [math.exp(v) for v in exponents]
+    assert [float(v) for v in log_values] == [math.log(v) for v in positives]
+    scalar = source_exp(1.5)
+    assert type(scalar) is float
+    assert scalar == math.exp(1.5)
+    assert type(source_log(np.float64(2.5))) is float
+    assert source_exp(np.array([0.5])).shape == (1,)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        specials = source_log(np.array([0.0, -1.0, np.inf, np.nan, 4.0]))
+    assert specials[0] == -np.inf
+    assert np.isnan(specials[1])
+    assert specials[2] == np.inf
+    assert np.isnan(specials[3])
+    assert specials[4] == math.log(4.0)

@@ -26,6 +26,8 @@ from jaxgam.execution.regular_working_model import RegularWorkingModelIteration
 from jaxgam.execution.working_model import (
     WorkingModelIteration,
     fit_gaussian_working_model_statistics,
+    source_exp,
+    source_log,
 )
 from jaxgam.fitting.discrete_ops import (
     discrete_xbd,
@@ -156,7 +158,7 @@ def _fixed_sp(sp: npt.ArrayLike, n_penalties: int) -> tuple[np.ndarray, np.ndarr
             "sp must contain strictly positive, finite values; "
             f"got invalid value(s) {bad.tolist()}."
         )
-    return values, np.log(values)
+    return values, source_log(values)
 
 
 def _solver_plan(
@@ -260,7 +262,8 @@ def _log_pdet(structure: PenaltyStructure, log_smoothing: np.ndarray) -> float:
             if np.any(eigenvalues <= 0.0):
                 raise FloatingPointError("Penalty range determinant is not positive.")
             log_determinant += float(
-                rank * log_smoothing[block.sp_indices[0]] + np.sum(np.log(eigenvalues))
+                rank * log_smoothing[block.sp_indices[0]]
+                + np.sum(source_log(eigenvalues))
             )
             continue
 
@@ -284,7 +287,7 @@ def _log_pdet(structure: PenaltyStructure, log_smoothing: np.ndarray) -> float:
             root = _pivoted_cholesky_root(
                 source_range.T @ component @ source_range, rank
             )
-            combined += np.exp(value - maximum) * (root @ root.T)
+            combined += source_exp(float(value - maximum)) * (root @ root.T)
         log_determinant += rank * maximum + _positive_logdet(combined, rank)
     return log_determinant
 
@@ -316,7 +319,7 @@ def _positive_logdet(matrix: np.ndarray, structural_rank: int) -> float:
         )
     selected = pivots[:rank] - 1
     return float(
-        2.0 * np.sum(np.log(np.diag(factor)[:rank]) + np.log(scaling[selected]))
+        2.0 * np.sum(source_log(np.diag(factor)[:rank]) + source_log(scaling[selected]))
     )
 
 
@@ -332,13 +335,13 @@ def _reml_score(
     n_obs: int,
     null_dimension: int,
 ) -> float:
-    log_det_hessian = 2.0 * float(np.sum(np.log(np.diag(factor))))
+    log_det_hessian = 2.0 * float(np.sum(source_log(np.diag(factor))))
     penalized = deviance + float(beta @ penalty @ beta)
     return float(
         penalized / (2.0 * score_scale)
         + log_det_hessian / 2.0
         - _log_pdet(penalty_structure, log_smoothing) / 2.0
-        + (n_obs - null_dimension) * np.log(2.0 * np.pi * score_scale) / 2.0
+        + (n_obs - null_dimension) * source_log(2.0 * np.pi * score_scale) / 2.0
     )
 
 
@@ -357,7 +360,7 @@ def _pinned_fixed_scale(
     variance = y_centered_square_sum / (n_obs - 1)
     if not np.isfinite(variance) or variance <= 0.0:
         raise FloatingPointError("Gaussian scale initialization is not positive.")
-    log_scale = float(np.log(variance * 0.05))
+    log_scale = float(source_log(variance * 0.05))
     step = 0.0
     deviance = penalized_deviance
     deviance_old = np.inf
@@ -367,12 +370,12 @@ def _pinned_fixed_scale(
             and abs(deviance - deviance_old) / (0.1 + abs(deviance)) < 1e-7
             and abs(step) < 1e-7 * (abs(log_scale) + 1.0)
         ):
-            return float(np.exp(log_scale)), iteration - 1
+            return float(source_exp(log_scale)), iteration - 1
         deviance_old = deviance
         previous_step = step
         while True:
             trial = log_scale + previous_step
-            scale = float(np.exp(trial))
+            scale = float(source_exp(trial))
             gradient = (-penalized_deviance / scale + denominator) / 2.0
             proposed = 1.0 - denominator * scale / penalized_deviance
             if abs(proposed) > 4.0:
@@ -635,7 +638,7 @@ def fit_discrete_gaussian(
                 fit_peak_bytes=memory.fit_peak_bytes + extra,
             )
             log_smoothing = selected.log_smoothing
-            smoothing = np.exp(log_smoothing)
+            smoothing = source_exp(log_smoothing)
             penalty = penalties.materialize(log_smoothing)
             if not selected.converged:
                 warnings.warn(
@@ -748,7 +751,7 @@ def fit_discrete_gaussian(
                         setup.predict_spec, null_dimension
                     )
                 )
-                * np.log(2.0 * np.pi * score_scale)
+                * source_log(2.0 * np.pi * score_scale)
                 / 2.0
             )
         )
