@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from jaxgam.smooths.source_arithmetic import libm_log10
+
 
 class _RRandom:
     """R 4.5's default Mersenne Twister plus rejection index sampler."""
@@ -81,7 +83,10 @@ def _r_number_text(value: Any) -> str:
     # large doubles (for example 8956883870379507).
     digits = 15
     magnitude = abs(numeric)
-    k_pos = int(np.floor(np.log10(magnitude))) - digits + 1
+    # scientific(): kp = (int) floor(log10(r)) - R + 1, with the C library's
+    # log10. A vectorized NumPy log10 can differ by an ulp next to a power of
+    # ten and move kp; libm_log10 is the same symbol R calls.
+    k_pos = math.floor(float(libm_log10(np.array([magnitude]))[0])) - digits + 1
     has_extended_precision = np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
     if has_extended_precision:
         magnitude_precise: float | np.longdouble = np.longdouble(magnitude)
