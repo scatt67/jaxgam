@@ -135,33 +135,41 @@ class _TermCollector:
             )
 
     def _visit_binop(self, node: ast.BinOp) -> None:
-        """Handle ``+`` and ``-`` operators connecting terms."""
-        if isinstance(node.op, ast.Add):
-            self.visit(node.left)
-            self.visit(node.right)
-        elif isinstance(node.op, ast.Sub):
-            # ``expr - 1`` removes the intercept
-            self.visit(node.left)
-            if isinstance(node.right, ast.Constant) and node.right.value == 1:
+        """Handle ``+`` and ``-`` operators connecting terms.
+
+        ``a + b + c`` parses left-nested, so a formula with m terms is an
+        m-deep chain. The chain is flattened iteratively and its links are
+        processed left to right, exactly the order of the former recursive
+        walk, so the depth no longer grows with the number of terms.
+        Parenthesized sub-chains (``a + (b + c)``) recurse once per
+        parenthesis level, which Python's own parser bounds.
+        """
+        if not isinstance(node.op, (ast.Add, ast.Sub)):
+            raise ValueError(
+                f"Unsupported operator in formula: {type(node.op).__name__}. "
+                f"Only '+' and '-' are supported. Got: {_unparse(node)}"
+            )
+        leftmost, links = _additive_chain(node)
+        self.visit(leftmost)
+        for link in links:
+            if isinstance(link.op, ast.Add):
+                self.visit(link.right)
+            elif isinstance(link.right, ast.Constant) and link.right.value == 1:
+                # ``expr - 1`` removes the intercept
                 self.has_intercept = False
             else:
                 raise ValueError(
                     "Subtraction in formula RHS is only supported as "
                     "'- 1' to remove the intercept. "
-                    f"Got: {ast.unparse(node)}"
+                    f"Got: {_unparse(link)}"
                 )
-        else:
-            raise ValueError(
-                f"Unsupported operator in formula: {type(node.op).__name__}. "
-                f"Only '+' and '-' are supported. Got: {ast.unparse(node)}"
-            )
 
     def _visit_call(self, node: ast.Call) -> None:
         """Handle function calls: s(), te(), ti()."""
         func_name = self._get_func_name(node)
         if func_name is None:
             raise ValueError(
-                f"Cannot resolve function name in formula: {ast.unparse(node)}"
+                f"Cannot resolve function name in formula: {_unparse(node)}"
             )
 
         if func_name not in _SMOOTH_FUNCTIONS:
@@ -173,7 +181,7 @@ class _TermCollector:
         if not node.args:
             raise ValueError(
                 f"Smooth function '{func_name}()' requires at least one "
-                f"variable argument. Got: {ast.unparse(node)}"
+                f"variable argument. Got: {_unparse(node)}"
             )
 
         spec = _parse_smooth_call(func_name, node)
@@ -223,7 +231,7 @@ class _TermCollector:
             self.has_intercept = False
         else:
             raise ValueError(
-                f"Unsupported unary expression in formula: {ast.unparse(node)}"
+                f"Unsupported unary expression in formula: {_unparse(node)}"
             )
 
     @staticmethod
@@ -256,7 +264,7 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
         else:
             raise ValueError(
                 f"Positional arguments to {func_name}() must be variable "
-                f"names. Got: {ast.unparse(arg)}"
+                f"names. Got: {_unparse(arg)}"
             )
 
     # Keyword arguments
@@ -272,14 +280,14 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
             if not isinstance(k, int):
                 raise ValueError(
                     f"Argument 'k' in {func_name}() must be an integer. "
-                    f"Got: {ast.unparse(kw.value)}"
+                    f"Got: {_unparse(kw.value)}"
                 )
         elif key == "bs":
             bs = _eval_kwarg_value(kw.value, key, func_name)
             if not isinstance(bs, str):
                 raise ValueError(
                     f"Argument 'bs' in {func_name}() must be a string. "
-                    f"Got: {ast.unparse(kw.value)}"
+                    f"Got: {_unparse(kw.value)}"
                 )
         elif key == "by":
             if isinstance(kw.value, ast.Name):
@@ -289,7 +297,7 @@ def _parse_smooth_call(func_name: str, node: ast.Call) -> SmoothSpec:
             else:
                 raise ValueError(
                     f"Argument 'by' in {func_name}() must be a variable "
-                    f"name or string. Got: {ast.unparse(kw.value)}"
+                    f"name or string. Got: {_unparse(kw.value)}"
                 )
         elif key == "fx":
             # fx=True (fixed-df, unpenalized regression spline) is a deferred
@@ -375,5 +383,117 @@ def _eval_kwarg_value(node: ast.expr, key: str, func_name: str) -> Any:
         raise ValueError(
             f"Cannot evaluate argument '{key}' in {func_name}() at parse "
             f"time. Only literal values (integers, strings, floats) are "
-            f"supported. Got: {ast.unparse(node)}"
+            f"supported. Got: {_unparse(node)}"
         ) from None
+
+
+# Left-associative binary operators of equal precedence: a left-nested run of
+# them is printed and evaluated as one flat chain. ``**`` is right-associative
+# and is never flattened.
+_PRECEDENCE_GROUPS: tuple[tuple[type[ast.operator], ...], ...] = (
+    (ast.Add, ast.Sub),
+    (ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.MatMult),
+    (ast.LShift, ast.RShift),
+    (ast.BitAnd,),
+    (ast.BitXor,),
+    (ast.BitOr,),
+)
+
+
+def _additive_chain(node: ast.BinOp) -> tuple[ast.expr, list[ast.BinOp]]:
+    """Flatten a left-nested ``+``/``-`` chain without recursion.
+
+    Returns the leftmost operand and the chain's ``BinOp`` links in source
+    order; each link's ``right`` is the term it adds or subtracts.
+    """
+    return _operator_chain(node, (ast.Add, ast.Sub))
+
+
+def _operator_chain(
+    node: ast.BinOp, group: tuple[type[ast.operator], ...]
+) -> tuple[ast.expr, list[ast.BinOp]]:
+    """Flatten the left-nested run of ``group`` operators rooted at ``node``."""
+    links: list[ast.BinOp] = []
+    current: ast.expr = node
+    while isinstance(current, ast.BinOp) and isinstance(current.op, group):
+        links.append(current)
+        current = current.left
+    links.reverse()
+    return current, links
+
+
+def _precedence_group(op: ast.operator) -> tuple[type[ast.operator], ...]:
+    """The left-associative group of ``op``; empty for ``**``."""
+    for group in _PRECEDENCE_GROUPS:
+        if isinstance(op, group):
+            return group
+    return ()
+
+
+# Placeholder operand that lets ``ast.unparse`` spell one operator and decide
+# its parentheses without rendering the operand it stands for.
+_SLOT = "_jaxgam_formula_slot_"
+
+
+def _unparse(node: ast.expr) -> str:
+    """``ast.unparse(node)`` without recursion along operator chains.
+
+    ``ast.unparse`` recurses once per nested operator and overflows the
+    interpreter stack on a formula of a few hundred terms. This renderer walks
+    left-nested chains of equal-precedence operators iteratively (``+``/``-``
+    terms, or a malformed ``*`` run) and asks ``ast.unparse`` about one
+    operator at a time, with each binary operand replaced by a shallow
+    stand-in that has the same operator and therefore the same precedence, so
+    the operator spelling and parenthesization are ``ast.unparse``'s own.
+    """
+    if isinstance(node, ast.BinOp):
+        group = _precedence_group(node.op)
+        if group:
+            leftmost, links = _operator_chain(node, group)
+        else:
+            leftmost, links = node.left, [node]
+        text = _operand_text(leftmost, links[0].op, right=False)
+        for link in links:
+            text += _operand_text(link.right, link.op, right=True)
+        return text
+    if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.BinOp):
+        probe = ast.unparse(ast.UnaryOp(op=node.op, operand=_stand_in(node.operand)))
+        return _substitute(probe, node.operand, at_end=True)
+    return ast.unparse(node)
+
+
+def _stand_in(node: ast.BinOp) -> ast.BinOp:
+    """A one-operator node with the same operator, hence precedence, as ``node``."""
+    return ast.BinOp(left=ast.Name(id="a"), op=node.op, right=ast.Name(id="b"))
+
+
+def _substitute(probe: str, operand: ast.BinOp, *, at_end: bool) -> str:
+    """Replace the rendered stand-in at one end of ``probe`` by ``operand``."""
+    stand_in = ast.unparse(_stand_in(operand))
+    inner = _unparse(operand)
+    for rendered, replacement in ((f"({stand_in})", f"({inner})"), (stand_in, inner)):
+        if at_end and probe.endswith(rendered):
+            return probe[: -len(rendered)] + replacement
+        if not at_end and probe.startswith(rendered):
+            return replacement + probe[len(rendered) :]
+    raise AssertionError(f"Unexpected rendering of a formula operand: {probe!r}")
+
+
+def _operand_text(operand: ast.expr, op: ast.operator, *, right: bool) -> str:
+    """Render one operand of ``op`` exactly as ``ast.unparse`` places it.
+
+    A left operand is returned alone; a right operand is returned with the
+    operator text before it, so a chain's text is its leftmost operand
+    followed by each link's right-hand piece.
+    """
+    slot = ast.Name(id=_SLOT)
+    stand_in = _stand_in(operand) if isinstance(operand, ast.BinOp) else operand
+    if right:
+        piece = ast.unparse(ast.BinOp(left=slot, op=op, right=stand_in))[len(_SLOT) :]
+    else:
+        probe = ast.unparse(ast.BinOp(left=stand_in, op=op, right=slot))
+        operator = ast.unparse(ast.BinOp(left=slot, op=op, right=slot))[len(_SLOT) :]
+        piece = probe[: -len(operator)]
+    if isinstance(operand, ast.BinOp):
+        return _substitute(piece, operand, at_end=right)
+    return piece

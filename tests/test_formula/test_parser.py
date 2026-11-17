@@ -14,6 +14,7 @@ Covers:
 """
 
 import dataclasses
+import re
 
 import pytest
 
@@ -575,3 +576,126 @@ class TestDeferredAndDuplicateArgs:
 
         ordered = parse_formula("y ~ x1 + x2 + x1")
         assert [t.name for t in ordered.parametric_terms] == ["x1", "x2"]
+
+
+def _chain_text(m: int) -> str:
+    return " + ".join(f"s(x{i}, k=10, bs='cr')" for i in range(m))
+
+
+def _chain_specs(m: int) -> list[SmoothSpec]:
+    return [
+        SmoothSpec(variables=[f"x{i}"], bs="cr", k=10, smooth_type="s")
+        for i in range(m)
+    ]
+
+
+class TestLongChains:
+    """Formulas with hundreds or thousands of terms (iterative chain walk)."""
+
+    @pytest.mark.parametrize("m", [500, 5000])
+    def test_long_additive_smooth_chains_parse(self, m: int) -> None:
+        result = parse_formula(f"y ~ {_chain_text(m)} + z + w - 1")
+
+        assert result.response == "y"
+        assert result.smooth_terms == _chain_specs(m)
+        assert [t.name for t in result.parametric_terms] == ["z", "w"]
+        assert result.has_intercept is False
+
+    def test_four_hundred_term_chain_matches_the_term_list(self) -> None:
+        """Field-for-field the specification the recursive walk produced."""
+        result = parse_formula(f"y ~ 0 + {_chain_text(400)} + 1")
+
+        assert result == FormulaSpec(
+            response="y",
+            smooth_terms=_chain_specs(400),
+            parametric_terms=[],
+            has_intercept=True,
+        )
+
+    def test_parenthesized_long_chain_is_walked_in_order(self) -> None:
+        result = parse_formula(f"y ~ a + ({_chain_text(600)}) + b")
+
+        assert result.smooth_terms == _chain_specs(600)
+        assert [t.name for t in result.parametric_terms] == ["a", "b"]
+
+    @pytest.mark.parametrize("m", [400, 5000])
+    def test_malformed_long_chains_raise_the_rendered_errors(self, m: int) -> None:
+        chain = _chain_text(m)
+        cases = {
+            f"y ~ {chain} - x": (
+                "Subtraction in formula RHS is only supported as '- 1' to "
+                f"remove the intercept. Got: {chain} - x"
+            ),
+            f"y ~ {chain} - 1 - 2": (
+                "Subtraction in formula RHS is only supported as '- 1' to "
+                f"remove the intercept. Got: {chain} - 1 - 2"
+            ),
+            f"y ~ {chain} * 2": (
+                "Unsupported operator in formula: Mult. Only '+' and '-' are "
+                f"supported. Got: s(x{m - 1}, k=10, bs='cr') * 2"
+            ),
+            f"y ~ ({chain}) * 2": (
+                "Unsupported operator in formula: Mult. Only '+' and '-' are "
+                f"supported. Got: ({chain}) * 2"
+            ),
+            f"y ~ -({chain})": (f"Unsupported unary expression in formula: -({chain})"),
+            "y ~ " + " * ".join(f"x{i}" for i in range(m)): (
+                "Unsupported operator in formula: Mult. Only '+' and '-' are "
+                "supported. Got: " + " * ".join(f"x{i}" for i in range(m))
+            ),
+        }
+        collector = _AssertCollector()
+        for formula, message in cases.items():
+
+            def check(formula: str = formula, message: str = message) -> None:
+                with pytest.raises(ValueError, match=re.escape(message[:60])) as caught:
+                    parse_formula(formula)
+                assert str(caught.value) == message
+
+            collector.check(formula[:40], check)
+        collector.raise_if_any("malformed long chains")
+
+    def test_error_text_matches_ast_unparse(self) -> None:
+        """The iterative renderer reproduces ast.unparse, parentheses included."""
+        import ast
+        import random
+
+        from jaxgam.formula.parser import _unparse
+
+        fixed = [
+            "a + b - c",
+            "a - (b + c)",
+            "(a + b) * c",
+            "a * (b + c) - d",
+            "a + b * c ** d",
+            "(a + b) ** c",
+            "a ** (b + c)",
+            "a << b + c",
+            "(a << b) + c",
+            "a & b | c ^ d",
+            "-(a + b)",
+            "-a + b",
+            "(a < b) + c",
+            "s(x, k=5) + te(x, z, bs='cr') - 1",
+            "a @ b // c % d / e",
+            "(lambda: 0) + a",
+        ]
+        operators = ["+", "-", "*", "/", "//", "%", "**", "<<", ">>", "&", "|", "^"]
+        atoms = ["a", "1", "2.5", "s(x)", "'q'", "f(a + b)", "-c", "(a < b)"]
+        rng = random.Random(20261117)
+
+        def expression(depth: int) -> str:
+            if depth == 0 or rng.random() < 0.25:
+                return rng.choice(atoms)
+            choice = rng.random()
+            if choice < 0.7:
+                left, right = expression(depth - 1), expression(depth - 1)
+                return f"{left} {rng.choice(operators)} {right}"
+            if choice < 0.85:
+                return f"({expression(depth - 1)})"
+            return f"-{expression(depth - 1)}"
+
+        sources = fixed + [expression(rng.randint(1, 5)) for _ in range(2000)]
+        for source in sources:
+            node = ast.parse(source, mode="eval").body
+            assert _unparse(node) == ast.unparse(node), source
