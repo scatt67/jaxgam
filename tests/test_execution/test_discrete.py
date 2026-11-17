@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import math
 import weakref
 
@@ -37,9 +38,16 @@ class _CountingSource(DataFrameRowSource):
         yield from super().scan(batch_rows)
 
 
-def test_completed_fitting_scan_releases_batch_arrays_before_residual_scan(
-    monkeypatch,
-) -> None:
+def _observed_two_scan_fit(monkeypatch, *, retain: bool):
+    """Fit while checking the first fitting scan's batch arrays are released.
+
+    At the start of the second fitting scan every weak reference to the first
+    scan's batch arrays must be dead.  The cyclic garbage collector is run
+    explicitly first, so the check does not depend on when it last ran: it
+    fails only if a live reference still holds an array.  ``retain`` keeps
+    one array alive on purpose, to show the check fails in that case.
+    """
+
     class ObservedSource(DataFrameRowSource):
         fitting_started = False
         fitting_scans = 0
@@ -47,6 +55,7 @@ def test_completed_fitting_scan_releases_batch_arrays_before_residual_scan(
         def __init__(self, frame):
             super().__init__(frame, response="y")
             self.first_scan_arrays = []
+            self.retained = []
 
         def scan(self, batch_rows):
             if not self.fitting_started:
@@ -55,7 +64,11 @@ def test_completed_fitting_scan_releases_batch_arrays_before_residual_scan(
             self.fitting_scans += 1
             if self.fitting_scans == 2:
                 assert self.first_scan_arrays
-                assert all(reference() is None for reference in self.first_scan_arrays)
+                gc.collect()
+                live = sum(
+                    reference() is not None for reference in self.first_scan_arrays
+                )
+                assert live == 0, f"{live} first-scan batch arrays still referenced"
             for batch in super().scan(batch_rows):
                 if self.fitting_scans == 1:
                     self.first_scan_arrays.extend(
@@ -68,6 +81,8 @@ def test_completed_fitting_scan_releases_batch_arrays_before_residual_scan(
                             batch.row_positions,
                         )
                     )
+                    if retain and not self.retained:
+                        self.retained.append(batch.y)
                 yield batch
 
     source = ObservedSource(_frame())
@@ -81,7 +96,19 @@ def test_completed_fitting_scan_releases_batch_arrays_before_residual_scan(
     result = GAM("y ~ z + s(x,bs='cr',k=6)", sp=[0.65], control=_control(8)).fit(
         source, result="prediction"
     )
+    return source, result
+
+
+def test_completed_fitting_scan_releases_batch_arrays_before_residual_scan(
+    monkeypatch,
+) -> None:
+    source, result = _observed_two_scan_fit(monkeypatch, retain=False)
     assert source.fitting_scans == result.source_scans == 2
+
+
+def test_release_check_fails_when_a_first_scan_array_is_retained(monkeypatch) -> None:
+    with pytest.raises(AssertionError, match="1 first-scan batch arrays still"):
+        _observed_two_scan_fit(monkeypatch, retain=True)
 
 
 def _frame(n_rows: int = 75) -> pd.DataFrame:
