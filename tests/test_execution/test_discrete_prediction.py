@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import logging
 import pickle
 
 import numpy as np
@@ -20,7 +19,7 @@ from jaxgam.formula.discrete_design import (
 )
 from jaxgam.formula.parser import parse_formula
 from tests.helpers import _AssertCollector, check_that
-from tests.tolerances import STRICT
+from tests.tolerances import MODERATE, STRICT
 
 _LEVELS = ("low", "mid", "high")
 
@@ -29,6 +28,16 @@ def _frame(n_rows: int = 97) -> pd.DataFrame:
     position = np.arange(n_rows, dtype=float)
     x = (position + 0.2 * np.sin(position * 0.7)) / n_rows
     z = np.cos(position * 0.23) + 0.07 * np.sin(position * 0.91)
+    y = 0.4 - 0.3 * z + np.sin(4.5 * x) + 0.4 * np.sin(3 * x) * np.cos(2 * z)
+    return pd.DataFrame({"x": x, "z": z, "y": y + 0.05 * np.cos(position)})
+
+
+def _symmetric_grid_frame(n_rows: int = 400) -> pd.DataFrame:
+    """``z`` discretizes to a full evenly spaced grid, symmetric about its
+    midpoint, so the thin-plate kernel matrix is centrosymmetric."""
+    position = np.arange(n_rows, dtype=float)
+    x = (position + 0.3 * np.sin(position)) / n_rows
+    z = np.cos(position * 0.19)
     y = 0.4 - 0.3 * z + np.sin(4.5 * x) + 0.4 * np.sin(3 * x) * np.cos(2 * z)
     return pd.DataFrame({"x": x, "z": z, "y": y + 0.05 * np.cos(position)})
 
@@ -68,9 +77,9 @@ def _requests(seed: int, columns: dict[str, tuple[float, float]]):
     return held_out, large
 
 
-def _control(policy: str, **kwargs) -> FitControl:
+def _control(policy: str, *, m: int = 30, **kwargs) -> FitControl:
     discretization = ContinuousDiscretizationControl(
-        m=30,
+        m=m,
         factor_names=kwargs.pop("factor_names", ()),
         prediction_policy=policy,
     )
@@ -90,46 +99,83 @@ def _close(observed, expected):
     )
 
 
-_LOGGER = logging.getLogger(__name__)
+def _basis_change_to_pinned_bam(r_bridge, formula, frame, m):
+    """Whether the discretized design equals pinned bam's, and otherwise T.
 
-
-def _design_gap_to_pinned_bam(r_bridge, formula: str, frame: pd.DataFrame) -> float:
-    """Max |X - X_R| of the discretized training design, or inf if shapes differ.
-
-    The design is the basis gauge: equal designs at STRICT give the same
-    coefficient coordinates as pinned ``bam``.
+    Returns ``(T, gap)``: ``T`` is ``None`` when the training designs agree
+    at STRICT (the same coefficient coordinates as pinned ``bam``). Otherwise
+    ``T`` solves ``X_J T = X_R``; a caller must check it is a change of
+    coordinates of the penalized problem (see ``_check_basis_change``).
     """
     source = DataFrameRowSource(frame, response="y")
-    setup = build_continuous_discrete_setup(parse_formula(formula), source, m=30)
+    setup = build_continuous_discrete_setup(parse_formula(formula), source, m=m)
     try:
         descriptor = build_continuous_discrete_design(
             setup, source, control=DiscreteDesignControl(batch_rows=len(frame))
         )
         assert not isinstance(descriptor, DiscreteDesignUnavailable)
         ours = descriptor.evaluate_batch(np.arange(len(frame)))
+        width = ours.shape[1]
+        penalties = []
+        for block in setup.penalties.blocks:
+            for local in block.dense_penalties():
+                full = np.zeros((width, width))
+                full[block.start : block.stop, block.start : block.stop] = local
+                penalties.append((block.start, block.stop, full))
     finally:
         setup.cleanup()
-    theirs = r_bridge.bam_discrete_setup(formula, frame, m=30).expanded_design
-    if ours.shape != theirs.shape:
-        return float("inf")
+    reference = r_bridge.bam_discrete_setup(formula, frame, m=m)
+    theirs = reference.expanded_design
+    assert ours.shape == theirs.shape
+    gap = float(np.max(np.abs(ours - theirs)))
     if np.allclose(ours, theirs, rtol=STRICT.rtol, atol=STRICT.atol):
-        return 0.0
-    return float(np.max(np.abs(ours - theirs)))
+        return None, gap, None
+    T = np.linalg.lstsq(ours, theirs, rcond=None)[0]
+    pairs = []
+    for (start, stop, mine), local in zip(penalties, reference.penalties, strict=True):
+        full = np.zeros_like(mine)
+        full[start:stop, start:stop] = local
+        pairs.append((mine, full))
+    return T, gap, (ours, theirs, pairs)
 
 
+def _check_basis_change(collector, label, T, evidence):
+    """X_J T = X_R and T' S_J T = S_R for every penalty, each at STRICT."""
+    ours, theirs, pairs = evidence
+    collector.check(f"{label}/X_J T = X_R", _close(ours @ T, theirs))
+    for index, (mine, reference) in enumerate(pairs):
+        collector.check(
+            f"{label}/T' S_J T = S_R [{index}]", _close(T.T @ mine @ T, reference)
+        )
+
+
+def _moderate(observed, expected):
+    return lambda: np.testing.assert_allclose(
+        observed, expected, rtol=MODERATE.rtol, atol=MODERATE.atol
+    )
+
+
+_SYMMETRIC_TP = "y ~ s(x,bs='cr',k=6) + s(z,bs='tp',k=5)"
+# case: (formula, frame, m). The symmetric-grid thin-plate cases sit on a
+# rounding-level tie: on that grid the constant row of tprs_setup's T'U has an
+# exactly zero QT pivot (1'v = 0 for an odd eigenvector of the centrosymmetric
+# kernel), whose sign roundoff decides. The null-space basis, and so the
+# coefficient coordinates, can then differ from pinned bam's by a change of
+# coordinates that leaves the penalized model unchanged.
 _CASES = {
-    "smooth+parametric": "y ~ z + s(x,bs='cr',k=6)",
-    "tensor margins": "y ~ te(x,z,bs='cr',k=3)",
-    "numeric by": "y ~ z + s(x,by=z,bs='cr',k=6)",
-    "joint tp": "y ~ s(x,z,bs='tp',k=12)",
+    "smooth+parametric": ("y ~ z + s(x,bs='cr',k=6)", _frame(97), 30),
+    "tensor margins": ("y ~ te(x,z,bs='cr',k=3)", _frame(97), 30),
+    "numeric by": ("y ~ z + s(x,by=z,bs='cr',k=6)", _frame(97), 30),
+    "joint tp": ("y ~ s(x,z,bs='tp',k=12)", _frame(150), 30),
+    "symmetric-grid tp m30": (_SYMMETRIC_TP, _symmetric_grid_frame(), 30),
+    "symmetric-grid tp m20": (_SYMMETRIC_TP, _symmetric_grid_frame(), 20),
 }
 
 
 @pytest.mark.parametrize("case", sorted(_CASES))
 @pytest.mark.platform_sensitive
 def test_working_model_prediction_matches_pinned_predict_bam(r_bridge, case) -> None:
-    formula = _CASES[case]
-    frame = _frame(150 if case == "joint tp" else 97)
+    formula, frame, m = _CASES[case]
     held_out, large = _requests(17, {"x": (0.0, 1.0), "z": (-1.0, 1.0)})
     if case == "joint tp":
         # A joint 2-D group rounds only above 100 x 100 distinct rows.
@@ -142,33 +188,31 @@ def test_working_model_prediction_matches_pinned_predict_bam(r_bridge, case) -> 
         )
     results = {
         policy: GAM(
-            formula, control=_control(policy, smoothing_strategy="working_model_reml")
+            formula,
+            control=_control(policy, m=m, smoothing_strategy="working_model_reml"),
         ).fit(DataFrameRowSource(frame, response="y"), result="prediction")
         for policy in ("continuous_frozen_basis", "mgcv_predict_bamd")
     }
     collector = _AssertCollector()
-    compare_coefficients = True
-    if case == "joint tp":
-        # The thin-plate basis is not yet source-exact at this point in the
-        # stack (PR12 makes it so): its Ritz vectors can rotate within a
-        # nearly degenerate pair, a gauge change that leaves fitted values,
-        # standard errors and predictions unchanged. Compare raw coefficients
-        # only when the design (the gauge) equals pinned bam's at STRICT.
-        gap = _design_gap_to_pinned_bam(r_bridge, formula, frame)
-        compare_coefficients = gap == 0.0
-        if not compare_coefficients:
-            _LOGGER.warning(
-                "joint tp: discretized design differs from pinned bam's by %.3e "
-                "(basis gauge); raw coefficients not compared, only fitted "
-                "values, standard errors and batched predictions",
-                gap,
-            )
-    for request_label, request in (("held-out", held_out), ("large", large)):
-        exact = r_bridge.fit_bam_discrete_gaussian(
-            formula, frame, m=30, newdata=request
+    T = None
+    if "tp" in case:
+        # A thin-plate null-space basis can differ from pinned bam's by a
+        # change of coordinates (see _CASES). Coefficients are compared
+        # directly when the training designs agree at STRICT; otherwise T
+        # with X_J T = X_R must be a change of coordinates of the penalized
+        # problem (each at STRICT), and coefficients and covariance are
+        # compared through it at MODERATE (the solve for T costs digits).
+        T, gap, evidence = _basis_change_to_pinned_bam(r_bridge, formula, frame, m)
+        branch = "matching design" if T is None else "change of coordinates"
+        print(  # noqa: T201 - report which comparison branch ran
+            f"{case}: {branch} branch; max |X_J - X_R| = {gap:.3e}"
         )
+        if T is not None:
+            _check_basis_change(collector, case, T, evidence)
+    for request_label, request in (("held-out", held_out), ("large", large)):
+        exact = r_bridge.fit_bam_discrete_gaussian(formula, frame, m=m, newdata=request)
         compressed = r_bridge.fit_bam_discrete_gaussian(
-            formula, frame, m=30, newdata=request, discrete_prediction=True
+            formula, frame, m=m, newdata=request, discrete_prediction=True
         )
         for policy, expected in (
             ("continuous_frozen_basis", exact),
@@ -177,10 +221,27 @@ def test_working_model_prediction_matches_pinned_predict_bam(r_bridge, case) -> 
             result = results[policy]
             fit, se = result.predict(request, pred_type="link", se_fit=True)
             label = f"{case}/{request_label}/{policy}"
-            if compare_coefficients:
+            if T is None:
                 collector.check(
                     f"{label}/coefficients",
                     _close(result.coefficients, expected.coefficients),
+                )
+            else:
+                mapped = T @ expected.coefficients
+                distance = np.max(np.abs(result.coefficients - mapped))
+                print(  # noqa: T201 - report the mapped coefficient distance
+                    f"{label}: max |beta_J - T beta_R| = {distance:.3e}"
+                )
+                collector.check(
+                    f"{label}/coefficients through T",
+                    _moderate(result.coefficients, mapped),
+                )
+                collector.check(
+                    f"{label}/covariance through T",
+                    _moderate(
+                        result.materialize_covariance(64 * 1024 * 1024),
+                        T @ expected.covariance @ T.T,
+                    ),
                 )
             collector.check(f"{label}/fit", _close(fit, expected.prediction))
             collector.check(f"{label}/se", _close(se, expected.prediction_se))
