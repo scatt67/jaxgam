@@ -135,6 +135,52 @@ def _prepared_transform_coefficients_cpu(
     return result
 
 
+def _rotate_covariance(
+    covariance: npt.NDArray[np.floating],
+    rotation: tuple[tuple[int, int, npt.NDArray[np.floating]], ...],
+) -> npt.NDArray[np.floating]:
+    """``T C T'`` for gam.reparam block maps ``(start, stop, T)``."""
+    if not rotation:
+        return covariance
+    result = np.array(covariance, copy=True)
+    for start, stop, T in rotation:
+        result[start:stop, :] = T @ result[start:stop, :]
+        result[:, start:stop] = result[:, start:stop] @ T.T
+    return result
+
+
+def _factor_transforms(
+    fitting_data: FittingData,
+    rotation: tuple[tuple[int, int, npt.NDArray[np.floating]], ...],
+) -> tuple[tuple[int, int, str, npt.NDArray[np.floating]], ...]:
+    """Per-block maps from the Fisher factor's coordinates to public ones.
+
+    One entry per block: the local transform ``D``, composed as ``D T`` with
+    the block's gam.reparam map when the factor is in stable coordinates.
+    """
+    rotations = {start: (stop, T) for start, stop, T in rotation}
+    transforms = []
+    for block in fitting_data.penalty_structure.blocks:
+        kind = block.transform.kind
+        values = to_numpy(block.transform.values)
+        if block.start in rotations:
+            stop, T = rotations.pop(block.start)
+            if stop != block.stop:
+                raise ValueError("stable rotation does not match its penalty block")
+            if kind == "dense":
+                values = values @ T
+            elif kind == "diagonal":
+                values = values[:, None] * T
+            else:
+                values = T
+            transforms.append((block.start, block.stop, "dense", values))
+        elif kind != "identity":
+            transforms.append((block.start, block.stop, kind, values))
+    if rotations:
+        raise ValueError("stable rotation has no penalty block")
+    return tuple(transforms)
+
+
 def _prepared_fisher_transforms(
     prepared,
 ) -> tuple[tuple[int, int, str, npt.NDArray[np.floating]], ...]:
@@ -1157,6 +1203,7 @@ class GAMResults(_FitDiagnostics):
         # Phase 2→3: transfer to NumPy
         coefficients = to_numpy(pr.coefficients)
         scale = float(to_numpy(fit_result.scale))
+        stable_rotation = getattr(fit_result, "stable_rotation", ())
 
         # This must precede every dense covariance/EDF and row-output transfer.
         # The optimizer already computed total Fisher EDF for unknown-scale
@@ -1169,16 +1216,7 @@ class GAMResults(_FitDiagnostics):
             covariance = None
             if control.uncertainty != "none":
                 factor = to_numpy(pr.L_fisher)
-                transforms = tuple(
-                    (
-                        block.start,
-                        block.stop,
-                        block.transform.kind,
-                        to_numpy(block.transform.values),
-                    )
-                    for block in fd.penalty_structure.blocks
-                    if block.transform.kind != "identity"
-                )
+                transforms = _factor_transforms(fd, stable_rotation)
                 if control.uncertainty == "covariance":
                     p = factor.shape[0]
                     required = 3 * p * p * np.dtype(float).itemsize
@@ -1189,7 +1227,7 @@ class GAMResults(_FitDiagnostics):
                             f"{control.memory_budget_bytes}."
                         )
                     Z = sla.solve_triangular(factor, np.eye(p), lower=True)
-                    covariance = phi * (Z.T @ Z)
+                    covariance = phi * _rotate_covariance(Z.T @ Z, stable_rotation)
                     covariance = _transform_covariance_cpu(fd, covariance)
                     # Dense covariance is the provider in this explicit mode;
                     # do not retain its factor or local transforms as well.
@@ -1241,7 +1279,8 @@ class GAMResults(_FitDiagnostics):
         # O(p^3) but p is typically small (< 200 for GAMs).
         p = L.shape[0]
         Z = sla.solve_triangular(L, np.eye(p), lower=True)
-        H_inv = Z.T @ Z
+        # A fit in gam.reparam coordinates: R's rV <- T %*% rV (gam.fit3.r 813).
+        H_inv = _rotate_covariance(Z.T @ Z, stable_rotation)
 
         # Per-smooth EDF via hat matrix F = H^{-1} @ XtWX
         # (invariant under repara -- cyclic trace with block-diagonal D).

@@ -395,6 +395,41 @@ def hessian_qr_inputs(
     return jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * fd.X, fd.penalty_roots
 
 
+def _criterion_coordinates(
+    fd: FittingData, pirls_result: PIRLSResult, stable: Any | None
+) -> tuple:
+    """``(XtWX, hessian_qr, beta, penalty_structure, log|S|+ terms)``.
+
+    Without ``stable`` the fitting coordinates and fixed-basis projections.
+    With a :class:`jaxgam.fitting.stable_log_det.StableSystem`, gam.fit3's
+    coordinates at that evaluation: every quantity of the criterion is formed
+    there (gam.fit3.r 161-179), from the fit's fitting-coordinate output.
+    """
+    weights = pirls_result.working_weights
+    if stable is None:
+        return (
+            pirls_result.XtWX,
+            hessian_qr_inputs(fd, weights),
+            pirls_result.coefficients,
+            fd.penalty_structure,
+            None,
+        )
+    rotation = stable.rotation
+    hessian_qr = None
+    if uses_qr_log_det(fd):
+        hessian_qr = (
+            jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * rotation.design(fd.X),
+            stable.penalty_roots,
+        )
+    return (
+        rotation.to_stable_matrix(pirls_result.XtWX),
+        hessian_qr,
+        rotation.to_stable(pirls_result.coefficients),
+        stable.penalty_structure,
+        stable.log_det_terms,
+    )
+
+
 def estimate_scale(
     y: jax.Array,
     mu: jax.Array,
@@ -789,7 +824,7 @@ class _CriterionBase(ABC):
         fd: FittingData,
         pirls_result: PIRLSResult,
         *,
-        multi_block_proj_S: tuple | None = None,
+        stable: Any | None = None,
     ) -> None:
         # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
         # For standard families Fisher = Newton; for extended families
@@ -811,10 +846,13 @@ class _CriterionBase(ABC):
                 fd.y, fd.wt, self.scale, max_y=fd.max_y
             )
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
-        self._XtWX = pirls_result.XtWX
-        self._hessian_qr = hessian_qr_inputs(fd, pirls_result.working_weights)
-        self._beta = pirls_result.coefficients
-        self._penalty_structure = fd.penalty_structure
+        (
+            self._XtWX,
+            self._hessian_qr,
+            self._beta,
+            self._penalty_structure,
+            stable_terms,
+        ) = _criterion_coordinates(fd, pirls_result, stable)
         self._Mp = fd.total_penalty_null_dim
         self._rank_deficit = fd.rank_deficit
         # Block-structured log|S+| metadata
@@ -826,7 +864,7 @@ class _CriterionBase(ABC):
         # Host get_stableS terms at the evaluation point when supplied (see
         # jaxgam.fitting.stable_log_det); otherwise the fixed-basis projections.
         self._multi_block_proj_S = (
-            fd.multi_block_proj_S if multi_block_proj_S is None else multi_block_proj_S
+            fd.multi_block_proj_S if stable_terms is None else stable_terms
         )
 
     def _kwargs(self) -> dict[str, Any]:
@@ -940,7 +978,7 @@ class _JointCriterionBase(ABC):
         fd: FittingData,
         pirls_result: PIRLSResult,
         *,
-        multi_block_proj_S: tuple | None = None,
+        stable: Any | None = None,
     ) -> None:
         # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
         self.edf = fisher_edf(pirls_result)
@@ -948,10 +986,13 @@ class _JointCriterionBase(ABC):
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
-        self._XtWX = pirls_result.XtWX
-        self._hessian_qr = hessian_qr_inputs(fd, pirls_result.working_weights)
-        self._beta = pirls_result.coefficients
-        self._penalty_structure = fd.penalty_structure
+        (
+            self._XtWX,
+            self._hessian_qr,
+            self._beta,
+            self._penalty_structure,
+            stable_terms,
+        ) = _criterion_coordinates(fd, pirls_result, stable)
         self._y = fd.y
         self._wt = fd.wt
         # Retained as attribute because joint criteria need to call
@@ -969,7 +1010,7 @@ class _JointCriterionBase(ABC):
         # Host get_stableS terms at the evaluation point when supplied (see
         # jaxgam.fitting.stable_log_det); otherwise the fixed-basis projections.
         self._multi_block_proj_S = (
-            fd.multi_block_proj_S if multi_block_proj_S is None else multi_block_proj_S
+            fd.multi_block_proj_S if stable_terms is None else stable_terms
         )
         self._max_y = fd.max_y
 

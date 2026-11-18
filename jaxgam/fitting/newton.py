@@ -65,14 +65,16 @@ from jaxgam.fitting.reml import (
     _criterion_core,
     _CriterionBase,
     _JointCriterionBase,
+    estimate_edf,
     fisher_edf,
     fletcher_scale,
     uses_qr_log_det,
 )
 from jaxgam.fitting.source_pirls import source_pirls, status_message
 from jaxgam.fitting.stable_log_det import (
-    criterion_multi_block_inputs,
+    StableSystem,
     stable_block_roots,
+    stable_system,
 )
 from jaxgam.jax_utils import StableLogDetTerms, cho_factor
 
@@ -177,6 +179,7 @@ def factorization_fallbacks(
     log_lambda: jax.Array,
     *,
     include_ift: bool,
+    stable: StableSystem | None = None,
 ) -> dict[str, float]:
     """Fallback jitter level of every factorization in the reported fit.
 
@@ -188,7 +191,13 @@ def factorization_fallbacks(
     levels = {"PIRLS": float(np.max(np.asarray(pirls_result.factor_regularization)))}
     if fd.n_penalties == 0:
         return levels
-    H = pirls_result.XtWX + fd.S_lambda(jnp.asarray(log_lambda))
+    if stable is None:
+        H = pirls_result.XtWX + fd.S_lambda(jnp.asarray(log_lambda))
+    else:
+        # The criterion and the IFT factor H in gam.fit3's coordinates.
+        H = stable.rotation.to_stable_matrix(
+            pirls_result.XtWX
+        ) + penalty_ops.materialize(stable.penalty_structure, jnp.asarray(log_lambda))
     if fd.rank_deficit == 0 and not uses_qr_log_det(fd):
         d = jnp.sqrt(jnp.maximum(jnp.diag(H), jnp.finfo(H.dtype).tiny))
         _, level = cho_factor(H / (d[:, None] * d[None, :]))
@@ -205,6 +214,37 @@ def fallback_note(levels: dict[str, float]) -> str:
     if not fired:
         return ""
     return f"; fallback jitter {max(fired.values()):g} in " + ", ".join(fired)
+
+
+def pirls_from_stable(
+    result: PIRLSResult, rotation: penalty_ops.JaxCoefficientRotation
+) -> PIRLSResult:
+    """Map a fit made in gam.reparam coordinates back (gam.fit3.r 812-813).
+
+    Coefficients, ``X'WX`` (Newton and Fisher) and the influence matrix
+    return to fitting coordinates; the EDF is the rotation-invariant trace
+    from the stable factor. ``L`` and ``L_fisher`` stay the triangular
+    factors of the stable-coordinate Hessian: the covariance is formed from
+    them and the rotation at post-estimation, as R forms ``Vp`` from
+    ``rV <- T %*% rV`` (``NewtonResult.stable_rotation``).
+    """
+    edf = (
+        result.fisher_edf
+        if result.fisher_edf is not None
+        else estimate_edf(result.XtWX_fisher, result.L_fisher)
+    )
+    return dataclasses.replace(
+        result,
+        coefficients=rotation.from_stable(result.coefficients),
+        XtWX=rotation.from_stable_matrix(result.XtWX),
+        XtWX_fisher=rotation.from_stable_matrix(result.XtWX_fisher),
+        fisher_hat=(
+            None
+            if result.fisher_hat is None
+            else rotation.from_stable_matrix(result.fisher_hat)
+        ),
+        fisher_edf=edf,
+    )
 
 
 def _hessian_qr(
@@ -259,6 +299,7 @@ def _diff_score(
     rank_deficit: int = 0,
     penalty_roots: penalty_ops.JaxPenaltyRoots | None = None,
     null_beta: jax.Array | None = None,
+    rotation: penalty_ops.JaxCoefficientRotation | None = None,
 ) -> jax.Array:
     """End-to-end differentiable score: PIRLS + criterion.
 
@@ -313,6 +354,14 @@ def _diff_score(
     """
 
     _ = p  # Retained static cache-key compatibility for compiled callers.
+    if rotation is not None:
+        # gam.fit3.r 161-179: fit in gam.reparam's coordinates. The penalty
+        # structure, roots and log|S|+ terms arrive already in them; T is
+        # held fixed, so derivatives of these invariant scalars are exact.
+        X = rotation.design(X)
+        beta_warm = rotation.to_stable(beta_warm)
+        if null_beta is not None:
+            null_beta = rotation.to_stable(null_beta)
     # ---- Parse params: [log_lambda, <log_theta>, <log_phi>] ----
     idx = n_lambda
     log_lambda = params[:idx]
@@ -650,6 +699,7 @@ def _fit_and_score_impl(
     rank_deficit: int = 0,
     penalty_roots: penalty_ops.JaxPenaltyRoots | None = None,
     null_beta: jax.Array | None = None,
+    rotation: penalty_ops.JaxCoefficientRotation | None = None,
 ) -> tuple[jax.Array, PIRLSResult]:
     """Fused PIRLS + criterion score in one XLA program.
 
@@ -669,6 +719,12 @@ def _fit_and_score_impl(
         Converged PIRLS output.
     """
     _ = p  # Retained static cache-key compatibility for compiled callers.
+    if rotation is not None:
+        # gam.fit3.r 161-179 (see _diff_score); mapped back at the end.
+        X = rotation.design(X)
+        beta_init = rotation.to_stable(beta_init)
+        if null_beta is not None:
+            null_beta = rotation.to_stable(null_beta)
     # Parse params: [log_lambda, <log_theta>, <log_phi>]
     idx = n_lambda
     log_lambda = params[:idx]
@@ -752,6 +808,8 @@ def _fit_and_score_impl(
     # REML criterion (ML is not supported in v1.0; see _check_scope_guards).
     score = core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
+    if rotation is not None:
+        pirls_result = pirls_from_stable(pirls_result, rotation)
     return score, pirls_result
 
 
@@ -926,6 +984,12 @@ class NewtonResult:
         criterion log|H| and, for an optimized fit, the IFT factor.  ``0``
         means no factor was regularized; a positive level is also named in
         ``convergence_info``.
+    stable_rotation : tuple of (start, stop, T)
+        gam.reparam's block maps ``b = T b_s`` at the final evaluation (empty
+        without multi-penalty blocks). ``pirls_result``'s coefficients and
+        ``X'WX`` are in fitting coordinates; its ``L``/``L_fisher`` factor the
+        Hessian in the stable coordinates, so ``Vp = T (L L')^-1 T'`` (R's
+        ``rV <- T %*% rV``, gam.fit3.r 813).
     """
 
     log_lambda: jax.Array
@@ -940,6 +1004,7 @@ class NewtonResult:
     convergence_info: str
     theta: float | None = None
     factor_regularization: float = 0.0
+    stable_rotation: tuple[tuple[int, int, np.ndarray], ...] = ()
 
 
 class _OuterScoreState(Protocol):
@@ -1213,7 +1278,9 @@ class NewtonOptimizer:
             }
             if fd.multi_block_sp_indices:
                 self._stable_blocks = stable_block_roots(
-                    fd.multi_block_sp_indices, fd.multi_block_proj_S
+                    fd.multi_block_sp_indices,
+                    fd.multi_block_proj_S,
+                    fd.penalty_structure,
                 )
 
         # Build custom_jvp-based differentiable score for all families.
@@ -1241,36 +1308,46 @@ class NewtonOptimizer:
 
             def _grad_hess_fn(params, beta_warm):
                 return _jit_diff_grad_hess(
-                    params, beta_warm, **self._with_stable_terms(kw, params, deriv=2)
+                    params, beta_warm, **self._with_stable_system(kw, params, deriv=2)
                 )
 
             self._diff_grad_hess = _grad_hess_fn
         else:
             self._diff_grad_hess = None
 
-    def _stable_terms(
+    def _stable_system(
         self, params: jax.Array, *, deriv: int, base_params: jax.Array | None = None
-    ) -> tuple:
-        """Multi-block log|S|+ inputs at exactly ``params``' smoothing parameters."""
+    ) -> StableSystem | None:
+        """gam.reparam's coordinates at exactly ``params``' smoothing parameters.
+
+        None without multi-penalty blocks. ``gam.fit3`` recomputes them at
+        every evaluation (gam.fit3.r 144); so does every caller here.
+        """
+        if not self._stable_blocks:
+            return None
         fd = self._fd
         n_lambda = fd.n_penalties
         base = None if base_params is None else np.asarray(base_params)[:n_lambda]
-        return criterion_multi_block_inputs(
-            fd.multi_block_sp_indices,
-            fd.multi_block_proj_S,
+        return stable_system(
+            self._stable_blocks,
+            fd.penalty_structure,
+            fd.penalty_roots,
             np.asarray(params)[:n_lambda],
             deriv=deriv,
-            blocks=self._stable_blocks,
             base_log_lambda=base,
         )
 
-    def _with_stable_terms(self, kwargs: dict, params: jax.Array, *, deriv: int):
-        """``kwargs`` with the host get_stableS terms at ``params``."""
-        if not self._stable_blocks:
+    def _with_stable_system(self, kwargs: dict, params: jax.Array, *, deriv: int):
+        """``kwargs`` in gam.reparam's coordinates at ``params``."""
+        system = self._stable_system(params, deriv=deriv)
+        if system is None:
             return kwargs
         return {
             **kwargs,
-            "multi_block_proj_S": self._stable_terms(params, deriv=deriv),
+            "multi_block_proj_S": system.log_det_terms,
+            "penalty_structure": system.penalty_structure,
+            "penalty_roots": system.penalty_roots,
+            "rotation": system.rotation,
         }
 
     def _source_kwargs(self) -> dict:
@@ -1282,6 +1359,52 @@ class NewtonOptimizer:
             "max_y": kw.get("max_y", 0),
             "integer_counts": kw.get("integer_counts", True),
         }
+
+    def _eager_inner_fit(
+        self,
+        log_lambda: jax.Array,
+        S_lambda: jax.Array,
+        log_theta: jax.Array | None,
+    ) -> PIRLSResult:
+        """One inner fit from the initial coefficients, as gam.fit3 runs it."""
+        fd = self._fd
+        source = self._source_kwargs()
+        system = self._stable_system(log_lambda, deriv=0)
+        if system is None:
+            return _inner_fit(
+                fd.X,
+                fd.y,
+                self._initial_beta(),
+                S_lambda,
+                fd.family,
+                fd.wt,
+                fd.offset,
+                tol=self._pirls_tol,
+                log_theta=log_theta,
+                penalty_root=fd.penalty_root(log_lambda),
+                **source,
+            )
+        rotation = system.rotation
+        null_beta = source.pop("null_beta")
+        result = _inner_fit(
+            rotation.design(fd.X),
+            fd.y,
+            rotation.to_stable(self._initial_beta()),
+            penalty_ops.materialize(system.penalty_structure, log_lambda),
+            fd.family,
+            fd.wt,
+            fd.offset,
+            tol=self._pirls_tol,
+            log_theta=log_theta,
+            penalty_root=(
+                None
+                if system.penalty_roots is None
+                else penalty_ops.augmented_root(system.penalty_roots, log_lambda)
+            ),
+            null_beta=None if null_beta is None else rotation.to_stable(null_beta),
+            **source,
+        )
+        return pirls_from_stable(result, rotation)
 
     def _clamp_params(self, params: jax.Array) -> jax.Array:
         """Optionally clamp the free log smoothing parameters.
@@ -1338,16 +1461,10 @@ class NewtonOptimizer:
         """
         if self._score_provider is not None:
             return _ProviderCriterion(pirls_result.edf, pirls_result.scale)
-        projections = (
-            self._stable_terms(params, deriv=2)
-            if self._stable_blocks and params is not None
-            else None
-        )
+        stable = None if params is None else self._stable_system(params, deriv=2)
         if self._joint_scale:
-            return JointREMLCriterion(
-                self._fd, pirls_result, multi_block_proj_S=projections
-            )
-        return REMLCriterion(self._fd, pirls_result, multi_block_proj_S=projections)
+            return JointREMLCriterion(self._fd, pirls_result, stable=stable)
+        return REMLCriterion(self._fd, pirls_result, stable=stable)
 
     def _fit_and_score(
         self,
@@ -1373,7 +1490,7 @@ class NewtonOptimizer:
         score, pirls_result = _jit_fit_and_score(
             params,
             beta_init,
-            **self._with_stable_terms(self._jit_kwargs, params, deriv=0),
+            **self._with_stable_system(self._jit_kwargs, params, deriv=0),
         )
         return pirls_result, score
 
@@ -1433,23 +1550,34 @@ class NewtonOptimizer:
             or fd.rank_deficit != 0
         ):
             return change
+        X, structure, XtWX = fd.X, fd.penalty_structure, trial.XtWX
+        beta_trial, terms = trial.coefficients, fd.multi_block_proj_S
+        base_system = self._stable_system(params, deriv=0)
+        if base_system is not None:
+            # Both states in the base point's gam.reparam coordinates: there
+            # S_base and S_trial - S_base keep the penalties' scales apart.
+            rotation = base_system.rotation
+            X = rotation.design(X)
+            structure = base_system.penalty_structure
+            XtWX = rotation.to_stable_matrix(XtWX)
+            beta_base = rotation.to_stable(beta_base)
+            beta_trial = rotation.to_stable(beta_trial)
+            terms = self._stable_system(
+                params_trial, deriv=0, base_params=params
+            ).log_det_terms
         stable_change = float(
             _jit_gaussian_score_change(
                 params,
                 params_trial,
                 beta_base,
-                trial.coefficients,
-                fd.X,
+                beta_trial,
+                X,
                 fd.y,
                 fd.wt,
                 self._jit_kwargs["offset"],
-                trial.XtWX,
-                fd.penalty_structure,
-                (
-                    self._stable_terms(params_trial, deriv=0, base_params=params)
-                    if self._stable_blocks
-                    else fd.multi_block_proj_S
-                ),
+                XtWX,
+                structure,
+                terms,
                 n_lambda=fd.n_penalties,
                 Mp=fd.total_penalty_null_dim,
                 singleton_sp_indices=fd.singleton_sp_indices,
@@ -1868,6 +1996,11 @@ class NewtonOptimizer:
         n_lambda = self._fd.n_penalties
         log_lambda = params[:n_lambda]
         grad_lambda = gradient[:n_lambda]
+        final_system = (
+            None
+            if self._score_provider is not None
+            else self._stable_system(params, deriv=0)
+        )
         # The compressed Gaussian QR score provider (PR9) factors by QR and
         # never calls cho_factor; its state is not a PIRLSResult.
         levels = (
@@ -1878,6 +2011,7 @@ class NewtonOptimizer:
                 pirls_result,
                 log_lambda,
                 include_ift=self._diff_grad_hess is not None,
+                stable=final_system,
             )
         )
         info = info + fallback_note(levels)
@@ -1909,6 +2043,7 @@ class NewtonOptimizer:
             convergence_info=info,
             theta=theta,
             factor_regularization=max(levels.values(), default=0.0),
+            stable_rotation=() if final_system is None else final_system.host_rotation,
         )
 
     def run(self) -> NewtonResult:
@@ -1977,18 +2112,8 @@ class NewtonOptimizer:
                 log_theta_init_for_pirls = jnp.asarray(
                     fd.family.get_theta(transformed=False)
                 )
-            pirls_init = _inner_fit(
-                fd.X,
-                fd.y,
-                self._initial_beta(),
-                S_init,
-                fd.family,
-                fd.wt,
-                fd.offset,
-                tol=self._pirls_tol,
-                log_theta=log_theta_init_for_pirls,
-                penalty_root=fd.penalty_root(log_lambda),
-                **self._source_kwargs(),
+            pirls_init = self._eager_inner_fit(
+                log_lambda, S_init, log_theta_init_for_pirls
             )
             # Fisher-weighted EDF (XtWX may be observed info for non-canonical).
             edf_init = fisher_edf(pirls_init)

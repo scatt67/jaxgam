@@ -32,11 +32,12 @@ from jaxgam.fitting.newton import (
     factorization_fallbacks,
     fallback_note,
     newton_optimize,
+    pirls_from_stable,
 )
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.fitting.reml import REMLCriterion
 from jaxgam.fitting.source_pirls import source_pirls, status_message
-from jaxgam.fitting.stable_log_det import criterion_multi_block_inputs
+from jaxgam.fitting.stable_log_det import stable_block_roots, stable_system
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.design_provider import StreamDesign
 from jaxgam.formula.parser import parse_formula
@@ -1859,7 +1860,39 @@ def _fit_fixed_sp(
             score_provider=score_provider,
         )
 
-    S_lam = fd.S_lambda(log_lambda)
+    from jaxgam.fitting import penalty_ops
+
+    # gam.fit3 fits multi-penalty blocks in gam.reparam's coordinates
+    # (gam.fit3.r 144-179) and maps the fit back (812-813).
+    system = (
+        stable_system(
+            stable_block_roots(
+                fd.multi_block_sp_indices, fd.multi_block_proj_S, fd.penalty_structure
+            ),
+            fd.penalty_structure,
+            fd.penalty_roots,
+            np.asarray(log_lambda),
+            deriv=0,
+        )
+        if fd.multi_block_sp_indices
+        else None
+    )
+    if system is None:
+        X_fit = fd.X
+        S_lam = fd.S_lambda(log_lambda)
+        penalty_root = fd.penalty_root(log_lambda)
+        null_beta = fd.null_beta
+    else:
+        X_fit = system.rotation.design(fd.X)
+        S_lam = penalty_ops.materialize(system.penalty_structure, log_lambda)
+        penalty_root = (
+            None
+            if system.penalty_roots is None
+            else penalty_ops.augmented_root(system.penalty_roots, log_lambda)
+        )
+        null_beta = (
+            None if fd.null_beta is None else system.rotation.to_stable(fd.null_beta)
+        )
 
     # Initialize beta and run PIRLS
     beta_init = fd.beta_init
@@ -1872,20 +1905,23 @@ def _fit_fixed_sp(
             np.asarray(fd.offset) if fd.offset is not None else None,
         )
 
+    if system is not None:
+        beta_init = system.rotation.to_stable(jnp.asarray(beta_init))
+
     log_theta = None
     if fd.family.n_theta > 0:
         log_theta = jnp.asarray(fd.family.get_theta(transformed=False))
 
     if fd.uses_source_loop:
         pirls_result = source_pirls(
-            fd.X,
+            X_fit,
             fd.y,
             beta_init,
             S_lam,
             fd.family,
             fd.wt,
             fd.offset,
-            fd.null_beta,
+            null_beta,
             log_theta=log_theta,
             count_indices=(
                 fd.count_prefix_plan.indices if fd.count_prefix_plan else None
@@ -1894,11 +1930,11 @@ def _fit_fixed_sp(
             integer_counts=(
                 fd.count_prefix_plan.integer_counts if fd.count_prefix_plan else True
             ),
-            penalty_root=fd.penalty_root(log_lambda),
+            penalty_root=penalty_root,
         ).pirls_result
     else:
         pirls_result = pirls_loop(
-            fd.X,
+            X_fit,
             fd.y,
             beta_init,
             S_lam,
@@ -1906,8 +1942,10 @@ def _fit_fixed_sp(
             wt=fd.wt,
             offset=fd.offset,
             log_theta=log_theta,
-            penalty_root=fd.penalty_root(log_lambda),
+            penalty_root=penalty_root,
         )
+    if system is not None:
+        pirls_result = pirls_from_stable(pirls_result, system.rotation)
 
     # Known-scale standard families (Poisson/Binomial): no free dispersion
     # parameter, so the REML score is a single criterion evaluation at the fixed
@@ -1916,23 +1954,16 @@ def _fit_fixed_sp(
     # stubbing score=0.0 — so GAMResults.score is the real REML criterion (R's
     # gcv.ubre). REMLCriterion recomputes EDF/scale internally with the Fisher
     # weighting, identical to the values below.
-    criterion = REMLCriterion(
-        fd,
-        pirls_result,
-        multi_block_proj_S=criterion_multi_block_inputs(
-            fd.multi_block_sp_indices,
-            fd.multi_block_proj_S,
-            np.asarray(log_lambda),
-            deriv=0,
-        ),
-    )
+    criterion = REMLCriterion(fd, pirls_result, stable=system)
     edf = criterion.edf
     scale = criterion.scale
     score = criterion.score(log_lambda)
     # A non-finite REML score is a failed evaluation, never a converged fit.
     finite_score = bool(jnp.isfinite(score))
 
-    levels = factorization_fallbacks(fd, pirls_result, log_lambda, include_ift=False)
+    levels = factorization_fallbacks(
+        fd, pirls_result, log_lambda, include_ift=False, stable=system
+    )
     inner_converged = bool(pirls_result.converged)
     if not inner_converged:
         info = "fixed sp: inner fit did not converge: " + status_message(
@@ -1954,4 +1985,5 @@ def _fit_fixed_sp(
         pirls_result=pirls_result,
         convergence_info=info + fallback_note(levels),
         factor_regularization=max(levels.values()),
+        stable_rotation=() if system is None else system.host_rotation,
     )
