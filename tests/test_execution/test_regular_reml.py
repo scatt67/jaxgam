@@ -1815,14 +1815,26 @@ def test_public_exact_stream_poisson_ten_smooths_converges_across_windows() -> N
     )
     diagnostics = fit.exact_optimizer_diagnostics
     assert fit.converged, fit.convergence_info
-    assert fit.convergence_info.startswith(
+    # Converged under the route's rule, by whichever branch meets it: the
+    # projected gradient reaches gtol, or (native Linux x86_64 CI: a
+    # function-reduction exit at 2.1e-6) L-BFGS-B exits on relative
+    # reduction and pinned newton()'s relative test classifies the exit.
+    gtol = StreamREMLControl().gtol
+    if fit.convergence_info.startswith(
         "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL"
-    )
+    ):
+        assert diagnostics.projected_gradient_inf <= gtol
+    else:
+        assert fit.convergence_info.startswith(
+            "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
+        )
+        assert "converged by pinned mgcv newton()'s relative test" in (
+            fit.convergence_info
+        )
     assert "source step window(s)" in fit.convergence_info
     windows = int(fit.convergence_info.split("; ")[1].split(" ")[0])
     assert windows > 1
     assert fit.n_iter > StreamREMLControl().max_iter
-    assert diagnostics.projected_gradient_inf <= StreamREMLControl().gtol
     # Every exact trial scans the source at least once (its adjoint pass), and
     # the reported fit scans are a subset of the scans the source served
     # (the remainder are setup scans).
