@@ -3,17 +3,24 @@
 One operator fit is built once; then, for every seed, the public
 ``bulk_link_variance`` builds a probe sketch and calibrates the selected rows
 against exact Fisher solves. The call's own raise limit is set out of reach so
-every seed is recorded; whether the public default rule
-(``BULK_CALIBRATION_MAX_STANDARD_ERRORS`` Monte Carlo standard errors) would
-have raised is recorded per seed instead.
+every seed is recorded; whether each rule would have raised at the public
+limit (``BULK_CALIBRATION_MAX_STANDARD_ERRORS``) is recorded per seed instead.
+
+The product judges calibration by the exact pivot: ``probes * estimate /
+exact`` is chi-square with ``probes`` degrees of freedom for Gaussian probes
+and exact solves, and is mapped to the standard normal deviate with the same
+tail probability (``equivalent_deviates``; the rule compares
+``maximum_absolute_deviate`` with the limit). That is the current rule. The
+superseded rule compared ``|estimate - exact| / monte_carlo_se`` with the same
+limit; this script recomputes that statistic itself, from the calibration's
+``estimated``, ``exact`` and ``monte_carlo_se``, so the record shows how the
+old rule would have done beside the replacement.
 
 Per seed and calibration row the record holds the exact variance, the
-estimate, the Monte Carlo standard error, the current standardized error
-``|estimate - exact| / se`` and the ratio ``estimate / exact``. With Gaussian
-probes and exact solves, ``probes * ratio`` is chi-square with ``probes``
-degrees of freedom, so the ratio can be checked against an exact reference
-while the standardized error reproduces the current rule. Probe solves,
-source scans and PCG residuals come from the provider's diagnostics::
+estimate, the Monte Carlo standard error, the ratio ``estimate / exact``, the
+current equivalent deviates and the superseded standardized error. Probe
+solves, source scans and PCG residuals come from the provider's
+diagnostics::
 
     make benchmark-bulk-variance ARGS="--model re --levels 10000 --seeds 1000 \\
         --output $RUN/bulk.json"
@@ -125,13 +132,41 @@ def clopper_pearson(successes: int, trials: int, level: float = 0.95) -> list[fl
     return [float(lower), float(upper)]
 
 
+def superseded_standardized_errors(
+    estimated: np.ndarray, exact: np.ndarray, monte_carlo_se: np.ndarray
+) -> np.ndarray:
+    """The superseded calibration statistic ``|estimate - exact| / se``.
+
+    As the provider computed it before the chi-square pivot replaced it: a
+    zero residual is 0, and a nonzero residual over a zero error is infinite.
+    """
+    residual = np.abs(np.asarray(estimated) - np.asarray(exact))
+    error = np.asarray(monte_carlo_se)
+    return np.divide(
+        residual,
+        error,
+        out=np.where(residual == 0, 0.0, np.inf),
+        where=error > 0,
+    )
+
+
+def _rule(maxima: np.ndarray, limit: float) -> dict[str, Any]:
+    exceed = int(np.sum(maxima > limit))
+    return {
+        "exceedances": exceed,
+        "rate": exceed / len(maxima),
+        "rate_clopper_pearson_95": clopper_pearson(exceed, len(maxima)),
+        "maximum_quantiles": {
+            str(q): float(np.quantile(maxima, q)) for q in (0.5, 0.9, 0.95, 0.99, 1.0)
+        },
+    }
+
+
 def summarize(seeds: list[dict[str, Any]], probes: int, limit: float) -> dict[str, Any]:
-    """Old-rule exceedance rate and the exact chi-square check of the ratios."""
+    """Both rules' exceedance rates at the limit and the chi-square ratio check."""
     from scipy.stats import chi2, kstest
 
-    maxima = np.asarray([seed["maximum_standardized_error"] for seed in seeds])
     ratios = np.asarray([seed["ratio"] for seed in seeds])  # seeds x rows
-    exceed = int(np.sum(maxima > limit))
     scaled = probes * ratios
 
     def ks(values: np.ndarray) -> dict[str, float]:
@@ -140,12 +175,25 @@ def summarize(seeds: list[dict[str, Any]], probes: int, limit: float) -> dict[st
 
     return {
         "seeds": len(seeds),
-        "default_limit_standard_errors": limit,
-        "default_rule_exceedances": exceed,
-        "default_rule_rate": exceed / len(seeds),
-        "default_rule_rate_clopper_pearson_95": clopper_pearson(exceed, len(seeds)),
-        "maximum_standardized_error_quantiles": {
-            str(q): float(np.quantile(maxima, q)) for q in (0.5, 0.9, 0.95, 0.99, 1.0)
+        "limit_standard_errors": limit,
+        "current_rule": {
+            "statistic": (
+                "maximum_absolute_deviate (chi-square pivot as a normal deviate)"
+            ),
+            **_rule(
+                np.asarray([seed["maximum_absolute_deviate"] for seed in seeds]), limit
+            ),
+        },
+        "superseded_rule": {
+            "statistic": (
+                "superseded_maximum_standardized_error (|estimate - exact| / se)"
+            ),
+            **_rule(
+                np.asarray(
+                    [seed["superseded_maximum_standardized_error"] for seed in seeds]
+                ),
+                limit,
+            ),
         },
         "ratio_reference": (
             "probes * estimate / exact ~ chi-square(probes) for Gaussian probes "
@@ -236,7 +284,7 @@ def run(options: argparse.Namespace, cache: str) -> dict[str, Any]:
         exact = np.asarray(calibration.exact)
         estimated = np.asarray(calibration.estimated)
         error = np.asarray(calibration.monte_carlo_se)
-        standardized = np.abs(estimated - exact) / error
+        superseded = superseded_standardized_errors(estimated, exact, error)
         if bulk_pass is None:
             started = time.perf_counter()
             batches = list(
@@ -250,7 +298,8 @@ def run(options: argparse.Namespace, cache: str) -> dict[str, Any]:
                     all(np.all(np.isfinite(batch.variance)) for batch in batches)
                 ),
             }
-        maximum = float(calibration.maximum_standardized_error)
+        current = float(calibration.maximum_absolute_deviate)
+        superseded_maximum = float(np.max(superseded, initial=0.0))
         seeds.append(
             {
                 "seed": seed,
@@ -258,16 +307,22 @@ def run(options: argparse.Namespace, cache: str) -> dict[str, Any]:
                 "exact": exact.tolist(),
                 "estimated": estimated.tolist(),
                 "monte_carlo_se": error.tolist(),
-                "standardized_error": standardized.tolist(),
                 "ratio": (estimated / exact).tolist(),
-                "maximum_standardized_error": maximum,
-                "default_rule_would_raise": maximum
+                "equivalent_deviates": np.asarray(
+                    calibration.equivalent_deviates
+                ).tolist(),
+                "maximum_absolute_deviate": current,
+                "current_rule_would_raise": current
+                > BULK_CALIBRATION_MAX_STANDARD_ERRORS,
+                "superseded_standardized_error": superseded.tolist(),
+                "superseded_maximum_standardized_error": superseded_maximum,
+                "superseded_rule_would_raise": superseded_maximum
                 > BULK_CALIBRATION_MAX_STANDARD_ERRORS,
                 "diagnostics": asdict(provider.diagnostics),
             }
         )
     return {
-        "schema": "jaxgam-bulk-variance-benchmark-v1",
+        "schema": "jaxgam-bulk-variance-benchmark-v2",
         "case": {
             "model": options.model,
             "formula": formula,
