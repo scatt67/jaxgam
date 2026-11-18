@@ -424,7 +424,10 @@ _REVIEWED_TIE_REPLAYS = {
         "macos-arm64": (1, 1),
         "linux-aarch64": (1, 0),
         "x86_64": (0, 0),  # run 44051330720
-        "x86_64-avx512": (0, 0),  # run 44051330720
+        # 0 with the unrolled pair kernels (run 44051330720); 1 since the
+        # kernels are stacked by block shape, whose Hessian and Newton step
+        # differ from the unrolled ones in the last place (run 44277646843).
+        "x86_64-avx512": (1, 1),
     },
     ("boundary-fixed", "gamma-near-zero-y"): {
         "macos-arm64": (67, 67),
