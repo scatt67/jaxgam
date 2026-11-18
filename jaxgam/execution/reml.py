@@ -1322,6 +1322,125 @@ class _CurvatureCompletion:
     last_step_accepted: bool = False
 
 
+# Pinned mgcv decides outer REML/ML convergence relatively: gam.control()
+# sets newton$conv.tol <- 1e-6 (mgcv.r:2518), and newton() (gam.fit3.r) forms
+# score.scale <- abs(log(b$scale.est)) + abs(score) for REML/ML (lines
+# 1379-1380, 1646-1647), stops only when every |grad| <= score.scale *
+# conv.tol * 5 (line 1650) and |old.score - score| <= score.scale * conv.tol
+# (line 1651). b$scale.est is gam.fit3's Fletcher scale estimate (lines
+# 596-606), which it also forms for known-scale families.
+MGCV_NEWTON_CONV_TOL = 1e-6
+_MGCV_GRADIENT_FACTOR = 5.0
+_FUNCTION_REDUCTION = "RELATIVE REDUCTION OF F"
+
+
+@dataclass(frozen=True)
+class MgcvRelativeTest:
+    """Pinned newton()'s relative convergence test at one accepted trial."""
+
+    met: bool
+    projected_gradient_inf: float
+    gradient_limit: float
+    score_change: float
+    score_change_limit: float
+    score_scale: float
+
+
+def mgcv_relative_convergence(
+    score: float,
+    projected_gradient_inf: float,
+    *,
+    scale_estimate: float | None,
+    score_change: float,
+) -> MgcvRelativeTest:
+    """Evaluate pinned newton()'s REML/ML stopping test.
+
+    ``scale_estimate`` is the route's Fletcher/Pearson scale for an
+    estimated-scale family. For a known-scale family pass ``None``: the
+    ``abs(log(scale.est))`` term is then omitted, which can only shrink
+    ``score.scale``, so the test is never looser than mgcv's.
+    """
+    score_scale = abs(float(score))
+    if scale_estimate is not None:
+        if not np.isfinite(scale_estimate) or scale_estimate <= 0.0:
+            raise ValueError("scale_estimate must be finite and positive.")
+        score_scale += abs(float(np.log(scale_estimate)))
+    gradient_limit = _MGCV_GRADIENT_FACTOR * MGCV_NEWTON_CONV_TOL * score_scale
+    change_limit = MGCV_NEWTON_CONV_TOL * score_scale
+    met = bool(
+        np.isfinite(score)
+        and np.isfinite(projected_gradient_inf)
+        and np.isfinite(score_change)
+        and projected_gradient_inf <= gradient_limit
+        and abs(score_change) <= change_limit
+    )
+    return MgcvRelativeTest(
+        met,
+        float(projected_gradient_inf),
+        float(gradient_limit),
+        float(abs(score_change)),
+        float(change_limit),
+        float(score_scale),
+    )
+
+
+def function_reduction_exit(status: int, message: str) -> bool:
+    """Whether L-BFGS-B's final exit was its relative-reduction stop."""
+    return int(status) == 0 and _FUNCTION_REDUCTION in str(message)
+
+
+def mgcv_relative_message(test: MgcvRelativeTest) -> str:
+    """State the criterion that classified a function-reduction exit."""
+    return (
+        "converged by pinned mgcv newton()'s relative test after an L-BFGS-B "
+        f"function-reduction exit: projected gradient "
+        f"{test.projected_gradient_inf:.3e} <= 5*conv.tol*score.scale "
+        f"{test.gradient_limit:.3e}, score change {test.score_change:.3e} <= "
+        f"conv.tol*score.scale {test.score_change_limit:.3e} (conv.tol "
+        f"{MGCV_NEWTON_CONV_TOL:.0e}, score.scale {test.score_scale:.6g})"
+    )
+
+
+def _classify_function_reduction(
+    optimized: _ParameterizedOptimization[_TrialT],
+    control: StreamREMLControl,
+    *,
+    scale_estimate: Callable[[], float | None],
+) -> _ParameterizedOptimization[_TrialT]:
+    """Apply pinned newton()'s relative test to a function-reduction exit.
+
+    Only an unconverged result whose final L-BFGS-B exit was the
+    relative-reduction stop, after every completion the route already takes,
+    is reclassified; limits, the window limit, ABNORMAL and errors keep
+    their meaning. The score change is the larger of the last accepted step
+    and the bound the exit itself implies (``ftol * max(|f|, 1)``).
+    ``scale_estimate`` is read only for such an exit.
+    """
+    if (
+        optimized.converged
+        or not function_reduction_exit(optimized.status, optimized.message)
+        or "Window limit" in optimized.message
+    ):
+        return optimized
+    score = float(np.asarray(optimized.trial.score))
+    history = optimized.accepted_score_history
+    last_change = abs(history[-1] - history[-2]) if len(history) >= 2 else 0.0
+    exit_change = control.ftol * max(abs(score), 1.0)
+    test = mgcv_relative_convergence(
+        score,
+        optimized.projected_gradient_inf,
+        scale_estimate=scale_estimate(),
+        score_change=max(last_change, exit_change),
+    )
+    if not test.met:
+        return optimized
+    return replace(
+        optimized,
+        converged=True,
+        message=f"{optimized.message}; {mgcv_relative_message(test)}.",
+    )
+
+
 def _lbfgsb_roundoff_stop(result: OptimizeResult) -> bool:
     """Whether L-BFGS-B stopped on raw-score roundoff rather than a limit.
 
@@ -2546,6 +2665,16 @@ def optimize_regular_stream_reml(
             reml_control,
             inner_tolerance=pirls_control.tol,
         )
+    final_trial = optimized.trial
+    optimized = _classify_function_reduction(
+        optimized,
+        reml_control,
+        scale_estimate=lambda: (
+            None
+            if family.scale_known
+            else float(np.asarray(final_trial.fit_result.state.scale))
+        ),
+    )
     return RegularStreamREMLOptimization(
         trial=optimized.trial,
         converged=optimized.converged,

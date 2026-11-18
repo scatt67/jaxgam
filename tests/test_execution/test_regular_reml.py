@@ -1545,3 +1545,128 @@ def test_regular_stream_reml_rejects_high_rho_rotated_nullspace_roundoff() -> No
                 control=control,
                 initial_coefficients=start,
             )
+
+
+def _floor_case(monkeypatch, *, offset: float, message: str, status: int):
+    """Stub exact trials around an optimum at 12 with an O(1000) score.
+
+    ``minimize`` stops at ``12 + offset`` with the given exit, as L-BFGS-B
+    does when no further decrease is representable.
+    """
+
+    def evaluate(_stream, _family, params, **_kwargs):
+        rho = float(np.asarray(params)[0])
+        return SimpleNamespace(
+            params=np.asarray(params).copy(),
+            score=jnp.array(1000.0 + (rho - 12.0) ** 2),
+            gradient=jnp.array([2.0 * (rho - 12.0)]),
+            source_scans=2,
+            batches_scanned=4,
+            source_fingerprint="source",
+            workspace=SimpleNamespace(required_bytes=128),
+        )
+
+    def stop(objective, _center, *, callback, **_kwargs):
+        point = np.array([12.0 + offset])
+        objective(point)
+        callback(SimpleNamespace(x=point))
+        return SimpleNamespace(
+            x=point,
+            success=status == 0,
+            message=message,
+            status=status,
+            nit=7,
+        )
+
+    monkeypatch.setattr(reml_execution, "evaluate_regular_stream_reml", evaluate)
+    monkeypatch.setattr(reml_execution, "minimize", stop)
+    # Isolate the classification from the curvature completion.
+    monkeypatch.setattr(reml_execution, "_CURVATURE_COMPLETION_MAX_FREE", 0)
+    stream = SimpleNamespace(
+        source=SimpleNamespace(fingerprint=lambda: "source"),
+        prepared=SimpleNamespace(
+            fitting=SimpleNamespace(penalty_structure=SimpleNamespace(n_penalties=1)),
+            n_coef=2,
+        ),
+    )
+    return optimize_regular_stream_reml(
+        stream,
+        SimpleNamespace(scale_known=True),
+        # Start one step away, so the last accepted score change is as small
+        # as at a real function-reduction exit.
+        np.array([12.0 + 2.0 * offset]),
+        maximum_bytes=1_000_000,
+        control=StreamREMLControl(ftol=0.0),
+    )
+
+
+_FUNCTION_REDUCTION_EXIT = "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
+
+
+def test_function_reduction_exit_within_mgcv_relative_test_converges(
+    monkeypatch,
+) -> None:
+    """Gradient 2e-4 > gtol 1e-6 but <= 5e-6 * score.scale (~1000)."""
+    result = _floor_case(
+        monkeypatch, offset=1e-4, message=_FUNCTION_REDUCTION_EXIT, status=0
+    )
+    assert result.converged
+    assert result.projected_gradient_inf == 2.0 * ((12.0 + 1e-4) - 12.0)
+    assert result.projected_gradient_inf > StreamREMLControl().gtol
+    assert "converged by pinned mgcv newton()'s relative test" in result.message
+    assert "<= 5*conv.tol*score.scale 5.000e-03" in result.message
+    assert result.message.startswith(_FUNCTION_REDUCTION_EXIT)
+
+
+def test_function_reduction_exit_beyond_mgcv_relative_test_stays_unconverged(
+    monkeypatch,
+) -> None:
+    """Gradient 0.2 exceeds 5e-6 * score.scale: truthfully not converged."""
+    result = _floor_case(
+        monkeypatch, offset=0.1, message=_FUNCTION_REDUCTION_EXIT, status=0
+    )
+    assert not result.converged
+    assert "relative test" not in result.message
+    assert "exceeds gtol" in result.message
+
+
+@pytest.mark.parametrize(
+    ("message", "status"),
+    [
+        ("ABNORMAL: ", 2),
+        ("STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT", 1),
+        ("STOP: TOTAL NO. OF F,G EVALUATIONS EXCEEDS LIMIT", 1),
+    ],
+    ids=["abnormal", "iteration-limit", "evaluation-limit"],
+)
+def test_other_lbfgsb_exits_keep_their_meaning(monkeypatch, message, status) -> None:
+    """Only the function-reduction exit is classified by mgcv's test."""
+    result = _floor_case(monkeypatch, offset=1e-4, message=message, status=status)
+    assert not result.converged
+    assert "relative test" not in result.message
+
+
+def test_mgcv_relative_test_forms_score_scale_as_newton_does() -> None:
+    """score.scale = |log(scale.est)| + |score|; 5*conv.tol on the gradient."""
+    from jaxgam.execution.reml import MGCV_NEWTON_CONV_TOL, mgcv_relative_convergence
+
+    assert MGCV_NEWTON_CONV_TOL == 1e-6
+    estimated = mgcv_relative_convergence(
+        -100.0, 1e-4, scale_estimate=np.exp(-2.0), score_change=1e-5
+    )
+    assert estimated.score_scale == 102.0
+    assert estimated.gradient_limit == 5.0 * 1e-6 * 102.0
+    assert estimated.score_change_limit == 1e-6 * 102.0
+    assert estimated.met
+    known = mgcv_relative_convergence(
+        -100.0, 1e-4, scale_estimate=None, score_change=0.0
+    )
+    assert known.score_scale == 100.0
+    assert not mgcv_relative_convergence(
+        -100.0, 1e-4, scale_estimate=None, score_change=2e-4
+    ).met
+    assert not mgcv_relative_convergence(
+        -100.0, 6e-4, scale_estimate=None, score_change=0.0
+    ).met
+    with pytest.raises(ValueError, match="finite and positive"):
+        mgcv_relative_convergence(1.0, 0.0, scale_estimate=0.0, score_change=0.0)

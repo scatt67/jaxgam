@@ -45,6 +45,9 @@ from .reml import (
     _lbfgsb_roundoff_stop,
     _newton_model_rejection,
     _projected_gradient,
+    function_reduction_exit,
+    mgcv_relative_convergence,
+    mgcv_relative_message,
 )
 
 
@@ -782,7 +785,34 @@ def optimize_gaussian_qr_lbfgs(
             bool(result.success) or int(result.status) == 2
         )
         n_iter = int(result.nit)
-        if converged:
+        relative_test = None
+        if not converged and function_reduction_exit(
+            int(result.status), str(result.message)
+        ):
+            # No further decrease is representable: classify the exit by
+            # pinned newton()'s relative test, after the log-scale
+            # completion above. The exit bounds the last score change by
+            # ftol * max(|f|, 1).
+            terminal_score = float(np.asarray(terminal_trial.score))
+            relative_test = mgcv_relative_convergence(
+                terminal_score,
+                projected_gradient_inf,
+                scale_estimate=(
+                    None
+                    if fitting.family.scale_known
+                    else float(np.asarray(terminal_trial.state.scale))
+                ),
+                score_change=reml_control.ftol * max(abs(terminal_score), 1.0),
+            )
+            converged = relative_test.met
+        if converged and relative_test is not None:
+            convergence_info = mgcv_relative_message(relative_test)
+            if completion is not None:
+                convergence_info += (
+                    f"; log-scale completion: {completion.stop}, "
+                    f"{completion.steps} accepted step(s)"
+                )
+        elif converged:
             convergence_info = "full convergence"
         elif int(result.status) == 1:
             convergence_info = "iteration limit"

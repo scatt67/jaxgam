@@ -550,6 +550,7 @@ def _regular_stub(params, *, score, gradient, log_phi_curvature=None):
                 converged=True,
                 line_search_failed=False,
                 stationarity=0.0,
+                scale=np.float64(1.0),
                 score_scale=np.float64(1.0),
                 saturated_loglik=np.float64(-150.0),
                 coefficient_factor=SimpleNamespace(

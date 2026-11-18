@@ -21,7 +21,7 @@ from jaxgam.execution.gaussian_optimizer import (
     optimize_gaussian_qr_lbfgs,
     use_gaussian_qr_lbfgs,
 )
-from jaxgam.execution.reml import StreamREMLControl
+from jaxgam.execution.reml import StreamREMLControl, mgcv_relative_convergence
 from jaxgam.families.standard import Gaussian
 from jaxgam.fitting import penalty_ops
 from jaxgam.fitting.data import FittingData
@@ -29,7 +29,7 @@ from jaxgam.fitting.newton import NewtonOptimizer, newton_optimize
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.rank_coordinates import IdentifiableCoordinateMap
-from tests.tolerances import STRICT
+from tests.tolerances import MODERATE, STRICT
 
 
 def _problem_inputs():
@@ -226,6 +226,11 @@ def test_lbfgs_matches_newton_meaningful_fit_and_shared_gradient_strict() -> Non
     lbfgs = optimize_gaussian_qr_lbfgs(fitting, lbfgs_provider)
     assert newton.converged
     assert lbfgs.converged
+    # Two optimizers' endpoints at selected smoothing parameters, not one
+    # computation: where each stops on the flat REML optimum depends on
+    # rounding. Measured: coefficients 4.3e-10 relative on 2 of 12 entries on
+    # native Linux x86_64 CI; 3.1e-9 on macOS arm64. Hence MODERATE; the
+    # shared-gradient check above, at one common point, stays STRICT.
     for actual, expected in (
         (lbfgs.score, newton.score),
         (lbfgs.edf, newton.edf),
@@ -234,7 +239,9 @@ def test_lbfgs_matches_newton_meaningful_fit_and_shared_gradient_strict() -> Non
         (lbfgs.pirls_result.eta, newton.pirls_result.eta),
         (lbfgs.pirls_result.deviance, newton.pirls_result.deviance),
     ):
-        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+        np.testing.assert_allclose(
+            actual, expected, rtol=MODERATE.rtol, atol=MODERATE.atol
+        )
     assert newton_provider.finalize_calls == lbfgs_provider.finalize_calls == 1
 
 
@@ -363,11 +370,20 @@ def test_public_large_m_selection_and_fixed_sp_precedence(
     assert newton.lambda_strategy == "newton_reml"
     assert lbfgs.lambda_strategy == "lbfgs_reml"
     assert fixed.lambda_strategy == fixed_lbfgs.lambda_strategy == "fixed"
+    # L-BFGS and Newton endpoints at selected smoothing parameters differ
+    # by where each stops on the flat optimum (4.3e-10 relative on native
+    # Linux x86_64, 3.1e-9 on macOS arm64 for this problem family): MODERATE.
     for actual, expected in (
         (lbfgs.coefficients, newton.coefficients),
         (lbfgs.deviance, newton.deviance),
         (lbfgs.score, newton.score),
         (lbfgs.scale, newton.scale),
+    ):
+        np.testing.assert_allclose(
+            actual, expected, rtol=MODERATE.rtol, atol=MODERATE.atol
+        )
+    # Fixed smoothing parameters: one deterministic computation, STRICT.
+    for actual, expected in (
         (fixed_lbfgs.coefficients, fixed.coefficients),
         (fixed_lbfgs.smoothing_params, fixed.smoothing_params),
         (fixed_lbfgs.score, fixed.score),
@@ -599,14 +615,60 @@ def test_lbfgs_fixed_smoothing_roundoff_stop_completes_log_scale(
     np.testing.assert_array_equal(result.log_lambda, stationary[:-1])
 
 
-def test_lbfgs_roundoff_stop_names_the_smoothing_coordinate_left_unconverged(
+def _mgcv_gradient_limit(provider, params: np.ndarray) -> float:
+    """Pinned newton()'s 5 * conv.tol * score.scale at ``params``."""
+    state, score = provider.evaluate(jax.numpy.asarray(params))
+    return mgcv_relative_convergence(
+        float(score),
+        0.0,
+        scale_estimate=float(state.scale),
+        score_change=0.0,
+    ).gradient_limit
+
+
+def test_lbfgs_relative_reduction_stop_meets_mgcv_relative_test(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A smoothing coordinate above gtol stays truthfully not converged."""
+    """A function-reduction exit above gtol but within mgcv's test converges.
+
+    The smoothing coordinate's gradient exceeds the tight L-BFGS-B tolerance
+    yet meets pinned newton()'s 5 * conv.tol * score.scale, so the exit is
+    classified as converged and the message states both numbers.
+    """
     fitting, provider, newton, stationary = _stationary_reference()
     threshold = 1e-10 * (1.0 + abs(float(newton.score)))
     stalled = stationary.copy()
     stalled[1] += 1e-4
+    monkeypatch.setattr(
+        gaussian_optimizer_module,
+        "minimize",
+        _forced_stop(stalled, threshold, scale_only=False),
+    )
+    result = optimize_gaussian_qr_lbfgs(fitting, provider)
+    assert result.converged
+    assert result.convergence_info.startswith(
+        "converged by pinned mgcv newton()'s relative test after an L-BFGS-B "
+        "function-reduction exit: projected gradient "
+    )
+    assert "<= 5*conv.tol*score.scale" in result.convergence_info
+    gradient = float(np.max(np.abs(result.gradient)))
+    assert threshold < gradient <= _mgcv_gradient_limit(provider, stalled)
+    np.testing.assert_array_equal(result.log_lambda, stalled[:-1])
+    assert provider.finalize_calls == 1
+
+
+def test_lbfgs_roundoff_stop_names_the_smoothing_coordinate_left_unconverged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A smoothing coordinate beyond mgcv's relative test stays unconverged."""
+    fitting, provider, newton, stationary = _stationary_reference()
+    threshold = 1e-10 * (1.0 + abs(float(newton.score)))
+    stalled = stationary.copy()
+    stalled[1] += 1.0
+    stalled_gradient, _ = provider.differentiate(
+        jax.numpy.asarray(stalled), None, second_order=False
+    )
+    assert abs(float(stalled_gradient[1])) > _mgcv_gradient_limit(provider, stalled)
     monkeypatch.setattr(
         gaussian_optimizer_module,
         "minimize",
@@ -626,6 +688,13 @@ def test_lbfgs_roundoff_stop_names_the_smoothing_coordinate_left_unconverged(
 def test_lbfgs_rejected_scale_completion_keeps_the_accepted_trial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A rejected log-scale completion keeps the accepted trial.
+
+    The stall (log scale 4e-10 from its stationary value) is beyond the tight
+    L-BFGS-B tolerance but within pinned newton()'s relative test, so after
+    the rejected completion the function-reduction exit is classified as
+    converged by that test; the message keeps the completion's outcome.
+    """
     fitting, provider, newton, stationary = _stationary_reference()
     threshold = 1e-10 * (1.0 + abs(float(newton.score)))
     stalled = np.r_[stationary[:-1], stationary[-1] + 4e-10]
@@ -641,14 +710,16 @@ def test_lbfgs_rejected_scale_completion_keeps_the_accepted_trial(
     )
     _, expected_score = provider.evaluate(jax.numpy.asarray(stalled))
     result = optimize_gaussian_qr_lbfgs(fitting, provider)
-    assert not result.converged
+    assert result.converged
     assert result.convergence_info.startswith(
-        "step failed: log scale projected gradient "
+        "converged by pinned mgcv newton()'s relative test after an L-BFGS-B "
+        "function-reduction exit"
     )
     assert result.convergence_info.endswith(
         "log-scale completion: quadratic model error, 0 accepted step(s)"
     )
     assert float(result.score) == float(expected_score)
+    np.testing.assert_array_equal(result.log_lambda, stalled[:-1])
 
 
 def test_gaussian_scale_rejection_reasons_and_profile_validation() -> None:

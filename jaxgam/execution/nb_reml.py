@@ -31,6 +31,7 @@ from jaxgam.execution.reml import (
     StreamREMLControl,
     _abnormal_line_search_stop,
     _AcceptedParameterizedTrialObjective,
+    _classify_function_reduction,
     _complete_pinned_coordinate,
     _LocalScoreChange,
     _parameterized_optimizer_workspace_bytes,
@@ -1118,6 +1119,10 @@ def optimize_nb_stream_reml(
             reml_control,
             pirls_control.tol,
         )
+    # NB has a known scale (phi = 1): the score.scale lower bound applies.
+    optimized = _classify_function_reduction(
+        optimized, reml_control, scale_estimate=lambda: None
+    )
     trial = optimized.trial
     if family.n_theta and not np.array_equal(
         np.asarray(trial.fit_result.log_theta),
