@@ -41,6 +41,7 @@ from jaxgam.penalties.structure import (
     PenaltyStructure,
     make_penalty_structure,
 )
+from jaxgam.results import _rotate_covariance
 from tests.helpers import (
     _AssertCollector,
     check_flat_ridge_endpoint,
@@ -1001,9 +1002,12 @@ def _r_exact_fit_fields(components: dict, y: np.ndarray, sp: np.ndarray) -> dict
     factor = np.asarray(pirls.L_fisher)
     p = factor.shape[0]
     inverse = np.linalg.solve(factor, np.eye(p))
+    # The factor is the gam.reparam-coordinate one of a multi-penalty block;
+    # the covariance is T (L L')^-1 T' (R's rV <- T %*% rV, gam.fit3.r 813).
     Vp = scale * np.asarray(
         penalty_ops.transform_covariance(
-            fd.penalty_structure, jnp.asarray(inverse.T @ inverse)
+            fd.penalty_structure,
+            jnp.asarray(_rotate_covariance(inverse.T @ inverse, fit.stable_rotation)),
         )
     )
     starts = np.cumsum([X.shape[1] - sum(widths), *widths])
@@ -1017,6 +1021,10 @@ def _r_exact_fit_fields(components: dict, y: np.ndarray, sp: np.ndarray) -> dict
         S_lambda @ np.asarray(pirls.coefficients)
     )
     H = Xf.T @ Xf + S_lambda
+    # X T: the design in the factor's gam.reparam coordinates.
+    X_stable = Xf.copy()
+    for block_start, block_stop, T in fit.stable_rotation:
+        X_stable[:, block_start:block_stop] = Xf[:, block_start:block_stop] @ T
     backward_error = np.linalg.norm(residual) / (
         np.linalg.norm(H, 2) * np.linalg.norm(pirls.coefficients)
         + np.linalg.norm(Xf.T @ np.asarray(y))
@@ -1034,7 +1042,7 @@ def _r_exact_fit_fields(components: dict, y: np.ndarray, sp: np.ndarray) -> dict
         ),
         "Vp": Vp,
         "link_se": np.sqrt(scale)
-        * np.linalg.norm(np.linalg.solve(factor, Xf.T), axis=0),
+        * np.linalg.norm(np.linalg.solve(factor, X_stable.T), axis=0),
         "backward_error": float(backward_error),
         "regularization": float(np.max(np.asarray(pirls.factor_regularization))),
     }
