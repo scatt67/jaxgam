@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
+import jax
 import numpy as np
 import numpy.typing as npt
 import scipy.linalg as sla
@@ -30,11 +31,17 @@ from jaxgam.execution.working_model import (
     source_log,
 )
 from jaxgam.fitting.discrete_ops import (
+    DeviceDiscreteDesign,
+    discrete_row_xwxd,
+    discrete_row_xwxd_bytes,
+    discrete_row_xwxd_cost,
     discrete_xbd,
     discrete_xwxd,
+    discrete_xwxd_cost,
     discrete_xwyd,
     to_device_discrete_design,
 )
+from jaxgam.fitting.working_model import working_model_hessian_inverse
 from jaxgam.formula.continuous_design import build_continuous_discrete_design
 from jaxgam.formula.continuous_metadata import (
     ContinuousDiscretizationMetadata,
@@ -52,7 +59,7 @@ from jaxgam.formula.discrete_design import (
     DiscreteMemoryPlan,
     FrozenDiscreteDesign,
 )
-from jaxgam.formula.fitting_prepare import total_penalty_spaces
+from jaxgam.formula.fitting_prepare import total_penalty_rank, total_penalty_spaces
 from jaxgam.formula.predict_matrix import PredictSpec
 from jaxgam.formula.terms import FormulaSpec
 from jaxgam.inference.predictor import PivotedQRFisherFactor
@@ -211,7 +218,7 @@ def _solver_plan(
 
 
 def _penalty_rank(structure: PenaltyStructure) -> int:
-    return sum(basis.shape[1] for _, basis in total_penalty_spaces(structure)[1])
+    return total_penalty_rank(structure)
 
 
 def _pinned_criterion_null_dimension(
@@ -508,6 +515,29 @@ def _prepared_discrete(
         setup.cleanup()
 
 
+_ROW_XWXD_CHUNKS = (2048, 1024, 512, 256, 128, 64)
+
+
+def _row_xwxd_chunk(design: DeviceDiscreteDesign, available_bytes: int) -> int | None:
+    """Rows per chunk for :func:`discrete_row_xwxd`, or None for pair reductions.
+
+    Materialized row chunks are used when their estimated cost undercuts the
+    pair reductions' (:func:`discrete_xwxd_cost`): many smooths against few
+    coefficients. A few wide blocks, such as a random effect with many levels,
+    keep the pair reductions. The largest chunk whose scratch fits the
+    remaining budget is chosen.
+    """
+    n_coef = design.n_coef
+    if discrete_row_xwxd_cost(n_coef, design.batch_rows) >= discrete_xwxd_cost(
+        design, design.batch_rows
+    ):
+        return None
+    for chunk_rows in _ROW_XWXD_CHUNKS:
+        if discrete_row_xwxd_bytes(n_coef, chunk_rows) <= available_bytes:
+            return chunk_rows
+    return None
+
+
 def _check_fit_budget(memory: DiscreteFitMemoryPlan) -> None:
     if memory.fit_peak_bytes > memory.budget_bytes:
         raise MemoryError(
@@ -563,6 +593,12 @@ def fit_discrete_gaussian(
             smoothing, log_smoothing = _fixed_sp(sp, penalties.n_penalties)
             penalty = penalties.materialize(log_smoothing)
         device_descriptor = to_device_discrete_design(descriptor, device)
+        # The row kernel replaces the pair kernel during the statistics scan
+        # only, and its scratch fits the budget left after the fit plan, so
+        # the scan's peak stays within the budget and later stages are unchanged.
+        chunk_rows = _row_xwxd_chunk(
+            device_descriptor, memory.budget_bytes - memory.fit_peak_bytes
+        )
         gram = np.zeros((descriptor.n_coef, descriptor.n_coef))
         rhs = np.zeros(descriptor.n_coef)
         cursor = 0
@@ -595,7 +631,13 @@ def fit_discrete_gaussian(
                 )
             rows = np.arange(cursor, cursor + size, dtype=np.intp)
             selectors = descriptor.batch_indices(rows)
-            gram += np.asarray(discrete_xwxd(device_descriptor, selectors, weights))
+            gram += np.asarray(
+                discrete_xwxd(device_descriptor, selectors, weights)
+                if chunk_rows is None
+                else discrete_row_xwxd(
+                    device_descriptor, selectors, weights, chunk_rows=chunk_rows
+                )
+            )
             rhs += np.asarray(
                 discrete_xwyd(device_descriptor, selectors, weights, y - offset)
             )
@@ -658,7 +700,19 @@ def fit_discrete_gaussian(
                 keep=selected_pivots,
                 original_n_coef=descriptor.n_coef,
             )
-            inverse = qr_factor.hessian_inverse(np.eye(descriptor.n_coef))
+            inverse = np.array(
+                working_model_hessian_inverse(
+                    *jax.device_put(
+                        (
+                            selected.factor_upper,
+                            selected.factor_pivots,
+                            selected.factor_diagonal,
+                            np.int32(selected.factor_rank),
+                        ),
+                        device,
+                    )
+                )
+            )
             transforms = selected.coefficient_transforms
             for start, stop, _, values in transforms:
                 inverse[start:stop, :] = values @ inverse[start:stop, :]
@@ -706,12 +760,13 @@ def fit_discrete_gaussian(
         if source.fingerprint() != fingerprint:
             raise RuntimeError("RowSource changed during discrete residual evaluation.")
 
-        inverse_gram = (
-            inverse @ gram
+        # tr(H^-1 X'WX) needs only the elementwise product, not the p^3 matrix
+        # product; the fixed-sp route still solves against X'WX.
+        edf = float(
+            np.sum(inverse * gram.T)
             if selected is not None
-            else sla.cho_solve((factor, True), gram)
+            else np.trace(sla.cho_solve((factor, True), gram))
         )
-        edf = float(np.trace(inverse_gram))
         rank = _penalty_rank(penalties)
         null_dimension = descriptor.n_coef - rank
         if selected is None:

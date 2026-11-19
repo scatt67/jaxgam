@@ -154,3 +154,42 @@ def test_qr_roots_honor_rotated_declared_rank() -> None:
         rtol=STRICT.rtol,
         atol=100.0 * np.finfo(float).eps,
     )
+
+
+def test_total_penalty_rank_matches_the_range_bases() -> None:
+    """The rank-only path agrees with total_penalty_spaces on mixed blocks."""
+    from jaxgam.formula.fitting_prepare import total_penalty_rank, total_penalty_spaces
+    from jaxgam.penalties.structure import DiagonalPenalty, IdentityPenalty
+
+    generator = np.random.default_rng(20261119)
+    difference = np.diff(np.eye(6), n=2, axis=0)
+    root = generator.normal(size=(5, 3))
+    tiny = np.diag([1.0, 1e-13, 0.0, 2.0])
+    blocks = (
+        (DenseLocalPenalty(difference.T @ difference),),
+        (DenseLocalPenalty(root @ root.T), DenseLocalPenalty(np.eye(5))),
+        (IdentityPenalty(7),),
+        (DiagonalPenalty(np.array([0.0, 3.0, 1e-14, 2.0])),),
+        (DenseLocalPenalty(tiny),),
+    )
+    start = 0
+    penalty_blocks = []
+    sp = 0
+    for components in blocks:
+        size = len(components[0].dense())
+        penalty_blocks.append(
+            PenaltyBlock(
+                start,
+                start + size,
+                tuple(range(sp, sp + len(components))),
+                components,
+                IdentityTransform(size),
+                tuple(np.linalg.matrix_rank(S.dense()) for S in components),
+            )
+        )
+        start += size
+        sp += len(components)
+    structure = PenaltyStructure(start, tuple(penalty_blocks))
+    expected = sum(basis.shape[1] for _, basis in total_penalty_spaces(structure)[1])
+    assert total_penalty_rank(structure) == expected
+    assert total_penalty_rank(PenaltyStructure(4, ())) == 0

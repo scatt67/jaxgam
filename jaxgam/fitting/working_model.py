@@ -220,12 +220,7 @@ class WorkingModelCriterionMetadata:
                     block.start,
                     block.stop,
                     block.sp_indices,
-                    tuple(
-                        penalty_ops.JaxLocalPenalty(
-                            "dense", jax.device_put(S, device), size
-                        )
-                        for S in block.penalties
-                    ),
+                    tuple(map(partial(_local_penalty, device=device), block.penalties)),
                     penalty_ops.JaxTransform(
                         "dense", jax.device_put(block.transform, device), size
                     ),
@@ -303,6 +298,24 @@ class WorkingModelCriterionMetadata:
             roots,
             stacked,
         )
+
+
+def _local_penalty(
+    values: np.ndarray, device: jax.Device | None
+) -> penalty_ops.JaxLocalPenalty:
+    """One device local penalty, declared diagonal when it is.
+
+    ``Sl.setup`` leaves a singleton block's penalty as an exact partial
+    identity; scaling rows by its diagonal gives the same numbers as the
+    dense product, whose other terms are exact zeros.
+    """
+    size = len(values)
+    off_diagonal = values - np.diag(np.diag(values))
+    if not np.any(off_diagonal):
+        return penalty_ops.JaxLocalPenalty(
+            "diagonal", jax.device_put(np.diag(values).copy(), device), size
+        )
+    return penalty_ops.JaxLocalPenalty("dense", jax.device_put(values, device), size)
 
 
 class WorkingModelFactor(NamedTuple):
@@ -465,8 +478,15 @@ def _source_cholesky_solve(
     diagonal: jax.Array,
     rhs: jax.Array,
     rank: jax.Array | None = None,
+    *,
+    blocked: bool = False,
 ) -> jax.Array:
-    """Sl.fitChol's scaled pivoted solve, with static-size rank padding."""
+    """Sl.fitChol's scaled pivoted solve, with static-size rank padding.
+
+    ``blocked`` solves a many-column right-hand side with
+    :func:`_upper_triangular_solve`'s blocked substitution, whose work is
+    almost all matrix products; it equals the plain solve up to rounding.
+    """
     if rank is None:
         rank = len(upper)
     active = jnp.arange(len(upper)) < rank
@@ -478,9 +498,139 @@ def _source_cholesky_solve(
     scale = diagonal.reshape((-1,) + (1,) * (rhs.ndim - 1))
     active_rows = active.reshape((-1,) + (1,) * (rhs.ndim - 1))
     pivoted_rhs = jnp.where(active_rows, (rhs / scale)[pivots], 0.0)
-    first = jsl.solve_triangular(upper.T, pivoted_rhs, lower=True)
-    solved = jsl.solve_triangular(upper, first, lower=False)
+    if blocked:
+        levels = _triangular_levels(len(upper))
+        first = _upper_triangular_solve(upper, pivoted_rhs, levels, transpose=True)
+        solved = _upper_triangular_solve(upper, first, levels, transpose=False)
+    else:
+        first = jsl.solve_triangular(upper.T, pivoted_rhs, lower=True)
+        solved = jsl.solve_triangular(upper, first, lower=False)
     return jnp.zeros_like(rhs).at[pivots].set(solved / scale[pivots])
+
+
+# The blocked triangular routines split a matrix of at least this order into
+# ``2**_TRIANGULAR_LEVELS`` diagonal blocks; smaller ones are handled whole.
+# The depth is fixed so the traced graph does not grow with the dimension.
+_TRIANGULAR_MIN_ORDER = 64
+_TRIANGULAR_LEVELS = 4
+
+
+def _triangular_levels(n: int) -> int:
+    return _TRIANGULAR_LEVELS if n >= _TRIANGULAR_MIN_ORDER else 0
+
+
+def _upper_triangular_solve(
+    upper: jax.Array, rhs: jax.Array, levels: int, *, transpose: bool
+) -> jax.Array:
+    """Solve ``U x = b`` (or ``U' x = b``) by blocked substitution.
+
+    With ``U = [[A, B], [0, C]]``: ``x2 = C \\ b2`` then
+    ``x1 = A \\ (b1 - B x2)``; the transposed system runs the other way.
+    It recurses ``levels`` times on static halves, as a blocked BLAS
+    ``dtrsm`` does, so most of the work is matrix products.
+    """
+    if not levels:
+        return jsl.solve_triangular(
+            upper.T if transpose else upper, rhs, lower=transpose
+        )
+    half = upper.shape[0] // 2
+    first, coupling, last = (
+        upper[:half, :half],
+        upper[:half, half:],
+        upper[half:, half:],
+    )
+    if transpose:
+        head = _upper_triangular_solve(first, rhs[:half], levels - 1, transpose=True)
+        tail = _upper_triangular_solve(
+            last, rhs[half:] - coupling.T @ head, levels - 1, transpose=True
+        )
+    else:
+        tail = _upper_triangular_solve(last, rhs[half:], levels - 1, transpose=False)
+        head = _upper_triangular_solve(
+            first, rhs[:half] - coupling @ tail, levels - 1, transpose=False
+        )
+    return jnp.concatenate([head, tail])
+
+
+def _upper_triangular_inverse(upper: jax.Array, levels: int) -> jax.Array:
+    """Inverse of a nonsingular upper triangle (LAPACK ``dtrtri``'s algebra).
+
+    ``[[A, B], [0, C]]^-1 = [[A^-1, -A^-1 B C^-1], [0, C^-1]]``, recursing
+    ``levels`` times on static halves, so almost all work is matrix products
+    rather than a triangular solve with ``n`` right-hand sides.
+    """
+    n = upper.shape[0]
+    if not levels:
+        return jsl.solve_triangular(upper, jnp.eye(n, dtype=upper.dtype), lower=False)
+    half = n // 2
+    first = _upper_triangular_inverse(upper[:half, :half], levels - 1)
+    last = _upper_triangular_inverse(upper[half:, half:], levels - 1)
+    coupling = -((first @ upper[:half, half:]) @ last)
+    return jnp.block(
+        [[first, coupling], [jnp.zeros((n - half, half), upper.dtype), last]]
+    )
+
+
+def _upper_triangular_gram(upper: jax.Array, levels: int) -> jax.Array:
+    """``V V'`` for an upper triangle ``V`` (LAPACK ``dlauum``'s algebra)."""
+    if not levels:
+        return upper @ upper.T
+    half = upper.shape[0] // 2
+    coupling = upper[:half, half:]
+    last = upper[half:, half:]
+    leading = (
+        _upper_triangular_gram(upper[:half, :half], levels - 1) + coupling @ coupling.T
+    )
+    cross = coupling @ last.T
+    return jnp.block(
+        [[leading, cross], [cross.T, _upper_triangular_gram(last, levels - 1)]]
+    )
+
+
+def _source_cholesky_inverse(
+    upper: jax.Array,
+    pivots: jax.Array,
+    diagonal: jax.Array,
+    rank: jax.Array | None = None,
+) -> jax.Array:
+    """Sl.fitChol's ``PP``: ``chol2inv`` of the pivoted factor, unpivoted.
+
+    ``PP[piv, piv] <- chol2inv(R); PP <- t(PP/d)/d``, with the same
+    static-size rank padding as :func:`_source_cholesky_solve`: dropped
+    coordinates get zero rows and columns. It equals that solve against the
+    identity up to rounding; ``chol2inv`` (LAPACK ``dpotri``) forms
+    ``R^-1 R^-T`` from the triangular inverse instead of two triangular
+    solves with ``p`` right-hand sides, and fills its lower triangle from
+    the upper, as R does.
+    """
+    n = len(upper)
+    if rank is None:
+        rank = n
+    active = jnp.arange(n) < rank
+    kept = active[:, None] & active[None, :]
+    upper = jnp.where(kept, upper, jnp.diag((~active).astype(upper.dtype)))
+    levels = _triangular_levels(n)
+    product = _upper_triangular_gram(_upper_triangular_inverse(upper, levels), levels)
+    product = jnp.where(kept, jnp.triu(product) + jnp.triu(product, 1).T, 0.0)
+    order = jnp.argsort(pivots)
+    unpivoted = product[order][:, order]
+    return (unpivoted / diagonal[:, None]).T / diagonal[:, None]
+
+
+@jax.jit
+def working_model_hessian_inverse(
+    upper: jax.Array,
+    pivots: jax.Array,
+    diagonal: jax.Array,
+    rank: jax.Array,
+) -> jax.Array:
+    """``H^-1`` in working coordinates from one accepted trial's host factor.
+
+    The same ``chol2inv`` the proposal forms (:func:`_source_cholesky_inverse`),
+    for the selected model's covariance: dropped coordinates have zero rows
+    and columns, as the compact pivoted QR Fisher factor's inverse does.
+    """
+    return _source_cholesky_inverse(upper, pivots, diagonal, rank)
 
 
 def _source_ift_chol(
@@ -500,8 +650,11 @@ def _source_ift_chol(
     coefficient penalties never acquire a smoothing-parameter stack of
     global square matrices. The expanded source contractions deliberately
     preserve its operation order rather than differentiating yy-beta'f.
-    Its loops are linear in the smooth count and stay unrolled, for the
-    rounding reason given in :func:`_original_working_coefficients`.
+    The ``D`` loop is linear in the smooth count and stays unrolled, for the
+    rounding reason given in :func:`_original_working_coefficients`. ``db``
+    uses the blocked substitution and ``S.db`` :func:`_penalty_columns`; each
+    equals its per-column form, but XLA rounds the products that consume
+    them differently, so ``Sl.iftChol``'s Hessian terms move in the last bits.
     """
     count = penalties.n_penalties
     D = jnp.zeros((penalties.n_coef, count), dtype=beta.dtype)
@@ -512,16 +665,68 @@ def _source_ift_chol(
                 rho, smoothing, sp
             ) * penalty_ops._apply_local(component, local_beta)
             D = D.at[block.start : block.stop, sp].add(column)
-    db = -_source_cholesky_solve(upper, pivots, diagonal, D, rank)
+    db = -_source_cholesky_solve(upper, pivots, diagonal, D, rank, blocked=True)
     first = jnp.sum(beta[:, None] * D, axis=0)
-    Sdb = jax.vmap(
-        lambda vector: penalty_ops.apply(penalties, vector, rho, smoothing=smoothing),
-        in_axes=1,
-        out_axes=1,
-    )(db)
+    Sdb = _penalty_columns(penalties, db, rho, smoothing)
     quadratic_second = jnp.diag(first) + 2.0 * (db.T @ (D + Sdb) + D.T @ db)
     residual_second = 2.0 * (db.T @ (gram @ db))
     return first, quadratic_second + residual_second, db
+
+
+def _penalty_columns(penalties, matrix, rho, smoothing=None):
+    """``S_lambda`` applied to every column, as ``penalty_ops.apply`` does.
+
+    Single-penalty blocks declared diagonal are applied to all their rows at
+    once with ``apply``'s arithmetic, ``lambda * (S_ii * x)``; every other
+    block keeps ``apply``'s per-block product, vectorized over the columns.
+    """
+    stacked = penalty_ops.as_stacked(penalties)
+    n_coef = penalties.n_coef
+    lam = jnp.zeros(n_coef, dtype=matrix.dtype)
+    values = jnp.zeros(n_coef, dtype=matrix.dtype)
+    covered = np.zeros(n_coef, dtype=bool)
+    ordinals = set()
+    for group in stacked.groups:
+        if not (group.diagonal and group.count == 1):
+            continue
+        rows = (np.asarray(group.starts)[:, None] + np.arange(group.size)).ravel()
+        sp = np.repeat(np.asarray(group.sp_indices, dtype=np.int64)[:, 0], group.size)
+        smoothing_rows = jnp.exp(rho[sp]) if smoothing is None else smoothing[sp]
+        lam = lam.at[rows].set(smoothing_rows)
+        values = values.at[rows].set(
+            jnp.diagonal(group.penalties[:, 0], axis1=1, axis2=2).ravel()
+        )
+        covered[rows] = True
+        ordinals.update(group.ordinals)
+    result = lam[:, None] * (values[:, None] * matrix)
+    rest = tuple(
+        block for index, block in enumerate(penalties.blocks) if index not in ordinals
+    )
+    if rest:
+        dense = jax.vmap(
+            lambda vector: penalty_ops.apply(
+                penalty_ops.JaxPenaltyStructure(n_coef, rest),
+                vector,
+                rho,
+                smoothing=smoothing,
+            ),
+            in_axes=1,
+            out_axes=1,
+        )(matrix)
+        result = jnp.where(jnp.asarray(covered)[:, None], result, dense)
+    return result
+
+
+def _scaled_penalty_product(scale, penalty, rows, diagonal):
+    """``(scale * S) @ rows``; a declared-diagonal ``S`` scales rows instead.
+
+    For a diagonal ``S`` every off-diagonal term of the dense product is an
+    exact zero, so both forms round ``scale * S_ii * rows_ij`` once.
+    """
+    scaled = scale * penalty
+    if diagonal:
+        return jnp.diagonal(scaled)[:, None] * rows
+    return scaled @ rows
 
 
 def _source_hessian_determinant_derivatives(
@@ -546,14 +751,18 @@ def _source_hessian_determinant_derivatives(
     groups = [group for group in penalties.groups if group.count]
     for left in groups:
 
-        def left_term(carry, item, left_size=left.size):
+        def left_term(carry, item, left_size=left.size, left_diagonal=left.diagonal):
             first, second = carry
             left_component, left_start, left_sp = item
             left_rows = jax.lax.dynamic_slice(
                 inverse, (left_start, 0), (left_size, width)
             )
-            left_S = penalty_ops._smoothing(rho, smoothing, left_sp) * left_component
-            left_product = left_S @ left_rows
+            left_product = _scaled_penalty_product(
+                penalty_ops._smoothing(rho, smoothing, left_sp),
+                left_component,
+                left_rows,
+                left_diagonal,
+            )
             first = first.at[left_sp].add(
                 jnp.trace(
                     jax.lax.dynamic_slice(
@@ -568,6 +777,8 @@ def _source_hessian_determinant_derivatives(
                     right_rows = jax.lax.dynamic_slice(
                         inverse, (right_start, left_start), (right_size, left_size)
                     )
+                    # Kept a dense product: XLA fuses a row scaling here into
+                    # the pair sum and rounds it differently by one ulp.
                     right_S = (
                         penalty_ops._smoothing(rho, smoothing, right_sp)
                         * right_component
@@ -712,22 +923,48 @@ def _source_penalty_factor_input(root_products, lam):
 
 
 @jax.jit
+def working_model_statistics(
+    gram: jax.Array,
+    rhs: jax.Array,
+    metadata: WorkingModelCriterionMetadata,
+) -> tuple[jax.Array, jax.Array]:
+    """``Sl.initial.repara``'s block transform of ``X'WX`` and ``X'Wz``, once.
+
+    The transform does not depend on the smoothing parameters, so a caller
+    that evaluates many trials on one set of statistics applies it here once
+    and passes ``working_coordinates=True`` to the trial kernels, which
+    otherwise repeat it on every call with the same operations.
+    """
+    n_coef = metadata.penalties.n_coef
+    if gram.shape != (n_coef, n_coef) or rhs.shape != (n_coef,):
+        raise ValueError("gram and rhs must match the coefficient dimension.")
+    return (
+        _initial_working_gram(gram, metadata.stacked),
+        _initial_working_rhs(rhs, metadata.stacked),
+    )
+
+
+@partial(jax.jit, static_argnames=("working_coordinates",))
 def working_model_factor_inputs(
     gram: jax.Array,
     metadata: WorkingModelCriterionMetadata,
     smoothing: jax.Array,
+    *,
+    working_coordinates: bool = False,
 ) -> WorkingModelFactorInputs:
     """Matrices pinned R factors at one trial, before ``chol(pivot=TRUE)``.
 
-    ``gram`` is in public coordinates; ``smoothing`` is the trial's
-    ``exp(log sp)``, which the proposal must receive unchanged.
+    ``gram`` is in public coordinates, or already transformed by
+    :func:`working_model_statistics` when ``working_coordinates``;
+    ``smoothing`` is the trial's ``exp(log sp)``, which the proposal must
+    receive unchanged.
     """
     _check_smoothing(smoothing, metadata)
     if gram.shape != (metadata.penalties.n_coef, metadata.penalties.n_coef):
         raise ValueError("gram must match the coefficient dimension.")
     H = _source_add_penalties(
         metadata.stacked,
-        _initial_working_gram(gram, metadata.stacked),
+        gram if working_coordinates else _initial_working_gram(gram, metadata.stacked),
         None,
         smoothing,
     )
@@ -773,8 +1010,8 @@ def _source_gaussian_state(
     beta = _source_cholesky_solve(
         factor.upper, factor.pivots, diagonal, rhs, factor.rank
     )
-    inverse = _source_cholesky_solve(
-        factor.upper, factor.pivots, diagonal, jnp.eye(len(diagonal)), factor.rank
+    inverse = _source_cholesky_inverse(
+        factor.upper, factor.pivots, diagonal, factor.rank
     )
     used = jnp.arange(len(diagonal)) < factor.rank
     upper_diagonal = jnp.where(used, jnp.diag(factor.upper), 1.0)
@@ -830,7 +1067,15 @@ def _source_gaussian_state(
     )
 
 
-@partial(jax.jit, static_argnames=("scale_is_fixed", "fixed_smoothing", "debug"))
+@partial(
+    jax.jit,
+    static_argnames=(
+        "scale_is_fixed",
+        "fixed_smoothing",
+        "working_coordinates",
+        "debug",
+    ),
+)
 def gaussian_working_model_proposal(
     parameters: jax.Array,
     gram: jax.Array,
@@ -844,6 +1089,7 @@ def gaussian_working_model_proposal(
     fixed_smoothing: bool = False,
     log_scale: jax.Array = 0.0,
     tolerance: jax.Array = 0.0,
+    working_coordinates: bool = False,
     debug: bool = False,
 ) -> GaussianWorkingModelProposal:
     """Evaluate one row-free ``Sl.fitChol`` trial at log smoothing/scale.
@@ -866,6 +1112,8 @@ def gaussian_working_model_proposal(
     surrounding execution controller. ``smoothing`` is the trial's
     ``exp(log sp)`` and ``factors`` the host factors of the matrices
     ``working_model_factor_inputs`` built from that same ``smoothing``.
+    With ``working_coordinates``, ``gram`` and ``rhs`` are the output of
+    :func:`working_model_statistics` rather than public-coordinate statistics.
     """
     _check_smoothing(smoothing, metadata)
     expected_parameters = metadata.penalties.n_penalties + (not scale_is_fixed)
@@ -878,8 +1126,8 @@ def gaussian_working_model_proposal(
         raise ValueError("response_square_sum must be scalar.")
     if len(factors.penalties) != len(metadata.multi_block_sp_indices):
         raise ValueError("factors must hold one factor per coupled penalty block.")
-    gram = _initial_working_gram(gram, metadata.stacked)
-    rhs = _initial_working_rhs(rhs, metadata.stacked)
+    if not working_coordinates:
+        gram, rhs = working_model_statistics.__wrapped__(gram, rhs, metadata)
 
     value, beta, gradient, hessian, factor, diagonal, H_value, S_value = (
         _source_gaussian_state(

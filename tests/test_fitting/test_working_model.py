@@ -1183,3 +1183,122 @@ def test_every_long_double_accumulator_matches_its_exact_model():
         ),
     )
     collector.raise_if_any("long double accumulators")
+
+
+@pytest.mark.parametrize("n", [5, 63, 64, 150, 301])
+def test_blocked_triangular_inverse_and_solve_match_direct_substitution(n):
+    """chol2inv and the blocked solve equal the two direct triangular solves.
+
+    Orders from 64 split into ``2**_TRIANGULAR_LEVELS`` blocks and recurse;
+    smaller orders take the direct path. Both rank-padding modes are covered.
+    """
+    import scipy.linalg as sla
+
+    from jaxgam.fitting.working_model import (
+        _source_cholesky_inverse,
+        _source_cholesky_solve,
+        _triangular_levels,
+        _upper_triangular_gram,
+        _upper_triangular_inverse,
+        _upper_triangular_solve,
+    )
+
+    assert (_triangular_levels(n) > 0) == (n >= 64)
+    generator = np.random.default_rng(20261119 + n)
+    X = generator.normal(size=(3 * n, n))
+    H = X.T @ X / n + np.eye(n)
+    diagonal = np.sqrt(np.diag(H))
+    scaled = (H / diagonal[:, None]).T / diagonal[:, None]
+    upper, pivots, rank, _ = sla.lapack.dpstrf(scaled, lower=0)
+    assert rank == n
+    upper = np.triu(upper)
+    pivots = pivots.astype(np.int32) - 1
+    rhs = generator.normal(size=(n, 7))
+    levels = _triangular_levels(n)
+    collector = _AssertCollector()
+
+    def close(name, observed, expected):
+        collector.check(
+            name,
+            lambda: np.testing.assert_allclose(
+                np.asarray(observed), expected, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+        )
+
+    triangular_inverse = jax.jit(_upper_triangular_inverse, static_argnums=1)(
+        upper, levels
+    )
+    direct_inverse = sla.solve_triangular(upper, np.eye(n), lower=False)
+    close("triangular inverse", triangular_inverse, direct_inverse)
+    close(
+        "triangular Gram",
+        jax.jit(_upper_triangular_gram, static_argnums=1)(direct_inverse, levels),
+        direct_inverse @ direct_inverse.T,
+    )
+    for transpose in (False, True):
+        close(
+            f"blocked substitution (transpose={transpose})",
+            jax.jit(
+                _upper_triangular_solve, static_argnums=2, static_argnames="transpose"
+            )(upper, rhs, levels, transpose=transpose),
+            sla.solve_triangular(upper, rhs, trans=int(transpose), lower=False),
+        )
+    for rank in (n, n - 2):
+        rank = jnp.asarray(rank)
+        reference = jax.jit(_source_cholesky_solve)(
+            upper, pivots, diagonal, jnp.eye(n), rank
+        )
+        inverse = jax.jit(_source_cholesky_inverse)(upper, pivots, diagonal, rank)
+        close(f"chol2inv, rank {int(rank)}", inverse, np.asarray(reference))
+        collector.check(
+            f"chol2inv symmetric, rank {int(rank)}",
+            lambda inverse=inverse: np.testing.assert_array_equal(
+                np.asarray(inverse), np.asarray(inverse).T
+            ),
+        )
+        blocked = jax.jit(_source_cholesky_solve, static_argnames="blocked")(
+            upper, pivots, diagonal, rhs, rank, blocked=True
+        )
+        plain = jax.jit(_source_cholesky_solve)(upper, pivots, diagonal, rhs, rank)
+        close(f"blocked pivoted solve, rank {int(rank)}", blocked, np.asarray(plain))
+    close(
+        "chol2inv inverts H",
+        jax.jit(_source_cholesky_inverse)(upper, pivots, diagonal),
+        np.linalg.inv(H),
+    )
+    collector.raise_if_any(f"blocked triangular routines, n={n}")
+
+
+@pytest.mark.parametrize("dropped", [0, 3])
+def test_working_model_hessian_inverse_matches_qr_fisher_factor(dropped):
+    """The selected covariance's chol2inv equals the compact QR factor inverse."""
+    from jaxgam.fitting.working_model import working_model_hessian_inverse
+    from jaxgam.inference.predictor import PivotedQRFisherFactor
+    from jaxgam.smooths.source_lapack import source_pivoted_cholesky
+
+    n = 90
+    generator = np.random.default_rng(20261119 + dropped)
+    X = generator.normal(size=(2 * n, n - dropped)) @ generator.normal(
+        size=(n - dropped, n)
+    )
+    H = X.T @ X / n + (np.eye(n) if not dropped else 0.0)
+    diagonal = np.sqrt(np.diag(H))
+    factor = source_pivoted_cholesky((H / diagonal[:, None]).T / diagonal[:, None])
+    rank = min(factor.rank, n - dropped)
+    kept = factor.pivots[:rank]
+    expected = PivotedQRFisherFactor(
+        R=factor.upper[:rank, :rank] * diagonal[kept][None, :],
+        pivots=np.arange(rank, dtype=np.intp),
+        keep=kept,
+        original_n_coef=n,
+    ).hessian_inverse(np.eye(n))
+    observed = np.asarray(
+        working_model_hessian_inverse(
+            factor.upper, factor.pivots, diagonal, np.int32(rank)
+        )
+    )
+    scale = np.max(np.abs(expected))
+    np.testing.assert_allclose(
+        observed / scale, expected / scale, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_array_equal(observed, observed.T)

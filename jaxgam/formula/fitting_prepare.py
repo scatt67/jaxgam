@@ -534,6 +534,37 @@ def initial_log_sp_from_diagonal(
     return libm_log(np.maximum(def_sp, np.finfo(float).tiny))
 
 
+def _normalized_penalty_total(block: PenaltyBlock) -> npt.NDArray[np.floating]:
+    """A block's penalties, each scaled to unit Frobenius norm, summed."""
+    total = np.zeros((block.size, block.size))
+    for S in block.dense_penalties():
+        norm = np.linalg.norm(S, "fro")
+        if norm:
+            total += S / norm
+    return total
+
+
+def total_penalty_rank(structure: PenaltyStructure) -> int:
+    """The range dimension :func:`total_penalty_spaces` reports, without bases.
+
+    The same spectra and cutoff; a diagonal block total's spectrum is its
+    sorted diagonal (what the symmetric eigensolver returns for a diagonal
+    matrix), so a wide random-effect block skips its eigendecomposition.
+    """
+    spectra = []
+    for block in structure.blocks:
+        total = _normalized_penalty_total(block)
+        diagonal = np.diag(total)
+        if np.array_equal(total, np.diag(diagonal)):
+            spectra.append(np.sort(diagonal))
+        else:
+            spectra.append(np.linalg.eigh(total)[0])
+    largest = max((float(np.max(eigs)) for eigs in spectra if len(eigs)), default=0.0)
+    largest = max(largest, 0.0)
+    cutoff = largest * _EPS_TWO_THIRDS
+    return int(sum(np.count_nonzero(eigs > cutoff) for eigs in spectra))
+
+
 def total_penalty_spaces(
     structure: PenaltyStructure,
 ) -> tuple[
@@ -544,12 +575,7 @@ def total_penalty_spaces(
     spectra: list[tuple[PenaltyBlock, np.ndarray, np.ndarray]] = []
     largest = 0.0
     for block in structure.blocks:
-        total = np.zeros((block.size, block.size))
-        for S in block.dense_penalties():
-            norm = np.linalg.norm(S, "fro")
-            if norm:
-                total += S / norm
-        eigs, vectors = np.linalg.eigh(total)
+        eigs, vectors = np.linalg.eigh(_normalized_penalty_total(block))
         spectra.append((block, eigs, vectors))
         largest = max(largest, float(np.max(eigs)) if len(eigs) else 0.0)
     cutoff = largest * _EPS_TWO_THIRDS

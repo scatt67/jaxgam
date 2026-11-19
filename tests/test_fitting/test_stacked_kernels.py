@@ -32,6 +32,8 @@ from jaxgam.fitting.discrete_ops import (
     _block_stop,
     _subblock_pair_crossproduct,
     _validate_device_batch,
+    discrete_row_xwxd,
+    discrete_row_xwxd_bytes,
     discrete_xwxd,
     discrete_xwyd,
     lookup_pair_histogram_crossproduct,
@@ -45,7 +47,7 @@ from jaxgam.formula.discrete_design import (
     DiscreteDesignUnavailable,
 )
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import _AssertCollector
+from tests.helpers import _AssertCollector, check_that
 from tests.tolerances import STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -319,6 +321,40 @@ def test_discrete_xwxd_matches_per_pair_loop(name: str, policy: str) -> None:
 
 
 @pytest.mark.parametrize("name", list(_STRUCTURES))
+def test_discrete_row_xwxd_matches_pair_reductions(name: str) -> None:
+    """Materialized row chunks give the pair kernel's X'WX up to rounding.
+
+    Chunks that divide the batch, that leave a zero-weight padded tail, and
+    that exceed the batch are covered; the result is exactly symmetric.
+    """
+    _, device, selectors, _ = _built(name)
+    weights = jnp.linspace(0.3, 1.7, _N)
+    expected = np.asarray(discrete_xwxd(device, selectors, weights))
+    collector = _AssertCollector()
+    for chunk_rows in (16, 48, 4 * _N):
+        observed = np.asarray(
+            discrete_row_xwxd(device, selectors, weights, chunk_rows=chunk_rows)
+        )
+        _close(collector, f"X'WX, {chunk_rows}-row chunks", observed, expected)
+        collector.check(
+            f"symmetric, {chunk_rows}-row chunks",
+            lambda observed=observed: np.testing.assert_array_equal(
+                observed, observed.T
+            ),
+        )
+    collector.raise_if_any(f"row-chunk X'WX, {name}")
+
+
+def test_discrete_row_xwxd_rejects_bad_inputs() -> None:
+    _, device, selectors, _ = _built("two_mixed_k")
+    with pytest.raises(ValueError, match="weights"):
+        discrete_row_xwxd(device, selectors, jnp.ones(_N - 1), chunk_rows=8)
+    with pytest.raises(ValueError, match="chunk_rows"):
+        discrete_row_xwxd(device, selectors, jnp.ones(_N), chunk_rows=0)
+    assert discrete_row_xwxd_bytes(10, 4) == 8 * (3 * 4 * 10 + 2 * 100)
+
+
+@pytest.mark.parametrize("name", list(_STRUCTURES))
 def test_discrete_working_batch_gram_matches_per_pair_loop(
     name: str, monkeypatch
 ) -> None:
@@ -503,3 +539,104 @@ def test_proposal_kernels_match_per_block_loops(name: str, monkeypatch) -> None:
                 getattr(reference, field),
             )
     collector.raise_if_any(f"stacked proposal kernels, {name}")
+
+
+@pytest.mark.parametrize("name", list(_STRUCTURES))
+def test_working_coordinate_kernels_and_penalty_columns_are_bitwise(name: str) -> None:
+    """Statistics transformed once, and the diagonal penalty paths, change nothing.
+
+    ``working_model_statistics`` applies ``Sl.initial.repara`` once for every
+    trial on one set of statistics; the kernels given those statistics with
+    ``working_coordinates=True`` equal the public-coordinate kernels bitwise.
+    Singleton blocks are declared diagonal (their stacked groups say so) and
+    their ``S_lambda`` column action equals ``penalty_ops.apply`` bitwise.
+    """
+    metadata, gram, rhs, yy, smoothing, log_phi = _working_inputs(name)
+    smoothing = jnp.asarray(smoothing)
+    rho = jnp.log(smoothing)
+    parameters = jnp.r_[rho, log_phi]
+    working_gram, working_rhs = wm.working_model_statistics(gram, rhs, metadata)
+    collector = _AssertCollector()
+    _equal(
+        collector,
+        "working statistics",
+        (working_gram, working_rhs),
+        (
+            jax.jit(wm._initial_working_gram)(gram, metadata.stacked),
+            jax.jit(wm._initial_working_rhs)(rhs, metadata.stacked),
+        ),
+    )
+    inputs = wm.working_model_factor_inputs(gram, metadata, smoothing)
+    _equal(
+        collector,
+        "factor inputs",
+        wm.working_model_factor_inputs(
+            working_gram, metadata, smoothing, working_coordinates=True
+        ),
+        inputs,
+    )
+    factors = factor_working_model(inputs)
+    for label, extra in (
+        ("unknown scale", {"tolerance": jnp.asarray(1e-7)}),
+        ("fixed scale", {"scale_is_fixed": True, "log_scale": jnp.asarray(log_phi)}),
+    ):
+        free = parameters if label == "unknown scale" else parameters[:-1]
+        public = wm.gaussian_working_model_proposal(
+            free, gram, rhs, yy, metadata, factors, smoothing=smoothing, **extra
+        )
+        working = wm.gaussian_working_model_proposal(
+            free,
+            working_gram,
+            working_rhs,
+            yy,
+            metadata,
+            factors,
+            smoothing=smoothing,
+            working_coordinates=True,
+            **extra,
+        )
+        _equal(collector, f"proposal ({label})", working, public)
+    singletons = {
+        index
+        for index, block in enumerate(metadata.penalties.blocks)
+        if len(block.penalties) == 1
+    }
+    collector.check(
+        "singleton groups are declared diagonal",
+        lambda: check_that(
+            all(
+                group.diagonal == (group.count == 1)
+                for group in metadata.stacked.groups
+                if group.count
+            )
+            and {
+                ordinal
+                for group in metadata.stacked.groups
+                if group.diagonal
+                for ordinal in group.ordinals
+            }
+            == singletons,
+            "diagonal groups differ from singleton blocks",
+        ),
+    )
+    columns = jnp.asarray(
+        np.random.default_rng(20261119).normal(
+            size=(metadata.penalties.n_coef, metadata.penalties.n_penalties)
+        )
+    )
+    for label, supplied in (("exp(rho)", None), ("supplied smoothing", smoothing)):
+        _equal(
+            collector,
+            f"S_lambda columns ({label})",
+            jax.jit(wm._penalty_columns)(metadata.penalties, columns, rho, supplied),
+            jax.jit(
+                lambda matrix, rho, supplied: jax.vmap(
+                    lambda vector: penalty_ops.apply(
+                        metadata.penalties, vector, rho, smoothing=supplied
+                    ),
+                    in_axes=1,
+                    out_axes=1,
+                )(matrix)
+            )(columns, rho, supplied),
+        )
+    collector.raise_if_any(f"working-coordinate kernels, {name}")
