@@ -450,6 +450,10 @@ comparison.
 Classification: **reproduces** at the stated size; **does not reproduce at
 this size**; **needs the full size**. Sizes stayed at n <= 20,000.
 
+These classifications are from the dry runs. The status of each finding after
+the full-size measurement run, and three findings that run added (F14 to
+F16), are in `acceptance_results.md`.
+
 | ID | Finding | Smallest reproduction | Classification and observation |
 |---|---|---|---|
 | F1 | Gaussian QR, p = 1001, 100 smooths | `make benchmark-scaling ARGS="--execution stream-gaussian-qr --smooth-count 100 --k 11 --batch-rows 16384 --n 20000 P"`; then `--batch-rows 4096`; then `--batch-rows 16384 --memory-budget-mib 1024` | **Documented limit (user decision, 2026-11-17): the streamed Gaussian QR route does not converge above about 50 penalties; not fixed in this effort.** Reproduces at n = 20,000. B=16384: "Known streamed Gaussian QR workspace requires 558529632 bytes, exceeding FitControl.memory_budget_bytes=536870912". B=4096: `converged=False`, status `iteration limit`. With 1 GiB at B=16384 the preflight passes and the stop is the same `iteration limit`, so the non-convergence does not depend on the batch size. The status is L-BFGS-B's iteration limit, not the relative-reduction stop that the Gaussian QR route showed elsewhere; the harness keeps no projected gradient for an invalid fit (G7) |
