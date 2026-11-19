@@ -8,9 +8,9 @@ compact setup stage.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any, Literal
 
 import numpy as np
@@ -28,7 +28,13 @@ from jaxgam.data.discretize import (
     _deep_size,
     _key,
 )
-from jaxgam.data.source import RowBatch, RowSource, declared_row_vectors
+from jaxgam.data.source import (
+    Column,
+    RowBatch,
+    RowSource,
+    declared_row_vectors,
+    overlay_columns,
+)
 from jaxgam.formula.terms import FormulaSpec, SmoothSpec
 
 
@@ -263,19 +269,19 @@ class _FormulaRowSource:
 
     def scan(self, batch_rows: int):
         for batch in self.source.scan(batch_rows):
-            columns = dict(batch.columns)
-            if self.response not in columns:
+            added: dict[str, Callable[[], Column]] = {}
+            if self.response not in batch.columns:
                 if batch.y is None:
                     raise ValueError(
                         f"Response '{self.response}' is absent from RowSource"
                     )
-                columns[self.response] = batch.y
+                added[self.response] = lambda batch=batch: batch.y
             if self.has_explicit_weights:
-                columns[_REPLAY_ONLY_WEIGHTS] = batch.weight
+                added[_REPLAY_ONLY_WEIGHTS] = lambda batch=batch: batch.weight
             if self.has_explicit_offset:
-                columns[_REPLAY_ONLY_OFFSET] = batch.offset
+                added[_REPLAY_ONLY_OFFSET] = lambda batch=batch: batch.offset
             yield RowBatch(
-                MappingProxyType(columns),
+                overlay_columns(batch.columns, added),
                 batch.y,
                 batch.weight,
                 batch.offset,

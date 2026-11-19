@@ -1430,8 +1430,11 @@ def _device_peak_memory(jax: Any) -> tuple[int | None, str]:
 
 
 class _CountingArrayRowSource:
-    """Count started scans, yielded rows and numeric bytes of row batches.
+    """Count started scans, yielded rows and the bytes readers took.
 
+    ``batch_bytes`` adds each batch's response, weight, offset, validity and
+    position vectors, and each column when a reader takes it: a source that
+    produces columns on use is not made to produce the ones nobody reads.
     ``max_batch_rows`` records the largest batch any scan yielded, so a
     caller can verify that the requested batch size bounded every scan.
     """
@@ -1451,10 +1454,13 @@ class _CountingArrayRowSource:
         return self._source.fingerprint()
 
     def scan(self, batch_rows: int) -> Any:
+        from dataclasses import replace
+
+        from jaxgam.data.source import LazyColumns
+
         self.scan_calls += 1
         for batch in self._source.scan(batch_rows):
-            values = (
-                *batch.columns.values(),
+            vectors = (
                 batch.y,
                 batch.weight,
                 batch.offset,
@@ -1462,12 +1468,29 @@ class _CountingArrayRowSource:
                 batch.row_positions,
             )
             self.batch_bytes += sum(
-                np.asarray(value).nbytes for value in values if value is not None
+                np.asarray(value).nbytes for value in vectors if value is not None
             )
+            columns = batch.columns
+            if isinstance(columns, LazyColumns):
+                batch = replace(
+                    batch,
+                    columns=LazyColumns(
+                        columns,
+                        lambda name, columns=columns: self._taken(columns[name]),
+                    ),
+                )
+            else:
+                self.batch_bytes += sum(
+                    np.asarray(value).nbytes for value in columns.values()
+                )
             batch_rows_yielded = len(batch.row_positions)
             self.rows_yielded += batch_rows_yielded
             self.max_batch_rows = max(self.max_batch_rows, batch_rows_yielded)
             yield batch
+
+    def _taken(self, value: Any) -> Any:
+        self.batch_bytes += np.asarray(value).nbytes
+        return value
 
 
 def _source_scan_count(source: _CountingArrayRowSource | None) -> int | None:

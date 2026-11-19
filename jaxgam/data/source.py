@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import numbers
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -16,6 +18,102 @@ import pandas as pd
 
 Column = npt.NDArray[Any] | pd.Series
 _CHUNK_ROWS = 65_536
+
+
+class LazyColumns(Mapping[str, Column]):
+    """Read-only batch columns, each produced on first use and then kept.
+
+    A scan used to slice every source column for every batch, whoever was
+    reading. Setup reads one or two columns per pass, so with hundreds of
+    columns nearly all of that copying was discarded. A column is now sliced
+    when a reader asks for it; asking twice returns the same array.
+    """
+
+    __slots__ = ("_load", "_loaded", "_n_rows", "_names")
+
+    def __init__(self, names: Iterable[str], load: Callable[[str], Column]) -> None:
+        self._names = dict.fromkeys(names)
+        self._load = load
+        self._loaded: dict[str, Column] = {}
+        self._n_rows: int | None = None
+
+    def expect_rows(self, n_rows: int) -> None:
+        """Check every column against the batch length as it is produced."""
+        self._n_rows = n_rows
+        for name, value in self._loaded.items():
+            self._check(name, value)
+
+    def _check(self, name: str, value: Column) -> None:
+        if self._n_rows is not None and len(value) != self._n_rows:
+            raise ValueError(
+                f"Column '{name}' has {len(value)} rows but batch has {self._n_rows}."
+            )
+
+    def __getitem__(self, name: str) -> Column:
+        try:
+            return self._loaded[name]
+        except KeyError:
+            pass
+        if name not in self._names:
+            raise KeyError(name)
+        value = self._load(name)
+        self._check(name, value)
+        self._loaded[name] = value
+        return value
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._names)
+
+    def __len__(self) -> int:
+        return len(self._names)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._names
+
+
+def overlay_columns(
+    base: Mapping[str, Column], overrides: Mapping[str, Callable[[], Column]]
+) -> LazyColumns:
+    """``base`` with some columns replaced or added, still produced on use."""
+    names = [*base, *(name for name in overrides if name not in base)]
+
+    def load(name: str) -> Column:
+        producer = overrides.get(name)
+        return base[name] if producer is None else producer()
+
+    return LazyColumns(names, load)
+
+
+_FINGERPRINT_MEMO: ContextVar[dict[int, tuple[Any, str]] | None] = ContextVar(
+    "jaxgam_single_fit_fingerprints", default=None
+)
+
+
+@contextmanager
+def single_fit_fingerprints() -> Iterator[None]:
+    """Hash each in-memory source once for the duration of one fit.
+
+    :meth:`ArrayRowSource.fingerprint` rehashes its data on every call so
+    that a mutation shows. A fit asks for the fingerprint before and after
+    every scan, so setup rehashed the whole data set hundreds of times: more
+    than half of setup time at 100 smooths. Inside this scope the first
+    digest of each source is reused. On a normal exit every source is hashed
+    once more, so data that changed during the fit still raise, at the end of
+    the fit instead of at the scan that would have seen it. A nested scope
+    joins the outer one.
+    """
+    if _FINGERPRINT_MEMO.get() is not None:
+        yield
+        return
+    memo: dict[int, tuple[Any, str]] = {}
+    token = _FINGERPRINT_MEMO.set(memo)
+    try:
+        yield
+    finally:
+        _FINGERPRINT_MEMO.reset(token)
+    for source, digest in memo.values():
+        if source.fingerprint() != digest:
+            raise RuntimeError("RowSource changed during the fit")
 
 
 @dataclass(frozen=True)
@@ -31,11 +129,14 @@ class RowBatch:
 
     def __post_init__(self) -> None:
         n_rows = len(self.row_positions)
-        for name, value in self.columns.items():
-            if len(value) != n_rows:
-                raise ValueError(
-                    f"Column '{name}' has {len(value)} rows but batch has {n_rows}."
-                )
+        if isinstance(self.columns, LazyColumns):
+            self.columns.expect_rows(n_rows)
+        else:
+            for name, value in self.columns.items():
+                if len(value) != n_rows:
+                    raise ValueError(
+                        f"Column '{name}' has {len(value)} rows but batch has {n_rows}."
+                    )
         for name, value in (
             ("weight", self.weight),
             ("offset", self.offset),
@@ -258,9 +359,12 @@ class ArrayRowSource:
                 if self._positions is None
                 else self._positions[start:stop]
             )
-            columns = {
-                name: _slice(value, positions) for name, value in self._columns.items()
-            }
+            columns = LazyColumns(
+                self._columns,
+                lambda name, positions=positions: _slice(
+                    self._columns[name], positions
+                ),
+            )
             y = None if self._y is None else np.asarray(self._y[positions], dtype=float)
             weight = (
                 np.ones(len(positions), dtype=float)
@@ -273,7 +377,7 @@ class ArrayRowSource:
                 else np.asarray(self._offset[positions], dtype=float)
             )
             yield RowBatch(
-                MappingProxyType(columns),
+                columns,
                 y,
                 weight,
                 offset,
@@ -282,7 +386,22 @@ class ArrayRowSource:
             )
 
     def fingerprint(self) -> str:
-        """Content/schema/selection fingerprint, recomputed to reveal mutation."""
+        """Content/schema/selection fingerprint, recomputed to reveal mutation.
+
+        Inside :func:`single_fit_fingerprints` the first digest is reused and
+        the data are rehashed once when the scope ends.
+        """
+        memo = _FINGERPRINT_MEMO.get()
+        if memo is not None:
+            known = memo.get(id(self))
+            if known is not None:
+                return known[1]
+        value = self._content_fingerprint()
+        if memo is not None:
+            memo[id(self)] = (self, value)
+        return value
+
+    def _content_fingerprint(self) -> str:
         digest = hashlib.sha256(b"jaxgam-row-source-v2\0")
         for name, value in self._columns.items():
             digest.update(_schema_token(name, value))

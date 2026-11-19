@@ -13,6 +13,7 @@ import pytest
 
 from jaxgam.data.continuous_discretize import (
     RangeGridIndex,
+    _first_occurrence_groups,
     _r_number_text,
     range_grid_index_columns,
 )
@@ -277,6 +278,86 @@ def test_rounding_workspace_is_rejected_before_transform_scan(monkeypatch) -> No
     assert isinstance(result, ExactIndexUnavailable)
     assert "range-grid indexing batch workspace" in result.reason
     assert transformed_scans == []
+
+
+def _row_by_row_groups(columns: list[np.ndarray]) -> tuple[list[int], list[int]]:
+    """First rows and group numbers found by walking the rows one at a time."""
+    seen: dict[tuple, int] = {}
+    first_rows: list[int] = []
+    group: list[int] = []
+    for row in range(len(columns[0])):
+        key = tuple(
+            "nan" if isinstance(value, float) and np.isnan(value) else value
+            for value in (column[row].item() for column in columns)
+        )
+        if key not in seen:
+            seen[key] = len(first_rows)
+            first_rows.append(row)
+        group.append(seen[key])
+    return first_rows, group
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        [np.array([0.5, 0.25, 0.5, np.nan, 0.25, np.nan, -0.0, 0.0, 3.0])],
+        [np.array([3, 1, 3, 2, 1, 1], dtype=np.int64)],
+        [np.array([True, False, True, True])],
+        [
+            np.array([0.0, 1.0, 0.0, 1.0, np.nan, np.nan, 0.0]),
+            np.array([5, 5, 5, 6, 7, 7, 5], dtype=np.int32),
+        ],
+        [
+            np.random.default_rng(3).integers(0, 7, 400).astype(float),
+            np.random.default_rng(4).integers(0, 5, 400).astype(float),
+            np.random.default_rng(5).integers(0, 3, 400),
+        ],
+    ],
+    ids=["float-nan-zero", "int", "bool", "two-columns-nan", "three-columns"],
+)
+def test_first_occurrence_groups_match_a_row_by_row_walk(
+    columns: list[np.ndarray],
+) -> None:
+    first_rows, group = _first_occurrence_groups(columns)
+    expected_first, expected_group = _row_by_row_groups(columns)
+
+    assert first_rows.tolist() == expected_first
+    assert group.tolist() == expected_group
+
+
+def test_first_occurrence_groups_do_not_rely_on_the_order_of_factor_codes(
+    monkeypatch,
+) -> None:
+    """Codes handed out in any order still give first rows in row order."""
+    factorize = pd.factorize
+
+    def reversed_codes(values, **kwargs):
+        codes, levels = factorize(values, **kwargs)
+        return len(levels) - 1 - codes, levels[::-1]
+
+    monkeypatch.setattr(pd, "factorize", reversed_codes)
+    columns = [np.array([2.0, 7.0, 2.0, np.nan, 7.0, 5.0, np.nan])]
+
+    first_rows, group = _first_occurrence_groups(columns)
+
+    assert first_rows.tolist() == [0, 1, 3, 5]
+    assert group.tolist() == [0, 1, 0, 2, 1, 3, 2]
+
+
+def test_first_occurrence_groups_leave_non_numeric_columns_row_by_row() -> None:
+    columns = [np.array(["a", "b", "a"], dtype=object), np.array([1.0, 2.0, 1.0])]
+
+    first_rows, group = _first_occurrence_groups(columns)
+
+    assert first_rows.tolist() == [0, 1, 2]
+    assert group.tolist() == [0, 1, 2]
+
+
+def test_first_occurrence_groups_of_an_empty_batch() -> None:
+    first_rows, group = _first_occurrence_groups([np.empty(0)])
+
+    assert first_rows.tolist() == []
+    assert group.tolist() == []
 
 
 def test_range_grid_module_imports_without_jax() -> None:

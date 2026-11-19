@@ -6,11 +6,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import jaxgam.data.source as source_module
 from jaxgam.data.source import (
     ArrayRowSource,
     DataFrameRowSource,
+    LazyColumns,
     MemmapRowSource,
     RowBatch,
+    overlay_columns,
+    single_fit_fingerprints,
 )
 
 
@@ -165,3 +169,134 @@ def test_array_sources_declare_supplied_weights_and_offset(tmp_path) -> None:
         {"x": tmp_path / "x.npy"}, weights=tmp_path / "w.npy"
     )
     assert (memmap.has_explicit_weights, memmap.has_explicit_offset) == (True, False)
+
+
+def _count_calls(monkeypatch: pytest.MonkeyPatch, owner: object, name: str) -> list:
+    """Record each call of ``owner.name`` while leaving it working."""
+    calls: list = []
+    original = getattr(owner, name)
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, name, counted)
+    return calls
+
+
+def test_array_source_slices_a_column_only_when_it_is_read(monkeypatch) -> None:
+    source = ArrayRowSource(
+        {"a": np.arange(5.0), "b": np.arange(5.0) * 2, "c": np.arange(5.0) * 3},
+        y=np.arange(5.0),
+    )
+    slices = _count_calls(monkeypatch, source_module, "_slice")
+
+    batches = list(source.scan(2))
+
+    assert slices == []
+    columns = batches[0].columns
+    assert isinstance(columns, LazyColumns)
+    assert list(columns) == ["a", "b", "c"]
+    assert len(columns) == 3
+    assert "b" in columns
+    assert "z" not in columns
+    np.testing.assert_array_equal(columns["b"], [0.0, 2.0])
+    assert columns["b"] is columns["b"]
+    assert len(slices) == 1
+    with pytest.raises(KeyError):
+        columns["z"]
+    with pytest.raises(TypeError):
+        columns["a"] = np.zeros(2)  # type: ignore[index]
+    # Reading every column still yields what an eager scan did.
+    assert {name: value.tolist() for name, value in batches[2].columns.items()} == {
+        "a": [4.0],
+        "b": [8.0],
+        "c": [12.0],
+    }
+
+
+def test_lazy_columns_are_checked_against_the_batch_length_when_read() -> None:
+    columns = LazyColumns(
+        ["good", "bad"], {"good": np.zeros(2), "bad": np.zeros(3)}.get
+    )
+    batch = RowBatch(
+        columns,
+        None,
+        np.ones(2),
+        np.zeros(2),
+        np.ones(2, bool),
+        np.arange(2, dtype=np.intp),
+    )
+
+    assert len(batch.columns["good"]) == 2
+    with pytest.raises(ValueError, match="Column 'bad' has 3 rows but batch has 2"):
+        batch.columns["bad"]
+
+
+def test_overlay_columns_adds_and_replaces_without_reading_the_rest() -> None:
+    read: list[str] = []
+
+    def load(name: str) -> np.ndarray:
+        read.append(name)
+        return np.full(2, float(len(name)))
+
+    base = LazyColumns(["x", "yy"], load)
+    produced: list[str] = []
+
+    def replacement() -> np.ndarray:
+        produced.append("x")
+        return base["x"] + 10.0
+
+    columns = overlay_columns(
+        base, {"x": replacement, "extra": lambda: np.array([7.0, 8.0])}
+    )
+
+    assert list(columns) == ["x", "yy", "extra"]
+    assert read == []
+    assert produced == []
+    np.testing.assert_array_equal(columns["x"], [11.0, 11.0])
+    np.testing.assert_array_equal(columns["extra"], [7.0, 8.0])
+    assert read == ["x"]
+    assert produced == ["x"]
+
+
+def test_single_fit_fingerprints_hash_once_then_verify_on_exit(monkeypatch) -> None:
+    values = np.arange(6.0)
+    source = ArrayRowSource({"x": values}, y=np.arange(6.0))
+    hashes = _count_calls(monkeypatch, ArrayRowSource, "_content_fingerprint")
+
+    outside = source.fingerprint()
+    assert source.fingerprint() == outside
+    assert len(hashes) == 2
+
+    with single_fit_fingerprints():
+        inside = [source.fingerprint() for _ in range(5)]
+        with single_fit_fingerprints():
+            inside.append(source.fingerprint())
+        assert len(hashes) == 3
+    assert set(inside) == {outside}
+    assert len(hashes) == 4
+
+    def mutate_inside_a_fit() -> None:
+        with single_fit_fingerprints():
+            before = source.fingerprint()
+            values[0] = 99.0
+            assert source.fingerprint() == before
+
+    with pytest.raises(RuntimeError, match="RowSource changed during the fit"):
+        mutate_inside_a_fit()
+    assert source.fingerprint() != outside
+
+
+def test_single_fit_fingerprints_do_not_mask_an_error_from_the_fit() -> None:
+    values = np.arange(4.0)
+    source = ArrayRowSource({"x": values})
+
+    def fail_inside_a_fit() -> None:
+        with single_fit_fingerprints():
+            source.fingerprint()
+            values[0] = 5.0
+            raise KeyError("fit failed")
+
+    with pytest.raises(KeyError, match="fit failed"):
+        fail_inside_a_fit()

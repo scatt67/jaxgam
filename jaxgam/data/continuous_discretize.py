@@ -14,7 +14,6 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any, Literal
 
 import numpy as np
@@ -29,7 +28,12 @@ from jaxgam.data.discretize import (
     _deep_size,
     _key,
 )
-from jaxgam.data.source import RowBatch, RowSource, declared_row_vectors
+from jaxgam.data.source import (
+    RowBatch,
+    RowSource,
+    declared_row_vectors,
+    overlay_columns,
+)
 
 # The pinned R 4.5 RNG, sampler and number labels are shared with the radial
 # knot setup; they are re-exported here for this module's existing importers.
@@ -388,11 +392,14 @@ class _RangeGridSource:
 
     def scan(self, batch_rows: int):
         for batch in self.source.scan(batch_rows):
-            columns = dict(batch.columns)
-            for name, grid in zip(self.metric_names, self.grids, strict=True):
-                columns[name] = snap_to_range_grid(columns[name], grid)
+            snapped = {
+                name: lambda batch=batch, name=name, grid=grid: snap_to_range_grid(
+                    batch.columns[name], grid
+                )
+                for name, grid in zip(self.metric_names, self.grids, strict=True)
+            }
             yield RowBatch(
-                MappingProxyType(columns),
+                overlay_columns(batch.columns, snapped),
                 batch.y,
                 batch.weight,
                 batch.offset,
@@ -445,6 +452,54 @@ def _r_row_token(
         else:
             components.append(_r_number_text(value))
     return "*".join(components)
+
+
+_GROUPED_KINDS = frozenset("fiub")
+_MAX_COMBINED_CODE = 1 << 62
+
+
+def _first_occurrence_groups(
+    columns: list[np.ndarray],
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """Group a batch's exactly equal rows, in order of first occurrence.
+
+    Returns ``(first_rows, group)``: the row number at which each distinct row
+    first occurs, ascending, and for every row the position of its group in
+    ``first_rows``. Rows are equal when every column compares equal, with NaN
+    equal to NaN and ``0.0`` equal to ``-0.0``, which is also when
+    :func:`_key` and :func:`_r_row_token` give them one key. The caller can
+    therefore key only ``first_rows``, in order, and meet new keys exactly
+    where a row-by-row walk would.
+
+    Columns that are not plain numeric arrays, and batches whose combined code
+    could overflow, get one group per row: the row-by-row walk.
+    """
+    n_rows = len(columns[0]) if columns else 0
+    identity = np.arange(n_rows, dtype=np.intp)
+    if n_rows == 0 or any(
+        column.dtype.kind not in _GROUPED_KINDS for column in columns
+    ):
+        return identity, identity
+    group: npt.NDArray[np.int64] | None = None
+    for column in columns:
+        codes, levels = pd.factorize(column, use_na_sentinel=False)
+        if group is None:
+            group = codes.astype(np.int64, copy=False)
+            continue
+        n_groups = int(group.max()) + 1
+        if n_groups * len(levels) > _MAX_COMBINED_CODE:
+            return identity, identity
+        group, _ = pd.factorize(group * len(levels) + codes)
+    assert group is not None
+    # The first row of each code, whatever order the codes were handed out
+    # in: writing the rows in reverse leaves the smallest row of each code.
+    rows = np.arange(n_rows, dtype=np.intp)
+    first = np.empty(int(group.max()) + 1, dtype=np.intp)
+    first[group[::-1]] = rows[::-1]
+    order = np.argsort(first, kind="stable")
+    position = np.empty(len(order), dtype=np.intp)
+    position[order] = np.arange(len(order), dtype=np.intp)
+    return first[order], position[group]
 
 
 def _uniquecombs_index(
@@ -528,6 +583,9 @@ def _uniquecombs_index(
     scan_offset = 0
     construction_bytes = initial_construction_bytes
     construction_peak = construction_bytes
+    fixed_size = False
+    scalar_dtype: np.dtype[Any] | None = None
+    payload_of_scalar: int | None = None
     start_fingerprint = source.fingerprint()
     try:
         for batch in source.scan(batch_rows):
@@ -544,7 +602,20 @@ def _uniquecombs_index(
                         f"Compressed column '{name}' has incompatible batch length"
                     )
                 columns.append(column)
-            for local in range(len(batch.row_positions)):
+            if not (
+                fixed_size
+                and len(columns) == 1
+                and columns[0].dtype.kind in _GROUPED_KINDS
+                and columns[0].dtype == scalar_dtype
+            ):
+                fixed_size = (
+                    len(columns) == 1 and columns[0].dtype.kind in _GROUPED_KINDS
+                )
+                scalar_dtype = columns[0].dtype if fixed_size else None
+                payload_of_scalar = None
+            first_rows, group = _first_occurrence_groups(columns)
+            items = np.empty(len(first_rows), dtype=np.int32)
+            for slot, local in enumerate(first_rows.tolist()):
                 values = tuple(column[local] for column in columns)
                 key: Any = (
                     _key(values)
@@ -554,7 +625,14 @@ def _uniquecombs_index(
                 item = index.get(key)
                 if item is None:
                     old_containers = sys.getsizeof(index) + sys.getsizeof(unique)
-                    payload_bytes = _deep_size((key, values))
+                    if fixed_size and key[0][0] != "nan":
+                        # One fixed-size NumPy scalar and its key: every
+                        # value of the column weighs the same.
+                        if payload_of_scalar is None:
+                            payload_of_scalar = _deep_size((key, values))
+                        payload_bytes = payload_of_scalar
+                    else:
+                        payload_bytes = _deep_size((key, values))
                     growth_bound = (
                         4 * sys.getsizeof(index)
                         + 3 * sys.getsizeof(unique)
@@ -593,7 +671,8 @@ def _uniquecombs_index(
                     construction_bytes += (
                         payload_bytes + sys.getsizeof(item) + container_growth
                     )
-                selector[scan_offset + local] = item
+                items[slot] = item
+            selector[scan_offset:scan_stop] = items[group]
             scan_offset = scan_stop
         if scan_offset != n_rows:
             raise RuntimeError("RowSource yielded fewer than its advertised rows")

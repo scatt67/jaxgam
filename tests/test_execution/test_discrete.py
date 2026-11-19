@@ -10,10 +10,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import jaxgam.data.source as source_module
 import jaxgam.execution.discrete as discrete_execution
 import jaxgam.execution.discrete_regular as discrete_regular_execution
 from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
-from jaxgam.data.source import DataFrameRowSource
+from jaxgam.data.source import ArrayRowSource, DataFrameRowSource
 from jaxgam.families.standard import Gaussian
 from jaxgam.formula.continuous_design import build_continuous_discrete_design
 from jaxgam.formula.continuous_setup import (
@@ -607,3 +608,60 @@ def test_declared_integer_categories_follow_level_order_like_pinned_bam(
             ),
         )
     collector.raise_if_any(f"{term} {order} vs pinned bam")
+
+
+def _many_smooth_source(n_smooths: int, n_rows: int = 240) -> ArrayRowSource:
+    rng = np.random.default_rng(11)
+    columns = {f"x{index}": rng.uniform(size=n_rows) for index in range(n_smooths)}
+    y = sum(np.sin(3.0 * value) for value in columns.values()) + rng.normal(
+        0.0, 0.1, n_rows
+    )
+    return ArrayRowSource(columns, y=y)
+
+
+@pytest.mark.parametrize("n_smooths", [2, 6])
+def test_setup_cost_per_fit_does_not_grow_with_the_other_columns(
+    monkeypatch, n_smooths: int
+) -> None:
+    """One fit hashes its source twice and reads only the columns it uses.
+
+    Setup scans the source several times per smooth. It used to rehash the
+    whole source around every scan and to slice every column of every batch,
+    so both costs grew with the square of the number of smooths.
+    """
+    source = _many_smooth_source(n_smooths)
+    formula = "y ~ " + " + ".join(
+        f"s(x{index},bs='cr',k=5)" for index in range(n_smooths)
+    )
+    hashes: list[int] = []
+    slices: list[int] = []
+    scans: list[int] = []
+    content_fingerprint = ArrayRowSource._content_fingerprint
+    slice_column = source_module._slice
+    scan = ArrayRowSource.scan
+
+    def counted_fingerprint(self):
+        hashes.append(1)
+        return content_fingerprint(self)
+
+    def counted_slice(value, positions):
+        slices.append(1)
+        return slice_column(value, positions)
+
+    def counted_scan(self, batch_rows):
+        scans.append(1)
+        return scan(self, batch_rows)
+
+    monkeypatch.setattr(ArrayRowSource, "_content_fingerprint", counted_fingerprint)
+    monkeypatch.setattr(source_module, "_slice", counted_slice)
+    monkeypatch.setattr(ArrayRowSource, "scan", counted_scan)
+
+    result = GAM(formula, sp=[0.5] * n_smooths, control=_control(240)).fit(
+        source, result="prediction"
+    )
+
+    assert np.all(np.isfinite(np.asarray(result.coefficients)))
+    assert len(hashes) == 2
+    # With 240-row batches every scan is one batch. Reading every column of
+    # every scan would take len(scans) * n_smooths slices.
+    assert len(slices) <= 2 * len(scans)

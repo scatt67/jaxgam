@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Literal, overload
 import numpy as np
 
 from jaxgam.control import FitControl
-from jaxgam.data.source import RowSource
+from jaxgam.data.source import RowSource, single_fit_fingerprints
 from jaxgam.families.base import ExponentialFamily
 from jaxgam.families.extended import ExtendedFamily
 from jaxgam.families.registry import get_family
@@ -927,25 +927,28 @@ class GAM:
             )
         spec = parse_formula(self.formula)
         device = _resolve_device(self.device)
-        state = (
-            fit_discrete_gaussian(
-                spec, data, self.sp, control=self.control, device=device
+        # One content hash of the source when the fit starts and one when it
+        # ends, not one before and after every scan.
+        with single_fit_fingerprints():
+            state = (
+                fit_discrete_gaussian(
+                    spec, data, self.sp, control=self.control, device=device
+                )
+                if additive
+                else fit_discrete_regular(
+                    spec, data, family, self.sp, control=self.control, device=device
+                )
             )
-            if additive
-            else fit_discrete_regular(
-                spec, data, family, self.sp, control=self.control, device=device
-            )
-        )
-        return _with_execution_fallback_reason(
-            GAMPredictionResult._from_discrete(
+            fitted = GAMPredictionResult._from_discrete(
                 fit_state=state,
                 family=family,
                 formula=self.formula,
                 method=self.method,
                 control=self.control,
                 supplied_smoothing_params=self.sp,
-            ),
-            _discrete_gaussian_qr_request_fallback(self.control),
+            )
+        return _with_execution_fallback_reason(
+            fitted, _discrete_gaussian_qr_request_fallback(self.control)
         )
 
 
