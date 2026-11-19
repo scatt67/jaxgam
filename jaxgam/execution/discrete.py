@@ -59,7 +59,7 @@ from jaxgam.formula.discrete_design import (
     DiscreteMemoryPlan,
     FrozenDiscreteDesign,
 )
-from jaxgam.formula.fitting_prepare import total_penalty_spaces
+from jaxgam.formula.fitting_prepare import total_penalty_rank, total_penalty_spaces
 from jaxgam.formula.predict_matrix import PredictSpec
 from jaxgam.formula.terms import FormulaSpec
 from jaxgam.inference.predictor import PivotedQRFisherFactor
@@ -218,7 +218,7 @@ def _solver_plan(
 
 
 def _penalty_rank(structure: PenaltyStructure) -> int:
-    return sum(basis.shape[1] for _, basis in total_penalty_spaces(structure)[1])
+    return total_penalty_rank(structure)
 
 
 def _pinned_criterion_null_dimension(
