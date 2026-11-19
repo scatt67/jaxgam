@@ -771,6 +771,13 @@ class _ReviewedFlatSp:
 # replica): on x86_64 the sp vector is 1.89x STRICT from pinned R, so the
 # allowance applies there; on x86_64-avx512 it is 0.368x STRICT, so that class
 # is reviewed with no allowance and asserts STRICT.
+#
+# Linux arm64 (root decision 2026-11-18): the pinned image computes the same
+# digest c8354644... and its sp vector is 0.881x STRICT from pinned R (max
+# relative 8.814e-11; full suite on 8a75064). That is inside STRICT by 12% on
+# a vector pinned R itself moves 0.2-8.6x STRICT under one-ulp offset noise,
+# so the class takes the allowance rather than a STRICT claim one rounding
+# could break. Every physical field stays STRICT there, as on every class.
 _REVIEWED_FLAT_SP = {
     "binomial-log-separate_re": _ReviewedFlatSp(
         "19e17fd49337277e81b57edaa7b99acf3ef1d2660cb5e7a0c20ed27c6fb6a90b",
@@ -791,6 +798,10 @@ _REVIEWED_FLAT_SP = {
             ),
             # run 44051330720: sp 1.89x STRICT (max relative 1.887e-10).
             "x86_64": (
+                "c835464407eeea1e737b90fefa3ad95e3182eeb151ea46fb2077f246a876aa42"
+            ),
+            # pinned image on 8a75064: sp 0.881x STRICT (max relative 8.814e-11).
+            "linux-aarch64": (
                 "c835464407eeea1e737b90fefa3ad95e3182eeb151ea46fb2077f246a876aa42"
             ),
         },
@@ -1542,6 +1553,11 @@ def test_tie_replay_is_explicit_and_bounded():
                 )
 
 
+# What cpu_platform_class() returns when an x86 CPU's flags cannot be read:
+# a real class that no reviewed table has an entry for.
+_UNREVIEWED_CLASS = "x86_64-unreadable-flags"
+
+
 def _flat_sp_case_inputs(case: str):
     if case == "poisson-low-counts":
         return _boundary_frame("poisson_low_counts")
@@ -1551,7 +1567,7 @@ def _flat_sp_case_inputs(case: str):
 def test_flat_sp_class_without_entry_fails_with_digest_and_distance(monkeypatch):
     """A per-class record fails on an unreviewed class, printing what to review."""
     frame, weights, offset = _flat_sp_case_inputs("poisson-low-counts")
-    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: "linux-aarch64")
+    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: _UNREVIEWED_CLASS)
     with pytest.raises(AssertionError) as raised:
         _flat_sp_tolerance(
             "poisson-low-counts",
@@ -1566,7 +1582,7 @@ def test_flat_sp_class_without_entry_fails_with_digest_and_distance(monkeypatch)
             np.array([1.0, 2.0]),
         )
     message = str(raised.value)
-    assert "linux-aarch64" in message
+    assert _UNREVIEWED_CLASS in message
     assert _input_digest(frame, weights, offset) in message
     assert "x STRICT (max relative 5.000e-10)" in message
 
@@ -1589,7 +1605,7 @@ def test_flat_sp_reviewed_strict_class_asserts_strict_without_failing(monkeypatc
     )
     monkeypatch.setitem(globals(), "cpu_platform_class", lambda: "x86_64-avx512")
     assert _flat_sp_tolerance(*arguments) is STRICT
-    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: "linux-aarch64")
+    monkeypatch.setitem(globals(), "cpu_platform_class", lambda: _UNREVIEWED_CLASS)
     with pytest.raises(AssertionError, match="no reviewed digest"):
         _flat_sp_tolerance(*arguments)
 

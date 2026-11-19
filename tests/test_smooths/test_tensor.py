@@ -133,9 +133,14 @@ class TestAbsorbConstraint:
         # Symmetric
         np.testing.assert_allclose(S_c, S_c.T, rtol=STRICT.rtol, atol=STRICT.atol)
 
-        # PSD
+        # PSD, relative to the spectrum: the constrained penalty has one
+        # structural zero eigenvalue and a largest one of 3.4e4, so eigvalsh
+        # returns that zero only to about eps * 3.4e4 = 7.6e-12 of either
+        # sign. An absolute STRICT.atol is below that rounding floor (the
+        # pinned Linux arm64 image returned -1.36e-12, 4e-17 of the largest).
         eigvals = np.linalg.eigvalsh(S_c)
-        assert np.all(eigvals >= -STRICT.atol), (
+        floor = STRICT.atol + STRICT.rtol * np.max(np.abs(eigvals))
+        assert np.all(eigvals >= -floor), (
             f"Constrained penalty has negative eigenvalue: {np.min(eigvals):.2e}"
         )
 
