@@ -407,9 +407,9 @@ def test_every_setup_scan_honors_the_requested_batch_rows() -> None:
         parse_formula(_BUDGET_FORMULA), source, family=Gaussian(), batch_rows=7
     )
     # Two one-row peeks, one in-memory exact knot scan for both cubic
-    # covariates (no budget), centering/alias, initial beta, valid-domain and
-    # rank scans.
-    assert [rows for rows, _ in source.scans] == [1, 1] + [7] * 5
+    # covariates (no budget), centering/alias, initial beta with the rank
+    # factor, and valid-domain scans.
+    assert [rows for rows, _ in source.scans] == [1, 1] + [7] * 4
     for rows, lengths in source.full_scans():
         assert max(lengths) <= rows
         assert sum(lengths) == len(data)
@@ -418,7 +418,7 @@ def test_every_setup_scan_honors_the_requested_batch_rows() -> None:
     unfitted = prepare_model(parse_formula(_BUDGET_FORMULA), direct, batch_rows=5)
     direct.scans.clear()
     refitted = prepare_fitting(unfitted, direct, Gaussian(), batch_rows=5)
-    assert [rows for rows, _ in direct.scans] == [5] * 3
+    assert [rows for rows, _ in direct.scans] == [5] * 2
     np.testing.assert_allclose(
         refitted.fitting.beta_init,
         prepared.fitting.beta_init,
@@ -498,7 +498,7 @@ def test_setup_budget_shrinks_every_scan(monkeypatch) -> None:
         # A schema peek, then fitting scans sized by the knot-free workspace.
         fitting_rows = captured[-1][1].batch_rows(len(data), budget)
         assert fitting_rows >= rows
-        assert [requested for requested, _ in direct.scans] == [1] + [fitting_rows] * 3
+        assert [requested for requested, _ in direct.scans] == [1] + [fitting_rows] * 2
 
 
 def test_setup_budget_below_one_row_is_rejected_before_full_scans(
@@ -575,8 +575,9 @@ def test_setup_without_unpenalized_columns_has_no_rank_factor() -> None:
     )
     assert prepared.fitting.total_penalty_null_dim == 0
     assert prepared.fitting.unpenalized_rank_deficit == 0
-    # The rank pass still replays and validates every batch.
-    assert [rows for rows, _ in source.full_scans()] == [7] * 5
+    # Knot, centering, initial-beta (with the empty rank pass) and
+    # valid-domain scans; every one validates every batch.
+    assert [rows for rows, _ in source.full_scans()] == [7] * 4
 
 
 def test_valid_domain_fallback_scan_honors_setup_batch_rows() -> None:
@@ -589,8 +590,9 @@ def test_valid_domain_fallback_scan_honors_setup_batch_rows() -> None:
     for batch_rows in (len(data), 7):
         source = _RecordingSource(data)
         prepared = prepare_model(spec, source, family=family, batch_rows=batch_rows)
-        # Centering, initial beta, valid-domain, fallback and rank passes.
-        assert [rows for rows, _ in source.full_scans()] == [batch_rows] * 5
+        # Centering, initial beta with the rank factor, valid-domain and
+        # fallback passes.
+        assert [rows for rows, _ in source.full_scans()] == [batch_rows] * 4
         np.testing.assert_allclose(
             prepared.fitting.beta_init,
             np.asarray(dense.beta_init),

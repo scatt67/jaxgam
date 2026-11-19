@@ -352,10 +352,11 @@ def test_public_stream_threads_fit_control_into_setup(monkeypatch) -> None:
         control=FitControl(execution="stream", memory_budget_bytes=budget),
     ).fit(shrunk, result="prediction")
     assert result.converged
-    setup_scans = shrunk.scans[2 : 2 + 5]  # knot, centering and fitting preparation
+    # Knot, centering, then initial beta with the rank factor and valid domain.
+    setup_scans = shrunk.scans[2 : 2 + 4]
     assert [requested for requested, _ in shrunk.scans[:2]] == [1, 1]
     assert {requested for requested, _ in setup_scans} == {5}
-    assert {requested for requested, _ in shrunk.scans[7:]} == {65_536}
+    assert {requested for requested, _ in shrunk.scans[6:]} == {65_536}
 
 
 def _stream_fit_fields(result) -> dict[str, np.ndarray]:

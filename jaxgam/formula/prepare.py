@@ -262,9 +262,11 @@ class SetupWorkspace:
             # raw cubic block, and the evaluator's (rows, k) temporaries plus
             # its row vectors and parametric conversions.
             2 * width + 4 * k_max + n_parametric + 16,
-            # Fitting/rank passes: two designs (public/fitting, weighted
+            # Fitting passes: two designs (public/fitting, weighted
             # diag(X'WX), or design plus its Fortran QR stack) with local
-            # transform products and the QR isfinite mask.
+            # transform products and the QR isfinite mask; or the fitting
+            # design with the rank pieces and their column_stack copy, at
+            # most two more designs' width.
             3 * width,
         )
         # The consumed batch can stay referenced while the next one is built.
@@ -1125,6 +1127,20 @@ def _prepare_fitting(
     )
     public = prepared.penalties or PenaltyStructure(prepared.n_coef, ())
     transformed = reparameterize_structure(public)
+    null_bases, range_bases = total_penalty_spaces(transformed)
+    total_penalty_rank = sum(basis.shape[1] for _, basis in range_bases)
+    covered = np.zeros(prepared.n_coef, dtype=bool)
+    for block in transformed.blocks:
+        covered[block.start : block.stop] = True
+    null_bases = [(block, basis) for block, basis in null_bases if basis.shape[1]]
+    rank_columns = int(np.sum(~covered)) + sum(
+        basis.shape[1] for _, basis in null_bases
+    )
+    # Canonical leaves make the rank decision independent of batch_rows. The
+    # unpenalized rank design is a column selection of the fitting design, so
+    # the first scan feeds it the same rows in the same order as a scan of
+    # its own would.
+    rank_tree = _CanonicalTreeR(rank_columns) if rank_columns else None
     gram = np.zeros((prepared.n_coef, prepared.n_coef))
     rhs = np.zeros(prepared.n_coef)
     qr_R = np.empty((0, prepared.n_coef))
@@ -1158,6 +1174,13 @@ def _prepare_fitting(
         del weighted_public
         X = apply_transforms_to_design(X_public, transformed)
         del X_public
+        if rank_tree is not None:
+            pieces = [X[:, ~covered]]
+            pieces.extend(
+                X[:, block.start : block.stop] @ basis for block, basis in null_bases
+            )
+            rank_tree.update(np.column_stack(pieces))
+            del pieces
         # Calling initialize is also the family-owned response-domain check.
         mu = np.asarray(family.initialize(y, wt), dtype=float)
         eta = np.asarray(family.link.link(mu), dtype=float)
@@ -1221,32 +1244,6 @@ def _prepare_fitting(
             qr_R, qr_target = _merge_qr(stacked, qr_target, target_batch)
             del stacked
         beta_init, _, _, _ = np.linalg.lstsq(qr_R, qr_target, rcond=dense_rcond)
-    null_bases, range_bases = total_penalty_spaces(transformed)
-    total_penalty_rank = sum(basis.shape[1] for _, basis in range_bases)
-    covered = np.zeros(prepared.n_coef, dtype=bool)
-    for block in transformed.blocks:
-        covered[block.start : block.stop] = True
-    null_bases = [(block, basis) for block, basis in null_bases if basis.shape[1]]
-    rank_columns = int(np.sum(~covered)) + sum(
-        basis.shape[1] for _, basis in null_bases
-    )
-    # Canonical leaves make the rank decision independent of batch_rows.
-    rank_tree = _CanonicalTreeR(rank_columns) if rank_columns else None
-    for batch in _scan_valid(source, setup_rows):
-        if not np.all(batch.valid):
-            raise NotImplementedError(
-                "Prepared setup does not yet support padded batches."
-            )
-        if rank_tree is None:
-            continue
-        X = apply_transforms_to_design(prepared.evaluate_batch(batch), transformed)
-        pieces = [X[:, ~covered]]
-        pieces.extend(
-            X[:, block.start : block.stop] @ basis for block, basis in null_bases
-        )
-        del X
-        rank_tree.update(np.column_stack(pieces))
-        del pieces
     rank_R = rank_tree.finalize() if rank_tree is not None else np.empty((0, 0))
     singular_values = np.linalg.svd(rank_R, compute_uv=False)
     rank_tolerance = (
