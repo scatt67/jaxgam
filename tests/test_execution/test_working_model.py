@@ -16,7 +16,7 @@ from jaxgam import GAM, ContinuousDiscretizationControl, FitControl
 from jaxgam.data.source import DataFrameRowSource
 from jaxgam.formula.continuous_setup import build_continuous_discrete_setup
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import _AssertCollector, check_that
+from tests.helpers import _AssertCollector, check_that, r_links_pinned_openblas
 from tests.test_fitting.test_working_model import (
     check_newton_step,
     ldet_tolerance,
@@ -932,7 +932,16 @@ def test_extreme_start_working_model_matches_pinned_bam(r_bridge, zero_weights, 
         ),
         ("coefficients", selected.coefficients, expected.coefficients, MODERATE),
         ("fitted values", fitted, expected.fitted_values, MODERATE),
-        ("deviance", deviance, expected.deviance, STRICT),
+        # STRICT against pinned R. An R on another LAPACK ends this
+        # extreme-start run a rounding away: on macOS (libRlapack over
+        # Accelerate) the deviance is 1.4x and 1.6x STRICT from it for the
+        # two low starts (2026-11-19), so it is MODERATE there.
+        (
+            "deviance",
+            deviance,
+            expected.deviance,
+            STRICT if r_links_pinned_openblas(r_bridge) else MODERATE,
+        ),
         ("scale", selected.scale, expected.scale, MODERATE),
     ):
         collector.check(

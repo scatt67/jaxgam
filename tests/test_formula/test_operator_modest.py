@@ -18,8 +18,11 @@ from jaxgam.formula.operator_prepare import (
 )
 from jaxgam.formula.parser import parse_formula
 from jaxgam.inference.operator_geometry import OperatorPredictionGeometry
-from jaxgam.smooths.source_lapack import cubic_shrinkage_workspace_bound
-from tests.helpers import _AssertCollector
+from jaxgam.smooths.source_lapack import (
+    cubic_shrinkage_workspace_bound,
+    scipy_uses_accelerate_lapack,
+)
+from tests.helpers import _AssertCollector, r_links_pinned_openblas
 from tests.tolerances import STRICT
 
 
@@ -95,6 +98,16 @@ def test_constant_numeric_by_constraint_and_penalty_match_pinned(
     frame.z = constant
     expression = f"s(x,bs='{basis}',k=5,by=z)"
     expected = r_bridge.smooth_construct(expression, frame, absorb_cons=True)
+    # A cs penalty depends on the basis R's LAPACK returns for the penalty
+    # null space (see test_cubic_shrinkage_raw_penalties_match_pinned_r_...
+    # in tests/test_smooths/test_source_lapack.py, which checks what does not
+    # depend on it). Its entries are compared with R's only when this side
+    # runs R's provider.
+    penalty_is_comparable = (
+        basis != "cs"
+        or r_links_pinned_openblas(r_bridge)
+        or scipy_uses_accelerate_lapack()
+    )
     collector = _AssertCollector()
     for B in (1, 7, 19):
         source = DataFrameRowSource(frame, response="y")
@@ -106,10 +119,12 @@ def test_constant_numeric_by_constraint_and_penalty_match_pinned(
         actual = np.vstack(
             [model.evaluate_batch(b).modest_values for b in source.scan(B)]
         )
-        for name, value, reference in (
-            ("base constraint before by", actual, expected["X"]),
-            ("source penalty", model.penalties.materialize(), expected["S"][0]),
-        ):
+        fields = [("base constraint before by", actual, expected["X"])]
+        if penalty_is_comparable:
+            fields.append(
+                ("source penalty", model.penalties.materialize(), expected["S"][0])
+            )
+        for name, value, reference in fields:
             collector.check(
                 f"{constant}/B{B}/{name}",
                 lambda value=value, reference=reference: np.testing.assert_allclose(

@@ -44,7 +44,7 @@ from jaxgam.penalties.structure import (
 )
 from jaxgam.smooths.source_lapack import _OPENBLAS_PREFIX, scipy_uses_accelerate_lapack
 from tests.helpers import _AssertCollector, check_that
-from tests.tolerances import MODERATE, STRICT
+from tests.tolerances import LOOSE, MODERATE, STRICT
 
 # JaxGAM's own Sl.setup roots equal pinned R's physical penalty operators
 # but not its rounding (see the physical-coordinate root-product test). At
@@ -331,6 +331,13 @@ def _assert_proposal_matches_pinned_sl_fitchol(
     # See the module note: extreme criterion/gradient are MODERATE after the
     # documented passes; their Hessian/step belong to the matched-state gate.
     derivative = MODERATE if extreme else STRICT
+    if extreme and ldet_tolerance(r_bridge) is not STRICT:
+        # Against an R whose LAPACK no pinned provider reproduces, the
+        # near-singular penalty blocks of the extreme case amplify R's own
+        # factor rounding in the ldetS derivative (ldet_tolerance). Measured
+        # on macOS, libRlapack over Accelerate: one gradient element 4.5x
+        # MODERATE from R (4.5e-4 relative), 2026-11-19. Pinned R is MODERATE.
+        derivative = LOOSE
     collector = _AssertCollector()
     for fixed in (False, True):
         parameters = np.log(smoothing) if fixed else np.r_[np.log(smoothing), -3.0]
