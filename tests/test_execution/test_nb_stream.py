@@ -752,14 +752,18 @@ def test_pinned_gam_fit4_fixed_theta_prepared_basis_stopping_and_information(
         state = result.state
         collector = _AssertCollector()
         score_tolerance = STRICT
-        if theta == 1e6:
+        if theta == 1e6 and (
+            _fixed_theta_score_gate_digest(stream, link, theta, B)
+            == _FIXED_THETA_SCORE_DIGESTS[(link, B)]
+        ):
             # efam.r's saturated-likelihood expression moves by 6.54e-8
             # between pinned arm64 and amd64 R for this exact input. See the
             # checked-in numerical review; no other field or fixture is relaxed.
-            assert (
-                _fixed_theta_score_gate_digest(stream, link, theta, B)
-                == _FIXED_THETA_SCORE_DIGESTS[(link, B)]
-            )
+            # The allowance holds for those input bytes only. Any other input
+            # gets none: the score stays STRICT. macOS is such a case (its
+            # libm rounds the fixture's cos and sin differently, so the bytes
+            # differ) and needs no allowance: the score there is 0.62 to 0.66
+            # of STRICT from R on all six cases (2026-11-19, arm64).
             score_tolerance = MODERATE
         for name, actual in (
             ("beta", state.coefficients),
