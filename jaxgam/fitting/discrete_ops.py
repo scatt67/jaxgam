@@ -8,6 +8,7 @@ mgcv's ``Xbd``, ``XWyd``, ``XWXd`` and ``diagXVXd`` helpers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -34,6 +35,8 @@ __all__ = [
     "DeviceTensorLookupBlock",
     "PairReductionPlan",
     "discrete_diag_xvxd",
+    "discrete_row_xwxd",
+    "discrete_row_xwxd_bytes",
     "discrete_xb_transpose",
     "discrete_xbd",
     "discrete_xwxd",
@@ -760,6 +763,133 @@ def discrete_xwxd(
             ),
         )
     return result
+
+
+# discrete_row_xwxd forms the upper panels of an equal split of the columns.
+_ROW_XWXD_PANELS = 4
+
+
+def discrete_row_xwxd_bytes(n_coef: int, chunk_rows: int) -> int:
+    """Device scratch of :func:`discrete_row_xwxd` beyond its p x p result.
+
+    One chunk of materialized rows, its weighted copy and the gathered
+    lookup rows before placement, plus the carried and updated sums.
+    """
+    float_bytes = np.dtype(np.float64).itemsize
+    return float_bytes * (3 * chunk_rows * n_coef + 2 * n_coef * n_coef)
+
+
+@partial(jax.jit, static_argnames=("chunk_rows",))
+def discrete_row_xwxd(
+    design: DeviceDiscreteDesign,
+    selectors: tuple[tuple[jax.Array, ...], ...],
+    weights: jax.Array,
+    *,
+    chunk_rows: int,
+) -> jax.Array:
+    """``X.T @ diag(w) @ X`` from materialized row chunks of the compact design.
+
+    Each chunk of ``chunk_rows`` rows is expanded to its dense ``rows x p``
+    model matrix (lookup tables gathered per equal-shape group, tensor blocks
+    by their row product) and reduced with one matrix product, so the work is
+    ``n p^2`` in matrix products rather than one gather or histogram per pair
+    of blocks. It equals :func:`discrete_xwxd` up to rounding; the upper
+    triangle is mirrored so the result is exactly symmetric, as that kernel's
+    is. Rows past the batch are padded with weight zero.
+    """
+    n_rows = _validate_device_batch(design, selectors)
+    if weights.shape != (n_rows,):
+        raise ValueError("weights do not match selector batch length")
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be positive")
+    chunk_rows = min(chunk_rows, n_rows)
+    n_chunks = -(-n_rows // chunk_rows)
+    padded = n_chunks * chunk_rows
+
+    def pad(values: jax.Array) -> jax.Array:
+        return jnp.pad(values, (0, padded - n_rows)).reshape(n_chunks, chunk_rows)
+
+    keys = tuple(
+        _block_key(number, block, block_selectors)
+        for number, (block, block_selectors) in enumerate(
+            zip(design.blocks, selectors, strict=True)
+        )
+    )
+    lookup_groups = []
+    for key, members in shape_groups(keys):
+        if isinstance(key, TensorKey):
+            continue
+        members = [int(member) for member in members]
+        tables = jnp.stack([design.blocks[member].table for member in members])
+        chosen = jnp.stack([pad(selectors[member][0]) for member in members], axis=1)
+        columns = np.concatenate(
+            [
+                design.blocks[member].col_start + np.arange(key.columns)
+                for member in members
+            ]
+        )
+        lookup_groups.append((tables, chosen, columns))
+    tensors = [
+        (
+            design.blocks[key.block],
+            tuple(pad(selector) for selector in selectors[key.block]),
+        )
+        for key in keys
+        if isinstance(key, TensorKey)
+    ]
+    member_index = [jnp.arange(len(tables))[:, None] for tables, _, _ in lookup_groups]
+
+    def chunk(total, item):
+        chunk_weights, lookup_selectors, tensor_selectors = item
+        X = jnp.zeros((chunk_rows, design.n_coef), dtype=weights.dtype)
+        for (tables, _, columns), index, chosen in zip(
+            lookup_groups, member_index, lookup_selectors, strict=True
+        ):
+            rows = tables[index, chosen]
+            X = X.at[:, columns].set(
+                jnp.swapaxes(rows, 0, 1).reshape(chunk_rows, len(columns))
+            )
+        for (block, _), block_selectors in zip(tensors, tensor_selectors, strict=True):
+            X = X.at[:, block.col_start : _block_stop(block)].set(
+                _block_rows(block, block_selectors)
+            )
+        weighted = chunk_weights[:, None] * X
+        return tuple(
+            part
+            + X[:, edges[i] : edges[i + 1]].T @ weighted[:, edges[j] : edges[j + 1]]
+            for part, (i, j) in zip(total, panels, strict=True)
+        ), None
+
+    # Only the upper panels of the symmetric product are formed.
+    edges = np.linspace(0, design.n_coef, _ROW_XWXD_PANELS + 1).astype(int)
+    panels = [
+        (i, j) for i in range(_ROW_XWXD_PANELS) for j in range(i, _ROW_XWXD_PANELS)
+    ]
+    total, _ = jax.lax.scan(
+        chunk,
+        tuple(
+            jnp.zeros(
+                (edges[i + 1] - edges[i], edges[j + 1] - edges[j]), dtype=weights.dtype
+            )
+            for i, j in panels
+        ),
+        (
+            pad(weights),
+            tuple(chosen for _, chosen, _ in lookup_groups),
+            tuple(block_selectors for _, block_selectors in tensors),
+        ),
+    )
+    upper = dict(zip(panels, total, strict=True))
+    total = jnp.block(
+        [
+            [
+                upper[(i, j)] if i <= j else upper[(j, i)].T
+                for j in range(_ROW_XWXD_PANELS)
+            ]
+            for i in range(_ROW_XWXD_PANELS)
+        ]
+    )
+    return jnp.triu(total) + jnp.triu(total, 1).T
 
 
 @jax.jit

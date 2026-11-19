@@ -32,6 +32,8 @@ from jaxgam.fitting.discrete_ops import (
     _block_stop,
     _subblock_pair_crossproduct,
     _validate_device_batch,
+    discrete_row_xwxd,
+    discrete_row_xwxd_bytes,
     discrete_xwxd,
     discrete_xwyd,
     lookup_pair_histogram_crossproduct,
@@ -316,6 +318,40 @@ def test_discrete_xwxd_matches_per_pair_loop(name: str, policy: str) -> None:
     np.testing.assert_allclose(
         np.asarray(observed), np.asarray(expected), rtol=STRICT.rtol, atol=STRICT.atol
     )
+
+
+@pytest.mark.parametrize("name", list(_STRUCTURES))
+def test_discrete_row_xwxd_matches_pair_reductions(name: str) -> None:
+    """Materialized row chunks give the pair kernel's X'WX up to rounding.
+
+    Chunks that divide the batch, that leave a zero-weight padded tail, and
+    that exceed the batch are covered; the result is exactly symmetric.
+    """
+    _, device, selectors, _ = _built(name)
+    weights = jnp.linspace(0.3, 1.7, _N)
+    expected = np.asarray(discrete_xwxd(device, selectors, weights))
+    collector = _AssertCollector()
+    for chunk_rows in (16, 48, 4 * _N):
+        observed = np.asarray(
+            discrete_row_xwxd(device, selectors, weights, chunk_rows=chunk_rows)
+        )
+        _close(collector, f"X'WX, {chunk_rows}-row chunks", observed, expected)
+        collector.check(
+            f"symmetric, {chunk_rows}-row chunks",
+            lambda observed=observed: np.testing.assert_array_equal(
+                observed, observed.T
+            ),
+        )
+    collector.raise_if_any(f"row-chunk X'WX, {name}")
+
+
+def test_discrete_row_xwxd_rejects_bad_inputs() -> None:
+    _, device, selectors, _ = _built("two_mixed_k")
+    with pytest.raises(ValueError, match="weights"):
+        discrete_row_xwxd(device, selectors, jnp.ones(_N - 1), chunk_rows=8)
+    with pytest.raises(ValueError, match="chunk_rows"):
+        discrete_row_xwxd(device, selectors, jnp.ones(_N), chunk_rows=0)
+    assert discrete_row_xwxd_bytes(10, 4) == 8 * (3 * 4 * 10 + 2 * 100)
 
 
 @pytest.mark.parametrize("name", list(_STRUCTURES))

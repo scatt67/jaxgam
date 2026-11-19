@@ -30,6 +30,9 @@ from jaxgam.execution.working_model import (
     source_log,
 )
 from jaxgam.fitting.discrete_ops import (
+    DeviceDiscreteDesign,
+    discrete_row_xwxd,
+    discrete_row_xwxd_bytes,
     discrete_xbd,
     discrete_xwxd,
     discrete_xwyd,
@@ -508,6 +511,33 @@ def _prepared_discrete(
         setup.cleanup()
 
 
+# A pair reduction (one gather or histogram update per row and pair of blocks)
+# costs far more than one multiply-add of a matrix product: measured on the
+# 100-smooth section 8 design, about 15 ns per row and pair against about
+# 6 ps per product flop. Row chunks are used only when 2 p^2 product flops per
+# row undercut this many flops per row and pair, a margin of about 2.4x.
+_ROW_XWXD_PAIR_FLOPS = 1000
+_ROW_XWXD_CHUNKS = (2048, 1024, 512, 256, 128, 64)
+
+
+def _row_xwxd_chunk(design: DeviceDiscreteDesign, available_bytes: int) -> int | None:
+    """Rows per chunk for :func:`discrete_row_xwxd`, or None for pair reductions.
+
+    Materialized row chunks win when the coefficient count is small against
+    the number of block pairs (many smooths); a few wide blocks, such as a
+    random effect with many levels, keep the per-pair reductions. The
+    largest chunk whose scratch fits the remaining budget is chosen.
+    """
+    n_coef = design.n_coef
+    pairs = len(design.blocks) * (len(design.blocks) + 1) // 2
+    if 2 * n_coef * n_coef > _ROW_XWXD_PAIR_FLOPS * pairs:
+        return None
+    for chunk_rows in _ROW_XWXD_CHUNKS:
+        if discrete_row_xwxd_bytes(n_coef, chunk_rows) <= available_bytes:
+            return chunk_rows
+    return None
+
+
 def _check_fit_budget(memory: DiscreteFitMemoryPlan) -> None:
     if memory.fit_peak_bytes > memory.budget_bytes:
         raise MemoryError(
@@ -563,6 +593,12 @@ def fit_discrete_gaussian(
             smoothing, log_smoothing = _fixed_sp(sp, penalties.n_penalties)
             penalty = penalties.materialize(log_smoothing)
         device_descriptor = to_device_discrete_design(descriptor, device)
+        # The row kernel replaces the pair kernel during the statistics scan
+        # only, and its scratch fits the budget left after the fit plan, so
+        # the scan's peak stays within the budget and later stages are unchanged.
+        chunk_rows = _row_xwxd_chunk(
+            device_descriptor, memory.budget_bytes - memory.fit_peak_bytes
+        )
         gram = np.zeros((descriptor.n_coef, descriptor.n_coef))
         rhs = np.zeros(descriptor.n_coef)
         cursor = 0
@@ -595,7 +631,13 @@ def fit_discrete_gaussian(
                 )
             rows = np.arange(cursor, cursor + size, dtype=np.intp)
             selectors = descriptor.batch_indices(rows)
-            gram += np.asarray(discrete_xwxd(device_descriptor, selectors, weights))
+            gram += np.asarray(
+                discrete_xwxd(device_descriptor, selectors, weights)
+                if chunk_rows is None
+                else discrete_row_xwxd(
+                    device_descriptor, selectors, weights, chunk_rows=chunk_rows
+                )
+            )
             rhs += np.asarray(
                 discrete_xwyd(device_descriptor, selectors, weights, y - offset)
             )

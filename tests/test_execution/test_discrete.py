@@ -665,3 +665,19 @@ def test_setup_cost_per_fit_does_not_grow_with_the_other_columns(
     # With 240-row batches every scan is one batch. Reading every column of
     # every scan would take len(scans) * n_smooths slices.
     assert len(slices) <= 2 * len(scans)
+
+
+def test_row_xwxd_chunk_selection_follows_cost_and_budget() -> None:
+    """Many blocks against few coefficients use row chunks within the budget."""
+    from types import SimpleNamespace
+
+    from jaxgam.execution.discrete import _row_xwxd_chunk
+    from jaxgam.fitting.discrete_ops import discrete_row_xwxd_bytes
+
+    many = SimpleNamespace(n_coef=901, blocks=(None,) * 101)
+    wide = SimpleNamespace(n_coef=1006, blocks=(None,) * 3)
+    plenty = 1 << 40
+    assert _row_xwxd_chunk(many, plenty) == 2048
+    assert _row_xwxd_chunk(wide, plenty) is None
+    assert _row_xwxd_chunk(many, discrete_row_xwxd_bytes(901, 256)) == 256
+    assert _row_xwxd_chunk(many, discrete_row_xwxd_bytes(901, 64) - 1) is None
