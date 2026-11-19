@@ -31,6 +31,7 @@ from jaxgam.fitting.working_model import (
     WorkingModelFactors,
     gaussian_working_model_proposal,
     working_model_factor_inputs,
+    working_model_statistics,
 )
 from jaxgam.formula.fitting_prepare import initial_log_sp_from_diagonal
 from jaxgam.penalties.structure import PenaltyStructure
@@ -530,11 +531,13 @@ class CompiledWorkingModelProposal:
         *,
         scale_is_fixed: bool,
         fixed_log_smoothing: np.ndarray | None,
+        statistics_executable: Callable[..., tuple[jax.Array, jax.Array]],
     ) -> None:
         self.metadata = metadata
         self.memory_plan = memory_plan
         self._factor_executable = factor_executable
         self._executable = executable
+        self._statistics_executable = statistics_executable
         self._device = device
         self.scale_is_fixed = scale_is_fixed
         self.fixed_log_smoothing = fixed_log_smoothing
@@ -542,10 +545,19 @@ class CompiledWorkingModelProposal:
     def transfer(
         self, gram: np.ndarray, rhs: np.ndarray, response_square_sum: float
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        """Place one set of working statistics on the proposal device."""
-        return (
+        """Place one set of working statistics on the proposal device.
+
+        ``Sl.initial.repara``'s coefficient transform is applied here, once
+        per set of statistics, and every trial on them reuses it.
+        """
+        gram, rhs = self._statistics_executable(
             jax.device_put(gram, self._device),
             jax.device_put(rhs, self._device),
+            self.metadata,
+        )
+        return (
+            gram,
+            rhs,
             jax.device_put(np.asarray(response_square_sum), self._device),
         )
 
@@ -633,8 +645,11 @@ def compile_working_model_proposal(
     parameter_shape = jax.ShapeDtypeStruct((n_kernel_parameters,), np.float64)
     smoothing_shape = jax.ShapeDtypeStruct((penalties.n_penalties,), np.float64)
     tolerance_shape = jax.ShapeDtypeStruct((), np.float64)
+    statistics_executable = working_model_statistics.lower(
+        gram_device, rhs_device, metadata
+    ).compile()
     factor_executable = working_model_factor_inputs.lower(
-        gram_device, metadata, smoothing_shape
+        gram_device, metadata, smoothing_shape, working_coordinates=True
     ).compile()
     executable = gaussian_working_model_proposal.lower(
         parameter_shape,
@@ -647,9 +662,14 @@ def compile_working_model_proposal(
         scale_is_fixed=scale_is_fixed,
         fixed_smoothing=fixed_log_smoothing is not None,
         tolerance=tolerance_shape,
+        working_coordinates=True,
     ).compile()
     del gram_device, rhs_device, yy_device
-    analyses = (factor_executable.memory_analysis(), executable.memory_analysis())
+    analyses = (
+        statistics_executable.memory_analysis(),
+        factor_executable.memory_analysis(),
+        executable.memory_analysis(),
+    )
     if any(analysis is None for analysis in analyses):
         raise NotImplementedError(
             "Working-model backend cannot report compiled memory."
@@ -680,6 +700,7 @@ def compile_working_model_proposal(
         device,
         scale_is_fixed=scale_is_fixed,
         fixed_log_smoothing=fixed_log_smoothing,
+        statistics_executable=statistics_executable,
     )
 
 

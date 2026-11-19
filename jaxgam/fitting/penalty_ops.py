@@ -216,6 +216,9 @@ class StackedPenaltyGroup:
     ``transforms[g]`` its dense local transform. Placement (``ordinals`` in
     the source block order, ``starts`` and ``sp_indices``) is static, so a
     kernel traces one loop body per group rather than one per block.
+    ``diagonal`` is static too: every member penalty was declared diagonal
+    (or identity), so a kernel may scale rows by the stacked diagonal instead
+    of forming a dense matrix product with it.
     """
 
     size: int
@@ -224,6 +227,7 @@ class StackedPenaltyGroup:
     sp_indices: tuple[tuple[int, ...], ...]
     penalties: jax.Array
     transforms: jax.Array
+    diagonal: bool = False
 
     def tree_flatten(self):
         return (self.penalties, self.transforms), (
@@ -231,11 +235,13 @@ class StackedPenaltyGroup:
             self.ordinals,
             self.starts,
             self.sp_indices,
+            self.diagonal,
         )
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        return cls(*aux, *children)
+        size, ordinals, starts, sp_indices, diagonal = aux
+        return cls(size, ordinals, starts, sp_indices, *children, diagonal)
 
     @property
     def count(self) -> int:
@@ -328,6 +334,12 @@ def stack_penalty_structure(
                 tuple(tuple(block.sp_indices) for block in blocks),
                 penalties,
                 jnp.stack([_dense_transform(block.transform) for block in blocks]),
+                bool(count)
+                and all(
+                    penalty.kind != "dense"
+                    for block in blocks
+                    for penalty in block.penalties
+                ),
             )
         )
     return StackedPenaltyStructure(structure.n_coef, tuple(groups))

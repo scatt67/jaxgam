@@ -45,7 +45,7 @@ from jaxgam.formula.discrete_design import (
     DiscreteDesignUnavailable,
 )
 from jaxgam.formula.parser import parse_formula
-from tests.helpers import _AssertCollector
+from tests.helpers import _AssertCollector, check_that
 from tests.tolerances import STRICT
 
 jax.config.update("jax_enable_x64", True)
@@ -503,3 +503,83 @@ def test_proposal_kernels_match_per_block_loops(name: str, monkeypatch) -> None:
                 getattr(reference, field),
             )
     collector.raise_if_any(f"stacked proposal kernels, {name}")
+
+
+@pytest.mark.parametrize("name", list(_STRUCTURES))
+def test_working_coordinate_kernels_and_penalty_columns_are_bitwise(name: str) -> None:
+    """Statistics transformed once, and diagonal singleton penalties, change nothing.
+
+    ``working_model_statistics`` applies ``Sl.initial.repara`` once for every
+    trial on one set of statistics; the kernels given those statistics with
+    ``working_coordinates=True`` equal the public-coordinate kernels bitwise.
+    Singleton blocks are declared diagonal, and their stacked groups say so.
+    """
+    metadata, gram, rhs, yy, smoothing, log_phi = _working_inputs(name)
+    smoothing = jnp.asarray(smoothing)
+    rho = jnp.log(smoothing)
+    parameters = jnp.r_[rho, log_phi]
+    working_gram, working_rhs = wm.working_model_statistics(gram, rhs, metadata)
+    collector = _AssertCollector()
+    _equal(
+        collector,
+        "working statistics",
+        (working_gram, working_rhs),
+        (
+            jax.jit(wm._initial_working_gram)(gram, metadata.stacked),
+            jax.jit(wm._initial_working_rhs)(rhs, metadata.stacked),
+        ),
+    )
+    inputs = wm.working_model_factor_inputs(gram, metadata, smoothing)
+    _equal(
+        collector,
+        "factor inputs",
+        wm.working_model_factor_inputs(
+            working_gram, metadata, smoothing, working_coordinates=True
+        ),
+        inputs,
+    )
+    factors = factor_working_model(inputs)
+    for label, extra in (
+        ("unknown scale", {"tolerance": jnp.asarray(1e-7)}),
+        ("fixed scale", {"scale_is_fixed": True, "log_scale": jnp.asarray(log_phi)}),
+    ):
+        free = parameters if label == "unknown scale" else parameters[:-1]
+        public = wm.gaussian_working_model_proposal(
+            free, gram, rhs, yy, metadata, factors, smoothing=smoothing, **extra
+        )
+        working = wm.gaussian_working_model_proposal(
+            free,
+            working_gram,
+            working_rhs,
+            yy,
+            metadata,
+            factors,
+            smoothing=smoothing,
+            working_coordinates=True,
+            **extra,
+        )
+        _equal(collector, f"proposal ({label})", working, public)
+    singletons = {
+        index
+        for index, block in enumerate(metadata.penalties.blocks)
+        if len(block.penalties) == 1
+    }
+    collector.check(
+        "singleton groups are declared diagonal",
+        lambda: check_that(
+            all(
+                group.diagonal == (group.count == 1)
+                for group in metadata.stacked.groups
+                if group.count
+            )
+            and {
+                ordinal
+                for group in metadata.stacked.groups
+                if group.diagonal
+                for ordinal in group.ordinals
+            }
+            == singletons,
+            "diagonal groups differ from singleton blocks",
+        ),
+    )
+    collector.raise_if_any(f"working-coordinate kernels, {name}")

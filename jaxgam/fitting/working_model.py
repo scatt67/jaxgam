@@ -220,12 +220,7 @@ class WorkingModelCriterionMetadata:
                     block.start,
                     block.stop,
                     block.sp_indices,
-                    tuple(
-                        penalty_ops.JaxLocalPenalty(
-                            "dense", jax.device_put(S, device), size
-                        )
-                        for S in block.penalties
-                    ),
+                    tuple(map(partial(_local_penalty, device=device), block.penalties)),
                     penalty_ops.JaxTransform(
                         "dense", jax.device_put(block.transform, device), size
                     ),
@@ -303,6 +298,24 @@ class WorkingModelCriterionMetadata:
             roots,
             stacked,
         )
+
+
+def _local_penalty(
+    values: np.ndarray, device: jax.Device | None
+) -> penalty_ops.JaxLocalPenalty:
+    """One device local penalty, declared diagonal when it is.
+
+    ``Sl.setup`` leaves a singleton block's penalty as an exact partial
+    identity; scaling rows by its diagonal gives the same numbers as the
+    dense product, whose other terms are exact zeros.
+    """
+    size = len(values)
+    off_diagonal = values - np.diag(np.diag(values))
+    if not np.any(off_diagonal):
+        return penalty_ops.JaxLocalPenalty(
+            "diagonal", jax.device_put(np.diag(values).copy(), device), size
+        )
+    return penalty_ops.JaxLocalPenalty("dense", jax.device_put(values, device), size)
 
 
 class WorkingModelFactor(NamedTuple):
@@ -524,6 +537,18 @@ def _source_ift_chol(
     return first, quadratic_second + residual_second, db
 
 
+def _scaled_penalty_product(scale, penalty, rows, diagonal):
+    """``(scale * S) @ rows``; a declared-diagonal ``S`` scales rows instead.
+
+    For a diagonal ``S`` every off-diagonal term of the dense product is an
+    exact zero, so both forms round ``scale * S_ii * rows_ij`` once.
+    """
+    scaled = scale * penalty
+    if diagonal:
+        return jnp.diagonal(scaled)[:, None] * rows
+    return scaled @ rows
+
+
 def _source_hessian_determinant_derivatives(
     inverse: jax.Array,
     penalties: penalty_ops.JaxPenaltyStructure | penalty_ops.StackedPenaltyStructure,
@@ -546,14 +571,18 @@ def _source_hessian_determinant_derivatives(
     groups = [group for group in penalties.groups if group.count]
     for left in groups:
 
-        def left_term(carry, item, left_size=left.size):
+        def left_term(carry, item, left_size=left.size, left_diagonal=left.diagonal):
             first, second = carry
             left_component, left_start, left_sp = item
             left_rows = jax.lax.dynamic_slice(
                 inverse, (left_start, 0), (left_size, width)
             )
-            left_S = penalty_ops._smoothing(rho, smoothing, left_sp) * left_component
-            left_product = left_S @ left_rows
+            left_product = _scaled_penalty_product(
+                penalty_ops._smoothing(rho, smoothing, left_sp),
+                left_component,
+                left_rows,
+                left_diagonal,
+            )
             first = first.at[left_sp].add(
                 jnp.trace(
                     jax.lax.dynamic_slice(
@@ -568,6 +597,8 @@ def _source_hessian_determinant_derivatives(
                     right_rows = jax.lax.dynamic_slice(
                         inverse, (right_start, left_start), (right_size, left_size)
                     )
+                    # Kept a dense product: XLA fuses a row scaling here into
+                    # the pair sum and rounds it differently by one ulp.
                     right_S = (
                         penalty_ops._smoothing(rho, smoothing, right_sp)
                         * right_component
@@ -712,22 +743,48 @@ def _source_penalty_factor_input(root_products, lam):
 
 
 @jax.jit
+def working_model_statistics(
+    gram: jax.Array,
+    rhs: jax.Array,
+    metadata: WorkingModelCriterionMetadata,
+) -> tuple[jax.Array, jax.Array]:
+    """``Sl.initial.repara``'s block transform of ``X'WX`` and ``X'Wz``, once.
+
+    The transform does not depend on the smoothing parameters, so a caller
+    that evaluates many trials on one set of statistics applies it here once
+    and passes ``working_coordinates=True`` to the trial kernels, which
+    otherwise repeat it on every call with the same operations.
+    """
+    n_coef = metadata.penalties.n_coef
+    if gram.shape != (n_coef, n_coef) or rhs.shape != (n_coef,):
+        raise ValueError("gram and rhs must match the coefficient dimension.")
+    return (
+        _initial_working_gram(gram, metadata.stacked),
+        _initial_working_rhs(rhs, metadata.stacked),
+    )
+
+
+@partial(jax.jit, static_argnames=("working_coordinates",))
 def working_model_factor_inputs(
     gram: jax.Array,
     metadata: WorkingModelCriterionMetadata,
     smoothing: jax.Array,
+    *,
+    working_coordinates: bool = False,
 ) -> WorkingModelFactorInputs:
     """Matrices pinned R factors at one trial, before ``chol(pivot=TRUE)``.
 
-    ``gram`` is in public coordinates; ``smoothing`` is the trial's
-    ``exp(log sp)``, which the proposal must receive unchanged.
+    ``gram`` is in public coordinates, or already transformed by
+    :func:`working_model_statistics` when ``working_coordinates``;
+    ``smoothing`` is the trial's ``exp(log sp)``, which the proposal must
+    receive unchanged.
     """
     _check_smoothing(smoothing, metadata)
     if gram.shape != (metadata.penalties.n_coef, metadata.penalties.n_coef):
         raise ValueError("gram must match the coefficient dimension.")
     H = _source_add_penalties(
         metadata.stacked,
-        _initial_working_gram(gram, metadata.stacked),
+        gram if working_coordinates else _initial_working_gram(gram, metadata.stacked),
         None,
         smoothing,
     )
@@ -830,7 +887,15 @@ def _source_gaussian_state(
     )
 
 
-@partial(jax.jit, static_argnames=("scale_is_fixed", "fixed_smoothing", "debug"))
+@partial(
+    jax.jit,
+    static_argnames=(
+        "scale_is_fixed",
+        "fixed_smoothing",
+        "working_coordinates",
+        "debug",
+    ),
+)
 def gaussian_working_model_proposal(
     parameters: jax.Array,
     gram: jax.Array,
@@ -844,6 +909,7 @@ def gaussian_working_model_proposal(
     fixed_smoothing: bool = False,
     log_scale: jax.Array = 0.0,
     tolerance: jax.Array = 0.0,
+    working_coordinates: bool = False,
     debug: bool = False,
 ) -> GaussianWorkingModelProposal:
     """Evaluate one row-free ``Sl.fitChol`` trial at log smoothing/scale.
@@ -866,6 +932,8 @@ def gaussian_working_model_proposal(
     surrounding execution controller. ``smoothing`` is the trial's
     ``exp(log sp)`` and ``factors`` the host factors of the matrices
     ``working_model_factor_inputs`` built from that same ``smoothing``.
+    With ``working_coordinates``, ``gram`` and ``rhs`` are the output of
+    :func:`working_model_statistics` rather than public-coordinate statistics.
     """
     _check_smoothing(smoothing, metadata)
     expected_parameters = metadata.penalties.n_penalties + (not scale_is_fixed)
@@ -878,8 +946,8 @@ def gaussian_working_model_proposal(
         raise ValueError("response_square_sum must be scalar.")
     if len(factors.penalties) != len(metadata.multi_block_sp_indices):
         raise ValueError("factors must hold one factor per coupled penalty block.")
-    gram = _initial_working_gram(gram, metadata.stacked)
-    rhs = _initial_working_rhs(rhs, metadata.stacked)
+    if not working_coordinates:
+        gram, rhs = working_model_statistics.__wrapped__(gram, rhs, metadata)
 
     value, beta, gradient, hessian, factor, diagonal, H_value, S_value = (
         _source_gaussian_state(
