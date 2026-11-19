@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -18,7 +20,9 @@ from jaxgam.formula.parser import parse_formula
 from jaxgam.formula.prepare import (
     _SQLITE_CACHE_KIB,
     _SQLITE_SCOPE_BYTES,
+    SetupWorkspace,
     _exact_cubic_knots,
+    _exact_cubic_knots_in_memory,
     _source_batch_bytes,
     _source_row_bytes,
     prepare_fitting,
@@ -402,9 +406,10 @@ def test_every_setup_scan_honors_the_requested_batch_rows() -> None:
     prepared = prepare_model(
         parse_formula(_BUDGET_FORMULA), source, family=Gaussian(), batch_rows=7
     )
-    # Two one-row peeks, two exact knot scans, centering/alias, initial beta,
-    # valid-domain and rank scans.
-    assert [rows for rows, _ in source.scans] == [1, 1] + [7] * 6
+    # Two one-row peeks, one in-memory exact knot scan for both cubic
+    # covariates (no budget), centering/alias, initial beta, valid-domain and
+    # rank scans.
+    assert [rows for rows, _ in source.scans] == [1, 1] + [7] * 5
     for rows, lengths in source.full_scans():
         assert max(lengths) <= rows
         assert sum(lengths) == len(data)
@@ -870,10 +875,267 @@ def test_setup_workspace_bounds_traced_setup_allocations(monkeypatch) -> None:
             tracemalloc.stop()
         assert captured[-1][1] == workspace
         assert workspace.batch_rows(n, budget) == rows
+        # The budget leaves room to gather both cubic covariates in memory.
+        knot_columns = workspace.in_memory_knot_columns(rows, budget, 2)
+        assert knot_columns == 2
         traced_bound = max(
             workspace.fixed_bytes + rows * workspace.row_bytes,
             workspace.knot_fixed_bytes
             - _SQLITE_SCOPE_BYTES
             + rows * workspace.knot_row_bytes,
+            workspace.in_memory_knot_bytes(rows, knot_columns),
         )
         assert peak - start <= traced_bound
+
+
+# ---------------------------------------------------------------------------
+# In-memory exact knots
+# ---------------------------------------------------------------------------
+
+
+def _knot_columns(case: str) -> dict[str, np.ndarray]:
+    rng = np.random.default_rng(1_119)
+    if case == "ties":
+        x = np.repeat(rng.normal(size=40), rng.integers(1, 9, size=40))
+    elif case == "few":
+        # Exactly six distinct values, each repeated many times.
+        x = rng.integers(0, 6, size=900) * 0.1
+    elif case == "signed_zero":
+        # SQLite returns +0.0 for a stored -0.0; subnormals and integral
+        # values beyond 2**53 round-trip exactly.
+        x = np.array(
+            [-0.0, 0.0, 1e-310, -1e-310, 5e-324, 2.0**60, -3.5, 1.0, -0.0, 0.0, 7.25]
+            * 3
+        )
+    else:
+        x = np.tile(np.array([3.0, 1.0, 2.0, 1.0, 3.0, 0.5, 2.0]), 50)
+    x = rng.permutation(x)
+    return {"x": x, "z": np.round(x[::-1] * 3.0) / 3.0}
+
+
+@pytest.mark.parametrize("case", ["ties", "few", "signed_zero", "repeats"])
+def test_in_memory_knots_are_bitwise_equal_to_sqlite_knots(case: str) -> None:
+    columns = _knot_columns(case)
+    source = ArrayRowSource(columns)
+    n_unique = min(len(np.unique(value)) for value in columns.values())
+    collector = _AssertCollector()
+    for k in sorted({3, min(6, n_unique), n_unique}):
+        for batch_rows in (1, 7, len(columns["x"])):
+            in_memory = _exact_cubic_knots_in_memory(
+                source, ["x", "z"], [k, k], batch_rows
+            )
+            for variable, knots in zip(("x", "z"), in_memory, strict=True):
+                sqlite_knots = _exact_cubic_knots(source, variable, k, batch_rows)
+                collector.check(
+                    f"{variable} k={k} batch_rows={batch_rows}",
+                    lambda a=knots, b=sqlite_knots: check_that(
+                        a.tobytes() == b.tobytes(), f"{a!r} != {b!r}"
+                    ),
+                )
+                collector.check(
+                    f"{variable} k={k} matches np.unique",
+                    lambda a=knots, v=columns[variable], k=k: (
+                        np.testing.assert_allclose(
+                            a,
+                            CubicRegressionSmooth._place_knots(v, k),
+                            rtol=STRICT.rtol,
+                            atol=STRICT.atol,
+                        )
+                    ),
+                )
+    collector.raise_if_any(f"in-memory knots, {case}")
+
+
+@pytest.mark.parametrize(
+    ("x_failure", "z_failure"),
+    [
+        ("nonfinite", None),
+        ("unique", None),
+        (None, "nonfinite"),
+        (None, "unique"),
+        ("unique", "nonfinite"),
+        ("nonfinite", "unique"),
+    ],
+)
+def test_in_memory_knots_raise_what_one_sqlite_scan_per_covariate_raises(
+    x_failure: str | None, z_failure: str | None
+) -> None:
+    def column(failure: str | None) -> np.ndarray:
+        value = np.linspace(0.0, 1.0, 24)
+        if failure == "unique":
+            value = np.repeat(value[:4], 6)
+        elif failure == "nonfinite":
+            value[17] = np.inf
+        return value
+
+    source = ArrayRowSource({"x": column(x_failure), "z": column(z_failure)})
+
+    def sqlite_error() -> str:
+        try:
+            for variable in ("x", "z"):
+                _exact_cubic_knots(source, variable, 6, 5)
+        except ValueError as error:
+            return str(error)
+        raise AssertionError("the SQLite scans accepted invalid covariates")
+
+    with pytest.raises(ValueError, match=f"^{re.escape(sqlite_error())}$"):
+        _exact_cubic_knots_in_memory(source, ["x", "z"], [6, 6], 5)
+
+
+def test_in_memory_knots_reject_a_source_whose_replay_changes_length() -> None:
+    class ShortReplay(ArrayRowSource):
+        def scan(self, batch_rows):
+            batches = list(super().scan(batch_rows))
+            yield from batches[:-1]
+
+    source = ShortReplay({"x": np.linspace(0.0, 1.0, 30)})
+    with pytest.raises(RuntimeError, match="valid stable row set"):
+        _exact_cubic_knots_in_memory(source, ["x"], [6], 7)
+
+
+def test_setup_workspace_accounts_the_in_memory_knot_path() -> None:
+    kwargs = {
+        "n_parametric": 1,
+        "basis_dimensions": (6, 5),
+        "null_dimensions": (2, 0),
+        "source_row_bytes": 64,
+        "source_batch_bytes": 4_096,
+        "n_rows": 1_000_000,
+    }
+    workspace = SetupWorkspace.for_design(**kwargs)
+    assert workspace.knot_column_bytes == 8 * 1_000_000
+    assert workspace.knot_reduce_bytes == (1 + np.dtype(np.intp).itemsize) * 1_000_000
+    rows = 512
+    one = workspace.in_memory_knot_bytes(rows, 1)
+    assert one == (
+        workspace.knot_fixed_bytes
+        - _SQLITE_SCOPE_BYTES
+        + rows * workspace.knot_row_bytes
+        + workspace.knot_column_bytes
+        + workspace.knot_reduce_bytes
+    )
+    assert workspace.in_memory_knot_columns(rows, one - 1, 2) == 0
+    assert workspace.in_memory_knot_columns(rows, one, 2) == 1
+    two = workspace.in_memory_knot_bytes(rows, 2)
+    assert workspace.in_memory_knot_columns(rows, two, 2) == 2
+    assert workspace.in_memory_knot_columns(rows, 10 * two, 2) == 2
+    assert workspace.in_memory_knot_columns(rows, None, 2) == 2
+    # The SQLite scan's bound does not grow with rows; the in-memory one does.
+    larger = SetupWorkspace.for_design(**{**kwargs, "n_rows": 2_000_000})
+    assert larger.bytes_for_rows(rows) == workspace.bytes_for_rows(rows)
+    assert larger.in_memory_knot_bytes(rows, 1) > one
+    fitting = SetupWorkspace.for_design(**kwargs, knot_scans=False)
+    assert fitting.knot_column_bytes == fitting.knot_reduce_bytes == 0
+    assert fitting.in_memory_knot_columns(rows, None, 2) == 0
+
+
+@pytest.mark.parametrize("fitting_columns", [0, 1, 2])
+def test_setup_budget_gate_picks_sqlite_when_the_columns_do_not_fit(
+    monkeypatch, fitting_columns: int
+) -> None:
+    """Above the budget each covariate keeps its SQLite scan; knots agree.
+
+    Each gathered column is charged as if it held 32 MiB, so the default
+    one-row-feasible budget can be set exactly at the gate.
+    """
+    from jaxgam.formula import prepare as prepare_module
+
+    data = _budget_data()
+    spec = parse_formula(_BUDGET_FORMULA)
+    reference = prepare_model(spec, DataFrameRowSource(data, response="y"))
+    column_bytes = 32 * 1024 * 1024
+    original = prepare_module.SetupWorkspace.for_design.__func__
+    sized = []
+
+    def heavy_columns(cls, **kwargs):
+        workspace = original(cls, **kwargs)
+        workspace = replace(workspace, knot_column_bytes=column_bytes)
+        sized.append(workspace)
+        return workspace
+
+    monkeypatch.setattr(
+        prepare_module.SetupWorkspace, "for_design", classmethod(heavy_columns)
+    )
+    prepare_model(spec, DataFrameRowSource(data, response="y"))
+    rows = 64
+    workspace = sized[-1]
+    budget = workspace.in_memory_knot_bytes(rows, max(fitting_columns, 1))
+    if fitting_columns == 0:
+        budget -= 1
+    assert workspace.bytes_for_rows(rows) <= budget
+
+    connections = []
+    in_memory_scans = []
+    original_connect = sqlite3.connect
+    original_in_memory = prepare_module._exact_cubic_knots_in_memory
+
+    def counted_connect(*args, **kwargs):
+        connections.append(1)
+        return original_connect(*args, **kwargs)
+
+    def counted_in_memory(source, variables, *args):
+        in_memory_scans.append(tuple(variables))
+        return original_in_memory(source, variables, *args)
+
+    monkeypatch.setattr(sqlite3, "connect", counted_connect)
+    monkeypatch.setattr(
+        prepare_module, "_exact_cubic_knots_in_memory", counted_in_memory
+    )
+    prepared = prepare_model(
+        spec,
+        DataFrameRowSource(data, response="y"),
+        batch_rows=rows,
+        maximum_bytes=budget,
+    )
+    if fitting_columns == 0:
+        assert len(connections) == 2
+        assert in_memory_scans == []
+    elif fitting_columns == 1:
+        assert connections == []
+        assert in_memory_scans == [("x",), ("x2",)]
+    else:
+        assert connections == []
+        assert in_memory_scans == [("x", "x2")]
+    for observed, expected in zip(
+        prepared.predict_spec.coef_map.terms,
+        reference.predict_spec.coef_map.terms,
+        strict=True,
+    ):
+        if observed.smooth is not None:
+            assert (
+                np.asarray(observed.smooth._knots).tobytes()
+                == np.asarray(expected.smooth._knots).tobytes()
+            )
+    assert prepared.basis_fingerprint == reference.basis_fingerprint
+
+
+def test_in_memory_knot_scan_stays_inside_its_traced_bound() -> None:
+    import tracemalloc
+
+    n = 200_000
+    rng = np.random.default_rng(526)
+    source = ArrayRowSource(
+        {"x": rng.uniform(size=n), "z": np.round(rng.normal(size=n), 2)},
+        y=rng.normal(size=n),
+    )
+    first = next(source.scan(1))
+    workspace = SetupWorkspace.for_design(
+        n_parametric=1,
+        basis_dimensions=(10, 10),
+        null_dimensions=(2, 2),
+        source_row_bytes=_source_row_bytes(first),
+        source_batch_bytes=_source_batch_bytes(first),
+        n_rows=n,
+    )
+    rows = 4_096
+    _exact_cubic_knots_in_memory(source, ["x"], [10], rows)  # warm imports
+    tracemalloc.start()
+    try:
+        start, _ = tracemalloc.get_traced_memory()
+        _exact_cubic_knots_in_memory(source, ["x", "z"], [10, 10], rows)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # The gathered columns dominate: the bound is not vacuous at this size.
+    assert peak - start >= 2 * workspace.knot_column_bytes
+    assert peak - start <= workspace.in_memory_knot_bytes(rows, 2)

@@ -81,6 +81,7 @@ class PreparedModel:
 
 _DEFAULT_SETUP_BATCH_ROWS = 65_536
 _FLOAT_BYTES = np.dtype(np.float64).itemsize
+_INTP_BYTES = np.dtype(np.intp).itemsize
 
 #: Fixed canonical row leaves for the narrow QR factors behind discrete setup
 #: decisions (parametric aliasing and the unpenalized rank deficit). Leaves are
@@ -181,7 +182,14 @@ class SetupWorkspace:
 
     Scans run sequentially, so one batch size is feasible when the widest
     design scan and, with cubic smooths, one exact SQLite knot scan each fit
-    the budget. Row terms count the arrays simultaneously live per batch row:
+    the budget. The SQLite knot scan keeps setup memory independent of the
+    number of rows and is always available; when the budget leaves room at
+    the chosen batch size, knots are instead found in memory, gathering as
+    many cubic covariates per scan as fit (``knot_column_bytes`` each, see
+    :meth:`in_memory_knot_columns`). The setup peak is then
+    ``max(bytes_for_rows(rows), in_memory_knot_bytes(rows, columns))``, which
+    never exceeds the budget. Row terms count the arrays simultaneously live
+    per batch row:
     source batches, design evaluation (term blocks, ``column_stack`` copy and
     cubic evaluator temporaries), fitting/rank designs and their Fortran QR
     stacks, and row vectors. Fixed terms count coefficient-square arrays,
@@ -196,6 +204,10 @@ class SetupWorkspace:
     fixed_bytes: int
     knot_row_bytes: int
     knot_fixed_bytes: int
+    #: One gathered float64 cubic covariate of the in-memory knot path.
+    knot_column_bytes: int = 0
+    #: Run-start mask and positions while one gathered column is reduced.
+    knot_reduce_bytes: int = 0
 
     @classmethod
     def for_design(
@@ -254,9 +266,47 @@ class SetupWorkspace:
             # variable; SQLite holds its pages in its own fixed scope.
             knot_row_bytes = 2 * source_row_bytes + _FLOAT_BYTES + 1
             knot_fixed_bytes = base_bytes + _SQLITE_SCOPE_BYTES
+            knot_column_bytes = _FLOAT_BYTES * n_rows
+            knot_reduce_bytes = (np.dtype(np.bool_).itemsize + _INTP_BYTES) * n_rows
         else:
             knot_row_bytes = knot_fixed_bytes = 0
-        return cls(row_bytes, fixed_bytes, knot_row_bytes, knot_fixed_bytes)
+            knot_column_bytes = knot_reduce_bytes = 0
+        return cls(
+            row_bytes,
+            fixed_bytes,
+            knot_row_bytes,
+            knot_fixed_bytes,
+            knot_column_bytes,
+            knot_reduce_bytes,
+        )
+
+    def in_memory_knot_bytes(self, rows: int, columns: int) -> int:
+        """Prospective peak of one in-memory knot scan of ``columns`` columns.
+
+        The SQLite scan's batch terms and base objects, the gathered columns,
+        and the run-start mask and positions of the column being reduced.
+        """
+        return (
+            self.knot_fixed_bytes
+            - _SQLITE_SCOPE_BYTES
+            + rows * self.knot_row_bytes
+            + columns * self.knot_column_bytes
+            + self.knot_reduce_bytes
+        )
+
+    def in_memory_knot_columns(
+        self, rows: int, maximum_bytes: int | None, wanted: int
+    ) -> int:
+        """Cubic covariates one in-memory knot scan may gather; 0 means SQLite.
+
+        Without a budget every covariate is gathered in one scan.
+        """
+        if not self.knot_column_bytes or wanted <= 0:
+            return 0
+        if maximum_bytes is None:
+            return wanted
+        spare = maximum_bytes - self.in_memory_knot_bytes(rows, 0)
+        return max(0, min(wanted, spare // self.knot_column_bytes))
 
     def _scans(self) -> tuple[tuple[int, int], ...]:
         design = (self.fixed_bytes, self.row_bytes)
@@ -376,6 +426,46 @@ def _merge_qr(
     return R, Q.T @ np.concatenate((qty, target))
 
 
+def _knot_ranks(n_unique: int, k: int) -> tuple[npt.NDArray[np.floating], list[int]]:
+    """Fractional unique-value ranks of ``k`` knots and the integer ranks read.
+
+    mgcv ``place.knots`` interpolates ``k`` equally spaced fractional indices
+    through the sorted unique covariate values.
+    """
+    if n_unique < k:
+        raise ValueError(
+            f"Basis dimension k={k} exceeds number of unique data values ({n_unique})."
+        )
+    ranks = np.linspace(0, n_unique - 1, k)
+    needed = sorted(
+        {int(np.floor(rank)) for rank in ranks} | {int(np.ceil(rank)) for rank in ranks}
+    )
+    return ranks, needed
+
+
+def _interpolate_knots(
+    ranks: npt.NDArray[np.floating], lookup: dict[int, float]
+) -> npt.NDArray[np.floating]:
+    """Rank interpolation shared by both exact knot paths, bit for bit."""
+    return np.array(
+        [
+            (1.0 - (rank - np.floor(rank))) * lookup[int(np.floor(rank))]
+            + (rank - np.floor(rank)) * lookup[int(np.ceil(rank))]
+            for rank in ranks
+        ]
+    )
+
+
+def _knot_column(batch: RowBatch, variable: str) -> npt.NDArray[np.floating]:
+    """One batch of a cubic covariate as float64, rejecting non-finite values."""
+    if variable not in batch.columns:
+        raise ValueError(f"Smooth variable '{variable}' not found in source.")
+    value = np.asarray(batch.columns[variable], dtype=float)
+    if not np.all(np.isfinite(value)):
+        raise ValueError(f"Covariate '{variable}' contains non-finite values.")
+    return value
+
+
 def _exact_cubic_knots(
     values: RowSource,
     variable: str,
@@ -386,6 +476,8 @@ def _exact_cubic_knots(
 
     SQLite's on-disk DISTINCT/ORDER BY is deliberately used here instead of a
     fixed-size sketch: cubic knots interpolate ranks through *unique* values.
+    Its memory does not grow with rows; :func:`_exact_cubic_knots_in_memory`
+    is the faster path setup takes when the columns fit the budget.
     """
     batch_rows = _positive_integer(batch_rows, "batch_rows")
     with tempfile.TemporaryDirectory(prefix="jaxgam-unique-") as directory:
@@ -397,31 +489,14 @@ def _exact_cubic_knots(
             connection.execute(f"PRAGMA cache_size = -{_SQLITE_CACHE_KIB}")
             connection.execute("CREATE TABLE values_table (value REAL NOT NULL)")
             for batch in _scan_valid(values, batch_rows):
-                if variable not in batch.columns:
-                    raise ValueError(
-                        f"Smooth variable '{variable}' not found in source."
-                    )
-                value = np.asarray(batch.columns[variable], dtype=float)
-                if not np.all(np.isfinite(value)):
-                    raise ValueError(
-                        f"Covariate '{variable}' contains non-finite values."
-                    )
+                value = _knot_column(batch, variable)
                 connection.executemany(
                     "INSERT INTO values_table VALUES (?)", ((float(x),) for x in value)
                 )
             n_unique = connection.execute(
                 "SELECT COUNT(DISTINCT value) FROM values_table"
             ).fetchone()[0]
-            if n_unique < k:
-                raise ValueError(
-                    f"Basis dimension k={k} exceeds number of unique data values "
-                    f"({n_unique})."
-                )
-            ranks = np.linspace(0, n_unique - 1, k)
-            needed = sorted(
-                {int(np.floor(rank)) for rank in ranks}
-                | {int(np.ceil(rank)) for rank in ranks}
-            )
+            ranks, needed = _knot_ranks(n_unique, k)
             placeholders = ",".join("?" for _ in needed)
             rows = connection.execute(
                 "SELECT value FROM (SELECT value, ROW_NUMBER() OVER "
@@ -430,14 +505,103 @@ def _exact_cubic_knots(
                 f"WHERE position IN ({placeholders}) ORDER BY position",
                 needed,
             ).fetchall()
-    lookup = dict(zip(needed, (row[0] for row in rows), strict=True))
-    return np.array(
-        [
-            (1.0 - (rank - np.floor(rank))) * lookup[int(np.floor(rank))]
-            + (rank - np.floor(rank)) * lookup[int(np.ceil(rank))]
-            for rank in ranks
-        ]
+    return _interpolate_knots(
+        ranks, dict(zip(needed, (row[0] for row in rows), strict=True))
     )
+
+
+def _exact_cubic_knots_in_memory(
+    values: RowSource,
+    variables: list[str],
+    dimensions: list[int],
+    batch_rows: int = _DEFAULT_SETUP_BATCH_ROWS,
+) -> list[npt.NDArray[np.floating]]:
+    """Exact knots of several cubic covariates from one scan held in memory.
+
+    Gives the knots of :func:`_exact_cubic_knots` bit for bit, at the cost of
+    ``8 * n`` bytes per gathered column (:class:`SetupWorkspace`). The sorted
+    distinct values are those of ``np.unique``, found in place: sort, mark
+    the first of each run of equal values, read the needed ranks. SQLite
+    stores ``-0.0`` as ``0.0``, so zeros are made positive (``x + 0.0``) as
+    they are gathered; every other finite double round-trips exactly through
+    an SQLite ``REAL``, and both orders are numeric. Rank interpolation is
+    the shared :func:`_interpolate_knots`.
+
+    Errors are raised in the order of one SQLite scan per variable: for each
+    variable in turn, a non-finite value, then too few unique values.
+    """
+    batch_rows = _positive_integer(batch_rows, "batch_rows")
+    gathered = np.empty((len(variables), values.n_rows))
+    finite = [True] * len(variables)
+    start = 0
+    for batch in _scan_valid(values, batch_rows):
+        stop = start + len(batch.row_positions)
+        if stop > values.n_rows:
+            raise RuntimeError(
+                "RowSource replay did not provide a valid stable row set."
+            )
+        for index, variable in enumerate(variables):
+            if variable not in batch.columns:
+                raise ValueError(f"Smooth variable '{variable}' not found in source.")
+            if not finite[index]:
+                continue
+            value = np.asarray(batch.columns[variable], dtype=float)
+            if np.all(np.isfinite(value)):
+                np.add(value, 0.0, out=gathered[index, start:stop])
+            else:
+                finite[index] = False
+            del value
+        start = stop
+        del batch
+    if start != values.n_rows:
+        raise RuntimeError("RowSource replay did not provide a valid stable row set.")
+    knots = []
+    for index, (variable, k) in enumerate(zip(variables, dimensions, strict=True)):
+        if not finite[index]:
+            raise ValueError(f"Covariate '{variable}' contains non-finite values.")
+        column = gathered[index]
+        column.sort()
+        run_starts = np.empty(len(column), dtype=bool)
+        run_starts[:1] = True
+        np.not_equal(column[1:], column[:-1], out=run_starts[1:])
+        positions = np.flatnonzero(run_starts)
+        del run_starts
+        ranks, needed = _knot_ranks(len(positions), k)
+        knots.append(
+            _interpolate_knots(
+                ranks, {rank: float(column[positions[rank]]) for rank in needed}
+            )
+        )
+        del positions
+    return knots
+
+
+def _setup_knots(
+    source: RowSource,
+    variables: list[str],
+    dimensions: list[int],
+    batch_rows: int,
+    columns_per_scan: int,
+) -> list[npt.NDArray[np.floating]]:
+    """Exact knots of every cubic covariate, in memory when the budget allows.
+
+    ``columns_per_scan`` comes from :meth:`SetupWorkspace.in_memory_knot_columns`;
+    zero keeps one SQLite scan per covariate. Both paths give the same knots.
+    """
+    if not columns_per_scan:
+        return [
+            _exact_cubic_knots(source, variable, k, batch_rows)
+            for variable, k in zip(variables, dimensions, strict=True)
+        ]
+    knots: list[npt.NDArray[np.floating]] = []
+    for start in range(0, len(variables), columns_per_scan):
+        stop = start + columns_per_scan
+        knots.extend(
+            _exact_cubic_knots_in_memory(
+                source, variables[start:stop], dimensions[start:stop], batch_rows
+            )
+        )
+    return knots
 
 
 _CUBIC_CLASSES: dict[str, type[CubicRegressionSmooth]] = {
@@ -663,10 +827,20 @@ def prepare_model(
     )
     setup_rows = workspace.batch_rows(min(batch_rows, source.n_rows), maximum_bytes)
     smooths = [
-        _cubic_from_knots(
-            term, _exact_cubic_knots(source, term.variables[0], k, setup_rows)
+        _cubic_from_knots(term, knots)
+        for term, knots in zip(
+            formula_spec.smooth_terms,
+            _setup_knots(
+                source,
+                variables,
+                list(basis_dimensions),
+                setup_rows,
+                workspace.in_memory_knot_columns(
+                    setup_rows, maximum_bytes, len(variables)
+                ),
+            ),
+            strict=True,
         )
-        for term, k in zip(formula_spec.smooth_terms, basis_dimensions, strict=True)
     ]
     param_tree = _CanonicalTreeR(n_parametric) if n_parametric else None
     exact_alias_scales = np.full((n_parametric, n_parametric), np.nan)

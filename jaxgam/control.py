@@ -188,7 +188,11 @@ class FitControl:
     ``batch_rows`` rows at a time and shrinks that size until its prospective
     setup workspace (JaxGAM-owned arrays plus the exact-knot SQLite scope) fits
     ``memory_budget_bytes``; a budget too small for one row is rejected before
-    any full-data scan. Source-owned storage and allocator overhead remain
+    any full-data scan. When the budget also holds them at that size, exact
+    cubic knots are found from covariate columns gathered in memory (8 bytes
+    per row per column, as many columns per scan as fit) instead of the
+    row-count-independent SQLite scan; the knots are identical either way.
+    Source-owned storage and allocator overhead remain
     outside these bounds. Gaussian QR adds a route-specific ledger for its
     merge buffers and compact score/derivative arrays, including either the
     small-penalty Newton Hessian or the bounded large-penalty L-BFGS-B work

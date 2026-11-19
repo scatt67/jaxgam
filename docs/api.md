@@ -110,8 +110,12 @@ Preparation scans also honor `FitControl.batch_rows` and
 `memory_budget_bytes`. Setup requests at most `batch_rows` rows per scan and
 shrinks that size until its prospective workspace, including the bounded
 SQLite scope used for exact cubic knots, fits the budget. A budget too small
-for one row is rejected before any full data scan. Knot, alias and rank
-decisions do not depend on the batch size. The source's own storage is
+for one row is rejected before any full data scan. When the budget also has
+room for them, the cubic covariates are gathered in memory (8 bytes per row
+per column, as many columns per scan as fit) and their exact knots come from
+a sort instead of SQLite; the knots are bitwise identical, and a smaller
+budget keeps setup memory independent of the number of rows. Knot, alias and
+rank decisions do not depend on the batch size. The source's own storage is
 outside these bounds.
 
 Model preparation fixes the identifiable coefficient subspace before fitting.
