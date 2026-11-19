@@ -354,19 +354,56 @@ def test_cubic_shrinkage_raw_penalties_match_pinned_r_across_block_boundary(
     for k in (32, 64, 65, 96):
         cases.append(np.linspace(-2.0, 3.0, k))
         cases.append(np.cumsum(rng.uniform(0.01, 2.0, size=k)) - 4.0)
+    # mgcv gives the two null-space eigenvalues different values (shrink and
+    # shrink^2 times the smallest positive one), so its penalty depends on
+    # which basis of that two-dimensional null space R's LAPACK returns.
+    # Entries are comparable only when this side runs R's provider: pinned
+    # OpenBLAS on both, or the audited Accelerate pairing. With neither (this
+    # side on OpenBLAS, R on libRlapack over Accelerate) the two penalties
+    # differ by a rotation inside the null space and by nothing else, and
+    # that is what is checked.
+    same_provider = (
+        r_links_pinned_openblas(r_bridge)
+        or source_lapack.scipy_uses_accelerate_lapack()
+    )
     collector = _AssertCollector()
     for index, knots in enumerate(cases):
         _, raw = CubicRegressionSmooth._compute_natural_f_and_penalty(knots)
         k = len(knots)
         expected = r_bridge.source_cubic_shrinkage_penalty(raw)
         actual = source_lapack.cubic_shrinkage_penalty(raw)
-        tolerance = _reviewed_raw_cubic_tolerance(index, knots, raw, 0.1)
+        if same_provider:
+            tolerance = _reviewed_raw_cubic_tolerance(index, knots, raw, 0.1)
+            collector.check(
+                f"case{index}/k{k}",
+                lambda actual=actual, expected=expected, tolerance=tolerance: (
+                    np.testing.assert_allclose(
+                        actual, expected, rtol=tolerance.rtol, atol=tolerance.atol
+                    )
+                ),
+            )
+            continue
+        values, vectors = np.linalg.eigh(raw)
+        null = vectors[:, np.argsort(np.abs(values))[:2]]
+        difference = actual - expected
+        outside = difference - null @ (null.T @ difference @ null) @ null.T
         collector.check(
-            f"case{index}/k{k}",
-            lambda actual=actual, expected=expected, tolerance=tolerance: (
-                np.testing.assert_allclose(
-                    actual, expected, rtol=tolerance.rtol, atol=tolerance.atol
-                )
+            f"case{index}/k{k} outside the null space",
+            lambda outside=outside, expected=expected: np.testing.assert_allclose(
+                outside,
+                0.0,
+                atol=STRICT.rtol * float(np.max(np.abs(expected))),
+            ),
+        )
+        # Measured 3e-13 to 2.1e-6 relative on macOS (2026-11-19): the two
+        # replaced eigenvalues are tiny and nearly degenerate at large k.
+        collector.check(
+            f"case{index}/k{k} spectrum",
+            lambda actual=actual, expected=expected: np.testing.assert_allclose(
+                np.linalg.eigvalsh(actual),
+                np.linalg.eigvalsh(expected),
+                rtol=MODERATE.rtol,
+                atol=MODERATE.atol * float(np.max(np.abs(expected))),
             ),
         )
     collector.raise_if_any("source cubic shrinkage")
