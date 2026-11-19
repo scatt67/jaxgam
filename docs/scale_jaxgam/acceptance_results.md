@@ -28,8 +28,8 @@ Three limits on what the numbers mean:
 | Item | Value |
 |---|---|
 | Commit (manifest, start and end) | `a47515593175e10810e402cf1ad6344aa2b4ecfa`; clean tree at both; `same_checkout=true` |
-| Commit in the harness records | 82 setup/fit records; commits: `a47515593175e10810e402cf1ad6344aa2b4ecfa` |
-| First case started, last case ended (UTC) | 2026-11-19T01:40:43Z to 2026-11-19T11:08:07Z |
+| Commit in the harness records | 83 setup/fit records; commits: `a47515593175e10810e402cf1ad6344aa2b4ecfa` |
+| First case started, last case ended (UTC) | 2026-11-19T01:40:43Z to 2026-11-19T11:50:50Z |
 | Host | Apple M4, 10 logical CPUs, 17,179,869,184 bytes RAM, macOS-15.6-arm64-arm-64bit-Mach-O |
 | Power before each case | Now drawing from 'AC Power' |
 | Sleep assertions at manifest start and end | {"PreventSystemSleep": "1", "PreventUserIdleSystemSleep": "1"}; {"PreventSystemSleep": "1", "PreventUserIdleSystemSleep": "1"} |
@@ -80,7 +80,7 @@ Three limits on what the numbers mean:
 2. **Many additive terms: are penalty storage, compilation and smoothing
    derivatives controlled?** At 100 smooths, yes on the discrete route:
    3.3 s of backend compilation (k = 10) and 3.8 s (k = 20), where the defect
-   F11 had cost 664 s. At 500 smooths the route's two memory checks together need 5.85 GB; the run inside 6 GiB (M2c) had not finished when this version was written. Two limits remain: the streamed Gaussian
+   F11 had cost 664 s. At 500 smooths the fit ran inside 6 GiB: 16.5 s of backend compilation in a 1,001 s cold fit, with a fit peak bound of 5.85 GB. Two limits remain: the streamed Gaussian
    QR route does not converge at 100 smooths (F1, a documented limit), and the
    exact streamed route did not converge at 40 Gaussian smooths (F13).
 3. **Expensive kernels: are distance and kernel intermediates batch bounded?**
@@ -146,7 +146,9 @@ Memory pairs (all routes; the K5 and H2 rows belong to sections 3 and 5):
 
 - **L1, L6.** Scans, workspace and iteration counts are in answer 1. Setup
   and fit time grow in proportion to n (setup 38 s, 140 s and 556 s): both
-  read the whole source a fixed number of times.
+  read the whole source a fixed number of times. The scan count follows the
+  number of smooths, not the iterations: the two-smooth fit T12g2 used 9
+  scans in 14 iterations.
 - **L2.** The larger fit stopped on L-BFGS-B's relative-reduction test and
   was completed by one curvature Newton step; its final projected gradient is
   3.5e-10.
@@ -171,18 +173,17 @@ Memory pairs (all routes; the K5 and H2 rows belong to sections 3 and 5):
 | M5b | additive(100, 20) | gaussian | 100,000 | 1,901 / 100 | discrete-wm | 2,048 MiB fit, 512 MiB table | valid | 28.2 | 56.6 (3.75) | 51.9 | 1,340 | 1,090 | fit scans 2; 44 proposal evaluations; fit peak bound 1,094 MB; setup construction peak 390.6 MB; compact rows per group up to 1,000; setup scans 307; EDF 344.08; converged after 45 iterations |
 | M2 | additive(500, 10) | gaussian | 100,000 | 4,501 / 500 | discrete-wm | 2,048 MiB fit, 2,048 MiB table | rejected | 523.5 | – | – | – | – | Discrete fit workspace requires 3,369,443,492 bytes, exceeding FitControl.memory_budget_bytes=2,147,483,648. |
 | M2b | additive(500, 10) | gaussian | 100,000 | 4,501 / 500 | discrete-wm | 4,096 MiB fit, 2,048 MiB table | rejected | 516.4 | – | – | – | – | Working-model compiled workspace requires 2,480,725,666 additional bytes; available workspace is 925,523,804. |
+| M2c | additive(500, 10) | gaussian | 100,000 | 4,501 / 500 | discrete-wm | 6,144 MiB fit, 2,048 MiB table | valid | 523.8 | 1,000.9 (16.5) | 983.4 | 3,083 | 5,839 | fit scans 2; 74 proposal evaluations; fit peak bound 5,850 MB; setup construction peak 1,696.5 MB; compact rows per group up to 1,000; setup scans 1,507; EDF 685.90; converged after 75 iterations |
 | M3 | additive(10, 10) | poisson | 100,000 | 91 / 10 | stream-exact | default | rejected | 2.20 | – | – | – | – | regular signed QR known workspace requires 678,845,952 bytes, exceeding maximum_bytes=536,022,128 |
 | M3b | additive(10, 10) | poisson | 100,000 | 91 / 10 | stream-exact | 1,024 MiB fit | valid | 2.20 | 77.3 (1.72) | 75.1 | 886 | 784 | fit scans 330; 27 score evaluations, 20 accepted; derivative time 5.09 s; projected gradient 7.52e-07; EDF 90.16; stop: projected gradient <= pgtol, 2 step window(s) |
 | M4 | additive(100, 10) | gaussian | 20,000 | 901 / 100 | dense-reml | default | valid | 0.36 | 202.8 (24.0) | 178.4 | 6,397 | – | 19 outer iteration(s); EDF 173.04 |
 | F13 | additive(40, 10) | gaussian | 4,000 | 361 / 40 | stream-exact | default | not converged | 0.52 | – | – | – | – | 100 iterations; stop: L-BFGS-B iteration limit, 1 step window(s) |
 
-**Pending (no record yet): M2c.**
-
 - **M1, M5.** The 100-smooth fits converged with 34 and 44 proposal
   evaluations. M5 at the 1 GiB fit budget the matrix names was rejected (the
   compiled workspace needed 443,730,034 more bytes than the 423,890,156
   available); M5b is the same case at 2 GiB.
-- **M2.** The 500-smooth formula parses, and setup takes 516 s (28.9 s at 100 smooths). The 2 GiB fit budget the matrix names was rejected on the fit workspace (3,369,443,492 bytes). 4 GiB (M2b) passed that check and was rejected on the compiled workspace, which needs 2,480,725,666 bytes more than the 925,523,804 then left. Together that is 5,850,169,158 bytes. M2c, inside 6 GiB, was still running when this version was written; its row will be added.
+- **M2.** The 500-smooth formula parses, and setup takes 524 s (28.9 s at 100 smooths) with 1,507 source scans. The 2 GiB fit budget the matrix names was rejected on the fit workspace (3,369,443,492 bytes). 4 GiB (M2b) passed that check and was rejected on the compiled workspace, which needs 2,480,725,666 bytes more than the 925,523,804 then left. Together that is 5,850,169,158 bytes. Inside 6 GiB (M2c) the fit converged after 74 proposal evaluations: 1,001 s cold, of which 16.5 s is backend compilation, and 3.1 GB resident above baseline.
 - **M3.** Rejected at the default 512 MiB (workspace 678,845,952 bytes). At
   1 GiB (M3b) the fit converged on the projected gradient in two step windows
   with 27 score evaluations. The iteration-budget defect F10 no longer
@@ -196,8 +197,8 @@ Memory pairs (all routes; the K5 and H2 rows belong to sections 3 and 5):
   first few, so in the 10-smooth and 100-smooth cases the fitted model is
   misspecified by construction: EDF sits near its ceiling and the residual
   scale is far above the noise variance of 0.09 (0.52 at 10 smooths, 7.7 at
-  100). These cases measure storage, compilation and derivative work at the
-  stated sizes. They do not test smoothing-parameter selection at an interior
+  100, 39 at 500). These cases measure storage, compilation and derivative
+  work at the stated sizes. They do not test smoothing-parameter selection at an interior
   optimum; the 2-smooth cases and the test suite do that.
 
 ### 3. Expensive kernels (tp, gp)
@@ -448,7 +449,7 @@ is named.
 | H1cb | 1,024 MiB fit | Frozen operator requires 803,422,474 bytes; budget is 446,032,116. | H1cc | H1cc (2,048 MiB fit): valid |
 | H7c | 2,048 MiB table | Discrete fit workspace requires 1,743,171,846 bytes, exceeding FitControl.memory_budget_bytes=536,870,912. | H7f | H7f (3,072 MiB fit, 2,048 MiB table): valid |
 | H7d | 256 MiB table | Working-model compiled workspace requires 250,740,033 additional bytes; available workspace is 175,746,810. | H7e | H7e (1,024 MiB fit, 256 MiB table): valid |
-| M2b | 4,096 MiB fit, 2,048 MiB table | Working-model compiled workspace requires 2,480,725,666 additional bytes; available workspace is 925,523,804. | M2c | M2c: pending |
+| M2b | 4,096 MiB fit, 2,048 MiB table | Working-model compiled workspace requires 2,480,725,666 additional bytes; available workspace is 925,523,804. | M2c | M2c (6,144 MiB fit, 2,048 MiB table): valid |
 
 The discrete and operator routes check their budgets in stages, so a rerun at
 the size one message asks for can meet a further requirement (K3, H7, M2 and
@@ -513,7 +514,7 @@ Status of the findings listed in `acceptance_cases.md`, and three new ones.
 | F8 | Discrete multi-dimensional tp construction bytes | **Reproduced at full size; a budget matter, not a defect.** 2-D tp(30) at 1 million rows needs a 1.5 GB table and 3-D tp3(20) a 1.2 GB one; both then fit with a small fit bound | K3, K8 |
 | F9 | Formula parser recursion at 500 terms | **Fixed earlier** (`a892c63`): the 500-smooth case parses | M2 |
 | F10 | Exact streamed Poisson with 10 smooths hitting the iteration limit | **Fixed**: converges on the projected gradient at 100,000 rows | M3b |
-| F11 | Compile time of discrete working-model REML with many smooths | **Fixed**: 3.3 s and 3.8 s at 100 smooths. The 500-smooth case (M2c) is pending | M1, M5b, M2 |
+| F11 | Compile time of discrete working-model REML with many smooths | **Fixed**: 3.3 s and 3.8 s at 100 smooths. At 500 smooths, 16.5 s of a 1,001 s cold fit | M1, M5b, M2c |
 | F12 | Dense Poisson REML with count outliers at n = 400 | **Fixed**: full convergence | T13 |
 | F13 | Exact streamed Gaussian REML with 40 smooths | **Open.** Does not converge and says so: L-BFGS-B iteration limit after 100 iterations. The harness data (seed 42) differ from the data the finding was first recorded on (seed 5, relative-reduction stop), so the two stops are not the same event | F13 |
 | F14 | **New.** Exact streamed NB REML on data near the Poisson limit | **Open.** Stops with an abnormal line-search exit and reports `converged=False`, at a score 5.9e-7 (relative) below the dense route's converged score. The route classifies function-reduction exits by `newton()`'s relative test but not abnormal line-search exits; whether it should is a decision, not a measurement | N8, N9 |
@@ -545,7 +546,8 @@ Status of the findings listed in `acceptance_cases.md`, and three new ones.
   started twice at once by a queueing mistake and overlapped each other.
   Those records were set aside and the four cases rerun alone; the tables
   show the reruns.
-- **M2 ran.** The plan held it back until F11 was fixed; it was.
+- **M2 ran.** The plan held it back until F11 was fixed; it was. It needed
+  three budgets (2, 4 and 6 GiB).
 - **Durations.** The plan estimated about 8.5 hours for groups 1 to 7.
   Measured wall time by group is below; the lettered groups are the reruns.
 
@@ -562,3 +564,4 @@ Status of the findings listed in `acceptance_cases.md`, and three new ones.
 | f | K3b, H7b, K8b, L3b, M3b, T8sb, M5b, H1cb, T11ob, H6b | – | 37.2 |
 | g | H5b, K3c, H7c, H7d, H1cc, M2b | – | 40.3 |
 | h | H7e, H7f, T12d2, T12g2 | – | 0.5 |
+| i | M2c | – | 42.6 |
