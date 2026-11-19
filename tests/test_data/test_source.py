@@ -15,6 +15,7 @@ from jaxgam.data.source import (
     RowBatch,
     overlay_columns,
     single_fit_fingerprints,
+    stage_fingerprint,
 )
 
 
@@ -300,3 +301,33 @@ def test_single_fit_fingerprints_do_not_mask_an_error_from_the_fit() -> None:
 
     with pytest.raises(KeyError, match="fit failed"):
         fail_inside_a_fit()
+
+
+def test_stage_fingerprint_recomputes_unless_an_outer_scope_will_verify(
+    monkeypatch,
+) -> None:
+    values = np.arange(4.0)
+    source = ArrayRowSource({"x": values})
+    hashes = _count_calls(monkeypatch, ArrayRowSource, "_content_fingerprint")
+
+    with single_fit_fingerprints(verify_on_exit=False):
+        start = source.fingerprint()
+        assert source.fingerprint() == start
+        assert len(hashes) == 1
+        values[0] = 7.0
+        assert source.fingerprint() == start
+        assert stage_fingerprint(source) != start
+        assert len(hashes) == 2
+    # A stage scope leaves the final check to the stage.
+    assert len(hashes) == 2
+
+    def stage_inside_a_fit() -> None:
+        with single_fit_fingerprints():
+            begin = source.fingerprint()
+            with single_fit_fingerprints(verify_on_exit=False):
+                values[0] = 8.0
+                assert stage_fingerprint(source) == begin
+
+    with pytest.raises(RuntimeError, match="RowSource changed during the fit"):
+        stage_inside_a_fit()
+    assert stage_fingerprint(source) == source.fingerprint()

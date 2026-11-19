@@ -84,36 +84,66 @@ def overlay_columns(
     return LazyColumns(names, load)
 
 
-_FINGERPRINT_MEMO: ContextVar[dict[int, tuple[Any, str]] | None] = ContextVar(
+@dataclass
+class _FingerprintMemo:
+    """Digests reused inside one :func:`single_fit_fingerprints` scope."""
+
+    verify_on_exit: bool
+    digests: dict[int, tuple[Any, str]]
+
+
+_FINGERPRINT_MEMO: ContextVar[_FingerprintMemo | None] = ContextVar(
     "jaxgam_single_fit_fingerprints", default=None
 )
 
 
 @contextmanager
-def single_fit_fingerprints() -> Iterator[None]:
-    """Hash each in-memory source once for the duration of one fit.
+def single_fit_fingerprints(*, verify_on_exit: bool = True) -> Iterator[None]:
+    """Hash each in-memory source once for the duration of one fit or stage.
 
     :meth:`ArrayRowSource.fingerprint` rehashes its data on every call so
-    that a mutation shows. A fit asks for the fingerprint before and after
-    every scan, so setup rehashed the whole data set hundreds of times: more
+    that a mutation shows. Setup asks for the fingerprint before and after
+    every scan, so it rehashed the whole data set hundreds of times: more
     than half of setup time at 100 smooths. Inside this scope the first
-    digest of each source is reused. On a normal exit every source is hashed
-    once more, so data that changed during the fit still raise, at the end of
-    the fit instead of at the scan that would have seen it. A nested scope
-    joins the outer one.
+    digest of each source is reused.
+
+    With ``verify_on_exit`` every source is hashed once more on a normal
+    exit, so data that changed during the fit still raise, at the end of the
+    fit instead of at the scan that would have seen it. A stage that ends
+    with its own check passes ``verify_on_exit=False`` and makes that check
+    with :func:`stage_fingerprint`. A nested scope joins the outer one.
     """
     if _FINGERPRINT_MEMO.get() is not None:
         yield
         return
-    memo: dict[int, tuple[Any, str]] = {}
+    memo = _FingerprintMemo(verify_on_exit, {})
     token = _FINGERPRINT_MEMO.set(memo)
     try:
         yield
     finally:
         _FINGERPRINT_MEMO.reset(token)
-    for source, digest in memo.values():
-        if source.fingerprint() != digest:
-            raise RuntimeError("RowSource changed during the fit")
+    if verify_on_exit:
+        for source, digest in memo.digests.values():
+            if source.fingerprint() != digest:
+                raise RuntimeError("RowSource changed during the fit")
+
+
+def stage_fingerprint(source: RowSource) -> str:
+    """The fingerprint to compare when a stage ends.
+
+    It is recomputed, so the stage's own error names what changed and when,
+    unless an enclosing :func:`single_fit_fingerprints` scope will verify the
+    source as it ends: then the reused digest is returned and that scope
+    reports a change.
+    """
+    memo = _FINGERPRINT_MEMO.get()
+    if memo is None or memo.verify_on_exit:
+        return source.fingerprint()
+    token = _FINGERPRINT_MEMO.set(None)
+    try:
+        return source.fingerprint()
+    finally:
+        _FINGERPRINT_MEMO.reset(token)
 
 
 @dataclass(frozen=True)
@@ -393,12 +423,12 @@ class ArrayRowSource:
         """
         memo = _FINGERPRINT_MEMO.get()
         if memo is not None:
-            known = memo.get(id(self))
+            known = memo.digests.get(id(self))
             if known is not None:
                 return known[1]
         value = self._content_fingerprint()
         if memo is not None:
-            memo[id(self)] = (self, value)
+            memo.digests[id(self)] = (self, value)
         return value
 
     def _content_fingerprint(self) -> str:

@@ -26,7 +26,11 @@ from jaxgam.data.continuous_frame import (
     build_compact_setup_frame,
 )
 from jaxgam.data.discretize import DiscretizationBudget
-from jaxgam.data.source import RowSource
+from jaxgam.data.source import (
+    RowSource,
+    single_fit_fingerprints,
+    stage_fingerprint,
+)
 from jaxgam.formula.design import ModelSetup
 from jaxgam.formula.predict_matrix import PredictSpec, build_predict_spec
 from jaxgam.formula.terms import FormulaSpec, SmoothSpec
@@ -261,7 +265,35 @@ def build_continuous_discrete_setup(
     batch_rows: int = 65_536,
     seed: int = 8547,
 ) -> ContinuousDiscreteSetup | ContinuousSetupUnavailable:
-    """Compress rows, construct the compact basis once, and freeze its state."""
+    """Compress rows, construct the compact basis once, and freeze its state.
+
+    The source is content-hashed when the stage starts and when it ends, not
+    around each of its scans (:func:`~jaxgam.data.source.single_fit_fingerprints`).
+    """
+    with single_fit_fingerprints(verify_on_exit=False):
+        return _build_continuous_discrete_setup(
+            formula,
+            source,
+            factor_names=factor_names,
+            m=m,
+            budget=budget,
+            selector_memmap_dir=selector_memmap_dir,
+            batch_rows=batch_rows,
+            seed=seed,
+        )
+
+
+def _build_continuous_discrete_setup(
+    formula: FormulaSpec,
+    source: RowSource,
+    *,
+    factor_names: tuple[str, ...],
+    m: int | tuple[int, ...] | None,
+    budget: DiscretizationBudget | None,
+    selector_memmap_dir: str | Path | None,
+    batch_rows: int,
+    seed: int,
+) -> ContinuousDiscreteSetup | ContinuousSetupUnavailable:
     if budget is None:
         budget = DiscretizationBudget()
     source_fingerprint = source.fingerprint()
@@ -325,7 +357,7 @@ def build_continuous_discrete_setup(
                 "table",
                 "basis",
             )
-        if source.fingerprint() != source_fingerprint:
+        if stage_fingerprint(source) != source_fingerprint:
             raise RuntimeError("RowSource changed during compact basis setup")
         return ContinuousDiscreteSetup(
             compact=compact,
