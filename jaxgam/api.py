@@ -603,8 +603,6 @@ class GAM:
         ineligible, takes the published route it would take without the
         request; an unmet request is reported in ``execution_fallback_reason``.
         """
-        from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
-
         if self.control.linear_solver == "pcg":
             raise ValueError("linear_solver='pcg' requires execution='operator'.")
         if not isinstance(data, RowSource):
@@ -645,6 +643,32 @@ class GAM:
             _check_stream_fixed_family(family, "qr")
         else:
             _check_stream_fixed_family(family, self.control.linear_solver)
+        # One content hash of the source when the fit starts and one when it
+        # ends, not one before and after every setup and fitting scan; data
+        # changed during the fit raise when the fit ends.
+        with single_fit_fingerprints():
+            return self._fit_stream_routes(
+                data,
+                family,
+                estimated_efs=estimated_efs,
+                estimated_exact=estimated_exact,
+                gaussian_qr_candidate=gaussian_qr_candidate,
+                execution_fallback_reason=execution_fallback_reason,
+            )
+
+    def _fit_stream_routes(
+        self,
+        data: RowSource,
+        family: ExponentialFamily,
+        *,
+        estimated_efs: bool,
+        estimated_exact: bool,
+        gaussian_qr_candidate: bool,
+        execution_fallback_reason: str | None,
+    ) -> GAMPredictionResult:
+        """Prepare a validated streamed fit and dispatch it to its route."""
+        from jaxgam.execution.stream import StreamPIRLSControl, fit_streamed_pirls
+
         spec = parse_formula(self.formula)
         prepared = prepare_model(
             spec,

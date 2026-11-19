@@ -553,3 +553,87 @@ def test_public_stream_fixed_sp_matches_pinned_r_predictions_and_scale(
         ),
     )
     collector.raise_if_any("public streamed fixed-sp R parity")
+
+
+def _many_smooth_source(family: str, n_smooths: int, n_rows: int = 240):
+    from jaxgam.data.source import ArrayRowSource
+
+    rng = np.random.default_rng(1_119)
+    columns = {f"x{index}": rng.uniform(size=n_rows) for index in range(n_smooths)}
+    eta = 0.3 + 0.4 * sum(np.sin(3.0 * value) for value in columns.values())
+    if family == "poisson":
+        y = rng.poisson(np.exp(eta)).astype(float)
+    else:
+        y = eta + rng.normal(scale=0.2, size=n_rows)
+    return ArrayRowSource(columns, y=y)
+
+
+_STREAM_ROUTES = {
+    # route: (family, fixed sp, FitControl keywords)
+    "stream_gaussian_qr": ("gaussian", False, {"gaussian_compression": True}),
+    "stream_exact_reml_qr": ("gaussian", False, {"linear_solver": "qr"}),
+    "stream_qr": ("poisson", True, {"linear_solver": "qr"}),
+}
+
+
+def _route_fit(route: str, n_smooths: int, source) -> GAMPredictionResult:
+    family, fixed, keywords = _STREAM_ROUTES[route]
+    formula = "y ~ " + " + ".join(
+        f"s(x{index}, bs='cr', k=5)" for index in range(n_smooths)
+    )
+    return GAM(
+        formula,
+        family=family,
+        sp=[0.5] * n_smooths if fixed else None,
+        control=FitControl(execution="stream", batch_rows=64, **keywords),
+    ).fit(source, result="prediction")
+
+
+@pytest.mark.parametrize("route", sorted(_STREAM_ROUTES))
+@pytest.mark.parametrize("n_smooths", [2, 4])
+def test_streamed_fit_hashes_its_source_twice(
+    monkeypatch, route: str, n_smooths: int
+) -> None:
+    """One content hash when the fit starts and one when it ends.
+
+    Setup and fitting ask for the fingerprint before and after every scan;
+    outside one fit's scope each request rehashed the whole source.
+    """
+    from jaxgam.data.source import ArrayRowSource
+
+    hashes: list[int] = []
+    content_fingerprint = ArrayRowSource._content_fingerprint
+
+    def counted_fingerprint(self):
+        hashes.append(1)
+        return content_fingerprint(self)
+
+    monkeypatch.setattr(ArrayRowSource, "_content_fingerprint", counted_fingerprint)
+    result = _route_fit(route, n_smooths, _many_smooth_source(route, n_smooths))
+    assert result.execution_route == route
+    assert np.all(np.isfinite(np.asarray(result.coefficients)))
+    assert len(hashes) == 2
+
+
+@pytest.mark.parametrize("route", sorted(_STREAM_ROUTES))
+def test_streamed_fit_raises_when_its_source_changes_during_the_fit(
+    monkeypatch, route: str
+) -> None:
+    """A source mutated after setup raises when the fit ends."""
+    from jaxgam.data.source import ArrayRowSource
+
+    source = _many_smooth_source(route, 2)
+    scans: list[int] = []
+    scan = ArrayRowSource.scan
+
+    def mutating_scan(self, batch_rows):
+        scans.append(1)
+        if len(scans) == 6:
+            # Rows already read by setup now differ from the source.
+            self._y[0] += 1.0
+        return scan(self, batch_rows)
+
+    monkeypatch.setattr(ArrayRowSource, "scan", mutating_scan)
+    with pytest.raises(RuntimeError, match="RowSource changed during the fit"):
+        _route_fit(route, 2, source)
+    assert len(scans) > 6
