@@ -62,6 +62,11 @@ Three limits on what the numbers mean:
   numbers are the bounds in the record column and the known workspace.
 - **Known workspace.** The bytes the route itself accounts for before it
   allocates.
+- **Fit times and fit scans cover the whole fit call.** Each timed fit is one
+  public `GAM(...).fit(...)` call, which includes model setup. The Setup
+  column is that same setup measured alone in its own process, so the
+  optimization itself is roughly the difference. Where setup dominates
+  (L1, L6, M2c) the text says so.
 - **Units.** MB is 10^6 bytes; MiB is 2^20 bytes. Budgets are stated in MiB as
   the harness options take them.
 
@@ -69,9 +74,10 @@ Three limits on what the numbers mean:
 
 1. **Large n, modest p: does streamed memory plateau, and does Gaussian
    optimization stop reading rows?** Yes for every streamed route measured.
-   The Gaussian QR route used 17 source scans and a 218.5 MB workspace at 1,
-   3 and 10 million rows, with 13, 13 and 14 outer iterations, so its
-   iterations read no rows. The exact streamed route kept a 212.6 MB workspace
+   A Gaussian QR fit call made 17 source scans and used a 218.5 MB workspace
+   at 1, 3 and 10 million rows. Setup alone makes 16 of those scans, so the
+   optimization reads the source once, whatever its iteration count (13, 13
+   and 14). The exact streamed route kept a 212.6 MB workspace
    from 100,000 to 1 million rows; it reads the source on every score
    evaluation by design (316 and 604 scans). Fixed-sp streamed PIRLS used 34
    scans and 747.9 MB at both sizes. Resident memory above baseline did not
@@ -80,7 +86,7 @@ Three limits on what the numbers mean:
 2. **Many additive terms: are penalty storage, compilation and smoothing
    derivatives controlled?** At 100 smooths, yes on the discrete route:
    3.3 s of backend compilation (k = 10) and 3.8 s (k = 20), where the defect
-   F11 had cost 664 s. At 500 smooths the fit ran inside 6 GiB: 16.5 s of backend compilation in a 1,001 s cold fit, with a fit peak bound of 5.85 GB. Two limits remain: the streamed Gaussian
+   F11 had cost 664 s. At 500 smooths the fit ran inside 6 GiB: a 1,001 s cold fit call, of which about 524 s is setup and 16.5 s backend compilation, with a fit peak bound of 5.85 GB. Two limits remain: the streamed Gaussian
    QR route does not converge at 100 smooths (F1, a documented limit), and the
    exact streamed route did not converge at 40 Gaussian smooths (F13).
 3. **Expensive kernels: are distance and kernel intermediates batch bounded?**
@@ -145,10 +151,10 @@ Memory pairs (all routes; the K5 and H2 rows belong to sections 3 and 5):
 | L3b | additive(10, 11) | poisson | stream-qr | 100,000 / 1,000,000 | 34 / 34 | 747.9 / 747.9 (`known_workspace_bytes`) | yes | 9 / 88 | 734 / 748 |
 
 - **L1, L6.** Scans, workspace and iteration counts are in answer 1. Setup
-  and fit time grow in proportion to n (setup 38 s, 140 s and 556 s): both
-  read the whole source a fixed number of times. The scan count follows the
-  number of smooths, not the iterations: the two-smooth fit T12g2 used 9
-  scans in 14 iterations.
+  dominates the fit call and grows in proportion to n: 38 of 45 s at 1
+  million rows, 140 of 152 s at 3 million and 556 of 598 s at 10 million.
+  The scan count follows the number of smooths, not the iterations: the
+  two-smooth fit T12g2 made 9 scans (8 in setup) in 14 iterations.
 - **L2.** The larger fit stopped on L-BFGS-B's relative-reduction test and
   was completed by one curvature Newton step; its final projected gradient is
   3.5e-10.
@@ -183,7 +189,7 @@ Memory pairs (all routes; the K5 and H2 rows belong to sections 3 and 5):
   evaluations. M5 at the 1 GiB fit budget the matrix names was rejected (the
   compiled workspace needed 443,730,034 more bytes than the 423,890,156
   available); M5b is the same case at 2 GiB.
-- **M2.** The 500-smooth formula parses, and setup takes 524 s (28.9 s at 100 smooths) with 1,507 source scans. The 2 GiB fit budget the matrix names was rejected on the fit workspace (3,369,443,492 bytes). 4 GiB (M2b) passed that check and was rejected on the compiled workspace, which needs 2,480,725,666 bytes more than the 925,523,804 then left. Together that is 5,850,169,158 bytes. Inside 6 GiB (M2c) the fit converged after 74 proposal evaluations: 1,001 s cold, of which 16.5 s is backend compilation, and 3.1 GB resident above baseline.
+- **M2.** The 500-smooth formula parses, and setup takes 524 s (28.9 s at 100 smooths) with 1,507 source scans. The 2 GiB fit budget the matrix names was rejected on the fit workspace (3,369,443,492 bytes). 4 GiB (M2b) passed that check and was rejected on the compiled workspace, which needs 2,480,725,666 bytes more than the 925,523,804 then left. Together that is 5,850,169,158 bytes. Inside 6 GiB (M2c) the fit converged after 74 proposal evaluations. The cold fit call took 1,001 s: about 524 s of setup, 16.5 s of backend compilation and the rest optimization, with 3.1 GB resident above baseline.
 - **M3.** Rejected at the default 512 MiB (workspace 678,845,952 bytes). At
   1 GiB (M3b) the fit converged on the projected gradient in two step windows
   with 27 score evaluations. The iteration-budget defect F10 no longer
@@ -514,7 +520,7 @@ Status of the findings listed in `acceptance_cases.md`, and three new ones.
 | F8 | Discrete multi-dimensional tp construction bytes | **Reproduced at full size; a budget matter, not a defect.** 2-D tp(30) at 1 million rows needs a 1.5 GB table and 3-D tp3(20) a 1.2 GB one; both then fit with a small fit bound | K3, K8 |
 | F9 | Formula parser recursion at 500 terms | **Fixed earlier** (`a892c63`): the 500-smooth case parses | M2 |
 | F10 | Exact streamed Poisson with 10 smooths hitting the iteration limit | **Fixed**: converges on the projected gradient at 100,000 rows | M3b |
-| F11 | Compile time of discrete working-model REML with many smooths | **Fixed**: 3.3 s and 3.8 s at 100 smooths. At 500 smooths, 16.5 s of a 1,001 s cold fit | M1, M5b, M2c |
+| F11 | Compile time of discrete working-model REML with many smooths | **Fixed**: 3.3 s and 3.8 s at 100 smooths. At 500 smooths, 16.5 s of a 1,001 s cold fit call | M1, M5b, M2c |
 | F12 | Dense Poisson REML with count outliers at n = 400 | **Fixed**: full convergence | T13 |
 | F13 | Exact streamed Gaussian REML with 40 smooths | **Open.** Does not converge and says so: L-BFGS-B iteration limit after 100 iterations. The harness data (seed 42) differ from the data the finding was first recorded on (seed 5, relative-reduction stop), so the two stops are not the same event | F13 |
 | F14 | **New.** Exact streamed NB REML on data near the Poisson limit | **Open.** Stops with an abnormal line-search exit and reports `converged=False`, at a score 5.9e-7 (relative) below the dense route's converged score. The route classifies function-reduction exits by `newton()`'s relative test but not abnormal line-search exits; whether it should is a decision, not a measurement | N8, N9 |
@@ -525,7 +531,7 @@ Status of the findings listed in `acceptance_cases.md`, and three new ones.
 
 - **Budget reruns.** Ten matrix rows were rejected at the budget the matrix
   names. Each rejection is kept under its ID and each rerun has its own ID
-  (suffix b, c or d) and row.
+  (suffix b to f) and row.
 - **H6 cut from 100 seeds to 10.** At 10,000 levels one seed takes 79 s, so
   100 seeds need about 130 minutes, not the 45 the plan estimated. The
   100-seed run was stopped by hand after 84 minutes (the script writes its
