@@ -1267,3 +1267,38 @@ def test_blocked_triangular_inverse_and_solve_match_direct_substitution(n):
         np.linalg.inv(H),
     )
     collector.raise_if_any(f"blocked triangular routines, n={n}")
+
+
+@pytest.mark.parametrize("dropped", [0, 3])
+def test_working_model_hessian_inverse_matches_qr_fisher_factor(dropped):
+    """The selected covariance's chol2inv equals the compact QR factor inverse."""
+    from jaxgam.fitting.working_model import working_model_hessian_inverse
+    from jaxgam.inference.predictor import PivotedQRFisherFactor
+    from jaxgam.smooths.source_lapack import source_pivoted_cholesky
+
+    n = 90
+    generator = np.random.default_rng(20261119 + dropped)
+    X = generator.normal(size=(2 * n, n - dropped)) @ generator.normal(
+        size=(n - dropped, n)
+    )
+    H = X.T @ X / n + (np.eye(n) if not dropped else 0.0)
+    diagonal = np.sqrt(np.diag(H))
+    factor = source_pivoted_cholesky((H / diagonal[:, None]).T / diagonal[:, None])
+    rank = min(factor.rank, n - dropped)
+    kept = factor.pivots[:rank]
+    expected = PivotedQRFisherFactor(
+        R=factor.upper[:rank, :rank] * diagonal[kept][None, :],
+        pivots=np.arange(rank, dtype=np.intp),
+        keep=kept,
+        original_n_coef=n,
+    ).hessian_inverse(np.eye(n))
+    observed = np.asarray(
+        working_model_hessian_inverse(
+            factor.upper, factor.pivots, diagonal, np.int32(rank)
+        )
+    )
+    scale = np.max(np.abs(expected))
+    np.testing.assert_allclose(
+        observed / scale, expected / scale, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    np.testing.assert_array_equal(observed, observed.T)

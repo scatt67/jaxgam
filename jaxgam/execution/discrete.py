@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
+import jax
 import numpy as np
 import numpy.typing as npt
 import scipy.linalg as sla
@@ -38,6 +39,7 @@ from jaxgam.fitting.discrete_ops import (
     discrete_xwyd,
     to_device_discrete_design,
 )
+from jaxgam.fitting.working_model import working_model_hessian_inverse
 from jaxgam.formula.continuous_design import build_continuous_discrete_design
 from jaxgam.formula.continuous_metadata import (
     ContinuousDiscretizationMetadata,
@@ -700,7 +702,19 @@ def fit_discrete_gaussian(
                 keep=selected_pivots,
                 original_n_coef=descriptor.n_coef,
             )
-            inverse = qr_factor.hessian_inverse(np.eye(descriptor.n_coef))
+            inverse = np.array(
+                working_model_hessian_inverse(
+                    *jax.device_put(
+                        (
+                            selected.factor_upper,
+                            selected.factor_pivots,
+                            selected.factor_diagonal,
+                            np.int32(selected.factor_rank),
+                        ),
+                        device,
+                    )
+                )
+            )
             transforms = selected.coefficient_transforms
             for start, stop, _, values in transforms:
                 inverse[start:stop, :] = values @ inverse[start:stop, :]
@@ -748,12 +762,13 @@ def fit_discrete_gaussian(
         if source.fingerprint() != fingerprint:
             raise RuntimeError("RowSource changed during discrete residual evaluation.")
 
-        inverse_gram = (
-            inverse @ gram
+        # tr(H^-1 X'WX) needs only the elementwise product, not the p^3 matrix
+        # product; the fixed-sp route still solves against X'WX.
+        edf = float(
+            np.sum(inverse * gram.T)
             if selected is not None
-            else sla.cho_solve((factor, True), gram)
+            else np.trace(sla.cho_solve((factor, True), gram))
         )
-        edf = float(np.trace(inverse_gram))
         rank = _penalty_rank(penalties)
         null_dimension = descriptor.n_coef - rank
         if selected is None:

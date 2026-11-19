@@ -80,7 +80,10 @@ from jaxgam.fitting.discrete_working import (
     discrete_theta_batch,
     discrete_working_batch,
 )
-from jaxgam.fitting.working_model import GaussianWorkingModelProposal
+from jaxgam.fitting.working_model import (
+    GaussianWorkingModelProposal,
+    working_model_hessian_inverse,
+)
 from jaxgam.formula.discrete_design import DiscreteMemoryPlan, FrozenDiscreteDesign
 from jaxgam.formula.fitting_prepare import initial_log_sp_from_diagonal
 from jaxgam.formula.terms import FormulaSpec
@@ -497,7 +500,11 @@ class RegularWorkingComponents:
             keep=kept,
             original_n_coef=n_coef,
         )
-        inverse = qr_factor.hessian_inverse(np.eye(n_coef))
+        inverse = np.array(
+            working_model_hessian_inverse(
+                factor.upper, factor.pivots, factor.diagonal, np.int32(factor.rank)
+            )
+        )
         transforms = []
         for block in self.compiled.metadata.penalties.blocks:
             values = np.asarray(block.transform.values).copy()
@@ -509,7 +516,7 @@ class RegularWorkingComponents:
             inverse[:, block.start : block.stop] = (
                 inverse[:, block.start : block.stop] @ values.T
             )
-        edf = float(np.trace(inverse @ fit.gram))
+        edf = float(np.sum(inverse * fit.gram.T))
         null_dimension = n_coef - _penalty_rank(problem.penalties)
         criterion_null = _pinned_criterion_null_dimension(
             setup.predict_spec, null_dimension

@@ -617,6 +617,22 @@ def _source_cholesky_inverse(
     return (unpivoted / diagonal[:, None]).T / diagonal[:, None]
 
 
+@jax.jit
+def working_model_hessian_inverse(
+    upper: jax.Array,
+    pivots: jax.Array,
+    diagonal: jax.Array,
+    rank: jax.Array,
+) -> jax.Array:
+    """``H^-1`` in working coordinates from one accepted trial's host factor.
+
+    The same ``chol2inv`` the proposal forms (:func:`_source_cholesky_inverse`),
+    for the selected model's covariance: dropped coordinates have zero rows
+    and columns, as the compact pivoted QR Fisher factor's inverse does.
+    """
+    return _source_cholesky_inverse(upper, pivots, diagonal, rank)
+
+
 def _source_ift_chol(
     gram: jax.Array,
     beta: jax.Array,
