@@ -16,6 +16,7 @@ import pytest
 import jaxgam
 import jaxgam.inference as inference
 from jaxgam import GAM
+from jaxgam.data.source import ArrayRowSource
 from jaxgam.families.registry import get_family
 from jaxgam.families.standard import Gaussian
 from jaxgam.formula.predict_matrix import build_predict_spec
@@ -89,6 +90,30 @@ def test_predict_and_matrix_are_byte_identical_to_full_results() -> None:
                     assert_prediction,
                 )
     collector.raise_if_any("GAMPredictor equivalence")
+
+
+def test_predict_iter_matches_concrete_prediction_with_source_offsets() -> None:
+    data = pd.DataFrame({"x": np.linspace(0.0, 1.0, 31)})
+    data["y"] = np.sin(2 * np.pi * data["x"])
+    result = GAM('y ~ s(x, bs="cr", k=6)', sp=0.2).fit(data)
+    predictor = _make_predictor(result)
+    offset = np.linspace(-0.1, 0.2, len(data))
+    source = ArrayRowSource({"x": data["x"].to_numpy()}, offset=offset)
+    batches = list(predictor.predict_iter(source, 9, pred_type="link"))
+    np.testing.assert_array_equal(
+        np.concatenate([positions for positions, _ in batches]), np.arange(len(data))
+    )
+    got = np.concatenate([prediction for _, prediction in batches])
+    expected = predictor.predict(data[["x"]], pred_type="link", offset=offset)
+    np.testing.assert_allclose(got, expected)
+
+
+def test_predict_iter_accepts_empty_prediction_source() -> None:
+    data = pd.DataFrame({"x": np.linspace(0.0, 1.0, 12)})
+    data["y"] = data["x"]
+    predictor = _make_predictor(GAM("y ~ x", sp=[]).fit(data))
+    source = ArrayRowSource({"x": np.empty(0)})
+    assert list(predictor.predict_iter(source, 4)) == []
 
 
 @pytest.mark.skipif(not r_available(), reason="R/mgcv not available")

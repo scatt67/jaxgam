@@ -66,6 +66,55 @@ class Smooth(ABC):
                 setattr(clone, attr, None)
         return clone
 
+    def copy_for_training(self) -> Smooth:
+        """Return a predict-only copy that can still evaluate training rows.
+
+        Bounded row-replay setup evaluates the training source batch by batch.
+        Smooths whose training rows equal their prediction rows need nothing
+        beyond :meth:`copy_for_prediction`.
+        """
+        return self.copy_for_prediction()
+
+    def training_matrix(
+        self, data: dict[str, npt.NDArray[np.floating]]
+    ) -> npt.NDArray[np.floating]:
+        """Evaluate rows of the setup source in the training parameterization.
+
+        mgcv's model matrix for most bases is their prediction matrix at the
+        data. Bases whose constructor builds training rows differently
+        (thin-plate knot rows) override this; it is never a prediction route.
+        """
+        return self.predict_matrix(data)
+
+    def training_design_matrix(self) -> npt.NDArray[np.floating]:
+        """Return the basis constructed during :meth:`setup`.
+
+        Setup owns construction of the training basis, matching mgcv's
+        ``smoothCon`` contract. Model assembly consumes this explicit handoff
+        instead of asking ``build_design_matrix`` to infer whether supplied
+        data happen to be the training rows. Prediction callers must continue
+        to use ``build_design_matrix`` or ``predict_matrix``.
+        """
+        self._require_setup()
+        X = getattr(self, "_X", None)
+        if X is None:
+            raise RuntimeError(
+                f"{type(self).__name__} did not retain its training basis."
+            )
+        return X
+
+    def consume_training_design_matrix(self) -> npt.NDArray[np.floating]:
+        """Transfer ownership of the setup-built matrix to model assembly.
+
+        The dense training matrix belongs to ``ModelSetup`` after Phase 1;
+        prediction retains only basis transforms. Clearing the fit-only cache
+        prevents tensor and wrapper smooths from retaining a second n-by-k
+        matrix after assembly.
+        """
+        X = self.training_design_matrix()
+        self._X = None
+        return X
+
     @staticmethod
     def _smoothcon_normalize(
         X: npt.NDArray[np.floating],
@@ -90,7 +139,20 @@ class Smooth(ABC):
         s_scale : float
             The normalization scale factor.
         """
-        norm_X_inf = np.linalg.norm(X, ord=np.inf)
+        return Smooth._smoothcon_normalize_from_norm(
+            np.linalg.norm(X, ord=np.inf), S_list
+        )
+
+    @staticmethod
+    def _smoothcon_normalize_from_norm(
+        norm_X_inf: float,
+        S_list: list[npt.NDArray[np.floating]],
+    ) -> tuple[list[npt.NDArray[np.floating]], float]:
+        """Apply smoothCon's normalization given ``norm(X, "I")``.
+
+        Streamed setup supplies the maximum absolute row sum of ``X`` so that
+        it shares this normalization with dense setup.
+        """
         norm_S_1 = np.linalg.norm(S_list[0], ord=1)
         # R variable: maXX (mgcv smoothCon)
         max_x_sq = norm_X_inf**2
@@ -98,6 +160,62 @@ class Smooth(ABC):
             s_scale = norm_S_1 / max_x_sq
             return [S / s_scale for S in S_list], s_scale
         return list(S_list), 1.0
+
+    @staticmethod
+    def _source_smoothcon_normalize(
+        X: npt.NDArray[np.floating],
+        S_list: list[npt.NDArray[np.floating]],
+    ) -> tuple[list[npt.NDArray[np.floating]], float]:
+        """smoothCon's penalty scaling with R's ``norm`` arithmetic.
+
+        ``maXX <- norm(X, "I")^2`` and ``maS <- norm(S[[i]])/maXX`` call
+        LAPACK ``dlange``, whose reference loops sum absolute values in a
+        fixed order: across columns for each row (``"I"``) and down rows for
+        each column (``"O"``).  Each penalty is divided by its own ``maS``;
+        the returned scale is the first penalty's, as in
+        :meth:`_smoothcon_normalize`.
+        """
+        return Smooth._source_smoothcon_normalize_from_norm(
+            Smooth._source_max_abs_row_sum(X), S_list
+        )
+
+    @staticmethod
+    def _source_max_abs_row_sum(X: npt.NDArray[np.floating]) -> float:
+        """``dlange("I")``: each row's absolute sum taken column by column.
+
+        Rows are independent, so the maximum over streamed row blocks equals
+        the whole matrix's value.
+        """
+        X = np.asarray(X, dtype=np.float64)
+        row_sums = np.zeros(X.shape[0], dtype=np.float64)
+        for column in range(X.shape[1]):
+            row_sums += np.abs(X[:, column])
+        return float(row_sums.max(initial=0.0))
+
+    @staticmethod
+    def _source_smoothcon_normalize_from_norm(
+        norm_x: float,
+        S_list: list[npt.NDArray[np.floating]],
+    ) -> tuple[list[npt.NDArray[np.floating]], float]:
+        """Scale penalties given ``dlange("I")`` of X, in dlange's order.
+
+        ``maXX`` is ``R_pow(norm, 2)``, i.e. ``x * x``, and each ``maS`` takes
+        ``dlange("O")``: every column's absolute sum down its rows.
+        """
+        max_x_sq = norm_x * norm_x
+        if not max_x_sq > 0.0:
+            return list(S_list), 1.0
+        normalized = []
+        scales = []
+        for S in S_list:
+            S = np.asarray(S, dtype=np.float64)
+            column_sums = np.zeros(S.shape[1], dtype=np.float64)
+            for row in range(S.shape[0]):
+                column_sums += np.abs(S[row])
+            scale = float(column_sums.max(initial=0.0)) / max_x_sq
+            normalized.append(S / scale)
+            scales.append(scale)
+        return normalized, scales[0]
 
     def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         """Hook for shrinkage penalty modification. No-op in base."""

@@ -14,18 +14,44 @@ import warnings
 import numpy as np
 import numpy.typing as npt
 
+from jaxgam.data.source_tokens import r_sample_knot_rows, r_uniquecombs_ordered
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
 from jaxgam.smooths.gp_kernels import GPKernel, gp_kernel_registry
+from jaxgam.smooths.source_lapack import source_lanczos, source_r_matprod
 from jaxgam.smooths.utils import (
-    _compute_distance_matrix,
-    _get_unique_rows,
-    _slanczos,
-    _subsample_knots,
+    DISTANCE_BATCH_ROWS,
+    radial_knot_options,
+    source_column_means,
 )
 
 _DEF_K = (10, 30, 100)
+_WIDE_LONG_DOUBLE = np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
+
+
+def _compute_distance_matrix(
+    X1: npt.NDArray[np.floating],
+    X2: npt.NDArray[np.floating],
+) -> npt.NDArray[np.float64]:
+    """Return gpE's distances ``sqrt(rowSums((x - xk)^2))`` as R forms them.
+
+    R squares each coordinate difference in double, sums the squares over
+    covariates in order in ``rowSums``' C ``long double`` accumulator, rounds
+    to double and takes the square root.  One covariate needs no wide
+    accumulator: ``0 + d^2`` is exact.
+    """
+    X1 = np.asarray(X1, dtype=np.float64)
+    X2 = np.asarray(X2, dtype=np.float64)
+    d = X1.shape[1]
+    wide = d > 1 and _WIDE_LONG_DOUBLE
+    total = np.zeros(
+        (X1.shape[0], X2.shape[0]), dtype=np.longdouble if wide else np.float64
+    )
+    for column in range(d):
+        delta = X1[:, column, np.newaxis] - X2[np.newaxis, :, column]
+        total += delta * delta
+    return np.sqrt(np.asarray(total, dtype=np.float64))
 
 
 class GaussianProcessSmooth(Smooth):
@@ -125,8 +151,17 @@ class GaussianProcessSmooth(Smooth):
         max_knots: int,
         seed: int,
     ) -> npt.NDArray[np.floating]:
-        xu, _ = _get_unique_rows(x)
-        return _subsample_knots(xu, max_knots, seed=seed)
+        """Port smooth.construct.gp's knot choice.
+
+        The knots are ``uniquecombs(x, TRUE)``'s ordered unique rows (numeric
+        order for one covariate; C-collated ``paste0`` row labels for
+        several). With more of them than ``max_knots``, R samples
+        ``max_knots`` rows with ``temp.seed(seed)``.
+        """
+        xu = r_uniquecombs_ordered(x)
+        if xu.shape[0] <= max_knots:
+            return xu
+        return r_sample_knot_rows(xu, max_knots, seed)
 
     def _gp_T(self, x_centered: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
         n = x_centered.shape[0]
@@ -163,10 +198,30 @@ class GaussianProcessSmooth(Smooth):
     def _build_design(
         self, x_centered: npt.NDArray[np.floating]
     ) -> npt.NDArray[np.floating]:
-        E_xn, _ = self._gp_E(x_centered, self._knt, resolved_rho=self._resolved_rho)
-        pen_block = E_xn @ self._UZ
-        null_block = self._gp_T(x_centered)
-        return np.hstack([pen_block, null_block])
+        """Port Predict.matrix.gp.smooth, including its row chunks.
+
+        R evaluates ``gpE(x[ind,], knt) %*% UZ`` in chunks of ``nk`` rows when
+        ``n > nk`` (then a final partial chunk), else in one block.  The chunk
+        shape selects R's BLAS call (``dgemm``, or ``dgemv`` for one row), so
+        the same products go to the pinned provider.  Kernel distances within
+        a chunk are formed in row batches of at most ``DISTANCE_BATCH_ROWS``.
+        """
+        n_rows = x_centered.shape[0]
+        n_knots = self._knt.shape[0]
+        X = np.empty((n_rows, self.n_coefs), dtype=float)
+        chunk = n_knots if n_rows > n_knots else max(n_rows, 1)
+        for start in range(0, n_rows, chunk):
+            stop = min(start + chunk, n_rows)
+            E_chunk = np.empty((stop - start, n_knots), dtype=float)
+            for low in range(start, stop, DISTANCE_BATCH_ROWS):
+                high = min(low + DISTANCE_BATCH_ROWS, stop)
+                distances = _compute_distance_matrix(x_centered[low:high], self._knt)
+                E_chunk[low - start : high - start] = self._kernel.evaluate(
+                    distances / self._resolved_rho, power=self._power
+                )
+            X[start:stop, : self.rank] = source_r_matprod(E_chunk, self._UZ)
+            X[start:stop, self.rank :] = self._gp_T(x_centered[start:stop])
+        return X
 
     def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
         for v in self.spec.variables:
@@ -175,9 +230,7 @@ class GaussianProcessSmooth(Smooth):
                     f"Variable '{v}' not found in data. Available: {list(data.keys())}"
                 )
 
-        xt = self.spec.extra_args.get("xt", {})
-        max_knots = xt.get("max_knots", xt.get("max.knots", 2000))
-        seed = xt.get("seed", 1)
+        max_knots, seed = radial_knot_options(self.spec)
 
         variables = self.spec.variables
         d = len(variables)
@@ -196,7 +249,7 @@ class GaussianProcessSmooth(Smooth):
                 f"(nk={nk}, bs_dim={bs_dim})."
             )
 
-        self._shift = x.mean(axis=0)
+        self._shift = source_column_means(x)
         x_c = x - self._shift
         knt_c = knt - self._shift
         self._knt = knt_c
@@ -205,7 +258,7 @@ class GaussianProcessSmooth(Smooth):
         self._resolved_rho = rho_resolved
         self._E_knot = E
 
-        eigvals, eigvecs = _slanczos(E, k, tol=np.finfo(float).eps ** 0.5)
+        eigvals, eigvecs = source_lanczos(E, k, tol=np.finfo(float).eps ** 0.5)
         self._E_knot = None
 
         if (eigvals < 0).any():
@@ -230,7 +283,7 @@ class GaussianProcessSmooth(Smooth):
         X = self._build_design(x_c)
         self._X = X
 
-        [self._S], self._s_scale = self._smoothcon_normalize(X, [D])
+        [self._S], self._s_scale = self._source_smoothcon_normalize(X, [D])
 
         self._is_setup = True
 

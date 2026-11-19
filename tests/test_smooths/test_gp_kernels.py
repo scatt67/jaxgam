@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -16,6 +18,9 @@ from jaxgam.smooths.gp_kernels import (
 )
 from tests.helpers import _AssertCollector
 from tests.tolerances import STRICT
+
+# Outcome can depend on the CPU's SIMD maths or BLAS kernel family.
+pytestmark = pytest.mark.platform_sensitive
 
 
 def _closed_form(
@@ -156,3 +161,39 @@ class TestRegistry:
         collector.check("class resolution", assert_each_key_resolves_to_class)
         collector.check("unknown kernel raises", assert_unknown_kernel_raises)
         collector.raise_if_any("gp_kernel_registry")
+
+
+def _r_pow_scalar(x: float, y: float) -> float:
+    """R's ``x ^ y`` (``R_pow``) for finite non-negative ``x``."""
+    if y == 2.0:
+        return x * x
+    if x == 1.0 or y == 0.0:
+        return 1.0
+    if x == 0.0:
+        return 0.0
+    return math.pow(x, y)
+
+
+_GPE_SCALAR = {
+    # gpE (smooth.r): exp is the C library's, E^k is R_pow.
+    "spherical": lambda e, _k: (1 - 1.5 * e + 0.5 * _r_pow_scalar(e, 3.0)) * (e <= 1),
+    "power_exponential": lambda e, k: math.exp(-_r_pow_scalar(e, k)),
+    "matern_3_2": lambda e, _k: (1 + e) * math.exp(-e),
+    "matern_5_2": lambda e, _k: math.exp(-e) + (e * math.exp(-e)) * (1 + e / 3),
+    "matern_7_2": lambda e, _k: (
+        math.exp(-e) + (e * math.exp(-e)) * (1 + 0.4 * e + _r_pow_scalar(e, 2.0) / 15)
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_GPE_SCALAR))
+@pytest.mark.parametrize("power", [1.0, 1.5, 2.0])
+def test_kernels_evaluate_gpe_with_libm_bitwise(name: str, power: float) -> None:
+    """Each kernel is gpE's own expression with libm exp/pow, on every CPU."""
+    rng = np.random.default_rng(23)
+    e = np.concatenate(
+        [rng.uniform(0.0, 4.0, 4000), [0.0, 1.0, np.nextafter(1.0, 2.0), 1e-300]]
+    )
+    kernel = gp_kernel_registry.get_instance(name)
+    expected = np.array([_GPE_SCALAR[name](float(v), power) for v in e])
+    np.testing.assert_array_equal(kernel.evaluate(e, power=power), expected)

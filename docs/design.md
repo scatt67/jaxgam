@@ -3624,53 +3624,45 @@ def optimize_smoothing_parameters(provider, penalty_set, family, weights,
     return jnp.exp(log_lambda), pirls_result
 ```
 
-### 8.2 Fellner-Schall Method (Fast REML for bam)
+### 8.2 Extended Fellner--Schall smoothing updates
 
-```python
-# fitting/fellner_schall.py
+Extended Fellner--Schall (EFS) is a separate REML outer-controller, based on
+mgcv's `efsudr`; it is neither `bam(method="fREML")` nor the Newton REML
+optimizer. Its update uses the penalty-range determinant derivative,
+Fisher-covariance contractions, and penalty quadratic forms for each coupled
+penalty. A singleton-rank formula is therefore not a general implementation.
 
-def fellner_schall_update(lambda_j, S_j, beta, F_inv, n, p):
-    """
-    Fellner-Schall update for smoothing parameter λ_j.
+EFS is an authorized optimizer selected explicitly with ``optimizer="efs"``.
+Dense execution covers all result modes. Replayable ``RowSource`` execution is
+available with the explicit QR solver and a prediction result; its compact
+result may retain Fisher uncertainty but owns no training rows or source. The
+released routes cover the tested regular-family links, regular-family scale
+handling, and the separate fixed/estimated NB theta path for log, identity,
+and square-root links. Fixed smoothing and zero-penalty models retain their
+established dispatch precedence. ``gaussian_compression=True`` applies to
+the Newton or fixed-smoothing Gaussian route, not to estimated EFS smoothing.
+For estimated negative-binomial identity and square-root links, the pinned
+``gam.fit4`` default is a zero-coefficient recovery anchor. The public adapter
+accepts these links only when applying the supplied offset to that anchor gives
+strictly positive means; otherwise it rejects the same default-start boundary
+as pinned mgcv. Its EFS-only coefficient solve also follows ``gam.fit4`` by
+retrying an indefinite observed-information proposal with positive-curvature
+rows.
 
-    This is the fast update used in bam() and as an alternative
-    in gam(). It's a one-step update that avoids computing
-    the full Hessian of the REML criterion.
+The nonadvertised Poisson logit, probit and complementary-log-log constructor
+extensions retain their source default-start boundary. Positive integer
+responses make the row initializer exceed the bounded-link domain; an
+all-zero response gives a nonfinite null-link mean. Their internal
+matched-start evidence does not imply a public default-start route.
 
-    λ_j^{new} = (p_j / (β^T S_j β)) * λ_j
-
-    where p_j = rank(S_j) - λ_j * tr(F^{-1} S_j)
-    is the effective degrees of freedom consumed by penalty j.
-
-    F = X^T W X + S_λ is the penalized Fisher information.
-    """
-    # tr(F^{-1} S_j) - computed efficiently
-    if sparse.issparse(S_j):
-        trace_term = np.sum(F_inv * S_j.toarray())
-    else:
-        trace_term = np.trace(F_inv @ S_j)
-
-    rank_Sj = np.linalg.matrix_rank(
-        S_j.toarray() if sparse.issparse(S_j) else S_j
-    )
-    p_j = rank_Sj - lambda_j * trace_term
-    beta_S_beta = beta @ (S_j @ beta)
-
-    # Update
-    lambda_new = max(p_j / max(beta_S_beta, 1e-10), 1e-10)
-    return lambda_new
-
-
-def extended_fellner_schall_update(lambda_j, S_j, beta, grad_ll,
-                                   hess_ll, theta, family):
-    """
-    Extended Fellner-Schall for extended families.
-    Uses log-likelihood derivatives (from autodiff) instead of
-    deviance-based quantities.
-    """
-    # Similar structure but uses full log-likelihood Hessian
-    pass
-```
+Newton retains its existing objective-monotonicity contract, while the faithful
+EFS controller may accept a finite score increase after contraction reaches
+multiplier one, exactly as pinned mgcv does. EFS records an immutable compact
+profile with its exact trace and step policy, convergence reason, selected
+iteration counts, bounded accepted histories, movement maxima, and numerical
+event indicators. The streamed profile records startup and executed-provider
+scan counts separately and excludes Phase-1 preparation from both. It is not
+represented as a monotone Newton trajectory or as fREML.
 
 ### 8.3 GCV and UBRE Criteria
 
@@ -3899,6 +3891,20 @@ def test_nb_autodiff_matches_finite_diff():
 
 ### 10.1 The Sparse/Dense/GPU Triangle Problem (Resolved)
 
+**Implemented post-v1 streamed fixed-sp route.** `FitControl(execution="stream",
+linear_solver="qr")` with replayable `RowSource` input and
+`result="prediction"` supports the built-in regular-family/link inventory and
+NB log/identity/square-root links on their valid source-start domains.
+Preparation and source scans remain CPU NumPy operations; pure batch kernels
+and solves remain JAX-compatible. The controller retains bounded coefficient
+reductions rather than the training design. Signed observed fit factors and
+Fisher uncertainty factors have distinct roles. Fixed smoothing parameters
+remain fixed while unknown regular scale or free NB theta is estimated by the
+exact parameter driver. Selected coefficients, family state, score and scale
+must refer to the same returned fit, with truthful convergence and source-work
+diagnostics. This explicit route does not enable the speculative automatic
+sparse/CHOLMOD/bam routing described below.
+
 v1.0 proposed transparent sparse/dense switching. This was removed because JAX sparse is experimental and cannot JIT, scipy sparse forces CPU round-trips from GPU, and the "transparent" decision logic was neither good for GPU perf nor good for sparse perf.
 
 **Instead, the library provides three explicit, well-optimized execution paths.** The user can choose explicitly, or an auto-selector picks based on n and p.
@@ -3946,6 +3952,39 @@ def auto_select_path(n: int, p: int, has_sparse_basis: bool,
         return ExecutionPath.DENSE_GPU
     return ExecutionPath.SPARSE_CPU
 ```
+
+**Implemented fixed-sp operator route.** `FitControl(execution="operator",
+linear_solver="pcg")` explicitly selects CPU host orchestration with pure
+numerical kernels. `OperatorControl` composes coefficient and Krylov limits.
+Preparation combines indexed random effects with bounded modest basis blocks;
+it must budget setup as well as fitting and may not materialize an n-by-p
+design, p-by-p system, dense range basis or covariance. Observed working states
+and preconditioners are frozen during every solve, and admission requires a
+bounded positive-definiteness certificate. An uncertified system rejects
+rather than changing the fitting equation. Compact prediction results retain
+geometry but not the source; absent score/EDF/unknown-scale providers are
+represented by `None`. Fixed theta and smoothing are required until the
+separately validated parameter, trace and score providers are integrated.
+
+**Operator bulk Fisher uncertainty.** A converged fixed-sp operator prediction
+result can explicitly construct a bulk variance provider with
+`result.bulk_link_variance(training_source, calibration_data, probes=..., seed=...,
+memory_budget_bytes=...)`. The caller replays the original training source;
+its content fingerprint and prepared-row digest, plus the fitted family/link,
+theta, coefficients and smoothing values, identify the accepted state. The
+result itself retains no source. Unknown-scale families require an externally
+established positive scale. The provider forms the family-owned expected
+Fisher curvature, draws coefficient covariance samples by streaming
+`X' sqrt(W)` noise and local `S^(1/2)` noise, and solves the certified Fisher
+system for each probe. It retains a budgeted coefficient-by-probe sketch,
+never a coefficient-square covariance. `estimate_iter(prediction_source)`
+streams link-scale variance and standard-error estimates in bounded batches;
+`calibrate(selected_data)` compares specified rows to exact Fisher solves.
+The output names its Monte Carlo standard error, seed/probe count, PCG
+residuals, source scans and memory bound. Monte Carlo error describes sampling
+variation, not iterative-solve bias or a universal guarantee for unselected
+rows. Ordinary `predict(se_fit=True)` remains an exact-uncertainty request and
+does not silently use this approximation.
 
 ### 10.2 Structured Penalty Representations
 
@@ -4297,7 +4336,15 @@ Not all penalty structures can provide exact `log_pseudo_det()`. The REML criter
 | Soap film / Duchon | O(p²) dense | O(p²) dense | O(p³) exact (dense block) | O(p²) | Dense-GPU if p small; Sparse-CPU otherwise |
 | Adaptive (spatially varying λ) | Depends on base | Depends on base | **Approximated** - stochastic trace est. for REML gradient | Depends | Sparse-CPU + Fellner-Schall |
 
-**Routing rule:** If any penalty in the `CompositePenalty` cannot provide exact `log_pseudo_det()`, the REML optimizer either (a) routes to Sparse-CPU where `CHOLMOD` can compute log-det of the full `H` directly, or (b) uses the Fellner-Schall update (Section 8.3) which requires only traces, not log-dets. This is declared per penalty via:
+**Routing rule:** A REML optimizer needs a valid score provider for the
+penalty pseudo-determinant and the observed-system determinant. In a future
+sparse path, an appropriate sparse factorization can supply those quantities.
+EFS trace ratios do not remove this requirement: its trial comparisons and
+score-window stopping still use REML scores. Operator smoothing therefore
+requires a separately validated exact or approximate score provider, with
+explicit uncertainty for approximate comparisons. An unavailable determinant
+must not be replaced by a finite placeholder score or bypassed by selecting
+EFS. Penalty capability is declared via:
 
 ```python
 class StructuredPenalty(ABC):
@@ -7011,6 +7058,13 @@ def test_deviance_residual_identity(family_class, test_data):
 **Hard-gate invariants - never LOOSE (v1.15):**
 
 The tolerance strategy allows LOOSE comparisons vs R for quantities like p-values and EDF. But some mathematical invariants must hold regardless of mgcv comparison tolerance. These are correctness gates, not comparison tests - if they fail, the implementation is wrong, not merely imprecise:
+
+The penalized-objective monotonicity gate below applies to coefficient
+step-halving at fixed smoothing and nuisance parameters. Newton keeps its
+existing outer-score acceptance contract. The source-faithful EFS outer
+controller instead applies the finite-increase contraction rule documented in
+Section 8.2 and records that policy in its result diagnostics; its accepted
+outer score history is not required to be monotone.
 
 | Invariant | Tolerance | Rationale |
 |---|---|---|

@@ -5,7 +5,7 @@ Provides:
   backend-agnostic code (links, families).
 - ``to_jax`` / ``to_numpy``: Phase 1→2 and Phase 2→3 device transfer
   boundaries (design.md §1.3).
-- ``cho_factor``: Cholesky with scale-relative jitter (design.md §4.8).
+- ``cho_factor``: plain Cholesky with a diagonal-relative fallback jitter.
 - ``penalized_cholesky`` / ``penalized_solve``: penalized Hessian solves
   for PIRLS.
 - ``numerical_rank``: rank estimation via pivoted QR.
@@ -18,6 +18,7 @@ from ``jax.scipy.linalg`` / ``jax.numpy.linalg``.
 from __future__ import annotations
 
 import types
+from dataclasses import dataclass
 from typing import overload
 
 import jax
@@ -140,6 +141,34 @@ def array_module(x: object) -> types.ModuleType:
     return np
 
 
+@jax.custom_jvp
+def _materialize_source_jax(value: jax.Array) -> jax.Array:
+    return jnp.nextafter(value, value)
+
+
+@_materialize_source_jax.defjvp
+def _materialize_source_jvp(
+    primals: tuple[jax.Array], tangents: tuple[jax.Array]
+) -> tuple[jax.Array, jax.Array]:
+    (value,) = primals
+    (tangent,) = tangents
+    return _materialize_source_jax(value), tangent
+
+
+def _materialize_source_operation(
+    value: jax.Array | np.ndarray,
+) -> jax.Array | np.ndarray:
+    """Preserve one rounded source temporary with its identity derivative.
+
+    nextafter(x, x) is exactly x. Its bit-level lowering prevents XLA from
+    contracting arithmetic across a source vector-operation boundary; the
+    custom JVP preserves the derivative of this identity operation.
+    """
+    if is_jax_array(value):
+        return _materialize_source_jax(value)
+    return np.nextafter(value, value)
+
+
 # ---------------------------------------------------------------------------
 # Linear algebra primitives
 # ---------------------------------------------------------------------------
@@ -172,6 +201,45 @@ def build_S_lambda(
     for j, S_j in enumerate(S_list):
         S_lambda = S_lambda + jnp.exp(log_lambda[j]) * S_j
     return S_lambda
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class StableLogDetTerms:
+    """Host ``gam.reparam`` log|S|+ terms of one multi-penalty block at ``rho0``.
+
+    ``det``, ``det1`` and ``det2`` are ``get_stableS``'s log|S|+ and its
+    gradient and Hessian in the block's log smoothing parameters, computed on
+    the host at ``rho0`` (pinned gam.fit3.r:144 calls gam.reparam at every
+    evaluation; REML uses rp$det, rp$det1, rp$det2 at 616-621).  In the
+    criterion they enter as ``det + det1.d + d'det2 d / 2`` with
+    ``d = rho - rho0``: at ``rho0`` its value, ``jax.grad`` and
+    ``jax.hessian`` are exactly det, det1 and det2.  Evaluated at any other
+    rho the term is NaN, so no code can silently use it away from the host's
+    point.  ``det_change`` carries ``det(rho_trial) - det(rho0)`` for the
+    Gaussian score-change comparison (zero otherwise).
+    """
+
+    rho0: jax.Array
+    det: jax.Array
+    det1: jax.Array
+    det2: jax.Array
+    det_change: jax.Array
+
+    def tree_flatten(self):
+        return (self.rho0, self.det, self.det1, self.det2, self.det_change), None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        del aux
+        return cls(*children)
+
+    def log_det(self, rho_block: jax.Array) -> jax.Array:
+        """The quadratic expansion at ``rho_block``; NaN unless it is ``rho0``."""
+        delta = rho_block - self.rho0
+        value = self.det + self.det1 @ delta + 0.5 * delta @ self.det2 @ delta
+        at_point = jnp.all(jax.lax.stop_gradient(delta) == 0.0)
+        return jnp.where(at_point, value, jnp.nan)
 
 
 def block_log_det_S(
@@ -210,8 +278,9 @@ def block_log_det_S(
         ``log_lambda`` indices for each multi-penalty block.
     multi_block_ranks : tuple[int, ...]
         Combined penalty rank for each multi-penalty block.
-    multi_block_proj_S : tuple[tuple[jax.Array, ...], ...]
-        Range-space-projected penalty matrices for each multi-penalty block.
+    multi_block_proj_S : tuple[tuple[jax.Array, ...] | StableLogDetTerms, ...]
+        Range-space-projected penalty matrices for each multi-penalty block,
+        or that block's host :class:`StableLogDetTerms` at the current rho.
 
     Returns
     -------
@@ -228,9 +297,13 @@ def block_log_det_S(
             + singleton_eig_constants[i]
         )
 
-    # Multi-penalty blocks: scaled slogdet for well-conditioned derivatives
+    # Multi-penalty blocks: host get_stableS terms when supplied, otherwise
+    # the scaled slogdet in the fixed range basis.
     for i, sp_indices in enumerate(multi_block_sp_indices):
         rho_block = jnp.stack([log_lambda[j] for j in sp_indices])
+        if isinstance(multi_block_proj_S[i], StableLogDetTerms):
+            log_det = log_det + multi_block_proj_S[i].log_det(rho_block)
+            continue
         rho_max = jnp.max(rho_block)
         S_adj = jnp.zeros_like(multi_block_proj_S[i][0])
         for j, S_j_proj in enumerate(multi_block_proj_S[i]):
@@ -274,19 +347,35 @@ def stable_log_pseudo_det(S: jax.Array, U_range: jax.Array) -> jax.Array:
     return jnp.where(sign > 0, logdet, -1e10)
 
 
+_CHOLESKY_SMALL_RELATIVE_JITTER = 1e-12
+_CHOLESKY_LARGE_RELATIVE_JITTER = 1e-6
+
+
 @jax.jit
 def cho_factor(
     H: jax.Array,
 ) -> tuple[jax.Array, jax.Array]:
-    """Cholesky factorization with two-level scale-relative jitter.
+    """Plain Cholesky factorization, regularized only when it fails.
 
-    Follows the stabilization strategy from design.md §4.8 (lines 3190-3212):
-    always applies a small jitter ``eps_small * trace(H)/p``, and falls back
-    to a larger jitter ``eps_large * trace(H)/p`` if the first attempt
-    produces NaN (indicating non-positive-definiteness under JIT).
+    mgcv never adds a diagonal jitter to a penalized fit: ``pls_fit1`` and
+    ``gdiPK`` (gdi.c) factor by pivoted QR with explicit rank handling.  A
+    jitter proportional to ``trace(H)/p`` is dominated by the penalty at large
+    smoothing parameters and then swamps the data curvature of unpenalized
+    directions, so the factor here is the *plain* Cholesky of ``H`` whenever
+    that is finite.  Only if it fails (``H`` not numerically positive
+    definite) is a diagonal-relative jitter ``eps * |diag(H)|`` added, first
+    ``eps = 1e-12`` and then ``eps = 1e-6``.  That regularization is
+    scale-free in every coordinate (a zero diagonal entry uses unit scale).
 
-    Uses ``jax.lax.cond`` for the fallback, which is gradient-safe
-    (only differentiates the executed branch).
+    A plain factor whose smallest relative pivot ``L_ii**2 / |H_ii|`` is below
+    ``1e-12`` counts as failed too: ``H`` is then numerically singular (for
+    example aliased unpenalized columns, which ``pls_fit1`` would drop by its
+    rank test), the pivot is roundoff and the solve would be garbage in that
+    direction.  The relative pivot is scale-free, so a large smoothing
+    parameter alone never triggers the fallback.
+
+    ``jax.lax.cond`` selects the branch, which is gradient-safe (only the
+    executed branch is differentiated).
 
     Parameters
     ----------
@@ -299,30 +388,39 @@ def cho_factor(
         Lower-triangular Cholesky factor. Pass ``(L, True)`` to
         ``jax.scipy.linalg.cho_solve``.
     jitter_applied : jax.Array
-        Scalar jitter level that was actually used (for diagnostics).
+        Relative diagonal jitter level used: ``0`` for the plain factor,
+        otherwise the fallback ``eps``.  Callers surface a nonzero level as an
+        explicit regularization diagnostic.
     """
-    p = H.shape[0]
-    I_p = jnp.eye(p)
-    trace_H = jnp.trace(H)
-
-    eps_small = jnp.maximum(1e-12 * trace_H / p, 1e-14)
-    eps_large = jnp.maximum(1e-6 * trace_H / p, 1e-10)
-
-    L_small = jnp.linalg.cholesky(H + eps_small * I_p)
-    has_nan = jnp.any(jnp.isnan(L_small))
-
-    def _use_large_jitter(_: None) -> tuple[jax.Array, jax.Array]:
-        L_large = jnp.linalg.cholesky(H + eps_large * I_p)
-        return L_large, eps_large
-
-    def _use_small_jitter(_: None) -> tuple[jax.Array, jax.Array]:
-        return L_small, eps_small
-
-    L, jitter_applied = jax.lax.cond(
-        has_nan, _use_large_jitter, _use_small_jitter, None
+    L_plain = jnp.linalg.cholesky(H)
+    magnitude = jnp.abs(jnp.diag(H))
+    scale = jnp.where(magnitude > 0.0, magnitude, 1.0)
+    relative_pivot = jnp.diag(L_plain) ** 2 / scale
+    plain_ok = jnp.all(jnp.isfinite(L_plain)) & jnp.all(
+        relative_pivot >= _CHOLESKY_SMALL_RELATIVE_JITTER
     )
+    reference = jnp.diag(scale)
+    zero = jnp.zeros((), dtype=H.dtype)
 
-    return L, jitter_applied
+    def _use_plain(_: None) -> tuple[jax.Array, jax.Array]:
+        return L_plain, zero
+
+    def _use_fallback(_: None) -> tuple[jax.Array, jax.Array]:
+        small = jnp.asarray(_CHOLESKY_SMALL_RELATIVE_JITTER, dtype=H.dtype)
+        large = jnp.asarray(_CHOLESKY_LARGE_RELATIVE_JITTER, dtype=H.dtype)
+        L_small = jnp.linalg.cholesky(H + small * reference)
+
+        def _use_large(_: None) -> tuple[jax.Array, jax.Array]:
+            return jnp.linalg.cholesky(H + large * reference), large
+
+        def _use_small(_: None) -> tuple[jax.Array, jax.Array]:
+            return L_small, small
+
+        return jax.lax.cond(
+            jnp.all(jnp.isfinite(L_small)), _use_small, _use_large, None
+        )
+
+    return jax.lax.cond(plain_ok, _use_plain, _use_fallback, None)
 
 
 @jax.jit
@@ -343,7 +441,8 @@ def penalized_cholesky(
     L : jax.Array, shape (p, p)
         Lower-triangular Cholesky factor.
     jitter_applied : jax.Array
-        Jitter level used (for diagnostics).
+        Relative diagonal jitter level of the ``cho_factor`` fallback, or
+        ``0`` when the plain factor succeeded.
     """
     H = XtWX + S_lambda
     return cho_factor(H)
@@ -374,7 +473,8 @@ def penalized_solve(
         Lower-triangular Cholesky factor, retained for downstream use
         (e.g. EDF computation, log-determinant).
     jitter_applied : jax.Array
-        Jitter level used.
+        Relative diagonal jitter level of the ``cho_factor`` fallback, or
+        ``0`` when the plain factor succeeded.
     """
     L, jitter_applied = penalized_cholesky(XtWX, S_lambda)
     beta = jsla.cho_solve((L, True), rhs)

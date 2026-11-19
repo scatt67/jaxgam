@@ -58,7 +58,9 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jsla
 
-from jaxgam.jax_utils import block_log_det_S, build_S_lambda, cho_factor
+from jaxgam.fitting import penalty_ops
+from jaxgam.fitting.qr import qr_log_det
+from jaxgam.jax_utils import cho_factor
 
 if TYPE_CHECKING:
     from jaxgam.families.base import ExponentialFamily
@@ -111,7 +113,7 @@ def _criterion_core(
     beta: jax.Array,
     deviance: jax.Array,
     ls_sat: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     phi: jax.Array,
     singleton_sp_indices: tuple[int, ...],
     singleton_ranks: tuple[int, ...],
@@ -120,6 +122,7 @@ def _criterion_core(
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     rank_deficit: int = 0,
+    hessian_qr: tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None = None,
 ) -> jax.Array:
     """Shared REML criterion computation. Pure JAX, differentiable.
 
@@ -141,8 +144,8 @@ def _criterion_core(
         Unpenalized deviance from PIRLS.
     ls_sat : jax.Array, scalar
         Saturated log-likelihood.
-    S_list : tuple[jax.Array, ...]
-        Per-penalty (p, p) matrices.
+    penalty_structure : JaxPenaltyStructure
+        Local per-block penalty descriptors.
     phi : jax.Array, scalar
         Dispersion parameter.
     singleton_sp_indices, singleton_ranks : tuple[int, ...]
@@ -161,14 +164,55 @@ def _criterion_core(
     jax.Array, scalar
         Core criterion value (before REML correction term).
     """
-    p = beta.shape[0]
-    S_lambda = build_S_lambda(log_lambda, S_list, p)
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
 
     penalty = beta @ S_lambda @ beta
     Dp = deviance + penalty
 
+    log_det_H, log_det_S = _criterion_log_determinants(
+        log_lambda,
+        XtWX,
+        S_lambda,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+        rank_deficit,
+        hessian_qr,
+    )
+
+    return Dp / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
+
+
+def _criterion_log_determinants(
+    log_lambda: jax.Array,
+    XtWX: jax.Array,
+    S_lambda: jax.Array,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    rank_deficit: int,
+    hessian_qr: tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    """Return the two log determinants used by scalar REML scores.
+
+    ``hessian_qr = (sqrt(W) X, penalty roots)`` for a nonnegative-weight,
+    structurally full-rank system takes ``log|H|`` from the pls_fit1/gdiPK
+    QR of ``[sqrt(W) X; E(rho)]`` (``qr_log_det``); its derivative is still
+    ``tr(H^-1 dH)`` through ``XtWX`` and ``S_lambda``, so the factor inputs
+    are constants (``stop_gradient``).
+    """
     H = XtWX + S_lambda
-    if rank_deficit == 0:
+    if hessian_qr is not None:
+        weighted_X, roots = hessian_qr
+        E = jax.lax.stop_gradient(penalty_ops.augmented_root(roots, log_lambda))
+        log_det_H = qr_log_det(H, jax.lax.stop_gradient(weighted_X), E)
+    elif rank_deficit == 0:
         # Diagonal preconditioning: scale H to unit diagonal before logdet.
         # This dramatically improves conditioning for binomial (where W
         # varies from ~0 to 0.25) and prevents AD noise when jax.hessian
@@ -191,7 +235,7 @@ def _criterion_core(
         ev = jnp.maximum(ev, jnp.finfo(H.dtype).tiny)
         log_det_H = jnp.sum(jnp.log(ev))
 
-    log_det_S = block_log_det_S(
+    log_det_S = penalty_ops.log_pdet(
         log_lambda,
         singleton_sp_indices,
         singleton_ranks,
@@ -201,7 +245,7 @@ def _criterion_core(
         multi_block_proj_S,
     )
 
-    return Dp / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
+    return log_det_H, log_det_S
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +356,80 @@ def estimate_edf(
     return jnp.trace(H_inv_XtWX)
 
 
+def fisher_edf(pirls_result: PIRLSResult) -> jax.Array:
+    """Total Fisher EDF: from the QR when the inner fit recorded it.
+
+    A structurally full-rank dense fit stores ``tr(F) = |R1 R2^-1|_F^2`` of
+    its Fisher system (``qr.penalized_qr_hat``, gdi's ``P K'`` route);
+    otherwise the Cholesky normal-equation trace is used.
+    """
+    if pirls_result.fisher_edf is not None:
+        return pirls_result.fisher_edf
+    return estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
+
+
+def uses_qr_log_det(fd: FittingData) -> bool:
+    """Whether the criterion log|H| comes from the QR (nonnegative weights).
+
+    The QR route needs the structural penalty roots and a Hessian whose
+    weights are nonnegative: canonical regular links, where Newton equals
+    Fisher.  Signed Newton/observed systems (noncanonical links, NB) keep
+    the Cholesky determinant (pls_fit1's negative-weight branch is not
+    ported).
+    """
+    family = fd.family
+    return (
+        fd.penalty_roots is not None
+        and fd.rank_deficit == 0
+        and family.is_canonical
+        and family.n_theta == 0
+    )
+
+
+def hessian_qr_inputs(
+    fd: FittingData, weights: jax.Array
+) -> tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None:
+    """``(sqrt(W) X, roots)`` for ``qr_log_det``, or None for Cholesky."""
+    if not uses_qr_log_det(fd):
+        return None
+    return jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * fd.X, fd.penalty_roots
+
+
+def _criterion_coordinates(
+    fd: FittingData, pirls_result: PIRLSResult, stable: Any | None
+) -> tuple:
+    """``(XtWX, hessian_qr, beta, penalty_structure, log|S|+ terms)``.
+
+    Without ``stable`` the fitting coordinates and fixed-basis projections.
+    With a :class:`jaxgam.fitting.stable_log_det.StableSystem`, gam.fit3's
+    coordinates at that evaluation: every quantity of the criterion is formed
+    there (gam.fit3.r 161-179), from the fit's fitting-coordinate output.
+    """
+    weights = pirls_result.working_weights
+    if stable is None:
+        return (
+            pirls_result.XtWX,
+            hessian_qr_inputs(fd, weights),
+            pirls_result.coefficients,
+            fd.penalty_structure,
+            None,
+        )
+    rotation = stable.rotation
+    hessian_qr = None
+    if uses_qr_log_det(fd):
+        hessian_qr = (
+            jnp.sqrt(jnp.maximum(weights, 0.0))[:, None] * rotation.design(fd.X),
+            stable.penalty_roots,
+        )
+    return (
+        rotation.to_stable_matrix(pirls_result.XtWX),
+        hessian_qr,
+        rotation.to_stable(pirls_result.coefficients),
+        stable.penalty_structure,
+        stable.log_det_terms,
+    )
+
+
 def estimate_scale(
     y: jax.Array,
     mu: jax.Array,
@@ -360,7 +478,7 @@ def reml_criterion(
     beta: jax.Array,
     deviance: jax.Array,
     ls_sat: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     phi: jax.Array,
     Mp: int,
     singleton_sp_indices: tuple[int, ...],
@@ -370,6 +488,7 @@ def reml_criterion(
     multi_block_ranks: tuple[int, ...],
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     rank_deficit: int = 0,
+    hessian_qr: tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None = None,
 ) -> jax.Array:
     """REML criterion matching R's Laplace REML (gam.fit3.r line 616).
 
@@ -384,7 +503,7 @@ def reml_criterion(
     ----------
     log_lambda : jax.Array, shape (m,)
         Log smoothing parameters.
-    XtWX, beta, deviance, ls_sat, S_list, phi, Mp
+    XtWX, beta, deviance, ls_sat, penalty_structure, phi, Mp
         See ``_criterion_core``.
     singleton_sp_indices, singleton_ranks, singleton_eig_constants,
     multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
@@ -401,7 +520,7 @@ def reml_criterion(
         beta,
         deviance,
         ls_sat,
-        S_list,
+        penalty_structure,
         phi,
         singleton_sp_indices,
         singleton_ranks,
@@ -410,8 +529,127 @@ def reml_criterion(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        hessian_qr,
     )
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
+
+
+def reml_criterion_from_penalized_deviance(
+    log_lambda: jax.Array,
+    XtWX: jax.Array,
+    penalized_deviance: jax.Array,
+    ls_sat: jax.Array,
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
+    phi: jax.Array,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    rank_deficit: int = 0,
+    *,
+    log_det_hessian: jax.Array | None = None,
+) -> jax.Array:
+    """Evaluate REML from an explicit source-provenance ``Dp`` value.
+
+    Pinned ``gam.fit3`` keeps the deviance from its converged PIRLS state but
+    adds ``C_gdi1``'s final weighted-solve penalty.  That combination cannot be
+    represented faithfully by a single coefficient/deviance pair when the
+    final candidate is rejected on a family-domain check, so the EFS adapter
+    passes the resulting penalized deviance explicitly through this function.
+
+    A supplied frozen observed-factor determinant avoids rebuilding its
+    normal matrix. As for ``reml_criterion_with_logdet_hessian``, this requires
+    the full identifiable subspace and is not a free-rho objective.
+    """
+    if log_det_hessian is None:
+        S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
+        log_det_H, log_det_S = _criterion_log_determinants(
+            log_lambda,
+            XtWX,
+            S_lambda,
+            singleton_sp_indices,
+            singleton_ranks,
+            singleton_eig_constants,
+            multi_block_sp_indices,
+            multi_block_ranks,
+            multi_block_proj_S,
+            rank_deficit,
+        )
+    else:
+        if rank_deficit != 0:
+            raise NotImplementedError(
+                "Supplied-Hessian REML requires the full identifiable subspace."
+            )
+        log_det_H = log_det_hessian
+        log_det_S = penalty_ops.log_pdet(
+            log_lambda,
+            singleton_sp_indices,
+            singleton_ranks,
+            singleton_eig_constants,
+            multi_block_sp_indices,
+            multi_block_ranks,
+            multi_block_proj_S,
+        )
+    core = penalized_deviance / (2.0 * phi) - ls_sat + log_det_H / 2.0 - log_det_S / 2.0
+    return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
+
+
+def reml_criterion_with_logdet_hessian(
+    log_lambda: jax.Array,
+    beta: jax.Array,
+    deviance: jax.Array,
+    ls_sat: jax.Array,
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
+    phi: jax.Array,
+    Mp: int,
+    singleton_sp_indices: tuple[int, ...],
+    singleton_ranks: tuple[int, ...],
+    singleton_eig_constants: jax.Array,
+    multi_block_sp_indices: tuple[tuple[int, ...], ...],
+    multi_block_ranks: tuple[int, ...],
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
+    log_det_hessian: jax.Array,
+    rank_deficit: int = 0,
+) -> jax.Array:
+    """Evaluate a complete fixed-state REML score with a supplied ``log|H|``.
+
+    This is for a *matched frozen fit state*: ``beta``, deviance, working
+    scale, and ``log_det_hessian`` must all come from the same final solve.
+    In particular it is not a free-``rho`` objective and must not be used for
+    implicit derivatives or smoothing-parameter optimization.  The supplied
+    determinant is accepted only on the full identifiable subspace; explicit
+    coefficient-map/rank-deficit support belongs to the later QR alias path.
+
+    It intentionally preserves the existing REML arithmetic for the penalty
+    quadratic, pseudo-determinant, and ``Mp`` correction while avoiding a
+    second normal-equation factorization solely to obtain ``log|H|``.
+    """
+    if rank_deficit != 0:
+        raise NotImplementedError(
+            "Supplied-Hessian REML requires the full identifiable subspace."
+        )
+    S_lambda = penalty_ops.materialize(penalty_structure, log_lambda)
+    penalty = beta @ S_lambda @ beta
+    Dp = deviance + penalty
+    log_det_S = penalty_ops.log_pdet(
+        log_lambda,
+        singleton_sp_indices,
+        singleton_ranks,
+        singleton_eig_constants,
+        multi_block_sp_indices,
+        multi_block_ranks,
+        multi_block_proj_S,
+    )
+    return (
+        Dp / (2.0 * phi)
+        - ls_sat
+        + log_det_hessian / 2.0
+        - log_det_S / 2.0
+        - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +664,7 @@ def reml_criterion_joint(
     deviance: jax.Array,
     y: jax.Array,
     wt: jax.Array,
-    S_list: tuple[jax.Array, ...],
+    penalty_structure: penalty_ops.JaxPenaltyStructure,
     Mp: int,
     n_lambda: int,
     family: ExponentialFamily,
@@ -438,6 +676,7 @@ def reml_criterion_joint(
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...],
     max_y: int = 0,
     rank_deficit: int = 0,
+    hessian_qr: tuple[jax.Array, penalty_ops.JaxPenaltyRoots] | None = None,
 ) -> jax.Array:
     """REML criterion with joint ``(log_lambda, log_phi)`` optimization.
 
@@ -452,7 +691,7 @@ def reml_criterion_joint(
     ----------
     params : jax.Array, shape (n_lambda + 1,)
         ``[log_lambda_1, ..., log_lambda_m, log_phi]``.
-    XtWX, beta, deviance, y, wt, S_list, Mp, n_lambda, family
+    XtWX, beta, deviance, y, wt, penalty_structure, Mp, n_lambda, family
         See ``_criterion_core`` / ``reml_criterion``.
     singleton_sp_indices, singleton_ranks, singleton_eig_constants,
     multi_block_sp_indices, multi_block_ranks, multi_block_proj_S
@@ -472,7 +711,7 @@ def reml_criterion_joint(
         beta,
         deviance,
         ls_sat,
-        S_list,
+        penalty_structure,
         phi,
         singleton_sp_indices,
         singleton_ranks,
@@ -481,6 +720,7 @@ def reml_criterion_joint(
         multi_block_ranks,
         multi_block_proj_S,
         rank_deficit,
+        hessian_qr,
     )
     return core - Mp / 2.0 * jnp.log(2.0 * jnp.pi * phi)
 
@@ -579,20 +819,40 @@ class _CriterionBase(ABC):
         and working weights.
     """
 
-    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
+    def __init__(
+        self,
+        fd: FittingData,
+        pirls_result: PIRLSResult,
+        *,
+        stable: Any | None = None,
+    ) -> None:
         # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
         # For standard families Fisher = Newton; for extended families
         # (NB) the Fisher XtWX/L are recomputed post-convergence.
-        self.edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
+        self.edf = fisher_edf(pirls_result)
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
-        self._ls_sat = fd.family.saturated_loglik(
-            fd.y, fd.wt, self.scale, max_y=fd.max_y
-        )
+        if fd.family.family_name == "nb" and fd.count_prefix_plan is not None:
+            self._ls_sat = fd.family.saturated_loglik(
+                fd.y,
+                fd.wt,
+                self.scale,
+                max_y=fd.max_y,
+                count_indices=fd.count_prefix_plan.indices,
+                integer_counts=fd.count_prefix_plan.integer_counts,
+            )
+        else:
+            self._ls_sat = fd.family.saturated_loglik(
+                fd.y, fd.wt, self.scale, max_y=fd.max_y
+            )
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
-        self._XtWX = pirls_result.XtWX
-        self._beta = pirls_result.coefficients
-        self._S_list = fd.S_list
+        (
+            self._XtWX,
+            self._hessian_qr,
+            self._beta,
+            self._penalty_structure,
+            stable_terms,
+        ) = _criterion_coordinates(fd, pirls_result, stable)
         self._Mp = fd.total_penalty_null_dim
         self._rank_deficit = fd.rank_deficit
         # Block-structured log|S+| metadata
@@ -601,7 +861,11 @@ class _CriterionBase(ABC):
         self._singleton_eig_constants = fd.singleton_eig_constants
         self._multi_block_sp_indices = fd.multi_block_sp_indices
         self._multi_block_ranks = fd.multi_block_ranks
-        self._multi_block_proj_S = fd.multi_block_proj_S
+        # Host get_stableS terms at the evaluation point when supplied (see
+        # jaxgam.fitting.stable_log_det); otherwise the fixed-basis projections.
+        self._multi_block_proj_S = (
+            fd.multi_block_proj_S if stable_terms is None else stable_terms
+        )
 
     def _kwargs(self) -> dict[str, Any]:
         """Build keyword arguments for the JIT'd criterion function."""
@@ -610,7 +874,7 @@ class _CriterionBase(ABC):
             "beta": self._beta,
             "deviance": self._deviance,
             "ls_sat": self._ls_sat,
-            "S_list": self._S_list,
+            "penalty_structure": self._penalty_structure,
             "phi": self.scale,
             "Mp": self._Mp,
             "rank_deficit": self._rank_deficit,
@@ -620,6 +884,7 @@ class _CriterionBase(ABC):
             "multi_block_sp_indices": self._multi_block_sp_indices,
             "multi_block_ranks": self._multi_block_ranks,
             "multi_block_proj_S": self._multi_block_proj_S,
+            "hessian_qr": self._hessian_qr,
         }
 
     @abstractmethod
@@ -708,16 +973,26 @@ class _JointCriterionBase(ABC):
         Converged PIRLS output.
     """
 
-    def __init__(self, fd: FittingData, pirls_result: PIRLSResult) -> None:
+    def __init__(
+        self,
+        fd: FittingData,
+        pirls_result: PIRLSResult,
+        *,
+        stable: Any | None = None,
+    ) -> None:
         # EDF uses Fisher-weighted quantities (R's gdi2, gdi.c:2262-2294).
-        self.edf = estimate_edf(pirls_result.XtWX_fisher, pirls_result.L_fisher)
+        self.edf = fisher_edf(pirls_result)
         # Fletcher scale used only as initial log_phi estimate
         self.scale = estimate_scale(fd.y, pirls_result.mu, fd.wt, fd.family, self.edf)
         self._deviance = pirls_result.deviance
         # REML criterion log|H| uses Newton-weighted XtWX (observed info).
-        self._XtWX = pirls_result.XtWX
-        self._beta = pirls_result.coefficients
-        self._S_list = fd.S_list
+        (
+            self._XtWX,
+            self._hessian_qr,
+            self._beta,
+            self._penalty_structure,
+            stable_terms,
+        ) = _criterion_coordinates(fd, pirls_result, stable)
         self._y = fd.y
         self._wt = fd.wt
         # Retained as attribute because joint criteria need to call
@@ -732,7 +1007,11 @@ class _JointCriterionBase(ABC):
         self._singleton_eig_constants = fd.singleton_eig_constants
         self._multi_block_sp_indices = fd.multi_block_sp_indices
         self._multi_block_ranks = fd.multi_block_ranks
-        self._multi_block_proj_S = fd.multi_block_proj_S
+        # Host get_stableS terms at the evaluation point when supplied (see
+        # jaxgam.fitting.stable_log_det); otherwise the fixed-basis projections.
+        self._multi_block_proj_S = (
+            fd.multi_block_proj_S if stable_terms is None else stable_terms
+        )
         self._max_y = fd.max_y
 
     def _kwargs(self) -> dict[str, Any]:
@@ -743,7 +1022,7 @@ class _JointCriterionBase(ABC):
             "deviance": self._deviance,
             "y": self._y,
             "wt": self._wt,
-            "S_list": self._S_list,
+            "penalty_structure": self._penalty_structure,
             "Mp": self._Mp,
             "rank_deficit": self._rank_deficit,
             "n_lambda": self._n_lambda,
@@ -755,6 +1034,7 @@ class _JointCriterionBase(ABC):
             "multi_block_ranks": self._multi_block_ranks,
             "multi_block_proj_S": self._multi_block_proj_S,
             "max_y": self._max_y,
+            "hessian_qr": self._hessian_qr,
         }
 
     @abstractmethod

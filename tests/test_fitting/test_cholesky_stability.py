@@ -17,6 +17,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jaxgam.fitting.penalty_ops import (
+    JaxLocalPenalty,
+    JaxPenaltyBlock,
+    JaxPenaltyStructure,
+    JaxTransform,
+)
 from jaxgam.fitting.reml import _criterion_core
 
 jax.config.update("jax_enable_x64", True)
@@ -45,7 +51,24 @@ def _make_nearly_singular_system(p: int = 10, rank_deficit: int = 3):
     S_j = S_base @ S_base.T
     S_j = (S_j + S_j.T) / 2
 
-    return jnp.array(XtWX), (jnp.array(S_j),)
+    return jnp.array(XtWX), jnp.array(S_j)
+
+
+def _singleton_structure(S: jax.Array) -> JaxPenaltyStructure:
+    """Use the production local-penalty representation in criterion tests."""
+    p = S.shape[0]
+    return JaxPenaltyStructure(
+        p,
+        (
+            JaxPenaltyBlock(
+                0,
+                p,
+                (0,),
+                (JaxLocalPenalty("dense", S, p),),
+                JaxTransform("identity", jnp.asarray(1.0), p),
+            ),
+        ),
+    )
 
 
 class TestCriterionCoreStability:
@@ -54,7 +77,7 @@ class TestCriterionCoreStability:
     def test_finite_logdet_nearly_singular(self):
         """Nearly-singular H should yield finite criterion (not NaN)."""
         p = 10
-        XtWX, S_list = _make_nearly_singular_system(p, rank_deficit=3)
+        XtWX, S = _make_nearly_singular_system(p, rank_deficit=3)
         log_lambda = jnp.array([0.0])
         beta = jnp.ones(p) * 0.1
         deviance = jnp.array(10.0)
@@ -64,7 +87,7 @@ class TestCriterionCoreStability:
         # Singleton block metadata for one penalty
         singleton_sp_indices = (0,)
         # Rank of the penalty
-        S_np = np.array(S_list[0])
+        S_np = np.array(S)
         rank = int(np.linalg.matrix_rank(S_np, tol=1e-10))
         singleton_ranks = (rank,)
         eigvals = np.linalg.eigvalsh(S_np)
@@ -77,7 +100,7 @@ class TestCriterionCoreStability:
             beta,
             deviance,
             ls_sat,
-            S_list,
+            _singleton_structure(S),
             phi,
             singleton_sp_indices,
             singleton_ranks,
@@ -91,13 +114,13 @@ class TestCriterionCoreStability:
     def test_gradient_finite_nearly_singular(self):
         """Gradient through _criterion_core must be finite on ill-conditioned H."""
         p = 10
-        XtWX, S_list = _make_nearly_singular_system(p, rank_deficit=3)
+        XtWX, S = _make_nearly_singular_system(p, rank_deficit=3)
         beta = jnp.ones(p) * 0.1
         deviance = jnp.array(10.0)
         ls_sat = jnp.array(0.0)
         phi = jnp.array(1.0)
 
-        S_np = np.array(S_list[0])
+        S_np = np.array(S)
         rank = int(np.linalg.matrix_rank(S_np, tol=1e-10))
         eigvals = np.linalg.eigvalsh(S_np)
         nonzero = eigvals[eigvals > 1e-10]
@@ -110,7 +133,7 @@ class TestCriterionCoreStability:
                 beta,
                 deviance,
                 ls_sat,
-                S_list,
+                _singleton_structure(S),
                 phi,
                 (0,),
                 (rank,),
@@ -127,13 +150,13 @@ class TestCriterionCoreStability:
     def test_hessian_finite_nearly_singular(self):
         """Hessian through _criterion_core must be finite on ill-conditioned H."""
         p = 10
-        XtWX, S_list = _make_nearly_singular_system(p, rank_deficit=3)
+        XtWX, S = _make_nearly_singular_system(p, rank_deficit=3)
         beta = jnp.ones(p) * 0.1
         deviance = jnp.array(10.0)
         ls_sat = jnp.array(0.0)
         phi = jnp.array(1.0)
 
-        S_np = np.array(S_list[0])
+        S_np = np.array(S)
         rank = int(np.linalg.matrix_rank(S_np, tol=1e-10))
         eigvals = np.linalg.eigvalsh(S_np)
         nonzero = eigvals[eigvals > 1e-10]
@@ -146,7 +169,7 @@ class TestCriterionCoreStability:
                 beta,
                 deviance,
                 ls_sat,
-                S_list,
+                _singleton_structure(S),
                 phi,
                 (0,),
                 (rank,),
@@ -163,7 +186,7 @@ class TestCriterionCoreStability:
     def test_high_regularization(self):
         """High penalty (large lambda) should still produce finite criterion."""
         p = 10
-        XtWX, S_list = _make_nearly_singular_system(p, rank_deficit=3)
+        XtWX, S = _make_nearly_singular_system(p, rank_deficit=3)
         # Very large lambda -> penalty dominates -> H is better conditioned
         # but the scaling pushes numerical boundaries
         log_lambda = jnp.array([20.0])
@@ -172,7 +195,7 @@ class TestCriterionCoreStability:
         ls_sat = jnp.array(0.0)
         phi = jnp.array(1.0)
 
-        S_np = np.array(S_list[0])
+        S_np = np.array(S)
         rank = int(np.linalg.matrix_rank(S_np, tol=1e-10))
         eigvals = np.linalg.eigvalsh(S_np)
         nonzero = eigvals[eigvals > 1e-10]
@@ -184,7 +207,7 @@ class TestCriterionCoreStability:
             beta,
             deviance,
             ls_sat,
-            S_list,
+            _singleton_structure(S),
             phi,
             (0,),
             (rank,),

@@ -5,6 +5,7 @@ Public API (used directly by tests):
 - r_available() — import-time R check for @pytest.mark.skipif
 - r_tolerance() — tolerance tier by family
 - make_smooth_spec() — SmoothSpec factory with many call-site variants
+- check_flat_ridge_endpoint() — flat-ridge REML endpoint rule against pinned R
 
 Private API (used by conftest fixtures and complex test-local fixtures):
 - _generate_family_data() — single-predictor family data
@@ -13,6 +14,7 @@ Private API (used by conftest fixtures and complex test-local fixtures):
 
 from __future__ import annotations
 
+import ctypes
 from collections.abc import Callable
 from typing import Any
 
@@ -20,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from jaxgam.formula.terms import SmoothSpec
-from tests.tolerances import LOOSE, MODERATE
+from tests.tolerances import LOOSE, MODERATE, STRICT
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -28,6 +30,37 @@ from tests.tolerances import LOOSE, MODERATE
 
 SEED = 42
 N = 200
+
+
+def nb_theta_six_row_case(variant: str) -> dict[str, object]:
+    """Construct the reviewed high-theta count boundary without saved data."""
+    if variant not in ("integer", "fractional_ge_one"):
+        raise ValueError("Unknown six-row NB theta variant.")
+    return {
+        "integer_counts": variant == "integer",
+        "log_theta": [float(np.log(1e6))],
+        "max_y": 8,
+        "mu": [1.2, 2.4, 3.1, 0.8, 2.0, 4.0],
+        "weight": [0.8, 1.2, 0.0, 1.0, 0.9, 1.1],
+        "y": (
+            [0.0, 2.0, 3.0, 4.0, 0.0, 7.0]
+            if variant == "integer"
+            else [0.0, 2.25, 3.5, 4.75, 0.0, 7.25]
+        ),
+    }
+
+
+def nb_optimizer_case_data() -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """Recreate the seeded weighted NB model used by the exact outer gates."""
+    rng = np.random.default_rng(8803)
+    x = np.linspace(-1.0, 1.0, 180)
+    offset = 0.12 * np.cos(2.0 * x)
+    mu = np.exp(1.0 + 1.1 * np.sin(3.2 * x) + 0.35 * np.cos(6.0 * x) + offset)
+    theta = 2.7
+    y = rng.negative_binomial(theta, theta / (theta + mu)).astype(float)
+    weight = 0.7 + 0.6 * rng.random(len(x))
+    weight[::29] = 0.0
+    return pd.DataFrame({"x": x, "y": y}), weight, offset
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +82,94 @@ def r_available() -> bool:
         return ok
     except Exception:
         return False
+
+
+def r_links_pinned_openblas(r_bridge) -> bool:
+    """Whether R's LAPACK is the OpenBLAS 0.3.26 the provider pins.
+
+    The source-LAPACK provider declares scipy-openblas32 0.3.26, the OpenBLAS
+    release the pinned Linux R links; results that depend on R's linked BLAS
+    are bitwise there. The library is located with the typed
+    ``RBridge.linked_lapack`` query (never the platform name) and identified
+    by its own ``openblas_get_config`` string, since Debian installs OpenBLAS's
+    LAPACK under the unversioned name ``liblapack.so.3``.
+    """
+    try:
+        library = ctypes.CDLL(r_bridge.linked_lapack(), mode=ctypes.RTLD_LOCAL)
+        config = library.openblas_get_config
+    except (OSError, AttributeError):
+        return False
+    config.argtypes = []
+    config.restype = ctypes.c_char_p
+    return (config() or b"").decode().startswith("OpenBLAS 0.3.26 ")
+
+
+def _openblas_identity(library: ctypes.CDLL, prefix: str) -> str:
+    """``openblas_get_config`` and core name of one loaded OpenBLAS."""
+    fields = []
+    for name in ("openblas_get_config", "openblas_get_corename"):
+        try:
+            function = getattr(library, prefix + name)
+        except AttributeError:
+            fields.append(f"{name}: not exported")
+            continue
+        function.argtypes = []
+        function.restype = ctypes.c_char_p
+        fields.append((function() or b"").decode())
+    return " | ".join(fields)
+
+
+def platform_report_lines() -> list[str]:
+    """CPU, SIMD and OpenBLAS kernel identity for platform-sensitive runs.
+
+    Reports the CPU model and its AVX-512 flags, NumPy's enabled AVX-512
+    dispatch, and the OpenBLAS configuration and selected core of the
+    provider wheel and of R's linked LAPACK, so a platform-sensitive run
+    records which runner type it sampled.
+    """
+    import platform
+
+    lines = [f"machine: {platform.machine()}"]
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as handle:
+            first = handle.read().split("\n\n")[0]
+        info = {
+            key.strip(): value.strip()
+            for key, _, value in (line.partition(":") for line in first.splitlines())
+        }
+        flags = sorted(
+            flag for flag in info.get("flags", "").split() if "avx512" in flag
+        )
+        lines.append(f"cpu: {info.get('model name', '?')}")
+        lines.append(f"avx512 flags: {' '.join(flags) or 'none'}")
+    except OSError:
+        lines.append("cpu: /proc/cpuinfo unavailable")
+    try:
+        from numpy._core._multiarray_umath import __cpu_features__ as features
+    except ImportError:  # pragma: no cover - NumPy 1.x layout
+        from numpy.core._multiarray_umath import __cpu_features__ as features
+    enabled = [name for name, on in features.items() if on and "AVX512" in name]
+    lines.append(f"numpy avx512 dispatch: {' '.join(enabled) or 'none'}")
+    try:
+        from jaxgam.smooths import source_lapack
+
+        provider = source_lapack._source_lapack()
+        identity = _openblas_identity(provider.library, "scipy_")
+        lines.append(f"provider wheel OpenBLAS: {identity}")
+    except Exception as error:
+        lines.append(f"provider wheel OpenBLAS: unavailable ({error})")
+    if r_available():
+        try:
+            from tests.r_bridge import RBridge
+
+            path = RBridge().linked_lapack()
+            library = ctypes.CDLL(path, mode=ctypes.RTLD_LOCAL)
+            lines.append(f"R LAPACK OpenBLAS: {_openblas_identity(library, '')}")
+        except Exception as error:
+            lines.append(f"R LAPACK OpenBLAS: unavailable ({error})")
+    else:
+        lines.append("R LAPACK OpenBLAS: R unavailable")
+    return lines
 
 
 def r_tolerance(family_name: str):
@@ -102,6 +223,91 @@ def check_that(condition: bool, message: str) -> None:
 # ---------------------------------------------------------------------------
 # SmoothSpec factory
 # ---------------------------------------------------------------------------
+
+
+def _strict_allowance(reference: float) -> float:
+    return STRICT.atol + STRICT.rtol * abs(float(reference))
+
+
+def check_flat_ridge_endpoint(
+    collector: _AssertCollector,
+    label: str,
+    *,
+    converged: bool,
+    jax_sp: np.ndarray,
+    jax_score: float,
+    r_sp: np.ndarray,
+    r_score: float,
+    jax_fixed: Callable[[np.ndarray], dict[str, Any]],
+    r_fixed: Callable[[np.ndarray], dict[str, Any]],
+) -> None:
+    """Root's flat-ridge endpoint rule (decision 1, 2026-11-16).
+
+    Where pinned R's REML endpoint is not stationary for R's own criterion
+    because the score keeps falling along a ridge, the Newton-completed-point
+    rule does not apply.  The endpoint is judged by:
+
+    (a) JaxGAM converged under its own contract;
+    (b) the two criteria agree at STRICT at both endpoints, each side through
+        its own fixed-sp fit (and each reported endpoint score equals its own
+        fixed-sp score there);
+    (c) JaxGAM's score is no higher than R's, to STRICT;
+    (d) the licence, asserted: R's own fixed-sp score at JaxGAM's endpoint is
+        lower than R's score at R's endpoint by more than STRICT;
+    (e) fitted values and deviance at both matched sp at STRICT.
+
+    ``jax_fixed`` / ``r_fixed`` map a smoothing-parameter vector to a dict
+    with ``score``, ``fitted_values`` and ``deviance``.  Hard-gate invariants
+    are the caller's (it owns the fit object).
+    """
+    jax_sp = np.asarray(jax_sp, dtype=np.float64)
+    r_sp = np.asarray(r_sp, dtype=np.float64)
+    fits = {
+        "JaxGAM endpoint": (jax_fixed(jax_sp), r_fixed(jax_sp)),
+        "R endpoint": (jax_fixed(r_sp), r_fixed(r_sp)),
+    }
+
+    def strict(actual, expected) -> None:
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+
+    collector.check(
+        f"{label}: (a) JaxGAM converged",
+        lambda: check_that(bool(converged), "JaxGAM endpoint not converged"),
+    )
+    for where, (jax_fit, r_fit) in fits.items():
+        collector.check(
+            f"{label}: (b) criteria agree at the {where}",
+            lambda j=jax_fit, r=r_fit: strict(j["score"], r["score"]),
+        )
+        for field in ("fitted_values", "deviance"):
+            collector.check(
+                f"{label}: (e) {field} at the {where}",
+                lambda j=jax_fit, r=r_fit, field=field: strict(j[field], r[field]),
+            )
+    collector.check(
+        f"{label}: (b) JaxGAM endpoint score is its fixed-sp score",
+        lambda: strict(jax_score, fits["JaxGAM endpoint"][0]["score"]),
+    )
+    collector.check(
+        f"{label}: (b) R endpoint score is its fixed-sp score",
+        lambda: strict(r_score, fits["R endpoint"][1]["score"]),
+    )
+    collector.check(
+        f"{label}: (c) JaxGAM score <= R score",
+        lambda: check_that(
+            jax_score <= r_score + _strict_allowance(r_score),
+            f"JaxGAM {jax_score!r} above R {r_score!r}",
+        ),
+    )
+    r_at_jax = float(fits["JaxGAM endpoint"][1]["score"])
+    r_at_r = float(fits["R endpoint"][1]["score"])
+    collector.check(
+        f"{label}: (d) licence: R's criterion is lower at JaxGAM's endpoint",
+        lambda: check_that(
+            r_at_jax < r_at_r - _strict_allowance(r_at_r),
+            f"R score at JaxGAM sp {r_at_jax!r} not below R endpoint {r_at_r!r}",
+        ),
+    )
 
 
 def make_smooth_spec(
@@ -355,3 +561,115 @@ def _inference_r_cases() -> dict[
             "gamma_log",
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-platform reviewed replay bounds
+# ---------------------------------------------------------------------------
+
+# Platform classes for reviewed replay counts. On x86_64 the class is decided
+# from the CPU's own flags (AVX-512F), never assumed from the OS or runner.
+PLATFORM_CLASSES = ("macos-arm64", "linux-aarch64", "x86_64", "x86_64-avx512")
+
+
+def _x86_cpu_flags() -> frozenset[str] | None:
+    """Lower-case CPU feature flags on x86_64, or ``None`` when unreadable."""
+    import subprocess
+    import sys
+
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("flags"):
+                        return frozenset(line.partition(":")[2].split())
+        except OSError:
+            return None
+        return None
+    if sys.platform == "darwin":
+        try:
+            text = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.features", "machdep.cpu.leaf7_features"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        return frozenset(token.lower().replace(".", "_") for token in text.split())
+    return None
+
+
+def cpu_platform_class() -> str:
+    """Return the running platform's replay class from the CPU's own flags.
+
+    ``macos-arm64`` / ``linux-aarch64`` for 64-bit Arm; on x86_64,
+    ``x86_64-avx512`` when the CPU reports AVX-512F (``avx512f`` in
+    ``/proc/cpuinfo`` flags, ``AVX512F`` in macOS ``machdep.cpu`` features)
+    and ``x86_64`` otherwise. Anything else, or unreadable x86 flags, returns
+    a descriptive class that has no reviewed entry.
+    """
+    import platform
+    import sys
+
+    machine = platform.machine().lower()
+    if machine in ("arm64", "aarch64"):
+        if sys.platform == "darwin":
+            return "macos-arm64"
+        if sys.platform.startswith("linux"):
+            return "linux-aarch64"
+        return f"{sys.platform}-{machine}"
+    if machine in ("x86_64", "amd64"):
+        flags = _x86_cpu_flags()
+        if flags is None:
+            return "x86_64-unreadable-flags"
+        return "x86_64-avx512" if "avx512f" in flags else "x86_64"
+    return f"{sys.platform}-{machine}"
+
+
+# Key of a per-case entry: every platform class without its own entry must
+# need no replay (bound 0), exactly as if the case were unlisted for it. Used
+# when a case needs a reviewed bound on some classes only.
+OTHER_CLASSES_NEED_NONE = "other classes need none"
+
+# Every replay-bound check of the session, printed by tests/conftest.py's
+# terminal summary so a run reports its measured counts even when it passes.
+REPLAY_COUNT_RECORDS: list[tuple[str, str, str, int, int | None]] = []
+
+
+def check_replay_bound(
+    table_name: str,
+    table: dict[Any, dict[str, tuple[int, int]]],
+    key: Any,
+    measured: int,
+) -> None:
+    """Assert a measured replay count against the running platform's entry.
+
+    ``table`` maps a case to ``{platform class: (bound, measured count)}``.
+    A case absent from the table must need no replay on any platform (bound
+    0). A listed case on a platform class without a reviewed entry fails and
+    reports the measured count, so the entry can be reviewed from it, unless
+    the case lists :data:`OTHER_CLASSES_NEED_NONE`, whose bound must be 0.
+    """
+    platform_class = cpu_platform_class()
+    if key not in table:
+        bound: int | None = 0
+    else:
+        entries = table[key]
+        if entries.get(OTHER_CLASSES_NEED_NONE, (0, 0))[0] != 0:
+            raise ValueError(f"{table_name}: {OTHER_CLASSES_NEED_NONE} must be 0")
+        entry = entries.get(platform_class, entries.get(OTHER_CLASSES_NEED_NONE))
+        bound = None if entry is None else entry[0]
+    REPLAY_COUNT_RECORDS.append(
+        (table_name, repr(key), platform_class, measured, bound)
+    )
+    if bound is None:
+        raise AssertionError(
+            f"{table_name}: no reviewed replay bound for {key!r} on platform class "
+            f"{platform_class}; measured {measured} replayed decisions"
+        )
+    if measured > bound:
+        raise AssertionError(
+            f"{table_name}: {measured} replayed decisions for {key!r} on "
+            f"{platform_class}; reviewed bound {bound}"
+        )

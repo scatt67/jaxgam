@@ -1,26 +1,9 @@
-"""Phase 1→2 boundary container for PIRLS/REML fitting.
-
-``FittingData`` encapsulates device transfer and penalty structure in one
-place. Created from a ``ModelSetup`` (Phase 1, NumPy) via the
-``from_setup()`` factory, it holds all JAX arrays and metadata that
-PIRLS and REML need.
-
-Key design points:
-- Not a JAX pytree (contains Python objects like ``family``). Used as an
-  orchestration container that provides arrays to fitting functions.
-- ``S_lambda()`` is pure JAX and differentiable — REML will differentiate
-  through it via ``jax.grad``.
-- ``coef_map`` and ``smooth_info`` bypass Phase 2 entirely (Python objects
-  that can't cross the JAX boundary). They stay on ``ModelSetup`` and
-  flow directly to Phase 3.
-
-Design doc reference: docs/design.md §1.3 (phase boundaries), §4.4
-"""
+"""Phase 1 to Phase 2 fitting data with local penalty storage."""
 
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
 import jax
@@ -28,99 +11,142 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxgam.families.base import ExponentialFamily
-from jaxgam.jax_utils import build_S_lambda, to_jax
+from jaxgam.fitting import penalty_ops
+from jaxgam.fitting.initialization import initialize_beta_cpu, r_null_coefficients
+from jaxgam.formula.fitting_prepare import (
+    apply_transforms_to_design,
+    initial_log_sp_from_diagonal,
+    qr_penalty_roots,
+    reparameterize_structure,
+    total_penalty_spaces,
+)
+from jaxgam.jax_utils import to_jax
+from jaxgam.penalties.structure import (
+    DenseLocalPenalty,
+    DenseTransform,
+    DiagonalPenalty,
+    DiagonalTransform,
+    IdentityPenalty,
+    IdentityTransform,
+    PenaltyBlock,
+    PenaltyStructure,
+)
 
 if TYPE_CHECKING:
     from jaxgam.formula.design import ModelSetup
-    from jaxgam.smooths.constraints import TermBlock
+    from jaxgam.formula.prepare import PreparedModel
 
-# Eigenvalue rank threshold: eigenvalues below max(eig) * _EPS_TWO_THIRDS
-# are treated as zero. Matches R's Sl.setup / totalPenaltySpace convention.
+
 _EPS_TWO_THIRDS = np.finfo(float).eps ** (2.0 / 3.0)
-
-# Floor for log of eigenvalues to prevent log(0).
 _LOG_FLOOR = 1e-30
 
-# R's initial.sp threshold for identifying active penalty entries.
-_ACTIVITY_THRESH = np.finfo(float).eps ** 0.8
+# Keep initial-sp reductions bounded without changing its dense result.
+_INITIAL_SP_BATCH_ROWS = 8192
 
-# Maximum iterations for the initial.sp scaling loop.
-_MAX_SP_ADJUST_ITERS = 200
+
+@dataclass(frozen=True)
+class CountPrefixPlan:
+    """Reusable NB count metadata prepared once at the CPU→device boundary.
+
+    ``indices`` is dynamic device data; the capacity and integer-domain flag
+    remain static so they key only the small compiled prefix-table shape.
+    """
+
+    indices: jax.Array
+    max_count: int
+    capacity: int
+    integer_counts: bool
+
+
+@dataclass(frozen=True)
+class PreparedFittingMetadata:
+    """Observation-independent Phase-2 metadata for prepared backends.
+
+    This deliberately contains neither a design matrix nor response, weights,
+    or offsets.  It is the compact fitting metadata needed by stream routes to
+    form penalty and REML statistics without retaining training rows.
+    """
+
+    penalty_structure: penalty_ops.JaxPenaltyStructure
+    log_lambda_init: jax.Array
+    family: ExponentialFamily
+    n_obs: int
+    n_coef: int
+    total_penalty_rank: int
+    singleton_sp_indices: tuple[int, ...]
+    singleton_ranks: tuple[int, ...]
+    singleton_eig_constants: jax.Array
+    multi_block_sp_indices: tuple[tuple[int, ...], ...]
+    multi_block_ranks: tuple[int, ...]
+    multi_block_proj_S: tuple[tuple[jax.Array, ...], ...]
+    source_fingerprint: str
+    basis_fingerprint: str
+    family_name: str
+    link_name: str
+    rank_deficit: int = 0
+
+    @property
+    def n_penalties(self) -> int:
+        return self.penalty_structure.n_penalties
+
+    @property
+    def total_penalty_null_dim(self) -> int:
+        return self.n_coef - self.total_penalty_rank
+
+    @classmethod
+    def from_prepared(
+        cls,
+        prepared: PreparedModel,
+        family: ExponentialFamily,
+        device: jax.Device | None = None,
+    ) -> PreparedFittingMetadata:
+        """Transfer only frozen prepared fitting metadata to the device."""
+        fitting = prepared.fitting
+        if fitting is None:
+            raise ValueError("Prepared fitting metadata requires fitting preparation.")
+        metadata = _build_block_metadata(fitting.penalty_structure, device)
+        return cls(
+            penalty_structure=_to_jax_structure(fitting.penalty_structure, device),
+            log_lambda_init=to_jax(fitting.log_lambda_init, device=device),
+            family=family,
+            n_obs=prepared.n_obs,
+            n_coef=prepared.n_coef,
+            total_penalty_rank=fitting.total_penalty_rank,
+            singleton_sp_indices=metadata["singleton_sp_indices"],
+            singleton_ranks=metadata["singleton_ranks"],
+            singleton_eig_constants=metadata["singleton_eig_constants"],
+            multi_block_sp_indices=metadata["multi_block_sp_indices"],
+            multi_block_ranks=metadata["multi_block_ranks"],
+            multi_block_proj_S=metadata["multi_block_proj_S"],
+            source_fingerprint=prepared.source_fingerprint,
+            basis_fingerprint=prepared.basis_fingerprint,
+            family_name=fitting.family_name,
+            link_name=fitting.link_name,
+            rank_deficit=fitting.unpenalized_rank_deficit,
+        )
 
 
 @dataclass(frozen=True)
 class FittingData:
-    """Phase 1→2 boundary: on-device data for PIRLS/REML.
+    """Device data and local penalty algebra for dense fitting.
 
-    Created via ``FittingData.from_setup(model_setup, family)``.
-    Not a JAX pytree (contains Python objects). Used as an
-    orchestration container that provides arrays to fitting functions.
-
-    Attributes
-    ----------
-    X : jax.Array, shape (n, p)
-        Model matrix on device.
-    y : jax.Array, shape (n,)
-        Response vector on device.
-    wt : jax.Array, shape (n,)
-        Prior weights on device.
-    offset : jax.Array or None
-        Offset vector on device, shape (n,), or None.
-    S_list : tuple[jax.Array, ...]
-        Per-penalty (p, p) matrices on device.
-    log_lambda_init : jax.Array, shape (n_penalties,)
-        Initial log smoothing parameters.
-    family : ExponentialFamily
-        Family with link attached (Python object, not traced).
-    n_obs : int
-        Number of observations.
-    n_coef : int
-        Number of coefficients (columns of X).
-    penalty_ranks : tuple[int, ...]
-        Rank of each penalty matrix (for REML log|S^+|).
-    penalty_null_dims : tuple[int, ...]
-        Null space dimension of each penalty (for REML).
-    penalty_range_basis : jax.Array or None
-        Orthogonal basis for the range space of the total penalty,
-        shape (p, r) where r = p - Mp. Used for stable log|S+|.
-    singleton_sp_indices : tuple[int, ...]
-        Index into log_lambda for each singleton penalty block.
-    singleton_ranks : tuple[int, ...]
-        Rank of each singleton penalty's local block.
-    singleton_eig_constants : jax.Array, shape (n_singletons,)
-        Precomputed log-eigenvalue constants for singletons.
-    multi_block_sp_indices : tuple[tuple[int, ...], ...]
-        Log_lambda indices for each multi-penalty block.
-    multi_block_ranks : tuple[int, ...]
-        Combined penalty rank for each multi-penalty block.
-    multi_block_proj_S : tuple[tuple[jax.Array, ...], ...]
-        Range-space-projected penalties for each multi-penalty block.
-    multi_block_S_local : tuple[tuple[jax.Array, ...], ...]
-        Block-local (unprojected) penalties for adaptive reparam.
-    repara_D : jax.Array or None
-        Sl.setup reparameterization matrix (p, p), or None if no
-        reparameterization was applied.
+    The direct solver still materializes one combined dense ``S_lambda`` when
+    constructing its Hessian. This object never owns m global zero-padded
+    penalties or a global fitting transform.
     """
 
-    # Arrays on device
     X: jax.Array
     y: jax.Array
     wt: jax.Array
     offset: jax.Array | None
-    S_list: tuple[jax.Array, ...]
+    penalty_structure: penalty_ops.JaxPenaltyStructure
     log_lambda_init: jax.Array
-
-    # Python objects
     family: ExponentialFamily
-
-    # Static metadata
     n_obs: int
     n_coef: int
     penalty_ranks: tuple[int, ...]
     penalty_null_dims: tuple[int, ...]
-    penalty_range_basis: jax.Array | None
-
-    # Block-structured log|S+| metadata
+    total_penalty_rank: int
     singleton_sp_indices: tuple[int, ...]
     singleton_ranks: tuple[int, ...]
     singleton_eig_constants: jax.Array
@@ -128,41 +154,56 @@ class FittingData:
     multi_block_ranks: tuple[int, ...]
     multi_block_proj_S: tuple[tuple[jax.Array, ...], ...]
     multi_block_S_local: tuple[tuple[jax.Array, ...], ...]
-
-    # Sl.setup reparameterization (R's fast-REML.r lines 68-429)
-    repara_D: jax.Array | None
-
-    # Maximum integer count in y. Used by NB's _lgamma_diff scan as
-    # a compile-time loop bound. Computed from data in from_setup().
     max_y: int
-
-    # Rank deficiency of the model matrix X: ``n_coef - rank(X)``. Nonzero only
-    # when the design is structurally rank-deficient (e.g. a parametric term
-    # sharing a smooth's null-space direction, ``y ~ x + s(x)``). Used as a
-    # static arg so the REML ``log|H|`` uses a generalized determinant over the
-    # identifiable subspace, matching R's rank-revealing fit. 0 => full rank
-    # (the Cholesky log-determinant path, unchanged).
+    count_prefix_plan: CountPrefixPlan | None = None
     rank_deficit: int = 0
+
+    # Computed once in transformed fitting coordinates at the CPU-to-JAX
+    # boundary. Manual FittingData fixtures retain the compatibility fallback.
+    beta_init: jax.Array | None = None
+
+    # Unscaled structural penalty roots when the lambda-free pls_fit1 rank
+    # test finds the data/penalty system structurally full rank; the dense
+    # inner fit then solves by QR. None keeps the Cholesky solve (manual
+    # fixtures, unpenalized models and structurally rank-deficient models).
+    penalty_roots: penalty_ops.JaxPenaltyRoots | None = None
+
+    # R's get.null.coef anchor in fitting coordinates, used by the pinned
+    # gam.fit3/gam.fit4 inner loops; None for manual fixtures.
+    null_beta: jax.Array | None = None
+
+    @property
+    def uses_source_loop(self) -> bool:
+        """Whether the dense inner fit runs the pinned mgcv loop.
+
+        Structurally rank-deficient systems keep the regularized solve:
+        pls_fit1's unidentifiable-column drop is not ported.
+        """
+        from jaxgam.fitting.source_pirls import uses_source_loop
+
+        return (
+            self.null_beta is not None
+            and self.rank_deficit == 0
+            and uses_source_loop(self.family)
+        )
+
+    def penalty_root(self, log_lambda: jax.Array) -> jax.Array | None:
+        """``E(rho)`` for the QR inner solve, or ``None`` for Cholesky."""
+        if self.penalty_roots is None:
+            return None
+        return penalty_ops.augmented_root(self.penalty_roots, log_lambda)
 
     @property
     def n_penalties(self) -> int:
-        """Number of penalty matrices."""
-        return len(self.S_list)
+        return self.penalty_structure.n_penalties
 
     @property
     def total_penalty_null_dim(self) -> int:
-        """Null space dimension of the total penalty matrix.
+        return self.n_coef - self.total_penalty_rank
 
-        This is R's ``Mp`` — the dimension of the kernel of
-        ``S_total = Σ S_j / ||S_j||`` (R's ``totalPenaltySpace``,
-        gam.fit3.r line 2661). It differs from ``sum(penalty_null_dims)``
-        when there are multiple penalties with overlapping null spaces.
-
-        Used in the REML criterion's ``-Mp/2·log(2πφ)`` term.
-        """
-        if self.penalty_range_basis is None:
-            return self.n_coef
-        return self.n_coef - self.penalty_range_basis.shape[1]
+    def S_lambda(self, log_lambda: jax.Array) -> jax.Array:
+        """Explicit one-matrix materialization at the direct-solver boundary."""
+        return penalty_ops.materialize(self.penalty_structure, log_lambda)
 
     @classmethod
     def from_setup(
@@ -171,479 +212,336 @@ class FittingData:
         family: ExponentialFamily,
         device: jax.Device | None = None,
     ) -> FittingData:
-        """Create FittingData from a Phase 1 ModelSetup.
-
-        Transfers arrays to the JAX device and extracts penalty metadata.
-
-        Parameters
-        ----------
-        setup : ModelSetup
-            Phase 1 output (NumPy arrays, penalty structure).
-        family : ExponentialFamily
-            Family with link attached.
-        device : jax.Device, optional
-            Target device. If None, uses JAX's default device.
-
-        Returns
-        -------
-        FittingData
-            On-device data ready for PIRLS/REML.
-        """
         if setup.X.ndim != 2:
             raise ValueError(f"Expected 2-D model matrix X, got ndim={setup.X.ndim}")
-
-        y_jax = to_jax(setup.y, device=device)
-        wt_jax = to_jax(setup.weights, device=device)
-
-        offset_jax: jax.Array | None = None
-        if setup.offset is not None:
-            offset_jax = to_jax(setup.offset, device=device)
-
-        # Extract per-penalty matrices and metadata (NumPy only;
-        # transfer to JAX after Sl.setup reparameterization below).
-        penalty_arrays: list[np.ndarray] = []
-        ranks: list[int] = []
-        null_dims: list[int] = []
-
-        if setup.penalties is not None:
-            for penalty in setup.penalties.penalties:
-                penalty_arrays.append(penalty.S)
-                ranks.append(penalty.rank)
-                null_dims.append(penalty.null_space_dim)
-            log_sp_init = cls._initial_sp(setup.X, penalty_arrays, setup.weights)
-            log_lambda_init = to_jax(log_sp_init, device=device)
-        else:
-            # Purely parametric model — no penalties
-            log_lambda_init = jnp.zeros(0)
-
-        # -- Sl.setup reparameterization (R's fast-REML.r lines 68-429) --
-        # For each smooth, reparameterize so that singleton penalties
-        # become partial identities (D^T S D = I_r). This makes
-        # S_lambda = lambda * I_r, yielding a well-conditioned Hessian
-        # and enabling fast Newton convergence (~10 iterations vs 100+).
-        # The REML criterion is invariant (2*log|D| cancels between
-        # log|H| and log|S+|). After optimization, coefficients and Vp
-        # are back-transformed: beta_orig = D @ beta_repara.
-        n_coef = setup.X.shape[1]
-        X_np = setup.X
-        repara_D_jax: jax.Array | None = None
-
-        # Group penalties by SMOOTH (one TermBlock per smooth), NOT by
-        # smooth_info: smooth_info is per-level for factor-by smooths (so the
-        # reported EDF/summary are per-level), but the penalty reparameterization
-        # and log|S+| block structure must stay per-smooth to keep the fit
-        # unchanged. coef_map.terms keeps exactly one block per smooth.
-        smooth_blocks = [t for t in setup.coef_map.terms if t.term_type == "smooth"]
-
-        if penalty_arrays and smooth_blocks:
-            D_global = _compute_repara_D(penalty_arrays, smooth_blocks, n_coef)
-            if D_global is not None:
-                X_np = setup.X @ D_global
-                penalty_arrays = [D_global.T @ S @ D_global for S in penalty_arrays]
-                repara_D_jax = to_jax(D_global, device=device)
-
-        # Transfer model matrix and penalties to device
-        X_jax = to_jax(X_np, device=device)
-        S_list: tuple[jax.Array, ...] = tuple(
-            to_jax(S, device=device) for S in penalty_arrays
+        structure = setup.penalties or PenaltyStructure(setup.X.shape[1], ())
+        log_sp_init = cls._initial_sp(setup.X, structure, setup.weights)
+        transformed = reparameterize_structure(structure)
+        X_np = apply_transforms_to_design(setup.X, transformed)
+        beta_init = to_jax(
+            initialize_beta_cpu(X_np, setup.y, setup.weights, family, setup.offset),
+            device=device,
         )
+        metadata = _build_block_metadata(transformed, device)
+        ranks = tuple(rank for block in structure.blocks for rank in block.ranks)
+        # Compatibility metadata historically came from a p-by-p Penalty, so
+        # its nullity includes coefficient directions outside this local block.
+        null_dims = tuple(setup.X.shape[1] - rank for rank in ranks)
 
-        penalty_range_basis = cls._penalty_range_basis(penalty_arrays, n_coef, device)
-
-        block_meta = _build_block_metadata(penalty_arrays, smooth_blocks, device)
-
-        # max(y) as a compile-time integer for NB's _lgamma_diff scan.
-        max_y = int(np.max(setup.y)) if len(setup.y) > 0 else 0
-
-        # Rank deficiency of the penalized Hessian that the penalty cannot
-        # regularize away — i.e. unpenalized confounding (e.g. a parametric
-        # term sharing a smooth's null-space direction). Penalized deficiencies
-        # (e.g. RE group dummies summing to the intercept) are NOT counted.
-        rank_deficit = cls._unpenalized_rank_deficit(penalty_arrays, X_np, n_coef)
+        # Only NB needs count metadata. Keeping max_y neutral for all other
+        # families prevents response maxima from needlessly splitting JIT
+        # cache entries. Fractional NB responses use the exact polygamma
+        # derivative path; they are never rounded into recurrence indices.
+        count_prefix_plan: CountPrefixPlan | None = None
+        max_y = 0
+        if family.family_name == "nb":
+            y_np = np.asarray(setup.y, dtype=np.float64)
+            integer_counts = bool(
+                np.all(np.isfinite(y_np)) and np.all(y_np == np.floor(y_np))
+            )
+            if integer_counts:
+                max_y = int(np.max(y_np)) if y_np.size else 0
+                int64_max = np.iinfo(np.int64).max
+                if max_y > int64_max:
+                    raise ValueError(
+                        "NB count-prefix indices require responses representable "
+                        f"as int64, got maximum count {max_y}."
+                    )
+                capacity = max(1, max_y)  # y_safe=1 is evaluated under where.
+                indices_np = y_np.astype(np.int64)
+            else:
+                capacity = 0
+                indices_np = np.zeros(y_np.shape, dtype=np.int64)
+            count_prefix_plan = CountPrefixPlan(
+                indices=jax.device_put(
+                    jnp.asarray(indices_np, dtype=jnp.int64), device
+                ),
+                max_count=max_y,
+                capacity=capacity,
+                integer_counts=integer_counts,
+            )
 
         return cls(
-            X=X_jax,
-            y=y_jax,
-            wt=wt_jax,
-            offset=offset_jax,
-            S_list=S_list,
-            log_lambda_init=log_lambda_init,
+            X=to_jax(X_np, device=device),
+            y=to_jax(setup.y, device=device),
+            wt=to_jax(setup.weights, device=device),
+            offset=None
+            if setup.offset is None
+            else to_jax(setup.offset, device=device),
+            penalty_structure=_to_jax_structure(transformed, device),
+            log_lambda_init=to_jax(log_sp_init, device=device),
             family=family,
             n_obs=setup.n_obs,
-            n_coef=n_coef,
-            penalty_ranks=tuple(ranks),
-            penalty_null_dims=tuple(null_dims),
-            penalty_range_basis=penalty_range_basis,
-            singleton_sp_indices=block_meta["singleton_sp_indices"],
-            singleton_ranks=block_meta["singleton_ranks"],
-            singleton_eig_constants=block_meta["singleton_eig_constants"],
-            multi_block_sp_indices=block_meta["multi_block_sp_indices"],
-            multi_block_ranks=block_meta["multi_block_ranks"],
-            multi_block_proj_S=block_meta["multi_block_proj_S"],
-            multi_block_S_local=block_meta["multi_block_S_local"],
-            repara_D=repara_D_jax,
+            n_coef=setup.X.shape[1],
+            penalty_ranks=ranks,
+            penalty_null_dims=null_dims,
+            total_penalty_rank=_total_penalty_rank(transformed),
+            singleton_sp_indices=metadata["singleton_sp_indices"],
+            singleton_ranks=metadata["singleton_ranks"],
+            singleton_eig_constants=metadata["singleton_eig_constants"],
+            multi_block_sp_indices=metadata["multi_block_sp_indices"],
+            multi_block_ranks=metadata["multi_block_ranks"],
+            multi_block_proj_S=metadata["multi_block_proj_S"],
+            multi_block_S_local=metadata["multi_block_S_local"],
             max_y=max_y,
-            rank_deficit=rank_deficit,
+            count_prefix_plan=count_prefix_plan,
+            rank_deficit=cls._unpenalized_rank_deficit(transformed, X_np),
+            beta_init=beta_init,
+            penalty_roots=_structural_penalty_roots(
+                transformed, X_np, np.asarray(setup.weights, dtype=np.float64), device
+            ),
+            null_beta=_null_beta(X_np, setup.y, family, device),
         )
 
     @staticmethod
     def _initial_sp(
-        X: np.ndarray,
-        S_list: list[np.ndarray],
-        weights: np.ndarray,
+        X: np.ndarray, structure: PenaltyStructure, weights: np.ndarray
     ) -> np.ndarray:
-        """Initial log smoothing parameters via R's ``initial.sp`` (mgcv.r:4626).
-
-        Balances diag(X'WX) against each penalty diagonal so that the
-        effective degrees of freedom are ~40% of the unpenalized model.
-        Must use the original (pre-reparameterization) X and S.
-        """
-        n_penalties = len(S_list)
-        if n_penalties == 0:
+        """R ``initial.sp`` scaling, retaining its old global-padding cutoff."""
+        if structure.n_penalties == 0:
             return np.zeros(0)
-
-        w = np.sqrt(np.maximum(weights, 0.0))
-        wX = w[:, None] * X
-
-        ldxx = np.sum(wX * wX, axis=0)
-        def_sp = np.zeros(n_penalties)
-        ldss = np.zeros_like(ldxx)
-        pen = np.zeros(len(ldxx), dtype=bool)
-
-        for i, S in enumerate(S_list):
-            maS = np.max(np.abs(S))
-            if maS == 0:
-                continue
-            rsS = np.mean(np.abs(S), axis=1)
-            csS = np.mean(np.abs(S), axis=0)
-            dS = np.abs(np.diag(S))
-            thresh = _ACTIVITY_THRESH * maS
-            ind = (rsS > thresh) & (csS > thresh) & (dS > thresh)
-
-            ss = np.diag(S)[ind]
-            xx = ldxx[ind]
-            sizeXX = np.mean(xx) if len(xx) > 0 else 0.0
-            sizeS = np.mean(ss) if len(ss) > 0 else 0.0
-
-            if sizeS <= 0 or sizeXX <= 0:
-                continue
-
-            def_sp[i] = sizeXX / sizeS
-            pen |= ind
-            ldss += def_sp[i] * np.diag(S)
-
-        idx = (ldss > 0) & pen & (ldxx > 0)
-        if not np.any(idx):
-            return np.zeros(n_penalties)
-
-        ldxx_s = ldxx[idx].copy()
-        ldss_s = ldss[idx].copy()
-
-        for _ in range(_MAX_SP_ADJUST_ITERS):
-            if np.mean(ldxx_s / (ldxx_s + ldss_s)) <= 0.4:
-                break
-            def_sp *= 10
-            ldss_s *= 10
-        for _ in range(_MAX_SP_ADJUST_ITERS):
-            if np.mean(ldxx_s / (ldxx_s + ldss_s)) >= 0.4:
-                break
-            def_sp /= 10
-            ldss_s /= 10
-
-        def_sp = np.maximum(def_sp, np.finfo(float).tiny)
-        return np.log(def_sp)
+        ldxx = FittingData._weighted_crossproduct_diag(X, weights)
+        return initial_log_sp_from_diagonal(ldxx, structure)
 
     @staticmethod
-    def _unpenalized_rank_deficit(
-        penalty_arrays: list[np.ndarray],
-        X_np: np.ndarray,
-        n_coef: int,
-    ) -> int:
-        """Number of unidentifiable UNPENALIZED directions in the design.
-
-        Computes ``dim(null(X) ∩ null(S_total))`` — the rank deficiency of the
-        penalized Hessian ``XtWX + S_lambda`` that the penalty cannot regularize
-        away (e.g. a parametric term confounded with a smooth's unpenalized
-        null space, ``y ~ x + s(x)``). Penalized rank deficiencies (e.g. random
-        effects whose group dummies sum to the intercept) are NOT counted,
-        because the ridge penalty makes those directions identifiable in ``H``.
-        """
-        if n_coef == 0:
-            return 0
-        if not penalty_arrays:
-            # No penalty: the entire null space of X is unpenalized.
-            return int(n_coef - np.linalg.matrix_rank(X_np))
-        St = np.zeros((n_coef, n_coef))
-        for S_np in penalty_arrays:
-            norm_j = np.sqrt(np.sum(S_np * S_np))
-            if norm_j > 0:
-                St += S_np / norm_j
-        eigs, vecs = np.linalg.eigh(St)
-        threshold = np.max(eigs) * _EPS_TWO_THIRDS
-        Mp = int(np.sum(eigs <= threshold))
-        if Mp == 0:
-            return 0
-        # Project X onto null(S_total) (the unpenalized directions); any rank
-        # deficiency there cannot be regularized by the penalty.
-        N = vecs[:, :Mp]
-        rank_unpen = int(np.linalg.matrix_rank(X_np @ N))
-        return Mp - rank_unpen
+    def _initial_sp_from_crossproduct_diag(
+        X: np.ndarray, structure: PenaltyStructure, ldxx: np.ndarray
+    ) -> np.ndarray:
+        """Preserve the EFS adapter through shared CPU initial-sp balancing."""
+        if ldxx.shape != (X.shape[1],):
+            raise ValueError("Initial-sp diagonal must match the design columns")
+        return initial_log_sp_from_diagonal(ldxx, structure)
 
     @staticmethod
-    def _penalty_range_basis(
-        penalty_arrays: list[np.ndarray],
-        n_coef: int,
-        device: jax.Device | None,
-    ) -> jax.Array | None:
-        """Orthogonal basis for the range space of the total penalty.
+    def _weighted_crossproduct_diag(X: np.ndarray, weights: np.ndarray) -> np.ndarray:
+        """Compute diag(X' diag(weights) X) in bounded row batches."""
+        diagonal = np.zeros(X.shape[1], dtype=np.float64)
+        for start in range(0, X.shape[0], _INITIAL_SP_BATCH_ROWS):
+            stop = min(start + _INITIAL_SP_BATCH_ROWS, X.shape[0])
+            weighted = np.sqrt(weights[start:stop])[:, None] * X[start:stop]
+            diagonal += np.sum(weighted * weighted, axis=0)
+        return diagonal
 
-        Eigendecomposes the normalized total penalty (R's totalPenaltySpace)
-        and returns eigenvectors for non-zero eigenvalues. Used for
-        stable ``log|S+|`` computation via range-space projection.
-        """
-        if not penalty_arrays:
-            return None
+    @staticmethod
+    def _unpenalized_rank_deficit(structure: PenaltyStructure, X: np.ndarray) -> int:
+        null_bases, _ = _total_penalty_spaces(structure)
+        if not structure.blocks:
+            return int(X.shape[1] - np.linalg.matrix_rank(X))
+        nonempty = [(block, basis) for block, basis in null_bases if basis.shape[1]]
+        covered = np.zeros(X.shape[1], dtype=bool)
+        for block in structure.blocks:
+            covered[block.start : block.stop] = True
+        unpenalized = X[:, ~covered]
+        if not nonempty:
+            design_null = unpenalized
+        else:
+            design_null = np.column_stack(
+                [
+                    unpenalized,
+                    *(
+                        X[:, block.start : block.stop] @ basis
+                        for block, basis in nonempty
+                    ),
+                ]
+            )
+        if design_null.shape[1] == 0:
+            return 0
+        return design_null.shape[1] - int(np.linalg.matrix_rank(design_null))
 
-        St = np.zeros((n_coef, n_coef))
-        for S_np in penalty_arrays:
-            norm_j = np.sqrt(np.sum(S_np * S_np))
-            if norm_j > 0:
-                St += S_np / norm_j
-        eigs, vecs = np.linalg.eigh(St)
-        threshold = np.max(eigs) * _EPS_TWO_THIRDS
-        Mp = int(np.sum(eigs <= threshold))
-        U_range = vecs[:, Mp:]
-        return to_jax(U_range, device=device)
 
-    def S_lambda(self, log_lambda: jax.Array) -> jax.Array:
-        """Compute S_lambda = sum_j exp(log_lambda[j]) * S_j.
+def _null_beta(
+    X: np.ndarray, y: np.ndarray, family: ExponentialFamily, device
+) -> jax.Array | None:
+    """R's ``null.coef`` anchor, or None when the link mean is not finite."""
+    try:
+        return to_jax(r_null_coefficients(X, y, family), device=device)
+    except ValueError:
+        return None
 
-        JAX-traceable: REML differentiates through this via ``jax.grad``.
 
-        Parameters
-        ----------
-        log_lambda : jax.Array, shape (n_penalties,)
-            Log smoothing parameters.
+def _structural_penalty_roots(
+    structure: PenaltyStructure,
+    X: np.ndarray,
+    weights: np.ndarray,
+    device: jax.Device | None,
+) -> penalty_ops.JaxPenaltyRoots | None:
+    """Device roots for the QR inner solve when the system is full rank.
 
-        Returns
-        -------
-        jax.Array, shape (n_coef, n_coef)
-            Combined weighted penalty matrix.
-        """
-        if self.n_penalties == 0:
-            return jnp.zeros((self.n_coef, self.n_coef))
+    ``pls_fit1`` decides identifiability once on the lambda-free system
+    ``[R1/|R1|; Es/|Es|]`` (gdi.c, ``R_cond`` with ``rank.tol = 100 eps``),
+    with ``R1`` the factor of the prior-weighted design.  A structurally
+    deficient system would have its unidentifiable columns dropped by
+    ``pls_fit1``; that drop is not ported, so such models keep the Cholesky
+    solve and its explicit fallback diagnostic.
+    """
+    if not structure.blocks or structure.n_penalties == 0:
+        return None
+    # Imported here: jaxgam.execution imports streamed routes that import
+    # this module.
+    from jaxgam.execution.qr import structural_rank
 
-        return build_S_lambda(log_lambda, self.S_list, self.n_coef)
+    roots = qr_penalty_roots(structure)
+    weighted = np.sqrt(np.maximum(weights, 0.0))[:, None] * X
+    data_R = np.linalg.qr(weighted, mode="r")
+    local = [(slice(root.start, root.stop), root.root) for root in roots]
+    if structural_rank(data_R, local, X.shape[1]) < X.shape[1]:
+        return None
+    return penalty_ops.JaxPenaltyRoots(
+        n_coef=X.shape[1],
+        starts=tuple(root.start for root in roots),
+        stops=tuple(root.stop for root in roots),
+        sp_indices=tuple(root.sp_index for root in roots),
+        roots=tuple(to_jax(root.root, device=device) for root in roots),
+    )
+
+
+def _to_jax_penalty(
+    penalty: object, device: jax.Device | None
+) -> penalty_ops.JaxLocalPenalty:
+    if isinstance(penalty, DenseLocalPenalty):
+        return penalty_ops.JaxLocalPenalty(
+            "dense", to_jax(penalty.matrix, device=device), penalty.size
+        )
+    if isinstance(penalty, DiagonalPenalty):
+        return penalty_ops.JaxLocalPenalty(
+            "diagonal", to_jax(penalty.diagonal, device=device), penalty.size
+        )
+    assert isinstance(penalty, IdentityPenalty)
+    return penalty_ops.JaxLocalPenalty(
+        "identity", to_jax(np.asarray(penalty.scale), device=device), penalty.size
+    )
+
+
+def _to_jax_transform(
+    transform: object, device: jax.Device | None
+) -> penalty_ops.JaxTransform:
+    if isinstance(transform, DenseTransform):
+        return penalty_ops.JaxTransform(
+            "dense", to_jax(transform.matrix, device=device), transform.size
+        )
+    if isinstance(transform, DiagonalTransform):
+        return penalty_ops.JaxTransform(
+            "diagonal", to_jax(transform.diagonal, device=device), transform.size
+        )
+    assert isinstance(transform, IdentityTransform)
+    return penalty_ops.JaxTransform(
+        "identity", to_jax(np.asarray(1.0), device=device), transform.size
+    )
+
+
+def _to_jax_structure(
+    structure: PenaltyStructure, device: jax.Device | None
+) -> penalty_ops.JaxPenaltyStructure:
+    return penalty_ops.JaxPenaltyStructure(
+        structure.n_coef,
+        tuple(
+            penalty_ops.JaxPenaltyBlock(
+                block.start,
+                block.stop,
+                block.sp_indices,
+                tuple(_to_jax_penalty(p, device) for p in block.local_penalties),
+                _to_jax_transform(block.transform, device),
+            )
+            for block in structure.blocks
+        ),
+    )
+
+
+def _penalties_non_overlapping(penalties: list[np.ndarray]) -> bool:
+    intervals: list[tuple[int, int]] = []
+    for penalty in penalties:
+        support = np.flatnonzero(np.sum(np.abs(penalty), axis=1) > 0)
+        if len(support):
+            intervals.append((int(support[0]), int(support[-1]) + 1))
+    intervals.sort()
+    return all(right[0] >= left[1] for left, right in pairwise(intervals))
+
+
+def _total_penalty_spaces(
+    structure: PenaltyStructure,
+) -> tuple[
+    list[tuple[PenaltyBlock, np.ndarray]], list[tuple[PenaltyBlock, np.ndarray]]
+]:
+    """Compatibility wrapper for the shared CPU penalty-space routine."""
+    return total_penalty_spaces(structure)
+
+
+def _total_penalty_rank(structure: PenaltyStructure) -> int:
+    return sum(basis.shape[1] for _, basis in _total_penalty_spaces(structure)[1])
 
 
 def _build_block_metadata(
-    penalty_arrays: list[np.ndarray],
-    smooth_blocks: list[TermBlock] | None,
-    device: jax.Device | None,
+    structure: PenaltyStructure, device: jax.Device | None
 ) -> dict[str, Any]:
-    """Classify penalties into singleton and multi-penalty blocks.
-
-    Penalties from different smooths occupy non-overlapping columns, so
-    ``S_lambda`` is block-diagonal and ``log|S+| = sum(log|S+_block|)``.
-
-    Singletons (one penalty per smooth) get an exact analytical
-    derivative: ``log|S+| = rank * rho + const``.  Multi-penalty blocks
-    (tensor products with overlapping penalties) use a scaled slogdet in
-    the range space.  Factor-by smooths (non-overlapping multi-penalty)
-    are split into independent singletons.
-
-    Parameters
-    ----------
-    penalty_arrays : list[np.ndarray]
-        Per-penalty (p, p) matrices (NumPy, not yet on device).
-    smooth_blocks : list[TermBlock] or None
-        Per-smooth coefficient blocks (column range + penalty indices); one per
-        smooth (factor-by stays aggregated here).
-    device : jax.Device or None
-        Target JAX device for array transfer.
-
-    Returns
-    -------
-    dict[str, Any]
-        Block metadata with keys:
-
-        - ``singleton_sp_indices``: index into log_lambda per singleton
-        - ``singleton_ranks``: rank of each singleton's penalty
-        - ``singleton_eig_constants``: precomputed log-eigenvalue sums
-        - ``multi_block_sp_indices``: log_lambda indices per block
-        - ``multi_block_ranks``: combined penalty rank per block
-        - ``multi_block_proj_S``: range-space-projected penalties
-        - ``multi_block_S_local``: block-local unprojected penalties
-    """
     singletons: list[tuple[int, int, float]] = []
-    multi_blocks: list[tuple[tuple[int, ...], int, list, list]] = []
-
-    if penalty_arrays and smooth_blocks:
-        for t in smooth_blocks:
-            if not t.penalty_indices:
-                continue
-            col_start = t.col_start
-            col_stop = t.col_start + t.n_coefs
-            sp_indices = tuple(t.penalty_indices)
-
-            if len(sp_indices) == 1:
-                sp_idx = sp_indices[0]
-                S_local = penalty_arrays[sp_idx][col_start:col_stop, col_start:col_stop]
-                eig_vals = np.linalg.eigvalsh(S_local)
-                thresh = np.max(np.abs(eig_vals)) * _EPS_TWO_THIRDS
-                nonzero = eig_vals > thresh
-                rank = int(np.sum(nonzero))
-                eig_const = float(
-                    np.sum(np.log(np.maximum(eig_vals[nonzero], _LOG_FLOOR)))
+    multis: list[tuple[tuple[int, ...], int, list[np.ndarray], list[np.ndarray]]] = []
+    for block in structure.blocks:
+        penalties = list(block.dense_penalties())
+        if len(penalties) == 1:
+            _append_singleton(singletons, block.sp_indices[0], penalties[0])
+        elif _penalties_non_overlapping(penalties):
+            for sp, S in zip(block.sp_indices, penalties, strict=True):
+                _append_singleton(singletons, sp, S)
+        else:
+            # A structurally present zero penalty still owns an sp index, but
+            # it contributes neither a range direction nor a determinant
+            # factor.  mgcv's norm-based combined range construction likewise
+            # cannot normalize a zero matrix.
+            rank, U = multi_block_eigenbasis(penalties, block.size)
+            range_basis = U[:, -rank:] if rank else U[:, :0]
+            multis.append(
+                (
+                    block.sp_indices,
+                    rank,
+                    [range_basis.T @ S @ range_basis for S in penalties],
+                    penalties,
                 )
-                singletons.append((sp_idx, rank, eig_const))
-            else:
-                S_locals = [
-                    penalty_arrays[j][col_start:col_stop, col_start:col_stop]
-                    for j in sp_indices
-                ]
-                non_overlapping = _penalties_non_overlapping(S_locals)
-
-                if non_overlapping:
-                    for idx, sp_idx in enumerate(sp_indices):
-                        eig_vals = np.linalg.eigvalsh(S_locals[idx])
-                        thresh = np.max(np.abs(eig_vals)) * _EPS_TWO_THIRDS
-                        nonzero = eig_vals > thresh
-                        rank = int(np.sum(nonzero))
-                        eig_const = float(
-                            np.sum(np.log(np.maximum(eig_vals[nonzero], _LOG_FLOOR)))
-                        )
-                        singletons.append((sp_idx, rank, eig_const))
-                else:
-                    St_local = np.zeros_like(S_locals[0])
-                    for S in S_locals:
-                        norm = np.linalg.norm(S, "fro")
-                        if norm > 0:
-                            St_local += S / norm
-                    eig_vals, vecs = np.linalg.eigh(St_local)
-                    thresh = np.max(eig_vals) * _EPS_TWO_THIRDS
-                    rank = int(np.sum(eig_vals > thresh))
-                    U_local = vecs[:, -rank:]
-                    S_projs = [U_local.T @ S @ U_local for S in S_locals]
-                    multi_blocks.append((sp_indices, rank, S_projs, S_locals))
-
-    eig_consts_np = np.array([s[2] for s in singletons]) if singletons else np.array([])
+            )
     return {
-        "singleton_sp_indices": tuple(s[0] for s in singletons),
-        "singleton_ranks": tuple(s[1] for s in singletons),
-        "singleton_eig_constants": to_jax(eig_consts_np, device=device),
-        "multi_block_sp_indices": tuple(mb[0] for mb in multi_blocks),
-        "multi_block_ranks": tuple(mb[1] for mb in multi_blocks),
+        "singleton_sp_indices": tuple(x[0] for x in singletons),
+        "singleton_ranks": tuple(x[1] for x in singletons),
+        "singleton_eig_constants": to_jax(
+            np.asarray([x[2] for x in singletons]), device=device
+        ),
+        "multi_block_sp_indices": tuple(x[0] for x in multis),
+        "multi_block_ranks": tuple(x[1] for x in multis),
         "multi_block_proj_S": tuple(
-            tuple(to_jax(S, device=device) for S in mb[2]) for mb in multi_blocks
+            tuple(to_jax(S, device=device) for S in x[2]) for x in multis
         ),
         "multi_block_S_local": tuple(
-            tuple(to_jax(S, device=device) for S in mb[3]) for mb in multi_blocks
+            tuple(to_jax(S, device=device) for S in x[3]) for x in multis
         ),
     }
 
 
-def _penalties_non_overlapping(S_locals: list[np.ndarray]) -> bool:
-    """Check if multi-penalty matrices have non-overlapping supports.
+def multi_block_eigenbasis(
+    penalties: list[np.ndarray], size: int
+) -> tuple[int, np.ndarray]:
+    """Rank and eigenvectors of a multi-penalty block's norm-scaled total.
 
-    Two penalties have non-overlapping supports if there is no position
-    where both have nonzero entries (i.e. their element-wise product
-    is zero everywhere). This is the case for factor-by smooths where
-    each level's penalty occupies a different sub-block.
+    ``U[:, -rank:]`` spans the total penalty's range (the coordinates of
+    ``multi_block_proj_S``) and ``U[:, :-rank]`` its null space, mgcv's
+    ``totalPenaltySpace`` split.
     """
-    for j in range(len(S_locals)):
-        for k in range(j + 1, len(S_locals)):
-            if np.any(np.abs(S_locals[j]) * np.abs(S_locals[k]) > 0):
-                return False
-    return True
+    normalized = [S / norm for S in penalties if (norm := np.linalg.norm(S, "fro")) > 0]
+    total = np.add.reduce(normalized) if normalized else np.zeros((size, size))
+    eigs, U = np.linalg.eigh(total)
+    rank = int(np.sum(eigs > np.max(eigs) * _EPS_TWO_THIRDS))
+    return rank, U
 
 
-def _compute_repara_D(
-    penalty_arrays: list[np.ndarray],
-    smooth_blocks: list[TermBlock],
-    n_coef: int,
-) -> np.ndarray | None:
-    """Compute Sl.setup reparameterization matrix.
-
-    Builds a block-diagonal ``D_global`` so that in the reparameterized
-    coordinate system, singleton penalties become partial identities
-    (``D^T S D = I_r``) and tensor product penalties are rotated into
-    the eigenspace of their total penalty.
-
-    Parameters
-    ----------
-    penalty_arrays : list[np.ndarray]
-        Per-penalty (p, p) matrices (NumPy, not yet on device).
-    smooth_blocks : list[TermBlock]
-        Per-smooth coefficient blocks (one per smooth, with column range and
-        penalty indices). Used instead of ``smooth_info`` because the latter is
-        per-level for factor-by smooths, which must not change the fit.
-    n_coef : int
-        Total number of coefficients.
-
-    Returns
-    -------
-    np.ndarray or None
-        (p, p) reparameterization matrix, or None if no transform needed.
-    """
-    D_global = np.eye(n_coef)
-    modified = False
-
-    for t in smooth_blocks:
-        if not t.penalty_indices:
-            continue
-
-        col_start = t.col_start
-        col_stop = t.col_start + t.n_coefs
-        block_size = col_stop - col_start
-        sp_indices = list(t.penalty_indices)
-
-        if len(sp_indices) == 1:
-            # Singleton: eigendecompose and scale so D^T S D = I_r
-            sp_idx = sp_indices[0]
-            S_local = penalty_arrays[sp_idx][col_start:col_stop, col_start:col_stop]
-            eigs, U = np.linalg.eigh(S_local)
-            threshold = max(eigs.max(), 0) * _EPS_TWO_THIRDS
-            D_diag = np.ones(block_size)
-            mask = eigs > threshold
-            D_diag[mask] = 1.0 / np.sqrt(eigs[mask])
-            D_block = U * D_diag  # U @ diag(D_diag)
-            D_global[col_start:col_stop, col_start:col_stop] = D_block
-            modified = True
-        else:
-            # Multi-penalty: check overlapping vs non-overlapping
-            S_locals = [
-                penalty_arrays[j][col_start:col_stop, col_start:col_stop]
-                for j in sp_indices
-            ]
-
-            if _penalties_non_overlapping(S_locals):
-                # Factor-by: apply singleton treatment per sub-block
-                D_block = np.eye(block_size)
-                for S_local in S_locals:
-                    row_sums = np.sum(np.abs(S_local), axis=1)
-                    nonzero_rows = np.where(row_sums > 0)[0]
-                    if len(nonzero_rows) == 0:
-                        continue
-                    sub_start = int(nonzero_rows[0])
-                    sub_stop = int(nonzero_rows[-1]) + 1
-                    S_sub = S_local[sub_start:sub_stop, sub_start:sub_stop]
-                    sub_k = sub_stop - sub_start
-
-                    eigs, U = np.linalg.eigh(S_sub)
-                    threshold = max(eigs.max(), 0) * _EPS_TWO_THIRDS
-                    D_diag = np.ones(sub_k)
-                    mask = eigs > threshold
-                    D_diag[mask] = 1.0 / np.sqrt(eigs[mask])
-                    D_block[sub_start:sub_stop, sub_start:sub_stop] = U * D_diag
-
-                D_global[col_start:col_stop, col_start:col_stop] = D_block
-                modified = True
-            else:
-                # Tensor product: rotate into eigenspace of total penalty
-                St = functools.reduce(np.add, S_locals)
-                _eigs, U = np.linalg.eigh(St)
-                D_global[col_start:col_stop, col_start:col_stop] = U
-                modified = True
-
-    return D_global if modified else None
+def _append_singleton(
+    target: list[tuple[int, int, float]], sp: int, S: np.ndarray
+) -> None:
+    if S.size == 0:
+        target.append((sp, 0, 0.0))
+        return
+    eigs = np.linalg.eigvalsh(S)
+    active = eigs > np.max(np.abs(eigs)) * _EPS_TWO_THIRDS
+    target.append(
+        (
+            sp,
+            int(np.sum(active)),
+            float(np.sum(np.log(np.maximum(eigs[active], _LOG_FLOOR)))),
+        )
+    )

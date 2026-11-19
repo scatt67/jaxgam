@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import tempfile
+from decimal import Decimal, localcontext
 
 import jax
 import jax.numpy as jnp
@@ -322,6 +323,78 @@ class TestDevianceResidsVsR:
             err_msg="Gamma deviance residuals^2 vs R dev.resids",
         )
 
+    def test_gamma_direct_deviance_near_mean_is_stable_and_jitted(self) -> None:
+        """Small source Gamma deviances remain positive across JIT and NumPy."""
+        family = Gamma()
+        mu = np.array([0.123456789, 0.764321, 1.23456789, 0.53, 0.71])
+        y = mu * np.array([1.0 + 1e-8, 1.0 - 1e-8, 1.0 + 1e-7, 1.001, 1.01])
+        weight = np.array([0.6, 1.2, 0.9, 1.1, 0.8])
+        with localcontext() as context:
+            context.prec = 80
+            expected = []
+            for response, mean, prior in zip(y, mu, weight, strict=True):
+                ratio = Decimal.from_float(float(response)) / Decimal.from_float(
+                    float(mean)
+                )
+                expected.append(
+                    float(
+                        2 * Decimal.from_float(float(prior)) * (ratio - 1 - ratio.ln())
+                    )
+                )
+        actual = family.deviance_contributions(y, mu, weight)
+        compiled = jax.jit(family.deviance_contributions)(
+            jnp.asarray(y), jnp.asarray(mu), jnp.asarray(weight)
+        )
+        # log1p and the final subtraction each round at the scale of r, not
+        # r^2. Budget 16 epsilon*w*|r| across residual formation, the log,
+        # subtraction and multiplication against the Decimal oracle. This
+        # tests roundoff at the cancellation scale without a field tolerance.
+        residual = (y - mu) / mu
+        roundoff_bound = 16.0 * np.finfo(float).eps * weight * np.abs(residual)
+        assert np.all(np.abs(np.asarray(actual) - expected) <= roundoff_bound)
+        assert np.all(np.abs(np.asarray(compiled) - expected) <= roundoff_bound)
+        assert np.all(np.asarray(compiled) > 0.0)
+
+    def test_gamma_direct_deviance_keeps_extreme_source_ratio_and_clamp(self) -> None:
+        """Far-from-mean rows never feed a rounded -1 into log1p's AD path."""
+        family = Gamma()
+        mu = np.array([1e20, 1e-10, 0.1])
+        y = np.array([1e-8, 1e-12, 0.9])
+        weight = np.array([0.6, 1.2, 0.9])
+        mu_safe = np.maximum(mu, 1e-10)
+        y_safe = np.maximum(y, 1e-10)
+        source = 2.0 * weight * (-np.log(y_safe / mu_safe) + (y - mu_safe) / mu_safe)
+        compiled = jax.jit(family.deviance_derivative_contributions)(
+            jnp.asarray(y), jnp.asarray(mu), jnp.asarray(weight)
+        )
+        np.testing.assert_allclose(
+            family.deviance_derivative_contributions(y, mu, weight),
+            source,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(compiled, source, rtol=STRICT.rtol, atol=STRICT.atol)
+        np.testing.assert_allclose(
+            family.deviance_contributions(y, mu, weight),
+            np.maximum(source, 0.0),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        far_gradient = jax.jit(
+            jax.grad(
+                lambda mean: family.deviance_derivative_contributions(
+                    jnp.asarray(y[0]), mean, jnp.asarray(weight[0])
+                )
+            )
+        )(jnp.asarray(mu[0]))
+        assert np.isfinite(np.asarray(far_gradient))
+        np.testing.assert_allclose(
+            far_gradient,
+            2.0 * weight[0] * (mu[0] - y[0]) / mu[0] ** 2,
+            rtol=STRICT.rtol,
+            atol=0.0,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Test 3: Working weights
@@ -404,6 +477,105 @@ class TestSaturatedAndAicVsRFormula:
     These reproduce R's ``family$ls`` / ``family$aic`` arithmetic in Python at
     STRICT tolerance — closed-form and deterministic, so they cannot go stale.
     """
+
+    def test_gamma_large_shape_saturated_likelihood_is_stable_and_jitted(
+        self,
+    ) -> None:
+        """The R Gamma shape term remains smooth across a tiny scale step."""
+        from scipy.special import digamma, gammaln
+
+        shape = np.array([31.0, 32.0, 48.0, 200.0, 350.0])
+        phi = 0.005
+        weight = jnp.asarray(shape * phi)
+        y = jnp.asarray([0.7, 0.9, 1.1, 1.3, 1.5])
+        family = Gamma()
+
+        @jax.jit
+        def score(log_phi):
+            return family.saturated_loglik(y, weight, jnp.exp(log_phi))
+
+        log_phi = jnp.log(phi)
+        actual = float(score(log_phi))
+        reference = float(
+            np.sum(-gammaln(shape) + shape * np.log(shape) - shape - np.log(y))
+        )
+        np.testing.assert_allclose(
+            actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        derivative = float(jax.jit(jax.grad(score))(log_phi))
+        expected_derivative = float(np.sum(shape * (digamma(shape) - np.log(shape))))
+        np.testing.assert_allclose(
+            derivative, expected_derivative, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        step = 1e-8
+        observed_change = float(score(log_phi + step) - score(log_phi))
+        # The linear prediction omits a second-order term proportional to
+        # step**2; this is a finite-step remainder check, not an R oracle.
+        np.testing.assert_allclose(
+            observed_change,
+            derivative * step,
+            rtol=1e-7,
+            atol=2e-13,
+        )
+
+    @pytest.mark.usefixtures("r_bridge")
+    @pytest.mark.parametrize("weight", [31.999999999, 32.0, 32.000000001])
+    def test_gamma_stirling_boundary_derivatives_match_pinned_r(
+        self, r_bridge, weight: float
+    ) -> None:
+        """The selected JIT branch has mgcv's first and second derivative."""
+        family = Gamma()
+        y = jnp.asarray([1.0])
+        weights = jnp.asarray([weight])
+
+        @jax.jit
+        def saturated(log_phi):
+            return family.saturated_loglik(y, weights, jnp.exp(log_phi))
+
+        log_phi = jnp.asarray(0.0)
+        actual = np.asarray(
+            [
+                saturated(log_phi),
+                jax.jit(jax.grad(saturated))(log_phi),
+                jax.jit(jax.hessian(saturated))(log_phi),
+            ]
+        )
+        source = r_bridge.source_gamma_saturated_likelihood(
+            np.asarray(y), np.asarray(weights), 1.0
+        )
+        expected = np.asarray([source[0], source[1], source[1] + source[2]])
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=STRICT.atol)
+
+    def test_gamma_stirling_inactive_branches_are_finite_at_large_shape(
+        self,
+    ) -> None:
+        """A masked zero weight and huge shape cannot poison JIT derivatives."""
+        family = Gamma()
+        y = jnp.asarray([1.0, 1.0])
+        weights = jnp.asarray([0.0, 1e12])
+
+        @jax.jit
+        def saturated(log_phi):
+            return family.saturated_loglik(y, weights, jnp.exp(log_phi))
+
+        log_phi = jnp.asarray(0.0)
+        actual = np.asarray(
+            [
+                saturated(log_phi),
+                jax.jit(jax.grad(saturated))(log_phi),
+                jax.jit(jax.hessian(saturated))(log_phi),
+            ]
+        )
+        assert np.all(np.isfinite(actual))
+        np.testing.assert_allclose(
+            actual[0],
+            0.5 * np.log(1e12 / (2.0 * np.pi)),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            actual[1:], [-0.5, 0.0], rtol=STRICT.rtol, atol=STRICT.atol
+        )
 
     def test_binomial_saturated_loglik_includes_lchoose(self) -> None:
         """Binomial ls adds lchoose(m, m*y); 0 for Bernoulli, nonzero grouped."""

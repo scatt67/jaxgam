@@ -29,6 +29,7 @@ R source reference: efam.r lines 161-310 (nb() extended family)
 from __future__ import annotations
 
 import functools
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -36,12 +37,43 @@ import jax.scipy.special as jsp
 import numpy as np
 from scipy.special import gammaln
 
-from jaxgam.families.base import NON_NEGATIVE
+from jaxgam.families.base import (
+    NON_NEGATIVE,
+    FamilyExecutionCapabilities,
+    FamilyParameterSnapshot,
+)
 from jaxgam.families.extended import ExtendedFamily
 from jaxgam.jax_utils import array_module
-from jaxgam.links.links import Link, LogLink
+from jaxgam.links.links import IdentityLink, Link, LogLink, SqrtLink
 
 _MU_EPS = 1e-10
+
+# A table is one float64 value per possible count plus its zero prefix.  This
+# deliberately bounds the extra workspace owned by the fast derivative path;
+# larger tables use the mgcv-style polygamma difference where it is well
+# conditioned.  The recurrence remains available to callers that need a
+# different large-count policy.
+# XLA's differentiated prefix kernel needs about 3.14x the raw table in the
+# current CPU backend (26,284,424 bytes for a 1,048,576-entry table). Keep a
+# 4x safety margin and budget the compiled derivative, not merely the table.
+_PREFIX_WORKSPACE_BYTES = 8 << 20
+_PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER = 4
+# Returning the primal with its JVP/Hessian keeps scalars and aligned buffers
+# live alongside the differentiated prefix. The current CPU executable needs
+# 504 bytes beyond the 4x table estimate at the boundary; reserve 512.
+_PREFIX_COMPILED_FIXED_BYTES = 512
+_VECTOR_DIFF_MAX_THETA_TO_COUNT = 1e6
+_FRACTIONAL_ASYMPTOTIC_THETA = 1e6
+_FRACTIONAL_ASYMPTOTIC_THETA_TO_RESPONSE = 1e4
+
+
+class NBDevianceDerivatives(NamedTuple):
+    """``nb()$Dd`` rows: d/dmu, d2/dmu2, d/dtheta and d2/dtheta2 of the deviance."""
+
+    mu: np.ndarray
+    mu2: np.ndarray
+    theta: np.ndarray
+    theta2: np.ndarray
 
 
 class NegativeBinomial(ExtendedFamily):
@@ -119,6 +151,36 @@ class NegativeBinomial(ExtendedFamily):
             return np.exp(self._log_theta)
         return self._log_theta.copy()
 
+    def execution_capabilities(self) -> FamilyExecutionCapabilities:
+        """Describe NB's explicit-theta, observed-information primitives.
+
+        Pinned ``nb()`` accepts the log, identity and sqrt links; each runs the
+        discrete extended-family performance iteration.
+        """
+        return FamilyExecutionCapabilities(
+            row_separable=True,
+            fisher_working_system=True,
+            observed_information=True,
+            direct_deviance=True,
+            differentiable_deviance=True,
+            saturated_loglikelihood=True,
+            dynamic_theta=self.n_theta > 0,
+            dynamic_phi=False,
+            coefficient_system="observed",
+            fisher_equals_observed_for_score=False,
+            extended_performance_iteration=isinstance(
+                self.link, (LogLink, IdentityLink, SqrtLink)
+            ),
+        )
+
+    def execution_parameter_snapshot(self) -> FamilyParameterSnapshot:
+        """Freeze theta mode/value so launches cannot observe later mutation."""
+        return FamilyParameterSnapshot(
+            theta_mode="estimated" if self.n_theta > 0 else "fixed",
+            log_theta=tuple(float(value) for value in self._log_theta),
+            phi_mode="known",
+        )
+
     def put_theta(self, log_theta: np.ndarray) -> None:
         """Set log(theta) vector. Called by Newton after each accepted step."""
         self._log_theta = np.asarray(log_theta, dtype=np.float64).reshape(
@@ -147,6 +209,8 @@ class NegativeBinomial(ExtendedFamily):
         scale: float,  # noqa: ARG002
         *,
         max_y: int = 0,
+        count_indices=None,
+        integer_counts: bool | None = None,
     ) -> float:
         """Saturated log-likelihood (R's family$ls).  Phase 2 only (JAX).
 
@@ -158,7 +222,7 @@ class NegativeBinomial(ExtendedFamily):
           custom_jvp for stable first and second derivatives via AD
         """
         theta = jnp.exp(self._log_theta[0])
-        return _saturated_loglik_jax(y, wt, theta, max_y)
+        return _saturated_loglik_jax(y, wt, theta, max_y, count_indices, integer_counts)
 
     def deviance_resids(
         self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
@@ -187,6 +251,22 @@ class NegativeBinomial(ExtendedFamily):
         )
         d = xp.maximum(d, 0.0)
         return xp.sign(y - mu_safe) * xp.sqrt(d)
+
+    def deviance_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Direct NB deviance at the stored theta for non-JIT callers."""
+        return self.deviance_contributions_for_parameters(
+            y, mu, wt, jnp.asarray(self._log_theta)
+        )
+
+    def deviance_derivative_contributions(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray
+    ) -> np.ndarray:
+        """Smooth NB deviance at stored theta for observed-information AD."""
+        return self.deviance_derivative_contributions_for_parameters(
+            y, mu, wt, jnp.asarray(self._log_theta)
+        )
 
     def aic(
         self,
@@ -229,9 +309,8 @@ class NegativeBinomial(ExtendedFamily):
         return mu > 0
 
     def valid_eta(self, eta: np.ndarray) -> np.ndarray:
-        """All finite eta are valid for NB."""
-        xp = array_module(eta)
-        return xp.isfinite(eta)
+        """R ``nb()$valideta`` is its link's ``make.link`` domain (efam.r)."""
+        return self.link.valid_eta(eta)
 
     # ------------------------------------------------------------------
     # Pure-function factories (explicit theta for AD in custom_jvp)
@@ -245,6 +324,8 @@ class NegativeBinomial(ExtendedFamily):
         log_theta: np.ndarray,
         *,
         max_y: int = 0,
+        count_indices=None,
+        integer_counts: bool | None = None,
     ):
         """Saturated log-likelihood with explicit theta for AD trace.
 
@@ -259,7 +340,19 @@ class NegativeBinomial(ExtendedFamily):
             in ``_lgamma_diff``. Must be a compile-time constant.
         """
         theta = jnp.exp(log_theta[0])
-        return _saturated_loglik_jax(y, wt, theta, max_y)
+        return _saturated_loglik_jax(y, wt, theta, max_y, count_indices, integer_counts)
+
+    def saturated_loglikelihood_for_parameters(
+        self,
+        y: np.ndarray,
+        wt: np.ndarray,
+        scale: float,
+        log_theta: np.ndarray,
+        *,
+        max_y: int = 0,
+    ):
+        """Evaluate saturated likelihood from explicit, immutable theta data."""
+        return self.saturated_loglik_theta(y, wt, scale, log_theta, max_y=max_y)
 
     def deviance_fn(self, y: np.ndarray, wt: np.ndarray):
         """Return pure JAX function ``D(eta, log_theta_vec) -> scalar``.
@@ -310,6 +403,216 @@ class NegativeBinomial(ExtendedFamily):
 
         return _ww
 
+    def working_weights_for_parameters(
+        self,
+        mu: np.ndarray,  # noqa: ARG002 - eta is the stable factory input
+        eta: np.ndarray,
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Use explicit theta; never read mutable ``_log_theta`` in a kernel."""
+        return self.working_weights_fn(wt)(eta, log_theta)
+
+    def deviance_contributions_for_parameters(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Direct NB deviance at explicit theta without residual square roots."""
+        xp = array_module(y)
+        theta = xp.exp(log_theta[0])
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_safe = xp.where(y > 0, y, 1.0)
+        contribution = (
+            2.0
+            * wt
+            * (
+                y * xp.log(y_safe / mu_safe)
+                - (y + theta) * xp.log1p((y - mu_safe) / (mu_safe + theta))
+            )
+        )
+        return xp.maximum(contribution, 0.0)
+
+    def deviance_derivative_contributions_for_parameters(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        wt: np.ndarray,
+        log_theta: np.ndarray,
+    ) -> np.ndarray:
+        """Interior-domain NB deviance with no reporting clamp kink."""
+        xp = array_module(y)
+        theta = xp.exp(log_theta[0])
+        mu_safe = xp.maximum(mu, _MU_EPS)
+        y_safe = xp.where(y > 0, y, 1.0)
+        return (
+            2.0
+            * wt
+            * (
+                y * xp.log(y_safe / mu_safe)
+                - (y + theta) * xp.log1p((y - mu_safe) / (mu_safe + theta))
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Pinned efam.r::nb() arithmetic at explicit theta (bgam.fitd route).
+    # ``theta`` is exp(log_theta) as the caller formed it (host libm exp).
+    # No stability rewrites: these reproduce R's own operation order.
+    # ------------------------------------------------------------------
+
+    def source_dev_resids_at(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray, theta
+    ) -> np.ndarray:
+        """``nb()$dev.resids``: ``mu[mu<=0] <- NA``, then the raw log ratios."""
+        xp = array_module(mu)
+        mu = xp.where(mu <= 0.0, xp.nan, mu)
+        return (
+            2.0
+            * wt
+            * (
+                y * xp.log(xp.maximum(1.0, y) / mu)
+                - (y + theta) * xp.log((y + theta) / (mu + theta))
+            )
+        )
+
+    def source_dd(
+        self, y: np.ndarray, mu: np.ndarray, wt: np.ndarray, theta
+    ) -> NBDevianceDerivatives:
+        """``nb()$Dd`` at level 2, restricted to the terms bgam.fitd uses."""
+        xp = array_module(mu)
+        yth = y + theta
+        muth = mu + theta
+        ratio = yth / muth
+        return NBDevianceDerivatives(
+            mu=2.0 * wt * (yth / muth - y / mu),
+            mu2=-2.0 * wt * (yth / muth**2 - y / mu**2),
+            theta=-2.0 * wt * theta * (xp.log(ratio) + (1.0 - ratio)),
+            theta2=-2.0
+            * wt
+            * theta
+            * (
+                xp.log(ratio)
+                + theta * yth / muth**2
+                - yth / muth
+                - 2.0 * theta / muth
+                + 1.0
+                + theta / yth
+            ),
+        )
+
+    def source_ls_rows(
+        self, y: np.ndarray, wt: np.ndarray, log_theta, theta
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Row terms of ``nb()$ls``: ``ls = -sum(a)``, ``lsth1 = sum(b)``,
+        ``lsth2 = -sum(c)`` for the returned ``(a, b, c)``."""
+        xp = array_module(y)
+        if xp is np:
+            from scipy.special import gammaln as lgamma
+            from scipy.special import polygamma, psi
+        else:
+            lgamma = jsp.gammaln
+            psi = jsp.digamma
+            polygamma = jsp.polygamma
+        positive = xp.where(y > 0.0, y, 1.0)
+        ylogy = xp.where(y > 0.0, positive * xp.log(positive), y)
+        yth = y + theta
+        lyth = xp.log(yth)
+        term = (
+            yth * lyth
+            - ylogy
+            + lgamma(y + 1.0)
+            - theta * xp.log(theta)
+            + lgamma(theta)
+            - lgamma(theta + y)
+        )
+        psi0_yth = psi(yth)
+        psi0_th = psi(theta)
+        first = theta * (lyth - psi0_yth + psi0_th - log_theta)
+        psi1_yth = polygamma(1, yth)
+        psi1_th = polygamma(1, theta)
+        second = theta * (
+            lyth
+            - theta * psi1_yth
+            - psi0_yth
+            + theta / yth
+            + theta * psi1_th
+            + psi0_th
+            - log_theta
+            - 1.0
+        )
+        return term * wt, -first * wt, second * wt
+
+    def source_newton_working(
+        self,
+        y: np.ndarray,
+        mu: np.ndarray,
+        eta: np.ndarray,
+        offset: np.ndarray,
+        wt: np.ndarray,
+        theta,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """``bgam.fitd``'s extended-family ``w``/``z`` from ``dDeta`` (``rho == 0``).
+
+        ``w = Deta2/2`` and ``z = (eta - offset) - Deta/Deta2`` (observed,
+        possibly negative weights); rows with a non-finite ``w`` or ``z`` get
+        zero of both.
+        """
+        xp = array_module(mu)
+        derivatives = self.source_dd(y, mu, wt, theta)
+        if isinstance(self.link, IdentityLink):
+            second = derivatives.mu2
+            ratio = derivatives.mu / derivatives.mu2
+        else:
+            ig1 = self.link.mu_eta(self.link.link(mu))
+            g2g = self.link.source_g2g(mu)
+            second = derivatives.mu2 * ig1**2 - derivatives.mu * g2g * ig1
+            ratio = derivatives.mu / (derivatives.mu2 * ig1 - derivatives.mu * g2g)
+        weight = second * 0.5
+        response = (eta - offset) - ratio
+        good = xp.isfinite(response) & xp.isfinite(weight)
+        return xp.where(good, weight, 0.0), xp.where(good, response, 0.0)
+
+    def execution_summary_from_batch(
+        self, y: np.ndarray, wt: np.ndarray, valid: np.ndarray
+    ) -> tuple[np.ndarray, ...]:
+        """Append bounded count-prefix planning metadata to the base summary."""
+        xp = array_module(y)
+        base = super().execution_summary_from_batch(y, wt, valid)
+        real = valid & xp.isfinite(y)
+        safe_y = xp.where(real, y, 0.0)
+        return (*base, xp.max(safe_y), xp.all(~valid | (y == xp.floor(y))))
+
+    def merge_execution_summaries(
+        self, left: tuple[np.ndarray, ...], right: tuple[np.ndarray, ...]
+    ) -> tuple[np.ndarray, ...]:
+        """Merge additive base leaves plus max/all NB count metadata."""
+        if len(left) != 6 or len(right) != 6:
+            raise ValueError("NB execution summaries require six leaves.")
+        xp = array_module(left[4])
+        return (
+            left[0] + right[0],
+            left[1] + right[1],
+            left[2] + right[2],
+            xp.logical_and(left[3], right[3]),
+            xp.maximum(left[4], right[4]),
+            xp.logical_and(left[5], right[5]),
+        )
+
+    def finalize_execution_summary(
+        self, summary: tuple[float, ...]
+    ) -> dict[str, float]:
+        """Expose count-prefix metadata without retaining observations."""
+        if len(summary) != 6:
+            raise ValueError("NB execution summaries require six leaves.")
+        result = super().finalize_execution_summary(summary[:4])
+        result.update(
+            max_count=float(summary[4]),
+            integer_counts=bool(summary[5]),
+        )
+        return result
+
     def __repr__(self) -> str:
         theta_val = float(np.exp(self._log_theta[0]))
         fixed = "fixed" if self.n_theta == 0 else "estimated"
@@ -336,14 +639,16 @@ class NegativeBinomial(ExtendedFamily):
 # ------------------------------------------------------------------
 
 
-@functools.partial(jax.custom_jvp, nondiff_argnums=(2,))
-def _lgamma_diff(theta, y, max_y):  # noqa: ARG001
+@functools.partial(jax.custom_jvp, nondiff_argnums=(3, 4))
+def _lgamma_diff_planned(theta, y, count_indices, capacity, integer_counts):
     """``lgamma(theta) - lgamma(theta + y)`` with stable AD derivatives.
 
-    Forward pass uses standard lgamma subtraction (accurate for the value).
-    The JVP uses the digamma recurrence ``-sum_{k=0}^{y-1} 1/(theta+k)``
-    which avoids the catastrophic cancellation in ``digamma(theta) -
-    digamma(theta+y)`` when theta is large.
+    Integer-count forward values use the exact recurrence
+    ``-sum(log(theta+k), k=0..y-1)`` when its prefix fits the bounded plan.
+    Oversized plans retain vectorized lgamma subtraction where it is well
+    conditioned and otherwise use a bounded-workspace scalar recurrence. The
+    JVP likewise uses the digamma recurrence
+    ``-sum_{k=0}^{y-1} 1/(theta+k)`` when subtraction would cancel.
 
     Second derivatives (Hessian) get the trigamma recurrence
     ``sum 1/(theta+k)^2`` for free by differentiating through the JVP.
@@ -354,48 +659,181 @@ def _lgamma_diff(theta, y, max_y):  # noqa: ARG001
         Dispersion parameter (positive).
     y : jax.Array, shape (n,)
         Non-negative integer counts (as float64).
-    max_y : int
-        Maximum value in y. Must be a compile-time static integer
-        (controls the ``lax.scan`` length).
+    count_indices : jax.Array
+        Precomputed non-negative integer count indices.  They are metadata,
+        not a differentiable representation of ``y``.
+    capacity : int
+        Static table capacity.  ``capacity >= max(count_indices)``.
+    integer_counts : bool
+        Static fast-path guard. Fractional responses retain the gamma
+        derivative semantics instead of being rounded for a recurrence.
     """
-    return jsp.gammaln(theta) - jsp.gammaln(theta + y)
+    if not integer_counts:
+        return jsp.gammaln(theta) - jsp.gammaln(theta + y)
+
+    indices = jnp.asarray(count_indices, dtype=jnp.int64)
+    valid_indices = (indices >= 0) & (indices <= capacity)
+    if capacity <= 0:
+        value = jnp.zeros_like(y)
+    elif (
+        (capacity + 1)
+        * np.dtype(np.float64).itemsize
+        * _PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
+        + _PREFIX_COMPILED_FIXED_BYTES
+        <= _PREFIX_WORKSPACE_BYTES
+    ):
+        log_terms = jnp.log(theta + jnp.arange(capacity, dtype=y.dtype))
+        prefix = jnp.concatenate((jnp.zeros(1, dtype=y.dtype), jnp.cumsum(log_terms)))
+        value = -jnp.take(prefix, indices, mode="fill", fill_value=jnp.nan)
+    else:
+
+        def _stable_recurrence(_: None):
+            def body(k, acc):
+                return acc + jnp.where(k < indices, jnp.log(theta + k), 0.0)
+
+            return -jax.lax.fori_loop(0, capacity, body, jnp.zeros_like(y))
+
+        def _vectorized(_: None):
+            return jsp.gammaln(theta) - jsp.gammaln(theta + y)
+
+        if indices.shape[0] == 0:
+            smallest_count = jnp.array(1.0, dtype=y.dtype)
+        else:
+            positive_counts = jnp.where(
+                indices > 0,
+                jnp.asarray(indices, dtype=y.dtype),
+                jnp.inf,
+            )
+            smallest_count = jnp.minimum(jnp.min(positive_counts), 1.0)
+        value = jax.lax.cond(
+            theta <= _VECTOR_DIFF_MAX_THETA_TO_COUNT * smallest_count,
+            _vectorized,
+            _stable_recurrence,
+            operand=None,
+        )
+    return jnp.where(valid_indices, value, jnp.nan)
 
 
-@_lgamma_diff.defjvp
-def _lgamma_diff_jvp(max_y, primals, tangents):
-    theta, y = primals
-    dtheta, dy = tangents
+@_lgamma_diff_planned.defjvp
+def _lgamma_diff_jvp(capacity, integer_counts, primals, tangents):
+    theta, y, count_indices = primals
+    dtheta, dy, _ = tangents
 
-    primal_out = _lgamma_diff(theta, y, max_y)
+    primal_out = _lgamma_diff_planned(theta, y, count_indices, capacity, integer_counts)
 
     # Recurrence: d/d(theta)[lgamma(theta) - lgamma(theta+y)]
     #           = digamma(theta) - digamma(theta+y)
     #           = -sum_{k=0}^{y-1} 1/(theta+k)
     # This avoids subtracting two large digamma values at large theta.
-    if max_y == 0:
-        tangent_out = jnp.zeros_like(y) * dtheta
-    else:
-
-        def _scan_body(acc, k):
-            mask = k < y
-            acc = acc + jnp.where(mask, 1.0 / (theta + k), 0.0)
-            return acc, None
-
-        neg_psi_sum, _ = jax.lax.scan(
-            _scan_body, jnp.zeros_like(y), jnp.arange(max_y, dtype=y.dtype)
+    indices = jnp.asarray(count_indices, dtype=jnp.int64)
+    valid_indices = (indices >= 0) & (indices <= capacity)
+    if not integer_counts:
+        # This is mgcv nb()$ls' digamma derivative. It is also the exact
+        # meaning for fractional NB responses, which are accepted today.
+        raw_difference = jsp.digamma(theta) - jsp.digamma(theta + y)
+        # Avoid subtracting nearly equal digammas for fractional responses,
+        # where the integer recurrence is inapplicable. The first three terms
+        # of psi(theta)-psi(theta+y) are enough once theta dwarfs y; AD of
+        # this expression supplies the matching second theta derivative.
+        asymptotic = (
+            -y / theta
+            + y * (y - 1.0) / (2.0 * theta**2)
+            - y * (2.0 * y**2 - 3.0 * y + 1.0) / (6.0 * theta**3)
         )
-        # d(primal)/d(theta) = -neg_psi_sum, chain with dtheta.
-        # The dy branch uses standard -digamma(theta+y).  This is fine
-        # because y is integer count data and never differentiated in
-        # practice — the recurrence is only needed for the theta
-        # direction where digamma(theta) - digamma(theta+y) cancels
-        # at large theta.
-        tangent_out = -neg_psi_sum * dtheta + (-jsp.digamma(theta + y)) * dy
+        dtheta_value = jnp.where(
+            theta
+            >= jnp.maximum(
+                _FRACTIONAL_ASYMPTOTIC_THETA * (1.0 - 1e-12),
+                _FRACTIONAL_ASYMPTOTIC_THETA_TO_RESPONSE * jnp.abs(y),
+            ),
+            asymptotic,
+            raw_difference,
+        )
+    elif capacity <= 0:
+        dtheta_value = jnp.zeros_like(y)
+    elif (
+        (capacity + 1)
+        * np.dtype(np.float64).itemsize
+        * _PREFIX_DIFFERENTIATED_WORKSPACE_MULTIPLIER
+        + _PREFIX_COMPILED_FIXED_BYTES
+        <= _PREFIX_WORKSPACE_BYTES
+    ):
+        reciprocal = 1.0 / (theta + jnp.arange(capacity, dtype=y.dtype))
+        prefix = jnp.concatenate((jnp.zeros(1, dtype=y.dtype), jnp.cumsum(reciprocal)))
+        # FittingData validates this metadata once. Direct callers receive a
+        # non-finite derivative for an undersized plan instead of truncation.
+        # ``mode='fill'`` makes malformed direct-helper metadata visible. JAX
+        # otherwise clamps out-of-range gathers, which would silently turn an
+        # undersized plan into the wrong derivative.
+        dtheta_value = jnp.where(
+            valid_indices,
+            -jnp.take(prefix, indices, mode="fill", fill_value=jnp.nan),
+            jnp.nan,
+        )
+    else:
+        # The table would exceed the budget. This branch is compiled without
+        # a count-length table. The vectorized formula is used only before
+        # subtraction loses material precision; otherwise retain the stable
+        # recurrence (O(n * capacity), but bounded auxiliary workspace).
+        def _stable_recurrence(_: None):
+            def body(k, acc):
+                return acc + jnp.where(
+                    k < indices,
+                    1.0 / (theta + k),
+                    0.0,
+                )
+
+            return -jax.lax.fori_loop(0, capacity, body, jnp.zeros_like(y))
+
+        def _vectorized(_: None):
+            return jsp.digamma(theta) - jsp.digamma(theta + y)
+
+        if indices.shape[0] == 0:
+            smallest_count = jnp.array(1.0, dtype=y.dtype)
+        else:
+            positive_counts = jnp.where(
+                indices > 0,
+                jnp.asarray(indices, dtype=y.dtype),
+                jnp.inf,
+            )
+            smallest_count = jnp.minimum(jnp.min(positive_counts), 1.0)
+        dtheta_value = jax.lax.cond(
+            theta <= _VECTOR_DIFF_MAX_THETA_TO_COUNT * smallest_count,
+            _vectorized,
+            _stable_recurrence,
+            operand=None,
+        )
+
+    # Metadata must be valid even on the recurrence/vectorized/empty paths;
+    # never turn an undersized plan into a finite but truncated derivative.
+    dtheta_value = jnp.where(valid_indices, dtheta_value, jnp.nan)
+    tangent_out = dtheta_value * dtheta - jsp.digamma(theta + y) * dy
 
     return primal_out, tangent_out
 
 
-def _saturated_loglik_jax(y, wt, theta, max_y):
+def _lgamma_diff(theta, y, max_y):
+    """Compatibility wrapper for the historical internal three-argument API.
+
+    Fitting passes precomputed indices to ``_lgamma_diff_planned``. Direct
+    callers retain the old signature and receive the same integer fast path.
+    """
+    capacity = max(1, max_y)
+
+    def integer_path(_: None):
+        return _lgamma_diff_planned(
+            theta, y, jnp.asarray(y, dtype=jnp.int64), capacity, True
+        )
+
+    def fractional_path(_: None):
+        return _lgamma_diff_planned(
+            theta, y, jnp.zeros(y.shape, dtype=jnp.int64), 0, False
+        )
+
+    return jax.lax.cond(jnp.all(y == jnp.floor(y)), integer_path, fractional_path, None)
+
+
+def _saturated_loglik_jax(y, wt, theta, max_y, count_indices=None, integer_counts=None):
     """Numerically stable saturated log-likelihood (JAX).
 
     Rewrites for stability at large theta (near-Poisson limit):
@@ -410,11 +848,14 @@ def _saturated_loglik_jax(y, wt, theta, max_y):
     """
     ylogy = jnp.where(y > 0, y * jnp.log(y), 0.0)
     y_safe = jnp.where(y > 0, y, 1.0)
-    lgamma_diff = jnp.where(
-        y > 0,
-        _lgamma_diff(theta, y_safe, max_y),
-        0.0,
-    )
+    if count_indices is None or integer_counts is None:
+        lgamma_value = _lgamma_diff(theta, y_safe, max_y)
+    else:
+        capacity = max(1, max_y) if integer_counts else 0
+        lgamma_value = _lgamma_diff_planned(
+            theta, y_safe, count_indices, capacity, integer_counts
+        )
+    lgamma_diff = jnp.where(y > 0, lgamma_value, 0.0)
     # Note: ``theta * log1p(y/theta)`` is optimized for the large-theta
     # regime (near-Poisson limit) where the original
     # ``(y+theta)*log(y+theta) - theta*log(theta)`` suffers cancellation.

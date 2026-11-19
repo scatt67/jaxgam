@@ -43,6 +43,21 @@ _CUBIC_SMOOTH_CLASSES = {
 }
 
 
+def test_source_fma_fallback_keeps_single_rounding_on_python_311(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The supported Python 3.11 fallback must preserve C's fused product."""
+    from jaxgam.smooths import cubic
+
+    monkeypatch.delattr(cubic.math, "fma", raising=False)
+    cubic._source_fma.cache_clear()
+    try:
+        unit = 1.0 + 2.0**-52
+        assert cubic._source_fma()(unit, unit, -(1.0 + 2.0**-51)) == 2.0**-104
+    finally:
+        cubic._source_fma.cache_clear()
+
+
 def _setup_cubic_smooth(bs: str, data, k: int = 10):
     spec = make_smooth_spec(["x"], bs=bs, k=k)
     smooth = _CUBIC_SMOOTH_CLASSES[bs](spec)
@@ -262,6 +277,56 @@ class TestRComparison:
 
     # --- cr element-wise tests (STRICT) ---
 
+    def test_cr_source_arithmetic_matches_r_strict(self) -> None:
+        """Pinned getFS/crspl arithmetic matches R before constraints."""
+        import pandas as pd
+
+        from tests.r_bridge import RBridge
+
+        position = np.arange(97, dtype=np.float64)
+        x = (position + 0.2 * np.sin(position * 0.7)) / len(position)
+        data = pd.DataFrame({"x": x})
+        expected = RBridge(mode="rpy2").smooth_construct("s(x, bs='cr', k=3)", data)
+        smooth = CubicRegressionSmooth(make_smooth_spec(["x"], bs="cr", k=3))
+        smooth.setup({"x": x})
+
+        np.testing.assert_allclose(
+            smooth.training_design_matrix(),
+            expected["X"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            smooth.build_penalty_matrices()[0].S,
+            expected["S"][0],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    @pytest.mark.parametrize("n_interior", [3, 1021])
+    def test_cr_source_extrapolation_matches_r_strict(self, n_interior: int) -> None:
+        """Source-order evaluation matches R at boundaries and dense batches."""
+        from tests.r_bridge import RBridge
+
+        x = np.linspace(-0.7, 1.3, 53, dtype=np.float64)
+        new_x = np.concatenate(
+            (
+                np.array([-1.2, -0.7]),
+                np.linspace(-0.7, 1.3, n_interior),
+                np.array([1.3, 1.9]),
+            )
+        )
+        bridge = RBridge(mode="rpy2")
+        expected = bridge.source_cubic_prediction(x, new_x, k=6)
+        smooth = CubicRegressionSmooth(make_smooth_spec(["x"], bs="cr", k=6))
+        smooth.setup({"x": x})
+        np.testing.assert_allclose(
+            smooth.predict_matrix({"x": new_x}),
+            expected,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
     def test_cr_X_values_vs_r(self) -> None:
         """cr basis matrix X matches R element-wise (STRICT).
 
@@ -302,30 +367,11 @@ class TestRComparison:
 
     def test_cr_knots_vs_r(self) -> None:
         """cr knot locations match R (STRICT)."""
-        import pandas as pd
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
+        from tests.r_bridge import RBridge
 
         smooth, _r_result, x = self._setup_cr()
 
-        # Extract knots via rpy2 (smoothCon doesn't export xp for cr)
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(pd.DataFrame({"x": x}))
-        ro.globalenv["dat_input"] = r_df
-        r_knots = np.array(
-            ro.r(
-                """
-            library(mgcv)
-            dat <- as.data.frame(dat_input)
-            spec <- s(x, bs="cr", k=10)
-            spec <- eval(spec)
-            sm <- smooth.construct(spec, dat, knots=NULL)
-            sm$xp
-            """
-            )
-        )
+        r_knots = RBridge(mode="rpy2").source_cubic_knots(x, basis="cr", k=10)
         np.testing.assert_allclose(
             smooth._knots,
             r_knots,
@@ -372,29 +418,11 @@ class TestRComparison:
 
     def test_cc_knots_vs_r(self) -> None:
         """cc knot locations match R (STRICT)."""
-        import pandas as pd
-        import rpy2.robjects as ro
-        from rpy2.robjects import numpy2ri, pandas2ri
+        from tests.r_bridge import RBridge
 
         smooth, _r_result, x = self._setup_cc()
 
-        with ro.conversion.localconverter(
-            ro.default_converter + pandas2ri.converter + numpy2ri.converter
-        ):
-            r_df = ro.conversion.py2rpy(pd.DataFrame({"x": x}))
-        ro.globalenv["dat_input"] = r_df
-        r_knots = np.array(
-            ro.r(
-                """
-            library(mgcv)
-            dat <- as.data.frame(dat_input)
-            spec <- s(x, bs="cc", k=10)
-            spec <- eval(spec)
-            sm <- smooth.construct(spec, dat, knots=NULL)
-            sm$xp
-            """
-            )
-        )
+        r_knots = RBridge(mode="rpy2").source_cubic_knots(x, basis="cc", k=10)
         np.testing.assert_allclose(
             smooth._knots,
             r_knots,
@@ -716,3 +744,64 @@ class TestParameterized:
 
         S = smooth.build_penalty_matrices()[0].S
         assert S.shape == (expected_coefs, expected_coefs)
+
+
+def _crspl_rows_without_contraction(x, knots, F):
+    """Scalar transcription of mgcv crspl with separately rounded products.
+
+    Python floats never fuse, so this is the audited x86_64 binary's
+    ``cjm * Fp + cjp * Fp1`` (MULSD, MULSD, ADDSD).
+    """
+    k = len(knots)
+    X = np.zeros((len(x), k))
+    for i, xi in enumerate(map(float, x)):
+        if xi < knots[0]:
+            h = float(knots[1] - knots[0])
+            xik = xi - float(knots[0])
+            cjm, cjp = -xik * h / 3.0, -xik * h / 6.0
+            for c in range(k):
+                X[i, c] = cjm * float(F[0, c]) + cjp * float(F[1, c])
+            X[i, 0] += 1.0 - xik / h
+            X[i, 1] += xik / h
+        elif xi > knots[-1]:
+            h = float(knots[-1] - knots[-2])
+            xik = xi - float(knots[-1])
+            cjm, cjp = xik * h / 6.0, xik * h / 3.0
+            for c in range(k):
+                X[i, c] = cjm * float(F[-2, c]) + cjp * float(F[-1, c])
+            X[i, -2] += -xik / h
+            X[i, -1] += 1.0 + xik / h
+        else:
+            j = int(min(np.searchsorted(knots, xi, side="right") - 1, k - 2))
+            j = max(j, 0)
+            xj, xj1 = float(knots[j]), float(knots[j + 1])
+            h = xj1 - xj
+            ajm, ajp = xj1 - xi, xi - xj
+            cjm = (ajm * (ajm * ajm / h - h)) / 6.0
+            cjp = (ajp * (ajp * ajp / h - h)) / 6.0
+            for c in range(k):
+                X[i, c] = cjm * float(F[j, c]) + cjp * float(F[j + 1, c])
+            X[i, j] += ajm / h
+            X[i, j + 1] += ajp / h
+    return X
+
+
+@pytest.mark.platform_sensitive
+def test_non_contracting_crspl_rounds_both_products(monkeypatch) -> None:
+    """On x86_64 the basis rounds cjm*Fp and cjp*Fp1 separately, as R does.
+
+    The audited x86_64 mgcv binary has no fused instructions, whereas x86_64
+    BLAS kernels fuse; the non-contracting path must not route through BLAS.
+    """
+    from jaxgam.smooths import cubic as cubic_module
+
+    rng = np.random.default_rng(71)
+    x = np.sort(rng.uniform(0.0, 1.0, 400))
+    smooth = CubicRegressionSmooth(make_smooth_spec(["x"], bs="cr", k=8))
+    smooth.setup({"x": x})
+    new = np.concatenate([[-0.2, -0.05], rng.uniform(0.0, 1.0, 300), [1.07, 1.3]])
+    monkeypatch.setattr(cubic_module, "SOURCE_FMA_CONTRACTION", False)
+    np.testing.assert_array_equal(
+        smooth._build_basis_matrix(new, smooth._knots, smooth._F),
+        _crspl_rows_without_contraction(new, smooth._knots, smooth._F),
+    )

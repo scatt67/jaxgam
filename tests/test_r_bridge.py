@@ -8,9 +8,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.helpers import _AssertCollector, make_smooth_spec
-from tests.r_bridge import RBridge, gp_config_to_mgcv_m
-from tests.tolerances import STRICT
+from tests.efs_oracle import make_efs_fixture
+from tests.helpers import (
+    _AssertCollector,
+    check_that,
+    make_smooth_spec,
+    r_links_pinned_openblas,
+)
+from tests.r_bridge import RBridge, RBridgeError, _r_array, gp_config_to_mgcv_m
+from tests.tolerances import MODERATE, STRICT
 
 
 def _r_available() -> bool:
@@ -36,6 +42,569 @@ class TestRBridgeAvailability:
         ok, reason = RBridge.check_versions()
         assert ok, reason
 
+    @pytest.mark.skipif(not RBridge.available(), reason="rpy2 with mgcv unavailable")
+    def test_default_reference_never_launches_rscript(self, monkeypatch) -> None:
+        """Default selection and version checks stay in the embedded R process."""
+        import subprocess
+
+        def unexpected_process(*_args, **_kwargs):
+            raise AssertionError("RBridge attempted to launch an external process")
+
+        monkeypatch.setattr(subprocess, "run", unexpected_process)
+        monkeypatch.setattr(subprocess, "check_output", unexpected_process)
+        assert RBridge.available()
+        bridge = RBridge()
+        bridge._require_rpy2()
+        assert bridge.mode == "rpy2"
+
+    @pytest.mark.skipif(not RBridge.available(), reason="rpy2 with mgcv unavailable")
+    def test_object_transport_preserves_values_and_dimensions(self) -> None:
+        """Subnormals, signed zero, and adjacent floats survive direct transfer."""
+        bridge = RBridge()
+        source = np.array(
+            [[0.0, -0.0], [np.nextafter(1.0, 2.0), np.nextafter(0.0, 1.0)]]
+        ).T
+        result = _r_array(bridge._to_r_matrix(source), dtype=np.float64)
+        np.testing.assert_array_equal(result.view(np.uint64), source.view(np.uint64))
+        integers = np.array([0, 1, np.iinfo(np.int32).max], dtype=np.int64)
+        np.testing.assert_array_equal(bridge._to_r_vector(integers), integers)
+        with pytest.raises(ValueError, match="non-missing range"):
+            bridge._to_r_vector(np.array([np.iinfo(np.int32).min]))
+        with pytest.raises(ValueError, match="two-dimensional"):
+            bridge._to_r_matrix(integers)
+
+
+def _owns_memory(array: np.ndarray) -> bool:
+    """Whether ``array`` (or the array it views) owns NumPy-allocated memory."""
+    root = array
+    while isinstance(root.base, np.ndarray):
+        root = root.base
+    return root.flags.owndata
+
+
+def _churn_r_memory(bridge: RBridge) -> None:
+    """Force R garbage collection between fresh R allocations (no RNG use)."""
+    for size in (10_000, 100_000, 1_000_000, 100_000):
+        bridge._base.gc()
+        bridge._base.numeric(size)
+        bridge._base.as_double(bridge._base.seq_len(size))
+    bridge._base.gc()
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+class TestRArrayOwnership:
+    """R-to-NumPy conversions own their memory instead of viewing R's."""
+
+    def test_r_array_copies_with_numpy_dtype_shape_and_layout(self) -> None:
+        bridge = RBridge()
+        values = np.arange(24.0) - 7.5
+        cases = {
+            "double": bridge._to_r_vector(values),
+            "integer": bridge._ro.IntVector(np.arange(5, dtype=np.int32)),
+            "logical": bridge._ro.BoolVector([True, False, True]),
+            "matrix": bridge._to_r_matrix(values.reshape(4, 6)),
+            "array": bridge._base.array(
+                bridge._to_r_vector(values), dim=bridge._ro.IntVector([2, 3, 4])
+            ),
+        }
+        collector = _AssertCollector()
+        for name, r_value in cases.items():
+            view = np.asarray(r_value)  # the zero-copy pattern being replaced
+            owned = _r_array(r_value)
+
+            def check(view=view, owned=owned) -> None:
+                assert not view.flags.owndata
+                assert owned.flags.owndata
+                assert not np.shares_memory(owned, view)
+                assert owned.dtype == view.dtype
+                assert owned.shape == view.shape
+                assert owned.flags.f_contiguous == view.flags.f_contiguous
+                np.testing.assert_array_equal(owned, view)
+
+            collector.check(name, check)
+        converted = _r_array(cases["integer"], dtype=np.float64)
+        collector.check(
+            "requested dtype",
+            lambda: np.testing.assert_array_equal(converted, np.arange(5.0)),
+        )
+        collector.raise_if_any("_r_array ownership")
+
+    def test_converted_values_survive_forced_r_garbage_collection(self) -> None:
+        """A copy keeps R's values after the R object is released and collected."""
+        bridge = RBridge()
+        source = np.linspace(-2.0, 3.0, 4096)
+        expected = source * 2.0 + 1.0
+        r_result = bridge._ro.r["+"](
+            bridge._ro.r["*"](bridge._to_r_vector(source), 2), 1
+        )
+        owned = _r_array(r_result)
+        del r_result
+        _churn_r_memory(bridge)
+        np.testing.assert_array_equal(owned, expected)
+
+    def test_bridge_oracles_return_owned_arrays_that_survive_gc(self) -> None:
+        bridge = RBridge()
+        rng = np.random.default_rng(20261025)
+        x = np.sort(rng.uniform(0.0, 1.0, 80))
+        z = rng.uniform(0.0, 1.0, 80)
+        data = pd.DataFrame({"x": x, "z": z, "y": np.sin(6 * x) + 0.3 * z})
+        results = {
+            "smoothCon": bridge.smooth_construct(
+                "s(x,bs='tp',k=8)", data, absorb_cons=False
+            ),
+            "smoothCon list": bridge.smooth_construct_list(
+                "ti(x,z,bs='tp',k=c(4,4))", data, absorb_cons=True
+            )[0],
+            "fit": bridge.fit_gam("y ~ s(x, k=8) + s(z, k=6)", data),
+            "prediction": bridge.predict_gam(
+                "y ~ s(x, k=8)", data, data.iloc[:7], se_fit=True
+            ),
+            "summary": bridge.summary_gam("y ~ s(x, k=8)", data),
+            "components": bridge.get_smooth_components("y ~ s(x, k=8)", data),
+        }
+
+        def arrays(value, prefix=""):
+            if isinstance(value, np.ndarray):
+                yield prefix, value
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    yield from arrays(item, f"{prefix}/{key}")
+            elif isinstance(value, (list, tuple)):
+                for index, item in enumerate(value):
+                    yield from arrays(item, f"{prefix}[{index}]")
+
+        found = list(arrays(results))
+        assert len(found) > 20
+        snapshot = {name: array.copy() for name, array in found}
+        _churn_r_memory(bridge)
+        for _ in range(3):
+            bridge.smooth_construct("ti(x,z,bs='tp',k=c(6,6))", data, absorb_cons=True)
+        _churn_r_memory(bridge)
+        collector = _AssertCollector()
+        for name, array in found:
+            collector.check(
+                f"{name} owned",
+                lambda array=array, name=name: check_that(
+                    _owns_memory(array), f"{name} views memory it does not own"
+                ),
+            )
+            collector.check(
+                f"{name} unchanged",
+                lambda array=array, name=name: np.testing.assert_array_equal(
+                    array, snapshot[name]
+                ),
+            )
+        collector.raise_if_any("bridge results after R garbage collection")
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_operator_qr_and_shrinkage_oracles_use_pinned_r_objects() -> None:
+    bridge = RBridge(mode="rpy2")
+    design = np.array([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]])
+    np.testing.assert_allclose(
+        bridge.qr_constant_coefficients(design, 2.0),
+        [2, 0],
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    raw = np.diag([0.0, 0.0, 2.0, 3.0])
+    np.testing.assert_allclose(
+        bridge.source_cubic_shrinkage_penalty(raw),
+        np.diag([0.02, 0.2, 2.0, 3.0]),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+
+
+def test_operator_source_oracles_reject_legacy_subprocess_mode() -> None:
+    bridge = RBridge(mode="subprocess")
+    with pytest.raises(RBridgeError, match="requires RBridge"):
+        bridge.qr_constant_coefficients(np.ones((2, 1)), 1.0)
+    with pytest.raises(RBridgeError, match="requires RBridge"):
+        bridge.sample_int_permutation(3, 7)
+    with pytest.raises(RBridgeError, match="requires RBridge"):
+        bridge.source_cubic_shrinkage_penalty(np.eye(3))
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_factor_tensor_oracle_keeps_levels_and_margin_ranks():
+    n = 31
+    frame = pd.DataFrame(
+        {
+            "x": np.linspace(-1, 1, n),
+            "z": np.linspace(0, 2, n) ** 2,
+            "fac": pd.Categorical(
+                np.resize(["first", "second", "third"], n),
+                categories=["third", "first", "second"],
+                ordered=True,
+            ),
+        }
+    )
+    result = RBridge(mode="rpy2").smooth_construct_list(
+        "ti(x,z,bs='cr',k=4,by=fac)", frame, absorb_cons=True
+    )
+    assert [smooth["by_level"] for smooth in result] == ["first", "second"]
+    for smooth in result:
+        assert smooth["X"].shape == (n, 9)
+        np.testing.assert_array_equal(smooth["rank_vector"], [6, 6])
+        assert len(smooth["S"]) == 2
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+class TestRBridgeEFS:
+    """Pinned EFS oracle calls use real mgcv fits and private instrumentation."""
+
+    def test_fit_efs_has_stable_full_fit_and_control_metadata(self) -> None:
+        data, fixture = make_efs_fixture(seed=91, n=48)
+        bridge = RBridge(mode="rpy2")
+        first = bridge.fit_efs(
+            fixture.formula,
+            data,
+            family=fixture.family,
+            weights="w",
+            offset="offset",
+            controls={"efs_lspmax": 12.0, "efs_tol": 0.05},
+        )
+        second = bridge.fit_efs(
+            fixture.formula,
+            data,
+            family=fixture.family,
+            weights="w",
+            offset="offset",
+            controls={"efs_lspmax": 12.0, "efs_tol": 0.05},
+        )
+
+        assert first["optimizer"] == "efs"
+        assert first["controls"] == {"efs_lspmax": 12.0, "efs_tol": 0.05}
+        assert first["provenance"]["data_hash"] == fixture.data_hash
+        assert first["provenance"]["source_commit"] == fixture.source_commit
+        assert first["outer_iterations"] > 0
+        assert first["inner_converged"]
+        assert first["convergence"] in {"full convergence", "iteration limit reached"}
+        np.testing.assert_allclose(
+            first["coefficients"],
+            second["coefficients"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        np.testing.assert_allclose(
+            first["score_history"],
+            second["score_history"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_efs_pirls_tolerance_rejects_nonpositive_value(self) -> None:
+        data, fixture = make_efs_fixture(seed=91, n=48)
+        with pytest.raises(ValueError, match="positive tolerances"):
+            RBridge(mode="rpy2").fit_efs(
+                fixture.formula,
+                data,
+                family=fixture.family,
+                controls={"epsilon": 0.0},
+            )
+
+    def test_efs_diagnostics_uses_real_penalty_and_pirls_statistics(self) -> None:
+        data, fixture = make_efs_fixture(seed=92, n=48)
+        bridge = RBridge(mode="rpy2")
+        fit = bridge.fit_efs(
+            fixture.formula, data, fixture.family, weights="w", offset="offset"
+        )
+        diagnostics = bridge.efs_diagnostics(
+            fixture.formula, data, fixture.family, weights="w", offset="offset"
+        )
+        statistics = diagnostics["statistics"]
+
+        assert {
+            "ldetS1",
+            "bSb",
+            "trVS",
+            "score_phi",
+            "update_phi",
+            "reported_phi",
+        } <= set(statistics)
+        assert len(statistics) >= len(fit["smoothing_params"])
+        assert np.all(
+            np.isfinite(statistics[["ldetS1", "bSb", "trVS", "score"]].to_numpy())
+        )
+        assert diagnostics["initial_shift"] == 2.5
+        assert (
+            diagnostics["source_commit"] == "fb7e8e718377513e78ba6c6bf7e60757fc6a32a9"
+        )
+        assert diagnostics["provenance"]["data_hash"] == fixture.data_hash
+        # For Poisson the score uses phi=1 even though gam.fit3 reports a
+        # Fletcher-like scale estimate for diagnostics.
+        np.testing.assert_allclose(
+            statistics["score_phi"], 1.0, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+        np.testing.assert_allclose(
+            statistics["update_phi"],
+            statistics["score_phi"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert np.any(
+            np.abs(statistics["reported_phi"] - statistics["score_phi"]) > MODERATE.atol
+        )
+        np.testing.assert_allclose(
+            diagnostics["final_score"],
+            fit["reml_score"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_fit_efs_validates_structured_inputs(self) -> None:
+        data, fixture = make_efs_fixture(n=24)
+        bridge = RBridge(mode="rpy2")
+        with pytest.raises(ValueError, match="weights column"):
+            bridge.fit_efs(fixture.formula, data, fixture.family, weights="missing")
+        with pytest.raises(ValueError, match="Unsupported EFS controls"):
+            bridge.fit_efs(
+                fixture.formula, data, fixture.family, controls={"outer_limit": 3}
+            )
+
+    def test_known_scale_initial_smoothing_reaches_pinned_fit_and_trace(self) -> None:
+        x = np.linspace(-1.0, 1.0, 36)
+        data = pd.DataFrame({"x": x, "y": np.resize([0, 1, 2, 1], len(x))})
+        formula = "y~s(x,bs='cr',k=5)"
+        bridge = RBridge(mode="rpy2")
+        start = np.array([0.8])
+        traced = bridge.efs_diagnostics(
+            formula, data, "poisson", initial_smoothing=start
+        )
+        np.testing.assert_allclose(
+            traced["statistics"].iloc[0]["log_smoothing"],
+            np.log(start[0]) + 2.5,
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        implicit = bridge.fit_efs(formula, data, "poisson", initial_smoothing=start)
+        explicit = bridge.fit_efs(
+            formula, data, "poisson", initial_smoothing=start, scale=1.0
+        )
+        np.testing.assert_allclose(
+            implicit["score_history"],
+            explicit["score_history"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+    def test_unknown_scale_initial_smoothing_requires_scale_context(self) -> None:
+        x = np.linspace(-1.0, 1.0, 20)
+        data = pd.DataFrame({"x": x, "y": 1.0 + x**2})
+        formula = "y~s(x,bs='cr',k=5)"
+        bridge = RBridge(mode="rpy2")
+        for oracle in (bridge.fit_efs, bridge.efs_diagnostics):
+            with pytest.raises(ValueError, match="initial_smoothing needs"):
+                oracle(formula, data, "gaussian", initial_smoothing=np.array([0.8]))
+
+    def test_fit_efs_rejects_scale_start_without_smoothing_start(self) -> None:
+        """A scale start the public fit cannot bind is refused, not dropped."""
+        x = np.linspace(-1.0, 1.0, 20)
+        data = pd.DataFrame({"x": x, "y": 1.0 + x**2})
+        bridge = RBridge(mode="rpy2")
+        for oracle in (
+            bridge.fit_efs,
+            bridge.fit_efs_selected_before_offset_null_deviance,
+        ):
+            with pytest.raises(ValueError, match="initial_scale requires"):
+                oracle("y~s(x,bs='cr',k=5)", data, "gaussian", initial_scale=0.5)
+
+    def test_selected_efs_oracle_isolates_offset_null_deviance_failure(self) -> None:
+        """The bounded-link source clone neither mutates nor masks public R."""
+        x = np.linspace(-0.6, 0.7, 79)
+        rng = np.random.default_rng(17019)
+        y = rng.binomial(1, 0.5 + 0.1 * x).astype(float)
+        weights = rng.uniform(0.5, 1.5, len(x))
+        weights[::9] = 0.0
+        data = pd.DataFrame({"x": x, "y": y, "w": weights, "off": 2.0})
+        bridge = RBridge(mode="rpy2")
+        arguments = {
+            "weights": "w",
+            "offset": "off",
+            "initial_smoothing": np.array([13.427864978849476]),
+            "scale": 1.0,
+        }
+        for _ in range(2):
+            with pytest.raises(RBridgeError, match="no valid set of coefficients"):
+                bridge.fit_efs(
+                    'y ~ s(x, bs="cr", k=6)',
+                    data,
+                    "binomial_inverse",
+                    **arguments,
+                )
+            selected = bridge.fit_efs_selected_before_offset_null_deviance(
+                'y ~ s(x, bs="cr", k=6)',
+                data,
+                "binomial_inverse",
+                **arguments,
+            )
+            assert selected["oracle_stage"] == "selected_before_offset_null_deviance"
+            assert selected["outer_iterations"] == 54
+            for field in (
+                "coefficients",
+                "fitted_values",
+                "smoothing_params",
+                "Vp",
+                "deviance",
+                "reml_score",
+                "scale",
+                "edf_total",
+            ):
+                assert np.all(np.isfinite(selected[field])), field
+
+
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+def test_public_fixed_sp_scale_derivatives_reproduce_newton_state() -> None:
+    """Matched-state gam.fit3 reproduces newton()'s state where it belongs.
+
+    newton()'s outer gradient/Hessian describe the returned ``reml.scale``
+    only after ``full convergence``; there the matched-state evaluation at
+    the returned scale must reproduce them. Which generated cells converge
+    fully is roundoff- and BLAS-dependent, so at least one must.
+    """
+    from jaxgam.families.standard import Gamma, Gaussian
+    from tests.test_execution.test_regular_starts import _case
+
+    bridge = RBridge(mode="rpy2")
+    checks = _AssertCollector()
+    full = 0
+    for family_class, link, sp in (
+        (Gaussian, "log", 0.5),
+        (Gaussian, "sqrt", 0.5),
+        (Gamma, "inverse", 0.5),
+        (Gamma, "sqrt", 0.5),
+        (Gamma, "probit", 0.5),
+        # Parametric y ~ x: newton's only parameter is log(scale).
+        (Gaussian, "log", None),
+        (Gamma, "inverse", None),
+        (Gamma, "sqrt", None),
+    ):
+        family, data, weight, offset, _ = _case(family_class, link)
+        name = family.family_name.lower()
+        public = bridge.public_fixed_sp_fit(data, weight, offset, name, link, sp=sp)
+        derivatives = bridge.public_fixed_sp_scale_derivatives(
+            data, weight, offset, name, link, sp=sp
+        )
+        assert derivatives["returned_scale"] == public["score_scale"]
+        assert derivatives["scale"] == public["score_scale"]
+        np.testing.assert_allclose(
+            derivatives["reml_scale"],
+            public["score_scale"],
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+        assert derivatives["outer_status"] == public["outer_status"]
+        assert derivatives["inner_converged"]
+        if derivatives["outer_status"] != "full convergence":
+            continue
+        full += 1
+        for field, outer in (
+            ("gradient", np.ravel(public["outer_gradient"])[-1]),
+            ("hessian", np.ravel(public["outer_hessian"])[-1]),
+        ):
+            checks.check(
+                f"{name}/{link} sp={sp} {field}",
+                lambda field=field, outer=outer, derivatives=derivatives: (
+                    np.testing.assert_allclose(
+                        derivatives[field],
+                        outer,
+                        rtol=STRICT.rtol,
+                        atol=STRICT.atol,
+                    )
+                ),
+            )
+    assert full > 0
+    checks.raise_if_any("Matched-state pinned newton() derivatives")
+    # A supplied scale is honored and the pinned sp coordinate is retained.
+    family, data, weight, offset, _ = _case(Gaussian, "log")
+    shifted = bridge.public_fixed_sp_scale_derivatives(
+        data, weight, offset, "gaussian", "log", sp=0.5, scale=1e-3
+    )
+    assert shifted["scale"] == 1e-3
+    np.testing.assert_allclose(
+        shifted["reml_scale"], 1e-3, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert shifted["gradient"] > 0.0
+    with pytest.raises(ValueError, match="unknown-scale"):
+        bridge.public_fixed_sp_scale_derivatives(
+            data, weight, offset, "poisson", "log", sp=0.5
+        )
+
+
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+def test_public_exact_reml_derivatives_reproduce_estimated_endpoint_state() -> None:
+    """Matched-state gam.fit3 reproduces R's estimated-smoothing endpoint.
+
+    At R's returned (log sp, log scale) the fresh deriv=2 evaluation must
+    return the public fit's own sp, scale and score, a converged inner fit and
+    a symmetric positive definite outer Hessian. newton()'s outer gradient and
+    Hessian describe the returned point only after ``full convergence``;
+    there the evaluation must reproduce them. Which cells converge fully is
+    platform-dependent, so at least one must.
+    """
+    from jaxgam.families.standard import Gamma, Gaussian
+    from tests.test_validation_matrix import _public_exact_regular_case
+
+    bridge = RBridge(mode="rpy2")
+    with pytest.raises(ValueError, match="unknown-scale"):
+        bridge.public_exact_reml_derivatives(
+            *_public_exact_regular_case(Gamma, "log"), "poisson", "log"
+        )
+    checks = _AssertCollector()
+    full = 0
+    for family_class, link in (
+        (Gamma, "logit"),
+        (Gamma, "inverse_squared"),
+        (Gaussian, "identity"),
+    ):
+        name = family_class.__name__.lower()
+        data, weight, offset = _public_exact_regular_case(family_class, link)
+        public = bridge.public_exact_reml_fit(data, weight, offset, name, link)
+        derivatives = bridge.public_exact_reml_derivatives(
+            data, weight, offset, name, link
+        )
+        assert derivatives["outer_status"] == public["outer_status"]
+        assert derivatives["inner_converged"]
+        assert derivatives["smoothing"] == public["smoothing"]
+        assert derivatives["returned_scale"] == public["score_scale"]
+        assert derivatives["returned_score"] == public["score"]
+        np.testing.assert_array_equal(
+            derivatives["log_parameters"],
+            np.log([public["smoothing"], public["score_scale"]]),
+        )
+        hessian = derivatives["hessian"]
+        np.testing.assert_array_equal(hessian, hessian.T)
+        assert np.all(np.linalg.eigvalsh(hessian) > 0.0)
+        for field, actual, reference in (
+            ("REML", derivatives["score"], public["score"]),
+            ("reml.scale", derivatives["reml_scale"], public["score_scale"]),
+        ):
+            checks.check(
+                f"{name}/{link} {field}",
+                lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                    actual, reference, rtol=STRICT.rtol, atol=STRICT.atol
+                ),
+            )
+        if derivatives["outer_status"] != "full convergence":
+            continue
+        full += 1
+        for field, actual, reference in (
+            ("gradient", derivatives["gradient"], derivatives["outer_gradient"]),
+            ("hessian", hessian, derivatives["outer_hessian"]),
+        ):
+            checks.check(
+                f"{name}/{link} newton {field}",
+                lambda actual=actual, reference=reference: np.testing.assert_allclose(
+                    np.ravel(actual),
+                    np.ravel(reference),
+                    rtol=STRICT.rtol,
+                    atol=STRICT.atol,
+                ),
+            )
+    assert full > 0
+    checks.raise_if_any("Matched-state pinned estimated-endpoint derivatives")
+
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeFitGam:
@@ -59,7 +628,11 @@ class TestRBridgeFitGam:
             "reml_score",
             "theta",
         }
-        assert set(result.keys()) == expected_keys
+        assert expected_keys <= set(result)
+        if bridge.mode == "rpy2":
+            assert isinstance(result["inner_converged"], bool)
+            assert isinstance(result["outer_converged"], bool)
+            assert isinstance(result["outer_status"], str | None)
 
     def test_fit_gaussian_types(self, gaussian_data: pd.DataFrame) -> None:
         bridge = RBridge()
@@ -260,6 +833,42 @@ class TestGPConfigToMgcvM:
 
 
 @pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
+def test_source_slanczos_and_linked_lapack_are_typed_oracles() -> None:
+    bridge = RBridge(mode="rpy2")
+    rng = np.random.default_rng(5)
+    A = rng.standard_normal((12, 12))
+    A = A + A.T
+    result = bridge.source_slanczos(A, 3, np.finfo(float).eps ** 0.7)
+    assert result["vectors"].shape == (12, 3)
+    assert result["iterations"] >= 3
+    values = np.linalg.eigvalsh(A)
+    expected = values[np.argsort(-np.abs(values))[:3]]
+    np.testing.assert_allclose(
+        np.sort(result["values"]), np.sort(expected), rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert bridge.linked_lapack()
+    with pytest.raises(ValueError, match="square"):
+        bridge.source_slanczos(A[:, :5], 3, 1e-8)
+
+
+def test_pinned_openblas_detection_needs_the_library_config(tmp_path) -> None:
+    """Detection asks the linked library itself; no library, or no config, is False."""
+
+    class _Bridge:
+        def __init__(self, path: str) -> None:
+            self._path = path
+
+        def linked_lapack(self) -> str:
+            return self._path
+
+    assert not r_links_pinned_openblas(_Bridge(str(tmp_path / "missing.so")))
+    if _r_available():
+        bridge = RBridge(mode="rpy2")
+        detected = r_links_pinned_openblas(bridge)
+        assert detected == r_links_pinned_openblas(_Bridge(bridge.linked_lapack()))
+
+
+@pytest.mark.skipif(not _r_available(), reason="R with mgcv not available")
 class TestRBridgeSmoothConstructGP:
     def test_smooth_construct_gp_extracts_knt_and_defn(self) -> None:
         """Bridge round-trips ``knt`` and ``gp.defn`` for a tiny GP smooth."""
@@ -375,3 +984,454 @@ class TestRBridgeSubprocessFallback:
         )
         np.testing.assert_allclose(r1["deviance"], r2["deviance"], rtol=STRICT.rtol)
         np.testing.assert_allclose(r1["edf_total"], r2["edf_total"], rtol=STRICT.rtol)
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+@pytest.mark.parametrize("scale", [-1.0, float(np.exp(-3.0))])
+def test_bam_discrete_gaussian_uses_requested_working_start_and_scale(
+    scale: float,
+) -> None:
+    """Live Sl.fitChol trace distinguishes starts from fixed smoothing."""
+    position = np.arange(97, dtype=float)
+    x = (position + 0.2 * np.sin(position * 0.7)) / len(position)
+    z = np.cos(position * 0.23) + 0.07 * np.sin(position * 0.91)
+    y = 0.4 - 0.3 * z + np.sin(4.5 * x) + 0.05 * np.cos(position)
+    frame = pd.DataFrame({"x": x, "z": z, "y": y})
+    bridge = RBridge(mode="rpy2")
+    start = np.array([1e-4, 1e4])
+    fit = bridge.fit_bam_discrete_gaussian(
+        "y ~ te(x,z,bs='cr',k=3)",
+        frame,
+        m=30,
+        initial_sp=start,
+        initial_scale=float(np.exp(-3.0)),
+        scale=scale,
+        capture_trials=True,
+    )
+    assert fit.mgcv_converged
+    assert fit.n_iter > 2
+    assert fit.trial_records is not None
+    assert len(fit.trial_records) >= fit.n_iter - 1
+    np.testing.assert_allclose(
+        fit.trial_records[0, : len(start)],
+        np.log(start),
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert fit.trial_records.shape[1] == (19 if scale < 0 else 12)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        bridge.fit_bam_discrete_gaussian(
+            "y ~ te(x,z,bs='cr',k=3)",
+            frame,
+            sp=start,
+            initial_sp=start,
+            initial_scale=float(np.exp(-3.0)),
+        )
+
+
+def _working_frame() -> pd.DataFrame:
+    position = np.arange(97, dtype=float)
+    x = (position + 0.2 * np.sin(position * 0.7)) / len(position)
+    z = np.cos(position * 0.23) + 0.07 * np.sin(position * 0.91)
+    y = 0.4 - 0.3 * z + np.sin(4.5 * x) + 0.05 * np.cos(position)
+    return pd.DataFrame({"x": x, "z": z, "y": y})
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+@pytest.mark.parametrize("scale", [-1.0, float(np.exp(-3.0))])
+def test_trace_bam_working_model_reports_replayable_frozen_state(scale: float) -> None:
+    """Tracing is numerically transparent and every trial is a source state."""
+    frame = _working_frame()
+    bridge = RBridge(mode="rpy2")
+    weights = np.linspace(0.6, 1.4, len(frame))
+    offset = np.linspace(-0.1, 0.2, len(frame))
+    arguments = {
+        "initial_sp": np.array([1e-4, 1e4]),
+        "initial_scale": float(np.exp(-3.0)),
+        "scale": scale,
+        "weights": weights,
+        "offset": offset,
+    }
+    trace = bridge.trace_bam_working_model(
+        "y ~ te(x,z,bs='cr',k=3)", frame, **arguments
+    )
+    plain = bridge.fit_bam_discrete_gaussian(
+        "y ~ te(x,z,bs='cr',k=3)", frame, m=30, **arguments
+    )
+    collector = _AssertCollector()
+    for name in ("coefficients", "smoothing_params", "fitted_values"):
+        collector.check(
+            f"untraced {name}",
+            lambda name=name: np.testing.assert_array_equal(
+                getattr(trace.fit, name), getattr(plain, name)
+            ),
+        )
+    (block,) = trace.state.blocks
+    n_parameters = 2 + (scale < 0)
+    collector.check(
+        "frozen state",
+        lambda: (
+            np.testing.assert_allclose(
+                trace.state.gram, trace.state.gram.T, rtol=STRICT.rtol, atol=STRICT.atol
+            ),
+            np.testing.assert_array_equal(
+                [block.start, block.stop, block.rank, trace.state.null_dimension],
+                [1, 9, 5, 4],
+            ),
+            np.testing.assert_array_equal(
+                [len(block.roots), len(block.root_products), trace.state.n_obs],
+                [2, 2, len(frame)],
+            ),
+        ),
+    )
+    first = trace.trials[0]
+    collector.check(
+        "iteration-one start",
+        lambda: (
+            np.testing.assert_allclose(
+                first.accepted[:2],
+                np.log(arguments["initial_sp"]),
+                rtol=STRICT.rtol,
+                atol=STRICT.atol,
+            ),
+            np.testing.assert_array_equal(first.step, np.zeros(n_parameters)),
+            np.testing.assert_array_equal(
+                [first.iteration, first.deviance, first.criterion], [1, 0.0, 0.0]
+            ),
+        ),
+    )
+    for index, trial in enumerate(trace.trials):
+        proposal = trial.proposal
+        collector.check(
+            f"trial {index} lsp = lsp0 + Nstep",
+            lambda trial=trial, proposal=proposal: np.testing.assert_array_equal(
+                trial.accepted + trial.step,
+                np.r_[proposal.log_smoothing, proposal.log_scale][:n_parameters],
+            ),
+        )
+        collector.check(
+            f"trial {index} shapes",
+            lambda proposal=proposal, trial=trial: np.testing.assert_array_equal(
+                [
+                    *proposal.hessian.shape,
+                    len(proposal.gradient),
+                    len(proposal.step),
+                    *trial.penalty_first.shape,
+                    *trial.penalty_second.shape,
+                ],
+                [n_parameters] * 4 + [2, 2, 2],
+            ),
+        )
+    collector.check(
+        "iterations",
+        lambda: np.testing.assert_array_equal(
+            sorted({trial.iteration for trial in trace.trials}),
+            np.arange(1, trace.fit.n_iter),
+        ),
+    )
+    collector.raise_if_any(f"bgam.fitd trace scale={scale}")
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_source_bam_sl_fitchol_state_validates_and_solves_its_system() -> None:
+    frame = _working_frame()
+    bridge = RBridge(mode="rpy2")
+    weights = np.linspace(0.6, 1.4, len(frame))
+    offset = np.linspace(-0.1, 0.2, len(frame))
+    for bad in (np.array([]), np.array([np.nan, 0.0]), np.zeros((1, 2))):
+        with pytest.raises(ValueError, match="log_smoothing"):
+            bridge.source_bam_sl_fitchol_state(
+                "y ~ te(x,z,bs='cr',k=3)",
+                frame,
+                bad,
+                weights,
+                offset,
+                fixed_scale=True,
+            )
+    with pytest.raises(ValueError, match="log_scale"):
+        bridge.source_bam_sl_fitchol_state(
+            "y ~ te(x,z,bs='cr',k=3)",
+            frame,
+            np.zeros(2),
+            weights,
+            offset,
+            fixed_scale=True,
+            log_scale=np.inf,
+        )
+    evaluation = bridge.source_bam_sl_fitchol_state(
+        "y ~ te(x,z,bs='cr',k=3)",
+        frame,
+        np.log([0.35, 0.7]),
+        weights,
+        offset,
+        fixed_scale=False,
+    )
+    state, proposal = evaluation.state, evaluation.proposal
+    (block,) = state.blocks
+    hessian = state.gram.copy()
+    penalized = block.start + np.flatnonzero(block.penalized)
+    for lam, penalty in zip(proposal.smoothing, block.penalties, strict=True):
+        hessian[np.ix_(penalized, penalized)] += lam * penalty
+    np.testing.assert_allclose(
+        hessian @ proposal.coefficients,
+        state.rhs,
+        rtol=STRICT.rtol,
+        atol=STRICT.atol,
+    )
+    assert proposal.gradient.shape == proposal.step.shape == (3,)
+    assert evaluation.penalty_second.shape == (2, 2)
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_source_linear_algebra_reports_r_lapack_provider() -> None:
+    from tests.r_bridge import SourceLinearAlgebra
+
+    report = RBridge(mode="rpy2").source_linear_algebra()
+    assert report.lapack_library
+    assert report.lapack_version.count(".") == 2
+    assert report.blas_library
+    if report.openblas_config is None:
+        assert not report.lapack_is_openblas("OpenBLAS")
+    else:
+        assert report.lapack_is_openblas("OpenBLAS ")
+        assert not report.lapack_is_openblas("OpenBLAS 9.9.9 ")
+    synthetic = SourceLinearAlgebra("lapack", "3.12.0", "blas", "OpenBLAS 0.3.26 X")
+    assert synthetic.lapack_is_openblas("OpenBLAS 0.3.26 ")
+
+
+def test_bam_discrete_gaussian_rejects_legacy_mode_before_r_object_conversion():
+    frame = pd.DataFrame({"x": [0.0, 1.0], "y": [1.0, 2.0]})
+    with pytest.raises(RBridgeError, match="requires RBridge"):
+        RBridge(mode="subprocess").fit_bam_discrete_gaussian(
+            "y ~ s(x)", frame, m=(3, 3)
+        )
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_bam_discretization_replays_bams_own_grids_and_term_margins() -> None:
+    frame = _working_frame()
+    bridge = RBridge(mode="rpy2")
+    rounded = bridge.bam_discretization("y ~ z + te(x,z,bs='cr',k=3)", frame, m=30)
+    assert set(rounded.variables) == {"x", "y", "z"}
+    assert rounded.term_margins == {
+        "(Intercept)": (("(Intercept)",),),
+        "z": (("z",),),
+        "te(x,z)": (("x",), ("z",)),
+    }
+    assert rounded.table_rows == (
+        1,
+        rounded.variables["z"].n_unique,
+        rounded.variables["x"].n_unique,
+        rounded.variables["z"].n_unique,
+    )
+    for name, variable in rounded.variables.items():
+        assert variable.n_unique <= 30
+        assert len(variable.representatives) == variable.n_unique
+        assert variable.data_range == (frame[name].min(), frame[name].max())
+        assert not set(variable.representatives) <= set(frame[name])
+    exact = bridge.bam_discretization("y ~ z + te(x,z,bs='cr',k=3)", frame)
+    for name, variable in exact.variables.items():
+        assert variable.n_unique == frame[name].nunique()
+        assert set(variable.representatives) == set(frame[name])
+    with pytest.raises(ValueError, match="factor_names"):
+        bridge.bam_discretization("y ~ s(x)", frame, factor_names=("g",))
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_bam_discrete_prediction_flag_selects_predict_bamd() -> None:
+    frame = _working_frame()
+    bridge = RBridge(mode="rpy2")
+    request = pd.DataFrame(
+        {
+            "x": np.linspace(-0.1, 1.1, 1200),
+            "z": np.linspace(-1.2, 1.2, 1200)[::-1],
+        }
+    )
+    exact = bridge.fit_bam_discrete_gaussian(
+        "y ~ z + s(x,bs='cr',k=6)", frame, m=30, newdata=request
+    )
+    compressed = bridge.fit_bam_discrete_gaussian(
+        "y ~ z + s(x,bs='cr',k=6)",
+        frame,
+        m=30,
+        newdata=request,
+        discrete_prediction=True,
+    )
+    np.testing.assert_array_equal(compressed.coefficients, exact.coefficients)
+    assert not np.allclose(
+        compressed.prediction, exact.prediction, rtol=STRICT.rtol, atol=STRICT.atol
+    )
+    assert compressed.prediction_se is not None
+
+
+def test_bam_discrete_prediction_flag_rejects_before_r_conversion(monkeypatch):
+    def reject(*_args, **_kwargs):
+        raise AssertionError("discrete_prediction must be checked before R input")
+
+    monkeypatch.setattr(RBridge, "_bam_discrete_arguments", reject)
+    bridge = object.__new__(RBridge)
+    with pytest.raises(ValueError, match="discrete_prediction"):
+        bridge.fit_bam_discrete_gaussian(
+            "y ~ s(x,bs='cr',k=6)", _working_frame(), m=30, discrete_prediction=1
+        )
+
+
+def _poisson_frame() -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    frame = _working_frame()
+    rate = np.exp(0.2 + np.sin(4.5 * frame.x) - 0.3 * frame.z)
+    frame["y"] = np.random.default_rng(4).poisson(rate).astype(float)
+    weights = np.linspace(0.6, 1.4, len(frame))
+    offset = np.linspace(-0.1, 0.2, len(frame))
+    return frame, weights, offset
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+@pytest.mark.parametrize("selected", [False, True], ids=["fixed", "selected"])
+def test_trace_bam_regular_working_model_is_transparent_and_complete(
+    selected: bool,
+) -> None:
+    """The non-additive bgam.fitd trace changes no result and records its loop."""
+    frame, weights, offset = _poisson_frame()
+    bridge = RBridge(mode="rpy2")
+    arguments = {
+        "family": "poisson",
+        "sp": None if selected else np.array([0.7]),
+        "weights": weights,
+        "offset": offset,
+    }
+    trace = bridge.trace_bam_regular_working_model(
+        "y ~ z + s(x,bs='cr',k=6)", frame, **arguments
+    )
+    plain = bridge.fit_bam_discrete(
+        "y ~ z + s(x,bs='cr',k=6)", frame, m=30, **arguments
+    )
+    collector = _AssertCollector()
+    for name in ("coefficients", "smoothing_params", "fitted_values"):
+        collector.check(
+            f"untraced {name}",
+            lambda name=name: np.testing.assert_array_equal(
+                getattr(trace.fit, name), getattr(plain, name)
+            ),
+        )
+    first = trace.trials[0]
+    collector.check(
+        "iteration one starts from mustart",
+        lambda: check_that(
+            first.iteration == 1
+            and first.coefficients is None
+            and first.coefficient_trials == 1
+            and all(trial.coefficients is not None for trial in trace.trials[1:]),
+            "iteration one has no coefficients; later iterations do",
+        ),
+    )
+    collector.check(
+        "loop exit",
+        lambda: check_that(
+            trace.failure is None
+            and trace.converged
+            and trace.final_iteration == trace.fit.n_iter
+            and trace.final_iteration == trace.trials[-1].iteration + 1
+            and trace.final_coefficient_trials >= 1,
+            f"exit {trace.final_iteration}/{trace.fit.n_iter} conv={trace.converged}",
+        ),
+    )
+    collector.check(
+        "proposal shapes",
+        lambda: check_that(
+            all(
+                len(trial.proposal.step) == (1 if selected else 0)
+                and trial.gram.shape == trial.state.gram.shape
+                for trial in trace.trials
+            ),
+            "fixed sp has no free parameter; selected has one",
+        ),
+    )
+    collector.raise_if_any(f"regular bgam.fitd trace {selected=}")
+
+
+def test_regular_bam_family_arguments_reject_before_r_conversion() -> None:
+    bridge = object.__new__(RBridge)
+    frame, _, _ = _poisson_frame()
+    with pytest.raises(ValueError, match="unsupported bam family/link"):
+        bridge.fit_bam_discrete("y ~ s(x)", frame, family="tweedie")
+    with pytest.raises(ValueError, match="unsupported bam family/link"):
+        bridge.fit_bam_discrete("y ~ s(x)", frame, family="poisson", link="logit")
+    with pytest.raises(ValueError, match="additive Gaussian"):
+        bridge.trace_bam_regular_working_model("y ~ s(x)", frame, family="gaussian")
+    with pytest.raises(ValueError, match="allow_failure"):
+        bridge.trace_bam_regular_working_model(
+            "y ~ s(x)", frame, family="poisson", allow_failure=1
+        )
+    with pytest.raises(ValueError, match="Unknown bam family"):
+        bridge._bam_family("tweedie", None)
+    with pytest.raises(ValueError, match="pinned poisson link"):
+        bridge._bam_family("poisson", "logit")
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+def test_family_dev_resids_returns_raw_rows_and_validates() -> None:
+    bridge = RBridge(mode="rpy2")
+    rows = bridge.family_dev_resids(
+        "poisson", np.array([0.0, 2.0]), np.array([-0.5, 1.0]), np.ones(2)
+    )
+    # R keeps 2*mu*wt for a zero count, even at a negative mean.
+    np.testing.assert_allclose(
+        rows, [-1.0, 2 * (2 * np.log(2.0) - 1.0)], rtol=STRICT.rtol
+    )
+    with pytest.raises(ValueError, match="matching 1-D"):
+        bridge.family_dev_resids("gamma", np.ones(2), np.ones(3), np.ones(2))
+
+
+def test_nb_family_arguments_reject_before_r_conversion() -> None:
+    bridge = object.__new__(RBridge)
+    with pytest.raises(ValueError, match="nb family only"):
+        bridge._bam_family("poisson", None, theta=2.0)
+    with pytest.raises(ValueError, match="needs its value"):
+        bridge._bam_family("nb", "log", theta_fixed=True)
+    with pytest.raises(ValueError, match="positive and finite"):
+        bridge._bam_family("nb", "log", theta=-1.0)
+    with pytest.raises(ValueError, match="theta_fixed must be a boolean"):
+        bridge._bam_family("nb", "log", theta=1.0, theta_fixed=1)
+    with pytest.raises(ValueError, match="pinned nb link"):
+        bridge._bam_family("nb", "logit")
+
+
+@pytest.mark.skipif(not _r_available(), reason="pinned R with mgcv not available")
+@pytest.mark.parametrize("fixed", [False, True], ids=["estimated", "fixed"])
+def test_trace_bam_nb_reports_theta_at_every_trial_and_exit(fixed: bool) -> None:
+    frame, weights, offset = _poisson_frame()
+    bridge = RBridge(mode="rpy2")
+    arguments = {
+        "family": "nb",
+        "sp": np.array([0.7]),
+        "weights": weights,
+        "offset": offset,
+        "theta": 2.0,
+        "theta_fixed": fixed,
+    }
+    trace = bridge.trace_bam_regular_working_model(
+        "y ~ z + s(x,bs='cr',k=6)", frame, **arguments
+    )
+    plain = bridge.fit_bam_discrete(
+        "y ~ z + s(x,bs='cr',k=6)", frame, m=30, **arguments
+    )
+    np.testing.assert_array_equal(trace.fit.coefficients, plain.coefficients)
+    thetas = [trial.log_theta for trial in trace.trials]
+    assert all(value is not None for value in thetas)
+    assert thetas[0] == np.log(2.0)
+    assert trace.final_log_theta == plain.log_theta
+    if fixed:
+        assert set(thetas) == {np.log(2.0)}
+    else:
+        assert len(set(thetas)) > 1
+    terms = bridge.nb_working_terms(
+        frame.y.to_numpy(),
+        plain.fitted_values,
+        np.log(plain.fitted_values),
+        offset,
+        weights,
+        plain.log_theta,
+    )
+    assert {"deviance", "dth", "dth2", "ls", "lsth1", "lsth2", "w", "z"} <= set(terms)
+    with pytest.raises(ValueError, match="matching 1-D"):
+        bridge.nb_estimate_theta(np.ones(2), np.ones(3), np.ones(2), 0.0)

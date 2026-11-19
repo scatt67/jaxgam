@@ -27,6 +27,9 @@ R source reference: fast-REML.r lines 1740-1875
 
 from __future__ import annotations
 
+import dataclasses
+from decimal import Decimal, localcontext
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -37,9 +40,18 @@ from jaxgam.families.standard import Binomial, Gamma, Gaussian, Poisson
 from jaxgam.fitting.data import FittingData
 from jaxgam.fitting.initialization import initialize_beta
 from jaxgam.fitting.newton import (
+    _MAX_HALVINGS_GAUSSIAN,
     NewtonOptimizer,
+    _jit_gaussian_score_change,
+    _logdet_change,
     _safe_newton_step,
     newton_optimize,
+)
+from jaxgam.fitting.penalty_ops import (
+    JaxLocalPenalty,
+    JaxPenaltyBlock,
+    JaxPenaltyStructure,
+    JaxTransform,
 )
 from jaxgam.fitting.pirls import pirls_loop
 from jaxgam.jax_utils import to_jax
@@ -55,7 +67,318 @@ from tests.tolerances import LOOSE, MODERATE, STRICT
 jax.config.update("jax_enable_x64", True)
 
 
+class _GaussianLineSearchProbe(NewtonOptimizer):
+    """Deterministic score probe for fast-REML line-search semantics."""
+
+    def __init__(self, scores: list[float]) -> None:
+        self._scores = iter(scores)
+        self.calls: list[jax.Array] = []
+        self._tol = 1e-6
+
+    def _clamp_params(self, params: jax.Array) -> jax.Array:
+        return params
+
+    def _gaussian_trial_score_change(
+        self, _params, _trial_params, _beta, _trial, score, score_trial, _scale
+    ) -> float:
+        return score_trial - score
+
+    def _fit_and_score(
+        self, params: jax.Array, _beta_init: jax.Array
+    ) -> tuple[object, jax.Array]:
+        self.calls.append(params)
+        return object(), jnp.asarray(next(self._scores))
+
+
 # ---- A. Safe Newton step tests ----
+
+
+class TestGaussianStepHalving:
+    """Pinned fast-REML acceptance and representability semantics."""
+
+    @staticmethod
+    def _run(
+        scores: list[float], step: float
+    ) -> tuple[_GaussianLineSearchProbe, jax.Array, object]:
+        probe = _GaussianLineSearchProbe(scores)
+        params, _pirls, _score, outcome = probe._step_halve_gaussian(
+            jnp.array([1.0]),
+            jnp.array([step]),
+            1.0,
+            jnp.array([0.0]),
+            1.0,
+        )
+        return probe, params, outcome
+
+    def test_equal_finite_score_is_accepted_without_halving(self):
+        probe, params, outcome = self._run([1.0], 0.25)
+        assert outcome.name == "ACCEPTED"
+        assert len(probe.calls) == 1
+        np.testing.assert_allclose(
+            params, jnp.array([1.25]), rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+    def test_representable_half_step_is_tried_after_one_ulp_worse_trial(self):
+        ulp = np.nextafter(1.0, 2.0) - 1.0
+        probe, params, outcome = self._run(
+            [np.nextafter(1.0, np.inf), np.nextafter(1.0, -np.inf)], 2.0 * ulp
+        )
+        assert outcome.name == "ACCEPTED"
+        assert len(probe.calls) == 2
+        assert float(params[0]) == np.nextafter(1.0, 2.0)
+
+    @pytest.mark.parametrize("invalid_score", [np.nan, np.inf, -np.inf])
+    def test_nonfinite_trial_is_never_accepted(self, invalid_score: float):
+        probe, params, outcome = self._run([invalid_score, 0.9], 0.25)
+        assert outcome.name == "ACCEPTED"
+        assert len(probe.calls) == 2
+        np.testing.assert_allclose(
+            params, jnp.array([1.125]), rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+    @pytest.mark.parametrize("invalid_score", [np.nan, np.inf, -np.inf])
+    def test_persistent_nonfinite_trials_exhaust_the_bounded_search(
+        self, invalid_score: float
+    ) -> None:
+        probe, _params, outcome = self._run(
+            [invalid_score] * (_MAX_HALVINGS_GAUSSIAN + 1), 0.25
+        )
+        assert outcome.name == "FAILED"
+        assert len(probe.calls) == _MAX_HALVINGS_GAUSSIAN + 1
+
+    def test_four_consecutive_insignificant_increases_fail(self):
+        probe, _params, outcome = self._run([np.nextafter(1.0, np.inf)] * 4, 0.25)
+        assert outcome.name == "FAILED"
+        assert len(probe.calls) == 4
+
+    def test_exact_unrepresentable_step_fails_without_a_second_trial(self):
+        half_ulp = (np.nextafter(1.0, 2.0) - 1.0) / 2.0
+        probe, params, outcome = self._run([1.1], half_ulp)
+        assert outcome.name == "FAILED"
+        assert len(probe.calls) == 1
+        assert float(params[0]) == 1.0
+
+    def test_halving_cap_remains_source_matched(self):
+        probe, _params, outcome = self._run([2.0] * (_MAX_HALVINGS_GAUSSIAN + 1), 0.25)
+        assert outcome.name == "FAILED"
+        assert len(probe.calls) == _MAX_HALVINGS_GAUSSIAN + 1
+
+
+class TestGaussianScoreChange:
+    """Stable criterion changes retain strict descent below scalar-score noise."""
+
+    @pytest.mark.parametrize(
+        ("base_shift", "rho_step", "phi_step", "beta_shift"),
+        [
+            (4e-8, 0.0, -4e-8, 0.0),
+            (0.0, 0.0, 4e-8, 0.0),
+            (0.0, 2e-8, 0.0, 0.0),
+            (0.0, 0.0, 0.0, 0.01),
+        ],
+    )
+    def test_sub_ulp_changes_match_100_digit_absolute_criterion(
+        self, base_shift, rho_step, phi_step, beta_shift
+    ) -> None:
+        base = np.array([0.0, np.log(2.0) + base_shift])
+        trial = base + np.array([rho_step, phi_step])
+        beta_base = np.array([1.0, 1.0 + beta_shift])
+        beta_trial = np.array([1.0, 2.0 / (1.0 + np.exp(trial[0]))])
+        structure = JaxPenaltyStructure(
+            2,
+            (
+                JaxPenaltyBlock(
+                    1,
+                    2,
+                    (0,),
+                    (JaxLocalPenalty("identity", jnp.array(1.0), 1),),
+                    JaxTransform("identity", jnp.array(1.0), 1),
+                ),
+            ),
+        )
+        actual = float(
+            _jit_gaussian_score_change(
+                jnp.asarray(base),
+                jnp.asarray(trial),
+                jnp.asarray(beta_base),
+                jnp.asarray(beta_trial),
+                jnp.eye(2),
+                jnp.array([1.0, 2.0]),
+                jnp.ones(2),
+                jnp.zeros(2),
+                jnp.eye(2),
+                structure,
+                (),
+                n_lambda=1,
+                Mp=1,
+                singleton_sp_indices=(0,),
+                singleton_ranks=(1,),
+                multi_block_sp_indices=(),
+            )
+        )
+        with localcontext() as context:
+            context.prec = 100
+
+            def absolute_score(params, beta):
+                rho, log_phi = (Decimal.from_float(float(x)) for x in params)
+                b0, b1 = (Decimal.from_float(float(x)) for x in beta)
+                penalty = rho.exp()
+                quadratic = (1 - b0) ** 2 + (2 - b1) ** 2 + penalty * b1**2
+                return (
+                    quadratic / log_phi.exp() + log_phi + (1 + penalty).ln() - rho
+                ) / 2
+
+            expected = float(
+                absolute_score(trial, beta_trial) - absolute_score(base, beta_base)
+            )
+        assert actual != 0.0
+        assert np.sign(actual) == np.sign(expected)
+        # An ordinary absolute tolerance would conceal a wrong sign or zero.
+        np.testing.assert_allclose(actual, expected, rtol=MODERATE.rtol, atol=0.0)
+
+    @pytest.mark.parametrize("jitter", [0.0, 1e-3])
+    def test_logdet_change_matches_high_precision_and_rejects_singular_base(
+        self, jitter
+    ):
+        base = np.array([[10.0, 0.3], [0.3, 0.1]])
+        change = np.array([[1e-12, -3e-13], [-3e-13, 2e-14]])
+        with localcontext() as context:
+            context.prec = 100
+            a, b, d = map(Decimal.from_float, (base[0, 0], base[0, 1], base[1, 1]))
+            da, db, dd = map(
+                Decimal.from_float, (change[0, 0], change[0, 1], change[1, 1])
+            )
+            multiplier = 1 + Decimal.from_float(jitter)
+            a, d, da, dd = (value * multiplier for value in (a, d, da, dd))
+            expected = float(
+                ((a + da) * (d + dd) - (b + db) ** 2).ln() - (a * d - b**2).ln()
+            )
+        actual = jax.jit(_logdet_change)(
+            jnp.asarray(base), jnp.asarray(change), relative_diagonal_jitter=jitter
+        )
+        np.testing.assert_allclose(actual, expected, rtol=STRICT.rtol, atol=0.0)
+        assert np.isnan(_logdet_change(jnp.zeros((2, 2)), jnp.eye(2)))
+
+    @pytest.mark.parametrize(
+        "formula",
+        ["y ~ s(x, bs='cr', k=6)", "y ~ te(x, z, bs='cr', k=4)"],
+    )
+    def test_change_matches_direct_criterion_for_weighted_offset_models(self, formula):
+        rng = np.random.default_rng(SEED)
+        data = pd.DataFrame({"x": rng.uniform(size=55), "z": rng.uniform(size=55)})
+        data["y"] = np.sin(3.0 * data.x) + rng.normal(scale=0.2, size=len(data))
+        fd = _setup_fd(formula, data, Gaussian())
+        fd = dataclasses.replace(
+            fd,
+            wt=jnp.linspace(0.2, 1.7, fd.n_obs).at[0].set(0.0),
+            offset=jnp.linspace(-0.2, 0.1, fd.n_obs),
+        )
+        optimizer = NewtonOptimizer(fd)
+        base = jnp.concatenate([fd.log_lambda_init, jnp.array([-1.2])])
+        trial = base + jnp.linspace(-0.02, 0.03, len(base))
+        before, score_before = optimizer._fit_and_score(base, optimizer._initial_beta())
+        after, score_after = optimizer._fit_and_score(trial, before.coefficients)
+        actual = _jit_gaussian_score_change(
+            base,
+            trial,
+            before.coefficients,
+            after.coefficients,
+            fd.X,
+            fd.y,
+            fd.wt,
+            fd.offset,
+            after.XtWX,
+            fd.penalty_structure,
+            fd.multi_block_proj_S,
+            n_lambda=fd.n_penalties,
+            Mp=fd.total_penalty_null_dim,
+            singleton_sp_indices=fd.singleton_sp_indices,
+            singleton_ranks=fd.singleton_ranks,
+            multi_block_sp_indices=fd.multi_block_sp_indices,
+        )
+        np.testing.assert_allclose(
+            actual, score_after - score_before, rtol=STRICT.rtol, atol=STRICT.atol
+        )
+
+    def test_flat_gp_start_converges_without_relaxing_gradient_tolerance(
+        self, monkeypatch
+    ):
+        from tests.test_validation_matrix import _make_gp_2d_data
+
+        fd = _setup_fd(
+            "y ~ s(x, z, bs='gp', k=30)", _make_gp_2d_data("gaussian"), Gaussian()
+        )
+        optimizer = NewtonOptimizer(
+            dataclasses.replace(fd, log_lambda_init=fd.log_lambda_init - 0.1)
+        )
+        checks = []
+        original_check = optimizer._check_convergence
+
+        def capture(*args, **kwargs):
+            result = original_check(*args, **kwargs)
+            checks.append(result)
+            return result
+
+        monkeypatch.setattr(optimizer, "_check_convergence", capture)
+        result = optimizer.run()
+        assert result.converged
+        gradient, _hessian, score_scale, converged = checks[-1]
+        assert converged
+        assert float(jnp.max(jnp.abs(gradient))) <= optimizer._tol * score_scale
+        assert optimizer._tol == np.sqrt(np.finfo(float).eps)
+
+    @pytest.mark.parametrize(
+        "mode", ["noncanonical", "rank", "no_joint_scale", "nonfinite", "large"]
+    )
+    def test_stable_comparison_does_not_expand_unsupported_paths(
+        self, monkeypatch, mode
+    ):
+        from jaxgam.fitting import newton as newton_module
+
+        data = _generate_family_data("gaussian", n=35)
+        family = Gaussian(link="log") if mode == "noncanonical" else Gaussian()
+        fd = _setup_fd("y ~ s(x, bs='cr', k=6)", data, family)
+        if mode == "rank":
+            fd = dataclasses.replace(fd, rank_deficit=1)
+        optimizer = NewtonOptimizer(fd)
+        if mode == "no_joint_scale":
+            optimizer._joint_scale = False
+
+        def unexpected_call(*_args, **_kwargs):
+            raise AssertionError("unsupported comparison used Gaussian refinement")
+
+        monkeypatch.setattr(
+            newton_module, "_jit_gaussian_score_change", unexpected_call
+        )
+        score_trial = (
+            np.inf if mode == "nonfinite" else 1.0 + (0.1 if mode == "large" else 1e-12)
+        )
+        actual = optimizer._gaussian_trial_score_change(
+            None, None, None, None, 1.0, score_trial, 2.0
+        )
+        assert actual == score_trial - 1.0
+
+    def test_nonfinite_stable_difference_preserves_original_comparison(
+        self, monkeypatch
+    ):
+        from jaxgam.fitting import newton as newton_module
+
+        fd = _setup_fd(
+            "y ~ s(x, bs='cr', k=6)",
+            _generate_family_data("gaussian", n=35),
+            Gaussian(),
+        )
+        optimizer = NewtonOptimizer(fd)
+        params = jnp.concatenate([fd.log_lambda_init, jnp.array([0.0])])
+        trial, _score = optimizer._fit_and_score(params, optimizer._initial_beta())
+        monkeypatch.setattr(
+            newton_module,
+            "_jit_gaussian_score_change",
+            lambda *_args, **_kwargs: jnp.nan,
+        )
+        actual = optimizer._gaussian_trial_score_change(
+            params, params, trial.coefficients, trial, 1.0, 1.0 + 1e-12, 2.0
+        )
+        assert actual == (1.0 + 1e-12) - 1.0
 
 
 class TestSafeNewtonStep:
@@ -425,14 +748,14 @@ class TestDiagnostics:
             y=to_jax(y),
             wt=jnp.ones(n),
             offset=None,
-            S_list=(),
+            penalty_structure=JaxPenaltyStructure(p, ()),
             log_lambda_init=jnp.zeros(0),
             family=Gaussian(),
             n_obs=n,
             n_coef=p,
             penalty_ranks=(),
             penalty_null_dims=(),
-            penalty_range_basis=None,
+            total_penalty_rank=0,
             singleton_sp_indices=(),
             singleton_ranks=(),
             singleton_eig_constants=jnp.array([]),
@@ -440,7 +763,6 @@ class TestDiagnostics:
             multi_block_ranks=(),
             multi_block_proj_S=(),
             multi_block_S_local=(),
-            repara_D=None,
             max_y=0,
         )
         result = newton_optimize(fd)
@@ -465,29 +787,7 @@ class TestDiagnostics:
         # Manually add an offset to FittingData
         n = fd_no_offset.n_obs
         offset = jnp.full(n, 0.5)
-        fd_offset = FittingData(
-            X=fd_no_offset.X,
-            y=fd_no_offset.y,
-            wt=fd_no_offset.wt,
-            offset=offset,
-            S_list=fd_no_offset.S_list,
-            log_lambda_init=fd_no_offset.log_lambda_init,
-            family=fd_no_offset.family,
-            n_obs=fd_no_offset.n_obs,
-            n_coef=fd_no_offset.n_coef,
-            penalty_ranks=fd_no_offset.penalty_ranks,
-            penalty_null_dims=fd_no_offset.penalty_null_dims,
-            penalty_range_basis=fd_no_offset.penalty_range_basis,
-            singleton_sp_indices=fd_no_offset.singleton_sp_indices,
-            singleton_ranks=fd_no_offset.singleton_ranks,
-            singleton_eig_constants=fd_no_offset.singleton_eig_constants,
-            multi_block_sp_indices=fd_no_offset.multi_block_sp_indices,
-            multi_block_ranks=fd_no_offset.multi_block_ranks,
-            multi_block_proj_S=fd_no_offset.multi_block_proj_S,
-            multi_block_S_local=fd_no_offset.multi_block_S_local,
-            repara_D=fd_no_offset.repara_D,
-            max_y=fd_no_offset.max_y,
-        )
+        fd_offset = dataclasses.replace(fd_no_offset, offset=offset)
         result_offset = newton_optimize(fd_offset)
 
         assert result_offset.converged
@@ -599,6 +899,131 @@ class TestStepFailureConvergence:
         outside = jnp.full((n,), 2.0 * thresh)
         assert opt._gradient_within_tol(within, params, score_scale)
         assert not opt._gradient_within_tol(outside, params, score_scale)
+
+
+class _NonFiniteScoreProbe(NewtonOptimizer):
+    """Report a NaN REML score at every evaluation, keeping the real PIRLS.
+
+    The criterion, gradient and Hessian are still computed from the real
+    PIRLS fit, so only the score is non-finite: a deterministic stand-in for
+    the extreme-sp evaluations whose score overflows to NaN.
+    """
+
+    evaluations = 0
+
+    def _fit_and_score(self, params, beta_init):
+        self.evaluations += 1
+        pirls_result, _score = super()._fit_and_score(params, beta_init)
+        return pirls_result, jnp.asarray(jnp.nan)
+
+
+class TestPinnedSmoothingParameters:
+    """Supplied (pinned) smoothing parameters are never clamped or moved.
+
+    Bug: the dense pinned-Newton route (fixed ``sp`` with an estimated scale
+    or NB theta) passed every trial through the ``lsp_max`` clamp, so a
+    supplied log sp of +-41 was fitted and reported as +-40. Pinned mgcv
+    keeps a supplied sp verbatim in ``lsp0`` (mgcv.r ``gam.setup``) and its
+    ``newton()`` has no log-sp bound (gam.fit3.r). A NaN score also passed
+    the convergence tests (every NaN comparison is false), so a non-finite
+    fit could be reported as converged.
+    """
+
+    FORMULA = "y ~ s(x, k=10, bs='cr')"
+
+    @staticmethod
+    def _pinned_fd(family_name: str, family, log_sp: float) -> FittingData:
+        fd = _setup_fd(
+            TestPinnedSmoothingParameters.FORMULA,
+            _generate_family_data(family_name),
+            family,
+        )
+        return dataclasses.replace(fd, log_lambda_init=jnp.asarray([log_sp]))
+
+    @pytest.mark.parametrize("log_sp", [-60.0, -41.0, -40.0, 0.3, 40.0, 41.0, 60.0])
+    def test_clamp_restores_pinned_values_bitwise(self, log_sp: float):
+        fd = self._pinned_fd("gaussian", Gaussian(), log_sp)
+        pinned = NewtonOptimizer(fd, pin_lambda=True)
+        free = NewtonOptimizer(fd)
+        moved = jnp.asarray([log_sp + 7.0, -1.7])  # [log lambda, log phi]
+        expected = np.asarray([log_sp, -1.7])
+        clamp_jit = jax.jit(pinned._clamp_params)
+        for actual in (pinned._clamp_params(moved), clamp_jit(moved)):
+            np.testing.assert_array_equal(np.asarray(actual), expected)
+        # A non-finite trial coordinate cannot leak into a pinned value.
+        nan_trial = jnp.asarray([jnp.nan, -1.7])
+        np.testing.assert_array_equal(np.asarray(clamp_jit(nan_trial)), expected)
+        # Free coordinates keep the optimizer's box; log phi stays unclamped.
+        np.testing.assert_array_equal(
+            np.asarray(free._clamp_params(moved)),
+            [np.clip(log_sp + 7.0, -40.0, 40.0), -1.7],
+        )
+        np.testing.assert_array_equal(
+            np.asarray(jax.jit(free._clamp_params)(moved)),
+            np.asarray(free._clamp_params(moved)),
+        )
+
+    def test_build_result_never_reports_nonfinite_as_converged(self):
+        fd = _setup_fd(self.FORMULA, _generate_family_data("poisson"), Poisson())
+        opt = NewtonOptimizer(fd)
+        params = fd.log_lambda_init
+        pirls_result, score = opt._fit_and_score(params, opt._initial_beta())
+        criterion = opt._make_criterion(pirls_result)
+        assert bool(jnp.isfinite(score))
+
+        def build(score_value, gradient):
+            return opt._build_result(
+                params,
+                score_value,
+                gradient,
+                criterion,
+                pirls_result,
+                converged=True,
+                step_failed=False,
+                n_iter=2,
+            )
+
+        finite = build(score, jnp.zeros(1))
+        assert finite.converged
+        assert finite.convergence_info == "full convergence"
+        for score_value, gradient in (
+            (jnp.asarray(jnp.nan), jnp.zeros(1)),
+            (jnp.asarray(jnp.inf), jnp.zeros(1)),
+            (score, jnp.asarray([jnp.nan])),
+        ):
+            result = build(score_value, gradient)
+            assert not result.converged
+            assert result.convergence_info == "non-finite REML score or gradient"
+            # The failed evaluation is reported as it is, never replaced
+            # (assert_array_equal treats NaN as equal to NaN).
+            np.testing.assert_array_equal(
+                np.asarray(result.score), np.asarray(score_value)
+            )
+
+    @pytest.mark.parametrize(
+        ("family_name", "family"),
+        [("gaussian", Gaussian()), ("gamma", Gamma())],
+        ids=["gaussian", "gamma"],
+    )
+    def test_pinned_nonfinite_start_stops_without_steps(self, family_name, family):
+        fd = self._pinned_fd(family_name, family, 41.0)
+        probe = _NonFiniteScoreProbe(fd, pin_lambda=True)
+        result = probe.run()
+        assert probe.evaluations == 1
+        assert not result.converged
+        assert result.n_iter == 0
+        assert result.convergence_info == "non-finite REML score or gradient"
+        assert np.isnan(float(result.score))
+        np.testing.assert_array_equal(np.asarray(result.log_lambda), [41.0])
+
+    def test_unpinned_stuck_nonfinite_score_is_not_converged(self):
+        """The non-Gaussian stuck exit no longer converges on a NaN score."""
+        fd = _setup_fd(self.FORMULA, _generate_family_data("poisson"), Poisson())
+        probe = _NonFiniteScoreProbe(fd)
+        result = probe.run()
+        assert probe.evaluations > 1  # estimated sp keeps the step search
+        assert not result.converged
+        assert result.convergence_info == "non-finite REML score or gradient"
 
 
 # ---- G. Step-halving ----

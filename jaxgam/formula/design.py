@@ -12,7 +12,7 @@ R source reference: R/gam.r gam.setup()
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,7 +22,11 @@ from scipy import linalg
 
 from jaxgam.formula import predict_matrix
 from jaxgam.formula.terms import FormulaSpec, ParametricTerm, SmoothSpec
-from jaxgam.penalties.penalty import CompositePenalty, Penalty
+from jaxgam.penalties.structure import (
+    DenseLocalPenalty,
+    PenaltyStructure,
+    make_penalty_structure,
+)
 from jaxgam.smooths.by_variable import (
     FactorBySmooth,
     NumericBySmooth,
@@ -97,8 +101,8 @@ class ModelSetup:
         Prior weights, shape ``(n,)``.
     offset : np.ndarray | None
         Offset vector, shape ``(n,)``, or None.
-    penalties : CompositePenalty | None
-        All penalties embedded in ``(total_p, total_p)`` space.
+    penalties : PenaltyStructure | None
+        Penalties retained in their local coefficient blocks.
         None if model is purely parametric.
     coef_map : CoefficientMap
         Constraint mapping for predict/summary (Phase 3).
@@ -131,7 +135,7 @@ class ModelSetup:
     n_obs: int
     weights: npt.NDArray[np.floating]
     offset: npt.NDArray[np.floating] | None
-    penalties: CompositePenalty | None
+    penalties: PenaltyStructure | None
     coef_map: CoefficientMap
     smooth_info: tuple[SmoothInfo, ...]
     term_names: tuple[str, ...]
@@ -141,6 +145,7 @@ class ModelSetup:
     parametric_terms: tuple[ParametricTerm, ...]
     parametric_keep_cols: tuple[int, ...] = ()
     dropped_param_names: tuple[str, ...] = ()
+    source_determinant_penalties: PenaltyStructure | None = None
     _predict_spec_cache: predict_matrix.PredictSpec | None = field(
         init=False, default=None, compare=False, repr=False
     )
@@ -156,6 +161,7 @@ class ModelSetup:
         data: dict[str, npt.NDArray[np.floating]] | pd.DataFrame,
         weights: npt.NDArray[np.floating] | None = None,
         offset: npt.NDArray[np.floating] | None = None,
+        source_penalty_coordinates: bool = False,
     ) -> ModelSetup:
         """Assemble the full model from a parsed formula and data.
 
@@ -284,6 +290,7 @@ class ModelSetup:
             has_intercept=formula_spec.has_intercept,
             n_parametric=n_parametric,
             X_parametric=X_parametric,
+            copy_inputs=False,
         )
 
         # 2e. Assemble full X
@@ -297,33 +304,56 @@ class ModelSetup:
                 f"coefficient map total ({coef_map.total_coefs})"
             )
 
-        # 2f. Embed penalties. Look the smooth's columns up POSITIONALLY (the
-        # i-th smooth term block), never by label — two smooths can share a
-        # label (s(x,k=6) + s(x,k=8)) and a label lookup would embed the second
-        # smooth's penalty on the first smooth's columns.
+        # 2f. Store penalties in the constrained coordinates of their owning
+        # smooth.  Positional lookup matters: labels can intentionally collide.
+        # Do not zero-pad every S_j into p-by-p coordinates here.
         total_p = coef_map.total_coefs
-        embedded_penalties: list[Penalty] = []
         smooth_blocks = [t for t in coef_map.terms if t.term_type == "smooth"]
+        composite_penalty = make_penalty_structure(
+            total_p, smooth_blocks, S_constrained
+        )
 
-        for i, _sm in enumerate(smooths):
-            col_start = smooth_blocks[i].col_start
+        source_determinant_penalties = None
+        if source_penalty_coordinates and composite_penalty is not None:
+            from jaxgam.smooths.source_penalty_coordinates import (
+                source_centered_penalties,
+            )
 
-            for S_j in S_constrained[i]:
-                S_global = CompositePenalty.embed(S_j, col_start, total_p)
-                # Compute rank of the per-smooth penalty
-                eigvals = np.linalg.eigvalsh(S_j)
-                max_eigval = np.max(np.abs(eigvals)) if len(eigvals) > 0 else 0
-                if max_eigval > 0:
-                    tol = max_eigval * max(S_j.shape[0], 1) * np.finfo(float).eps
-                    rank = int(np.sum(eigvals > tol))
+            source_blocks = list(composite_penalty.blocks)
+            for smooth, term, raw_X, raw_S in zip(
+                smooths, smooth_blocks, X_blocks, S_blocks, strict=True
+            ):
+                if len(raw_S) < 2 or isinstance(smooth, FactorBySmooth):
+                    continue
+                if term.Z_centering is None:
+                    source_S = tuple(raw_S)
                 else:
-                    rank = 0
-                embedded_penalties.append(Penalty(S_global, rank=rank))
-
-        if embedded_penalties:
-            composite_penalty = CompositePenalty(embedded_penalties)
-        else:
-            composite_penalty = None
+                    source_S = source_centered_penalties(raw_X, tuple(raw_S))
+                if term.del_index:
+                    keep = [
+                        i
+                        for i in range(source_S[0].shape[0])
+                        if i not in term.del_index
+                    ]
+                    source_S = tuple(S[np.ix_(keep, keep)] for S in source_S)
+                for index, block in enumerate(source_blocks):
+                    if (
+                        block.start == term.col_start
+                        and block.stop == term.col_start + term.n_coefs
+                        and block.sp_indices == term.penalty_indices
+                    ):
+                        source_blocks[index] = replace(
+                            block,
+                            local_penalties=tuple(
+                                DenseLocalPenalty(S) for S in source_S
+                            ),
+                        )
+                        break
+                else:
+                    raise RuntimeError("Source determinant block was not found.")
+            source_determinant_penalties = PenaltyStructure(
+                total_p, tuple(source_blocks)
+            )
 
         # 2g. Build SmoothInfo and term_names
         smooth_infos = cls._build_smooth_info(smooths, coef_map)
@@ -356,6 +386,7 @@ class ModelSetup:
             parametric_terms=tuple(formula_spec.parametric_terms),
             parametric_keep_cols=tuple(parametric_keep_cols),
             dropped_param_names=tuple(dropped_param_names),
+            source_determinant_penalties=source_determinant_penalties,
         )
 
     # ------------------------------------------------------------------
@@ -700,8 +731,14 @@ class ModelSetup:
             # Resolve by-variable
             smooth = resolve_by_variable(spec, original_data, smooth)
 
-            # Build design matrix and penalty matrices
-            X_s = smooth.build_design_matrix(data_dict)
+            # ``setup`` has already built this exact training basis. Transfer
+            # ownership explicitly so equal-length new data never act as a
+            # cache key and the smooth does not retain a second dense matrix.
+            X_s = (
+                smooth.consume_training_design_matrix(data_dict)
+                if isinstance(smooth, (FactorBySmooth, NumericBySmooth))
+                else smooth.consume_training_design_matrix()
+            )
             penalties = smooth.build_penalty_matrices()
             S_s = [p.S for p in penalties]
 

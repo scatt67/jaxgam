@@ -28,9 +28,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 from scipy import linalg
+from scipy.linalg.lapack import get_lapack_funcs
 
 from jaxgam.smooths.by_variable import FactorBySmooth, NumericBySmooth
-from jaxgam.smooths.tensor import TensorInteractionSmooth
+from jaxgam.smooths.source_penalty_coordinates import source_centered_smooth
+from jaxgam.smooths.tensor import TensorInteractionSmooth, TensorProductSmooth
 
 if TYPE_CHECKING:
     from jaxgam.smooths.base import Smooth
@@ -39,6 +41,44 @@ if TYPE_CHECKING:
     # NumericBySmooth share the same interface as Smooth but do not
     # inherit from it (see by_variable.py module docstring).
     SmoothLike = Smooth | FactorBySmooth | NumericBySmooth
+
+
+def _apply_householder_qt(
+    packed_qr: npt.NDArray[np.floating],
+    tau: npt.NDArray[np.floating],
+    matrix: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """Apply the Q-transpose stored by a raw QR factorization.
+
+    ``scipy.linalg.qr(mode="raw")`` returns the packed Householder
+    reflectors produced by ``geqp3``. Applying them through ``ormqr`` gives
+    the same result as forming a full Q and computing ``Q.T @ matrix``, but
+    only requires storage proportional to ``matrix``.
+    """
+    # LAPACK expects the packed reflector array to have exactly one column
+    # per reflector. Raw QR retains additional R columns for a wide matrix.
+    packed_reflectors = packed_qr[:, : tau.size]
+    ormqr = get_lapack_funcs("ormqr", (packed_reflectors, matrix))
+    matrix_fortran = np.array(matrix, dtype=packed_qr.dtype, order="F", copy=True)
+
+    # Query the LAPACK workspace first. This does not form Q; it only uses a
+    # matrix-sized output buffer, which the transformed coordinates need too.
+    _transformed, work, info = ormqr(
+        "L", "T", packed_reflectors, tau, matrix_fortran, -1
+    )
+    if info != 0:
+        raise linalg.LinAlgError(
+            f"LAPACK ormqr workspace query failed with info={info}."
+        )
+
+    lwork = max(1, int(work[0]))
+    del _transformed
+    transformed, _work, info = ormqr(
+        "L", "T", packed_reflectors, tau, matrix_fortran, lwork
+    )
+    if info != 0:
+        raise linalg.LinAlgError(f"LAPACK ormqr failed with info={info}.")
+    return transformed
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +371,7 @@ class CoefficientMap:
         X_parametric: npt.NDArray[np.floating] | None = None,
         apply_centering: bool = True,
         apply_side: bool = True,
+        copy_inputs: bool = True,
         tol: float = np.finfo(float).eps ** 0.5,
     ) -> tuple[
         CoefficientMap,
@@ -360,6 +401,10 @@ class CoefficientMap:
             Whether to apply sum-to-zero centering constraints.
         apply_side : bool
             Whether to apply gam_side identifiability constraints.
+        copy_inputs : bool
+            Whether inputs remain owned by the caller. Model setup transfers
+            ownership because the raw blocks are short-lived; direct callers
+            retain the conservative copying contract.
         tol : float
             Tolerance for dependence detection.
 
@@ -374,9 +419,16 @@ class CoefficientMap:
         """
         m = len(smooths)
 
-        # Work on copies
-        X_blocks = [X.copy() for X in X_smooth_blocks]
-        S_blocks = [[S.copy() for S in Ss] for Ss in S_smooth_blocks]
+        # Constraint transformations replace blocks rather than mutating their
+        # elements. Model assembly can therefore transfer short-lived raw
+        # blocks without copying them, while public/direct callers keep the
+        # historical defensive-copy behavior.
+        if copy_inputs:
+            X_blocks = [X.copy() for X in X_smooth_blocks]
+            S_blocks = [[S.copy() for S in Ss] for Ss in S_smooth_blocks]
+        else:
+            X_blocks = list(X_smooth_blocks)
+            S_blocks = [list(Ss) for Ss in S_smooth_blocks]
 
         # Track centering Z matrices per smooth
         Z_centering_list: list[npt.NDArray[np.floating] | None] = [None] * m
@@ -408,6 +460,15 @@ class CoefficientMap:
                         sm.k_per_level,
                         base_constraint=getattr(sm, "_base_constraint", None),
                     )
+                elif isinstance(base_smooth, TensorProductSmooth) and (
+                    base_smooth.spec.smooth_type == "te"
+                    and base_smooth.spec.bs in ("cr", "cs")
+                ):
+                    X_c, source_penalties, Z = source_centered_smooth(
+                        np.asarray(X_blocks[i], dtype=np.float64),
+                        tuple(np.asarray(S, dtype=np.float64) for S in S_blocks[i]),
+                    )
+                    S_c = list(source_penalties)
                 else:
                     X_c, S_c, Z = cls.apply_sum_to_zero(X_blocks[i], S_blocks[i])
 
@@ -633,14 +694,31 @@ class CoefficientMap:
                 f"got {X1.shape[0]} and {X2.shape[0]}."
             )
 
+        if X2.shape[1] == 0:
+            return None
+
         r = X1.shape[1]
 
-        # Pivoted QR of X1 (single full QR, matching R's qr() call)
-        Q1, R1, _ = linalg.qr(X1, pivoting=True)
+        # LAPACK's reflector routine requires one dtype for both its packed
+        # factor and right-hand side. Promote mixed inputs before QR; this
+        # also preserves the ordinary float32-only path.
+        qr_dtype = np.result_type(X1.dtype, X2.dtype)
+        X1_qr = np.asarray(X1, dtype=qr_dtype)
+        X2_qr = np.asarray(X2, dtype=qr_dtype)
+
+        # R's qr.qty(qr(X1, LAPACK=TRUE), X2) applies X1's packed
+        # Householder reflectors directly. Forming Q1 would allocate an
+        # n-by-n matrix for a tall X1.
+        (packed_qr, tau), R1, _ = linalg.qr(X1_qr, pivoting=True, mode="raw")
         R11 = abs(R1[0, 0])
 
+        # Preserve the existing Python behavior for square and wide X1:
+        # slicing from column count r leaves no residual coordinates.
+        if r >= X1.shape[0]:
+            return None
+
         # Project X2 into residual space of X1
-        QtX2 = Q1.T @ X2
+        QtX2 = _apply_householder_qt(packed_qr, tau, X2_qr)
         QtX2_resid = QtX2[r:, :]  # shape (n-r, p2)
 
         # Pivoted QR of residual
@@ -676,6 +754,8 @@ class CoefficientMap:
         X_parametric: npt.NDArray[np.floating] | None = None,
         tol: float = np.finfo(float).eps ** 0.5,
         with_pen: bool = True,
+        *,
+        intercept_reference: npt.NDArray[np.floating] | None = None,
     ) -> list[tuple[int, ...] | None]:
         """Detect and remove inter-term identifiability confounds.
 
@@ -699,6 +779,10 @@ class CoefficientMap:
             Tolerance for dependence detection.
         with_pen : bool
             Whether to augment with sqrt-penalty for detection.
+        intercept_reference : np.ndarray or None
+            The constant column after an orthogonal row reduction. Providing
+            it declares that an intercept exists; its coordinates replace
+            ones in dependence references. The caller owns its storage.
 
         Returns
         -------
@@ -709,6 +793,13 @@ class CoefficientMap:
         m = len(smooths)
         if m == 0:
             return []
+        if intercept_reference is not None and (
+            not isinstance(intercept_reference, np.ndarray)
+            or intercept_reference.shape != (X_blocks[0].shape[0],)
+            or not np.issubdtype(intercept_reference.dtype, np.floating)
+            or not np.all(np.isfinite(intercept_reference))
+        ):
+            raise ValueError("intercept_reference must match finite reduced rows.")
 
         # Collect variable names per smooth and max dimension
         v_names_all: list[str] = []
@@ -727,8 +818,8 @@ class CoefficientMap:
         # Only the intercept/constant direction ever enters the dependence
         # reference (R's gam.side, mgcv.r:594-604); non-intercept parametric
         # columns are never used to side-constrain a smooth.
-        intercept = False
-        if X_parametric is not None and X_parametric.shape[1] > 0:
+        intercept = intercept_reference is not None
+        if not intercept and X_parametric is not None and X_parametric.shape[1] > 0:
             col_sds = np.std(X_parametric, axis=0)
             if np.any(col_sds < np.finfo(float).eps ** 0.75):
                 intercept = True
@@ -771,6 +862,9 @@ class CoefficientMap:
 
         # Setup for augmented matrices if with_pen
         n_obs = X_blocks[0].shape[0] if X_blocks else 0
+        constant = (
+            np.ones(n_obs) if intercept_reference is None else intercept_reference
+        )
         total_np = 0
 
         if with_pen:
@@ -800,7 +894,7 @@ class CoefficientMap:
                     if intercept:
                         X1 = np.concatenate(
                             [
-                                np.ones((n_obs, 1)),
+                                constant[:, None],
                                 np.zeros((total_np, 1)),
                             ],
                             axis=0,
@@ -808,7 +902,7 @@ class CoefficientMap:
                     else:
                         X1 = np.zeros((n_obs + total_np, 0))
                 else:
-                    X1 = np.ones((n_obs, 1)) if intercept else np.zeros((n_obs, 0))
+                    X1 = constant[:, None] if intercept else np.zeros((n_obs, 0))
 
                 x1_components: set[int] = set()
 
@@ -840,7 +934,9 @@ class CoefficientMap:
                             X1 = np.column_stack([X1, Xb]) if X1.shape[1] > 0 else Xb
 
                 # Check for dependence
-                if X1.shape[1] == 0:
+                # R only side-constrains against an existing smooth reference;
+                # an intercept alone does not trigger fixDependence.
+                if X1.shape[1] == int(intercept):
                     continue
 
                 if with_pen:

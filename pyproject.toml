@@ -7,6 +7,23 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
+    # One pinned OpenBLAS wheel, loaded RTLD_LOCAL by
+    # jaxgam/smooths/source_lapack.py; it does not replace NumPy/SciPy's BLAS.
+    # scipy-openblas32 (OpenBLAS 0.3.26, LP64) is the OpenBLAS linked by
+    # pinned Linux R 4.5.2/mgcv 1.9-3. It serves cubic-shrinkage DSYEVR and
+    # DGEMM, getFS DPTSV, gdiPK DGEQP3, the source penalty-coordinate DSYEVR,
+    # the exact mat.c::Rlanczos port (DSYMV/DDOT/DAXPY/DSTEDC) for
+    # Gaussian-process bases, and the GP basis products (DGEMM/DGEMV).
+    # scipy-openblas64 (OpenBLAS 0.3.30, ILP64) served only the retained GP
+    # block-Lanczos route, which the exact Rlanczos port replaced. Single-wheel
+    # retry, 2026-10-26 (kept by root): every cubic-shrinkage, Lanczos,
+    # rank-coordinate and source gate stays STRICT on pinned Linux (312/312
+    # owning gates, 250/250 GP consumers, 50/50 gp validation cells) and on
+    # macOS (309 passed, 250/250, 50/50; the 3 weighted GP rank-map cases are
+    # the aliased tie Accelerate R breaks the other way, failing identically
+    # with two wheels, and are now judged by the other-BLAS gauge-invariant
+    # gate).
+    "scipy-openblas32==0.3.26.0.4",
     "numba>=0.58",
     "jax>=0.4.20",
     "jaxlib>=0.4.20",
@@ -58,6 +75,7 @@ min_confidence = 80
 testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "platform_sensitive: outcome can depend on the CPU's SIMD maths or BLAS kernel family (run across runner types by make test-platform-sensitive-ci)",
 ]
 
 [tool.coverage.run]

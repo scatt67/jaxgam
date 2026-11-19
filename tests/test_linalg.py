@@ -1,7 +1,7 @@
 """Tests for jaxgam.linalg.
 
 Coverage:
-1. TestChoFactor — jittered Cholesky factorization
+1. TestChoFactor — plain Cholesky with diagonal-relative fallback
 2. TestPenalizedCholesky — penalized Hessian factorization and solve
 3. TestNumericalRank — rank estimation via pivoted QR
 4. TestJITCompilation — every function runs under jax.jit
@@ -17,6 +17,8 @@ import numpy as np
 import pytest
 
 from jaxgam.jax_utils import (
+    _CHOLESKY_LARGE_RELATIVE_JITTER,
+    _CHOLESKY_SMALL_RELATIVE_JITTER,
     cho_factor,
     numerical_rank,
     penalized_cholesky,
@@ -73,7 +75,7 @@ def realistic_penalized_system() -> dict:
 
 
 class TestChoFactor:
-    """Tests for cho_factor with jitter stabilization."""
+    """Tests for cho_factor: plain factor, regularized only on failure."""
 
     def test_reconstruction(self, pd_matrix: jnp.ndarray) -> None:
         """L @ L.T ≈ H + jitter * I."""
@@ -88,24 +90,41 @@ class TestChoFactor:
             atol=STRICT.atol,
         )
 
-    def test_jitter_scales_with_conditioning(
+    def test_plain_factor_unless_not_positive_definite(
         self,
         pd_matrix: jnp.ndarray,
         near_singular_matrix: jnp.ndarray,
     ) -> None:
-        """Well-conditioned matrices use eps_small; singular ones need more."""
-        _, well_conditioned_jitter = cho_factor(pd_matrix)
-        p = pd_matrix.shape[0]
-        trace_H = jnp.trace(pd_matrix)
-        eps_small = jnp.maximum(1e-12 * trace_H / p, 1e-14)
-        np.testing.assert_allclose(float(well_conditioned_jitter), float(eps_small))
+        """A PD matrix gets the plain factor; fallbacks are diagonal-relative.
 
-        _, near_singular_jitter = cho_factor(near_singular_matrix)
-        trace_near_singular = jnp.trace(near_singular_matrix)
-        eps_small_near_singular = float(
-            jnp.maximum(1e-12 * trace_near_singular / p, 1e-14)
+        No jitter is added while the plain Cholesky succeeds (mgcv's QR-based
+        penalized fits never add one). A singular PSD matrix needs the
+        ``1e-12 * |diag(H)|`` fallback, and an indefinite matrix reports the
+        ``1e-6`` level even when that still cannot make it factorizable.
+        """
+        L, level = cho_factor(pd_matrix)
+        assert float(level) == 0.0
+        np.testing.assert_array_equal(
+            np.array(L), np.array(jnp.linalg.cholesky(pd_matrix))
         )
-        assert float(near_singular_jitter) > eps_small_near_singular
+
+        rng = np.random.default_rng(SEED)
+        basis = rng.standard_normal((10, 6))
+        singular = jnp.array(basis @ basis.T)
+        L_singular, singular_level = cho_factor(singular)
+        assert float(singular_level) == _CHOLESKY_SMALL_RELATIVE_JITTER
+        regularized = singular + _CHOLESKY_SMALL_RELATIVE_JITTER * jnp.diag(
+            jnp.abs(jnp.diag(singular))
+        )
+        np.testing.assert_allclose(
+            np.array(L_singular @ L_singular.T),
+            np.array(regularized),
+            rtol=STRICT.rtol,
+            atol=STRICT.atol,
+        )
+
+        _, indefinite_level = cho_factor(near_singular_matrix)
+        assert float(indefinite_level) == _CHOLESKY_LARGE_RELATIVE_JITTER
 
     def test_cho_solve_roundtrip(self, pd_matrix: jnp.ndarray) -> None:
         """cho_solve(cho_factor(H), b) ≈ H^{-1} b."""
@@ -157,12 +176,16 @@ class TestPenalizedCholesky:
         np.testing.assert_array_equal(np.array(L), np.array(L_solve))
         np.testing.assert_array_equal(float(jitter), float(jitter_solve))
 
-    def test_jitter_recorded(self, realistic_penalized_system: dict) -> None:
-        """Jitter value is finite and positive."""
+    def test_positive_definite_system_is_unregularized(
+        self, realistic_penalized_system: dict
+    ) -> None:
+        """A positive-definite penalized Hessian is factored without jitter."""
         sys = realistic_penalized_system
-        _, jitter = penalized_cholesky(sys["XtWX"], sys["S_lambda"])
-        assert jnp.isfinite(jitter)
-        assert float(jitter) > 0
+        L, level = penalized_cholesky(sys["XtWX"], sys["S_lambda"])
+        assert float(level) == 0.0
+        np.testing.assert_array_equal(
+            np.array(L), np.array(jnp.linalg.cholesky(sys["XtWX"] + sys["S_lambda"]))
+        )
 
 
 # ---------------------------------------------------------------------------

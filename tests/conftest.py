@@ -4,7 +4,12 @@ Provides:
 - Legacy simple_*_data fixtures (n=200, two-predictor)
 - New data-generating fixtures with indirect parametrisation
 - R bridge fixture
+- Minimal committed checkout for isolated benchmark-harness children
 """
+
+import shutil
+import subprocess
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -306,3 +311,72 @@ def family_data(request):
     else:
         family_name, n = param, None
     return family_name, _generate_family_data(family_name, n=n)
+
+
+def pytest_report_header(config):
+    """Print the runner's CPU and kernel identity for platform-sensitive runs."""
+    if "platform_sensitive" not in (config.option.markexpr or ""):
+        return None
+    from tests.helpers import platform_report_lines
+
+    return [
+        "platform-sensitive run:",
+        *(f"  {line}" for line in platform_report_lines()),
+    ]
+
+
+def pytest_terminal_summary(terminalreporter):
+    """Print every replay-bound check of the run with its measured count.
+
+    Reviewed replay bounds are per platform class, and x86_64 entries are
+    filled from CI's measured counts, so a run reports them even when every
+    check passed.
+    """
+    from tests.helpers import REPLAY_COUNT_RECORDS, cpu_platform_class
+
+    if not REPLAY_COUNT_RECORDS:
+        return
+    terminalreporter.section(f"replay counts (platform class {cpu_platform_class()})")
+    for table, key, platform_class, measured, bound in REPLAY_COUNT_RECORDS:
+        reviewed = "no reviewed entry" if bound is None else f"bound {bound}"
+        terminalreporter.write_line(
+            f"{table} {key} [{platform_class}]: measured {measured}, {reviewed}"
+        )
+
+
+@pytest.fixture
+def minimal_git_checkout(tmp_path: Path) -> Path:
+    """Build the smallest real checkout needed by isolated harness children.
+
+    The Docker test image deliberately excludes the repository's ``.git``
+    directory. The harness must still fail closed when provenance cannot be
+    obtained, so real-child tests run against this copied, committed checkout
+    rather than mocking source identity or relaxing the production helper.
+    """
+    checkout = tmp_path / "checkout"
+    ignore_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copytree(Path.cwd() / "jaxgam", checkout / "jaxgam", ignore=ignore_bytecode)
+    (checkout / "tests").mkdir()
+    for name in ("__init__.py", "tolerances.py"):
+        shutil.copy2(Path.cwd() / "tests" / name, checkout / "tests" / name)
+    (checkout / ".gitignore").write_text("__pycache__/\n*.pyc\n")
+    subprocess.run(["git", "init", "--quiet"], cwd=checkout, check=True)
+    subprocess.run(
+        ["git", "add", ".gitignore", "jaxgam", "tests"], cwd=checkout, check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=benchmark-test",
+            "-c",
+            "user.email=benchmark-test@example.com",
+            "commit",
+            "--quiet",
+            "-m",
+            "minimal isolated harness checkout",
+        ],
+        cwd=checkout,
+        check=True,
+    )
+    return checkout

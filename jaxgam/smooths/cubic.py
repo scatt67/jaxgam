@@ -16,15 +16,102 @@ R source reference: R/smooth.r smooth.construct.cr.smooth.spec()
 
 from __future__ import annotations
 
+import ctypes
+import functools
+import math
+import platform
+import sys
 import warnings
 
+import numba
 import numpy as np
 import numpy.typing as npt
-from scipy import linalg
+from scipy.linalg import blas
 
 from jaxgam.formula.terms import SmoothSpec
 from jaxgam.penalties.penalty import Penalty
 from jaxgam.smooths.base import Smooth
+from jaxgam.smooths.source_arithmetic import SOURCE_FMA_CONTRACTION
+from jaxgam.smooths.source_lapack import (
+    cubic_shrinkage_penalty,
+    natural_cubic_system_solve,
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _source_fma():
+    """Return C's fused multiply-add, including on supported Python 3.11."""
+    if hasattr(math, "fma"):
+        return math.fma
+    fused = ctypes.CDLL(None).fma
+    fused.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double]
+    fused.restype = ctypes.c_double
+    return fused
+
+
+def _source_getfs_multiply_add():
+    """Match the audited pinned R/mgcv Linux binary contraction.
+
+    The audited R 4.5.2/mgcv 1.9-3 x86_64 binary uses separate MULSD/ADDSD;
+    the audited aarch64 binary emits FMADD. This build-specific behavior is
+    not a promise about arbitrary binaries with the same version strings.
+    """
+    if sys.platform.startswith("linux") and platform.machine() == "x86_64":
+        return lambda a, b, c: a * b + c
+    return _source_fma()
+
+
+@functools.lru_cache(maxsize=1)
+def _compiled_source_cubic_basis():
+    """Compile the source-ordered FMA row loop once for macOS construction."""
+    fused = ctypes.CDLL(None).fma
+    fused.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double]
+    fused.restype = ctypes.c_double
+
+    @numba.njit
+    def fill(x, knots, F, intervals, X):
+        n_basis = len(knots)
+        for row in range(len(x)):
+            xi = x[row]
+            interval = int(intervals[row])
+            if xi < knots[0]:
+                h = knots[1] - knots[0]
+                xik = xi - knots[0]
+                cjm = -xik * h / 3.0
+                cjp = -xik * h / 6.0
+                for column in range(n_basis):
+                    X[row, column] = fused(cjm, F[0, column], cjp * F[1, column])
+                X[row, 0] += 1.0 - xik / h
+                X[row, 1] += xik / h
+            elif xi > knots[-1]:
+                h = knots[-1] - knots[-2]
+                xik = xi - knots[-1]
+                cjm = xik * h / 6.0
+                cjp = xik * h / 3.0
+                left = n_basis - 2
+                right = n_basis - 1
+                for column in range(n_basis):
+                    X[row, column] = fused(cjm, F[left, column], cjp * F[right, column])
+                X[row, left] += -xik / h
+                X[row, right] += 1.0 + xik / h
+            else:
+                xj = knots[interval]
+                xj1 = knots[interval + 1]
+                h = xj1 - xj
+                ajm = xj1 - xi
+                ajp = xi - xj
+                cjm = (ajm * (ajm * ajm / h - h)) / 6.0
+                cjp = (ajp * (ajp * ajp / h - h)) / 6.0
+                ajm /= h
+                ajp /= h
+                for column in range(n_basis):
+                    X[row, column] = fused(
+                        cjm, F[interval, column], cjp * F[interval + 1, column]
+                    )
+                X[row, interval] += ajm
+                X[row, interval + 1] += ajp
+
+    return fill
 
 
 class CubicRegressionSmooth(Smooth):
@@ -157,9 +244,11 @@ class CubicRegressionSmooth(Smooth):
     ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
         """Compute F matrix and penalty S for natural cubic spline.
 
-        Constructs B, D once, solves ``F_inner = B^{-1} D`` once, and
-        derives both F (for basis construction) and S (penalty) from the
-        same intermediates.
+        Replays mgcv ``getFS`` (``src/mgcv.c``) and the pinned LAPACK
+        DPTTRF/DPTTS2 scalar order. The explicit penalty contractions are
+        load-bearing for ``bs="cs"``: last-bit changes in the rank-deficient
+        raw penalty can rotate its two null eigenvectors before mgcv assigns
+        unequal shrinkage eigenvalues.
 
         Returns
         -------
@@ -168,36 +257,68 @@ class CubicRegressionSmooth(Smooth):
         S : np.ndarray
             Penalty matrix ``D.T @ F_inner``, shape ``(k, k)``.
         """
-        h = np.diff(knots)
         k = len(knots)
+        inner = k - 2
+        h = np.empty(k - 1)
+        for i in range(1, k):
+            h[i - 1] = knots[i] - knots[i - 1]
 
-        # B matrix (k-2, k-2) tridiagonal — banded storage
-        diag = (h[:-1] + h[1:]) / 3.0
-        off_diag = h[1:-1] / 6.0
-        banded_B = np.array(
-            [
-                np.r_[0.0, off_diag],
-                diag,
-                np.r_[off_diag, 0.0],
-            ]
-        )
-
-        # D matrix (k-2, k)
-        D = np.zeros((k - 2, k))
-        for i in range(k - 2):
+        # getFS builds D column-major, then DPTSV overwrites it with B^-1 D.
+        D = np.zeros((inner, k))
+        for i in range(inner):
             D[i, i] = 1.0 / h[i]
-            D[i, i + 1] = -(1.0 / h[i] + 1.0 / h[i + 1])
             D[i, i + 2] = 1.0 / h[i + 1]
+            D[i, i + 1] = -D[i, i] - D[i, i + 2]
 
-        # Single solve: F_inner = B^{-1} @ D, shape (k-2, k)
-        F_inner = linalg.solve_banded((1, 1), banded_B, D)
+        diagonal = np.empty(inner)
+        for i in range(inner):
+            diagonal[i] = (h[i] + h[i + 1]) / 3.0
+        off_diagonal = np.empty(inner - 1)
+        for i in range(1, inner):
+            off_diagonal[i - 1] = h[i] / 6.0
 
-        # F for basis: pad with zero rows for natural boundary conditions
-        F = np.vstack([np.zeros(k), F_inner, np.zeros(k)])
+        D = natural_cubic_system_solve(diagonal, off_diagonal, D)
 
-        # S for penalty
-        S = D.T @ F_inner
-        S = 0.5 * (S + S.T)
+        # Python prediction consumes rows of F where crspl consumes columns.
+        F = np.vstack([np.zeros(k), D, np.zeros(k)])
+
+        # Exact getFS D'B^-1D contraction order, followed by smooth.r's
+        # explicit ``(S + t(S))/2`` symmetry operation.
+        multiply_add = _source_getfs_multiply_add()
+        S = np.zeros((k, k))
+        a = 1.0 / h[0]
+        for column in range(k):
+            S[0, column] = D[0, column] * a
+        if k > 3:
+            a = -1.0 / h[0] - 1.0 / h[1]
+            b = 1.0 / h[1]
+            for column in range(k):
+                S[1, column] = multiply_add(D[0, column], a, D[1, column] * b)
+            for row in range(2, inner):
+                a = 1.0 / h[row - 1]
+                c = 1.0 / h[row]
+                b = -a - c
+                for column in range(k):
+                    S[row, column] = multiply_add(
+                        D[row, column],
+                        c,
+                        multiply_add(D[row - 2, column], a, D[row - 1, column] * b),
+                    )
+            row = inner
+            a = 1.0 / h[row - 1]
+            b = -1.0 / h[row - 1] - 1.0 / h[row]
+            for column in range(k):
+                S[row, column] = multiply_add(
+                    D[inner - 2, column], a, D[inner - 1, column] * b
+                )
+        else:
+            a = -1.0 / h[0] - 1.0 / h[1]
+            for column in range(k):
+                S[1, column] = D[0, column] * a
+        a = 1.0 / h[inner]
+        for column in range(k):
+            S[k - 1, column] = D[inner - 1, column] * a
+        S = (S + S.T) * 0.5
 
         return F, S
 
@@ -304,6 +425,62 @@ class CubicRegressionSmooth(Smooth):
         if self._cyclic:
             x = self._map_cyclic(x, knots[0], knots[-1])
 
+        if not self._cyclic:
+            j = self._find_knot_intervals(x, knots)
+            X = np.zeros((len(x), n_basis))
+            if sys.platform != "darwin" or not SOURCE_FMA_CONTRACTION:
+                # crspl evaluates cjm * Fp + cjp * Fp1. The audited aarch64
+                # binary contracts it to fma(cjm, Fp, cjp * Fp1), which the
+                # two-column DGEMM reproduces (Accelerate's rounds otherwise,
+                # so macOS arm64 uses the compiled fused loop below). The
+                # audited x86_64 binary uses separate MULSD/ADDSD, while BLAS
+                # kernels on x86_64 fuse, so there both products are rounded
+                # and added explicitly.
+                def combine(cjm, cjp, Fp, Fp1):
+                    if SOURCE_FMA_CONTRACTION:
+                        return blas.dgemm(
+                            1.0, np.column_stack((cjp, cjm)), np.vstack((Fp1, Fp))
+                        )
+                    return cjm[:, np.newaxis] * Fp + cjp[:, np.newaxis] * Fp1
+
+                left_rows = np.flatnonzero(x < knots[0])
+                if left_rows.size:
+                    h = knots[1] - knots[0]
+                    xik = x[left_rows] - knots[0]
+                    cjm = -xik * h / 3.0
+                    cjp = -xik * h / 6.0
+                    X[left_rows] = combine(cjm, cjp, F[0], F[1])
+                    X[left_rows, 0] += 1.0 - xik / h
+                    X[left_rows, 1] += xik / h
+                right_rows = np.flatnonzero(x > knots[-1])
+                if right_rows.size:
+                    h = knots[-1] - knots[-2]
+                    xik = x[right_rows] - knots[-1]
+                    cjm = xik * h / 6.0
+                    cjp = xik * h / 3.0
+                    X[right_rows] = combine(cjm, cjp, F[-2], F[-1])
+                    X[right_rows, -2] += -xik / h
+                    X[right_rows, -1] += 1.0 + xik / h
+                interior = (x >= knots[0]) & (x <= knots[-1])
+                for interval in range(n_basis - 1):
+                    rows = np.flatnonzero(interior & (j == interval))
+                    if rows.size == 0:
+                        continue
+                    xj = knots[interval]
+                    xj1 = knots[interval + 1]
+                    h = xj1 - xj
+                    ajm = xj1 - x[rows]
+                    ajp = x[rows] - xj
+                    cjm = (ajm * (ajm * ajm / h - h)) / 6.0
+                    cjp = (ajp * (ajp * ajp / h - h)) / 6.0
+                    X[rows] = combine(cjm, cjp, F[interval], F[interval + 1])
+                    X[rows, interval] += ajm / h
+                    X[rows, interval + 1] += ajp / h
+                return X
+
+            _compiled_source_cubic_basis()(x, knots, F, j, X)
+            return X
+
         ajm, ajp, cjm, cjp, j = self._compute_base_functions(x, knots)
 
         j1 = j + 1
@@ -324,7 +501,12 @@ class CubicRegressionSmooth(Smooth):
     # Public interface
     # ------------------------------------------------------------------
 
-    def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
+    def setup(
+        self,
+        data: dict[str, npt.NDArray[np.floating]],
+        *,
+        _normalize_penalty: bool = True,
+    ) -> None:
         """Construct cubic regression spline basis from data.
 
         Parameters
@@ -378,8 +560,13 @@ class CubicRegressionSmooth(Smooth):
         # smooth.construct modifies S, then smoothCon normalizes)
         self._S = self._apply_shrinkage(self._S)
 
-        # Normalize penalty (R's smoothCon normalization)
-        [self._S], self._s_scale = self._smoothcon_normalize(self._X, [self._S])
+        # te() constructs unconstrained marginals with smooth.construct(),
+        # which supplies the raw S directly. Normalizing and then undoing the
+        # scale changes its last bits at a tied null-space rank boundary.
+        if _normalize_penalty:
+            [self._S], self._s_scale = self._smoothcon_normalize(self._X, [self._S])
+        else:
+            self._s_scale = 1.0
 
         # Set dimensions
         if self._cyclic:
@@ -437,16 +624,28 @@ class CubicShrinkageSmooth(CubicRegressionSmooth):
     #: Shrinkage factor from R's ``attr(object,"shrink") <- .1``.
     _shrink: float = 0.1
 
-    def setup(self, data: dict[str, npt.NDArray[np.floating]]) -> None:
+    def setup(
+        self,
+        data: dict[str, npt.NDArray[np.floating]],
+        *,
+        _normalize_penalty: bool = True,
+    ) -> None:
         """Construct cs basis: standard cr + shrinkage penalty."""
-        super().setup(data)
+        super().setup(data, _normalize_penalty=_normalize_penalty)
         self.null_space_dim = 0
         self.rank = self._k
 
-    def _apply_shrinkage(self, S: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+    def _apply_shrinkage(
+        self,
+        S: npt.NDArray[np.floating],
+        *,
+        available_workspace_bytes: int | None = None,
+    ) -> npt.NDArray[np.floating]:
         """Apply chained geometric shrinkage matching R's cs."""
-        return self._decompose_and_replace(
-            S, self._k, self._shrink, self._chained_geometric_replacement
+        return cubic_shrinkage_penalty(
+            np.asarray(S, dtype=np.float64),
+            shrink=self._shrink,
+            available_workspace_bytes=available_workspace_bytes,
         )
 
 

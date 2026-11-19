@@ -59,6 +59,33 @@ cd jaxgam
 uv sync
 ```
 
+### Apple silicon: use the OpenBLAS builds of NumPy and SciPy
+
+On Apple silicon Macs the default NumPy and SciPy wheels use Apple
+Accelerate, and JAX's CPU LAPACK kernels take their LAPACK from SciPy. When
+several LAPACK calls run concurrently inside one compiled computation, memory
+can be corrupted: the process may abort, and occasionally results are wrong
+with no error. It was observed fitting models with about 100 smooths (about
+1,000 coefficients); none was seen with 50 smooths or fewer. No JAX or XLA
+setting prevents it. Linux is unaffected (its wheels use OpenBLAS).
+
+Importing `jaxgam` in an affected environment issues a `RuntimeWarning`. The
+fix is to install the OpenBLAS builds of the same NumPy and SciPy versions
+(shown here for numpy 2.3.5 and scipy 1.17.0):
+
+```bash
+# uv
+uv pip install --reinstall --no-deps --python-platform aarch64-apple-darwin \
+    numpy==2.3.5 scipy==1.17.0
+# pip
+pip download --only-binary=:all: --no-deps --platform macosx_12_0_arm64 \
+    numpy==2.3.5 scipy==1.17.0 -d wheels
+pip install --force-reinstall --no-deps wheels/*.whl
+```
+
+A later `uv sync` reinstalls the default wheels, so repeat the step after it.
+Set `JAXGAM_ALLOW_ACCELERATE=1` to silence the warning.
+
 ## Quickstart
 
 `GAM.fit()` has two explicit result modes:
