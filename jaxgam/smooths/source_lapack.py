@@ -1060,7 +1060,11 @@ def source_pivoted_cholesky(
         or not np.isfinite(tolerance)
     ):
         raise ValueError("Pivoted Cholesky tolerance must be a finite real scalar.")
-    if not np.all(np.isfinite(matrix[np.triu_indices(n)])):
+    # A finite matrix has a finite upper triangle; only a matrix with some
+    # non-finite entry needs the triangle itself checked.
+    if not np.all(np.isfinite(matrix)) and not np.all(
+        np.isfinite(matrix[np.triu_indices(n)])
+    ):
         raise ValueError("Pivoted Cholesky upper triangle must be finite.")
     if n == 0:
         return SourcePivotedCholesky(np.empty((0, 0)), np.empty(0, dtype=np.int32), 0)

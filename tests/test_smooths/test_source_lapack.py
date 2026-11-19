@@ -1097,6 +1097,12 @@ def test_source_pivoted_cholesky_validates_and_fails_closed() -> None:
     for matrix in (np.diag([1.0, np.nan]), np.array([[1.0, np.inf], [0.0, 2.0]])):
         with pytest.raises(ValueError, match="upper triangle must be finite"):
             source_lapack.source_pivoted_cholesky(matrix)
+    # The lower triangle is never read, so a non-finite entry there is accepted.
+    lower_nan = source_lapack.source_pivoted_cholesky(
+        np.array([[4.0, 1.0], [np.nan, 2.0]])
+    )
+    assert lower_nan.rank == 2
+    assert np.all(np.isfinite(lower_nan.upper))
     overflow = np.zeros((66, 66))
     np.fill_diagonal(overflow, 1e308)
     overflow[:64, 64:] = 1.25e307
