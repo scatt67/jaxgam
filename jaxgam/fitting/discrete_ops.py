@@ -37,9 +37,11 @@ __all__ = [
     "discrete_diag_xvxd",
     "discrete_row_xwxd",
     "discrete_row_xwxd_bytes",
+    "discrete_row_xwxd_cost",
     "discrete_xb_transpose",
     "discrete_xbd",
     "discrete_xwxd",
+    "discrete_xwxd_cost",
     "discrete_xwyd",
     "lookup_pair_histogram_crossproduct",
     "pair_reduction_plan",
@@ -767,6 +769,72 @@ def discrete_xwxd(
 
 # discrete_row_xwxd forms the upper panels of an equal split of the columns.
 _ROW_XWXD_PANELS = 4
+
+
+# Flop-equivalent cost of touching one row in a pair reduction (a gather or a
+# histogram scatter): measured on the 100-smooth section 8 design, about 15 ns
+# per row and pair against about 6 ps per matrix-product flop. Set below that
+# ratio so row chunks are chosen only with a clear margin.
+_ROW_TOUCH_FLOPS = 1000
+
+
+def _block_shape(block: DeviceBlock) -> tuple[int, int] | None:
+    """``(q, k)`` of a lookup block's table; None for a tensor block."""
+    return tuple(block.table.shape) if isinstance(block, DeviceLookupBlock) else None
+
+
+def discrete_xwxd_cost(design: DeviceDiscreteDesign, n_rows: int) -> float:
+    """Flop-equivalent estimate of :func:`discrete_xwxd` on ``n_rows`` rows.
+
+    Per pair, as the kernel reduces it: a lookup block with itself costs a
+    weight histogram and ``T' diag(h) T``; two lookup blocks a pair histogram
+    and ``T_l' H T_r`` or direct rows (:func:`pair_reduction_plan`); a pair
+    with a tensor block is charged as direct rows of its full width.
+    """
+    total = 0.0
+    blocks = design.blocks
+    for left_number, left in enumerate(blocks):
+        for right in blocks[left_number:]:
+            left_shape, right_shape = _block_shape(left), _block_shape(right)
+            touch = n_rows * _ROW_TOUCH_FLOPS
+            if left_shape is None or right_shape is None:
+                widths = (
+                    _block_stop(left) - left.col_start,
+                    _block_stop(right) - right.col_start,
+                )
+                total += touch + 2.0 * n_rows * widths[0] * widths[1]
+                continue
+            (q_left, k_left), (q_right, k_right) = left_shape, right_shape
+            if left is right:
+                total += touch + 2.0 * q_left * k_left * k_left
+            elif (
+                design.pair_policy == "histogram_or_direct"
+                and pair_reduction_plan(
+                    q_left,
+                    q_right,
+                    design.max_pair_histogram_bytes,
+                    n_rows=n_rows,
+                    k_left=k_left,
+                    k_right=k_right,
+                ).method
+                == "histogram"
+            ):
+                total += (
+                    touch
+                    + q_left * q_right * (2.0 * k_left + 8.0)
+                    + 2.0 * k_left * q_right * k_right
+                )
+            else:
+                total += touch + 2.0 * n_rows * k_left * k_right
+    return total
+
+
+def discrete_row_xwxd_cost(n_coef: int, n_rows: int) -> float:
+    """Flop-equivalent estimate of :func:`discrete_row_xwxd` on ``n_rows`` rows."""
+    panels = _ROW_XWXD_PANELS
+    return 2.0 * n_rows * n_coef * n_coef * (panels + 1) / (2 * panels) + (
+        n_rows * n_coef
+    )
 
 
 def discrete_row_xwxd_bytes(n_coef: int, chunk_rows: int) -> int:

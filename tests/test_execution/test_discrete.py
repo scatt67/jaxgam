@@ -668,16 +668,32 @@ def test_setup_cost_per_fit_does_not_grow_with_the_other_columns(
 
 
 def test_row_xwxd_chunk_selection_follows_cost_and_budget() -> None:
-    """Many blocks against few coefficients use row chunks within the budget."""
-    from types import SimpleNamespace
+    """Narrow blocks use row chunks within the budget; a wide random effect does not."""
+    import jax.numpy as jnp
 
     from jaxgam.execution.discrete import _row_xwxd_chunk
-    from jaxgam.fitting.discrete_ops import discrete_row_xwxd_bytes
+    from jaxgam.fitting.discrete_ops import (
+        DeviceDiscreteDesign,
+        DeviceLookupBlock,
+        discrete_row_xwxd_bytes,
+    )
 
-    many = SimpleNamespace(n_coef=901, blocks=(None,) * 101)
-    wide = SimpleNamespace(n_coef=1006, blocks=(None,) * 3)
+    def design(widths, batch_rows):
+        starts = np.cumsum((0, *widths))
+        blocks = tuple(
+            DeviceLookupBlock(jnp.zeros((1000, width)), int(start))
+            for width, start in zip(widths, starts, strict=False)
+        )
+        return DeviceDiscreteDesign(
+            blocks, int(starts[-1]), "histogram_or_direct", 32 << 20, batch_rows
+        )
+
     plenty = 1 << 40
-    assert _row_xwxd_chunk(many, plenty) == 2048
-    assert _row_xwxd_chunk(wide, plenty) is None
-    assert _row_xwxd_chunk(many, discrete_row_xwxd_bytes(901, 256)) == 256
-    assert _row_xwxd_chunk(many, discrete_row_xwxd_bytes(901, 64) - 1) is None
+    for k in (9, 19):
+        many = design((1, *(k,) * 100), 65536)
+        assert _row_xwxd_chunk(many, plenty) == 2048
+        n_coef = many.n_coef
+        assert _row_xwxd_chunk(many, discrete_row_xwxd_bytes(n_coef, 256)) == 256
+        assert _row_xwxd_chunk(many, discrete_row_xwxd_bytes(n_coef, 64) - 1) is None
+    assert _row_xwxd_chunk(design((1, 5, 1000), 8192), plenty) is None
+    assert _row_xwxd_chunk(design((1, 9, 9), 65536), plenty) == 2048

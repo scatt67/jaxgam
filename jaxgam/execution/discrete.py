@@ -34,8 +34,10 @@ from jaxgam.fitting.discrete_ops import (
     DeviceDiscreteDesign,
     discrete_row_xwxd,
     discrete_row_xwxd_bytes,
+    discrete_row_xwxd_cost,
     discrete_xbd,
     discrete_xwxd,
+    discrete_xwxd_cost,
     discrete_xwyd,
     to_device_discrete_design,
 )
@@ -513,26 +515,22 @@ def _prepared_discrete(
         setup.cleanup()
 
 
-# A pair reduction (one gather or histogram update per row and pair of blocks)
-# costs far more than one multiply-add of a matrix product: measured on the
-# 100-smooth section 8 design, about 15 ns per row and pair against about
-# 6 ps per product flop. Row chunks are used only when 2 p^2 product flops per
-# row undercut this many flops per row and pair, a margin of about 2.4x.
-_ROW_XWXD_PAIR_FLOPS = 1000
 _ROW_XWXD_CHUNKS = (2048, 1024, 512, 256, 128, 64)
 
 
 def _row_xwxd_chunk(design: DeviceDiscreteDesign, available_bytes: int) -> int | None:
     """Rows per chunk for :func:`discrete_row_xwxd`, or None for pair reductions.
 
-    Materialized row chunks win when the coefficient count is small against
-    the number of block pairs (many smooths); a few wide blocks, such as a
-    random effect with many levels, keep the per-pair reductions. The
-    largest chunk whose scratch fits the remaining budget is chosen.
+    Materialized row chunks are used when their estimated cost undercuts the
+    pair reductions' (:func:`discrete_xwxd_cost`): many smooths against few
+    coefficients. A few wide blocks, such as a random effect with many levels,
+    keep the pair reductions. The largest chunk whose scratch fits the
+    remaining budget is chosen.
     """
     n_coef = design.n_coef
-    pairs = len(design.blocks) * (len(design.blocks) + 1) // 2
-    if 2 * n_coef * n_coef > _ROW_XWXD_PAIR_FLOPS * pairs:
+    if discrete_row_xwxd_cost(n_coef, design.batch_rows) >= discrete_xwxd_cost(
+        design, design.batch_rows
+    ):
         return None
     for chunk_rows in _ROW_XWXD_CHUNKS:
         if discrete_row_xwxd_bytes(n_coef, chunk_rows) <= available_bytes:
