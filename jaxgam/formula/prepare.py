@@ -64,11 +64,17 @@ class PreparedModel:
         return self.predict_spec.total_coefs
 
     def evaluate_batch(self, batch: RowBatch) -> npt.NDArray[np.floating]:
-        """Evaluate one bounded public-coordinate training design batch."""
+        """Evaluate one bounded public-coordinate training design batch.
+
+        Only the formula's variables are read from the batch, so a lazily
+        sliced source column the model does not use is never produced.
+        """
         if not batch.columns and self.predict_spec.has_intercept:
             return np.ones((len(batch.row_positions), self.n_coef))
         spec = self.predict_spec if self.training_spec is None else self.training_spec
-        return spec.build_training_matrix(dict(batch.columns))
+        return spec.build_training_matrix(
+            _formula_columns(batch, _spec_variables(spec))
+        )
 
     def evaluate_fitting_batch(self, batch: RowBatch) -> npt.NDArray[np.floating]:
         """Evaluate one batch in frozen local-D fitting coordinates."""
@@ -77,6 +83,27 @@ class PreparedModel:
         return apply_transforms_to_design(
             self.evaluate_batch(batch), self.fitting.penalty_structure
         )
+
+
+def _spec_variables(spec: predict_matrix.PredictSpec) -> tuple[str, ...]:
+    """Source columns a prepared design reads, in first-use order."""
+    names = [term.name for term in spec.parametric_terms]
+    for info in spec.smooth_info:
+        names.extend(info.variables)
+        if info.by_variable is not None:
+            names.append(info.by_variable)
+    return tuple(dict.fromkeys(names))
+
+
+def _formula_columns(batch: RowBatch, names: tuple[str, ...] | list[str]) -> dict:
+    """The batch columns ``names`` only; every column when none are named.
+
+    With no named variable (an intercept-only design) the whole mapping is
+    passed, as before, so design evaluation still sees the batch length.
+    """
+    if not names:
+        return dict(batch.columns)
+    return {name: batch.columns[name] for name in names if name in batch.columns}
 
 
 _DEFAULT_SETUP_BATCH_ROWS = 65_536
@@ -813,7 +840,9 @@ def prepare_model(
         )
     # The evaluated parametric block, not the formula term count, fixes the
     # scanned width (an intercept plus any column expansion).
-    param_first, param_names = _batch_parametric(formula_spec, dict(first.columns), 1)
+    param_first, param_names = _batch_parametric(
+        formula_spec, _formula_columns(first, required), 1
+    )
     n_parametric = param_first.shape[1]
     workspace = SetupWorkspace.for_design(
         n_parametric=n_parametric,
@@ -859,7 +888,7 @@ def prepare_model(
         row_positions_digest.update(
             np.ascontiguousarray(positions, dtype=np.int64).view(np.uint8)
         )
-        columns = dict(batch.columns)
+        columns = _formula_columns(batch, required)
         parametric, _ = _batch_parametric(
             formula_spec, columns, len(batch.row_positions)
         )

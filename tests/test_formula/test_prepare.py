@@ -1139,3 +1139,34 @@ def test_in_memory_knot_scan_stays_inside_its_traced_bound() -> None:
     # The gathered columns dominate: the bound is not vacuous at this size.
     assert peak - start >= 2 * workspace.knot_column_bytes
     assert peak - start <= workspace.in_memory_knot_bytes(rows, 2)
+
+
+def test_prepared_batches_read_only_the_formula_columns(monkeypatch) -> None:
+    from jaxgam.data import source as source_module
+
+    rng = np.random.default_rng(527)
+    n = 50
+    columns = {f"unused{index}": rng.normal(size=n) for index in range(6)}
+    columns["x"] = rng.uniform(size=n)
+    columns["z"] = rng.normal(size=n)
+    source = ArrayRowSource(columns, y=rng.normal(size=n))
+    read: list[int] = []
+    slice_column = source_module._slice
+
+    def counted_slice(value, positions):
+        read.append(id(value))
+        return slice_column(value, positions)
+
+    monkeypatch.setattr(source_module, "_slice", counted_slice)
+    prepared = prepare_model(
+        parse_formula('y ~ z + s(x, bs="cr", k=6)'), source, family=Gaussian()
+    )
+    used = {id(columns["x"]), id(columns["z"])}
+    unused = {id(value) for name, value in columns.items() if name.startswith("unused")}
+    # The two one-row schema peeks still size every column of the source.
+    assert sum(identity in unused for identity in read) <= 2 * len(unused)
+    read.clear()
+    for batch in source.scan(7):
+        prepared.evaluate_fitting_batch(batch)
+    assert read
+    assert set(read) <= used
