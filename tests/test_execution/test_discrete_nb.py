@@ -388,8 +388,8 @@ def test_fixed_sp_nb_matches_the_identical_explicit_design(link, formula, mode):
 # by the eight-runner platform-sensitive job, run 44051330720 on 10b4b14 (root
 # decision 2026-11-17), identical within each class across replicas; every
 # replay passed its STRICT-margin decision check. The two log-tensor_by
-# estimated cases need a bound on x86_64 only; every other class must need none
-# (OTHER_CLASSES_NEED_NONE; measured 0 on macOS arm64 and x86_64-avx512). A
+# estimated cases need a bound on x86_64 and macOS arm64; every other class must
+# need none (OTHER_CLASSES_NEED_NONE; measured 0 on x86_64-avx512). A
 # listed case on a class without an entry fails and prints its measured count;
 # an unlisted case must need no replay on any platform.
 _REVIEWED_NB_TIE_REPLAYS = {
@@ -411,11 +411,22 @@ _REVIEWED_NB_TIE_REPLAYS = {
         "x86_64": (0, 0),  # run 44051330720
         "x86_64-avx512": (0, 0),  # run 44051330720
     },
+    # macOS arm64 in the three cases below: 0 at the 2026-10-24 review,
+    # re-measured 1 on 2026-11-19 (574b032, NumPy and SciPy on OpenBLAS, R on
+    # Accelerate). That review predates the pair kernels stacked by block
+    # shape and the OpenBLAS host environment. Each replay passed its
+    # STRICT-margin decision check.
+    ("explicit", "identity-separate_re-estimated"): {
+        "macos-arm64": (1, 1),
+        OTHER_CLASSES_NEED_NONE: (0, 0),
+    },
     ("explicit", "log-tensor_by-estimated"): {
+        "macos-arm64": (1, 1),
         "x86_64": (1, 1),  # run 44051330720
         OTHER_CLASSES_NEED_NONE: (0, 0),
     },
     ("fixed", "log-tensor_by-estimated"): {
+        "macos-arm64": (1, 1),
         "x86_64": (1, 1),  # run 44051330720
         OTHER_CLASSES_NEED_NONE: (0, 0),
     },
