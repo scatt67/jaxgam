@@ -507,12 +507,13 @@ def test_proposal_kernels_match_per_block_loops(name: str, monkeypatch) -> None:
 
 @pytest.mark.parametrize("name", list(_STRUCTURES))
 def test_working_coordinate_kernels_and_penalty_columns_are_bitwise(name: str) -> None:
-    """Statistics transformed once, and diagonal singleton penalties, change nothing.
+    """Statistics transformed once, and the diagonal penalty paths, change nothing.
 
     ``working_model_statistics`` applies ``Sl.initial.repara`` once for every
     trial on one set of statistics; the kernels given those statistics with
     ``working_coordinates=True`` equal the public-coordinate kernels bitwise.
-    Singleton blocks are declared diagonal, and their stacked groups say so.
+    Singleton blocks are declared diagonal (their stacked groups say so) and
+    their ``S_lambda`` column action equals ``penalty_ops.apply`` bitwise.
     """
     metadata, gram, rhs, yy, smoothing, log_phi = _working_inputs(name)
     smoothing = jnp.asarray(smoothing)
@@ -582,4 +583,24 @@ def test_working_coordinate_kernels_and_penalty_columns_are_bitwise(name: str) -
             "diagonal groups differ from singleton blocks",
         ),
     )
+    columns = jnp.asarray(
+        np.random.default_rng(20261119).normal(
+            size=(metadata.penalties.n_coef, metadata.penalties.n_penalties)
+        )
+    )
+    for label, supplied in (("exp(rho)", None), ("supplied smoothing", smoothing)):
+        _equal(
+            collector,
+            f"S_lambda columns ({label})",
+            jax.jit(wm._penalty_columns)(metadata.penalties, columns, rho, supplied),
+            jax.jit(
+                lambda matrix, rho, supplied: jax.vmap(
+                    lambda vector: penalty_ops.apply(
+                        metadata.penalties, vector, rho, smoothing=supplied
+                    ),
+                    in_axes=1,
+                    out_axes=1,
+                )(matrix)
+            )(columns, rho, supplied),
+        )
     collector.raise_if_any(f"working-coordinate kernels, {name}")
